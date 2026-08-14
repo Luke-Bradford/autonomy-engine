@@ -1393,6 +1393,235 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       code: 'no_executor',
     });
   });
+
+  // -------------------------------------------------------------------------
+  // M1 (#1104) — the PAIRED source/sink contract. Co-owned with D6: being
+  // paired is an ActivityDefinition DECLARATION (`sinkConnectionKinds`), not a
+  // property of the node, so these live beside the other contract branches and
+  // reuse `catalogOf`. Source is `http` (the fake adapter, so we can observe
+  // what `runActivity` received); sink is `anthropic_api` — a
+  // SECRET_REQUIRING kind, so its credential is actually decrypted and the
+  // fourth-argument channel is genuinely exercised.
+  // -------------------------------------------------------------------------
+
+  /** A registry with the real adapters plus a spy `http`, so both ends resolve. */
+  function pairedRegistry(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
+    const reg = testRegistry();
+    reg.set('http', {
+      kind: 'http',
+      configSchema: reg.get('http')!.configSchema,
+      testConnection: () => Promise.resolve({ ok: true }),
+      runActivity: run,
+    });
+    return reg;
+  }
+
+  function pairedCatalog(): ActivityCatalog {
+    return catalogOf({
+      type: 'test_paired',
+      kind: 'execution',
+      connectionKinds: ['http'],
+      sinkConnectionKinds: ['anthropic_api'],
+    });
+  }
+
+  function pairedNode(type: string, source: string | undefined, sink: string | undefined): Node {
+    seq += 1;
+    return {
+      id: 'n1',
+      type,
+      config: {},
+      ...(source !== undefined && sink !== undefined ? { connectionIds: { source, sink } } : {}),
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  /** The `node.failed` this run produced, or undefined. */
+  function failureOf(db: Db, runId: string) {
+    return loadEngineEvents(db, runId).find((e) => e.type === 'node.failed');
+  }
+
+  it('resolves BOTH ends: source drives the adapter, sink arrives as ctx.sink + the 4th arg', async () => {
+    let seen: {
+      connectionConfig: unknown;
+      sink: unknown;
+      secret: string | null;
+      sinkSecret: unknown;
+    } | null = null;
+    const adapters = pairedRegistry(async function* (ctx, secret, _fields, sinkSecret) {
+      seen = {
+        connectionConfig: ctx.connectionConfig,
+        sink: ctx.sink,
+        secret,
+        sinkSecret,
+      };
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', { baseUrl: 'https://src' }, null);
+    const sinkId = await seedConnection(db, 'anthropic_api', { model: 'm' }, 'SINK-KEY');
+    const pvId = seedVersion(db, [pairedNode('test_paired', sourceId, sinkId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters, catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('success');
+    // The SOURCE adapter is the one running, and `connectionConfig` stays its end.
+    expect(seen!.connectionConfig).toEqual({ baseUrl: 'https://src' });
+    // The sink arrives with its KIND, which the running adapter has no other way
+    // to know — it must re-validate a store it did not resolve (spec §8).
+    expect(seen!.sink).toEqual({ kind: 'anthropic_api', connectionConfig: { model: 'm' } });
+    // Credentials stay on the SIDE CHANNEL, never in ctx.
+    expect(seen!.sinkSecret).toBe('SINK-KEY');
+    expect(seen!.secret).toBeNull();
+    expect(JSON.stringify(seen!.sink)).not.toContain('SINK-KEY');
+  });
+
+  it('omits ctx.sink and the 4th arg entirely for a single-connection activity', async () => {
+    // The widening must be invisible to the six existing adapters: `sink` is
+    // OMITTED, not present-undefined, so `'sink' in ctx` stays an honest test.
+    let hasSink = true;
+    let sinkSecretArg: unknown = 'unset';
+    const adapters = pairedRegistry(async function* (ctx, _secret, _fields, sinkSecret) {
+      hasSink = 'sink' in ctx;
+      sinkSecretArg = sinkSecret;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [nodeOfType('test_single', connId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters,
+        catalog: catalogOf({ type: 'test_single', kind: 'execution', connectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    expect(hasSink).toBe(false);
+    expect(sinkSecretArg).toBeUndefined();
+  });
+
+  it('REDACTS the sink secret out of this node’s events (the source adapter cannot)', async () => {
+    // The source adapter redacts its OWN outgoing secret; it has never seen the
+    // sink's, so the executor is the only layer that can scrub it. The fixture
+    // echoes the sink credential into an output — exactly what an adapter that
+    // reflects an error body would do by accident.
+    const adapters = pairedRegistry(async function* (_ctx, _secret, _fields, sinkSecret) {
+      yield { type: 'succeeded', outputs: { leaked: `wrote with ${String(sinkSecret)}` } };
+    });
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', {}, null);
+    const sinkId = await seedConnection(db, 'anthropic_api', {}, 'SINK-KEY-XYZ');
+    const pvId = seedVersion(db, [pairedNode('test_paired', sourceId, sinkId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters, catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('success');
+    const serialized = JSON.stringify(loadEngineEvents(db, run.id));
+    expect(serialized).not.toContain('SINK-KEY-XYZ');
+    expect(serialized).toContain('leaked');
+  });
+
+  it('labels a SINK-end failure with side:sink, without inventing a SINK_ code', async () => {
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [pairedNode('test_paired', sourceId, 'conn-does-not-exist')]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(failureOf(db, run.id)).toMatchObject({
+      // The cause's own code is UNCHANGED — the side is orthogonal to it, and
+      // travels beside it rather than doubling the vocabulary.
+      code: 'connection_not_found',
+      kind: 'permanent',
+      side: 'sink',
+      error: expect.stringContaining('sink connection:'),
+    });
+  });
+
+  it('labels a SOURCE-end failure with side:source and never resolves the sink', async () => {
+    // Source-first with a short circuit: a node with BOTH ends broken reports the
+    // source only, rather than decrypting a sink credential for a dispatch that
+    // cannot happen.
+    const db = freshDb().db;
+    const pvId = seedVersion(db, [pairedNode('test_paired', 'no-such-source', 'no-such-sink')]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'connection_not_found',
+      side: 'source',
+      error: expect.stringContaining('source connection:'),
+    });
+    expect(failureOf(db, run.id)!.error).not.toContain('no-such-sink');
+  });
+
+  it('refuses a sink whose kind is outside the declared sinkConnectionKinds', async () => {
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', {}, null);
+    // `http` is a valid SOURCE kind here but not a valid SINK kind.
+    const sinkId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [pairedNode('test_paired', sourceId, sinkId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'connection_kind_invalid',
+      side: 'sink',
+    });
+  });
+
+  it('fails a PAIRED node that carries no pair as CONNECTION_MISSING on the source', async () => {
+    const db = freshDb().db;
+    const pvId = seedVersion(db, [pairedNode('test_paired', undefined, undefined)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'connection_missing',
+      kind: 'permanent',
+      side: 'source',
+    });
+  });
+
+  it('IGNORES a stray connectionIds on an activity the catalog does not declare paired', async () => {
+    // Being paired is the CATALOG's answer, never the node's: a stray pair must
+    // not change how a single-connection activity dispatches. It falls through to
+    // the singular path, which has no binding — the same fail-closed posture as a
+    // stray `connectionId` on a connection-less activity. Note NO `side`: an
+    // unpaired failure must not claim an end.
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', {}, null);
+    const sinkId = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const pvId = seedVersion(db, [pairedNode('test_single', sourceId, sinkId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        catalog: catalogOf({ type: 'test_single', kind: 'execution', connectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'connection_missing', kind: 'permanent' });
+    expect(failure).not.toHaveProperty('side');
+  });
 });
 
 describe('createExecutor — error taxonomy → node.failed{kind, code} (#1 F0)', () => {
