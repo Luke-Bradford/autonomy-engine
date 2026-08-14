@@ -56,8 +56,9 @@ test.describe('U14c run-window editor', () => {
     await page.getByRole('button', { name: /New trigger/i }).click();
     const form = triggerForm(page);
     await form.getByLabel('Name').fill('Weekday office hours');
+    // A new schedule trigger opens on the RECURRENCE builder, whose blank form
+    // is already a valid daily schedule — nothing else needs authoring here.
     await form.getByLabel(/^Mode/).selectOption('schedule');
-    await form.getByLabel(/Schedule \(cron\)/).fill('0 * * * *');
 
     // Unrestricted until asked — the rows only appear once there is a window.
     await expect(form.getByRole('group', { name: 'Window 1' })).toBeHidden();
