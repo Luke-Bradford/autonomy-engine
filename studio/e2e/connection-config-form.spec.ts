@@ -41,7 +41,9 @@ test.describe('U13b per-kind connection config', () => {
     // These controls exist ONLY because the form read `fs`'s own schema. Before
     // #1087 the whole config was one textarea and an operator had to know the
     // key names by heart.
-    await form(page).getByLabel(/^roots/).fill('/tmp/e2e-u13b');
+    await form(page)
+      .getByLabel(/^roots/)
+      .fill('/tmp/e2e-u13b');
     await form(page).getByLabel('maxBytes (optional)').fill('2048');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
@@ -49,11 +51,24 @@ test.describe('U13b per-kind connection config', () => {
 
     // Read the row back from the SERVER, not from the DOM: the point is that
     // the typed fields became those exact config keys, with those types.
+    // `GET /api/connections` is PAGED (#542-line work), so this walks the pages
+    // rather than assuming one holds everything — the row it wants is the
+    // newest, but a page-size assumption is exactly the kind of thing that
+    // passes until a fixture grows.
     const stored = await page.evaluate(async (wanted: string) => {
-      const res = await fetch('/api/connections');
-      const rows: { name: string; kind: string; config: Record<string, unknown> }[] =
-        await res.json();
-      return rows.find((r) => r.name === wanted) ?? null;
+      type Row = { name: string; kind: string; config: Record<string, unknown> };
+      let cursor: string | null = null;
+      for (;;) {
+        const url: string =
+          cursor === null
+            ? '/api/connections'
+            : `/api/connections?cursor=${encodeURIComponent(cursor)}`;
+        const page: { items: Row[]; nextCursor: string | null } = await (await fetch(url)).json();
+        const hit = page.items.find((r) => r.name === wanted);
+        if (hit !== undefined) return hit;
+        if (page.nextCursor === null) return null;
+        cursor = page.nextCursor;
+      }
     }, name);
 
     expect(stored).not.toBeNull();
