@@ -117,6 +117,27 @@ describe('NodeSchema', () => {
   it('rejects a non-record connectionParams', () => {
     expect(() => NodeSchema.parse({ ...node, connectionParams: ['model'] })).toThrow();
   });
+
+  // M1 (#1104) — the paired source/sink binding, beside the singular.
+  it('round-trips connectionIds (either end may be a ${} expression)', () => {
+    const value = {
+      ...node,
+      connectionId: undefined,
+      connectionIds: { source: 'conn_src', sink: '${params.sink}' },
+    };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('rejects a half pair — a pair with one end missing is not a pair', () => {
+    expect(() => NodeSchema.parse({ ...node, connectionIds: { source: 'conn_src' } })).toThrow();
+    expect(() => NodeSchema.parse({ ...node, connectionIds: { sink: 'conn_sink' } })).toThrow();
+  });
+
+  it('rejects an empty-string end', () => {
+    expect(() =>
+      NodeSchema.parse({ ...node, connectionIds: { source: '', sink: 'conn_sink' } }),
+    ).toThrow();
+  });
 });
 
 describe('EdgeOnSchema', () => {
