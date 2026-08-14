@@ -4071,7 +4071,9 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       case 'activity.warned':
         // #750 — INERT (like `activity.toolCalled`): a non-fatal ADVISORY about an
-        // attempt that succeeded anyway. It never enters `outputs` or `${}`, never
+        // attempt, which since #1101 may go on to succeed OR to fail (an adapter
+        // may mint one before the outcome is decided). "Non-fatal" is the durable
+        // property, not "rode a success": it never enters `outputs` or `${}`, never
         // touches the node's status, and never influences the run outcome — a
         // warning that could change a fold would be a failure wearing a softer
         // word. It lives in the log for the Monitor run-detail. Emitted once at
