@@ -85,20 +85,59 @@ function run(cmd, args, cwd) {
  * until someone deletes a file they have never heard of.
  */
 async function withLock(body) {
-  try {
-    writeFileSync(REFRESH_LOCK, `${String(process.pid)}\n`, { flag: 'wx' });
-  } catch (err) {
-    if (err.code !== 'EEXIST') throw err;
-    const holder = Number(readFileSync(REFRESH_LOCK, 'utf8').trim());
-    if (Number.isInteger(holder) && holder > 0 && alive(holder)) {
-      throw new ServiceError(
-        `another refresh is already running (pid ${String(holder)}).\n` +
-          `Wait for it, or if it is gone: rm ${REFRESH_LOCK}`,
-      );
+  /* Bounded, because every retry means the lock changed hands under us; a loop
+     that never gives up would spin instead of reporting a machine where
+     something is repeatedly dying mid-refresh. */
+  const ATTEMPTS = 3;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      writeFileSync(REFRESH_LOCK, `${String(process.pid)}\n`, { flag: 'wx' });
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+
+      /* The holder can RELEASE between our failed create and this read, which
+         is not an error — it just means the lock is free now. Retrying the
+         exclusive create is the whole response. */
+      let holderText;
+      try {
+        holderText = readFileSync(REFRESH_LOCK, 'utf8').trim();
+      } catch (readErr) {
+        if (readErr.code !== 'ENOENT') throw readErr;
+        if (attempt >= ATTEMPTS) throw new ServiceError('the refresh lock kept changing hands');
+        continue;
+      }
+
+      const holder = Number(holderText);
+      if (Number.isInteger(holder) && holder > 0 && alive(holder)) {
+        throw new ServiceError(
+          `another refresh is already running (pid ${String(holder)}).\n` +
+            `Wait for it, or if it is gone: rm ${REFRESH_LOCK}`,
+        );
+      }
+
+      /* STALE. Do NOT simply overwrite it: a plain write is not exclusive, so
+         two processes that both find the holder dead would both proceed — which
+         is the failure this lock exists to prevent, reintroduced in precisely
+         the crash-recovery path it was added for. Instead remove it and go
+         round again, so ownership is still decided by an exclusive create and
+         exactly one racer can win.
+         The removal is CONTENT-CHECKED: another process may have taken over
+         between the read above and here, and deleting a lock that is now LIVE
+         would be worse than the problem. Node has no atomic compare-and-delete,
+         so a window of a few microseconds remains — two processes recovering
+         the same stale lock at the same instant. Stated rather than hidden: the
+         cost is one duplicated build on a machine where a refresh had already
+         been killed mid-flight, and closing it properly needs a real lock file
+         API this script does not earn. */
+      if (readFileSync(REFRESH_LOCK, 'utf8').trim() === holderText) {
+        console.log(`taking over a stale lock from pid ${holderText}`);
+        rmSync(REFRESH_LOCK, { force: true });
+      }
+      if (attempt >= ATTEMPTS) throw new ServiceError('the refresh lock kept changing hands');
     }
-    console.log(`taking over a stale lock from pid ${readFileSync(REFRESH_LOCK, 'utf8').trim()}`);
-    writeFileSync(REFRESH_LOCK, `${String(process.pid)}\n`);
   }
+
   try {
     return await body();
   } finally {
