@@ -266,8 +266,8 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
            So the empty state states the SCOPE and the mechanism — studio is told,
            it does not look. */
         <p className="notice">
-          No external agent has reported activity in this window. Agents studio did not launch —
-          the autonomy build loop, or any other CLI running beside it — report in through{' '}
+          No external agent has reported activity in this window. Agents studio did not launch — the
+          autonomy build loop, or any other CLI running beside it — report in through{' '}
           <code>POST /api/monitor/external-activity</code>; studio does not watch processes it did
           not start.
         </p>

@@ -329,11 +329,7 @@ export function aggregateExternalAgentActivity(
     })
     .from(externalAgentActivity)
     .where(where)
-    .groupBy(
-      externalAgentActivity.source,
-      externalAgentActivity.agent,
-      externalAgentActivity.model,
-    )
+    .groupBy(externalAgentActivity.source, externalAgentActivity.agent, externalAgentActivity.model)
     /* A TOTAL order, so the table does not reshuffle between two polls of
      * identical data: busiest first, then the (source, agent, model) tail, which
      * is unique per group and is what makes the order total. Ordered in SQL

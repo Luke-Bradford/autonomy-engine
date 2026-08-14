@@ -878,7 +878,9 @@ describe('AiActivityPage', () => {
 
       await waitFor(() =>
         expect(
-          screen.getByText('1 of 3 reported invocations running now — 1 completed, 1 did not, 1 unknown.'),
+          screen.getByText(
+            '1 of 3 reported invocations running now — 1 completed, 1 did not, 1 unknown.',
+          ),
         ).toBeInTheDocument(),
       );
     });
@@ -948,9 +950,7 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
 
-      await waitFor(() =>
-        expect(screen.getByText(/in THIS workspace's runs/)).toBeInTheDocument(),
-      );
+      await waitFor(() => expect(screen.getByText(/in THIS workspace's runs/)).toBeInTheDocument());
     });
     /**
      * A group is MANY invocations, so "some reported" is a state a single row

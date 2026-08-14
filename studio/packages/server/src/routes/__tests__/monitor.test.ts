@@ -202,8 +202,8 @@ describe('POST /api/monitor/external-activity', () => {
     ...over,
   });
 
-  const post = (app: FastifyInstance, payload: unknown) =>
-    app.inject({ method: 'POST', url: '/api/monitor/external-activity', payload });
+  const post = async (app: FastifyInstance, payload: Record<string, unknown>) =>
+    await app.inject({ method: 'POST', url: '/api/monitor/external-activity', payload });
 
   it('answers 201 on first sight and 200 on a re-report of the same invocation', async () => {
     const { app } = await makeApp();
