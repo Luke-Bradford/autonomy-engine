@@ -56,9 +56,14 @@ function stripNodeConnectionPair(
   pair: NonNullable<Node['connectionIds']>,
   strippedIds: Set<string>,
 ): NodeExport {
-  const { connectionIds, connectionParams, ...rest } = node;
-  void connectionIds;
-  void connectionParams; // refused alongside a pair at save; never re-exported
+  // `connectionIds` is NOT destructured out — the return below rebuilds it from
+  // the classified ends, so excluding it here would be redundant. Only
+  // `connectionParams` must go: it is refused alongside a pair at save
+  // (`engine/params.ts`), so it is never re-exported. Same `void` idiom as
+  // `stripNodeConnectionId` below (this file's existing convention; a leading
+  // `_` is not exempt under this repo's `no-unused-vars` config).
+  const { connectionParams, ...rest } = node;
+  void connectionParams;
   let stripped = false;
   const portableEnd = (id: string): string | null => {
     if (interpolationMode(id).mode !== 'literal') return id;
