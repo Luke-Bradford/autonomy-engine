@@ -44,6 +44,8 @@ describe('connection config is one declaration, server and shared', () => {
     expect(schema.safeParse({ roots: ['/tmp'], maxBytes: 1024 }).success).toBe(true);
     const empty = schema.safeParse({ roots: [] });
     expect(empty.success).toBe(false);
-    expect(empty.error?.issues[0]?.message).toBe('an fs connection needs at least one allowed root');
+    expect(empty.error?.issues[0]?.message).toBe(
+      'an fs connection needs at least one allowed root',
+    );
   });
 });
