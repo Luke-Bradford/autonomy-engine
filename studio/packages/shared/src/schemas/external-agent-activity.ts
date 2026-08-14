@@ -27,6 +27,14 @@ import { z } from 'zod';
  * so summing them into the money model would corrupt the one number the cost
  * surfaces exist to keep honest. Reported activity is rendered as its own
  * section, attributed to its reporter, and never added to studio's own figures.
+ *
+ * NO COST FIELD IS ACCEPTED, and that is a decision rather than an omission —
+ * `loop/fire_stats.sh` parses a `total_cost_usd` out of every fire log, so the
+ * figure is there for the taking. It is an API-EQUIVALENT estimate for work
+ * billed to a subscription, i.e. money nobody was charged. Studio's cost
+ * surfaces are fail-closed about what they can price; admitting a number that
+ * corresponds to no invoice would make them confidently wrong instead. Reported
+ * SPEND belongs to the quota panel next door, which reads the account.
  */
 
 /**
@@ -108,6 +116,17 @@ export const ExternalAgentReportSchema = z
   .refine((r) => r.endedAt === null || r.endedAt >= r.startedAt, {
     message: 'endedAt must not be earlier than startedAt',
     path: ['endedAt'],
+  })
+  /*
+   * A SETTLED outcome with no end stamp is a contradiction, and refusing it is
+   * what lets `endedAt === null` be the single, trustworthy in-flight signal. A
+   * reporter that knows HOW an invocation ended necessarily knows THAT it ended;
+   * accepting the pair would put a finished fire in the "running right now"
+   * count forever, which is the reading this whole surface exists to give.
+   */
+  .refine((r) => r.outcome === 'unknown' || r.endedAt !== null, {
+    message: 'a settled outcome requires endedAt',
+    path: ['outcome'],
   });
 
 export type ExternalAgentReport = z.infer<typeof ExternalAgentReportSchema>;
@@ -187,6 +206,17 @@ export const ExternalAgentActivitySchema = z
   .object({
     ...activityCounts,
     tokens: ExternalAgentTokensSchema,
+    /**
+     * Whether `reporters` is a PREFIX rather than the whole breakdown.
+     *
+     * `source`/`agent`/`model` are free text from a caller studio does not
+     * control, so the group count is bounded by what reporters invent — and this
+     * body is polled every few seconds. The table is therefore capped while the
+     * counts above it are computed ungrouped, so a truncated breakdown never
+     * makes the HEADLINE under-report. Carried as data rather than inferred from
+     * `reporters.length`, which would make the UI re-derive the server's cap.
+     */
+    truncated: z.boolean(),
     /** Busiest first, total order (invocations desc, then source/agent/model). */
     reporters: z.array(ExternalReporterActivitySchema),
   })

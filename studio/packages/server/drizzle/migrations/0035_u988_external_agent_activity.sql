@@ -51,7 +51,16 @@ CREATE TABLE IF NOT EXISTS external_agent_activity (
 CREATE UNIQUE INDEX IF NOT EXISTS external_agent_activity_owner_source_external_idx
   ON external_agent_activity (owner_id, source, external_id);
 
--- The window query: owner-scoped, `started_at_ms >= sinceMs`. Also the order the
--- retention sweep deletes in.
+-- The window query: owner-scoped, by the interval the invocation OCCUPIED.
 CREATE INDEX IF NOT EXISTS external_agent_activity_owner_started_idx
   ON external_agent_activity (owner_id, started_at_ms);
+
+-- The RETENTION sweep (#464's shared batching discipline), which scans a
+-- DIFFERENT column on purpose: it prunes by `reported_at_ms`, studio's own
+-- clock, while the window above reads `started_at_ms`, the reporter's. Retention
+-- must not be evadable by a reporter whose clock is wrong or hostile — a row
+-- stamped years in the future would otherwise never expire. The sweep is not
+-- owner-scoped (expiry is a property of the row, not of who wrote it), so this
+-- index leads with `reported_at_ms` rather than reusing the one above.
+CREATE INDEX IF NOT EXISTS external_agent_activity_reported_at_idx
+  ON external_agent_activity (reported_at_ms);

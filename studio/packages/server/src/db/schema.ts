@@ -861,5 +861,9 @@ export const externalAgentActivity = sqliteTable(
       table.externalId,
     ),
     index('external_agent_activity_owner_started_idx').on(table.ownerId, table.startedAtMs),
+    // The retention sweep scans `reported_at_ms` — STUDIO's clock — not the
+    // reporter-supplied `started_at_ms` the window reads, so that a wrong or
+    // hostile reporter clock cannot make a row outlive retention.
+    index('external_agent_activity_reported_at_idx').on(table.reportedAtMs),
   ],
 );
