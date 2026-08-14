@@ -16,6 +16,15 @@ vi.mock('./api/connections', async (importActual) => ({
   listConnections: vi.fn().mockResolvedValue([]),
 }));
 
+// #1085 — every case here renders the real route tree at `/`, and Home now
+// loads its recent runs on mount. Unmocked that reaches a real `fetch` in
+// jsdom, the same hazard `routes.test.tsx` documents for its own stubs. The
+// PAGED envelope, not a bare array: `usePagedList` spreads `page.items`.
+vi.mock('./api/runs', async (importActual) => ({
+  ...(await importActual<typeof import('./api/runs')>()),
+  listRuns: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+}));
+
 /**
  * The rail's links, scoped away from the page body. The Home page signposts the
  * same hubs, so an unscoped `getByRole('link', {name: 'Manage'})` is ambiguous
