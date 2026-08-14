@@ -278,6 +278,56 @@ describe('resolveMasterKey', () => {
   });
 });
 
+/**
+ * #1094 — the resolution reports WHERE the key lives, so `GET /api/settings`
+ * can tell the operator which file to back up without parsing it back out of
+ * `warning`'s prose.
+ */
+describe('resolveMasterKey keyFilePath', () => {
+  it('is null for an env-provided key, which has no file', async () => {
+    const key = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    const resolution = await resolveMasterKey({
+      AUTONOMY_MASTER_KEY: sodium.to_base64(key, sodium.base64_variants.ORIGINAL),
+    });
+    expect(resolution.keyFilePath).toBeNull();
+  });
+
+  it('names the file a key was READ from', async () => {
+    const dir = freshTmpDir();
+    const keyFilePath = join(dir, 'master.key');
+    const key = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    writeFileSync(keyFilePath, sodium.to_base64(key, sodium.base64_variants.ORIGINAL), {
+      mode: 0o600,
+    });
+    chmodSync(keyFilePath, 0o600);
+
+    const resolution = await resolveMasterKey({ AUTONOMY_MASTER_KEY_FILE: keyFilePath });
+    expect(resolution.keyFilePath).toBe(keyFilePath);
+  });
+
+  /*
+   * The generated case is the one that matters: this path is the ONLY content
+   * of the back-it-up advisory. Pinned against the file the resolver actually
+   * WROTE (read back and compared to the returned key), not merely against the
+   * path that was asked for — a report naming a file the key is not in would be
+   * worse than no report.
+   */
+  it('names the file a key was WRITTEN to', async () => {
+    const dir = freshTmpDir();
+    const keyFilePath = join(dir, 'nested', 'master.key');
+
+    const resolution = await resolveMasterKey({ AUTONOMY_MASTER_KEY_FILE: keyFilePath });
+    expect(resolution.source).toBe('generated');
+    expect(resolution.keyFilePath).toBe(keyFilePath);
+
+    const persisted = sodium.from_base64(
+      readFileSync(resolution.keyFilePath!, 'utf8'),
+      sodium.base64_variants.ORIGINAL,
+    );
+    expect(Buffer.from(persisted)).toEqual(Buffer.from(resolution.key));
+  });
+});
+
 describe('DEFAULT_MASTER_KEY_FILE', () => {
   it('is an absolute path', () => {
     expect(isAbsolute(DEFAULT_MASTER_KEY_FILE)).toBe(true);

@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { buildDedupeKey, HelloSchema, type Hello } from '@autonomy-studio/shared';
 import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
-import { resolveMasterKey } from './secrets/secrets.js';
+import { masterKeyStatusOf, resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
 import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
 import { drainWebhookDeliveries } from './repo/webhook-deliveries.js';
@@ -53,6 +53,7 @@ import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { monitorRoutes } from './routes/monitor.js';
 import { quotaRoutes } from './routes/quota.js';
+import { settingsRoutes } from './routes/settings.js';
 import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
@@ -965,6 +966,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(workspaceAuditRoutes);
   await fastify.register(monitorRoutes);
   await fastify.register(quotaRoutes);
+  // #1094 — the master key's PROVENANCE, resolved once at boot above. Passed
+  // as a registration option rather than read off a decoration: it is a fact
+  // about this process that cannot change while it runs, and `masterKeyStatusOf`
+  // is the only thing that strips the key material off the resolution.
+  await fastify.register(settingsRoutes, { masterKey: masterKeyStatusOf(masterKeyResolution) });
   await fastify.register(versionRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));

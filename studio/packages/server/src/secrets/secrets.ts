@@ -32,15 +32,41 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import sodium from 'libsodium-wrappers';
+import type { MasterKeySource, MasterKeyStatus } from '@autonomy-studio/shared';
 
-export type MasterKeySource = 'env' | 'file' | 'generated';
+/*
+ * The union is declared in `@autonomy-studio/shared` and re-exported here, not
+ * declared here and mirrored there. `GET /api/settings` renders a different
+ * sentence per source, so both halves of the wire must agree on the list; two
+ * declarations would let a fourth source reach the browser as a string nothing
+ * has a case for.
+ */
+export type { MasterKeySource };
 
 export interface MasterKeyResolution {
   /** Raw 32-byte key material. Never log this. */
   key: Uint8Array;
   source: MasterKeySource;
+  /**
+   * Absolute path of the file the key lives in — `null` only for `source ===
+   * 'env'`, which has no file. Resolved here rather than recovered from
+   * `warning`'s prose by the one surface that reports it (#1094).
+   */
+  keyFilePath: string | null;
   /** Set (and already logged) only when `source === 'generated'`. */
   warning?: string;
+}
+
+/**
+ * The resolution's PROVENANCE, with the key itself dropped — what
+ * `GET /api/settings` serves.
+ *
+ * Built here, next to the resolution it describes, so the projection that
+ * removes the key material is written once and cannot be re-derived slightly
+ * differently by a route that happens to hold a `MasterKeyResolution`.
+ */
+export function masterKeyStatusOf(resolution: MasterKeyResolution): MasterKeyStatus {
+  return { source: resolution.source, keyFilePath: resolution.keyFilePath };
 }
 
 export class SecretDecryptionError extends Error {
@@ -215,7 +241,7 @@ export async function resolveMasterKey(
         `AUTONOMY_MASTER_KEY is set but is not a valid ${keyBytes}-byte key (expected base64 or hex)`,
       );
     }
-    return { key: decoded, source: 'env' };
+    return { key: decoded, source: 'env', keyFilePath: null };
   }
 
   const keyFilePath = resolveMasterKeyFilePath(env);
@@ -227,7 +253,7 @@ export async function resolveMasterKey(
         `Master key file at "${keyFilePath}" does not contain a valid ${keyBytes}-byte key`,
       );
     }
-    return { key: decoded, source: 'file' };
+    return { key: decoded, source: 'file', keyFilePath };
   }
 
   const generated = s.randombytes_buf(keyBytes);
@@ -243,7 +269,7 @@ export async function resolveMasterKey(
     'file is lost. Set AUTONOMY_MASTER_KEY or AUTONOMY_MASTER_KEY_FILE to pin your own ' +
     'key instead of relying on auto-generation.';
   console.warn(warning);
-  return { key: generated, source: 'generated', warning };
+  return { key: generated, source: 'generated', keyFilePath, warning };
 }
 
 /**
