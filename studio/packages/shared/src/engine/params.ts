@@ -1332,6 +1332,24 @@ export function validateRefs(
         foreachChildIds.has(node.id),
       );
     }
+    // M1 (#1104) — the PAIRED binding's two ends, each scanned exactly as the
+    // singular above (same env, same no-secret-sink posture). Scanned per END so
+    // the diagnostic names which one is wrong: "the connection ref is bad" on a
+    // heterogeneous copy is the same support problem the side-labelled dispatch
+    // failure exists to prevent.
+    if (node.connectionIds !== undefined) {
+      for (const side of ['source', 'sink'] as const) {
+        scan(
+          `nodes.${node.id}.connectionIds.${side}`,
+          node.connectionIds[side],
+          scope,
+          errors,
+          0,
+          undefined,
+          foreachChildIds.has(node.id),
+        );
+      }
+    }
     // #2 L13b — per-dispatch connection-parameter bindings. `scan` walks the
     // whole record (nested records/arrays included), so an embedded `${}`
     // string anywhere in a binding value is validated against the SAME env the
@@ -2104,10 +2122,40 @@ export function validateDoc(
           `node.${node.id}: connectionParams have no effect on a call node ` +
             "(its dispatch and connection are the child pipeline's) — remove them",
         );
+      } else if (node.connectionIds !== undefined) {
+        // M1 (#1104) — a PAIRED node has two connections, and `connectionParams`
+        // is a single flat record with no side. Binding it to one end silently
+        // (source, say) would be a guess the operator cannot see; per-side
+        // bindings are not modelled. Fail CLOSED — refusing now leaves the
+        // semantics free to be specced later, whereas a silent default would
+        // have to be preserved or broken.
+        errors.push(
+          `node.${node.id}: connectionParams cannot bind against connectionIds ` +
+            '(a paired node has two connections and these bindings name no side) — remove them',
+        );
       } else if (node.connectionId === undefined) {
         errors.push(
           `node.${node.id}: connectionParams need a connectionId to bind against ` +
             '(without one the bindings are silently inert) — bind a connection or remove them',
+        );
+      }
+    }
+    // M1 (#1104) — the paired binding's own shape rules, in the same
+    // silently-inert-config idiom (the L12 call-node precedent). Both are
+    // activity-AGNOSTIC and decidable from the doc alone: whether the node's
+    // ACTIVITY accepts a pair is a catalog question, and — exactly as for a
+    // stray `connectionId` on a connection-less activity — that check stays at
+    // DISPATCH, where the catalog is the executor's, not the validator's.
+    if (node.connectionIds !== undefined) {
+      if (node.call !== undefined) {
+        errors.push(
+          `node.${node.id}: connectionIds have no effect on a call node ` +
+            "(its dispatch and connections are the child pipeline's) — remove them",
+        );
+      } else if (node.connectionId !== undefined) {
+        errors.push(
+          `node.${node.id}: connectionId and connectionIds are mutually exclusive ` +
+            '(which one binds would be undecidable) — keep the single or the pair, not both',
         );
       }
     }
