@@ -72,7 +72,7 @@ import type { Db } from '../repo/types.js';
  * binding), which has no node to blame.
  */
 export interface UnserializableRefDetail {
-  ref: 'connection' | 'call' | 'binding';
+  ref: 'connection' | 'connectionSource' | 'connectionSink' | 'call' | 'binding';
   nodeId: string | null;
   danglingId: string;
 }
@@ -97,7 +97,11 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
   const what =
     detail.ref === 'connection'
       ? `connection "${detail.danglingId}"`
-      : `pipeline version "${detail.danglingId}"`;
+      : detail.ref === 'connectionSource'
+        ? `source connection "${detail.danglingId}"`
+        : detail.ref === 'connectionSink'
+          ? `sink connection "${detail.danglingId}"`
+          : `pipeline version "${detail.danglingId}"`;
   return detail.nodeId === null
     ? `binds ${what}, which no longer exists`
     : `node "${detail.nodeId}" references ${what}, which no longer exists`;
@@ -216,13 +220,23 @@ function forwardRemapNode(
   connRidByDbId: Map<string, string>,
   versionRidByDbId: Map<string, string>,
 ): NodeExport {
-  const { connectionId, call, ...rest } = node;
-  let connExport: string | null;
-  if (connectionId === undefined) connExport = null;
-  else if (interpolationMode(connectionId).mode !== 'literal') connExport = connectionId;
-  else connExport = connRidByDbId.get(connectionId) ?? connectionId;
+  const { connectionId, connectionIds, call, ...rest } = node;
+  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function, so
+  // the singular and each end of the M1 (#1104) pair cannot drift apart —
+  // divergence here manufactures a false "changed" in the stored-vs-branch
+  // compare, which is worse than a loud failure because it silently mints a
+  // version nobody authored.
+  const forwardRef = (id: string): string =>
+    interpolationMode(id).mode !== 'literal' ? id : (connRidByDbId.get(id) ?? id);
+  const connExport: string | null = connectionId === undefined ? null : forwardRef(connectionId);
 
   const exported: NodeExport = { ...rest, connectionId: connExport };
+  if (connectionIds !== undefined) {
+    exported.connectionIds = {
+      source: forwardRef(connectionIds.source),
+      sink: forwardRef(connectionIds.sink),
+    };
+  }
   if (call) {
     const ref = call.pipelineVersionId;
     const refExport =
@@ -315,13 +329,24 @@ export function compareStoredVersion(
   connRidByDbId: Map<string, string>,
   versionRidByDbId: Map<string, string>,
 ): StoredVersionComparison {
-  const maskConnection = new Set<string>();
-  const maskCall = new Set<string>();
+  const masks: NodeRefMasks = {
+    connection: new Set<string>(),
+    source: new Set<string>(),
+    sink: new Set<string>(),
+    call: new Set<string>(),
+  };
   for (const node of stored.nodes) {
-    if (isUndecidableRef(node.connectionId, connRidByDbId)) maskConnection.add(node.id);
-    if (isUndecidableRef(node.call?.pipelineVersionId, versionRidByDbId)) maskCall.add(node.id);
+    if (isUndecidableRef(node.connectionId, connRidByDbId)) masks.connection.add(node.id);
+    // M1 (#1104) — each END of a pair is judged on its own. Folding both into
+    // one per-node flag would over-mask: a node whose source is dangling and
+    // whose sink is fine would have its (decidable) sink blanked too, hiding a
+    // real hand-edit to that end behind the other end's undecidability.
+    if (isUndecidableRef(node.connectionIds?.source, connRidByDbId)) masks.source.add(node.id);
+    if (isUndecidableRef(node.connectionIds?.sink, connRidByDbId)) masks.sink.add(node.id);
+    if (isUndecidableRef(node.call?.pipelineVersionId, versionRidByDbId)) masks.call.add(node.id);
   }
-  const undecidableRefs = maskConnection.size + maskCall.size;
+  const undecidableRefs =
+    masks.connection.size + masks.source.size + masks.sink.size + masks.call.size;
   if (undecidableRefs === 0) {
     return {
       identical:
@@ -333,12 +358,12 @@ export function compareStoredVersion(
   const storedForm = pipelineVersionContentForm({
     ...stored,
     nodes: stored.nodes.map((n) =>
-      maskNode(forwardRemapNode(n, connRidByDbId, versionRidByDbId), maskConnection, maskCall),
+      maskNode(forwardRemapNode(n, connRidByDbId, versionRidByDbId), masks),
     ),
   } as PipelineVersionExport);
   const branchForm = pipelineVersionContentForm({
     ...branch,
-    nodes: branch.nodes.map((n) => maskNode(n, maskConnection, maskCall)),
+    nodes: branch.nodes.map((n) => maskNode(n, masks)),
   });
   return { identical: storedForm === branchForm, undecidableRefs };
 }
@@ -352,19 +377,36 @@ function isUndecidableRef(ref: string | undefined, ridByDbId: Map<string, string
   return !ridByDbId.has(ref);
 }
 
+/** #1018 — the node ids whose ref at each POSITION is undecidable. One set per
+ * position rather than per node, because a node carries up to three refs
+ * (`connectionId` OR the M1 pair's two ends, plus `call`) and each is decidable
+ * on its own. */
+interface NodeRefMasks {
+  connection: Set<string>;
+  source: Set<string>;
+  sink: Set<string>;
+  call: Set<string>;
+}
+
 /** #1018 — blank the named node's undecidable ref(s) to the shared sentinel.
  * Applied to BOTH sides by node id, so the masked positions cancel and every
  * other field still speaks. A branch node that has no `call` where the stored one
  * did is left alone — that is a real structural difference, not an undecidable
- * ref. */
-function maskNode(
-  node: NodeExport,
-  maskConnection: Set<string>,
-  maskCall: Set<string>,
-): NodeExport {
+ * ref; the same reasoning applies to a branch node with no `connectionIds`. */
+function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
   let masked = node;
-  if (maskConnection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
-  if (maskCall.has(node.id) && masked.call !== undefined) {
+  if (masks.connection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
+  if (masked.connectionIds !== undefined) {
+    const pair = masked.connectionIds;
+    masked = {
+      ...masked,
+      connectionIds: {
+        source: masks.source.has(node.id) ? UNDECIDABLE_REF : pair.source,
+        sink: masks.sink.has(node.id) ? UNDECIDABLE_REF : pair.sink,
+      },
+    };
+  }
+  if (masks.call.has(node.id) && masked.call !== undefined) {
     masked = { ...masked, call: { ...masked.call, pipelineVersionId: UNDECIDABLE_REF } };
   }
   return masked;
@@ -441,7 +483,7 @@ function remapRef(
 }
 
 function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
-  const { connectionId, call, ...rest } = node;
+  const { connectionId, connectionIds, call, ...rest } = node;
   const mappedConnectionId = remapRef(connectionId, maps.connectionResourceId, () => ({
     ref: 'connection',
     nodeId: node.id,
@@ -449,6 +491,23 @@ function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   }));
 
   const exported: NodeExport = { ...rest, connectionId: mappedConnectionId };
+  if (connectionIds !== undefined) {
+    // M1 (#1104) — each end remapped independently, and a dangling end names
+    // WHICH end it is: "node X references a connection that no longer exists"
+    // is not actionable on a node that binds two of them.
+    exported.connectionIds = {
+      source: remapRef(connectionIds.source, maps.connectionResourceId, () => ({
+        ref: 'connectionSource',
+        nodeId: node.id,
+        danglingId: connectionIds.source,
+      })),
+      sink: remapRef(connectionIds.sink, maps.connectionResourceId, () => ({
+        ref: 'connectionSink',
+        nodeId: node.id,
+        danglingId: connectionIds.sink,
+      })),
+    };
+  }
   if (call) {
     // call.pipelineVersionId is non-nullable; remapRef never returns null for a
     // non-null literal input (it either maps it or throws), so the `!` is sound.

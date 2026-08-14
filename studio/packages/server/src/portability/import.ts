@@ -23,8 +23,17 @@ import type { Db } from '../repo/types.js';
  * `connectionId` (every export nulls it) becomes an OMITTED key — the
  * live-row `NodeSchema.connectionId` is `optional()`, never `null`. */
 function toDbNode(node: NodeExport): Node {
-  const { connectionId, ...rest } = node;
-  return connectionId === null ? rest : { ...rest, connectionId };
+  const { connectionId, connectionIds, ...rest } = node;
+  const base = connectionId === null ? rest : { ...rest, connectionId };
+  // M1 (#1104) — the paired binding's inverse. An end nulled by export is
+  // UNBOUND on import, and `NodeSchema.connectionIds` requires BOTH ends, so a
+  // pair with either end nulled drops the whole key: the importer rebinds it
+  // (the node is flagged in `strippedConnectionRefs`). Keeping a half pair would
+  // be unsavable, and manufacturing an id for the missing end is the fail-open
+  // this codebase refuses. A fully-`${}` pair survives intact.
+  if (connectionIds === undefined) return base;
+  const { source, sink } = connectionIds;
+  return source === null || sink === null ? base : { ...base, connectionIds: { source, sink } };
 }
 
 /**
