@@ -11,13 +11,21 @@ import { formatTokenCount, type ExternalAgentTokens } from '@autonomy-studio/sha
  * the helper would mean inventing exactly the money fields this surface refuses
  * to accept.
  *
- * `measuredInvocations === 0` is the group-level "nobody counted" signal, and it
- * is checked FIRST: a group whose every invocation reported nothing must not
- * render `0 in · 0 out`, which is the confident-zero-over-unmeasured-work
- * failure the metered side already refuses.
+ * The "neither side measured" check is keyed on THE SIDES, exactly as
+ * `tokenSummary` does it — not on `measuredInvocations`. An earlier draft used
+ * that count and a mutation test proved the branch dead: the two are equivalent
+ * by construction (the SQL sets `measuredInvocations` from those very columns),
+ * so the guard could never be the thing that fired. Keyed on the sides it is
+ * load-bearing, and it collapses "input not reported · output not reported" to
+ * the one short reading the metered table already uses.
+ *
+ * `measuredInvocations` earns its place elsewhere: a group is MANY invocations,
+ * so "some of them reported" is a state a single row cannot have and a sum
+ * cannot express. Two of five fires reporting tokens would otherwise render as
+ * a confident total for all five.
  */
-export function reportedTokenSummary(tokens: ExternalAgentTokens): string {
-  if (tokens.measuredInvocations === 0) return 'not reported';
+export function reportedTokenSummary(tokens: ExternalAgentTokens, invocations: number): string {
+  if (tokens.inputTokens === null && tokens.outputTokens === null) return 'not reported';
   const parts = [
     tokens.inputTokens === null
       ? 'input not reported'
@@ -33,6 +41,12 @@ export function reportedTokenSummary(tokens: ExternalAgentTokens): string {
    * subscription CLI they dominate the token count entirely. */
   if (tokens.cacheReadTokens !== null) {
     parts.push(`${formatTokenCount(tokens.cacheReadTokens)} cached`);
+  }
+  /* A PARTIALLY-measured group is stated as such. The figures are a real sum
+   * over the invocations that reported, so presenting them unqualified beside a
+   * larger invocation count would read as a total for all of them. */
+  if (tokens.measuredInvocations < invocations) {
+    parts.push(`${tokens.measuredInvocations} of ${invocations} measured`);
   }
   return parts.join(' · ');
 }

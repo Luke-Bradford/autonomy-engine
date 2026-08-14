@@ -299,7 +299,7 @@ function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }
                   <td>{r.model ?? 'not reported'}</td>
                   <td>{r.invocations}</td>
                   <td>{r.inFlight}</td>
-                  <td>{reportedTokenSummary(r.tokens)}</td>
+                  <td>{reportedTokenSummary(r.tokens, r.invocations)}</td>
                   <td>{formatWhen(r.lastAt)}</td>
                 </tr>
               ))}
