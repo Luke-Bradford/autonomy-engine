@@ -37,7 +37,7 @@ in #1 (contract/policy/secure), #2 (AI activities); this says WHAT activities ex
 | --- | --- | --- | --- |
 | `http_request` | Web | http | **shipped** |
 | `webhook` | Webhook | http (wait-for-callback) | med |
-| `file_read` / `file_write` / `file_copy` / `file_move` / `file_delete` / `file_list` | (Copy, GetMetadata) | a new **`fs`/`storage` connector** (local FS first; S3/blob later via connector kinds) | **high** (the operator's "file activity, copy steps") |
+| `file_read` / `file_write` / `file_copy` / `file_move` / `file_delete` / `file_list` | (GetMetadata) — **NOT ADF's Copy.** These are FILE operations. ADF's Copy activity (heterogeneous source/sink datasets + column mapping) is a different thing and is specced in `2026-08-14-foundation-data-movement.md`; #993 was filed precisely because `file_copy` read as ADF's Copy and is not | a new **`fs`/`storage` connector** (local FS first; S3/blob later via connector kinds) | **high** (the operator's "file activity, copy steps") |
 | `script` / `shell` | Custom/Batch | agent-ish subprocess | med (overlaps `agent_task`) |
 
 ### Execution — AI (Spec #2)
@@ -165,7 +165,11 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
 
 ## Non-goals
 
-- No dataset/linked-service data-movement abstraction (defer `copy`/`lookup`/`transform`).
+- ~~No dataset/linked-service data-movement abstraction (defer `copy`/`lookup`/`transform`).~~
+  **RETRACTED 2026-08-14 by operator decision #993** — ADF-grade data movement (heterogeneous
+  source/sink + column mapping) is the intent, and it is specced in
+  `2026-08-14-foundation-data-movement.md` (the M-series). `transform` alone stays deferred, and is a
+  non-goal *of that spec* with its reason stated there.
 - No alerting/notification system here (own spec). No UI.
 
 ## Open questions (for Codex / review)
@@ -174,6 +178,9 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
    (Leaning: formalize on the container — reuse the proven walk.)
 2. `wait`/`webhook` timers — reuse the #1 driver-timer→event pattern (same as retry) — confirm one
    mechanism, not three.
-3. File/storage connector: local-FS-only in v1 (self-host) with S3/blob as later connector kinds,
-   or design the storage abstraction up-front?
+3. ~~File/storage connector: local-FS-only in v1 (self-host) with S3/blob as later connector kinds,
+   or design the storage abstraction up-front?~~ **ANSWERED 2026-08-14** — local `fs` shipped first
+   (A11), and the storage abstraction is now designed up-front as the dataset layer in
+   `2026-08-14-foundation-data-movement.md` §2. Stores are ordinary `ConnectionKind`s; the *shape* of
+   a thing in a store is a `dataset`.
 4. `script`/`shell` vs `agent_task` — one subprocess activity or two?
