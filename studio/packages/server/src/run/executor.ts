@@ -538,6 +538,35 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /**
+   * The ONE constructor for a `node.failed` from a `resolveConnection` refusal,
+   * so the source and sink call sites cannot drift on how a failure is shaped.
+   *
+   * Most pre-flight failures are PERMANENT (a config typo does not self-heal);
+   * the #2 L14c admission gate is the one transient case, carrying its own
+   * `kind:'transient'` + `retryAfterSeconds` so it flows through the L7 retry
+   * path exactly like an adapter-reported `rate_limit`. `side` is applied here
+   * for a PAIRED activity only — an unpaired failure must not claim an end.
+   */
+  function connectionFailure(
+    runId: string,
+    nodeId: string,
+    attemptId: string,
+    failure: { error: string; code: string; kind?: FailureKind; retryAfterSeconds?: number },
+    side: 'source' | 'sink' | undefined,
+  ): EngineEvent {
+    const labelled = side === undefined ? failure : labelSide(failure, side);
+    return nodeFailed(runId, nodeId, attemptId, {
+      error: labelled.error,
+      kind: failure.kind ?? 'permanent',
+      code: failure.code,
+      ...(failure.retryAfterSeconds !== undefined
+        ? { retryAfterSeconds: failure.retryAfterSeconds }
+        : {}),
+      ...(side !== undefined ? { side } : {}),
+    });
+  }
+
+  /**
    * Consume an adapter's `ActivityEvent` stream (INSIDE the worker-pool limit)
    * and map it to the terminal + observability engine events. Any throw, or a
    * stream that ends without a terminal, becomes a `node.failed` — one bad node
@@ -880,20 +909,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         paired ? undefined : command.resolvedConnectionParams,
       );
       if ('error' in resolved) {
-        // Most pre-flight failures are PERMANENT (a config typo does not self-heal);
-        // the #2 L14c admission gate is the one transient case, carrying its own
-        // `kind:'transient'` + `retryAfterSeconds` so it flows through the L7 retry
-        // path exactly like an adapter-reported `rate_limit`.
-        const failure = paired ? labelSide(resolved, 'source') : resolved;
-        yield nodeFailed(runId, nodeId, attemptId, {
-          error: failure.error,
-          kind: resolved.kind ?? 'permanent',
-          code: resolved.code,
-          ...(resolved.retryAfterSeconds !== undefined
-            ? { retryAfterSeconds: resolved.retryAfterSeconds }
-            : {}),
-          ...(paired ? { side: 'source' as const } : {}),
-        });
+        yield connectionFailure(runId, nodeId, attemptId, resolved, paired ? 'source' : undefined);
         return;
       }
       ({ adapter, secret, connectionConfig } = resolved);
@@ -909,16 +925,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           undefined,
         );
         if ('error' in resolvedSink) {
-          const failure = labelSide(resolvedSink, 'sink');
-          yield nodeFailed(runId, nodeId, attemptId, {
-            error: failure.error,
-            kind: resolvedSink.kind ?? 'permanent',
-            code: resolvedSink.code,
-            ...(resolvedSink.retryAfterSeconds !== undefined
-              ? { retryAfterSeconds: resolvedSink.retryAfterSeconds }
-              : {}),
-            side: 'sink',
-          });
+          yield connectionFailure(runId, nodeId, attemptId, resolvedSink, 'sink');
           return;
         }
         // The sink's ADAPTER is deliberately discarded: the SOURCE adapter is the

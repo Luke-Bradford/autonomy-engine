@@ -14,6 +14,7 @@ import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, getTrigger, updateTrigger } from '../../repo/triggers.js';
 import type { Db } from '../../repo/types.js';
 import {
+  readyVersionResourceIds,
   regateTriggersForConnection,
   unreadyConnectionsForVersion,
   type CatalogOverride,
@@ -162,6 +163,30 @@ describe('M1 #1104 — the paired binding in the readiness gates', () => {
     const sink = needsSecretConnection(db);
     const vId = versionWithNodes(db, 'local', [pairNode('n1', readyConnection(db), sink)]);
     expect(unreadyConnectionsForVersion(db, 'local', vId, unpairedCatalog())).toEqual([]);
+  });
+
+  it('the IMPORT-PREVIEW readiness domain inherits the pair too (the third gate)', () => {
+    // `readyVersionResourceIds` is a pass-through, but "threaded through all
+    // three gates so a caller cannot disagree" is only true if it is threaded —
+    // an untested pass-through is where a dropped argument hides.
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [pairNode('n1', readyConnection(db), needsSecretConnection(db))],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    // Paired: the unready SINK drops the version out of the ready domain.
+    expect(readyVersionResourceIds(db, 'local', pairedCatalog()).has(version.resourceId)).toBe(
+      false,
+    );
+    // Unpaired: the same pair is inert, so the version is ready.
+    expect(readyVersionResourceIds(db, 'local', unpairedCatalog()).has(version.resourceId)).toBe(
+      true,
+    );
   });
 
   it('the REVERSE gate inherits the pair: a sink going unready disables its dependents', () => {

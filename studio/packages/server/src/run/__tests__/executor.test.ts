@@ -1406,7 +1406,11 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
 
   /** A registry with the real adapters plus a spy `http`, so both ends resolve. */
   function pairedRegistry(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
-    const reg = testRegistry();
+    // A MUTABLE copy: `ConnectorRegistry` is a ReadonlyMap, and the existing
+    // `fakeHttpAdapter`/`fakeAgentCliAdapter` helpers build a fresh Map for the
+    // same reason. Copied rather than built from scratch because BOTH ends must
+    // resolve here — the sink's adapter has to exist even though it never runs.
+    const reg = new Map(testRegistry());
     reg.set('http', {
       kind: 'http',
       configSchema: reg.get('http')!.configSchema,
