@@ -8,3 +8,4 @@ export * from './llm-config.js';
 export * from './llm-recipes.js';
 export * from './llm-structured.js';
 export * from './fs-activity-config.js';
+export * from './connection-config.js';

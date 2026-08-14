@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { HTTP_SECRET_HEADERS_FIELD, httpSecretHeadersSchema } from '@autonomy-studio/shared';
+import {
+  HTTP_SECRET_HEADERS_FIELD,
+  httpConnectionConfigSchema,
+  httpSecretHeadersSchema,
+} from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import { redactSecrets } from './redact.js';
 
@@ -51,13 +55,9 @@ const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
  */
 const SECRET_HEADERS_PREFIX = `${HTTP_SECRET_HEADERS_FIELD}.`;
 
-/** The Connection-level (non-secret) config for an `http` connection. */
-const httpConnectionConfigSchema = z.object({
-  baseUrl: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  /** Per-request timeout in ms (whole exchange). Defaults to 30s. */
-  timeoutMs: z.number().int().positive().optional(),
-});
+// #1087 — the shape moved to `shared/catalog/connection-config.ts` so the
+// Manage › Connections form derives its controls from the schema this adapter
+// parses at dispatch. Imported, never re-declared.
 
 /** The per-activity request settings, read from the node's prepared `input`. */
 const httpRequestInputSchema = z.object({

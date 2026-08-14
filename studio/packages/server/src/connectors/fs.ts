@@ -9,6 +9,7 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
+  fsConnectionConfigSchema as sharedFsConnectionConfigSchema,
   fileCopyConfigSchema,
   fileDeleteConfigSchema,
   fileListConfigSchema,
@@ -111,17 +112,30 @@ const TRANSIENT_ERRNOS: ReadonlySet<string> = new Set([
   'EIO', // low-level I/O error (may be a transient device hiccup)
 ]);
 
-/** The Connection-level (non-secret) config for an `fs` connection. */
-const fsConnectionConfigSchema = z.object({
-  // Each root MUST be absolute — a relative root would resolve against the
-  // server's cwd (ambiguous + a traversal risk), so it is a config error.
-  roots: z
-    .array(z.string().min(1).refine(isAbsolute, 'every fs root must be an absolute path'))
-    .min(1, 'an fs connection needs at least one allowed root'),
-  /** Per-read size cap in bytes. Defaults to 10 MiB. */
-  maxBytes: z.number().int().positive().optional(),
-  /** Per-`file_list` entry cap. Defaults to 10000. */
-  maxEntries: z.number().int().positive().optional(),
+/**
+ * The Connection-level (non-secret) config for an `fs` connection.
+ *
+ * #1087 — the SHAPE lives in `shared/catalog/connection-config.ts`, so the
+ * Manage › Connections form derives its controls from the same declaration this
+ * adapter parses at dispatch. This is the ONE place server and shared diverge,
+ * and only by one check: each root MUST be absolute — a relative root would
+ * resolve against the server's cwd (ambiguous + a traversal risk) — and that is
+ * `node:path`'s platform-aware `isAbsolute`, which cannot live in a
+ * browser-safe package.
+ *
+ * Refining the shared `roots` rather than re-declaring it keeps the `.min(1)`
+ * and its message in ONE file (re-typing them here would reintroduce exactly
+ * the drift the move exists to kill), and any key added to the shared shape
+ * appears here automatically. The refine is invisible to the form: a
+ * `.refine()` is a CHECK, not a wrapper, so `deriveConfigFields` still sees a
+ * list of strings either way. The cost is that the issue path is `roots`
+ * rather than `roots.<i>`, which nothing asserts on.
+ */
+const fsConnectionConfigSchema = sharedFsConnectionConfigSchema.extend({
+  roots: sharedFsConnectionConfigSchema.shape.roots.refine(
+    (roots) => roots.every((root) => isAbsolute(root)),
+    'every fs root must be an absolute path',
+  ),
 });
 
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
