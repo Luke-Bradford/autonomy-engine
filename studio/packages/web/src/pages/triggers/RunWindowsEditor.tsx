@@ -91,6 +91,13 @@ export function RunWindowsEditor({
         // The `[]` state, which the engine reads as permanently closed. It is a
         // legitimate thing to mean and a terrible thing to mean by accident, so
         // it is stated rather than left to be inferred from an empty list.
+        //
+        // `contract-advisory` and not `page-hint`, deliberately: this is the one
+        // advisory here describing something the save ACCEPTS, which is exactly
+        // what that class is documented to mean. The two below describe states
+        // the write schema REFUSES, so they take the siblings' "not valid yet"
+        // `page-hint` instead — a blocked save is reported by the form's own
+        // `role="alert"`.
         <p className="contract-advisory">
           Restricted with no windows: this trigger can never fire automatically. Add a window, or
           clear the restriction above.
@@ -98,7 +105,7 @@ export function RunWindowsEditor({
       )}
 
       {value.restricted && !isGated && ungatedReason !== undefined && (
-        <p className="contract-advisory">
+        <p className="page-hint">
           {`Run windows do not gate a ${mode} trigger — ${ungatedReason}. This restriction will be stored, and consulted if the mode changes.`}
         </p>
       )}
@@ -133,15 +140,15 @@ export function RunWindowsEditor({
           </label>
 
           {(isUnreadableBound(row.start) || isUnreadableBound(row.end)) && (
-            <p className="contract-advisory">
-              {`The scheduler cannot read ${[
+            <p className="page-hint">
+              {`Not a valid window yet — the scheduler cannot read ${[
                 isUnreadableBound(row.start) ? `start "${row.start}"` : null,
                 isUnreadableBound(row.end) ? `end "${row.end}"` : null,
               ]
                 .filter((part) => part !== null)
                 .join(
                   ' and ',
-                )}, so this window has never opened. Times are 24-hour UTC, like 09:00 or 22:30.`}
+                )}, so it would never open. Times are 24-hour UTC, like 09:00 or 22:30.`}
             </p>
           )}
 
@@ -174,8 +181,8 @@ export function RunWindowsEditor({
             // The per-row twin of the `[]` advisory: an empty `days` matches no
             // weekday, so the window is dead. Refused on save; said here so the
             // operator is not waiting on a save to find out.
-            <p className="contract-advisory">
-              {`Window ${index + 1} is restricted to specific days but none are selected, so it can never open.`}
+            <p className="page-hint">
+              {`Not a valid window yet — window ${index + 1} is restricted to specific days but none are selected, so it could never open.`}
             </p>
           )}
 
