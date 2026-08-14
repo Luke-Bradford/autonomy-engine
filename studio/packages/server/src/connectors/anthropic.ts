@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { anthropicConnectionConfigSchema } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
@@ -6,7 +5,6 @@ import {
   buildCapture,
   coerceStopReason,
   llmCallConfigSchema,
-  llmConnectionConfigSchema,
   llmProbeGet,
   meterUsage,
   noCompletionFailure,

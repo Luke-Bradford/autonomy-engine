@@ -12,7 +12,6 @@ import {
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
 import {
-  MAX_RETRY_AFTER_SECONDS,
   coerceStopReason,
   llmCallConfigSchema,
   normalizeLlmRequest,

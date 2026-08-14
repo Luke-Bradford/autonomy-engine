@@ -350,7 +350,11 @@ function ConnectionForm({
     // already typed win. A plain re-seed would drop every in-progress edit; no
     // re-seed at all would leave a key the new kind owns showing an empty
     // control, which `assembleConfig` reads as a clearing gesture and DELETES.
-    onChange({ ...form, kind, inputs: { ...seedFieldInputs(next.fields, form.config), ...form.inputs } });
+    onChange({
+      ...form,
+      kind,
+      inputs: { ...seedFieldInputs(next.fields, form.config), ...form.inputs },
+    });
   }
 
   /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
