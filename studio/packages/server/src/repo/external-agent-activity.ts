@@ -99,9 +99,16 @@ function mergeReport(
      * overwrite a settled one — moving the row out of windows that legitimately
      * contained it while its `completed` verdict stayed put. */
     endedAtMs: existing.endedAtMs ?? report.endedAt,
-    /* An `unknown` outcome never overwrites a settled one, for the same reason
-     * `endedAt` does not: it is the ABSENCE of a verdict, not a verdict. */
-    outcome: report.outcome === 'unknown' ? existing.outcome : report.outcome,
+    /* FIRST VERDICT WINS, exactly as `endedAtMs` does — not merely "an `unknown`
+     * never overwrites a settled one". The weaker rule left one asymmetry: a
+     * late report carrying a DIFFERENT settled outcome (`notCompleted` arriving
+     * after `completed`) silently replaced the first verdict, while the end
+     * stamp and the tokens it arrived with were both correctly refused. Under
+     * out-of-order delivery the later message is not the newer fact, so the
+     * whole settlement — verdict and end stamp together — is decided once.
+     * A reporter that genuinely needs to say something different about a new
+     * invocation gives it a new `externalId`; that is what identifies one. */
+    outcome: existing.outcome === 'unknown' ? report.outcome : existing.outcome,
     inputTokens: keepMeasured(report.inputTokens, existing.inputTokens),
     outputTokens: keepMeasured(report.outputTokens, existing.outputTokens),
     cacheReadTokens: keepMeasured(report.cacheReadTokens, existing.cacheReadTokens),

@@ -294,6 +294,20 @@ describe('merge is stable under out-of-order delivery', () => {
     expect(w.completed).toBe(1);
   });
 
+  it('keeps the FIRST verdict when a later report carries a different one', () => {
+    const { db } = freshDb();
+    record(db, { endedAt: T + 60_000, outcome: 'completed' }, T + 60_000);
+
+    // A different settled verdict, arriving late. The later message is not the
+    // newer fact — and its end stamp is already refused, so accepting its
+    // verdict would settle one invocation two different ways.
+    record(db, { endedAt: T + 61_000, outcome: 'notCompleted' }, T + 90_000);
+
+    const w = windowOf(db, T - 1000, T + 120_000);
+    expect(w.completed).toBe(1);
+    expect(w.notCompleted).toBe(0);
+  });
+
   it('keeps the EARLIEST start when a later report claims a later one', () => {
     const { db } = freshDb();
     record(db, { startedAt: T });

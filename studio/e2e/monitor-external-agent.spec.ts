@@ -52,9 +52,15 @@ test.describe('reported external agent activity', () => {
     const row = page.locator('tr', { hasText: SOURCE });
     await expect(row).toHaveCount(1);
     await expect(row).toContainText('claude-opus-5');
+
     // The invocation has not ended, so it must read as RUNNING — the state the
     // operator was looking at when the panel told them nothing was happening.
-    await expect(row).toContainText('not reported');
+    // Asserted on the RUNNING CELL, not on the presence of "not reported":
+    // that string comes from the tokens column and would be there for a
+    // finished, unmeasured invocation too, so it proves nothing about liveness.
+    // Columns: Source · Agent · Model · Invocations · Running · Tokens · Last started
+    await expect(row.locator('td').nth(4)).toHaveText('1');
+    await expect(page.getByText(/running now/)).toBeVisible();
 
     // The window notice must NOT claim the window was idle: reported activity is
     // activity, and this is the ticket's own symptom in its second form.
