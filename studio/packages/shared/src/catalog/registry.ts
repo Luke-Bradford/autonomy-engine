@@ -125,7 +125,14 @@ const ENTRIES: ActivityCatalogEntry[] = [
     category: 'ai',
     idempotent: false,
     connectionKinds: ['agent_cli'],
-    outputs: [out('output', 'string'), out('exitCode', 'number')],
+    // #1101 — `truncated` says the child's output collection hit the supervisor's
+    // byte budget, so `output` is a PREFIX of what the agent wrote. Declared so a
+    // pipeline can branch on it exactly as it branches on `exitCode`; the durable
+    // `activity.warned{output_truncated}` states the same fact for the modes that
+    // have no key to carry it (structured `agent_task`, and `llm_call`). The
+    // budget is shared by stdout and stderr, so a `true` means COLLECTION stopped
+    // at the cap — stdout may itself be whole.
+    outputs: [out('output', 'string'), out('exitCode', 'number'), out('truncated', 'boolean')],
     configSchema: agentTaskConfigSchema,
   },
   {

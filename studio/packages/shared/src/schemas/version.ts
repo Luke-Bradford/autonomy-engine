@@ -215,7 +215,22 @@
 // `ConnectionPublicSchema`), so a pre-20 build must REFUSE the export at import
 // rather than run it wide. (A quota block without the key is byte-identical
 // across the bump.)
-export const CATALOG_VERSION = 20;
+// 21 (#1101): AGENT_TASK DECLARES `truncated`. The `agent_task` catalog entry
+// gained a third output — `truncated: boolean`, true when the supervisor's shared
+// stdout+stderr byte budget stopped collection, so `output` is a prefix. F13b
+// lowering seeds the catalog outputs into `config.outputs` at SAVE time, so a
+// pipeline authored here declares it, and a pre-21 build's adapter never yields
+// it: `validateOutputs` reports a MISSING declared output and fails the node on
+// every run. Unlike bumps 16/18/19/20 (a stripped knob, a silent mis-run) this
+// one is a hard refusal at run time rather than a wrong result — but it is the
+// same rule and the same remedy, and the artifact is equally not runnable AS
+// AUTHORED, so `parseAndUpgradeEnvelope` must refuse the import instead. Rides
+// PIPELINE envelopes (`config.outputs` is node state). Declared REQUIRED, not
+// optional, deliberately: an optional output would let a pre-21 build RUN the doc
+// and hand downstream `truncated: null` (`storeOutputs` normalizes an absent
+// optional to present-null) — a manufactured "not truncated"-looking value, the
+// silent-wrong direction bumps 17/18 exist to prevent.
+export const CATALOG_VERSION = 21;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
