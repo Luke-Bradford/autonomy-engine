@@ -8,9 +8,12 @@ import {
   agentStructuredInstruction,
   extractStructuredBlock,
   parseAndValidateStructured,
+  WARNING_CODES,
 } from '@autonomy-studio/shared';
+import type { WarningCode } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
+import { DEFAULT_MAX_OUTPUT_BYTES } from '../workers/process-supervisor.js';
 import {
   coerceStopReason,
   llmCallConfigSchema,
@@ -370,6 +373,39 @@ function narrowedQuotaSurface(
  * bare `string` so the label a failure is built with cannot drift from the one
  * `classifyCliOutcome` was given. */
 type CliShapeLabel = 'llm_call' | 'agent_task';
+
+/**
+ * #1101 — the ADVISORY for a child whose output collection hit the supervisor's
+ * byte cap. `ProcessSupervisor` has always computed `truncated` (a shared
+ * stdout+stderr budget, `DEFAULT_MAX_OUTPUT_BYTES` unless the connection sets
+ * `maxOutputBytes`); nothing read it, so a clipped transcript flowed into
+ * `${nodes.x.output.output}` indistinguishable from a whole one. That is the
+ * silent-truncation class `limits.ts` states outright and `fs.ts`'s `file_read`
+ * refuses — the only path that did it silently had already computed the marker.
+ *
+ * ADVISORY, not a failure, and the asymmetry with `file_read` is deliberate: a
+ * partial FILE is useless, whereas an over-long agent transcript is a normal
+ * outcome whose prefix is usually exactly what the operator wanted. So state the
+ * clipping and let the run stand.
+ *
+ * PRECISION MATTERS IN THE SENTENCE. The budget is ONE allowance shared by both
+ * streams (`SharedByteBudget`), so this says COLLECTION stopped at the cap — a
+ * chatty stderr can exhaust it while stdout is complete. It must not claim the
+ * `output` value was cut. It names the shape and the cap and NO child content:
+ * the durable `activity.warned.reason` is passed through unredacted, so the
+ * producer is the only guard.
+ */
+function truncationWarning(shape: CliShapeLabel, maxOutputBytes: number | undefined): ActivityEvent {
+  const cap = maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  return {
+    type: 'warned',
+    code: WARNING_CODES.OUTPUT_TRUNCATED satisfies WarningCode,
+    reason:
+      `${shape}: the agent CLI wrote more than the ${cap}-byte output budget, so collection ` +
+      `stopped there and the transcript kept is a prefix (the budget is shared by stdout and ` +
+      `stderr, so stdout may itself be complete)`,
+  };
+}
 
 /** The terminal half of a `classifyCliOutcome` result: either a ready-made
  * `failed` event, or the exit code of a subprocess that completed on its own. */
@@ -809,6 +845,11 @@ async function* runAgentTask(
       ...(output.length > 0 ? { outputHash: sha256Hex(output) } : {}),
     },
   };
+  // #1101 — and if collection hit the byte cap, SAY SO, on the same
+  // before-the-terminal footing as the telemetry fact and for the same reason:
+  // the fact is known here, ahead of the outcome, and a clipped transcript on an
+  // attempt that went on to time out is exactly when it is worth knowing.
+  if (result.truncated) yield truncationWarning(shape, config.maxOutputBytes);
   // #797 — meter the invocation BEFORE any terminal (see `cliSpendFact` for why
   // a subprocess that merely RAN is marked). Sited ahead of the terminal branch
   // so it covers every outcome uniformly: a completed run, a structured-mode
@@ -929,7 +970,18 @@ async function* runAgentTask(
     yield { type: 'succeeded', outputs: validated.value };
     return;
   }
-  yield { type: 'succeeded', outputs: { output, exitCode: terminal.exitCode } };
+  // #1101 — `truncated` rides the TEXT-mode outputs as well as the advisory, so a
+  // pipeline can BRANCH on `${nodes.x.output.truncated}` the way it already
+  // branches on `exitCode`. Only text mode: a structured node's contract is
+  // derived from its `outputSchema` (`lowerAgentTaskStructuredOutputs`), so an
+  // extra key there would be filtered out — the advisory is that mode's channel.
+  // Reaches only nodes SAVED on catalog >= 21, since `lowerNodeOutputs` seeds a
+  // contract once and never rewrites one; an older node's declared
+  // `[output, exitCode]` simply drops the key (`storeOutputs`) and still succeeds.
+  yield {
+    type: 'succeeded',
+    outputs: { output, exitCode: terminal.exitCode, truncated: result.truncated },
+  };
 }
 
 /**
@@ -1020,6 +1072,12 @@ async function* runLlmCall(
   const shape: CliShapeLabel = LLM_CALL_ACTIVITY_TYPE;
   const classification = classifyCliOutcome(result, config.command, shape);
   const { terminal } = classification;
+  // #1101 — this shape emits NO telemetry fact (that one is `agent_task`-only) and
+  // its outputs are the SHARED llm contract `[text, stopReason]`, which the three
+  // API adapters also fill — so neither of `agent_task`'s channels exists here and
+  // the advisory is the whole of it. Yielded first, before the metering fact and
+  // every terminal branch, so it is present on abnormal terminations too.
+  if (result.truncated) yield truncationWarning(shape, config.maxOutputBytes);
   // #2 L14c — the combined stderr+stdout diagnostic and the quota verdict read
   // off it, both LAZY. Computed HERE rather than inside the non-zero-exit branch
   // because the metering decision below needs the quota match. Shared with

@@ -649,6 +649,25 @@ export const WARNING_CODES = {
    * downstream with the run reading green and no trace of the cause.
    */
   EMPTY_TRUNCATED_COMPLETION: 'empty_truncated_completion',
+  /**
+   * #1101 — an `agent_cli` child's output collection hit the supervisor's byte
+   * cap (`config.maxOutputBytes`, default 10 MiB), so the transcript the harness
+   * kept is a PREFIX of what the process wrote. The supervisor already computed
+   * the fact; nothing consumed it, so a clipped transcript reached
+   * `${nodes.x.output.output}` reading exactly like a complete one — the
+   * silent-truncation class `limits.ts` and `fs.ts`'s `file_read` already refuse.
+   *
+   * Advisory rather than a failure BY SHAPE: an over-long agent transcript is a
+   * normal outcome (unlike a partial FILE, which is useless), so the honest move
+   * is to state the clipping, not to fail work that succeeded.
+   *
+   * The cap is on stdout and stderr COMBINED and is one shared budget, so this
+   * says "collection stopped at the cap", NOT "the `output` value was cut" — a
+   * chatty stderr can exhaust the budget while stdout is complete. Emitted on
+   * FAILED attempts too (the fact is known before the terminal is decided), which
+   * is why the event's own doc below reads "succeeded or failed".
+   */
+  OUTPUT_TRUNCATED: 'output_truncated',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */
@@ -1176,10 +1195,18 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     /**
-     * #750 — a NON-FATAL advisory about an attempt that nonetheless SUCCEEDED.
-     * The engine's first advisory channel; before it, every attempt fact was
-     * binary (`node.succeeded` or `node.failed`), so a result that was technically
-     * a success but practically useless had nowhere to be said.
+     * #750 — a NON-FATAL advisory about an attempt, which may go on to SUCCEED
+     * or to FAIL. The engine's first advisory channel; before it, every attempt
+     * fact was binary (`node.succeeded` or `node.failed`), so a result that was
+     * technically a success but practically useless had nowhere to be said.
+     *
+     * #1101 WIDENED THAT: the original producer derived the warning from a
+     * SUCCEEDED payload, so every warning rode a success and the doc said so.
+     * An adapter may now yield a `warned` ActivityEvent directly, and the fact it
+     * reports (an `agent_cli` transcript clipped at the byte cap) is known BEFORE
+     * the outcome is — a clipped transcript on a timed-out attempt is precisely
+     * when an operator most wants to be told. "Non-fatal" is unchanged and is the
+     * real invariant: the warning never DECIDES the outcome, it only observes.
      *
      * INERT in the reducer, like the rest of the `activity.*` family
      * (`metered`/`captured`/`agentTelemetry`/`toolCalled`) and ordered BEFORE the

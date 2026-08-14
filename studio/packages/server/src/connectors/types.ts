@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ConnectionKind, MeteringStatus } from '@autonomy-studio/shared';
+import type { ConnectionKind, MeteringStatus, WarningCode } from '@autonomy-studio/shared';
 
 /**
  * P3 — the CONNECTOR ADAPTER contract (target-architecture "connector model").
@@ -141,13 +141,13 @@ export interface ToolCallTelemetry {
 
 /**
  * What an adapter streams. `output`, `metered`, `captured`, `agentTelemetry`,
- * and `toolCalled` are observability only (partial progress / a per-response
- * metering fact / a per-response prompt-completion capture fact / an
- * `agent_task` subprocess telemetry fact / an executed-tool-call fact); exactly
- * one terminal `succeeded`/`failed` ends the stream. The executor maps these to
- * engine events (`node.output` / `activity.metered` / `activity.captured` /
- * `activity.agentTelemetry` / `activity.toolCalled` / `node.succeeded` /
- * `node.failed`).
+ * `toolCalled` and `warned` are observability only (partial progress / a
+ * per-response metering fact / a per-response prompt-completion capture fact /
+ * an `agent_task` subprocess telemetry fact / an executed-tool-call fact / a
+ * non-fatal advisory); exactly one terminal `succeeded`/`failed` ends the
+ * stream. The executor maps these to engine events (`node.output` /
+ * `activity.metered` / `activity.captured` / `activity.agentTelemetry` /
+ * `activity.toolCalled` / `activity.warned` / `node.succeeded` / `node.failed`).
  *
  * ONE terminal can mint TWO engine events (#725): a `failed` carrying a
  * `spendFact` yields an `activity.metered` BEFORE its `node.failed`, because a
@@ -160,6 +160,27 @@ export type ActivityEvent =
   | { type: 'captured'; capture: LlmCapture }
   | { type: 'agentTelemetry'; telemetry: AgentTelemetry }
   | { type: 'toolCalled'; call: ToolCallTelemetry }
+  /**
+   * #1101 — an ADAPTER-minted advisory, mapped to the durable `activity.warned`
+   * by the executor (which stamps the ids and nothing else). Non-terminal and
+   * folded inert, like the telemetry facts above; it never decides an outcome.
+   *
+   * A second producer of that event, and deliberately so. The first (#750) is
+   * DERIVED in the executor from a `succeeded` payload, which can only ever
+   * describe a success and only facts that survive into `outputs`. Neither holds
+   * here: an `agent_cli` transcript clipped at the byte cap is known before the
+   * outcome, and on the `llm_call` CLI shape (whose outputs are the shared
+   * `[text, stopReason]`) and on a structured `agent_task` (whose outputs are
+   * schema-derived) there is no outputs key to carry it. The adapter is the only
+   * layer that holds the fact, so it is the layer that states it.
+   *
+   * `code` is typed against the `WARNING_CODES` SSOT here, on the PRODUCER side —
+   * the durable field is an open string by back-compat contract, so this is where
+   * "no producer hand-spells a durable identifier" is enforced. `reason` is the
+   * human sentence for the run feed and MUST name no child content: no redaction
+   * pass inspects it (`redactEventPlaintexts` passes the variant through).
+   */
+  | { type: 'warned'; code: WarningCode; reason: string }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
   | {
       type: 'failed';

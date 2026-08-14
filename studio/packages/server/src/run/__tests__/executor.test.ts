@@ -2791,6 +2791,62 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
     });
   });
 
+  // #1101 — the SECOND producer of the same durable event: an adapter yields the
+  // advisory directly (the executor stamps ids only). The two cases below are the
+  // ones the #750 derive-from-outputs shape structurally cannot express.
+  it('maps an ADAPTER-yielded `warned` onto the durable event, before a SUCCESS terminal', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'warned',
+        code: 'output_truncated',
+        reason: 'output collection stopped at the 1024-byte cap',
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: { text: 'partial' } } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('activity.warned')).toBeLessThan(types.indexOf('node.succeeded'));
+    expect(events.find((e) => e.type === 'activity.warned')).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      code: 'output_truncated',
+      reason: 'output collection stopped at the 1024-byte cap',
+    });
+    // The advisory changed NO outcome and NO outputs.
+    expect((events.find((e) => e.type === 'node.succeeded') as { outputs?: unknown }).outputs)
+      .toEqual({ text: 'partial' });
+  });
+
+  it('keeps the advisory on a FAILING attempt — it observes, it never decides', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'warned',
+        code: 'output_truncated',
+        reason: 'output collection stopped at the 1024-byte cap',
+      } satisfies ActivityEvent;
+      yield { type: 'failed', kind: 'transient', error: 'timed out' } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('failure');
+    const types = loadEngineEvents(db, run.id).map((e) => e.type);
+    expect(types).toContain('activity.warned');
+    expect(types.indexOf('activity.warned')).toBeLessThan(types.indexOf('node.failed'));
+  });
+
   it('stays SILENT for an empty completion the provider did not truncate', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);

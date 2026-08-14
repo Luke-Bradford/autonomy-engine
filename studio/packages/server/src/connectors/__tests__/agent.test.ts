@@ -119,7 +119,7 @@ describe('createAgentAdapter().runActivity', () => {
     expect(events[1]).toEqual(UNPRICED_CLI);
     expect(events[2]).toEqual({
       type: 'succeeded',
-      outputs: { output: 'working...\ndone', exitCode: 0 },
+      outputs: { output: 'working...\ndone', exitCode: 0, truncated: false },
     });
     expect(events).toHaveLength(3);
     expect(spawnArgs[0]!.command).toBe('claude');
@@ -159,7 +159,10 @@ describe('createAgentAdapter().runActivity', () => {
     });
     // #797 — a non-zero exit is a COMPLETED agent_task, so it is metered.
     expect(events[1]).toEqual(UNPRICED_CLI);
-    expect(events[2]).toEqual({ type: 'succeeded', outputs: { output: 'partial', exitCode: 2 } });
+    expect(events[2]).toEqual({
+      type: 'succeeded',
+      outputs: { output: 'partial', exitCode: 2, truncated: false },
+    });
     expect(events).toHaveLength(3);
   });
 
@@ -337,7 +340,7 @@ describe('createAgentAdapter().runActivity', () => {
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
     expect(events.find((e) => e.type === 'succeeded')).toEqual({
       type: 'succeeded',
-      outputs: { output: 'a\nb\nc', exitCode: 0 },
+      outputs: { output: 'a\nb\nc', exitCode: 0, truncated: false },
     });
     // Telemetry fingerprints the fully-drained stdout (not a mid-drain snapshot).
     expect(events[0]).toMatchObject({
@@ -2034,6 +2037,113 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
       expect(parse({ format: 'json-lines', errorEnvelopeTypes: many })).toBe(false);
       expect(parse({ format: 'json-lines', errorEnvelopeTypes: ['x'.repeat(201)] })).toBe(false);
       expect(parse({ format: 'json-lines', errorEnvelopeTypes: many.slice(0, 32) })).toBe(true);
+    });
+  });
+});
+
+// #1101 — the supervisor bounds an agent child's combined stdout+stderr and
+// computes `truncated`; before this the adapter never read it, so a clipped
+// transcript reached `${nodes.x.output.output}` reading exactly like a whole one.
+describe('#1101 — a transcript clipped at the byte cap says so', () => {
+  const warnings = (events: ActivityEvent[]) => events.filter((e) => e.type === 'warned');
+  const terminalIndex = (events: ActivityEvent[]) =>
+    events.findIndex((e) => e.type === 'succeeded' || e.type === 'failed');
+
+  it('agent_task: yields the advisory BEFORE the terminal and carries the fact into outputs', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'half a transcript' }], {
+      exitCode: 0,
+      truncated: true,
+    });
+
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+
+    const warned = warnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ type: 'warned', code: 'output_truncated' });
+    expect(events.indexOf(warned[0]!)).toBeLessThan(terminalIndex(events));
+    // The sentence is durable and unredacted, so it names the CAP, never content.
+    const reason = String((warned[0] as { reason: string }).reason);
+    expect(reason).not.toContain('half a transcript');
+    expect(reason).toContain('agent_task');
+    // ...and the fact is branchable: `${nodes.x.output.truncated}`.
+    expect(events.at(-1)).toEqual({
+      type: 'succeeded',
+      outputs: { output: 'half a transcript', exitCode: 0, truncated: true },
+    });
+  });
+
+  it('agent_task: stays SILENT when nothing was clipped, and still states the fact', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'whole transcript' }], {
+      exitCode: 0,
+    });
+
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+
+    expect(warnings(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({
+      type: 'succeeded',
+      outputs: { output: 'whole transcript', exitCode: 0, truncated: false },
+    });
+  });
+
+  it('agent_task: warns on a FAILED attempt too — the clipping is known before the outcome', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'noise' }], {
+      exitCode: null,
+      timedOut: true,
+      truncated: true,
+    });
+
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+
+    const warned = warnings(events);
+    expect(warned).toHaveLength(1);
+    expect(events.indexOf(warned[0]!)).toBeLessThan(terminalIndex(events));
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'transient' });
+  });
+
+  it('agent_task STRUCTURED: the advisory is the only channel (outputs are schema-derived)', async () => {
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: AGENT_STRUCTURED_OPEN },
+        { stream: 'stdout', line: '{"verdict":"pass"}' },
+        { stream: 'stdout', line: AGENT_STRUCTURED_CLOSE },
+      ],
+      { exitCode: 0, truncated: true },
+    );
+
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          input: {
+            task: 'review',
+            outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+          },
+        }),
+        null,
+      ),
+    );
+
+    expect(warnings(events)).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: 'succeeded', outputs: { verdict: 'pass' } });
+  });
+
+  it('llm_call on a CLI connection: the shape with NO telemetry fact warns too', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'clipped answer' }], {
+      exitCode: 0,
+      truncated: true,
+    });
+
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+
+    const warned = warnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ type: 'warned', code: 'output_truncated' });
+    expect(String((warned[0] as { reason: string }).reason)).toContain('llm_call');
+    expect(events.indexOf(warned[0]!)).toBeLessThan(terminalIndex(events));
+    // Its outputs are the SHARED llm contract, so there is no key to carry it.
+    expect(events.at(-1)).toEqual({
+      type: 'succeeded',
+      outputs: { text: 'clipped answer', stopReason: 'unknown' },
     });
   });
 });

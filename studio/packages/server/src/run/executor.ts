@@ -648,6 +648,23 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             ...(call.argsHash !== undefined ? { argsHash: call.argsHash } : {}),
             ...(call.resultHash !== undefined ? { resultHash: call.resultHash } : {}),
           });
+        } else if (ev.type === 'warned') {
+          // #1101 — an ADAPTER-minted advisory: the executor stamps the ids and
+          // nothing else. `code` was already typed against `WARNING_CODES` at the
+          // producer (the durable field is an open string by back-compat
+          // contract), so there is no second spelling to drift.
+          //
+          // Non-terminal like `activity.toolCalled`, folded inert, and — unlike
+          // the #750 warning below — NOT tied to a success: it is emitted while
+          // the outcome is still undecided, so it rides failing attempts too.
+          events.push({
+            type: 'activity.warned',
+            runId,
+            nodeId,
+            attemptId,
+            code: ev.code,
+            reason: ev.reason,
+          });
         } else if (ev.type === 'succeeded') {
           // #750 — a non-fatal ADVISORY, ordered BEFORE the terminal exactly like
           // `activity.toolCalled`, and folded inert by the reducer. Read from the
