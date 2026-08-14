@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ConnectionKindSchema,
+  CONNECTION_KINDS,
+  CONNECTION_SECRET_USE,
+  connectionConfigSchema,
+  connectionKindRequiresSecret,
   formatZodIssues,
+  type ConnectionKind,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
@@ -17,30 +21,112 @@ import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { ImportPanel } from './ImportPanel';
+import {
+  assembleConfig,
+  deriveConfigFields,
+  seedFieldInputs,
+  unrepresentableFields,
+  type ConfigField,
+} from './pipeline/configForm';
+import { ConfigFieldControl } from './pipeline/ConfigFieldControl';
 
-const KINDS = ConnectionKindSchema.options;
+const KINDS = CONNECTION_KINDS;
 
 type FormState = {
   id: string | null; // null = creating, otherwise editing this connection
   name: string;
-  kind: ConnectionWrite['kind'];
-  configText: string;
+  kind: ConnectionKind;
+  /**
+   * The AUTHORITATIVE config. The two drafts below are what the operator is
+   * typing into; each mode change reads its draft back into here, so there is
+   * always exactly one answer to "what would Save write".
+   */
+  config: Record<string, unknown>;
+  /** One control value per derived field — the field-mode draft. */
+  inputs: Record<string, string | boolean>;
+  /** The whole-config JSON draft. */
+  jsonText: string;
+  /** Whether the operator ASKED for JSON. An unrenderable value forces it too. */
+  jsonMode: boolean;
   secret: string;
 };
 
+/**
+ * The controls for one kind's config, plus any CARRIED key.
+ *
+ * A carried key is one the stored config holds that this kind does not declare
+ * but another kind does — the residue of a kind switch. Rendering it (rather
+ * than only naming it) is what `ContainerPanel` does with a container's illegal
+ * fields and for the same reason: it makes "blank the control to drop the key"
+ * the repair, instead of a dead end that can only be fixed in the JSON editor.
+ * A carried field is always `optional` here, so blanking it OMITS the key —
+ * which is exactly the clearing gesture `assembleConfig` honours.
+ *
+ * A key no kind declares is not carried: nothing can describe it, so it stays
+ * untouched in `config` and is reachable through the JSON escape hatch.
+ */
+function connectionFields(
+  kind: ConnectionKind,
+  config: Record<string, unknown>,
+): { fields: ConfigField[]; carried: string[] } {
+  const own = deriveConfigFields(connectionConfigSchema(kind)) ?? [];
+  const seen = new Set(own.map((f) => f.name));
+  const carried: ConfigField[] = [];
+  for (const other of KINDS) {
+    if (other === kind) continue;
+    for (const field of deriveConfigFields(connectionConfigSchema(other)) ?? []) {
+      if (seen.has(field.name) || !(field.name in config)) continue;
+      seen.add(field.name);
+      carried.push({ ...field, optional: true });
+    }
+  }
+  return { fields: [...own, ...carried], carried: carried.map((f) => f.name) };
+}
+
+/** Read the JSON draft back out as a config object. Empty text means `{}`. */
+function parseConfigText(
+  text: string,
+): { ok: true; config: Record<string, unknown> } | { ok: false; message: string } {
+  try {
+    const raw: unknown = JSON.parse(text.trim() === '' ? '{}' : text);
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, message: 'Invalid config JSON: config must be a JSON object' };
+    }
+    return { ok: true, config: raw as Record<string, unknown> };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Invalid config JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+function formFor(
+  id: string | null,
+  name: string,
+  kind: ConnectionKind,
+  config: Record<string, unknown>,
+): FormState {
+  const { fields } = connectionFields(kind, config);
+  return {
+    id,
+    name,
+    kind,
+    config,
+    inputs: seedFieldInputs(fields, config),
+    jsonText: JSON.stringify(config, null, 2),
+    jsonMode: false,
+    secret: '', // never prefilled — secrets are write-only, blank = keep existing
+  };
+}
+
 function blankForm(): FormState {
   // KINDS is the connection-kind enum's option list — statically non-empty.
-  return { id: null, name: '', kind: KINDS[0]!, configText: '{}', secret: '' };
+  return formFor(null, '', KINDS[0]!, {});
 }
 
 function formForEdit(conn: ConnectionPublic): FormState {
-  return {
-    id: conn.id,
-    name: conn.name,
-    kind: conn.kind,
-    configText: JSON.stringify(conn.config, null, 2),
-    secret: '', // never prefilled — secrets are write-only, blank = keep existing
-  };
+  return formFor(conn.id, conn.name, conn.kind, conn.config);
 }
 
 /**
@@ -226,20 +312,106 @@ function ConnectionForm({
   const [saving, setSaving] = useState(false);
   const editing = form.id !== null;
 
+  const { fields, carried } = useMemo(
+    () => connectionFields(form.kind, form.config),
+    [form.kind, form.config],
+  );
+  // A STORED value its control cannot represent forces the JSON editor: showing
+  // a form that cannot round-trip what is already saved would corrupt the
+  // connection on a save the operator believes touched one other key.
+  const unrenderable = useMemo(
+    () => unrepresentableFields(fields, form.config),
+    [fields, form.config],
+  );
+  const jsonMode = form.jsonMode || unrenderable.length > 0;
+
+  /**
+   * What this kind's own schema says about the draft — ADVISORY only.
+   *
+   * Never a gate: `routes/connections.ts` runs no per-kind validation, so a
+   * config the adapter would reject (an `agent_cli` with no `command`, an `fs`
+   * with no `roots`) is storable TODAY. Refusing it here would make an existing
+   * row unsaveable after an unrelated rename, and the form must never refuse
+   * what the server accepts. Saying so before dispatch is the whole point of
+   * the ticket; refusing is a different, worse feature.
+   */
+  const advisory = useMemo(() => {
+    if (jsonMode) return null;
+    const assembled = assembleConfig(form.config, fields, form.inputs);
+    if (!assembled.ok) return null; // the per-field message already says this
+    const parsed = connectionConfigSchema(form.kind).safeParse(assembled.owned);
+    return parsed.success ? null : formatZodIssues(parsed.error.issues);
+  }, [jsonMode, form.config, form.kind, form.inputs, fields]);
+
+  /** Switch kinds WITHOUT discarding anything typed or stored. */
+  function onKindChange(kind: ConnectionKind) {
+    const next = connectionFields(kind, form.config);
+    // Seed the new kind's controls from the stored config, then let anything
+    // already typed win. A plain re-seed would drop every in-progress edit; no
+    // re-seed at all would leave a key the new kind owns showing an empty
+    // control, which `assembleConfig` reads as a clearing gesture and DELETES.
+    onChange({ ...form, kind, inputs: { ...seedFieldInputs(next.fields, form.config), ...form.inputs } });
+  }
+
+  /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
+  function toJsonMode() {
+    const assembled = assembleConfig(form.config, fields, form.inputs);
+    if (!assembled.ok) {
+      setError(assembled.message);
+      return;
+    }
+    setError(null);
+    onChange({
+      ...form,
+      config: assembled.config,
+      jsonText: JSON.stringify(assembled.config, null, 2),
+      jsonMode: true,
+    });
+  }
+
+  /** JSON → fields: parse first, and refuse if the result has no form to show. */
+  function toFieldMode() {
+    const parsed = parseConfigText(form.jsonText);
+    if (!parsed.ok) {
+      setError(parsed.message);
+      return;
+    }
+    const next = connectionFields(form.kind, parsed.config);
+    const bad = unrepresentableFields(next.fields, parsed.config);
+    if (bad.length > 0) {
+      setError(`These settings have no form control: ${bad.join(', ')}.`);
+      return;
+    }
+    setError(null);
+    onChange({
+      ...form,
+      config: parsed.config,
+      inputs: seedFieldInputs(next.fields, parsed.config),
+      jsonMode: false,
+    });
+  }
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
+    // Read back whichever draft is on screen — never the other one, which is
+    // why every mode change above commits to `config` before switching.
     let config: Record<string, unknown>;
-    try {
-      const raw: unknown = JSON.parse(form.configText.trim() === '' ? '{}' : form.configText);
-      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new Error('config must be a JSON object');
+    if (jsonMode) {
+      const parsed = parseConfigText(form.jsonText);
+      if (!parsed.ok) {
+        setError(parsed.message);
+        return;
       }
-      config = raw as Record<string, unknown>;
-    } catch (err) {
-      setError(`Invalid config JSON: ${err instanceof Error ? err.message : String(err)}`);
-      return;
+      config = parsed.config;
+    } else {
+      const assembled = assembleConfig(form.config, fields, form.inputs);
+      if (!assembled.ok) {
+        setError(assembled.message);
+        return;
+      }
+      config = assembled.config;
     }
 
     // Build the write body; only include `secret` when the user typed one
@@ -292,10 +464,7 @@ function ConnectionForm({
 
       <label>
         Kind
-        <select
-          value={form.kind}
-          onChange={(e) => onChange({ ...form, kind: e.target.value as ConnectionWrite['kind'] })}
-        >
+        <select value={form.kind} onChange={(e) => onKindChange(e.target.value as ConnectionKind)}>
           {KINDS.map((kind) => (
             <option key={kind} value={kind}>
               {kind}
@@ -304,15 +473,54 @@ function ConnectionForm({
         </select>
       </label>
 
-      <label>
-        Config (JSON)
-        <textarea
-          value={form.configText}
-          onChange={(e) => onChange({ ...form, configText: e.target.value })}
-          rows={5}
-          spellCheck={false}
-        />
-      </label>
+      <div className="connection-config" aria-label="Config">
+        <div className="connection-config-header">
+          <span>Config</span>
+          <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
+            {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
+          </button>
+        </div>
+
+        {unrenderable.length > 0 && (
+          <p className="page-hint">
+            {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
+          </p>
+        )}
+
+        {jsonMode ? (
+          <label>
+            Config (JSON)
+            <textarea
+              value={form.jsonText}
+              onChange={(e) => onChange({ ...form, jsonText: e.target.value })}
+              rows={8}
+              spellCheck={false}
+            />
+          </label>
+        ) : (
+          <>
+            {fields.length === 0 && <p className="page-hint">This kind has no settings.</p>}
+            {fields.map((field) => (
+              <ConfigFieldControl
+                key={field.name}
+                field={field}
+                value={form.inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+                onChange={(next) =>
+                  onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
+                }
+              />
+            ))}
+            {carried.length > 0 && (
+              <p className="page-hint">
+                {`Carried from another kind (${carried.join(', ')}) — ${form.kind} ignores these; blank a control to drop the key.`}
+              </p>
+            )}
+            {advisory !== null && (
+              <p className="page-hint">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
+            )}
+          </>
+        )}
+      </div>
 
       <label>
         Secret
@@ -324,6 +532,15 @@ function ConnectionForm({
           autoComplete="off"
         />
       </label>
+      {/* Never a `required` input: on edit blank means KEEP the stored secret,
+          and on create the server accepts a secretless row (it derives
+          `needs_secret` and stores it). This says what the kind DOES with one. */}
+      <p className="page-hint">
+        {connectionKindRequiresSecret(form.kind)
+          ? `Required — an ${form.kind} connection cannot dispatch without a secret. `
+          : ''}
+        {CONNECTION_SECRET_USE[form.kind]}
+      </p>
 
       {error && (
         <p role="alert" className="error">

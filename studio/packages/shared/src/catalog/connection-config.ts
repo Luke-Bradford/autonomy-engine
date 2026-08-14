@@ -346,6 +346,30 @@ export const CONNECTION_CONFIG_SCHEMAS: Record<ConnectionKind, z.ZodObject> = {
   fs: fsConnectionConfigSchema,
 };
 
+/**
+ * What each kind DOES with a connection-level secret, in the operator's words.
+ *
+ * Whether a secret is REQUIRED is not spelt here — that is
+ * `connectionKindRequiresSecret` (`schemas/connection.ts`), the G8a readiness
+ * SSOT, and this map must never restate it. What this adds is the other half
+ * the form could otherwise only guess at: a kind that requires no secret is not
+ * automatically a kind that IGNORES one. `agent_cli` injects it into the env var
+ * named by `config.secretEnv` (`connectors/agent.ts`) and `http` sends it as an
+ * `Authorization: Bearer` header (`connectors/http.ts`), so telling an operator
+ * either kind has no use for a secret would be false.
+ *
+ * Lives beside the schemas so a change in what an adapter does with its secret
+ * has ONE place to be reflected, next to the shape it is described against.
+ */
+export const CONNECTION_SECRET_USE: Record<ConnectionKind, string> = {
+  anthropic_api: 'Sent as the `x-api-key` header on every call.',
+  openai_api: 'Sent as the `Authorization: Bearer` header on every call.',
+  ollama: 'Not used by this kind — a local Ollama server takes no credential.',
+  agent_cli: 'Injected into the environment variable named by `secretEnv`, never into argv.',
+  http: 'Sent as an `Authorization: Bearer` header, under any header the request sets itself.',
+  fs: 'Not used by this kind — an fs connection is credential-less; `roots` is its guard.',
+};
+
 /** The connection-config schema for `kind`. Total over the kind enum. */
 export function connectionConfigSchema(kind: ConnectionKind): z.ZodObject {
   return CONNECTION_CONFIG_SCHEMAS[kind];
