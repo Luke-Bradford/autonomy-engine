@@ -395,7 +395,10 @@ type CliShapeLabel = 'llm_call' | 'agent_task';
  * the durable `activity.warned.reason` is passed through unredacted, so the
  * producer is the only guard.
  */
-function truncationWarning(shape: CliShapeLabel, maxOutputBytes: number | undefined): ActivityEvent {
+function truncationWarning(
+  shape: CliShapeLabel,
+  maxOutputBytes: number | undefined,
+): ActivityEvent {
   const cap = maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   return {
     type: 'warned',

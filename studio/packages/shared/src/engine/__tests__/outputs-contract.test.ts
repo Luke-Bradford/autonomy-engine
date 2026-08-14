@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineEvent, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { checkInboundOutputs, outputContract, storeOutputs } from '../outputs.js';
+import { checkInboundOutputs, outputContract, storeOutputs, validateOutputs } from '../outputs.js';
 import type { DeclaredOutput } from '../outputs.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -279,6 +279,24 @@ describe('storeOutputs — optional undefined → present-null (#594)', () => {
     });
     expect('data' in stored).toBe(true);
     expect(stored['data']).toBeNull();
+  });
+
+  // #1101's MIGRATION STORY, pinned. `lowerNodeOutputs` seeds a contract once and
+  // never rewrites one, so every `agent_task` node saved before catalog 21 keeps
+  // `[output, exitCode]` — and the adapter now yields a third key. This is the
+  // path that decides whether that is a silent drop (fine, the advisory event
+  // still states the fact) or a node failure (not fine): undeclared keys are
+  // FILTERED, and `validateOutputs` raises nothing for them.
+  it('a pre-#1101 agent_task contract DROPS the new `truncated` key rather than failing', () => {
+    const legacy = declared([
+      { name: 'output', type: 'string' },
+      { name: 'exitCode', type: 'number' },
+    ]);
+    const payload = { output: 'transcript', exitCode: 0, truncated: true };
+    expect(validateOutputs({ kind: 'declared', outputs: legacy.outputs }, payload).errs).toEqual(
+      [],
+    );
+    expect(storeOutputs(legacy, payload)).toEqual({ output: 'transcript', exitCode: 0 });
   });
 
   it('an omitted optional output → present-null', () => {

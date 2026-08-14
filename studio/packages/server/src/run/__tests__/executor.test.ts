@@ -2821,8 +2821,9 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
       reason: 'output collection stopped at the 1024-byte cap',
     });
     // The advisory changed NO outcome and NO outputs.
-    expect((events.find((e) => e.type === 'node.succeeded') as { outputs?: unknown }).outputs)
-      .toEqual({ text: 'partial' });
+    expect(
+      (events.find((e) => e.type === 'node.succeeded') as { outputs?: unknown }).outputs,
+    ).toEqual({ text: 'partial' });
   });
 
   it('keeps the advisory on a FAILING attempt — it observes, it never decides', async () => {

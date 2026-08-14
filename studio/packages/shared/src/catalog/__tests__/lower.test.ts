@@ -279,10 +279,14 @@ describe('lowerAgentTaskStructuredOutputs (#2 L11b)', () => {
       { name: 'verdict', type: 'string' },
       { name: 'confidence', type: 'number' },
     ]);
-    // plain agent_task: lowerNodeOutputs seeds the catalog default.
+    // plain agent_task: lowerNodeOutputs seeds the catalog default — which since
+    // #1101 (catalog 21) includes `truncated`, the byte-cap marker a text-mode
+    // node can branch on. A STRUCTURED node's derived contract above does NOT get
+    // it: its outputs are the schema's, and the advisory is its channel.
     expect(plain!.config['outputs']).toEqual([
       { name: 'output', type: 'string' },
       { name: 'exitCode', type: 'number' },
+      { name: 'truncated', type: 'boolean' },
     ]);
   });
 });
