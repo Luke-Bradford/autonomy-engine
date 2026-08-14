@@ -18,6 +18,7 @@ import { exportTrigger } from '../api/portability';
 import { ImportPanel } from './ImportPanel';
 import { RecurrenceEditor } from './triggers/RecurrenceEditor';
 import { WindowEditor } from './triggers/WindowEditor';
+import { RunWindowsEditor } from './triggers/RunWindowsEditor';
 import {
   blankEventForm,
   eventToForm,
@@ -30,6 +31,12 @@ import {
   windowToForm,
   type WindowFormState,
 } from './triggers/windowForm';
+import {
+  blankRunWindowsForm,
+  formToRunWindows,
+  runWindowsToForm,
+  type RunWindowsFormState,
+} from './triggers/runWindowsForm';
 import {
   blankRecurrenceForm,
   formToRecurrence,
@@ -115,7 +122,10 @@ type FormState = {
   concurrencyMax: string; // only meaningful for `parallel`; '' = unset
   enabled: boolean;
   paramsText: string; // JSON object
-  runWindowsText: string; // JSON array; '' = null
+  /** #1090 U14c — the structured run-window state. Mode-INDEPENDENT (unlike
+   * `recurrence`/`event`/`window`): a run window is stored and honoured for
+   * every mode that consults one, so it is never settled by `withMode`. */
+  runWindows: RunWindowsFormState;
 };
 
 /**
@@ -145,7 +155,7 @@ function blankForm(): FormState {
     concurrencyMax: '',
     enabled: false,
     paramsText: '{}',
-    runWindowsText: '',
+    runWindows: blankRunWindowsForm(),
   };
 }
 
@@ -189,7 +199,7 @@ function formForEdit(t: TriggerPublic): FormState {
       concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
       enabled: t.enabled,
       paramsText: JSON.stringify(t.params, null, 2),
-      runWindowsText: t.runWindows === null ? '' : JSON.stringify(t.runWindows, null, 2),
+      runWindows: runWindowsToForm(t.runWindows),
     },
     t.mode,
   );
@@ -640,17 +650,16 @@ function TriggerForm({
       return;
     }
 
-    // runWindows is an optional JSON array; blank = null (no windows). Shape is
-    // validated by the shared schema below.
-    let runWindows: unknown = null;
-    if (form.runWindowsText.trim() !== '') {
-      try {
-        runWindows = JSON.parse(form.runWindowsText);
-      } catch (err) {
-        setError(`Invalid run windows JSON: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
+    // #1090 U14c — run windows convert UNCONDITIONALLY, unlike the three
+    // mode-owned configs below: a window is not owned by a mode, so a mode
+    // switch must neither clear it nor skip validating it. Sent on every save
+    // for the usual PATCH reason — an omitted key means "untouched".
+    const convertedWindows = formToRunWindows(form.runWindows);
+    if (!convertedWindows.ok) {
+      setError(`Invalid run windows — ${convertedWindows.reason}`);
+      return;
     }
+    const runWindows = convertedWindows.runWindows;
 
     // #439 U14b — the schedule half. A recurrence and a raw cron are mutually
     // exclusive at the write boundary (`assertRecurrenceConsistent`), and the
@@ -751,7 +760,7 @@ function TriggerForm({
       window: windowConfig,
       webhook: null,
       concurrency,
-      runWindows: runWindows as TriggerWrite['runWindows'],
+      runWindows,
       enabled: form.enabled,
     };
 
@@ -1107,16 +1116,11 @@ function TriggerForm({
         />
       </label>
 
-      <label>
-        Run windows (JSON, optional)
-        <textarea
-          value={form.runWindowsText}
-          onChange={(e) => onChange({ ...form, runWindowsText: e.target.value })}
-          rows={3}
-          spellCheck={false}
-          placeholder='[{"start":"22:00","end":"02:00"}]'
-        />
-      </label>
+      <RunWindowsEditor
+        value={form.runWindows}
+        onChange={(runWindows) => onChange({ ...form, runWindows })}
+        mode={form.mode}
+      />
 
       {error && (
         <p role="alert" className="error">

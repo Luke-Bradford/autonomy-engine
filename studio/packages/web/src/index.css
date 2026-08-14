@@ -908,6 +908,7 @@ td button + button {
    #981 added the fourth, `.binding-kind`. */
 .trigger-form .recurrence-editor,
 .trigger-form .window-editor,
+.trigger-form .run-windows,
 .trigger-form .binding-kind {
   display: flex;
   flex-direction: column;
@@ -920,10 +921,22 @@ td button + button {
 
 .trigger-form .recurrence-editor legend,
 .trigger-form .window-editor legend,
+.trigger-form .run-windows legend,
 .trigger-form .binding-kind legend {
   padding: 0 0.35rem;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+/* #1090 — one run window's controls, kept visually grouped so a multi-window
+   restriction reads as a list of windows rather than a wall of time fields. */
+.trigger-form .run-window-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 /* The seven day checkboxes wrap as one row rather than stacking seven deep. */

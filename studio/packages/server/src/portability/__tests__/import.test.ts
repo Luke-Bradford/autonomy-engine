@@ -816,6 +816,33 @@ describe('importEnvelope: trigger', () => {
   // mandatory rebind — 400s on the effective-state rule (the same
   // brick-avoidance reasoning that forces `event`/`window` null above; params
   // can't be surgically forced consistent, so refusal is the honest disposition).
+  it('refuses an envelope carrying a run window the scheduler could never open (#1090)', () => {
+    // A legacy workspace can hold one — `RunWindowSchema` (the READ shape, and
+    // so the export shape) is deliberately lenient, so such a trigger exports
+    // cleanly. Import is a WRITE, and must refuse rather than launder it into
+    // the target, where it would sit enabled and never fire.
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db, 'owner-a');
+    const trigger = createTrigger(db, {
+      ownerId: 'owner-a',
+      name: 'Windowed',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'schedule',
+      schedule: '0 * * * *',
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: [{ start: '09:00', end: '17:00' }],
+      enabled: false,
+    });
+    const envelope = exportTrigger(db, trigger.id, 'owner-a');
+    // Hand-edited to a bound `parseRunWindowTime` cannot read — the shape the
+    // JSON textarea that #1090 replaces made easy to author.
+    (envelope.data as { runWindows: unknown }).runWindows = [{ start: '9am', end: '5pm' }];
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow();
+  });
+
   it('refuses a NON-tumbling envelope whose params bind ${trigger.windowStart/End}', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db, 'owner-a');

@@ -1067,6 +1067,29 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     );
   });
 
+  it('REFUSES an UPDATE carrying a run window the scheduler could never open (#1090)', () => {
+    // Symmetric with the concurrency case above, and it matters MORE here: a
+    // trigger whose window cannot be parsed does not fail loudly at fire time,
+    // it simply never fires. `TriggerExportDataSchema` derives from the LENIENT
+    // read shape, so such a window exports cleanly from a legacy workspace —
+    // the apply's `NewTriggerSchema` gate is where it must be caught, rather
+    // than laundered into the target.
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, triggerOn(version.id));
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+
+    const incoming = snapshot(src);
+    incoming.triggers[0]!.data.name = 'Edited'; // force a content change → update path
+    incoming.triggers[0]!.data.runWindows = [{ start: '9am', end: '5pm' }];
+
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha2', 'main')).toThrow();
+    // Atomic: the target trigger keeps its original (unrestricted) windows.
+    expect(getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!.runWindows).toBeNull();
+  });
+
   it('ABORTS atomically (nothing written) when a node references an absent connection', () => {
     const src = freshDb().db;
     const conn = createConnection(src, {

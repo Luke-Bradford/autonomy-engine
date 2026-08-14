@@ -33,9 +33,17 @@ export function isWithinRunWindows(windows: RunWindow[] | null, at: Date): boole
   return windows.some((w) => matchesWindow(w, at));
 }
 
-/** Parse "HH:MM" (1-2 digit hour, 2 digit minute) 24h into minutes-of-day, or
- * `null` if malformed / out of range — an unparseable bound fails closed. */
-function parseHM(value: string): number | null {
+/**
+ * Parse "HH:MM" (1-2 digit hour, 2 digit minute) 24h into minutes-of-day, or
+ * `null` if malformed / out of range — an unparseable bound fails closed.
+ *
+ * EXPORTED (#1090) so the write boundary (`RunWindowWriteSchema`) refuses
+ * exactly what this cannot read. The two must agree by CONSTRUCTION rather than
+ * via a second regex that happens to match today: a bound the schema admits but
+ * this rejects is a trigger that persists, looks healthy and never fires; one
+ * the schema refuses but this handles is a window an operator cannot author.
+ */
+export function parseRunWindowTime(value: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(value);
   if (m === null) return null;
   const h = Number(m[1]);
@@ -45,8 +53,8 @@ function parseHM(value: string): number | null {
 }
 
 function matchesWindow(w: RunWindow, at: Date): boolean {
-  const start = parseHM(w.start);
-  const end = parseHM(w.end);
+  const start = parseRunWindowTime(w.start);
+  const end = parseRunWindowTime(w.end);
   if (start === null || end === null) return false;
   if (w.days !== undefined && !w.days.includes(at.getUTCDay())) return false;
   const cur = at.getUTCHours() * 60 + at.getUTCMinutes();

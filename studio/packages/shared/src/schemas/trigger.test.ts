@@ -5,12 +5,14 @@ import {
   ConcurrencyWriteSchema,
   NewTriggerSchema,
   RunWindowSchema,
+  RunWindowWriteSchema,
   TriggerModeSchema,
   TriggerPublicSchema,
   TriggerSchema,
   WebhookConfigSchema,
   WebhookPublicConfigSchema,
 } from './trigger.js';
+import { parseRunWindowTime } from '../triggers/run-window.js';
 
 describe('TriggerModeSchema', () => {
   it.each(['manual', 'schedule', 'webhook', 'event', 'continuous', 'tumbling'])(
@@ -408,5 +410,112 @@ describe('TriggerPublicSchema', () => {
     const once = TriggerPublicSchema.parse(webhookTrigger);
     const twice = TriggerPublicSchema.parse(once);
     expect(twice.webhook).toEqual({ idempotencyWindowSeconds: 300 });
+  });
+});
+
+/**
+ * #1090 U14c — the run-window WRITE boundary.
+ *
+ * `isWithinRunWindows` is fail-CLOSED by design: a window it cannot parse never
+ * admits a run. That is right at fire time and silent at author time — before
+ * this schema, `RunWindowSchema`'s `z.string().min(1)` accepted `"9am"`, and the
+ * trigger then sat enabled, healthy-looking, and never fired, with no error
+ * raised anywhere. Every shape below is one an operator could author and get
+ * exactly that, so each is refused at the boundary instead.
+ */
+describe('RunWindowWriteSchema (#1090)', () => {
+  const at = (start: string, end: string, days?: number[]) =>
+    days === undefined ? { start, end } : { start, end, days };
+
+  it.each([
+    ['a plain window', at('09:00', '17:00')],
+    ['a 1-digit hour, which the evaluator accepts', at('9:00', '17:00')],
+    ['a window wrapping past midnight', at('22:00', '02:00')],
+    ['the widest legal same-day window', at('00:00', '23:59')],
+    ['a day-restricted window', at('09:00', '17:00', [1, 2, 3, 4, 5])],
+  ])('accepts %s', (_label, window) => {
+    expect(RunWindowWriteSchema.parse(window)).toEqual(window);
+  });
+
+  it.each([
+    ['a 12-hour clock time the evaluator cannot parse', at('9am', '5pm')],
+    ['an hour out of range', at('25:00', '02:00')],
+    ['a minute out of range', at('09:60', '17:00')],
+    ['`24:00` as a end-of-day bound', at('09:00', '24:00')],
+    ['a padded time (the anchored parse rejects whitespace)', at(' 09:00', '17:00')],
+    ['an empty start', at('', '17:00')],
+    ['a zero-width window, which can never contain an instant', at('09:00', '09:00')],
+    ['an empty day list, which no weekday satisfies', at('09:00', '17:00', [])],
+  ])('refuses %s', (_label, window) => {
+    expect(RunWindowWriteSchema.safeParse(window).success).toBe(false);
+  });
+
+  it('reports the offending BOUND, not just the window', () => {
+    const result = RunWindowWriteSchema.safeParse(at('09:00', '5pm'));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((i) => i.path)).toContainEqual(['end']);
+  });
+
+  it('accepts exactly what the evaluator can read — no drift between the two', () => {
+    // The write boundary and `parseRunWindowTime` must agree by CONSTRUCTION,
+    // not by two regexes that happen to match today: a bound the schema admits
+    // but the evaluator cannot parse is the silent never-fires this exists to
+    // stop, and one the schema refuses but the evaluator handles is a window an
+    // operator cannot author.
+    const bounds = ['09:00', '9:00', '00:00', '23:59', '9am', '25:00', '09:60', '24:00', '', '9:5'];
+    for (const bound of bounds) {
+      const parses = parseRunWindowTime(bound) !== null;
+      // Asserted on the BOUND's own issue, not on overall success: a bound that
+      // happens to equal the opposite one also trips the zero-width rule, which
+      // would read as "refused the bound" and hide a real disagreement.
+      const result = RunWindowWriteSchema.safeParse({ start: bound, end: '23:59' });
+      const boundRefused =
+        !result.success && result.error.issues.some((i) => i.path.join('.') === 'start');
+      expect(`${bound}: refused=${boundRefused}`).toBe(`${bound}: refused=${!parses}`);
+    }
+  });
+
+  it('the STORED schema stays lenient, so a legacy row still parses on READ', () => {
+    // Tightening the read shape would make `getTrigger`/`listTriggers` THROW on
+    // a row persisted before this gate, rather than merely refusing the next
+    // write — the `ConcurrencySchema`/`ConcurrencyWriteSchema` split, exactly.
+    expect(RunWindowSchema.parse(at('9am', '5pm'))).toEqual(at('9am', '5pm'));
+  });
+});
+
+describe('NewTriggerSchema.runWindows (#1090)', () => {
+  const { id, createdAt, updatedAt, ...insert } = trigger;
+  void id;
+  void createdAt;
+  void updatedAt;
+
+  it('refuses a malformed window on the trigger write path', () => {
+    const result = NewTriggerSchema.safeParse({
+      ...insert,
+      runWindows: [{ start: '9am', end: '5pm' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('still accepts null (unrestricted) and a well-formed window', () => {
+    expect(NewTriggerSchema.parse({ ...insert, runWindows: null }).runWindows).toBeNull();
+    expect(
+      NewTriggerSchema.parse({ ...insert, runWindows: [{ start: '22:00', end: '02:00' }] })
+        .runWindows,
+    ).toEqual([{ start: '22:00', end: '02:00' }]);
+  });
+
+  it('leaves the EMPTY array accepted — it is configured-and-closed, not malformed', () => {
+    // `run-window.ts` documents `[]` as a deliberate fail-closed state
+    // ("windows configured, none of them"). Refusing it here would be an engine
+    // semantics change wearing a validation hat. The editor never authors it
+    // by accident (#1090's `restricted` toggle is the surface for it).
+    expect(NewTriggerSchema.parse({ ...insert, runWindows: [] }).runWindows).toEqual([]);
+  });
+
+  it('a .partial() PATCH that omits runWindows does not manufacture one', () => {
+    const parsed = NewTriggerSchema.partial().parse({ enabled: false });
+    expect('runWindows' in parsed && parsed.runWindows !== undefined).toBe(false);
   });
 });

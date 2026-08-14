@@ -3,6 +3,7 @@ import { validateTriggerBindings } from '../engine/params.js';
 import { addParamsReplaySafetyIssues } from './replay-safety.js';
 import { RecurrenceSchema, RecurrenceWriteSchema } from './recurrence.js';
 import { WindowConfigSchema, WindowConfigWriteSchema } from './window.js';
+import { parseRunWindowTime } from '../triggers/run-window.js';
 
 export const TriggerModeSchema = z.enum([
   'manual',
@@ -76,6 +77,66 @@ export const RunWindowSchema = z.object({
   days: z.array(z.number().int().min(0).max(6)).optional(),
 });
 export type RunWindow = z.infer<typeof RunWindowSchema>;
+
+/**
+ * #1090 U14c — the WRITE-boundary run-window shape: the stored shape PLUS the
+ * rules that separate "a restriction" from "a trigger that can never fire".
+ *
+ * `isWithinRunWindows` is fail-CLOSED — a window it cannot read never admits a
+ * run. That is the right polarity at fire time and SILENT at author time: the
+ * stored schema's `z.string().min(1)` accepted `{start:'9am', end:'5pm'}`, so
+ * the trigger persisted, sat enabled, reported healthy, and never fired, with
+ * no error raised at write time, at fire time, or anywhere in the UI. Each rule
+ * below refuses one shape with exactly that outcome:
+ *
+ *   - a bound `parseRunWindowTime` cannot read (the parser is SHARED with the
+ *     evaluator, so the two cannot drift — see its docstring);
+ *   - `start === end`, a zero-width window: `matchesWindow` asks
+ *     `cur >= start && cur < end`, which no instant satisfies;
+ *   - a PRESENT but empty `days`, which `days.includes(weekday)` never
+ *     satisfies. Absent `days` (every day) stays the unrestricted case, so this
+ *     refuses only the array that was authored and means nothing.
+ *
+ * The stored `RunWindowSchema` stays LENIENT for the same reason
+ * `ConcurrencySchema` does: tightening the read shape would make a row
+ * persisted before this gate THROW on `getTrigger`/`listTriggers` rather than
+ * merely being refused at the next write.
+ *
+ * NOT refused here: an empty `runWindows` ARRAY. `run-window.ts` documents `[]`
+ * as a deliberate fail-closed state ("windows configured, none of them"), so
+ * refusing it would be an engine-semantics change wearing a validation hat.
+ */
+export const RunWindowWriteSchema = RunWindowSchema.superRefine((w, ctx) => {
+  for (const bound of ['start', 'end'] as const) {
+    if (parseRunWindowTime(w[bound]) === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        // Per-BOUND paths: a whole-object refinement would report both as the
+        // window's, and the operator has two controls to choose between.
+        path: [bound],
+        message: `\`${bound}\` must be a 24-hour UTC time like "09:00" or "22:30" (got ${JSON.stringify(w[bound])}) — a bound the scheduler cannot read would silently stop this trigger ever firing`,
+      });
+    }
+  }
+  if (w.start === w.end) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['end'],
+      // `end` is EXCLUSIVE and `parseRunWindowTime` rejects `24:00`, so the
+      // natural "all day" authoring lands here; name the way out of it.
+      message:
+        '`start` and `end` are equal, so this window can never be open — for an all-day window use "00:00" to "23:59"',
+    });
+  }
+  if (w.days !== undefined && w.days.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['days'],
+      message:
+        '`days` is present but empty, so no weekday satisfies it — select at least one day, or omit `days` for every day',
+    });
+  }
+});
 
 /** `{secretRef, ...}` — per-trigger webhook secret + whatever else a webhook
  * trigger needs (idempotency-key handling, replay-protection config); kept
@@ -224,6 +285,14 @@ export const NewTriggerSchema = TriggerSchema.omit({
   updatedAt: true,
 }).extend({
   concurrency: ConcurrencyWriteSchema,
+  // #1090 U14c — the same read-lenient / write-strict split as `concurrency`
+  // directly above: the stored `TriggerSchema.runWindows` keeps parsing any
+  // historically-valid row, while every CREATE/UPDATE is refused a window that
+  // could only ever fail closed. Required-nullable with NO default, so
+  // `.partial()` gives the clean 3-state a PATCH needs (omitted = untouched,
+  // `null` = clear, array = validated) without the `.default()` pitfall
+  // documented on `recurrence` below.
+  runWindows: z.array(RunWindowWriteSchema).nullable(),
   // Expression-valued param bindings are validated on the WRITE path only
   // (#5 S12b) — see `TriggerParamsWriteSchema`.
   params: TriggerParamsWriteSchema,

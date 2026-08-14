@@ -1183,3 +1183,126 @@ describe('TriggersPage — binding to the active published version', () => {
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
   });
 });
+
+/**
+ * #1090 U14c — the run-window editor. What the JSON textarea it replaces could
+ * do, and why that mattered: `isWithinRunWindows` is fail-CLOSED, so a window
+ * that is very slightly wrong makes the trigger persist, sit enabled, look
+ * healthy and never fire — with no error raised anywhere.
+ */
+describe('TriggersPage run windows (#1090)', () => {
+  const openNewForm = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    return form;
+  };
+
+  it('authors a day-restricted window through controls, not JSON', async () => {
+    const user = userEvent.setup();
+    const form = await openNewForm(user);
+
+    await user.click(form.getByRole('button', { name: /Add window/i }));
+    const win = within(form.getByRole('group', { name: 'Window 1' }));
+    await user.type(win.getByLabelText(/Window 1 start/i), '09:00');
+    await user.type(win.getByLabelText(/Window 1 end/i), '17:00');
+    await user.click(win.getByRole('checkbox', { name: /Only on selected days/i }));
+    await user.click(win.getByRole('checkbox', { name: 'Mon' }));
+    await user.click(win.getByRole('checkbox', { name: 'Fri' }));
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0]![0].runWindows).toEqual([
+      { start: '09:00', end: '17:00', days: [1, 5] },
+    ]);
+  });
+
+  it('an untouched form still sends `null` — no restriction is not an empty one', async () => {
+    const user = userEvent.setup();
+    const form = await openNewForm(user);
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0]![0].runWindows).toBeNull();
+  });
+
+  it('refuses a bound the scheduler cannot read, and says which one', async () => {
+    const user = userEvent.setup();
+    const form = await openNewForm(user);
+    await user.click(form.getByRole('button', { name: /Add window/i }));
+    const win = within(form.getByRole('group', { name: 'Window 1' }));
+    await user.type(win.getByLabelText(/Window 1 start/i), '9am');
+    await user.type(win.getByLabelText(/Window 1 end/i), '17:00');
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    expect(await form.findByRole('alert')).toHaveTextContent(/window 1\.start/i);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('shows the stored bound that broke a trigger, instead of an empty box', async () => {
+    // The JSON textarea could store "9am". A native time picker cannot HOLD
+    // that, so it would render as blank and the operator would never see the
+    // value that stopped their trigger firing.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({ name: 'Broken', runWindows: [{ start: '9am', end: '17:00' }] }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+    const win = within(form.getByRole('group', { name: 'Window 1' }));
+    expect(win.getByLabelText(/Window 1 start/i)).toHaveValue('9am');
+    expect(form.getByText(/cannot read start "9am"/i)).toBeInTheDocument();
+  });
+
+  it('a stored `[]` stays never-open across an unrelated edit', async () => {
+    // The fail-OPEN this design exists to stop: `[]` means "windows configured,
+    // none of them" (never fires). Rendering it as "no rows" and writing back
+    // `null` would silently convert that into "no restriction at all".
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Closed', runWindows: [] })]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+    expect(
+      form.getByRole('checkbox', { name: /Restrict when this trigger may fire/i }),
+    ).toBeChecked();
+    expect(form.getByText(/can never fire automatically/i)).toBeInTheDocument();
+
+    await user.clear(form.getByLabelText('Name'));
+    await user.type(form.getByLabelText('Name'), 'Closed renamed');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0]![1].runWindows).toEqual([]);
+  });
+
+  it('says so when the mode does not consult a run window', async () => {
+    // A structured editor is far more inviting than the textarea was, and three
+    // of the six modes never consult the value at all.
+    const user = userEvent.setup();
+    const form = await openNewForm(user);
+    await user.click(form.getByRole('button', { name: /Add window/i }));
+    expect(form.queryByText(/Run windows do not gate/i)).not.toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Mode'), 'manual');
+    expect(form.getByText(/Run windows do not gate a manual trigger/i)).toBeInTheDocument();
+  });
+
+  it('keeps the window across a mode switch — it is not owned by a mode', async () => {
+    const user = userEvent.setup();
+    const form = await openNewForm(user);
+    await user.click(form.getByRole('button', { name: /Add window/i }));
+    const win = within(form.getByRole('group', { name: 'Window 1' }));
+    await user.type(win.getByLabelText(/Window 1 start/i), '09:00');
+    await user.type(win.getByLabelText(/Window 1 end/i), '17:00');
+
+    await user.selectOptions(form.getByLabelText('Mode'), 'webhook');
+    expect(
+      within(form.getByRole('group', { name: 'Window 1' })).getByLabelText(/Window 1 start/i),
+    ).toHaveValue('09:00');
+  });
+});
