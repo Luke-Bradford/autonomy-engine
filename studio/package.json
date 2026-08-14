@@ -16,7 +16,9 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "audit:licenses": "pnpm --filter @autonomy-studio/cli run audit:licenses",
-    "preview": "pnpm build && node scripts/preview.mjs"
+    "preview": "pnpm build && node scripts/preview.mjs",
+    "service:status": "node scripts/service.mjs status",
+    "service:refresh": "node scripts/service.mjs refresh"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
