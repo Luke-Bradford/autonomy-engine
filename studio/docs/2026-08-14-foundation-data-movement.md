@@ -44,7 +44,7 @@ different kinds. **The current dispatch path cannot express that.**
 // shared/src/schemas/pipeline.ts:377
 connectionId: z.string().min(1).optional(),          // ONE, singular
 
-// server/src/connectors/types.ts:61,223
+// server/src/connectors/types.ts:61,241
 connectionConfig: Record<string, unknown>;           // ONE bound Connection's config
 runActivity(ctx, secret: string | null, secretFields?): AsyncIterable<ActivityEvent>;
 ```
@@ -199,10 +199,54 @@ gets the ordering exactly backwards: the pin's whole value is being in place whe
 - **No `active` pointer and no Publish.** Publish is a CAS over an event projection and refuses
   outright with no git repo connected (`routes/pipelines.ts:274,289-294`). Datasets are mutable, so
   there is nothing to promote; an edit takes effect on the next dispatch, like a connection edit.
-- **No trigger binding.** Triggers bind pipeline versions (`db/schema.ts:225`).
+- **No trigger binding.** Triggers bind pipeline versions (`triggers.pipelineVersionId`, `db/schema.ts:228`).
 - **No audit event.** No resource kind emits a create/update event today — there is no `connection.*`
   or `trigger.*` member of `WorkspaceEventSchema` at all. Datasets must not be the exception; if
   resource auditing is wanted it is one ticket across all four kinds.
+
+### 2.5 Where format lives: on the DATASET **[SETTLED]**
+
+#996 asks this directly — *"is 'CSV vs Excel' a property of the dataset, the linked service, or the
+copy? ADF puts it on the dataset. Say which, and why."* It is the dataset, and the reasoning holds
+independently of ADF:
+
+- **Not the linked service.** One folder holds CSV and Excel side by side, so format-on-connection
+  forces a separate connection per format — and the connection is the object carrying the credential
+  and the `config.roots` confinement. Splitting it by format multiplies the security-relevant object
+  for a purely presentational distinction.
+- **Not the copy.** The mapping surface needs the source's columns to auto-map against (§6.3). If
+  format lived on the copy, a dataset could not describe its own columns, so every copy would
+  re-declare them — and two copies over one file could disagree about what that file is.
+- **The dataset**, because a dataset is precisely *"a thing in a store, in a shape"*. `kind` selects
+  the reader; `config` carries that kind's options.
+
+### 2.6 What each kind's `config` carries
+
+`DatasetSchema.config` and a store connection's `config` are both `z.record` at the schema level, so
+the concrete shape has to be written down or it will be invented per ticket. Each lands in the
+existing per-kind SSOT — `CONNECTION_CONFIG_SCHEMAS` (`catalog/connection-config.ts:341`, exhaustive
+over the enum, so a missing entry is a compile error) for connections, and the dataset equivalent for
+dataset kinds.
+
+**Store connections (new `ConnectionKind`s):**
+
+| Kind | Non-secret `config` | Secret |
+|---|---|---|
+| `sqlite` | `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `readonly` | none |
+| `postgres` | `host`, `port`, `database`, `user`, `sslmode`, `connectTimeoutMs`, `statementTimeoutMs` | `secretRef` → password. **Joins `SECRET_REQUIRING_CONNECTION_KINDS`** (§8) |
+
+**Dataset kinds:**
+
+| Kind | `config` |
+|---|---|
+| `delimited` | `path`, `delimiter` (default `,`), `quote`, `escape`, `header` (bool), `encoding`, `nullValue`, `dateFormat` |
+| `excel` | `path`, `sheet` (name or index), `headerRow`, `nullValue`, `dateFormat` |
+| `table` | `schema`, `table` — **identifiers, so save-time literal-only (§8)** |
+| `query` | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters` |
+
+`nullValue` and `dateFormat` sit on the file kinds and not the SQL kinds deliberately: a database
+column already has a type and a real `NULL`, so there is nothing to declare. They exist only where
+the format genuinely cannot express the distinction (§6.2, §6.4).
 
 ---
 
@@ -223,8 +267,10 @@ worse to something else, on import. Nothing would throw.
 **Settled:** `NodeSchema` gains `datasetIds?: { source, sink }` as first-class fields, and the remap
 is added at all four sites alongside `connectionId`'s.
 
-**And they follow `connectionId`'s L13a rule exactly** (`export.ts:40-47`, every remap site branching
-on `interpolationMode`):
+**And they follow `connectionId`'s L13a rule exactly.** The null-vs-preserve mechanism itself lives in
+`export.ts:39-57` specifically — the other three sites remap rather than null (`workspace-serialize.ts`
+maps with a fallback; `:444-451` throws on an unresolved literal), so that is the file to read and
+copy. It branches on `interpolationMode`:
 
 - a **literal** dataset id is **nulled on export** — a concrete id is environment-specific and
   meaningless elsewhere;
@@ -499,7 +545,7 @@ exists — save time.
 ## §9 — execution tier: a copy must not stall the server **[SETTLED]**
 
 **The measured hazard.** Adapter runs share **one global `pLimit(deps.concurrency ?? 4)` across every
-run** (`run/executor.ts:56,241`); per-run dispatch concurrency is also 4 (`PER_RUN_DISPATCH_CONCURRENCY`, `run/driver.ts:899`). Four
+run** (`run/executor.ts:56,241`); per-run dispatch concurrency is also 4 (`PER_RUN_DISPATCH_CONCURRENCY`, `run/driver.ts:900`). Four
 long copies would hold every global adapter slot and stall every LLM and http node server-wide.
 
 **And the "zero new dependency" store is the worst case.** `better-sqlite3` is **synchronous**, and
@@ -530,7 +576,8 @@ this document depends on where the copy runs.
 
 **Cancellation and timeouts are NOT declared contract fields today.** `ActivityDefinition`
 deliberately omits `supportsCancel` and `timeoutScope` — `catalog/types.ts:293` lists them among the
-D6 fields "sequencing behind a named owner (F2a/F3/F4/F15/F9b-d)". There is no per-node timeout in
+D6 fields "deliberately NOT declared yet ... sequencing behind a named owner (F2a/F2b/F3/F4/F9b-d)"
+(F15's `secretSinkFields` is the one that IS declared). There is no per-node timeout in
 the executor. **`copy` is the first genuinely long-running activity in the product**, so it must not
 be specced as though those fields exist.
 
@@ -573,7 +620,7 @@ source and a sink.
 | **M2**  | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers     | the pin precedes the kind, deliberately               |
 | **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                       |
 | **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                             |
-| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first |                                                       |
+| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **Split when it becomes a queue item** — this is one spec-level ticket carrying at least three separable slices (the pump, the coercion matrix, the sink discipline) |
 | **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                       |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                       |
 | **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                    |
@@ -628,7 +675,7 @@ is therefore to widen `classify` with an `objectList` kind derived from the elem
 special-case `copy` in the panel, which would be the parallel field list U7 refuses.
 
 **Datasets belong in the Manage hub**, which the UI design already scopes as _"Manage (linked
-services, triggers)"_ (`2026-07-14-adf-grade-ui-design.md:33,117`) — a Datasets list + detail beside
+services, triggers)"_ (`2026-07-14-adf-grade-ui-design.md:33`; the hub's own section is `:117`) — a Datasets list + detail beside
 Connections. No new hub, no parallel authoring idiom.
 
 ---
@@ -659,7 +706,7 @@ Connections. No new hub, no parallel authoring idiom.
   `schemas/version.ts:218` (`CATALOG_VERSION`); `schemas/pipeline.ts:376-377` (+`connectionIds?`, +`datasetIds?`); `engine/params.ts:1962` (identifier rule); portability `paths/envelope/
 content-form/import-result` + the §2.3 exhaustiveness pin.
 - `server`: `+connectors/sqlite.ts`, `+connectors/postgres.ts`, `+connectors/copy/*` (readers,
-  writers, coercion, the pump); `connectors/types.ts:223` (+optional sink args);
+  writers, coercion, the pump); `connectors/types.ts:241` (+optional sink args);
   `connectors/registry.ts:28`; **extract `resolveWithinRoots` out of `connectors/fs.ts:186` into a
   shared module**; `run/executor.ts:241,327,477` (copy concurrency budget, two-sided resolve,
   side-labelled codes); `run/connection-readiness.ts`; `limits.ts` (+`LOOKUP_ROW_CAP`,
@@ -699,7 +746,7 @@ content-form/import-result` + the §2.3 exhaustiveness pin.
   (ADF 'Linked Service' analog)"_; `:9` six kinds; `:41` `SECRET_REQUIRING_CONNECTION_KINDS` = the two
   hosted LLM kinds only.
 - **One node binds ONE connection.** `shared/src/schemas/pipeline.ts:377` (singular, optional);
-  `connectors/types.ts:61` (one `connectionConfig`), `:223` (`runActivity(ctx, secret, secretFields?)`);
+  `connectors/types.ts:61` (one `connectionConfig`), `:241` (`runActivity(ctx, secret, secretFields?)`);
   registry keyed by kind (`registry.ts:12`); one adapter serves many activities (`types.ts:52`).
 - **Only pipelines are versioned.** `repo/connections.ts:155` mutates in place; immutability triggers
   exist for `pipeline_versions` only (`0002_p1a_data_model.sql:68-84`); `RESOURCE_KINDS` is three
@@ -718,7 +765,7 @@ content-form/import-result` + the §2.3 exhaustiveness pin.
 - **`file_write` is already crash-safe by temp+`rename`.** `connectors/fs.ts:63-64`, with a
   per-`(run,node,attempt)` temp suffix at `:300-304`.
 - **Adapter concurrency is one global pool of 4.** `run/executor.ts:56,241`;
-  `PER_RUN_DISPATCH_CONCURRENCY = 4` at `run/driver.ts:899`. Note its docblock (`:888-898`): the
+  `PER_RUN_DISPATCH_CONCURRENCY = 4` at `run/driver.ts:900`. Note the docblock immediately above it: the
   global `p-limit` caps only the **adapter phase**, which sits after the per-run pre-flight — so a
   copy holding an adapter slot is the constraint that matters here.
 - **`better-sqlite3` is synchronous and there are no worker threads.** `packages/server/package.json:19`;
