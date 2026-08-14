@@ -926,7 +926,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // (so the running adapter knows which store it writes to, and can
         // re-validate per spec §8) and its plaintext credential — the last on the
         // `runActivity` side channel, never in `ctx`.
-        sink = { kind: resolvedSink.connectionKind, connectionConfig: resolvedSink.connectionConfig };
+        sink = {
+          kind: resolvedSink.connectionKind,
+          connectionConfig: resolvedSink.connectionConfig,
+        };
         sinkSecret = resolvedSink.secret;
       }
     } else {

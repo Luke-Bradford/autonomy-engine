@@ -532,7 +532,12 @@ describe('#2 L13a — connectionId resolution on dispatchNode', () => {
 // ===========================================================================
 
 /** A node with the paired top-level `connectionIds` (no singular `connectionId`). */
-function pairNode(id: string, source: string, sink: string, config: Record<string, unknown> = {}): Node {
+function pairNode(
+  id: string,
+  source: string,
+  sink: string,
+  config: Record<string, unknown> = {},
+): Node {
   return { ...node(id, config), connectionIds: { source, sink } };
 }
 

@@ -98,13 +98,19 @@ function pairedCatalog(): CatalogOverride {
 
 /** The same entry WITHOUT the sink declaration — single-connection. */
 function unpairedCatalog(): CatalogOverride {
-  const paired = pairedCatalog().get('test_copy')!;
-  const { sinkConnectionKinds: _drop, ...single } = paired;
+  const single = { ...pairedCatalog().get('test_copy')! };
+  delete single.sinkConnectionKinds;
   return new Map([['test_copy', single]]);
 }
 
 function pairNode(id: string, source: string, sink: string): Node {
-  return { id, type: 'test_copy', config: {}, connectionIds: { source, sink }, position: { x: 0, y: 0 } };
+  return {
+    id,
+    type: 'test_copy',
+    config: {},
+    connectionIds: { source, sink },
+    position: { x: 0, y: 0 },
+  };
 }
 
 describe('M1 #1104 — the paired binding in the readiness gates', () => {
