@@ -112,9 +112,8 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New connection' }));
     await user.type(screen.getByLabelText('Name'), 'Prod key');
     await user.selectOptions(screen.getByLabelText('Kind'), 'openai_api');
-    const config = screen.getByLabelText('Config (JSON)');
-    await user.clear(config);
-    await user.type(config, '{{"model":"gpt-4o"}');
+    // #1087 — the kind's OWN field, not a JSON blob the author had to know.
+    await user.type(screen.getByLabelText('model (optional)'), 'gpt-4o');
     await user.type(screen.getByLabelText('Secret'), 'sk-secret');
 
     // After a successful create, the list refetches and includes the new row.
@@ -170,6 +169,9 @@ describe('ConnectionsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New connection' }));
     await user.type(screen.getByLabelText('Name'), 'Broken');
+    // #1087 — the JSON editor is now the escape hatch behind a toggle, so this
+    // reaches it the way an operator does. The rule it guards is unchanged.
+    await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
     const config = screen.getByLabelText('Config (JSON)');
     await user.clear(config);
     await user.type(config, 'not json');
@@ -177,6 +179,177 @@ describe('ConnectionsPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Invalid config JSON/i);
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the SELECTED kind's fields, and swaps them when the kind changes", async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    // `anthropic_api` (the first kind) declares the LLM trio plus its own
+    // version header; `fs` declares none of them and requires `roots`.
+    expect(screen.getByLabelText('anthropicVersion (optional)')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^roots/)).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+    // The one-per-line control labels itself `roots — one per line`.
+    expect(screen.getByLabelText(/^roots/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('anthropicVersion (optional)')).not.toBeInTheDocument();
+  });
+
+  it('keeps what was typed when the kind changes', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    // `model` is declared by anthropic_api AND ollama, so it survives the switch
+    // as the same field — a re-seed would blank it.
+    await user.type(screen.getByLabelText('model (optional)'), 'claude-opus-5');
+    await user.selectOptions(screen.getByLabelText('Kind'), 'ollama');
+
+    expect(screen.getByLabelText('model (optional)')).toHaveValue('claude-opus-5');
+  });
+
+  it('carries a field the fields draft holds across the JSON toggle', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('model (optional)'), 'claude-opus-5');
+    // The JSON editor must open on what SAVE would write, not on the config the
+    // form mounted with — otherwise the toggle silently discards the edit.
+    await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
+
+    expect(screen.getByLabelText('Config (JSON)')).toHaveValue(
+      JSON.stringify({ model: 'claude-opus-5' }, null, 2),
+    );
+  });
+
+  it('keeps a config key no kind declares through a field-mode save', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Legacy', config: { model: 'claude-opus-4-8', somethingOld: 'keep me' } }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Legacy');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.clear(within(form).getByLabelText('model (optional)'));
+    await user.type(within(form).getByLabelText('model (optional)'), 'claude-opus-5');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, body] = updateMock.mock.calls[0]!;
+    // A key the form cannot see must never be deleted by an edit to another one.
+    expect(body.config).toEqual({ model: 'claude-opus-5', somethingOld: 'keep me' });
+  });
+
+  it('renders a key another kind owns as a CARRIED field, so it can be dropped', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Switched', kind: 'fs', config: { roots: ['/tmp'], model: 'left over' } }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Switched');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).getByText(/Carried from another kind \(model\)/)).toBeInTheDocument();
+
+    // Blanking the carried control is the repair — it OMITS the key.
+    await user.clear(within(form).getByLabelText('model (optional)'));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, body] = updateMock.mock.calls[0]!;
+    expect(body.config).toEqual({ roots: ['/tmp'] });
+  });
+
+  it('falls back to JSON for a stored value no control can represent', async () => {
+    listMock.mockResolvedValue([conn({ name: 'Odd', config: { model: 42 } })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Odd');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    expect(within(form).getByText(/Saved settings this form cannot show \(model\)/)).toBeVisible();
+    expect(within(form).getByLabelText('Config (JSON)')).toBeInTheDocument();
+    expect(within(form).queryByLabelText('model (optional)')).not.toBeInTheDocument();
+  });
+
+  it('says what a kind does with a secret, and never demands one', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    // anthropic_api REQUIRES one (SECRET_REQUIRING_CONNECTION_KINDS)...
+    expect(within(form).getByText(/cannot dispatch without a secret/)).toBeInTheDocument();
+    // ...but the input is never `required`: a secretless row is one the server
+    // accepts, and on edit blank means "keep the stored secret".
+    expect(within(form).getByLabelText('Secret')).not.toBeRequired();
+
+    // `fs` needs none at all, and says so rather than saying "optional".
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'fs');
+    expect(within(form).getByText(/credential-less/)).toBeInTheDocument();
+    expect(within(form).queryByText(/cannot dispatch without a secret/)).not.toBeInTheDocument();
+  });
+
+  it('says a config is incomplete without refusing to save it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Empty agent');
+    await user.selectOptions(screen.getByLabelText('Kind'), 'agent_cli');
+    // `command` is REQUIRED by the adapter and absent here.
+    expect(await screen.findByText(/This agent_cli config is incomplete/)).toBeInTheDocument();
+
+    // Advisory, not a gate: the server stores this today, so the form must too.
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('still says a config is wrong for the kind when the JSON editor is open', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([conn({ name: 'Fs one', kind: 'fs', config: { roots: ['/tmp'] } })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Fs one');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.click(within(form).getByRole('button', { name: 'Edit as JSON' }));
+
+    // The Kind select is reachable in JSON mode, and switching it does NOT
+    // rewrite the operator's JSON — so without an advisory here, an fs-shaped
+    // config saves as an agent_cli with nothing on screen to say so.
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'agent_cli');
+    expect(within(form).getByText(/This agent_cli config is incomplete/)).toBeInTheDocument();
+    // Still not a gate — the server stores this today.
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  it('warns about a RELATIVE fs root, which the shared schema does not refuse', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Fs rel', kind: 'fs', config: { roots: ['relative/path'] } }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Fs rel');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    // The absolute-root check is the SERVER's (`node:path`), so a schema-only
+    // advisory would say nothing about the one path-safety key in the catalog.
+    expect(within(form).getByText(/every fs root must be an absolute path/)).toBeInTheDocument();
+    // Still advisory: the server stores this row today.
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
   it('edits a connection and leaves the secret blank by default', async () => {

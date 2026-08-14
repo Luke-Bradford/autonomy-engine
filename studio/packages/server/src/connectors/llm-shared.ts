@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
 import {
   MAX_RETRY_INTERVAL_SECONDS,
@@ -74,18 +73,14 @@ export type {
  * still holds for these secret-bearing kinds; no config-schema change is needed.
  */
 
-/** Default per-request timeout (ms) for an LLM call — bounds a hung provider. */
-export const DEFAULT_LLM_TIMEOUT_MS = 120_000;
-
-/** The non-secret Connection config common to every LLM adapter. */
-export const llmConnectionConfigSchema = z.object({
-  /** Provider base URL override (self-hosted / gateway / local). */
-  baseUrl: z.string().optional(),
-  /** Default model, used when the node's activity config sets none. */
-  model: z.string().optional(),
-  /** Per-request timeout in ms (whole exchange). Defaults to 120s. */
-  timeoutMs: z.number().int().positive().optional(),
-});
+/**
+ * #1087 — the LLM connection-config shape and its default timeout now live in
+ * `shared/catalog/connection-config.ts`, so the Manage › Connections form can
+ * derive per-kind controls from the SAME schema this adapter parses at
+ * dispatch. Re-exported here (rather than repointing every import) because
+ * `./llm-shared.js` is where the three LLM adapters already read them from.
+ */
+export { DEFAULT_LLM_TIMEOUT_MS, llmConnectionConfigSchema } from '@autonomy-studio/shared';
 
 /**
  * Classify an HTTP status into the connector error taxonomy. Unlike the `http`

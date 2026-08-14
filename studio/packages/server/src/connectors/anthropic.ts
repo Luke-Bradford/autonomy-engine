@@ -1,11 +1,10 @@
-import { z } from 'zod';
+import { anthropicConnectionConfigSchema } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
   buildCapture,
   coerceStopReason,
   llmCallConfigSchema,
-  llmConnectionConfigSchema,
   llmProbeGet,
   meterUsage,
   noCompletionFailure,
@@ -119,10 +118,9 @@ const DEFAULT_MAX_TOKENS = 4096;
 /** The default model when neither the node nor the connection specifies one. */
 const DEFAULT_MODEL = 'claude-opus-5';
 
-const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
-  /** The `anthropic-version` header value. Defaults to `2023-06-01`. */
-  anthropicVersion: z.string().optional(),
-});
+// #1087 — the shape moved to `shared/catalog/connection-config.ts` so the
+// Manage › Connections form derives its controls from the schema this adapter
+// parses at dispatch. Imported, never re-declared.
 
 /**
  * Concatenate the `text`-type content blocks of a Messages API response, or
