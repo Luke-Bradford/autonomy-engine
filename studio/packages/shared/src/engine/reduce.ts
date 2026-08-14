@@ -369,6 +369,8 @@ type PreparedDispatch = {
   resolvedConnectionId: string | undefined;
   /** #2 L13b — per-dispatch connection-parameter bindings, `${}`-resolved. */
   resolvedConnectionParams: Record<string, unknown> | undefined;
+  /** M1 (#1104) — the paired source/sink binding, both ends `${}`-resolved. */
+  resolvedConnectionIds: { source: string; sink: string } | undefined;
 };
 
 /**
@@ -1126,6 +1128,35 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * M1 (#1104) — the PAIRED twin of `resolveConnectionId`: resolve BOTH ends of
+   * a node's (possibly `${}`) `connectionIds` against the run env. Each end goes
+   * through the SAME `String(substitute(...))` with the same `buildCtx`/`item`
+   * env as the singular resolution and `prepInput`, so both ends and the config
+   * see one env — a source that routes on `${params.env}` cannot resolve against
+   * a different snapshot than the sink beside it.
+   *
+   * Deliberately resolved as a UNIT (one `undefined` for "no pair") rather than
+   * two independent optionals: `NodeSchema.connectionIds` requires both keys, so
+   * a half-pair is unrepresentable here exactly as it is in the doc — and the
+   * export/import path already refuses to reconstitute one.
+   *
+   * Throws exactly as `prepInput` does (bad ref / grammar), so the caller's
+   * existing try/catch → `prepFailure` covers it.
+   */
+  function resolveConnectionIds(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): { source: string; sink: string } | undefined {
+    if (node.connectionIds === undefined) return undefined;
+    const ctx = buildCtx(state);
+    return {
+      source: String(substitute(node.connectionIds.source, ctx, 0, item)),
+      sink: String(substitute(node.connectionIds.sink, ctx, 0, item)),
+    };
+  }
+
+  /**
    * #2 L13b — resolve a node's per-dispatch `connectionParams` bindings against
    * the run env. One `substitute` over the whole record (it walks nested
    * records/arrays), same `buildCtx`/`item` env as `prepInput` and
@@ -1168,6 +1199,7 @@ export function createEngine(doc: EngineDoc): Engine {
       preparedInput: prepInput(es, node, item),
       resolvedConnectionId: resolveConnectionId(es, node, item),
       resolvedConnectionParams: resolveConnectionParams(es, node, item),
+      resolvedConnectionIds: resolveConnectionIds(es, node, item),
     };
   }
 
@@ -1191,6 +1223,7 @@ export function createEngine(doc: EngineDoc): Engine {
       preparedInput: prepared.preparedInput,
       resolvedConnectionId: prepared.resolvedConnectionId,
       resolvedConnectionParams: prepared.resolvedConnectionParams,
+      resolvedConnectionIds: prepared.resolvedConnectionIds,
     };
   }
 
