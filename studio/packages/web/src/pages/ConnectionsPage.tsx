@@ -64,6 +64,13 @@ type FormState = {
  *
  * A key no kind declares is not carried: nothing can describe it, so it stays
  * untouched in `config` and is reachable through the JSON escape hatch.
+ *
+ * This matches fields across kinds BY NAME, which assumes a name means the same
+ * SHAPE everywhere it appears. That holds today — `model`/`baseUrl`/`timeoutMs`
+ * are the only shared names and each has one type across every kind declaring
+ * it — and it is what lets a kind switch keep a typed value. A future kind that
+ * reused a name with a DIFFERENT type would carry a stale draft into the wrong
+ * control, so give it a new name rather than a second meaning.
  */
 function connectionFields(
   kind: ConnectionKind,
@@ -336,15 +343,28 @@ function ConnectionForm({
    * the ticket; refusing is a different, worse feature.
    */
   const advisory = useMemo(() => {
-    if (jsonMode) return null;
-    const assembled = assembleConfig(form.config, fields, form.inputs);
-    if (!assembled.ok) return null; // the per-field message already says this
-    const parsed = connectionConfigSchema(form.kind).safeParse(assembled.owned);
+    // Both drafts, because the Kind select is reachable in EITHER mode. Going
+    // silent in JSON mode left one seam open: switch kind with the textarea
+    // showing and the JSON genuinely does not change, so a config shaped for
+    // the OLD kind saved with nothing on screen to say so — the exact failure
+    // this ticket exists to end, through the one path it did not cover.
+    let candidate: Record<string, unknown>;
+    if (jsonMode) {
+      const draft = parseConfigText(form.jsonText);
+      if (!draft.ok) return null; // submit reports the parse error itself
+      candidate = draft.config;
+    } else {
+      const assembled = assembleConfig(form.config, fields, form.inputs);
+      if (!assembled.ok) return null; // the per-field message already says this
+      candidate = assembled.owned;
+    }
+    const parsed = connectionConfigSchema(form.kind).safeParse(candidate);
     return parsed.success ? null : formatZodIssues(parsed.error.issues);
-  }, [jsonMode, form.config, form.kind, form.inputs, fields]);
+  }, [jsonMode, form.config, form.jsonText, form.kind, form.inputs, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
+    setError(null); // a parse/save error from the previous kind is not this one's
     const next = connectionFields(kind, form.config);
     // Seed the new kind's controls from the stored config, then let anything
     // already typed win. A plain re-seed would drop every in-progress edit; no
@@ -400,7 +420,9 @@ function ConnectionForm({
     setError(null);
 
     // Read back whichever draft is on screen — never the other one, which is
-    // why every mode change above commits to `config` before switching.
+    // why each MODE toggle above commits to `config` before switching. A kind
+    // change deliberately does not: it rewrites neither draft, so an operator's
+    // JSON is never edited under them. The advisory is what covers that seam.
     let config: Record<string, unknown>;
     if (jsonMode) {
       const parsed = parseConfigText(form.jsonText);
@@ -477,7 +499,7 @@ function ConnectionForm({
         </select>
       </label>
 
-      <div className="connection-config" aria-label="Config">
+      <div className="connection-config" role="group" aria-label="Config">
         <div className="connection-config-header">
           <span>Config</span>
           <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
@@ -486,7 +508,7 @@ function ConnectionForm({
         </div>
 
         {unrenderable.length > 0 && (
-          <p className="page-hint">
+          <p className="contract-advisory">
             {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
           </p>
         )}
@@ -515,14 +537,18 @@ function ConnectionForm({
               />
             ))}
             {carried.length > 0 && (
-              <p className="page-hint">
+              <p className="contract-advisory">
                 {`Carried from another kind (${carried.join(', ')}) — ${form.kind} ignores these; blank a control to drop the key.`}
               </p>
             )}
-            {advisory !== null && (
-              <p className="page-hint">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
-            )}
           </>
+        )}
+
+        {/* Outside the mode branch on purpose: the Kind select is reachable in
+            BOTH modes, and the JSON draft is exactly where a kind change can
+            leave a config shaped for the previous one. */}
+        {advisory !== null && (
+          <p className="contract-advisory">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
         )}
       </div>
 

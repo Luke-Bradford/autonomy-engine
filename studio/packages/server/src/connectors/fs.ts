@@ -128,14 +128,24 @@ const TRANSIENT_ERRNOS: ReadonlySet<string> = new Set([
  * the drift the move exists to kill), and any key added to the shared shape
  * appears here automatically. The refine is invisible to the form: a
  * `.refine()` is a CHECK, not a wrapper, so `deriveConfigFields` still sees a
- * list of strings either way. The cost is that the issue path is `roots`
- * rather than `roots.<i>`, which nothing asserts on.
+ * list of strings either way.
+ *
+ * `superRefine` with an explicit `path` rather than a whole-array `refine`, so
+ * the issue still names WHICH root is relative (`roots.<i>`) exactly as the
+ * per-element refine it replaces did. A whole-array check would have reported
+ * only `roots`, which reads fine with one root and uselessly with several.
  */
 const fsConnectionConfigSchema = sharedFsConnectionConfigSchema.extend({
-  roots: sharedFsConnectionConfigSchema.shape.roots.refine(
-    (roots) => roots.every((root) => isAbsolute(root)),
-    'every fs root must be an absolute path',
-  ),
+  roots: sharedFsConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
+    roots.forEach((root, index) => {
+      if (isAbsolute(root)) return;
+      ctx.addIssue({
+        code: 'custom',
+        message: 'every fs root must be an absolute path',
+        path: [index],
+      });
+    });
+  }),
 });
 
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the

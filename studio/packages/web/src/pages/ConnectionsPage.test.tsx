@@ -316,6 +316,25 @@ describe('ConnectionsPage', () => {
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
   });
 
+  it('still says a config is wrong for the kind when the JSON editor is open', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([conn({ name: 'Fs one', kind: 'fs', config: { roots: ['/tmp'] } })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Fs one');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.click(within(form).getByRole('button', { name: 'Edit as JSON' }));
+
+    // The Kind select is reachable in JSON mode, and switching it does NOT
+    // rewrite the operator's JSON — so without an advisory here, an fs-shaped
+    // config saves as an agent_cli with nothing on screen to say so.
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'agent_cli');
+    expect(within(form).getByText(/This agent_cli config is incomplete/)).toBeInTheDocument();
+    // Still not a gate — the server stores this today.
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
   it('edits a connection and leaves the secret blank by default', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Editable' })]);

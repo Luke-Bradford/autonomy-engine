@@ -40,6 +40,12 @@ describe('connection config is one declaration, server and shared', () => {
     expect(schema.safeParse({ roots: ['relative/path'] }).success).toBe(false);
     expect(connectionConfigSchema('fs').safeParse({ roots: ['relative/path'] }).success).toBe(true);
 
+    // And it still names WHICH root is wrong, as the per-element refine it
+    // replaced did — with several roots, `roots` alone would be useless.
+    const mixed = schema.safeParse({ roots: ['/ok', 'relative/path', '/also-ok'] });
+    expect(mixed.success).toBe(false);
+    expect(mixed.error?.issues[0]?.path).toEqual(['roots', 1]);
+
     // Everything else still comes from shared, including the messages.
     expect(schema.safeParse({ roots: ['/tmp'], maxBytes: 1024 }).success).toBe(true);
     const empty = schema.safeParse({ roots: [] });
