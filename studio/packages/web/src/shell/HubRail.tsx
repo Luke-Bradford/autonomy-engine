@@ -1,4 +1,5 @@
 import { Tooltip } from '@fluentui/react-components';
+import { SettingsFilled, SettingsRegular } from '@fluentui/react-icons';
 import { NavLink } from 'react-router';
 import { HUBS } from './hubs';
 import { ThemeToggle } from '../theme/ThemeToggle';
@@ -76,6 +77,26 @@ export function HubRail({ store }: HubRailProps) {
         ))}
       </ul>
       <div className="hub-rail__foot">
+        {/* Settings (U15 slice 2, #1094) — in the FOOT, not in `HUBS`. It is
+            not a hub: it has no secondary pane and no sections, and adding it
+            to that list would give it both. Fluent's own shells put settings at
+            the rail's foot for the same reason, beside the other app-wide
+            controls. Named twice over like the hub links above, and filled
+            when active so "you are here" is not colour-only. */}
+        <Tooltip content="Settings" relationship="label" positioning="after">
+          <NavLink
+            to="/settings"
+            aria-label="Settings"
+            className={({ isActive }) =>
+              `hub-rail__link${isActive ? ' hub-rail__link--active' : ''}`
+            }
+          >
+            {({ isActive }) => {
+              const Glyph = isActive ? SettingsFilled : SettingsRegular;
+              return <Glyph aria-hidden="true" />;
+            }}
+          </NavLink>
+        </Tooltip>
         <VersionBadge />
         <ThemeToggle store={store} />
       </div>

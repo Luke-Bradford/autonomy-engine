@@ -11,6 +11,7 @@ import { PipelinesPage } from './pages/PipelinesPage';
 import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute.lazy';
 import { TriggersPage } from './pages/TriggersPage';
 import { WorkspaceGitPage } from './pages/WorkspaceGitPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { AiActivityPage } from './pages/monitor/AiActivityPage';
 import { AuditPage } from './pages/monitor/AuditPage';
@@ -199,6 +200,20 @@ export const ROUTES: RouteObject[] = [
             handle: { crumb: sectionLabel('/manage/git') } satisfies ShellRouteHandle,
           },
         ],
+      },
+
+      /* Settings (U15 slice 2) is a SIBLING of the hubs, not a section inside
+         one: the design doc's route table and its U3 section both address it as
+         top-level `#/settings`, and it is about the server rather than about
+         authoring, monitoring or managing any resource. It carries no `hub`
+         handle, so `activeHubId` finds none and the shell renders no secondary
+         pane — the same path Home takes — and no rail hub lights up, which is
+         correct: the gear in the rail foot is not a hub button. Its crumb is
+         therefore the whole trail. */
+      {
+        path: 'settings',
+        element: <SettingsPage />,
+        handle: { crumb: 'Settings' } satisfies ShellRouteHandle,
       },
 
       /* U3r compatibility layer. `replace` throughout: a legacy path that
