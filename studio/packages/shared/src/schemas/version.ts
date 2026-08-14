@@ -230,6 +230,19 @@
 // and hand downstream `truncated: null` (`storeOutputs` normalizes an absent
 // optional to present-null) — a manufactured "not truncated"-looking value, the
 // silent-wrong direction bumps 17/18 exist to prevent.
+// NO BUMP for M1 (#1104), recorded because every other `NodeSchema` shape change
+// IS in this ledger and a silent one is the drift this file exists to prevent.
+// `NodeSchema.connectionIds` (the paired source/sink binding) is additive and, at
+// M1, INERT: nothing in the catalog declares a sink, so no executor, readiness or
+// validation path reads it — a doc authored here runs identically on a pre-M1
+// build. The governing rule is `catalog/types.ts` ("does an EXPORT now carry an
+// artifact an older build would MIS-RUN"), and the answer is no: unlike bump 18
+// (`connectionParams`, which a pre-18 build dropped and then dispatched on
+// unmodified config), a dropped `connectionIds` changes nothing a pre-M1 build
+// would have done anyway. Bumping would refuse imports that cannot differ.
+// WHAT VOIDS THIS: the first catalog entry to declare a sink — `copy` (M5) —
+// makes the field load-bearing, and owes the bump. That is a bump for POPULATING
+// the field, not merely for the new activity type.
 export const CATALOG_VERSION = 21;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

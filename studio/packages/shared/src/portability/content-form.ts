@@ -36,9 +36,12 @@ import type { ConnectionExportData, PipelineExportData, TriggerExportData } from
  *   node-drag would mint a version + a Publish candidate — the v2 hardened note).
  *
  * A binding IS content and stays IN the form: a `trigger.pipelineVersionId` /
- * `node.call.pipelineVersionId` / `node.connectionId` is a `resourceId` in an
- * export (remapped by `serializeWorkspace`), which is stable across machines, so
- * a rebind is a real change the classifier must see. Envelope-level fields
+ * `node.call.pipelineVersionId` / `node.connectionId` — and, M1 (#1104), each end
+ * of `node.connectionIds` — is a `resourceId` in an export (remapped by
+ * `serializeWorkspace`), which is stable across machines, so a rebind is a real
+ * change the classifier must see. Node-level exclusion is `position` alone, so
+ * the pair participates automatically; what it needed was the remap, not an
+ * entry here. Envelope-level fields
  * (`schemaVersion`, `catalogVersion`, `exportedAt`) never enter — the form is
  * computed over `data`, not the whole envelope.
  *

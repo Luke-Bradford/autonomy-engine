@@ -404,9 +404,7 @@ export const NodeSchema = z.object({
    * `copy` (M5) introduces the first paired activity as a NEW runnable TYPE,
    * and bumps then — the point at which a doc first RUNS differently.
    */
-  connectionIds: z
-    .object({ source: z.string().min(1), sink: z.string().min(1) })
-    .optional(),
+  connectionIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
   /**
    * #2 L13b — per-dispatch bindings for the bound connection's declared
    * `parameters` allowlist (`ConnectionSchema.parameters`). String values may

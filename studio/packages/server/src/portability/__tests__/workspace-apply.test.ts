@@ -116,6 +116,52 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(tgtVersion.nodes[0]!.connectionId).not.toBe(conn.id);
   });
 
+  it('M1 (#1104) — remaps BOTH ends of a connectionIds pair to TARGET db ids', () => {
+    const src = freshDb().db;
+    const source = createConnection(src, {
+      ownerId: 'local',
+      name: 'Src',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const sink = createConnection(src, {
+      ownerId: 'local',
+      name: 'Snk',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: source.id, sink: sink.id },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtSource = getConnectionByResourceId(tgt, 'local', source.resourceId)!;
+    const tgtSink = getConnectionByResourceId(tgt, 'local', sink.resourceId)!;
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const node = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!;
+
+    // Each end resolves to the TARGET row — not the source db id, and (the real
+    // hazard) not the resourceId riding through untouched on a rest spread.
+    expect(node.connectionIds).toEqual({ source: tgtSource.id, sink: tgtSink.id });
+    expect(node.connectionIds!.source).not.toBe(source.resourceId);
+    expect(node.connectionIds!.sink).not.toBe(sink.id);
+  });
+
   it('is idempotent: re-applying the same branch writes nothing new', () => {
     const src = freshDb().db;
     const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
