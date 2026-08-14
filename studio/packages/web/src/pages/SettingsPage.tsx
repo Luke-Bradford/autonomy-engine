@@ -111,11 +111,14 @@ export function SettingsPage() {
               {masterKey.keyFilePath !== null && (
                 <>
                   <dt>Key file</dt>
-                  {/* `<code>` because it is a path to be copied verbatim, and
-                      the class lets a long absolute path wrap instead of
-                      widening the page. */}
+                  {/* `<code>` because it is a path to be copied verbatim. It
+                      needs no wrap rule of its own: `.run-meta dd` already sets
+                      `overflow-wrap: anywhere`, which is an INHERITED property,
+                      so a long absolute path wraps rather than widening the
+                      page. A duplicate rule here would read as load-bearing
+                      while changing nothing. */}
                   <dd>
-                    <code className="settings-path">{masterKey.keyFilePath}</code>
+                    <code>{masterKey.keyFilePath}</code>
                   </dd>
                 </>
               )}

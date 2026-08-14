@@ -43,9 +43,14 @@ export interface SettingsRoutesOptions {
  * The absolute `keyFilePath` IS disclosed, deliberately: "back up this file" is
  * the advisory's only actionable content, and without the path the operator
  * would have to go read the server log — the exact thing this route replaces.
- * The one widening worth naming is that the server binds `HOST=0.0.0.0` when
- * the operator asks it to, which makes this path readable off-box; that is the
- * same posture as every other unauthenticated route here, not a new one.
+ *
+ * Two widenings worth naming, neither new in kind. The server binds
+ * `HOST=0.0.0.0` when the operator asks it to, which makes this path readable
+ * off-box — the same posture as every other unauthenticated route here (and
+ * the default is `127.0.0.1`). And the default path sits under `homedir()`, so
+ * disclosing it also discloses the OS username. Both are accepted: the path IS
+ * the actionable content, and a status that would not name the file cannot ask
+ * anyone to back it up.
  *
  * No `Cache-Control: no-store`. #925 is about responses whose BODY is a bearer
  * credential; this one grants nothing, and no route in this server sets that

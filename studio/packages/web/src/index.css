@@ -365,9 +365,12 @@ body {
   border-color: var(--accent);
 }
 
-/* The Home hub's overview sections (U15 slice 1, #1085). Colours come from the
-   theme custom properties only — `palette.test.ts` asserts there are no colour
-   literals outside the two palette blocks. */
+/* A labelled section of a hub-level overview page: the Home hub's (U15 slice 1,
+   #1085) and, since #1094, Settings'. Named for its first consumer; it was
+   never Home-specific, and the second one arrived without needing a single
+   property changed. Colours come from the theme custom properties only —
+   `palette.test.ts` asserts there are no colour literals outside the two
+   palette blocks. */
 .home-section {
   margin-top: 1.5rem;
 }
@@ -3517,13 +3520,6 @@ td button + button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-/* An absolute path the operator is meant to COPY, so it must show in full: it
-   wraps at any point rather than widening the page or being clipped, which for
-   a path is the difference between actionable and decorative. */
-.settings-path {
-  overflow-wrap: anywhere;
 }
 
 /* A warning about the STATE OF THE RUNNING SYSTEM — deliberately a third thing

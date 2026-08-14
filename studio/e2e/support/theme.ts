@@ -197,6 +197,13 @@ export async function surfaceBehind(
  * navigated to incidentally. Scoping fixes that at the definition rather than
  * leaving each caller to discover it. Any surface may grow a third toggle; the
  * rail's is the one that cannot go away, because it is the shell.
+ *
+ * SIX SPECS STILL QUERY THAT SWITCH UNSCOPED rather than through this helper
+ * (`theme-toggle`, `hub-nav`, `canvas-chrome`, `container-rendering`,
+ * `edge-typing`, `connect-validation`). None of them visits `#/settings`, so
+ * none is broken — but each is one navigation away from a strict-mode failure
+ * that reads as "the toggle vanished". Sweeping them is #1096; scope the
+ * locator to this nav if you write a seventh.
  */
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
   const toggle = page
