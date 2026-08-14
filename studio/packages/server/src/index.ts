@@ -9,6 +9,7 @@ import { appMeta } from './db/schema.js';
 import { masterKeyStatusOf, resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
 import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
+import { drainExternalAgentActivity } from './repo/external-agent-activity.js';
 import { drainWebhookDeliveries } from './repo/webhook-deliveries.js';
 import { RETENTION_BATCH, RETENTION_MAX_BATCHES_PER_SWEEP } from './repo/retention.js';
 import { reconcileOnBoot } from './run/reconcile.js';
@@ -107,6 +108,17 @@ export const DEFAULT_WAKEUP_RETENTION_MS = 30 * MS_PER_DAY;
  * append-per-delivery ledger from growing without bound.
  */
 export const DEFAULT_WEBHOOK_RETENTION_MS = 30 * MS_PER_DAY;
+
+/**
+ * Default retention floor for `external_agent_activity` rows (#988). 30 days
+ * because that is the WIDEST window `/api/monitor/ai-activity` can be asked for
+ * — a reported invocation older than that is unreadable by construction, so
+ * pruning it loses nothing that could ever have been displayed. This is the
+ * third ledger to join the sweep and the first whose rows arrive from OUTSIDE
+ * studio, which is exactly why it needs a bound: its growth rate is set by
+ * whoever is reporting.
+ */
+export const DEFAULT_EXTERNAL_ACTIVITY_RETENTION_MS = 30 * MS_PER_DAY;
 
 /**
  * Resolve a `<NAME>_RETENTION_DAYS` env value → the retention window in ms.
@@ -208,6 +220,8 @@ export interface BuildAppOptions {
   wakeupRetentionMs?: number;
   /** #421 — overrides `WEBHOOK_RETENTION_DAYS`/the 30-day default (ms). `0` disables the webhook-deliveries retention sweep. Call-time only, for test isolation + operator override. */
   webhookRetentionMs?: number;
+  /** #988 — overrides `EXTERNAL_ACTIVITY_RETENTION_DAYS`/the 30-day default (ms). `0` disables the reported-activity retention sweep. Call-time only, for test isolation + operator override. */
+  externalActivityRetentionMs?: number;
   /** #464/#421 — overrides the retention sweep interval (ms) for BOTH sweeps; defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable a sweep via its `*RetentionMs: 0`) to avoid a real hour-long timer. */
   retentionSweepMs?: number;
   /** #559 — overrides `RETENTION_BATCH_ROWS`/`RETENTION_BATCH` (default 1000): rows per bounded DELETE batch, SHARED by both retention sweeps. Must be a positive integer. Call-time only, for test isolation + operator override. */
@@ -808,7 +822,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // `onClose` teardown is registered — an interval armed then abandoned would keep
   // firing hourly against the open `db`.
   const resolveRetentionWindow = (
-    label: 'wakeup' | 'webhook',
+    label: 'wakeup' | 'webhook' | 'externalActivity',
     overrideMs: number | undefined,
     envName: string,
     defaultMs: number,
@@ -832,6 +846,13 @@ export async function buildApp(opts?: BuildAppOptions) {
     opts?.webhookRetentionMs,
     'WEBHOOK_RETENTION_DAYS',
     DEFAULT_WEBHOOK_RETENTION_MS,
+  );
+
+  const externalActivityRetentionMs = resolveRetentionWindow(
+    'externalActivity',
+    opts?.externalActivityRetentionMs,
+    'EXTERNAL_ACTIVITY_RETENTION_DAYS',
+    DEFAULT_EXTERNAL_ACTIVITY_RETENTION_MS,
   );
 
   // #559 — the two SHARED sweep bounds (rows-per-batch, max-batches-per-recurring
@@ -868,7 +889,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // A degenerate `retentionSweepMs <= 0` would make `setInterval` fire
   // continuously — only matters once at least one sweep is enabled.
   if (
-    (wakeupRetentionMs > 0 || webhookRetentionMs > 0) &&
+    (wakeupRetentionMs > 0 || webhookRetentionMs > 0 || externalActivityRetentionMs > 0) &&
     (!Number.isFinite(retentionSweepMs) || retentionSweepMs <= 0)
   ) {
     throw new Error(`Invalid retentionSweepMs ${retentionSweepMs} — must be a finite number > 0`);
@@ -878,7 +899,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // `undefined` when disabled) so `onClose` can clear it. Reached only after all
   // validation above, so no timer is armed before a possible throw.
   const startRetentionSweep = (
-    label: 'wakeup' | 'webhook',
+    label: 'wakeup' | 'webhook' | 'externalActivity',
     retentionMs: number,
     drain: (before: number, maxBatches?: number) => number,
   ): ReturnType<typeof setInterval> | undefined => {
@@ -922,6 +943,15 @@ export async function buildApp(opts?: BuildAppOptions) {
     webhookRetentionMs,
     (before, maxBatches) =>
       drainWebhookDeliveries(db, { before, batch: retentionBatch, maxBatches }),
+  );
+  // #988 — reported external activity. Pruned by `reported_at_ms` (STUDIO's
+  // clock), not by the reporter-supplied start stamp, so retention cannot be
+  // evaded by a caller whose clock is wrong.
+  const externalActivityRetentionTimer = startRetentionSweep(
+    'externalActivity',
+    externalActivityRetentionMs,
+    (before, maxBatches) =>
+      drainExternalAgentActivity(db, { before, batch: retentionBatch, maxBatches }),
   );
 
   // Auth seam + the one global error handler, registered before any route so
@@ -1045,6 +1075,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // is disabled.
     if (wakeupRetentionTimer !== undefined) clearInterval(wakeupRetentionTimer);
     if (webhookRetentionTimer !== undefined) clearInterval(webhookRetentionTimer);
+    if (externalActivityRetentionTimer !== undefined) {
+      clearInterval(externalActivityRetentionTimer);
+    }
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });

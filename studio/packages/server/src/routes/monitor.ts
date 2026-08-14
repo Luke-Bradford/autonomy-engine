@@ -3,11 +3,14 @@ import { z } from 'zod';
 import {
   AI_ACTIVITY_BUCKET_MS,
   RUN_SINCE_MS,
+  ExternalAgentReportSchema,
   RunSinceSchema,
   type AiActivitySnapshot,
+  type ExternalAgentReportAccepted,
   type RunSince,
 } from '@autonomy-studio/shared';
 import { aggregateAiActivity } from '../repo/ai-activity.js';
+import { recordExternalAgentActivity } from '../repo/external-agent-activity.js';
 
 /**
  * The window defaults to the last hour: this is the "what are my connected AIs
@@ -29,6 +32,33 @@ const AiActivityQuerystringSchema = z.object({
 });
 
 /**
+ * #988 — the report body, with the two identity fields TIGHTENED beyond the
+ * shared schema's length bounds.
+ *
+ * `source` and `agent` are grouping keys that reach the operator's screen and
+ * are chosen by whoever is reporting, so they are constrained to a slug charset
+ * here rather than accepted as free text: it keeps a reporter from writing a
+ * label that renders as something else (control characters, right-to-left
+ * overrides, a newline that breaks the row), and it makes the group cardinality
+ * a function of real reporters rather than of typos. `model` and `externalId`
+ * stay free-form — they are provider- and reporter-owned vocabularies studio
+ * does not get to define — and are bounded by length alone.
+ */
+const REPORTER_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+const ExternalActivityBodySchema = ExternalAgentReportSchema.superRefine((body, ctx) => {
+  for (const field of ['source', 'agent'] as const) {
+    if (!REPORTER_SLUG.test(body[field])) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} must be a slug: letters, digits, then any of . _ -`,
+      });
+    }
+  }
+});
+
+/**
  * #917 — the operator-facing monitoring surface for connected AI/LLM use.
  *
  * SECURITY — owner-scoped, unlike its neighbour `GET /api/quota`. The two are
@@ -39,6 +69,19 @@ const AiActivityQuerystringSchema = z.object({
  * pushed all the way into the SQL (both the event join and the run count), so a
  * second owner's spend is not merely hidden from the response — it is never
  * summed into the totals in the first place.
+ *
+ * #988 ADDED A WRITE HERE, so the paragraph above no longer describes the whole
+ * surface. `POST /api/monitor/external-activity` is UNAUTHENTICATED in the same
+ * sense every other write route is — `request.principal` is a fixed
+ * `LOCAL_PRINCIPAL`, and the server binds `127.0.0.1` unless told otherwise — so
+ * anything that can reach the port can insert reported activity. That is the
+ * accepted posture for a single-operator local app, and the reason it is
+ * ACCEPTABLE here specifically is that the rows it writes are inert: reported
+ * activity is displayed, attributed to its reporter, and folded into no total,
+ * no price, and no gate. Nothing decides anything on the strength of it. If that
+ * ever changes — if a reported figure comes to gate a fire, a spend guard or an
+ * admission decision — this route needs an authenticated caller FIRST, because
+ * at that point an unauthenticated writer would be steering the system.
  */
 export const monitorRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
@@ -65,4 +108,30 @@ export const monitorRoutes: FastifyPluginAsync = async (fastify) => {
     });
     return { generatedAt, since: window, windowStart, ...aggregate };
   });
+
+  /**
+   * #988 — an agent studio did NOT launch reports what it is doing.
+   *
+   * The direction matters and is the settled shape: studio never reaches out to
+   * inspect processes it did not start. A reporter sends an invocation when it
+   * begins (`endedAt: null`) and again when it ends; both name the same
+   * `(source, externalId)`, so the pair is one row and a retry is not a second
+   * fire. `201` on first sight, `200` on a re-report — the distinction is
+   * returned rather than swallowed so a reporter can tell them apart.
+   */
+  fastify.post(
+    '/api/monitor/external-activity',
+    async (request, reply): Promise<ExternalAgentReportAccepted> => {
+      const report = ExternalActivityBodySchema.parse(request.body);
+      const recorded = recordExternalAgentActivity(db, {
+        ownerId: request.principal.ownerId,
+        report,
+        // Studio's own clock, deliberately: it is what retention prunes by, and
+        // it must not be something the caller can set.
+        nowMs: Date.now(),
+      });
+      reply.code(recorded.created ? 201 : 200);
+      return recorded;
+    },
+  );
 };

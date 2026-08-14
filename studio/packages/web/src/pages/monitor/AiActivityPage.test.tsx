@@ -1,6 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import type { AiActivitySnapshot, RunCost, TokenSeriesBucket } from '@autonomy-studio/shared';
+import type {
+  AiActivitySnapshot,
+  ExternalAgentActivity,
+  ExternalReporterActivity,
+  RunCost,
+  TokenSeriesBucket,
+} from '@autonomy-studio/shared';
 import * as monitorApi from '../../api/monitor';
 import { AiActivityPage } from './AiActivityPage';
 
@@ -30,6 +36,51 @@ function cost(over: Partial<RunCost> = {}): RunCost {
   };
 }
 
+/** #988 — reported external activity, defaulting to "nobody reported anything". */
+function externalActivity(over: Partial<ExternalAgentActivity> = {}): ExternalAgentActivity {
+  return {
+    invocations: 0,
+    completed: 0,
+    notCompleted: 0,
+    unknown: 0,
+    inFlight: 0,
+    lastAt: null,
+    tokens: {
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      measuredInvocations: 0,
+    },
+    truncated: false,
+    reporters: [],
+    ...over,
+  };
+}
+
+/** One reported (source, agent, model) group. */
+function reporter(over: Partial<ExternalReporterActivity> = {}): ExternalReporterActivity {
+  return {
+    source: 'studio-build-loop',
+    agent: 'claude',
+    model: 'claude-opus-5',
+    invocations: 1,
+    completed: 1,
+    notCompleted: 0,
+    unknown: 0,
+    inFlight: 0,
+    lastAt: 1_785_999_000_000,
+    tokens: {
+      inputTokens: 12,
+      outputTokens: 34,
+      cacheReadTokens: 56,
+      cacheCreationTokens: 78,
+      measuredInvocations: 1,
+    },
+    ...over,
+  };
+}
+
 function snapshot(over: Partial<AiActivitySnapshot> = {}): AiActivitySnapshot {
   return {
     generatedAt: 1_786_000_000_000,
@@ -38,6 +89,7 @@ function snapshot(over: Partial<AiActivitySnapshot> = {}): AiActivitySnapshot {
     runs: { pending: 0, queued: 0, running: 0, waiting: 0 },
     models: [],
     agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
+    external: externalActivity(),
     totals: cost(),
     series: { bucketMs: 300_000, buckets: [] },
     ...over,
