@@ -78,6 +78,38 @@ describe('activity catalog', () => {
     expect(withSink).toEqual(['http_request']);
   });
 
+  it('M1 (#1104): NO activity declares a sink, so the paired binding is inert in this build', () => {
+    // The load-bearing pin for `schemas/version.ts`'s deliberate NO-BUMP: a doc
+    // carrying `Node.connectionIds` runs identically on a pre-M1 build precisely
+    // because nothing here declares `sinkConnectionKinds`, so neither the
+    // executor nor the readiness gate reads the pair. `copy` (M5) is the first
+    // entry to declare one and owes the CATALOG_VERSION bump — this test is what
+    // makes that ticket notice.
+    //
+    // Asserted across the FULL catalog (the `secretSinkFields` pin's idiom), not
+    // a named subset, so an entry cannot gain a sink silently.
+    const paired = [...catalog.values()]
+      .filter((entry) => entry.sinkConnectionKinds !== undefined)
+      .map((entry) => entry.type);
+    expect(paired).toEqual([]);
+  });
+
+  it('a declared sink allowlist must be non-empty, and pair with a non-empty source one', () => {
+    // The `[]` polarity decision, pinned rather than left to be discovered at M5:
+    // absence means "not paired", so `[]` cannot ALSO mean it — it would mean
+    // "paired, but no sink kind is ever valid", an entry every dispatch refuses.
+    // Deliberately NOT the same polarity as `connectionKinds: []` (= needs no
+    // connection), which has no absent form to carry that meaning.
+    for (const entry of catalog.values()) {
+      if (entry.sinkConnectionKinds === undefined) continue;
+      expect(entry.sinkConnectionKinds.length).toBeGreaterThan(0);
+      // A paired activity resolves a SOURCE from `connectionKinds` too, and the
+      // executor's `connectionKinds.length > 0` gate would otherwise route it to
+      // NO_EXECUTOR before the pair logic ever ran.
+      expect(entry.connectionKinds.length).toBeGreaterThan(0);
+    }
+  });
+
   it('llm_call binds the LLM provider kinds plus agent_cli (CLI/subscription, #2 L14b)', () => {
     expect(getActivity('llm_call')!.connectionKinds).toEqual([
       'anthropic_api',
