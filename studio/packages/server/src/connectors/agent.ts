@@ -404,7 +404,7 @@ function truncationWarning(
     type: 'warned',
     code: WARNING_CODES.OUTPUT_TRUNCATED satisfies WarningCode,
     reason:
-      `${shape}: the agent CLI wrote more than the ${cap}-byte output budget, so collection ` +
+      `${shape}: the agent CLI wrote more than its output budget of ${cap} bytes, so collection ` +
       `stopped there and the transcript kept is a prefix (the budget is shared by stdout and ` +
       `stderr, so stdout may itself be complete)`,
   };

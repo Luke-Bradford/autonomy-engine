@@ -665,7 +665,7 @@ export const WARNING_CODES = {
    * says "collection stopped at the cap", NOT "the `output` value was cut" — a
    * chatty stderr can exhaust the budget while stdout is complete. Emitted on
    * FAILED attempts too (the fact is known before the terminal is decided), which
-   * is why the event's own doc below reads "succeeded or failed".
+   * is why the event's own doc below no longer ties a warning to a success.
    */
   OUTPUT_TRUNCATED: 'output_truncated',
 } as const;

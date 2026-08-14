@@ -2140,6 +2140,9 @@ describe('#1101 — a transcript clipped at the byte cap says so', () => {
     expect(warned[0]).toMatchObject({ type: 'warned', code: 'output_truncated' });
     expect(String((warned[0] as { reason: string }).reason)).toContain('llm_call');
     expect(events.indexOf(warned[0]!)).toBeLessThan(terminalIndex(events));
+    // ...and BEFORE the metering fact, as the yield site claims: an abnormal
+    // termination must not be able to reorder the two.
+    expect(events.indexOf(warned[0]!)).toBeLessThan(events.findIndex((e) => e.type === 'metered'));
     // Its outputs are the SHARED llm contract, so there is no key to carry it.
     expect(events.at(-1)).toEqual({
       type: 'succeeded',
