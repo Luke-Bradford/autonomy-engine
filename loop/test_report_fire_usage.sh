@@ -107,13 +107,16 @@ contains "posts to the external-activity endpoint" "$(url)" "/api/monitor/extern
 # 5b. An explicit STUDIO_ACTIVITY_URL is used AS GIVEN. The derivation exists for
 #     the default; rewriting an override is how a caller's endpoint silently
 #     becomes a malformed one.
-(
-  STUDIO_ACTIVITY_URL="http://127.0.0.1:9999/ingest"
-  # shellcheck source=/dev/null
-  . "$HERE/report_fire_usage.sh"
-  check "an explicit endpoint override is left alone" "$STUDIO_ACTIVITY_URL" \
-    "http://127.0.0.1:9999/ingest"
-) || fails=$((fails + 1))
+#     Sourcing with a different environment needs a child shell, so the child
+#     PRINTS the resolved URL and the assertion runs HERE. A `check` inside
+#     `( ... )` would be invisible: `fails` is incremented in the subshell and
+#     lost when it exits, and `check` returns 0 either way, so the test could
+#     never fail — the same subshell trap the `curl` stub above documents.
+resolved_url() { STUDIO_ACTIVITY_URL="${1:-}" bash -c '. "$1/report_fire_usage.sh"; printf %s "$STUDIO_ACTIVITY_URL"' _ "$HERE"; }
+check "an explicit endpoint override is left alone" \
+  "$(resolved_url 'http://127.0.0.1:9999/ingest')" "http://127.0.0.1:9999/ingest"
+check "and the DEFAULT is derived from the quota URL" \
+  "$(resolved_url)" "http://127.0.0.1:8788/api/monitor/external-activity"
 
 # 6. BEST-EFFORT: every failure path returns 0. A monitoring nicety must never be
 #    able to stop the loop from engineering.
