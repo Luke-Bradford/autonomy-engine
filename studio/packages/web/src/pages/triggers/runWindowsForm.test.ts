@@ -62,7 +62,10 @@ describe('formToRunWindows', () => {
     ['a bound the scheduler cannot read', row({ start: '9am', end: '17:00' })],
     ['a blank bound', row({ start: '', end: '17:00' })],
     ['a zero-width window', row({ start: '09:00', end: '09:00' })],
-    ['day-restricted with no day selected', row({ start: '09:00', end: '17:00', daysRestricted: true })],
+    [
+      'day-restricted with no day selected',
+      row({ start: '09:00', end: '17:00', daysRestricted: true }),
+    ],
   ])('refuses %s', (_label, bad) => {
     expect(formToRunWindows(restricted(bad)).ok).toBe(false);
   });
@@ -106,7 +109,13 @@ describe('runWindowsToForm', () => {
     ['a plain window', [{ start: '09:00', end: '17:00' }]],
     ['a wrap-past-midnight window', [{ start: '22:00', end: '02:00' }]],
     ['a day-restricted window', [{ start: '09:00', end: '17:00', days: [1, 5] }]],
-    ['two windows', [{ start: '09:00', end: '12:00' }, { start: '13:00', end: '17:00' }]],
+    [
+      'two windows',
+      [
+        { start: '09:00', end: '12:00' },
+        { start: '13:00', end: '17:00' },
+      ],
+    ],
     ['the never-open empty array', []],
   ])('round-trips %s unchanged', (_label, stored) => {
     const result = formToRunWindows(runWindowsToForm(stored));

@@ -70,8 +70,7 @@ export function blankRunWindowsForm(): RunWindowsFormState {
 }
 
 export type RunWindowsConversion =
-  | { ok: true; runWindows: RunWindow[] | null }
-  | { ok: false; reason: string };
+  { ok: true; runWindows: RunWindow[] | null } | { ok: false; reason: string };
 
 /** The whole-array write shape. Built once here so the client validates the
  * array exactly as `NewTriggerSchema.runWindows` does. */

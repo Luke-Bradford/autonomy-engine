@@ -1268,7 +1268,9 @@ describe('TriggersPage run windows (#1090)', () => {
     await user.click(await screen.findByRole('button', { name: /^Edit/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
-    expect(form.getByRole('checkbox', { name: /Restrict when this trigger may fire/i })).toBeChecked();
+    expect(
+      form.getByRole('checkbox', { name: /Restrict when this trigger may fire/i }),
+    ).toBeChecked();
     expect(form.getByText(/can never fire automatically/i)).toBeInTheDocument();
 
     await user.clear(form.getByLabelText('Name'));

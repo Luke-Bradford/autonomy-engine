@@ -139,7 +139,9 @@ export function RunWindowsEditor({
                 isUnreadableBound(row.end) ? `end "${row.end}"` : null,
               ]
                 .filter((part) => part !== null)
-                .join(' and ')}, so this window has never opened. Times are 24-hour UTC, like 09:00 or 22:30.`}
+                .join(
+                  ' and ',
+                )}, so this window has never opened. Times are 24-hour UTC, like 09:00 or 22:30.`}
             </p>
           )}
 
@@ -179,9 +181,7 @@ export function RunWindowsEditor({
 
           <button
             type="button"
-            onClick={() =>
-              onChange({ ...value, rows: value.rows.filter((_, i) => i !== index) })
-            }
+            onClick={() => onChange({ ...value, rows: value.rows.filter((_, i) => i !== index) })}
           >
             {`Remove window ${index + 1}`}
           </button>
