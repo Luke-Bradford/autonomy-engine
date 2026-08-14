@@ -25,3 +25,4 @@ export * from './workspace-event.js';
 export * from './quota.js';
 export * from './ai-activity.js';
 export * from './zod-issues.js';
+export * from './settings.js';

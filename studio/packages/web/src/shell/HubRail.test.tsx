@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HubRail } from './HubRail';
 import { HUBS } from './hubs';
@@ -39,8 +39,31 @@ function activeLabels(): string[] {
 describe('HubRail', () => {
   it('renders one named link per hub, in SSOT order', () => {
     renderRail('/');
-    const links = screen.getAllByRole('link');
+    /* Scoped to the hub LIST, not the whole rail. The foot carries links of its
+       own now (#1094's Settings gear), and an unscoped query would fold them
+       into this list — turning "the rail's hubs are exactly `HUBS`" into "the
+       rail's links are exactly `HUBS`", which is a different and wrong claim.
+       Scoping keeps the invariant about hubs, where it belongs. */
+    const list = screen.getByRole('list');
+    const links = within(list).getAllByRole('link');
     expect(links.map((a) => a.getAttribute('aria-label'))).toEqual(HUBS.map((h) => h.label));
+  });
+
+  /* The foot's link is deliberately NOT a hub — see `HubRail.tsx`. Pinned here
+     because the invariant above can no longer see it: it must exist, and it
+     must stay out of `HUBS`. */
+  it('reaches Settings from the foot without making it a hub', () => {
+    renderRail('/');
+    /* No `#` — the test router is a MEMORY router, so hrefs are plain paths;
+       the hash comes from `createHashRouter` in the real app. */
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+    expect(HUBS.map((h) => h.label)).not.toContain('Settings');
+  });
+
+  it('leaves every hub unlit on /settings', () => {
+    renderRail('/settings');
+    expect(activeLabels()).toEqual([]);
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
   });
 
   /**

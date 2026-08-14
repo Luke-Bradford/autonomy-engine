@@ -365,9 +365,12 @@ body {
   border-color: var(--accent);
 }
 
-/* The Home hub's overview sections (U15 slice 1, #1085). Colours come from the
-   theme custom properties only — `palette.test.ts` asserts there are no colour
-   literals outside the two palette blocks. */
+/* A labelled section of a hub-level overview page: the Home hub's (U15 slice 1,
+   #1085) and, since #1094, Settings'. Named for its first consumer; it was
+   never Home-specific, and the second one arrived without needing a single
+   property changed. Colours come from the theme custom properties only —
+   `palette.test.ts` asserts there are no colour literals outside the two
+   palette blocks. */
 .home-section {
   margin-top: 1.5rem;
 }
@@ -3510,4 +3513,24 @@ td button + button {
 .react-flow__minimap-node {
   fill: var(--muted);
   stroke: none;
+}
+
+/* The Settings surface (U15 slice 2, #1094). */
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* A warning about the STATE OF THE RUNNING SYSTEM — deliberately a third thing
+   alongside the two advisory classes that already exist, because both of those
+   are about a pending EDIT and this page has no save at all. `.error` is
+   something that blocked an action; `.contract-advisory` is something the save
+   will nonetheless accept. This is neither: nothing was attempted, and the
+   operator is being told a fact about the server that they must act on
+   elsewhere. Colour is `--warning` from the theme, like its neighbours —
+   `palette.test.ts` forbids colour literals outside the two palette blocks. */
+.status-advisory {
+  color: var(--warning);
+  max-width: 60ch;
 }

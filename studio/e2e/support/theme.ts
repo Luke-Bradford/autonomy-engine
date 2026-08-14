@@ -189,9 +189,26 @@ export async function surfaceBehind(
  * is the control the store actually backs. `data-theme` is still what we WAIT
  * on, because it is written in the provider's layout effect and so is a barrier
  * for the Fluent commit as well as the palette one.
+ *
+ * SCOPED TO THE RAIL, which is the one place the switch is on every route.
+ * `#/settings` renders a SECOND `ThemeToggle` against the same store (#1094), so
+ * an unscoped query is ambiguous there and Playwright's strict mode fails the
+ * whole helper — for a caller that only wanted a theme, on a route it may have
+ * navigated to incidentally. Scoping fixes that at the definition rather than
+ * leaving each caller to discover it. Any surface may grow a third toggle; the
+ * rail's is the one that cannot go away, because it is the shell.
+ *
+ * SIX SPECS STILL QUERY THAT SWITCH UNSCOPED rather than through this helper
+ * (`theme-toggle`, `hub-nav`, `canvas-chrome`, `container-rendering`,
+ * `edge-typing`, `connect-validation`). None of them visits `#/settings`, so
+ * none is broken — but each is one navigation away from a strict-mode failure
+ * that reads as "the toggle vanished". Sweeping them is #1096; scope the
+ * locator to this nav if you write a seventh.
  */
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
-  const toggle = page.getByRole('switch', { name: 'Dark mode' });
+  const toggle = page
+    .getByRole('navigation', { name: 'Primary' })
+    .getByRole('switch', { name: 'Dark mode' });
   if ((await toggle.isChecked()) !== (theme === 'dark')) await toggle.click();
   await expect.poll(() => documentTheme(page)).toBe(theme);
 }
