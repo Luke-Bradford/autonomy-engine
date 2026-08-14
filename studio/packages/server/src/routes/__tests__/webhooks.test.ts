@@ -367,9 +367,13 @@ describe('webhook routes', () => {
   });
 
   it('outside a run window: skips (automatic firing is window-gated)', async () => {
-    // A window that never contains "now": a 1-minute window on a day offset.
+    // A window that never contains "now": a full day on TOMORROW's UTC weekday.
+    // (#1090 — this used to pass `days: []`, which never matched ANY weekday, so
+    // the "day offset" its comment described was not what made it skip. The
+    // write boundary now refuses an empty day list for exactly that reason.)
+    const notToday = (new Date().getUTCDay() + 1) % 7;
     const { id, secret } = await makeWebhookTrigger({
-      runWindows: [{ start: '00:00', end: '00:01', days: [] }],
+      runWindows: [{ start: '00:00', end: '23:59', days: [notToday] }],
     });
     const res = await app.inject(signedRequest(id, secret));
     expect(res.statusCode).toBe(202);

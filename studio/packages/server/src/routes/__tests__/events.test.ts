@@ -168,14 +168,16 @@ describe('POST /api/events', () => {
   });
 
   it('an out-of-window subscriber skips (automatic firing is window-gated)', async () => {
-    // A zero-width window that can never contain "now".
-    const now = new Date();
-    const hh = String(now.getUTCHours()).padStart(2, '0');
-    const mm = String(now.getUTCMinutes()).padStart(2, '0');
-    const point = `${hh}:${mm}`;
+    // A full-day window on TOMORROW's UTC weekday: legal, and it can never
+    // contain "now". (#1090 — this used to be a zero-width `start === end`
+    // window, which the write boundary now refuses precisely because a trigger
+    // carrying one is silently unable to ever fire.)
+    const notToday = (new Date().getUTCDay() + 1) % 7;
     const trig = createTrigger(
       app.db,
-      eventTriggerInput('t5.created', { runWindows: [{ start: point, end: point }] }),
+      eventTriggerInput('t5.created', {
+        runWindows: [{ start: '00:00', end: '23:59', days: [notToday] }],
+      }),
     );
     const res = await publish({ name: 't5.created' });
     const result = (res.json().results as Array<{ triggerId: string; outcome: string }>).find(
