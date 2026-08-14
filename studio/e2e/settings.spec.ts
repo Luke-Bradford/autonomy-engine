@@ -31,10 +31,14 @@ import { documentTheme, fluentRootReady, resolvedPaletteColor } from './support/
 
 /** The rail's toggle — the one that is on every route. */
 function railToggle(page: import('@playwright/test').Page) {
-  return page.getByRole('navigation', { name: 'Primary' }).getByRole('switch', { name: 'Dark mode' });
+  return page
+    .getByRole('navigation', { name: 'Primary' })
+    .getByRole('switch', { name: 'Dark mode' });
 }
 
-test('U15 — Settings names the auto-generated key file and says to back it up', async ({ page }) => {
+test('U15 — Settings names the auto-generated key file and says to back it up', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
 
   /* The SHIPPED wire, not `fastify.inject`. Two separate claims ride on it:
@@ -60,7 +64,10 @@ test('U15 — Settings names the auto-generated key file and says to back it up'
      sibling of the hubs, so no hub may light up on arrival. */
   await page.goto('/#/');
   await fluentRootReady(page);
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Settings' }).click();
+  await page
+    .getByRole('navigation', { name: 'Primary' })
+    .getByRole('link', { name: 'Settings' })
+    .click();
 
   await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible();
   await expect(page).toHaveURL(/#\/settings$/);

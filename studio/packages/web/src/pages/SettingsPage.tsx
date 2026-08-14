@@ -125,9 +125,9 @@ export function SettingsPage() {
               <p className="status-advisory">
                 This key was generated automatically and exists only in that file. It encrypts every
                 secret stored here — back it up somewhere safe (a password manager, or your
-                infrastructure&apos;s secret store). If the file is lost, every stored secret becomes
-                permanently undecryptable and each one has to be entered again. To pin your own key
-                instead, set AUTONOMY_MASTER_KEY or AUTONOMY_MASTER_KEY_FILE and restart.
+                infrastructure&apos;s secret store). If the file is lost, every stored secret
+                becomes permanently undecryptable and each one has to be entered again. To pin your
+                own key instead, set AUTONOMY_MASTER_KEY or AUTONOMY_MASTER_KEY_FILE and restart.
               </p>
             )}
           </>

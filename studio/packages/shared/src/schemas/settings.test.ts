@@ -38,7 +38,9 @@ describe('MasterKeyStatusSchema', () => {
   });
 
   it('refuses an empty path rather than treating "" as a location', () => {
-    expect(MasterKeyStatusSchema.safeParse({ source: 'file', keyFilePath: '' }).success).toBe(false);
+    expect(MasterKeyStatusSchema.safeParse({ source: 'file', keyFilePath: '' }).success).toBe(
+      false,
+    );
   });
 
   it('refuses a source the page has no sentence for', () => {
