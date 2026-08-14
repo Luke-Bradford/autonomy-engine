@@ -10,9 +10,9 @@ expression language (#6). This spec says WHAT the data layer is and WHICH seams 
 specs still own their mechanisms.
 
 **This spec RETRACTS a non-goal.** `2026-07-14-foundation-activity-library.md` carried
-*"No dataset/linked-service data-movement abstraction (defer `copy`/`lookup`/`transform`)"*.
-Operator decision #993 (2026-08-07) reversed it: *"the source and sink types could be different, we
-might want to move a csv or excel file into a database, or viceversa."* That line is struck in the
+_"No dataset/linked-service data-movement abstraction (defer `copy`/`lookup`/`transform`)"_.
+Operator decision #993 (2026-08-07) reversed it: _"the source and sink types could be different, we
+might want to move a csv or excel file into a database, or viceversa."_ That line is struck in the
 same PR as this spec, citing #993, **together with the two other places the old position is still
 written** (see §11) — leaving any of them in place while building the opposite is the contradiction
 class the loop already has a rule against.
@@ -24,20 +24,20 @@ class the loop already has a rule against.
 **#996 frames this as three missing layers. One of the three already exists, one is far more
 expensive than the ticket assumes, and the real blocker is in neither of them.**
 
-1. **Linked services are BUILT.** `Connection` is documented, in its own docblock, as *"a named
-   worker binding (ADF 'Linked Service' analog)"* — `shared/src/schemas/connection.ts:3`. It already
+1. **Linked services are BUILT.** `Connection` is documented, in its own docblock, as _"a named
+   worker binding (ADF 'Linked Service' analog)"_ — `shared/src/schemas/connection.ts:3`. It already
    carries `resourceId` (git identity), non-secret `config`, `secretRef`, `secretStatus`, `enabled`,
    and a per-dispatch override allowlist (`parameters`, #2 L13b). **Layer 1 is not a layer to build;
    it is new `ConnectionKind`s on a seam already load-bearing for six kinds.**
 2. **Datasets are new, and cost ~42 production edit sites** (§2.3) — not because they are versioned
-   (they are not, §2) but because *every* resource kind pays the portability enumeration.
+   (they are not, §2) but because _every_ resource kind pays the portability enumeration.
 3. **The real blocker is the adapter seam itself, and #996 does not mention it.** §1.
 
 ---
 
 ## §1 — the blocker: one node binds ONE connection **[SETTLED — the contract widens]**
 
-A `copy` is *heterogeneous by definition*: it reads from one store and writes to another, usually of
+A `copy` is _heterogeneous by definition_: it reads from one store and writes to another, usually of
 different kinds. **The current dispatch path cannot express that.**
 
 ```ts
@@ -56,11 +56,11 @@ second slot anywhere on the path.
 
 So every "just add a `copy` activity" plan is wrong before it starts.
 
-| | Shape | Verdict |
-|---|---|---|
-| (a) | **Widen the contract to a source/sink PAIR** — the node binds two connections, the executor resolves both, the adapter receives both | **CHOSEN** |
-| (b) | One `data_movement` kind whose adapter internally owns every store client; stores named inside the copy config, credentials via `{$secret}` sink fields | Rejected |
-| (c) | Split into `read` + `write` activities joined by an output | Rejected outright |
+|     | Shape                                                                                                                                                   | Verdict           |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| (a) | **Widen the contract to a source/sink PAIR** — the node binds two connections, the executor resolves both, the adapter receives both                    | **CHOSEN**        |
+| (b) | One `data_movement` kind whose adapter internally owns every store client; stores named inside the copy config, credentials via `{$secret}` sink fields | Rejected          |
+| (c) | Split into `read` + `write` activities joined by an output                                                                                              | Rejected outright |
 
 **(c) fails on correctness, not taste:** the only channel between two nodes is an output, and outputs
 land in `run_events` (`run/events.ts:49`). Piping a million rows through the append log is the defect
@@ -94,8 +94,8 @@ here because this is what needs it, and flagged in §10 as jointly owned.
 
 ## §2 — the dataset: a MUTABLE first-class resource **[SETTLED]**
 
-**#996 states:** *"a new resource that does not participate in the version model would break the
-run-binding invariant."* **Probed: that is false.**
+**#996 states:** _"a new resource that does not participate in the version model would break the
+run-binding invariant."_ **Probed: that is false.**
 
 Only pipelines are versioned; connections and triggers are mutable rows (`repo/connections.ts:155`),
 and the immutability triggers exist for `pipeline_versions` alone. Run binding is preserved by
@@ -107,20 +107,20 @@ not break.
 from "you want to re-point dev→prod"; that is wrong to cite, because environment promotion is an
 explicit non-goal (`2026-07-14-foundation-git-publish.md:900`). The correct argument is narrower and
 stronger: **a `Connection`'s `config` is a mutable row read live at dispatch, and a dataset address
-is the same class of fact.** A mutable dataset is *consistent with* the existing binding model rather
+is the same class of fact.** A mutable dataset is _consistent with_ the existing binding model rather
 than an exception to it. The verdict is unchanged; the reason is.
 
 A dataset is honestly **both** address and contract, so it is split by role:
 
-| Role | Lives in | Mutability | Why |
-|---|---|---|---|
-| **Address** — which store, which table/path, format options | the **dataset row** | mutable | same class of fact as a connection's `config` |
-| **Contract** — the column mapping | the **`copy` node's config**, inside the immutable `PipelineVersion` | immutable | a run must execute the mapping it was authored with |
-| **Declared schema** — the dataset's own column list | the dataset row | mutable | an **authoring aid** + a **drift check** (§7) — never a run input |
+| Role                                                        | Lives in                                                             | Mutability | Why                                                               |
+| ----------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| **Address** — which store, which table/path, format options | the **dataset row**                                                  | mutable    | same class of fact as a connection's `config`                     |
+| **Contract** — the column mapping                           | the **`copy` node's config**, inside the immutable `PipelineVersion` | immutable  | a run must execute the mapping it was authored with               |
+| **Declared schema** — the dataset's own column list         | the dataset row                                                      | mutable    | an **authoring aid** + a **drift check** (§7) — never a run input |
 
 ### 2.1 What this design owes, stated rather than hidden
 
-**"The node config is complete" is NOT the reason this is safe** — the node holds a *ref*, so the
+**"The node config is complete" is NOT the reason this is safe** — the node holds a _ref_, so the
 effective address resolves live. Two real consequences, both of which need a compensating control:
 
 1. **A rerun writes wherever the dataset points today**, even though it pins the same
@@ -140,14 +140,17 @@ effective address resolves live. Two real consequences, both of which need a com
 
 ```ts
 DatasetSchema = z.object({
-  id, resourceId, ownerId,                    // identical G1 identity contract to Connection
+  id,
+  resourceId,
+  ownerId, // identical G1 identity contract to Connection
   name: z.string().min(1),
-  connectionId: z.string().min(1),            // the STORE this dataset lives in
-  kind: DatasetKindSchema,                    // 'delimited' | 'excel' | 'table' | 'query'
-  config: z.record(z.string(), z.unknown()),  // kind-specific, non-secret
-  columns: z.array(DatasetColumnSchema),      // the DECLARED schema
-  parameters: z.array(z.string().min(1)).default([]),   // §8 — L13b's allowlist, reused verbatim
-  createdAt, updatedAt,
+  connectionId: z.string().min(1), // the STORE this dataset lives in
+  kind: DatasetKindSchema, // 'delimited' | 'excel' | 'table' | 'query'
+  config: z.record(z.string(), z.unknown()), // kind-specific, non-secret
+  columns: z.array(DatasetColumnSchema), // the DECLARED schema
+  parameters: z.array(z.string().min(1)).default([]), // §8 — L13b's allowlist, reused verbatim
+  createdAt,
+  updatedAt,
 });
 ```
 
@@ -175,13 +178,13 @@ surface and the run-binding column — not the enumeration.
 
 **It does NOT catch these 5**, because they are array/loop enumerations with no exhaustiveness check:
 
-| Site | What a forgotten kind does |
-|---|---|
-| `workspace-serialize.ts:626,637` | the kind **never gets committed** to git |
-| `workspace-drift.ts:161-173` | the kind reports **permanently clean** |
-| `workspace-reconcile.ts:307-344` | the kind never appears in an import **preview** |
-| `workspace-apply.ts:488,777` | the kind is silently **never applied** |
-| `envelope.ts:267` | pre-existing exports **lose the `resourceId` backfill** |
+| Site                             | What a forgotten kind does                              |
+| -------------------------------- | ------------------------------------------------------- |
+| `workspace-serialize.ts:626,637` | the kind **never gets committed** to git                |
+| `workspace-drift.ts:161-173`     | the kind reports **permanently clean**                  |
+| `workspace-reconcile.ts:307-344` | the kind never appears in an import **preview**         |
+| `workspace-apply.ts:488,777`     | the kind is silently **never applied**                  |
+| `envelope.ts:267`                | pre-existing exports **lose the `resourceId` backfill** |
 
 `portability/paths.ts:22-27` already notes the serializer "spells its three loops out rather than
 iterating this list".
@@ -234,13 +237,13 @@ not a new capability; it is refusing to make datasets the one ref that behaves d
 ### 3.1 Where the ref is CHECKED — dispatch, with one optional save-time arm
 
 `ActivityCatalogEntry` has **no declarative slot** for "this field is a reference to resource X"
-(`catalog/types.ts:250-298`). The two precedents are both refs held *beside* `config`, and they check
+(`catalog/types.ts:250-298`). The two precedents are both refs held _beside_ `config`, and they check
 at different times for a stated reason:
 
 - **`connectionId` checks at DISPATCH, not save** — and `pipeline.ts:384-387` gives the argument
-  verbatim: *"connections are mutable rows (a save-time check would go stale) and `connectionId` may
-  itself be a `${}` ref, so the target connection is unknowable here."* Save-time validation only
-  checks that the `${}` refs *inside* it resolve (`params.ts:1324`).
+  verbatim: _"connections are mutable rows (a save-time check would go stale) and `connectionId` may
+  itself be a `${}` ref, so the target connection is unknowable here."_ Save-time validation only
+  checks that the `${}` refs _inside_ it resolve (`params.ts:1324`).
 - **`call.pipelineVersionId` checks at SAVE**, through an **injected resolver** —
   `ValidateDocOptions.resolvePipeline` (`params.ts:1897`), supplied owner-scoped and server-side at
   `repo/pipeline-versions.ts:160`, while the canvas badge deliberately passes none (it has no DB, and
@@ -250,13 +253,13 @@ at different times for a stated reason:
 **Settled: a dataset ref follows `connectionId`.** Datasets are mutable rows (§2) and the ref may be
 `${}`, so both halves of the connection argument apply unchanged — the existence, ownership and
 kind-compatibility checks live at dispatch, where the drift gate (§7) already runs. The
-`resolvePipeline` pattern is the right tool for an *immutable* target and the wrong one here; naming
+`resolvePipeline` pattern is the right tool for an _immutable_ target and the wrong one here; naming
 it explicitly is what stops a later ticket reaching for it by analogy.
 
 An activity's acceptable dataset kinds are declared the way `connectionKinds` already declares
 acceptable connection kinds (`catalog/types.ts:278`), and enforced the same way: **the executor fails
-the node loudly**, with the node panel filtering the picker to accepted kinds *plus whatever is
-currently bound*, so a node bound to an off-kind dataset still shows its real binding
+the node loudly**, with the node panel filtering the picker to accepted kinds _plus whatever is
+currently bound_, so a node bound to an off-kind dataset still shows its real binding
 (`PipelineCanvas.tsx:2341-2345`'s rule).
 
 ---
@@ -281,15 +284,15 @@ an append sink**. #996 explicitly demands partial-copy behaviour; this is it.
      (`connectors/fs.ts:63-64`), with a per-dispatch temp suffix unique per `(run, node, attempt)`
      so two runs cannot collide (`fs.ts:300-304`).
    - **SQL sinks** — one transaction, committed once, or a staging table swapped in.
-   A copy whose sink swapped atomically **never leaves a partial write**, so a `transient` failure is
-   safely retryable and is classified as such.
+     A copy whose sink swapped atomically **never leaves a partial write**, so a `transient` failure is
+     safely retryable and is classified as such.
 2. **Otherwise the failure is `permanent`, whatever its cause.** If a copy cannot guarantee
    atomicity — an `append` write mode, a sink whose driver cannot transact the whole batch — then a
    failure after the first batch is committed is reported `permanent` **even for a network blip**,
    because the engine's only retry is from row 0 and that is a duplicating retry. Losing an automatic
    retry is the correct trade against silently doubling a table.
 3. **`idempotent: false` is still declared**, for the boot-recovery path it actually governs — an
-   interrupted copy must not be silently resumed. It is declared *in addition to* the above, never
+   interrupted copy must not be silently resumed. It is declared _in addition to_ the above, never
    instead of it.
 
 **Resumable copies are a non-goal in v1** (§12): a watermark that survives a run needs durable
@@ -299,13 +302,13 @@ run-scoped state that the engine does not have.
 (`connectors/types.ts:37`), narrowed to the engine's 3 by `toEngineFailure`
 (`connectors/error-kind.ts:28`). A copy must map to the adapter vocabulary, not invent a parallel one:
 
-| Cause | `ConnectorErrorKind` | Engine `kind` |
-|---|---|---|
-| bad DB credentials, permission denied | `auth` | `permanent` |
-| connect timeout, deadlock, connection reset — **and the sink swapped atomically** | `transient` | `transient` |
-| the same, but a partial write may have landed | `permanent` (§4.2) | `permanent` |
-| mapping/coercion/drift failure, path outside `config.roots` | `permanent` | `permanent` |
-| run cancelled / server shutdown | `cancelled` | `cancelled` — **never retried** |
+| Cause                                                                             | `ConnectorErrorKind` | Engine `kind`                   |
+| --------------------------------------------------------------------------------- | -------------------- | ------------------------------- |
+| bad DB credentials, permission denied                                             | `auth`               | `permanent`                     |
+| connect timeout, deadlock, connection reset — **and the sink swapped atomically** | `transient`          | `transient`                     |
+| the same, but a partial write may have landed                                     | `permanent` (§4.2)   | `permanent`                     |
+| mapping/coercion/drift failure, path outside `config.roots`                       | `permanent`          | `permanent`                     |
+| run cancelled / server shutdown                                                   | `cancelled`          | `cancelled` — **never retried** |
 
 ---
 
@@ -325,7 +328,7 @@ of size.
 **`truncated` is REQUIRED and must be honest.** The codebase has receipts both ways:
 
 - the honest pattern — `server/src/limits.ts:11`, `errors.ts:107-121`: a cap whose truncation is
-  STATED, *"never silently — an absent fact must never be manufactured"*;
+  STATED, _"never silently — an absent fact must never be manufactured"_;
 - the dishonest one, **live today** — `ProcessSupervisor` computes `truncated`
   (`workers/process-supervisor.ts:506`) and `connectors/agent.ts` never reads it, so an over-budget
   `agent_cli` output is silently clipped. **Filed as #1101 while writing this spec.**
@@ -346,7 +349,7 @@ inserts, and `node.succeeded.outputs` is `z.record(z.string(), z.unknown())` wit
   `activity.warned` reaches the log, so no consumer can mistake a prefix for the whole.
 
 **Progress.** A long copy must not look hung: it emits `node.output` ticks (`engine/types.ts:916` —
-*"Observability/streaming ONLY — never enters `outputs` or substitution"*), which is exactly this
+_"Observability/streaming ONLY — never enters `outputs` or substitution"_), which is exactly this
 channel and needs no new event. Ticks are **per batch, never per row** — one event per row would
 reproduce the log-volume problem this section forbids.
 
@@ -357,13 +360,17 @@ reproduce the log-volume problem this section forbids.
 ### 6.1 The mapping is declared, and lives on the node
 
 ```ts
-CopyMappingSchema = z.array(z.object({
-  source: z.string().min(1).optional(),      // a source column, XOR
-  expression: z.string().optional(),         // ... a ${} expression producing the value
-  sink: z.string().min(1),
-  type: DataTypeSchema,                      // the TARGET type — declared, never inferred
-  onError: z.enum(['fail', 'null']).default('fail'),
-}).strict());
+CopyMappingSchema = z.array(
+  z
+    .object({
+      source: z.string().min(1).optional(), // a source column, XOR
+      expression: z.string().optional(), // ... a ${} expression producing the value
+      sink: z.string().min(1),
+      type: DataTypeSchema, // the TARGET type — declared, never inferred
+      onError: z.enum(['fail', 'null']).default('fail'),
+    })
+    .strict(),
+);
 ```
 
 The XOR is enforced by `superRefine` with a per-element `path`, so an issue names its row rather than
@@ -376,16 +383,16 @@ Under-specifying this is how silent data corruption ships. The closed type set i
 **fails the row** with a named reason — there is no third outcome, and in particular no
 "best effort".
 
-| Source value | → `integer` | → `number` | → `boolean` | → `date` / `timestamp` | → `string` |
-|---|---|---|---|---|---|
-| `"42"` | 42 | 42 | **fail** | **fail** | `"42"` |
-| `"1.5"` | **fail** (never truncates to 1) | 1.5 | **fail** | **fail** | `"1.5"` |
-| `"1e400"` / overflow | **fail** | **fail** (non-finite) | **fail** | **fail** | `"1e400"` |
-| `"true"` / `"yes"` / `"1"` | 1 only from `"1"` | 1 only from `"1"` | `true` | **fail** | as written |
-| `""` (empty) | per `nullValue` (§6.4) | per `nullValue` | per `nullValue` | per `nullValue` | `""` — **not null** |
-| SQL `NULL` | `null` | `null` | `null` | `null` | `null` |
-| `"03/04/2026"` | **fail** | **fail** | **fail** | only via the declared `dateFormat`; **never guessed** | as written |
-| a real `number` 1.5 | **fail** | 1.5 | **fail** | **fail** | `"1.5"` — canonical form, never locale |
+| Source value               | → `integer`                     | → `number`            | → `boolean`     | → `date` / `timestamp`                                | → `string`                             |
+| -------------------------- | ------------------------------- | --------------------- | --------------- | ----------------------------------------------------- | -------------------------------------- |
+| `"42"`                     | 42                              | 42                    | **fail**        | **fail**                                              | `"42"`                                 |
+| `"1.5"`                    | **fail** (never truncates to 1) | 1.5                   | **fail**        | **fail**                                              | `"1.5"`                                |
+| `"1e400"` / overflow       | **fail**                        | **fail** (non-finite) | **fail**        | **fail**                                              | `"1e400"`                              |
+| `"true"` / `"yes"` / `"1"` | 1 only from `"1"`               | 1 only from `"1"`     | `true`          | **fail**                                              | as written                             |
+| `""` (empty)               | per `nullValue` (§6.4)          | per `nullValue`       | per `nullValue` | per `nullValue`                                       | `""` — **not null**                    |
+| SQL `NULL`                 | `null`                          | `null`                | `null`          | `null`                                                | `null`                                 |
+| `"03/04/2026"`             | **fail**                        | **fail**              | **fail**        | only via the declared `dateFormat`; **never guessed** | as written                             |
+| a real `number` 1.5        | **fail**                        | 1.5                   | **fail**        | **fail**                                              | `"1.5"` — canonical form, never locale |
 
 Two rows carry most of the risk and are stated deliberately:
 
@@ -433,13 +440,13 @@ fail.
 
 Checked before the first row moves:
 
-| Drift | Verdict |
-|---|---|
-| a mapped **source** column absent from the actual source | `permanent`, naming the column |
-| a mapped **sink** column absent from the actual sink | `permanent`, naming the column |
-| a mapped column's actual type is incompatible with its declared target type | `permanent`, naming both types |
-| a **new** column in the source the mapping does not mention | **allowed**, reported as `activity.warned` (`engine/types.ts:1198`) |
-| a source column the mapping does not mention has **disappeared** | allowed, silent — it was never read |
+| Drift                                                                       | Verdict                                                             |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| a mapped **source** column absent from the actual source                    | `permanent`, naming the column                                      |
+| a mapped **sink** column absent from the actual sink                        | `permanent`, naming the column                                      |
+| a mapped column's actual type is incompatible with its declared target type | `permanent`, naming both types                                      |
+| a **new** column in the source the mapping does not mention                 | **allowed**, reported as `activity.warned` (`engine/types.ts:1198`) |
+| a source column the mapping does not mention has **disappeared**            | allowed, silent — it was never read                                 |
 
 Additive drift must not break a working pipeline; that is why row 4 is a warning. It is still said out
 loud, because silent additive drift is how a mapping quietly stops covering its source.
@@ -472,7 +479,7 @@ exists — save time.
   adapter. Never free text.
 - **Paths: EXTRACT and share `fs`'s guard — do not mirror it.** `resolveWithinRoots`
   (`connectors/fs.ts:186`) is a hardened single implementation — lexical `..` collapse, `realpath` on
-  roots *and* the target's parent, `lstat` + `O_NOFOLLOW` at the target, atomic temp+`rename` writes.
+  roots _and_ the target's parent, `lstat` + `O_NOFOLLOW` at the target, atomic temp+`rename` writes.
   A second copy of that logic is a defect by construction. Note the deliberate shared/server split:
   the absolute-root check must stay server-side (`catalog/connection-config.ts:26-32,62-68`), and
   `connectionConfigAdvisory:405` is **advisory, never a gate** — its own docblock says so, because
@@ -492,7 +499,7 @@ exists — save time.
 ## §9 — execution tier: a copy must not stall the server **[SETTLED]**
 
 **The measured hazard.** Adapter runs share **one global `pLimit(deps.concurrency ?? 4)` across every
-run** (`run/executor.ts:56,241`); per-run dispatch concurrency is also 4 (`run/driver.ts:895`). Four
+run** (`run/executor.ts:56,241`); per-run dispatch concurrency is also 4 (`PER_RUN_DISPATCH_CONCURRENCY`, `run/driver.ts:899`). Four
 long copies would hold every global adapter slot and stall every LLM and http node server-wide.
 
 **And the "zero new dependency" store is the worst case.** `better-sqlite3` is **synchronous**, and
@@ -544,13 +551,13 @@ be specced as though those fields exist.
 and leaving two is the drift this repo has already been bitten by, so all three are amended in the
 same PR, each citing #993:
 
-1. **`:168` (Non-goals)** — *"No dataset/linked-service data-movement abstraction (defer
-   `copy`/`lookup`/`transform`)"* — **struck**.
-2. **`:40` (the file-activity row)** — still claims the ADF *"(Copy, GetMetadata)"* analog for
-   `file_copy`. That impersonation is the exact thing #993 objected to (*"everything currently reads
-   as a file copy, rather than a copy activity"*). Amended to name `file_copy` as a **file**
+1. **`:168` (Non-goals)** — _"No dataset/linked-service data-movement abstraction (defer
+   `copy`/`lookup`/`transform`)"_ — **struck**.
+2. **`:40` (the file-activity row)** — still claims the ADF _"(Copy, GetMetadata)"_ analog for
+   `file_copy`. That impersonation is the exact thing #993 objected to (_"everything currently reads
+   as a file copy, rather than a copy activity"_). Amended to name `file_copy` as a **file**
    operation and point at this spec for ADF's Copy.
-3. **`:177-178` (Open question 3)** — *"design the storage abstraction up-front?"* — **answered**, and
+3. **`:177-178` (Open question 3)** — _"design the storage abstraction up-front?"_ — **answered**, and
    marked so with a pointer here.
 
 ---
@@ -560,32 +567,32 @@ same PR, each citing #993:
 Strictly ordered. **M1 first and alone** — nothing else can be built on a seam that cannot express a
 source and a sink.
 
-| # | Ticket | Notes |
-|---|---|---|
-| **M1** | **The paired-connection contract widening** (§1): `NodeSchema.connectionIds?`, `ActivityContext.sink?`, the fourth `runActivity` arg, two-sided `resolveConnection` + readiness gate + side-labelled failure codes | additive; six adapters untouched. Co-owned with #1 D6 |
-| **M2** | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers | the pin precedes the kind, deliberately |
-| **M3** | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3) | |
-| **M4** | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield | **zero new dependencies** |
-| **M5** | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | |
-| **M6** | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1) | |
-| **M7** | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite) | the ticket that proves the spec |
-| **M8** | The mapping authoring panel (§13) | UI epic; e2e-gated |
-| **M9** | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1) | UI epic |
-| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS | |
-| **M11** | `excel` dataset kind | |
-| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation | |
+| #       | Ticket                                                                                                                                                                                                                      | Notes                                                 |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| **M1**  | **The paired-connection contract widening** (§1): `NodeSchema.connectionIds?`, `ActivityContext.sink?`, the fourth `runActivity` arg, two-sided `resolveConnection` + readiness gate + side-labelled failure codes          | additive; six adapters untouched. Co-owned with #1 D6 |
+| **M2**  | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers     | the pin precedes the kind, deliberately               |
+| **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                       |
+| **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                             |
+| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first |                                                       |
+| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                       |
+| **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                       |
+| **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                    |
+| **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                               |
+| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                       |
+| **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                       |
+| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                       |
 
 **Dependencies are named, and checked against packaging, not merely "called out".** `#993` chose the
 data-movement build, so these are consequences of a settled decision rather than an open fork — but
 each must be verified against `2026-07-30-packaging-and-updates.md` and
 `2026-07-24-bun-single-binary-spike.md` **before** its ticket starts, not after:
 
-| Ticket | Dependency | The specific risk to verify |
-|---|---|---|
-| M4 | none — `better-sqlite3@12.11.1` is already a server dep | its **native binding** already ships, so M4 also proves the single-binary story for native modules |
-| M7 | a CSV parser (streaming, no full materialisation) | must expose a row stream, not `parse(wholeFile)` |
-| M10 | `pg` | a **second** native/TLS surface alongside `better-sqlite3` in a single-binary target — verify empirically, do not assume |
-| M11 | an xlsx reader | xlsx is a ZIP container; most readers materialise the sheet, which fights §5 — check before choosing |
+| Ticket | Dependency                                              | The specific risk to verify                                                                                              |
+| ------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| M4     | none — `better-sqlite3@12.11.1` is already a server dep | its **native binding** already ships, so M4 also proves the single-binary story for native modules                       |
+| M7     | a CSV parser (streaming, no full materialisation)       | must expose a row stream, not `parse(wholeFile)`                                                                         |
+| M10    | `pg`                                                    | a **second** native/TLS surface alongside `better-sqlite3` in a single-binary target — verify empirically, do not assume |
+| M11    | an xlsx reader                                          | xlsx is a ZIP container; most readers materialise the sheet, which fights §5 — check before choosing                     |
 
 ---
 
@@ -600,7 +607,7 @@ is not representable**, so it degrades to a raw JSON textarea (`:154-164`, fail-
 
 So M8 is a **dedicated panel**, specified as such rather than discovered late: a source→sink table
 with per-row target type and `onError`, an **Auto-map** button that writes an explicit mapping (§6.3),
-a per-row expression escape hatch, and an explicit *unmapped* state — a column deliberately not copied
+a per-row expression escape hatch, and an explicit _unmapped_ state — a column deliberately not copied
 must be visibly so, never merely absent.
 
 Everything else about a copy node (two dataset pickers, batch size, write mode) is flat scalars and
@@ -616,12 +623,12 @@ array-of-object editor pays those two down as well.
 
 **It must fit inside U7's settled rule, not beside it** (`adf-grade-ui-design.md:148`): fields are
 derived from each activity's own Zod `configSchema`, never from hand-written metadata on the catalog
-entry, *"so a parallel field list would be a third copy free to drift"*. The honest way to add a table
+entry, _"so a parallel field list would be a third copy free to drift"_. The honest way to add a table
 is therefore to widen `classify` with an `objectList` kind derived from the element schema — not to
 special-case `copy` in the panel, which would be the parallel field list U7 refuses.
 
-**Datasets belong in the Manage hub**, which the UI design already scopes as *"Manage (linked
-services, triggers)"* (`2026-07-14-adf-grade-ui-design.md:33,117`) — a Datasets list + detail beside
+**Datasets belong in the Manage hub**, which the UI design already scopes as _"Manage (linked
+services, triggers)"_ (`2026-07-14-adf-grade-ui-design.md:33,117`) — a Datasets list + detail beside
 Connections. No new hub, no parallel authoring idiom.
 
 ---
@@ -636,7 +643,7 @@ Connections. No new hub, no parallel authoring idiom.
   `preparedInput` and never in an event; **both ends** of a paired activity are redacted.
 - **A credentialled kind joins `SECRET_REQUIRING_CONNECTION_KINDS`**, or the readiness gate passes a
   connection with no credential (§8).
-- **File paths stay inside `config.roots`** via the *shared* `fs` guard, with its realpath/symlink/
+- **File paths stay inside `config.roots`** via the _shared_ `fs` guard, with its realpath/symlink/
   `O_NOFOLLOW` discipline — and with the knowledge that the browser-side check is advisory only.
 - **A dataset's `parameters` allowlist is owner-declared and secret-refusing**, so a borrowed dataset
   cannot be re-pointed by a node that does not own it.
@@ -649,9 +656,8 @@ Connections. No new hub, no parallel authoring idiom.
 - `shared`: `+schemas/dataset.ts`; `schemas/connection.ts:9,41` (+2 kinds, +secret-requiring);
   `catalog/connection-config.ts:341,365`; `+catalog/copy-activity-config.ts`;
   `catalog/registry.ts:73` (+`copy`, +`lookup`); `catalog/types.ts` (+type constants);
-  `schemas/version.ts:218` (`CATALOG_VERSION`); `schemas/pipeline.ts:376-377` (+`connectionIds?`,
-  +`datasetIds?`); `engine/params.ts:1962` (identifier rule); portability `paths/envelope/
-  content-form/import-result` + the §2.3 exhaustiveness pin.
+  `schemas/version.ts:218` (`CATALOG_VERSION`); `schemas/pipeline.ts:376-377` (+`connectionIds?`, +`datasetIds?`); `engine/params.ts:1962` (identifier rule); portability `paths/envelope/
+content-form/import-result` + the §2.3 exhaustiveness pin.
 - `server`: `+connectors/sqlite.ts`, `+connectors/postgres.ts`, `+connectors/copy/*` (readers,
   writers, coercion, the pump); `connectors/types.ts:223` (+optional sink args);
   `connectors/registry.ts:28`; **extract `resolveWithinRoots` out of `connectors/fs.ts:186` into a
@@ -689,8 +695,8 @@ Connections. No new hub, no parallel authoring idiom.
 
 ## Evidence (probed, not argued)
 
-- **Linked services already exist.** `shared/src/schemas/connection.ts:3` — *"a named worker binding
-  (ADF 'Linked Service' analog)"*; `:9` six kinds; `:41` `SECRET_REQUIRING_CONNECTION_KINDS` = the two
+- **Linked services already exist.** `shared/src/schemas/connection.ts:3` — _"a named worker binding
+  (ADF 'Linked Service' analog)"_; `:9` six kinds; `:41` `SECRET_REQUIRING_CONNECTION_KINDS` = the two
   hosted LLM kinds only.
 - **One node binds ONE connection.** `shared/src/schemas/pipeline.ts:377` (singular, optional);
   `connectors/types.ts:61` (one `connectionConfig`), `:223` (`runActivity(ctx, secret, secretFields?)`);
@@ -711,8 +717,10 @@ Connections. No new hub, no parallel authoring idiom.
   (`docs/2026-07-13-p2-engine-spec.md:180-184`).
 - **`file_write` is already crash-safe by temp+`rename`.** `connectors/fs.ts:63-64`, with a
   per-`(run,node,attempt)` temp suffix at `:300-304`.
-- **Adapter concurrency is one global pool of 4.** `run/executor.ts:56,241`; per-run dispatch cap 4 at
-  `run/driver.ts:895`.
+- **Adapter concurrency is one global pool of 4.** `run/executor.ts:56,241`;
+  `PER_RUN_DISPATCH_CONCURRENCY = 4` at `run/driver.ts:899`. Note its docblock (`:888-898`): the
+  global `p-limit` caps only the **adapter phase**, which sits after the per-run pre-flight — so a
+  copy holding an adapter slot is the constraint that matters here.
 - **`better-sqlite3` is synchronous and there are no worker threads.** `packages/server/package.json:19`;
   `grep -rl worker_threads packages/server/src` → nothing.
 - **Cancel/timeout are undeclared contract fields.** `catalog/types.ts:293` lists `supportsCancel` and
@@ -730,7 +738,7 @@ Connections. No new hub, no parallel authoring idiom.
   `truncated`; `connectors/agent.ts` never reads it — **#1101**.
 - **`fs` confinement + its deliberate schema gap.** `connectors/fs.ts:186` `resolveWithinRoots`;
   `catalog/connection-config.ts:62-68` (absolute check server-only), `:395,405`
-  (`connectionConfigAdvisory` is *"advisory, never a gate"*).
+  (`connectionConfigAdvisory` is _"advisory, never a gate"_).
 - **A nested config renders as a JSON box.** `web/src/pages/pipeline/configForm.ts:166` returns `null`
   for a non-object-rooted schema (`:154-164`); consumed at `PipelineCanvas.tsx:2300`.
 - **The failure taxonomy.** `engine/types.ts:491` `['transient','permanent','cancelled']`;
@@ -739,7 +747,7 @@ Connections. No new hub, no parallel authoring idiom.
 - **Five portability enumerations are unchecked by the compiler.** `workspace-serialize.ts:626,637`;
   `workspace-drift.ts:161-173`; `workspace-reconcile.ts:307-344`; `workspace-apply.ts:488,777`;
   `envelope.ts:267`. Flagged in `portability/paths.ts:22-27`.
-- **Apply order is leaf-first, referrer-last.** `workspace-apply.ts:488` (connections, *"leaf: they
-  reference nothing"*) → `:559` (pipelines) → `:777-778` (triggers, *"AFTER the version mints"*).
-- **The git spec already anticipates datasets as files.** `foundation-git-publish.md:12` — *"each
-  pipeline / linked-service / dataset a separate file"*.
+- **Apply order is leaf-first, referrer-last.** `workspace-apply.ts:488` (connections, _"leaf: they
+  reference nothing"_) → `:559` (pipelines) → `:777-778` (triggers, _"AFTER the version mints"_).
+- **The git spec already anticipates datasets as files.** `foundation-git-publish.md:12` — _"each
+  pipeline / linked-service / dataset a separate file"_.
