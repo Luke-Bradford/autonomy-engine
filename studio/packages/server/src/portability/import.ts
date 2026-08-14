@@ -19,9 +19,11 @@ import {
 } from '../repo/index.js';
 import type { Db } from '../repo/types.js';
 
-/** The inverse of `stripNodeConnectionId` in `export.ts`: a `null`
- * `connectionId` (every export nulls it) becomes an OMITTED key — the
- * live-row `NodeSchema.connectionId` is `optional()`, never `null`. */
+/** The inverse of `export.ts`'s connection-ref stripping, for BOTH bindings: a
+ * `null` ref becomes an OMITTED key, since the live-row `NodeSchema` fields are
+ * `optional()`, never `null`. The singular is always present-and-nulled by
+ * export; the M1 (#1104) pair is present only when the node binds one, and
+ * carries its two ends independently. */
 function toDbNode(node: NodeExport): Node {
   const { connectionId, connectionIds, ...rest } = node;
   const base = connectionId === null ? rest : { ...rest, connectionId };

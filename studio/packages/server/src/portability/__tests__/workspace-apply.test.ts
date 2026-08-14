@@ -116,8 +116,10 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(tgtVersion.nodes[0]!.connectionId).not.toBe(conn.id);
   });
 
-  it('M1 (#1104) — remaps BOTH ends of a connectionIds pair to TARGET db ids', () => {
-    const src = freshDb().db;
+  /** M1 (#1104) — a one-pipeline workspace whose only node binds a SOURCE and a
+   * SINK, plus the branch snapshot of it (both ends already in resourceId-space,
+   * which is what an apply consumes). */
+  function pairedSnapshot(src: ReturnType<typeof freshDb>['db']) {
     const source = createConnection(src, {
       ownerId: 'local',
       name: 'Src',
@@ -145,7 +147,12 @@ describe('applyWorkspace (#3 G5c-1)', () => {
         },
       ],
     });
-    const incoming = snapshot(src);
+    return { source, sink, pipe, incoming: snapshot(src) };
+  }
+
+  it('M1 (#1104) — remaps BOTH ends of a connectionIds pair to TARGET db ids', () => {
+    const src = freshDb().db;
+    const { source, sink, pipe, incoming } = pairedSnapshot(src);
 
     const tgt = freshDb().db;
     expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
@@ -160,6 +167,39 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(node.connectionIds).toEqual({ source: tgtSource.id, sink: tgtSink.id });
     expect(node.connectionIds!.source).not.toBe(source.resourceId);
     expect(node.connectionIds!.sink).not.toBe(sink.id);
+  });
+
+  it('M1 (#1104) — a dangling END refuses the apply, and the message names WHICH end', () => {
+    const src = freshDb().db;
+    const { incoming } = pairedSnapshot(src);
+    // Tamper: the sink names a connection that is neither on the branch nor in
+    // the target workspace. "node n1 references a connection that no longer
+    // exists" is not actionable on a node that binds two of them.
+    incoming.pipelines[0]!.data.versions[0]!.nodes[0]!.connectionIds!.sink = 'rid_not_here';
+
+    const tgt = freshDb().db;
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      /sink connection "rid_not_here"/,
+    );
+    // Atomic, as every other refused ref is: nothing partial lands.
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
+  it('M1 (#1104) — an end nulled by a portable export drops the pair WHOLE, never half-applied', () => {
+    const src = freshDb().db;
+    const { pipe, incoming } = pairedSnapshot(src);
+    // The shape a PORTABLE export produces: the env-specific end nulled, the
+    // other preserved. `NodeSchema.connectionIds` requires both ends, so a half
+    // pair is unsavable — and inventing the missing end is the fail-open an
+    // absent fact must never become.
+    incoming.pipelines[0]!.data.versions[0]!.nodes[0]!.connectionIds!.sink = null;
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const node = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!;
+    expect(node.connectionIds).toBeUndefined();
   });
 
   it('is idempotent: re-applying the same branch writes nothing new', () => {
