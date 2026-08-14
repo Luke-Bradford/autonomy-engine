@@ -15,6 +15,7 @@ import {
   resolvePrice,
   WARNING_CODES,
   type ActivityCatalog,
+  type ConnectionKind,
   type EngineEvent,
   type FailureKind,
   type Node,
@@ -124,6 +125,9 @@ function nodeFailed(
     // on a post-dispatch adapter failure, so the driver's quota-window writer can
     // key an `agent_cli` `rate_limit` window off the exact connection).
     connectionId?: string;
+    // M1 (#1104) — which END of a PAIRED activity's connection pair failed.
+    // Absent on every single-connection failure (all of them at M1).
+    side?: 'source' | 'sink';
   },
 ): EngineEvent {
   return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
@@ -323,6 +327,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * to tell "you never bound a connection" from "your key won't decrypt" without
    * string-matching the message. All are `permanent` — a config mistake does not
    * fix itself on a retry.
+   *
+   * M1 (#1104) — called TWICE for a PAIRED activity (one the catalog declares
+   * `sinkConnectionKinds` for). The `side` label is applied by the CALLER, which
+   * already knows which end it asked for, rather than spread across the ten
+   * error returns here: `labelSide` below is the one place it is attached, so a
+   * new return path cannot ship unlabelled. The `code` vocabulary is deliberately
+   * NOT doubled with SINK_ variants — the side is orthogonal to the cause, and
+   * travels beside `code` on the event.
    */
   async function resolveConnection(
     connectionId: string | undefined,
@@ -336,6 +348,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         adapter: ConnectorAdapter;
         secret: string | null;
         connectionConfig: Record<string, unknown>;
+        connectionKind: ConnectionKind;
       }
   > {
     // #2 L13a — `connectionId` is the value the reducer resolved from the node's
@@ -345,6 +358,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // resolve. `undefined` here ⟺ the node carried no connectionId at all; a
     // `${}` that resolved to '' is a bound-but-empty ref → CONNECTION_NOT_FOUND
     // below, distinct from CONNECTION_MISSING.
+    //
+    // M1 (#1104) — the same holds for the PAIRED binding: the caller passes an
+    // end of `command.resolvedConnectionIds`, never `node.connectionIds`, for
+    // the identical reason. So "the executor never reads the node's raw
+    // connection fields" covers both shapes.
     if (connectionId === undefined) {
       return {
         error: `activity '${activityType}' requires a connection but the node has none`,
@@ -498,7 +516,25 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         };
       }
     }
-    return { adapter, secret, connectionConfig };
+    return { adapter, secret, connectionConfig, connectionKind: connection.kind };
+  }
+
+  /**
+   * M1 (#1104) — attach the source/sink `side` to a `resolveConnection` failure,
+   * for a PAIRED activity only. The ONE place the label is applied, so a new
+   * error return inside `resolveConnection` cannot ship unlabelled.
+   *
+   * Both a structured field AND the human message: the field is the contract
+   * (`node.failed.side`, machine-readable beside `code`, never string-matched);
+   * the message keeps the existing run-log surface honest before a UI ticket
+   * renders the field, since "connection 'x' not found" on a node bound to two
+   * connections names neither.
+   */
+  function labelSide<T extends { error: string }>(
+    failure: T,
+    side: 'source' | 'sink',
+  ): T & { side: 'source' | 'sink' } {
+    return { ...failure, side, error: `${side} connection: ${failure.error}` };
   }
 
   /**
@@ -517,6 +553,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     nodeId: string,
     attemptId: string,
     connectionId: string | undefined,
+    /**
+     * M1 (#1104) — the SINK end's plaintext credential for a PAIRED activity,
+     * passed straight through to the adapter's side channel. `undefined` for
+     * every single-connection activity.
+     */
+    sinkSecret: string | null | undefined,
   ): Promise<EngineEvent[]> {
     const events: EngineEvent[] = [];
     // #2 L5 — the per-connection price-table override, parsed ONCE per dispatch
@@ -582,7 +624,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       };
     };
     try {
-      for await (const ev of adapter.runActivity(ctx, secret, secretFields)) {
+      for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
           events.push({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
         } else if (ev.type === 'metered') {
@@ -805,30 +847,88 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     let adapter: ConnectorAdapter;
     let secret: string | null;
     let connectionConfig: Record<string, unknown>;
+    // M1 (#1104) — the SINK end, resolved only for a PAIRED activity. Both stay
+    // `undefined` for every single-connection activity (all of them at M1).
+    let sink: { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
+    let sinkSecret: string | null | undefined;
+    // The id the QUOTA-window writer keys off (#2 L14c). For a paired node this
+    // is the SOURCE end: the source adapter is the one that runs, so a
+    // `rate_limit` it reports came from the source's connection. Without this a
+    // paired node would hand the driver `undefined` and its window write would
+    // silently no-op — the fail-open shape the reset-epoch split exists to avoid.
+    let dispatchedConnectionId: string | undefined;
     if (entry.connectionKinds.length > 0) {
+      // M1 — a PAIRED activity is one the CATALOG declares a sink for. Read from
+      // the catalog, never inferred from the node: a stray `connectionIds` on a
+      // single-connection activity must not change how that activity dispatches
+      // (it falls through to the singular path below and fails CONNECTION_MISSING,
+      // the same fail-closed posture as a stray `connectionId` on a
+      // connection-less activity).
+      const sinkKinds = entry.sinkConnectionKinds;
+      const paired = sinkKinds !== undefined;
+      // Source first, and its failure SHORT-CIRCUITS: a node with both ends
+      // misconfigured reports the source only. Deliberate — the alternative is
+      // resolving (and decrypting) a sink for a dispatch that cannot happen.
       const resolved = await resolveConnection(
-        command.resolvedConnectionId,
+        paired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
         entry.connectionKinds,
         node.type,
         ownerId,
-        command.resolvedConnectionParams,
+        // A paired node carries no `connectionParams` — `validateDoc` refuses the
+        // combination (they name no side). Passed explicitly rather than relying
+        // on that, so a doc predating the rule cannot bind them to a guessed end.
+        paired ? undefined : command.resolvedConnectionParams,
       );
       if ('error' in resolved) {
         // Most pre-flight failures are PERMANENT (a config typo does not self-heal);
         // the #2 L14c admission gate is the one transient case, carrying its own
         // `kind:'transient'` + `retryAfterSeconds` so it flows through the L7 retry
         // path exactly like an adapter-reported `rate_limit`.
+        const failure = paired ? labelSide(resolved, 'source') : resolved;
         yield nodeFailed(runId, nodeId, attemptId, {
-          error: resolved.error,
+          error: failure.error,
           kind: resolved.kind ?? 'permanent',
           code: resolved.code,
           ...(resolved.retryAfterSeconds !== undefined
             ? { retryAfterSeconds: resolved.retryAfterSeconds }
             : {}),
+          ...(paired ? { side: 'source' as const } : {}),
         });
         return;
       }
       ({ adapter, secret, connectionConfig } = resolved);
+      dispatchedConnectionId = paired
+        ? command.resolvedConnectionIds?.source
+        : command.resolvedConnectionId;
+      if (paired) {
+        const resolvedSink = await resolveConnection(
+          command.resolvedConnectionIds?.sink,
+          sinkKinds,
+          node.type,
+          ownerId,
+          undefined,
+        );
+        if ('error' in resolvedSink) {
+          const failure = labelSide(resolvedSink, 'sink');
+          yield nodeFailed(runId, nodeId, attemptId, {
+            error: failure.error,
+            kind: resolvedSink.kind ?? 'permanent',
+            code: resolvedSink.code,
+            ...(resolvedSink.retryAfterSeconds !== undefined
+              ? { retryAfterSeconds: resolvedSink.retryAfterSeconds }
+              : {}),
+            side: 'sink',
+          });
+          return;
+        }
+        // The sink's ADAPTER is deliberately discarded: the SOURCE adapter is the
+        // one that runs. The sink contributes its non-secret config, its `kind`
+        // (so the running adapter knows which store it writes to, and can
+        // re-validate per spec §8) and its plaintext credential — the last on the
+        // `runActivity` side channel, never in `ctx`.
+        sink = { kind: resolvedSink.connectionKind, connectionConfig: resolvedSink.connectionConfig };
+        sinkSecret = resolvedSink.secret;
+      }
     } else {
       // An EXECUTION activity is connector-dispatched by definition (spec #4),
       // so this is a catalog defect today — but it stays the "future built-in
@@ -886,6 +986,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       activityType: node.type,
       input: command.preparedInput,
       connectionConfig,
+      // M1 (#1104) — omitted (not present-undefined) for a single-connection
+      // activity, so `'sink' in ctx` stays an honest test of "is this paired".
+      ...(sink !== undefined ? { sink } : {}),
       signal: controller.signal,
     };
     const events = await limit(() =>
@@ -898,7 +1001,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         runId,
         nodeId,
         attemptId,
-        command.resolvedConnectionId,
+        dispatchedConnectionId,
+        sinkSecret,
       ),
     );
     // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
@@ -917,8 +1021,19 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // exists to cover the config-sink plaintext the adapter contract does not; it
     // does not replace the adapter's own connection-secret redaction, it stacks
     // on top of it when a sink is present.
+    //
+    // M1 (#1104) widens the SWITCH, not the policy: a resolved SINK secret is
+    // the other plaintext class no adapter is guaranteed to redact. The source
+    // adapter is the one running, and it redacts ITS OWN outgoing secret; it has
+    // never seen the sink's, so on a paired node the executor is the only layer
+    // that can scrub it (spec §8: "a paired activity resolves two and must
+    // redact both"). Single-connection nodes are untouched — `sinkSecret` is
+    // `undefined` for every activity in this build.
+    const sinkPlaintexts = typeof sinkSecret === 'string' ? [sinkSecret] : [];
     const plaintexts =
-      Object.keys(secretFields).length > 0 ? [secret, ...Object.values(secretFields)] : [];
+      Object.keys(secretFields).length > 0 || sinkPlaintexts.length > 0
+        ? [secret, ...Object.values(secretFields), ...sinkPlaintexts]
+        : [];
     for (const ev of events)
       yield plaintexts.length > 0 ? redactEventPlaintexts(ev, plaintexts) : ev;
   }
