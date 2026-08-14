@@ -10,6 +10,7 @@ import {
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   ConnectionKindSchema,
+  ExternalAgentOutcomeSchema,
   ExternalWaitStatusSchema,
   RunStatusSchema,
   SecretStatusSchema,
@@ -21,6 +22,7 @@ import {
   type SecretStatus,
   type Container,
   type Edge,
+  type ExternalAgentOutcome,
   type ExternalWaitStatus,
   type Node,
   type Output,
@@ -795,5 +797,69 @@ export const workspaceEvents = sqliteTable(
     index('workspace_events_owner_id_idx').on(table.ownerId),
     // #3 G6c-1 — the `active` pointer projection filters `(owner_id, type)`.
     index('workspace_events_owner_id_type_idx').on(table.ownerId, table.type),
+  ],
+);
+
+/**
+ * #988 — AI/agent activity REPORTED BY an external agent studio did not launch.
+ *
+ * WHY THIS IS NOT `run_events`. Every other figure on `/monitor/ai` is derived
+ * from `run_events` INNER JOINed to `runs`, and `run_events.run_id` is `notNull`
+ * with an FK — so a row can only exist if it belongs to a studio pipeline run.
+ * The autonomy build loop's `claude -p` fires are launched by `loop/drive.sh`,
+ * outside studio entirely, so the panel truthfully reported zero while the
+ * operator watched the loop spend their weekly quota. Synthesising a run to hold
+ * them would put rows the reducer can never replay into the log the whole run
+ * model treats as authoritative; a reported invocation has no pipeline version,
+ * no graph and no reducer state, so it gets its own table.
+ *
+ * The direction is INGEST — an external agent reports in. Studio does not watch
+ * processes it did not launch, which is the boundary the ticket's settled shape
+ * draws (and why this is a table plus a POST route rather than a process scrape).
+ *
+ * These rows are DELIBERATELY not summed into `models`/`totals`/`series`: a
+ * subscription-billed CLI fire's tokens are not spend billed to a studio
+ * connection, and `AgentCliActivitySchema` already documents why non-metered CLI
+ * work is counted apart rather than folded into the token table.
+ */
+export const externalAgentActivity = sqliteTable(
+  'external_agent_activity',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    /** The REPORTER's identity, e.g. `studio-build-loop`. Free text: studio does
+     * not own the vocabulary of systems that may report to it. */
+    source: text('source').notNull(),
+    /** The reporter's OWN handle for this invocation (the build loop's fire id).
+     * Half of the idempotency key — see migration 0035. */
+    externalId: text('external_id').notNull(),
+    /** Which CLI ran, e.g. `claude` / `codex`. */
+    agent: text('agent').notNull(),
+    /** Model the invocation ran on, when the reporter knows it. */
+    model: text('model'),
+    startedAtMs: integer('started_at_ms').notNull(),
+    /** Epoch ms the invocation ended; NULL while it is STILL RUNNING. */
+    endedAtMs: integer('ended_at_ms'),
+    outcome: text('outcome', { enum: asEnumTuple(ExternalAgentOutcomeSchema.options) })
+      .notNull()
+      .$type<ExternalAgentOutcome>(),
+    /* NULLABLE on purpose: "the reporter sent no usage" must stay
+     * distinguishable from "it measured, and the answer was zero" — the same
+     * honesty `TokenSeriesBucketSchema` documents for the metered side. */
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    cacheReadTokens: integer('cache_read_tokens'),
+    cacheCreationTokens: integer('cache_creation_tokens'),
+    /** When STUDIO recorded the report, on studio's clock — distinct from
+     * `startedAtMs`, which is the reporter's. */
+    reportedAtMs: integer('reported_at_ms').notNull(),
+  },
+  (table) => [
+    uniqueIndex('external_agent_activity_owner_source_external_idx').on(
+      table.ownerId,
+      table.source,
+      table.externalId,
+    ),
+    index('external_agent_activity_owner_started_idx').on(table.ownerId, table.startedAtMs),
   ],
 );

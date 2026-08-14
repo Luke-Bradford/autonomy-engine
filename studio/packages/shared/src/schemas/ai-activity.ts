@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ExternalAgentActivitySchema } from './external-agent-activity.js';
 import { RunCostSchema } from '../pricing/run-cost.js';
 import { RUN_SINCE_MS, RunSinceSchema, type RunSince } from './run.js';
 
@@ -250,6 +251,27 @@ export const AiActivitySnapshotSchema = z
      */
     series: TokenSeriesSchema,
     agentCli: AgentCliActivitySchema,
+    /**
+     * #988 — AI use REPORTED BY agents studio did not launch, kept apart from
+     * every figure above it.
+     *
+     * The three fields above all describe work studio itself dispatched, because
+     * they are derived from `run_events` INNER JOINed to `runs`. That made the
+     * whole surface silently mean "studio's own AI use" while being labelled "AI
+     * activity" — so it read zero while the autonomy loop that BUILDS studio was
+     * spending the operator's subscription window. This block is the other half,
+     * and it is a sibling rather than a contribution: nothing here is summed into
+     * `models`, `series` or `totals`, for the reason `AgentCliActivitySchema`
+     * gives about non-metered work, plus one more — a subscription-billed CLI's
+     * tokens are not spend billed to any studio connection.
+     *
+     * REQUIRED, not optional. An optional block would let a stale client render
+     * a window with reported activity as one with none, which is the exact
+     * misreading this whole ticket is about. Nothing persists or re-parses this
+     * snapshot — it is parsed only at the wire, by the web client and the route
+     * tests — so requiring it breaks no stored history.
+     */
+    external: ExternalAgentActivitySchema,
     /**
      * The window's totals across every group in `models`.
      *
