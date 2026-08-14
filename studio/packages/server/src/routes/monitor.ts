@@ -46,7 +46,25 @@ const AiActivityQuerystringSchema = z.object({
  */
 const REPORTER_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * How far ahead of studio's clock a reporter's start stamp may be.
+ *
+ * Some skew is legitimate — the stamp comes from another process's clock — but
+ * an unbounded future stamp is a row that is INVISIBLE (the window excludes
+ * anything starting after `now`) and yet occupies the table, and one that keeps
+ * being re-reported never expires either. An hour is far beyond real skew and
+ * far short of anything that could hide a row for long.
+ */
+const MAX_CLOCK_SKEW_MS = 60 * 60_000;
+
 const ExternalActivityBodySchema = ExternalAgentReportSchema.superRefine((body, ctx) => {
+  if (body.startedAt > Date.now() + MAX_CLOCK_SKEW_MS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['startedAt'],
+      message: 'startedAt is too far in the future',
+    });
+  }
   for (const field of ['source', 'agent'] as const) {
     if (!REPORTER_SLUG.test(body[field])) {
       ctx.addIssue({

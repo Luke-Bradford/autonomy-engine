@@ -72,6 +72,27 @@ function seriesSnapshot() {
       },
     ],
     agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
+    /* #988 — REQUIRED on the snapshot, so a stub without it is rejected by the
+       client's schema and the page renders an error instead of a chart. Present
+       and empty here on purpose: this spec is about the METERED series, and
+       reported external activity plots no bar (it is billed to no connection). */
+    external: {
+      invocations: 0,
+      completed: 0,
+      notCompleted: 0,
+      unknown: 0,
+      inFlight: 0,
+      lastAt: null,
+      tokens: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        measuredInvocations: 0,
+      },
+      truncated: false,
+      reporters: [],
+    },
     totals: measured,
     series: {
       bucketMs: 300_000,

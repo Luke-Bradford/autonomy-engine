@@ -28,7 +28,9 @@ import type { Db, DbTx } from './types.js';
  *
  * Configurable and disable-able exactly like the two ledgers that came before it
  * (`WAKEUP_RETENTION_DAYS`, `WEBHOOK_RETENTION_DAYS`): see
- * `EXTERNAL_ACTIVITY_RETENTION_DAYS` in `index.ts`.
+ * `EXTERNAL_ACTIVITY_RETENTION_DAYS` in `index.ts`, which IMPORTS this rather
+ * than restating the number — two spellings of one default is how a constant
+ * drifts from itself.
  */
 export const DEFAULT_EXTERNAL_ACTIVITY_RETENTION_MS = RUN_SINCE_MS['30d'];
 
@@ -86,8 +88,17 @@ function mergeReport(
   return {
     agent: report.agent,
     model: report.model ?? existing.model,
-    startedAtMs: report.startedAt,
-    endedAtMs: report.endedAt ?? existing.endedAtMs,
+    /* EARLIEST start wins. `startedAt` was the one field a re-report could
+     * rewrite unconditionally, which let a late duplicate move an invocation's
+     * beginning — and with it `lastAt` and which windows the row belongs to.
+     * Under any delivery order the earliest reported start is the honest one. */
+    startedAtMs: Math.min(existing.startedAtMs, report.startedAt),
+    /* FIRST end wins, not "any non-null end". `outcome: 'unknown'` is allowed to
+     * carry an end stamp (a reporter may know an invocation stopped without
+     * knowing how), so `report.endedAt ?? existing` let a late, EARLIER end
+     * overwrite a settled one — moving the row out of windows that legitimately
+     * contained it while its `completed` verdict stayed put. */
+    endedAtMs: existing.endedAtMs ?? report.endedAt,
     /* An `unknown` outcome never overwrites a settled one, for the same reason
      * `endedAt` does not: it is the ABSENCE of a verdict, not a verdict. */
     outcome: report.outcome === 'unknown' ? existing.outcome : report.outcome,
@@ -169,9 +180,15 @@ export function recordExternalAgentActivity(
  * Pruned on `reported_at_ms` — STUDIO's clock — while the window reads
  * `started_at_ms`, the REPORTER's. That asymmetry is deliberate: retention must
  * not be evadable by a reporter whose clock is wrong or hostile, and a row
- * stamped years in the future would otherwise never expire. Nothing is lost by
- * it, because `reported_at_ms` is when studio learned of the row and a window
- * that could still contain it must be younger than that.
+ * stamped years in the future would otherwise never expire.
+ *
+ * Nothing DISPLAYABLE is lost by it: `reported_at_ms` is when studio learned of
+ * the row, and a window that could still contain it must be younger than that.
+ * The one thing this does NOT bound is a reporter that keeps re-reporting the
+ * same invocation forever — every write refreshes `reported_at_ms`, so the row
+ * stays. That is a live reporter describing a live invocation, which is what the
+ * table is for; the route separately refuses a start stamp far in the future, so
+ * such a row cannot also be invisible.
  */
 export function pruneExternalAgentActivity(
   db: Db,

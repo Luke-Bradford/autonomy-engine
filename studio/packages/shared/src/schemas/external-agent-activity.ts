@@ -198,9 +198,11 @@ export type ExternalReporterActivity = z.infer<typeof ExternalReporterActivitySc
  * The window's reported activity: the same rows partitioned two ways, exactly as
  * `models` and `totals` are on the metered side.
  *
- * The totals are SUMMED FROM THE GROUPS rather than read by a second query, so
- * "the total equals the table" is true by construction rather than by two
- * predicates being trusted to match.
+ * Unlike the metered side, the counts here are NOT summed from `reporters`:
+ * that list is CAPPED (see `truncated`), so summing it would make the headline
+ * quietly under-report the moment a 51st reporter appeared. They are read
+ * ungrouped over the same rows in the same snapshot, which is what lets the
+ * breakdown be truncated without the reading becoming false.
  */
 export const ExternalAgentActivitySchema = z
   .object({

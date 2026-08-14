@@ -85,6 +85,21 @@ capture_reset; report_fire_usage "$log3"
 check "an unmeasured fire reports null input" "$(jsonf inputTokens)" "None"
 check "an unmeasured fire reports null cache reads" "$(jsonf cacheReadTokens)" "None"
 
+# 4b. THE START REPORT -- the half the ticket actually turns on. A fire runs for
+#     up to ~90 minutes, so it must appear as RUNNING while it runs: no end
+#     stamp, and no verdict (a verdict would settle the row on arrival, and the
+#     fire would never once be shown as live).
+capture_reset; report_fire_usage "$log1" start
+check "a start report has no end stamp" "$(jsonf endedAt)" "None"
+check "a start report gives no verdict" "$(jsonf outcome)" "unknown"
+check "and it still names the same invocation" "$(jsonf externalId)" "20260814-102019"
+
+# The END report of the SAME fire settles it, under the same externalId -- which
+# is what makes the pair one invocation rather than two.
+capture_reset; report_fire_usage "$log1" end
+check "the end report settles the same invocation" "$(jsonf outcome)" "completed"
+check "and carries an end stamp" "$([ "$(jsonf endedAt)" = "None" ] && echo missing || echo present)" "present"
+
 # 5. The endpoint is DERIVED from the quota URL, so the two cannot point at
 #    different servers.
 contains "posts to the external-activity endpoint" "$(url)" "/api/monitor/external-activity"

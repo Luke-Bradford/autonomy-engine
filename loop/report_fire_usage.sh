@@ -21,8 +21,17 @@
 # of the other, so they read the same lines separately rather than one pretending
 # to be a library for the other.
 #
-#   ./report_fire_usage.sh                       # newest fire log
-#   ./report_fire_usage.sh logs/fire.NNN.log     # a specific one
+#   ./report_fire_usage.sh --start logs/fire.NNN.log   # "this fire has begun"
+#   ./report_fire_usage.sh                             # newest fire log, finished
+#   ./report_fire_usage.sh logs/fire.NNN.log           # a specific one, finished
+#
+# TWO REPORTS PER FIRE, and the first one is the point. A fire runs for up to
+# ~90 minutes; a reporter that only spoke afterwards would leave `/monitor/ai`
+# showing nothing for that entire time, which is VERBATIM the symptom #988 was
+# filed about. So `run.sh` announces the fire as it starts (`endedAt: null`,
+# `outcome: unknown` -- studio renders it as running now) and `drive.sh` reports
+# the finished figures when it exits. Both name the same `(source, externalId)`,
+# so they are one invocation and not two.
 #
 # BEST-EFFORT, ALWAYS. Every failure path warns to stderr and exits 0. This runs
 # on the fire path, and a monitoring nicety must never be able to stop the loop
@@ -56,7 +65,7 @@ REPORT_TIMEOUT="${REPORT_TIMEOUT:-5}"
 # distinction is the whole point of the field, and reading it off `$?` would
 # quietly replace it with "did the wrapper succeed".
 fire_usage_payload() {
-  FIRE_LOG="$1" REPORT_SOURCE="$REPORT_SOURCE" python3 - <<'PY'
+  FIRE_LOG="$1" REPORT_PHASE="${2:-end}" REPORT_SOURCE="$REPORT_SOURCE" python3 - <<'PY'
 import json, os, re, sys
 from datetime import datetime
 
@@ -117,6 +126,12 @@ tokens = (
     }
 )
 
+# A START report describes a fire that has not finished: no end stamp, and no
+# verdict to give. Sending `completed`/`notCompleted` here would settle the row
+# on arrival and the fire would never appear as running -- and sending zeros for
+# a log that has not been written yet would be a measurement of nothing.
+starting = os.environ.get("REPORT_PHASE") == "start"
+
 print(
     json.dumps(
         {
@@ -128,8 +143,8 @@ print(
             "agent": "claude",
             "model": model,
             "startedAt": int(started.timestamp() * 1000),
-            "endedAt": int(datetime.now().timestamp() * 1000),
-            "outcome": "completed" if completed else "notCompleted",
+            "endedAt": None if starting else int(datetime.now().timestamp() * 1000),
+            "outcome": "unknown" if starting else ("completed" if completed else "notCompleted"),
             **tokens,
         }
     )
@@ -138,8 +153,11 @@ PY
 }
 
 # Report one fire log to studio. Never fails the caller.
+#
+# `$2` is the PHASE: `start` (the fire has begun) or `end` (the default).
 report_fire_usage() {
   log_path="${1:-}"
+  phase="${2:-end}"
   if [ -z "$log_path" ]; then
     # shellcheck disable=SC2012  # ls -t is the intent (newest first); names are fixed-format
     log_path="$(ls -t "${INFRA:-.}"/logs/fire.*.log 2>/dev/null | head -1)"
@@ -149,7 +167,7 @@ report_fire_usage() {
     return 0
   fi
 
-  payload="$(fire_usage_payload "$log_path")" || return 0
+  payload="$(fire_usage_payload "$log_path" "$phase")" || return 0
   [ -n "$payload" ] || return 0
 
   if ! printf '%s' "$payload" | curl -fsS --max-time "$REPORT_TIMEOUT" \
@@ -169,6 +187,10 @@ report_fire_usage() {
 # never run) ------------------------------------------------------------
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   INFRA="${INFRA:-$(cd "$(dirname "$0")" && pwd)}"
-  report_fire_usage "${1:-}"
+  if [ "${1:-}" = "--start" ]; then
+    report_fire_usage "${2:-}" start
+  else
+    report_fire_usage "${1:-}" end
+  fi
   exit 0
 fi

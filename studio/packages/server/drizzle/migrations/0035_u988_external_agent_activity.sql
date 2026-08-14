@@ -38,7 +38,13 @@ CREATE TABLE IF NOT EXISTS external_agent_activity (
   model TEXT,
   started_at_ms INTEGER NOT NULL,
   ended_at_ms INTEGER,
-  outcome TEXT NOT NULL,
+  -- CHECKed at the DB layer, not only in Zod at the one route today. The
+  -- aggregate derives `unknown` as `invocations - completed - notCompleted`, so
+  -- a row with an out-of-vocabulary outcome would not merely be unreadable — it
+  -- would make that subtraction produce a wrong (or negative) count for every
+  -- other row in its group. A future migration or repair script is exactly the
+  -- write path Zod does not cover.
+  outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'notCompleted', 'unknown')),
   input_tokens INTEGER,
   output_tokens INTEGER,
   cache_read_tokens INTEGER,

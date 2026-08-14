@@ -273,6 +273,21 @@ describe('POST /api/monitor/external-activity', () => {
     expect((await post(app, body({ costUsd: 1.23 }))).statusCode).toBe(400);
   });
 
+  /**
+   * An unbounded future start stamp is a row that is INVISIBLE (the window
+   * excludes anything starting after now) yet occupies the table — and one that
+   * keeps being re-reported never expires either.
+   */
+  it('refuses a start stamp far in the future, while tolerating real clock skew', async () => {
+    const { app } = await makeApp();
+
+    const skewed = await post(app, body({ externalId: 'skewed', startedAt: Date.now() + 60_000 }));
+    const absurd = await post(app, body({ externalId: 'absurd', startedAt: Date.now() + 864e5 }));
+
+    expect(skewed.statusCode).toBe(201);
+    expect(absurd.statusCode).toBe(400);
+  });
+
   it('refuses a negative token count', async () => {
     const { app } = await makeApp();
 

@@ -255,3 +255,32 @@ describe('retention', () => {
     expect(windowOf(db, 0, T + 1000).invocations).toBe(0);
   });
 });
+
+/**
+ * The merge's two ORDERING guarantees, which only a late-arriving report can
+ * violate. Both were found by review: `report.endedAt ?? existing` and an
+ * unconditional `startedAt` each let a duplicate rewrite a settled fact.
+ */
+describe('merge is stable under out-of-order delivery', () => {
+  it('keeps the FIRST end stamp when a later report carries an earlier one', () => {
+    const { db } = freshDb();
+    record(db, { endedAt: T + 60_000, outcome: 'completed' }, T + 60_000);
+
+    // Legal per the schema: an end stamp with no verdict ("it stopped; I do not
+    // know how"). It must not move the settled end backwards.
+    record(db, { endedAt: T + 55_000, outcome: 'unknown' }, T + 70_000);
+
+    // A window opening between the two stamps still contains the invocation.
+    const w = windowOf(db, T + 57_000, T + 80_000);
+    expect(w.invocations).toBe(1);
+    expect(w.completed).toBe(1);
+  });
+
+  it('keeps the EARLIEST start when a later report claims a later one', () => {
+    const { db } = freshDb();
+    record(db, { startedAt: T });
+    record(db, { startedAt: T + 30 * 60_000 }, T + 30 * 60_000);
+
+    expect(windowOf(db, T - 1000, T + 60 * 60_000).lastAt).toBe(T);
+  });
+});
