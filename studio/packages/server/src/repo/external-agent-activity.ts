@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
   RUN_SINCE_MS,
   type ExternalAgentActivity,
@@ -194,18 +194,25 @@ export function pruneExternalAgentActivity(
   db: Db,
   opts: { before: number; limit: number },
 ): number {
+  /* ONE statement, as the two sibling ledgers do it: the doomed set is a
+   * SUBQUERY, not a fetched list re-deleted row by row. Deleting individually
+   * would take the single writer N times per batch and undercut the very
+   * stall-avoidance argument that makes this a batched sweep at all.
+   *
+   * `id` breaks `reportedAtMs` ties so batch boundaries are stable across
+   * sweeps — without it two rows sharing a millisecond could be re-selected as
+   * the same batch's edge on the next pass. */
   const doomed = db
     .select({ id: externalAgentActivity.id })
     .from(externalAgentActivity)
     .where(lt(externalAgentActivity.reportedAtMs, opts.before))
-    .orderBy(asc(externalAgentActivity.reportedAtMs))
-    .limit(opts.limit)
-    .all();
-  if (doomed.length === 0) return 0;
-  for (const row of doomed) {
-    db.delete(externalAgentActivity).where(eq(externalAgentActivity.id, row.id)).run();
-  }
-  return doomed.length;
+    .orderBy(asc(externalAgentActivity.reportedAtMs), asc(externalAgentActivity.id))
+    .limit(opts.limit);
+  return db
+    .delete(externalAgentActivity)
+    .where(inArray(externalAgentActivity.id, doomed))
+    .returning({ id: externalAgentActivity.id })
+    .all().length;
 }
 
 /** Drain expired reports to a fixpoint in bounded batches (#464's discipline). */

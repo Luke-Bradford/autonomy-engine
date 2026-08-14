@@ -104,6 +104,17 @@ check "and carries an end stamp" "$([ "$(jsonf endedAt)" = "None" ] && echo miss
 #    different servers.
 contains "posts to the external-activity endpoint" "$(url)" "/api/monitor/external-activity"
 
+# 5b. An explicit STUDIO_ACTIVITY_URL is used AS GIVEN. The derivation exists for
+#     the default; rewriting an override is how a caller's endpoint silently
+#     becomes a malformed one.
+(
+  STUDIO_ACTIVITY_URL="http://127.0.0.1:9999/ingest"
+  # shellcheck source=/dev/null
+  . "$HERE/report_fire_usage.sh"
+  check "an explicit endpoint override is left alone" "$STUDIO_ACTIVITY_URL" \
+    "http://127.0.0.1:9999/ingest"
+) || fails=$((fails + 1))
+
 # 6. BEST-EFFORT: every failure path returns 0. A monitoring nicety must never be
 #    able to stop the loop from engineering.
 CURL_RC=7

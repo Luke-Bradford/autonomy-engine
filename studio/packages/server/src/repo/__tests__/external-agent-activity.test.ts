@@ -4,6 +4,7 @@ import {
   MAX_REPORTER_GROUPS,
   aggregateExternalAgentActivity,
   drainExternalAgentActivity,
+  pruneExternalAgentActivity,
   recordExternalAgentActivity,
 } from '../external-agent-activity.js';
 import { freshDb } from './helpers.js';
@@ -244,6 +245,23 @@ describe('retention', () => {
     record(db);
 
     expect(drainExternalAgentActivity(db, { before: T - 30 * 24 * 3600_000 })).toBe(0);
+  });
+
+  /**
+   * The BOUND itself, not just the eventual total. `drainByBatches` asks for a
+   * fixpoint, so a `prune` that ignored its limit would still drain everything
+   * and every total-based assertion would pass — while each sweep took the
+   * single writer for the whole backlog at once, which is the stall the batching
+   * discipline exists to prevent.
+   */
+  it('deletes at most `limit` rows per call', () => {
+    const { db } = freshDb();
+    const old = T - 40 * 24 * 3600_000;
+    for (let i = 0; i < 5; i++) record(db, { externalId: `old-${i}` }, old);
+
+    expect(pruneExternalAgentActivity(db, { before: T, limit: 2 })).toBe(2);
+    expect(pruneExternalAgentActivity(db, { before: T, limit: 2 })).toBe(2);
+    expect(pruneExternalAgentActivity(db, { before: T, limit: 2 })).toBe(1);
   });
 
   it('drains a backlog larger than one batch to a fixpoint', () => {

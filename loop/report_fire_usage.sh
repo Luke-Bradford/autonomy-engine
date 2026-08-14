@@ -43,8 +43,14 @@ set -uo pipefail
 # how a stale pin survives its own reason. Both URLs point at the SAME server by
 # construction, which is the property this depends on.
 STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
-STUDIO_ACTIVITY_URL="${STUDIO_ACTIVITY_URL:-${STUDIO_QUOTA_URL%/}}"
-STUDIO_ACTIVITY_URL="${STUDIO_ACTIVITY_URL%/api/quota}/api/monitor/external-activity"
+# DERIVED ONLY WHEN NOT OVERRIDDEN. An earlier form rewrote the variable
+# unconditionally, so an explicit `STUDIO_ACTIVITY_URL` that did not happen to
+# end in `/api/quota` had the endpoint path appended to it -- an override that
+# looked accepted and silently posted to a malformed URL.
+if [ -z "${STUDIO_ACTIVITY_URL:-}" ]; then
+  quota_base="${STUDIO_QUOTA_URL%/}"
+  STUDIO_ACTIVITY_URL="${quota_base%/api/quota}/api/monitor/external-activity"
+fi
 
 # The reporter's identity on the panel. Fixed rather than derived from the host
 # or the checkout: it is the GROUPING key operators read, and one loop reporting
