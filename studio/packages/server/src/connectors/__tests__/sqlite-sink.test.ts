@@ -45,9 +45,9 @@ function rowsOf(path: string, sql = 'SELECT * FROM sink ORDER BY rowid'): unknow
   }
 }
 
-async function* one(rows: Record<string, SinkValue>[]): AsyncIterable<
-  readonly Record<string, SinkValue>[]
-> {
+async function* one(
+  rows: Record<string, SinkValue>[],
+): AsyncIterable<readonly Record<string, SinkValue>[]> {
   yield rows;
 }
 
@@ -413,10 +413,7 @@ describe('value binding', () => {
           columns: ['id', 'name'],
           mode: 'append',
         },
-        one([
-          { id: 1, name: 'a' },
-          { id: 2 } as Record<string, SinkValue>,
-        ]),
+        one([{ id: 1, name: 'a' }, { id: 2 } as Record<string, SinkValue>]),
       ),
     );
     expect(err.kind).toBe('permanent');
@@ -504,7 +501,6 @@ describe('write modes', () => {
       },
       one([{ id: 1 }]),
     );
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function* nothing(): AsyncIterable<readonly Record<string, SinkValue>[]> {}
     const result = await writeSqliteDatasetRows(
       {
@@ -536,7 +532,6 @@ describe('atomicity (§4)', () => {
       one([{ id: 1 }]),
     );
 
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function* explodes(): AsyncIterable<readonly Record<string, SinkValue>[]> {
       yield [{ id: 2 }, { id: 3 }];
       throw new Error('the source died at row 500000');
@@ -570,7 +565,6 @@ describe('atomicity (§4)', () => {
       },
       one([{ id: 1 }, { id: 2 }]),
     );
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function* explodes(): AsyncIterable<readonly Record<string, SinkValue>[]> {
       yield [{ id: 9 }];
       throw new Error('boom');
@@ -630,15 +624,15 @@ describe('the one state the sink cannot prove clean', () => {
     // ever having checked. Everything else in this suite runs against a real
     // store.
     const exec = Database.prototype.exec;
-    const spy = vi
-      .spyOn(Database.prototype, 'exec')
-      .mockImplementation(function (this: Database.Database, sql: string) {
-        if (sql === 'rollback') throw new Error('disk I/O error');
-        return exec.call(this, sql);
-      });
+    const spy = vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
+      this: Database.Database,
+      sql: string,
+    ) {
+      if (sql === 'rollback') throw new Error('disk I/O error');
+      return exec.call(this, sql);
+    });
 
     try {
-      // eslint-disable-next-line @typescript-eslint/require-await
       async function* explodes(): AsyncIterable<readonly Record<string, SinkValue>[]> {
         yield [{ id: 1 }];
         throw new Error('the source died');
@@ -681,7 +675,6 @@ describe('cancellation (§10)', () => {
     // pre-commit check refuses — the same `cancelled` and the same empty table,
     // reached after doing all the work the abort was meant to stop.
     let pulled = 0;
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function* threeBatches(): AsyncIterable<readonly Record<string, SinkValue>[]> {
       pulled += 1;
       yield [{ id: 1 }];
@@ -739,7 +732,6 @@ describe('progress (§5)', () => {
     const root = tempRoot();
     const path = seedSink(root);
     const seen: number[] = [];
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function* batches(): AsyncIterable<readonly Record<string, SinkValue>[]> {
       yield [{ id: 1 }, { id: 2 }];
       yield [{ id: 3 }];
@@ -767,13 +759,17 @@ describe('classifySinkFailure (§4.2)', () => {
   });
 
   it('downgrades a RETRYABLE kind to permanent when rows may already have landed', () => {
-    expect(classifySinkFailure({ kind: 'transient', partialWritePossible: true })).toBe('permanent');
+    expect(classifySinkFailure({ kind: 'transient', partialWritePossible: true })).toBe(
+      'permanent',
+    );
     expect(classifySinkFailure({ kind: 'rate_limit', partialWritePossible: true })).toBe(
       'permanent',
     );
   });
 
   it('leaves `cancelled` alone — it is already never retried, and the label carries information', () => {
-    expect(classifySinkFailure({ kind: 'cancelled', partialWritePossible: true })).toBe('cancelled');
+    expect(classifySinkFailure({ kind: 'cancelled', partialWritePossible: true })).toBe(
+      'cancelled',
+    );
   });
 });

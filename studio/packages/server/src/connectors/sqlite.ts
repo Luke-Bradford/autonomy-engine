@@ -320,10 +320,7 @@ export async function* readSqliteDatasetBatches(
 ): AsyncGenerator<SqliteRow[], void, undefined> {
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (!Number.isInteger(batchRows) || batchRows < 1) {
-    throw new DatasetIoError(
-      'permanent',
-      `batchRows must be a positive integer, got ${batchRows}`,
-    );
+    throw new DatasetIoError('permanent', `batchRows must be a positive integer, got ${batchRows}`);
   }
 
   // §8: "a file-backed dataset must re-validate at dispatch and must not assume
@@ -331,10 +328,7 @@ export async function* readSqliteDatasetBatches(
   // per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError(
-      'permanent',
-      `invalid sqlite connection config: ${cfg.error.message}`,
-    );
+    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
   }
 
   const statement = statementFor(read.datasetKind, read.datasetConfig);
@@ -345,7 +339,11 @@ export async function* readSqliteDatasetBatches(
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
+    db = new Database(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    });
   } catch (err) {
     throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
   }
@@ -412,7 +410,6 @@ export async function* readSqliteDatasetBatches(
     }
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // #1125 M5 slice 2 — the SINK.
@@ -524,9 +521,9 @@ function describeSinkTable(
       reason: `'${table}' is a ${String(found.type)}, not a table, so it cannot be written to`,
     };
   }
-  const columns = db
-    .prepare('SELECT name FROM pragma_table_info(?, ?)')
-    .all(table, schemaName) as { name: string }[];
+  const columns = db.prepare('SELECT name FROM pragma_table_info(?, ?)').all(table, schemaName) as {
+    name: string;
+  }[];
   return { ok: true, columns: columns.map((c) => c.name) };
 }
 
@@ -609,10 +606,7 @@ function sinkTargetFor(
   }
   const parsed = tableDatasetConfigSchema.safeParse(datasetConfig);
   if (!parsed.success) {
-    throw new DatasetIoError(
-      'permanent',
-      `invalid table dataset config: ${parsed.error.message}`,
-    );
+    throw new DatasetIoError('permanent', `invalid table dataset config: ${parsed.error.message}`);
   }
   // A SQLite "schema" is an ATTACHed database, and this connector attaches
   // nothing — so an unqualified dataset means `main`. A different name reaches
@@ -674,10 +668,7 @@ export async function writeSqliteDatasetRows(
   // runs no per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(write.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError(
-      'permanent',
-      `invalid sqlite connection config: ${cfg.error.message}`,
-    );
+    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
   }
 
   // THE `writable` GATE. Fail-closed, as the config field's own docstring
@@ -688,7 +679,7 @@ export async function writeSqliteDatasetRows(
   if (cfg.data.writable !== true) {
     throw new DatasetIoError(
       'permanent',
-      "this sqlite connection is not marked `writable`, so it cannot be a copy sink",
+      'this sqlite connection is not marked `writable`, so it cannot be a copy sink',
     );
   }
 
@@ -801,7 +792,11 @@ export const sqliteAdapter: ConnectorAdapter = {
 
     let db: Database.Database | undefined;
     try {
-      db = new Database(dbPath, { readonly: true, fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
+      db = new Database(dbPath, {
+        readonly: true,
+        fileMustExist: true,
+        timeout: SQLITE_BUSY_TIMEOUT_MS,
+      });
       // The query is what actually tests it. Measured: opening a NON-SQLite file
       // read-only SUCCEEDS, and it is the first statement that reports "file is
       // not a database" — so an open alone would call a text file a working
