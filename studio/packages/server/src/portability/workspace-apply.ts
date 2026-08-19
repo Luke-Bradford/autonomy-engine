@@ -1,5 +1,6 @@
 import {
   NewTriggerSchema,
+  RESOURCE_KINDS,
   connectionContentForm,
   interpolationMode,
   pipelineVersionContentForm,
@@ -10,6 +11,7 @@ import {
   type NodeExport,
   type PipelineVersion,
   type PipelineVersionExport,
+  type ResourceKind,
   type Trigger,
   type TriggerExportData,
   type WorkspaceGitAppliedAction,
@@ -472,6 +474,37 @@ function assertTriggerWindowBindingsConsistent(data: TriggerExportData, label: s
   }
 }
 
+/**
+ * #1112 (M2, data-movement spec §2.3) — the ORDER the apply phases run in, as a
+ * `Record<ResourceKind, number>` rather than a hand-written tuple.
+ *
+ * The order is load-bearing, not cosmetic. Connections are leaves and must exist
+ * before a pipeline version's nodes remap their connection refs onto DB ids;
+ * pipeline versions must be MINTED before a trigger can bind to a co-created
+ * one (#3 G5c-2 #670). Getting it wrong does not fail loudly — it strands refs.
+ *
+ * A rank map is used instead of an ordered `readonly ResourceKind[]` tuple for
+ * one reason: TypeScript does not require a tuple to contain every member of a
+ * union, so a tuple would let a new kind be forgotten HERE even while the
+ * `appliers` record forced a handler for it. A `Record` cannot. The cost is that
+ * the compiler cannot catch two kinds sharing a rank (a hand-typed number), so
+ * `APPLY_ORDER`'s totality and injectivity are pinned by test.
+ *
+ * M2 slice 2 inserts `dataset` between connections and pipelines (a dataset
+ * names the connection it lives in, and a copy node names the dataset), which is
+ * a deliberate renumber here rather than an edit to a list somewhere else.
+ */
+export const APPLY_RANK: Record<ResourceKind, number> = {
+  connection: 0,
+  pipeline: 1,
+  trigger: 2,
+};
+
+/** The apply phases in `APPLY_RANK` order — every `ResourceKind`, exactly once. */
+export const APPLY_ORDER: readonly ResourceKind[] = [...RESOURCE_KINDS].sort(
+  (a, b) => APPLY_RANK[a] - APPLY_RANK[b],
+);
+
 export function applyWorkspace(
   db: Db,
   ownerId: string,
@@ -568,60 +601,6 @@ export function applyWorkspace(
     // not collected — its readiness cannot have changed, so it can strand nothing.
     const touchedConnectionIds = new Set<string>();
 
-    for (const inc of incoming.connections) {
-      const data = inc.data;
-      const existing =
-        inc.resourceId === null ? null : getConnectionByResourceId(db, ownerId, inc.resourceId);
-      const patch = {
-        name: data.name,
-        kind: data.kind,
-        config: data.config,
-        parameters: data.parameters,
-      };
-      if (existing === null) {
-        // secretRef is NEVER imported (secrets never in git) — a fresh
-        // connection starts with none; `requiresSecret` is G8's readiness gate.
-        const created = createConnection(
-          db,
-          { ...patch, ownerId, secretRef: null },
-          inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
-        );
-        connById.set(created.resourceId, created.id);
-        touchedConnectionIds.add(created.id);
-        applied.push({
-          path: inc.path,
-          kind: 'connection',
-          resourceId: created.resourceId,
-          action: 'created',
-          versionMinted: false, // connections have no versions
-          versionContentUnverified: false, // ...so no version content to judge
-        });
-        continue;
-      }
-
-      const dbForm = inc.resourceId !== null ? dbConnFormByRid.get(inc.resourceId) : undefined;
-      const contentChanged = dbForm === undefined || connectionContentForm(data) !== dbForm;
-      const nameChanged = data.name !== existing.name;
-      let action: WorkspaceGitAppliedAction = 'unchanged';
-      if (contentChanged) {
-        updateConnection(db, existing.id, patch);
-        touchedConnectionIds.add(existing.id);
-        action = 'updated';
-      } else if (nameChanged) {
-        updateConnection(db, existing.id, { name: data.name });
-        action = 'renamed';
-      }
-      connById.set(existing.resourceId, existing.id);
-      applied.push({
-        path: inc.path,
-        kind: 'connection',
-        resourceId: existing.resourceId,
-        action,
-        versionMinted: false, // connections have no versions
-        versionContentUnverified: false, // ...so no version content to judge
-      });
-    }
-
     // --- Pipelines ---
     // Seed the version map with EVERY owned version (incl. archived pipelines'
     // versions — a call ref to an archived pipeline's still-present version must
@@ -650,198 +629,6 @@ export function applyWorkspace(
 
     const minters: Minter[] = [];
 
-    for (const inc of incoming.pipelines) {
-      const row = inc.data.pipeline;
-      const version = latestVersion(inc);
-      const versionRid = version?.resourceId ?? null;
-      // The version doc already materialised under this owner (a restore that
-      // preserved it, or a re-pull of what we already have) — an immutable
-      // version is never re-minted (skip guard) and never collides on the
-      // `(pipeline_id, resource_id)` UNIQUE index.
-      const alreadyMaterialised = versionRid !== null && existingVersionRids.has(versionRid);
-      const existing =
-        inc.resourceId === null ? null : getPipelineByResourceId(db, ownerId, inc.resourceId);
-
-      let pipelineId: string;
-      let resourceId: string;
-      let action: WorkspaceGitAppliedAction;
-      // Whether THIS pipeline queues a version mint — derived ONCE here (every
-      // branch below sets it) so the reported `action` can never disagree with
-      // what is actually written.
-      let willMint: boolean;
-      // #1018 — whether the version comparison below had to EXCUSE any ref it
-      // could not express in resourceId-space. Declared beside `willMint` and for
-      // the same reason: it is reported on the applied entry, so it must be one
-      // variable rather than one per branch.
-      let versionContentUnverified = false;
-
-      if (existing === null) {
-        // A brand-new pipeline claiming a version `resourceId` that already
-        // exists (under ANY of the owner's pipelines) is a contradiction —
-        // version ids are globally unique by construction, so this is a corrupt
-        // / hand-crafted branch. Fail closed, symmetric to the existing-pipeline
-        // path below (#473): never create a version-less shell + report
-        // `created` while silently dropping the version.
-        if (version !== undefined && alreadyMaterialised) {
-          throw new WorkspaceApplyError(
-            `new pipeline "${inc.resourceId ?? '(pre-G1)'}" branch version "${versionRid}" reuses an existing immutable version id — version ids are unique per resource`,
-          );
-        }
-        const created = createPipeline(
-          db,
-          { ownerId, name: row.name, concurrency: row.concurrency },
-          inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
-        );
-        pipelineId = created.id;
-        resourceId = created.resourceId;
-        action = 'created';
-        willMint = version !== undefined;
-      } else {
-        pipelineId = existing.id;
-        resourceId = existing.resourceId;
-        const rowPatch: { name?: string; concurrency?: number | null } = {};
-        if (row.name !== existing.name) rowPatch.name = row.name;
-        if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
-        if (Object.keys(rowPatch).length > 0) updatePipeline(db, existing.id, rowPatch);
-
-        // Whether the branch's latest version doc differs from the pipeline's
-        // ACTUAL latest DB version — which survives archive — compared in
-        // resourceId-space via the reverse maps. Decided UNIFORMLY for a live OR
-        // an archived (restore) pipeline. This drives the MINT; it deliberately
-        // does NOT decide legality, which is the guard below's job.
-        //
-        // #1018 — deliberately NOT put through `compareStoredVersion`'s masking,
-        // and the asymmetry is a decision rather than an oversight. This
-        // comparison DOES drive a write, and masking it could fold a real
-        // difference away and silently skip a mint; erring toward minting is the
-        // fail-safe direction. The cost is named rather than left silent: an
-        // ARCHIVED pipeline whose head references a deleted connection (archived
-        // rows are omitted from `serializeWorkspace`, so they are not covered by
-        // its throw) can read `versionChanged` spuriously true and mint a
-        // redundant version. A redundant immutable version is additive and
-        // harmless; a dropped one is not.
-        const dbLatest = getLatestPipelineVersion(db, existing.id);
-        const dbLatestForm = dbLatest
-          ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
-          : undefined;
-        const versionChanged =
-          version !== undefined &&
-          (dbLatestForm === undefined || pipelineVersionContentForm(version) !== dbLatestForm);
-
-        // #963 — a branch version that reuses an EXISTING immutable version
-        // `resourceId` is judged against the ROW THAT ID NAMES, never against the
-        // pipeline's head. Immutable rows cannot be edited in place, so the only
-        // legal reuse is a byte-identical re-pull of the row itself; anything else
-        // is a hand-edit that kept the id, or an id belonging to another pipeline.
-        // Fail closed on both (#473 — never silently skip a real edit), for
-        // archived and live alike.
-        //
-        // The predicate is deliberately NOT conditioned on `versionChanged`. That
-        // conjunct used to gate the whole guard, which left a hole: a branch file
-        // claiming ANOTHER pipeline's version id, with content that happens to
-        // match this pipeline's head, never reached the check at all — and the
-        // content form scrubs `resourceId`/`version`, so "same content, different
-        // owner" is reachable rather than theoretical.
-        let superseded = false;
-        if (version !== undefined && versionRid !== null && existingVersionRids.has(versionRid)) {
-          const owner = versionRowByRid.get(versionRid);
-          if (owner === undefined || owner.pipelineId !== existing.id) {
-            throw new WorkspaceApplyError(
-              `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses a version id owned by a different pipeline — version ids are unique per resource`,
-            );
-          }
-          // #1018 — masked comparison. A stored version is immutable, so a ref it
-          // holds can outlive what it names (a connection is hard-deleted with no
-          // FK to stop it). Such a ref cannot be put in resourceId-space, so the
-          // branch and the row differ THERE for a reason that is not an edit.
-          // `compareStoredVersion` excuses exactly those fields and judges every
-          // other one, so the refusal below still fires on a real hand-edit
-          // anywhere else in the same doc — what it no longer does is accuse the
-          // operator of tampering because they deleted a connection, which wedged
-          // every future pull of the branch with nothing they could act on.
-          const comparison = compareStoredVersion(owner, version, connRidByDbId, versionRidByDbId);
-          if (!comparison.identical) {
-            throw new WorkspaceApplyError(
-              `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
-            );
-          }
-          versionContentUnverified = comparison.undecidableRefs > 0;
-          // Legal: the branch names a version we already hold, byte-identical.
-          // If the workspace has since authored past it, say so rather than
-          // reporting a bare `unchanged` the preview has already contradicted.
-          superseded = versionChanged;
-        }
-        // This is the ONE place `willMint` is decided, so the reported `action`
-        // can never disagree with what is written. An already-materialised version
-        // is never re-minted — the row exists and is immutable.
-        willMint = versionChanged && !alreadyMaterialised;
-
-        if (existing.archived) {
-          restorePipeline(db, existing.id);
-          action = 'restored';
-        } else if (willMint || rowPatch.concurrency !== undefined) {
-          action = 'updated';
-        } else if (rowPatch.name !== undefined) {
-          action = 'renamed';
-        } else if (superseded) {
-          action = 'superseded';
-        } else {
-          action = 'unchanged';
-        }
-      }
-
-      // `versionMinted` is ORTHOGONAL to `action` (#672): a `restored` pipeline
-      // whose branch version doc also changed is `restored` + `versionMinted:true`
-      // — a signal the single-valued `action` cannot carry. `willMint` is the one
-      // place the mint is decided, so this can never disagree with the write.
-      applied.push({
-        path: inc.path,
-        kind: 'pipeline',
-        resourceId,
-        action,
-        versionMinted: willMint,
-        versionContentUnverified,
-      });
-      if (willMint && version !== undefined) {
-        minters.push({
-          pipelineId,
-          versionRid,
-          version,
-          callRefs: literalCallRefs(version),
-          sourceFilePath: inc.path,
-          sourceBlobSha: inc.blobSha,
-        });
-      }
-    }
-
-    // Mint versions in call-dependency order so a co-created callee exists before
-    // its caller's doc is validated.
-    for (const idx of mintOrder(minters)) {
-      const m = minters[idx]!;
-      const created = createPipelineVersion(
-        db,
-        {
-          ...m.version,
-          pipelineId: m.pipelineId,
-          nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, versionById)),
-        },
-        {
-          // Preserve the file's version resourceId (G5c) when present; else the
-          // repo mints a fresh one.
-          ...(m.versionRid !== null ? { resourceId: m.versionRid } : {}),
-          // #3 G6b — stamp git provenance on the mint: source commit (`head`) +
-          // branch, plus THIS file's path + blob sha (captured on the minter).
-          sourceCommit: head,
-          sourceBranch: branch,
-          sourceFilePath: m.sourceFilePath,
-          sourceBlobSha: m.sourceBlobSha,
-        },
-      );
-      if (m.versionRid !== null) versionById.set(m.versionRid, created.id);
-    }
-
-    // --- Triggers (#3 G5c-2 #670): applied AFTER the version mints, so a binding
-    // to a co-created pipeline's brand-new version resolves via `versionById`. ---
     // The reverse maps (DB id → resourceId) are the exact `OwnerRefMaps`
     // `serializeTrigger` needs to render a stored trigger's DB-side content form.
     const dbRefMaps: OwnerRefMaps = {
@@ -855,92 +642,369 @@ export function applyWorkspace(
     // (the `enabledForReadiness` fold short-circuits on it anyway).
     const connectionsReadyForBinding = (binding: string | null): boolean =>
       binding !== null && unreadyConnectionsForVersion(db, ownerId, binding).length === 0;
-    for (const inc of incoming.triggers) {
-      const data = inc.data;
-      // Existence by DB `resourceId` (getTriggerByResourceId), NOT the classifier
-      // plan: the plan's DB snapshot OMITS triggers bound to archived pipelines'
-      // versions (serialize omission), so trusting it for create-vs-update could
-      // mis-create an existing trigger into a `resourceId` UNIQUE collision.
-      const existing =
-        inc.resourceId === null ? null : getTriggerByResourceId(db, ownerId, inc.resourceId);
-      const label = inc.resourceId ?? '(pre-G1)';
 
-      let action: WorkspaceGitAppliedAction;
-      let resourceId: string;
-      if (existing === null) {
-        assertTriggerWindowBindingsConsistent(data, label);
-        const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
-        // #3 G8b-3 — a fresh trigger bound to a version whose connections are
-        // unready imports disabled (secrets never travel in git → a
-        // secret-requiring connection lands `needs_secret`); the dispatch gate
-        // backstops. `buildTriggerWriteInput` folds this via `enabledForReadiness`.
-        const connectionsReady = connectionsReadyForBinding(binding);
-        // webhook: the branch carries only the PUBLIC config (no `secretRef`,
-        // which `NewTriggerSchema` requires), so a fresh webhook trigger starts
-        // with no secret — the operator provisions it via the normal route (G8).
-        const writeInput = buildTriggerWriteInput(data, ownerId, binding, null, connectionsReady);
-        gateTriggerWrite(writeInput, inc.path);
-        const created = createTrigger(
-          db,
-          writeInput,
-          inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
-        );
-        action = 'created';
-        resourceId = created.resourceId;
-      } else {
-        const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
-        // #3 G8b-3 — readiness of the trigger's OWN bound version, computed once
-        // and reused by BOTH the content compare (below) and the write (so the two
-        // can never disagree, keeping a readiness-force-disabled trigger idempotent
-        // — no perpetual `update` churn while the connection stays unready).
-        const connectionsReady = connectionsReadyForBinding(binding);
-        // #3 G7 — compare in RESOLVED space: a branch trigger whose binding does
-        // not resolve to an owned version normalizes to (null, disabled) — exactly
-        // what this apply would persist — so a force-disabled unbound trigger stops
-        // re-classifying `update` forever. The DB side is already resolved
-        // (`serializeTrigger` renders a stored null binding as null). A genuine
-        // enable/disable on a BOUND trigger still differs, so it still propagates.
-        // #3 G8b-3 — the readiness predicate folds `enabled`→false for a
-        // bound-but-unready trigger too; the form only ever probes the trigger's
-        // own binding rid, so `() => connectionsReady` (that binding's readiness)
-        // is the exact fact needed.
-        const contentChanged =
-          normalizedTriggerContentForm(
-            data,
-            (rid) => versionById.has(rid),
-            () => connectionsReady,
-          ) !== dbTriggerContentForm(existing, dbRefMaps);
-        action = triggerAction(contentChanged, data.name !== existing.name);
-        if (action === 'updated') {
-          assertTriggerWindowBindingsConsistent(data, label);
-          // webhook: PRESERVE the existing local secret while the trigger stays a
-          // webhook (never drop it — the branch can't carry it back); clear a
-          // now-stale config on a mode change away from webhook.
-          const webhook = data.mode === 'webhook' ? existing.webhook : null;
-          const writeInput = buildTriggerWriteInput(
-            data,
-            ownerId,
-            binding,
-            webhook,
-            connectionsReady,
+    // #1112 (M2, data-movement spec §2.3) — the three apply PHASES, one per
+    // resource kind, behind an EXHAUSTIVE `Record<ResourceKind, …>`. This is the
+    // fourth of the five sites the spec measured as failing SILENTLY: a kind
+    // missing from a spelled-out sequence of loops compiles clean and is then
+    // simply NEVER APPLIED — a pull reports success having written nothing of
+    // that kind, which is the worst possible shape for an import.
+    //
+    // Every map the phases share is seeded ABOVE, from DB reads, so the phases
+    // close over one scope rather than threading five maps through three
+    // signatures. Hoisting the version seed above the connection phase is
+    // behaviour-identical: it reads pipelines and versions, and the connection
+    // phase writes only connections.
+    const applyConnections = (): void => {
+      for (const inc of incoming.connections) {
+        const data = inc.data;
+        const existing =
+          inc.resourceId === null ? null : getConnectionByResourceId(db, ownerId, inc.resourceId);
+        const patch = {
+          name: data.name,
+          kind: data.kind,
+          config: data.config,
+          parameters: data.parameters,
+        };
+        if (existing === null) {
+          // secretRef is NEVER imported (secrets never in git) — a fresh
+          // connection starts with none; `requiresSecret` is G8's readiness gate.
+          const created = createConnection(
+            db,
+            { ...patch, ownerId, secretRef: null },
+            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
           );
-          gateTriggerWrite(writeInput, inc.path);
-          updateTrigger(db, existing.id, writeInput);
-        } else if (action === 'renamed') {
-          updateTrigger(db, existing.id, { name: data.name });
+          connById.set(created.resourceId, created.id);
+          touchedConnectionIds.add(created.id);
+          applied.push({
+            path: inc.path,
+            kind: 'connection',
+            resourceId: created.resourceId,
+            action: 'created',
+            versionMinted: false, // connections have no versions
+            versionContentUnverified: false, // ...so no version content to judge
+          });
+          continue;
         }
-        resourceId = existing.resourceId;
+
+        const dbForm = inc.resourceId !== null ? dbConnFormByRid.get(inc.resourceId) : undefined;
+        const contentChanged = dbForm === undefined || connectionContentForm(data) !== dbForm;
+        const nameChanged = data.name !== existing.name;
+        let action: WorkspaceGitAppliedAction = 'unchanged';
+        if (contentChanged) {
+          updateConnection(db, existing.id, patch);
+          touchedConnectionIds.add(existing.id);
+          action = 'updated';
+        } else if (nameChanged) {
+          updateConnection(db, existing.id, { name: data.name });
+          action = 'renamed';
+        }
+        connById.set(existing.resourceId, existing.id);
+        applied.push({
+          path: inc.path,
+          kind: 'connection',
+          resourceId: existing.resourceId,
+          action,
+          versionMinted: false, // connections have no versions
+          versionContentUnverified: false, // ...so no version content to judge
+        });
+      }
+    };
+
+    const applyPipelines = (): void => {
+      for (const inc of incoming.pipelines) {
+        const row = inc.data.pipeline;
+        const version = latestVersion(inc);
+        const versionRid = version?.resourceId ?? null;
+        // The version doc already materialised under this owner (a restore that
+        // preserved it, or a re-pull of what we already have) — an immutable
+        // version is never re-minted (skip guard) and never collides on the
+        // `(pipeline_id, resource_id)` UNIQUE index.
+        const alreadyMaterialised = versionRid !== null && existingVersionRids.has(versionRid);
+        const existing =
+          inc.resourceId === null ? null : getPipelineByResourceId(db, ownerId, inc.resourceId);
+
+        let pipelineId: string;
+        let resourceId: string;
+        let action: WorkspaceGitAppliedAction;
+        // Whether THIS pipeline queues a version mint — derived ONCE here (every
+        // branch below sets it) so the reported `action` can never disagree with
+        // what is actually written.
+        let willMint: boolean;
+        // #1018 — whether the version comparison below had to EXCUSE any ref it
+        // could not express in resourceId-space. Declared beside `willMint` and for
+        // the same reason: it is reported on the applied entry, so it must be one
+        // variable rather than one per branch.
+        let versionContentUnverified = false;
+
+        if (existing === null) {
+          // A brand-new pipeline claiming a version `resourceId` that already
+          // exists (under ANY of the owner's pipelines) is a contradiction —
+          // version ids are globally unique by construction, so this is a corrupt
+          // / hand-crafted branch. Fail closed, symmetric to the existing-pipeline
+          // path below (#473): never create a version-less shell + report
+          // `created` while silently dropping the version.
+          if (version !== undefined && alreadyMaterialised) {
+            throw new WorkspaceApplyError(
+              `new pipeline "${inc.resourceId ?? '(pre-G1)'}" branch version "${versionRid}" reuses an existing immutable version id — version ids are unique per resource`,
+            );
+          }
+          const created = createPipeline(
+            db,
+            { ownerId, name: row.name, concurrency: row.concurrency },
+            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          );
+          pipelineId = created.id;
+          resourceId = created.resourceId;
+          action = 'created';
+          willMint = version !== undefined;
+        } else {
+          pipelineId = existing.id;
+          resourceId = existing.resourceId;
+          const rowPatch: { name?: string; concurrency?: number | null } = {};
+          if (row.name !== existing.name) rowPatch.name = row.name;
+          if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
+          if (Object.keys(rowPatch).length > 0) updatePipeline(db, existing.id, rowPatch);
+
+          // Whether the branch's latest version doc differs from the pipeline's
+          // ACTUAL latest DB version — which survives archive — compared in
+          // resourceId-space via the reverse maps. Decided UNIFORMLY for a live OR
+          // an archived (restore) pipeline. This drives the MINT; it deliberately
+          // does NOT decide legality, which is the guard below's job.
+          //
+          // #1018 — deliberately NOT put through `compareStoredVersion`'s masking,
+          // and the asymmetry is a decision rather than an oversight. This
+          // comparison DOES drive a write, and masking it could fold a real
+          // difference away and silently skip a mint; erring toward minting is the
+          // fail-safe direction. The cost is named rather than left silent: an
+          // ARCHIVED pipeline whose head references a deleted connection (archived
+          // rows are omitted from `serializeWorkspace`, so they are not covered by
+          // its throw) can read `versionChanged` spuriously true and mint a
+          // redundant version. A redundant immutable version is additive and
+          // harmless; a dropped one is not.
+          const dbLatest = getLatestPipelineVersion(db, existing.id);
+          const dbLatestForm = dbLatest
+            ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
+            : undefined;
+          const versionChanged =
+            version !== undefined &&
+            (dbLatestForm === undefined || pipelineVersionContentForm(version) !== dbLatestForm);
+
+          // #963 — a branch version that reuses an EXISTING immutable version
+          // `resourceId` is judged against the ROW THAT ID NAMES, never against the
+          // pipeline's head. Immutable rows cannot be edited in place, so the only
+          // legal reuse is a byte-identical re-pull of the row itself; anything else
+          // is a hand-edit that kept the id, or an id belonging to another pipeline.
+          // Fail closed on both (#473 — never silently skip a real edit), for
+          // archived and live alike.
+          //
+          // The predicate is deliberately NOT conditioned on `versionChanged`. That
+          // conjunct used to gate the whole guard, which left a hole: a branch file
+          // claiming ANOTHER pipeline's version id, with content that happens to
+          // match this pipeline's head, never reached the check at all — and the
+          // content form scrubs `resourceId`/`version`, so "same content, different
+          // owner" is reachable rather than theoretical.
+          let superseded = false;
+          if (version !== undefined && versionRid !== null && existingVersionRids.has(versionRid)) {
+            const owner = versionRowByRid.get(versionRid);
+            if (owner === undefined || owner.pipelineId !== existing.id) {
+              throw new WorkspaceApplyError(
+                `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses a version id owned by a different pipeline — version ids are unique per resource`,
+              );
+            }
+            // #1018 — masked comparison. A stored version is immutable, so a ref it
+            // holds can outlive what it names (a connection is hard-deleted with no
+            // FK to stop it). Such a ref cannot be put in resourceId-space, so the
+            // branch and the row differ THERE for a reason that is not an edit.
+            // `compareStoredVersion` excuses exactly those fields and judges every
+            // other one, so the refusal below still fires on a real hand-edit
+            // anywhere else in the same doc — what it no longer does is accuse the
+            // operator of tampering because they deleted a connection, which wedged
+            // every future pull of the branch with nothing they could act on.
+            const comparison = compareStoredVersion(
+              owner,
+              version,
+              connRidByDbId,
+              versionRidByDbId,
+            );
+            if (!comparison.identical) {
+              throw new WorkspaceApplyError(
+                `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
+              );
+            }
+            versionContentUnverified = comparison.undecidableRefs > 0;
+            // Legal: the branch names a version we already hold, byte-identical.
+            // If the workspace has since authored past it, say so rather than
+            // reporting a bare `unchanged` the preview has already contradicted.
+            superseded = versionChanged;
+          }
+          // This is the ONE place `willMint` is decided, so the reported `action`
+          // can never disagree with what is written. An already-materialised version
+          // is never re-minted — the row exists and is immutable.
+          willMint = versionChanged && !alreadyMaterialised;
+
+          if (existing.archived) {
+            restorePipeline(db, existing.id);
+            action = 'restored';
+          } else if (willMint || rowPatch.concurrency !== undefined) {
+            action = 'updated';
+          } else if (rowPatch.name !== undefined) {
+            action = 'renamed';
+          } else if (superseded) {
+            action = 'superseded';
+          } else {
+            action = 'unchanged';
+          }
+        }
+
+        // `versionMinted` is ORTHOGONAL to `action` (#672): a `restored` pipeline
+        // whose branch version doc also changed is `restored` + `versionMinted:true`
+        // — a signal the single-valued `action` cannot carry. `willMint` is the one
+        // place the mint is decided, so this can never disagree with the write.
+        applied.push({
+          path: inc.path,
+          kind: 'pipeline',
+          resourceId,
+          action,
+          versionMinted: willMint,
+          versionContentUnverified,
+        });
+        if (willMint && version !== undefined) {
+          minters.push({
+            pipelineId,
+            versionRid,
+            version,
+            callRefs: literalCallRefs(version),
+            sourceFilePath: inc.path,
+            sourceBlobSha: inc.blobSha,
+          });
+        }
       }
 
-      applied.push({
-        path: inc.path,
-        kind: 'trigger',
-        resourceId,
-        action,
-        versionMinted: false, // triggers have no versions
-        versionContentUnverified: false, // ...so no version content to judge
-      });
-    }
+      // Mint versions in call-dependency order so a co-created callee exists before
+      // its caller's doc is validated.
+      for (const idx of mintOrder(minters)) {
+        const m = minters[idx]!;
+        const created = createPipelineVersion(
+          db,
+          {
+            ...m.version,
+            pipelineId: m.pipelineId,
+            nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, versionById)),
+          },
+          {
+            // Preserve the file's version resourceId (G5c) when present; else the
+            // repo mints a fresh one.
+            ...(m.versionRid !== null ? { resourceId: m.versionRid } : {}),
+            // #3 G6b — stamp git provenance on the mint: source commit (`head`) +
+            // branch, plus THIS file's path + blob sha (captured on the minter).
+            sourceCommit: head,
+            sourceBranch: branch,
+            sourceFilePath: m.sourceFilePath,
+            sourceBlobSha: m.sourceBlobSha,
+          },
+        );
+        if (m.versionRid !== null) versionById.set(m.versionRid, created.id);
+      }
+    };
+
+    // --- Triggers (#3 G5c-2 #670): applied AFTER the version mints, so a binding
+    // to a co-created pipeline's brand-new version resolves via `versionById`. ---
+    const applyTriggers = (): void => {
+      for (const inc of incoming.triggers) {
+        const data = inc.data;
+        // Existence by DB `resourceId` (getTriggerByResourceId), NOT the classifier
+        // plan: the plan's DB snapshot OMITS triggers bound to archived pipelines'
+        // versions (serialize omission), so trusting it for create-vs-update could
+        // mis-create an existing trigger into a `resourceId` UNIQUE collision.
+        const existing =
+          inc.resourceId === null ? null : getTriggerByResourceId(db, ownerId, inc.resourceId);
+        const label = inc.resourceId ?? '(pre-G1)';
+
+        let action: WorkspaceGitAppliedAction;
+        let resourceId: string;
+        if (existing === null) {
+          assertTriggerWindowBindingsConsistent(data, label);
+          const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+          // #3 G8b-3 — a fresh trigger bound to a version whose connections are
+          // unready imports disabled (secrets never travel in git → a
+          // secret-requiring connection lands `needs_secret`); the dispatch gate
+          // backstops. `buildTriggerWriteInput` folds this via `enabledForReadiness`.
+          const connectionsReady = connectionsReadyForBinding(binding);
+          // webhook: the branch carries only the PUBLIC config (no `secretRef`,
+          // which `NewTriggerSchema` requires), so a fresh webhook trigger starts
+          // with no secret — the operator provisions it via the normal route (G8).
+          const writeInput = buildTriggerWriteInput(data, ownerId, binding, null, connectionsReady);
+          gateTriggerWrite(writeInput, inc.path);
+          const created = createTrigger(
+            db,
+            writeInput,
+            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          );
+          action = 'created';
+          resourceId = created.resourceId;
+        } else {
+          const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+          // #3 G8b-3 — readiness of the trigger's OWN bound version, computed once
+          // and reused by BOTH the content compare (below) and the write (so the two
+          // can never disagree, keeping a readiness-force-disabled trigger idempotent
+          // — no perpetual `update` churn while the connection stays unready).
+          const connectionsReady = connectionsReadyForBinding(binding);
+          // #3 G7 — compare in RESOLVED space: a branch trigger whose binding does
+          // not resolve to an owned version normalizes to (null, disabled) — exactly
+          // what this apply would persist — so a force-disabled unbound trigger stops
+          // re-classifying `update` forever. The DB side is already resolved
+          // (`serializeTrigger` renders a stored null binding as null). A genuine
+          // enable/disable on a BOUND trigger still differs, so it still propagates.
+          // #3 G8b-3 — the readiness predicate folds `enabled`→false for a
+          // bound-but-unready trigger too; the form only ever probes the trigger's
+          // own binding rid, so `() => connectionsReady` (that binding's readiness)
+          // is the exact fact needed.
+          const contentChanged =
+            normalizedTriggerContentForm(
+              data,
+              (rid) => versionById.has(rid),
+              () => connectionsReady,
+            ) !== dbTriggerContentForm(existing, dbRefMaps);
+          action = triggerAction(contentChanged, data.name !== existing.name);
+          if (action === 'updated') {
+            assertTriggerWindowBindingsConsistent(data, label);
+            // webhook: PRESERVE the existing local secret while the trigger stays a
+            // webhook (never drop it — the branch can't carry it back); clear a
+            // now-stale config on a mode change away from webhook.
+            const webhook = data.mode === 'webhook' ? existing.webhook : null;
+            const writeInput = buildTriggerWriteInput(
+              data,
+              ownerId,
+              binding,
+              webhook,
+              connectionsReady,
+            );
+            gateTriggerWrite(writeInput, inc.path);
+            updateTrigger(db, existing.id, writeInput);
+          } else if (action === 'renamed') {
+            updateTrigger(db, existing.id, { name: data.name });
+          }
+          resourceId = existing.resourceId;
+        }
+
+        applied.push({
+          path: inc.path,
+          kind: 'trigger',
+          resourceId,
+          action,
+          versionMinted: false, // triggers have no versions
+          versionContentUnverified: false, // ...so no version content to judge
+        });
+      }
+    };
+
+    const appliers: Record<ResourceKind, () => void> = {
+      connection: applyConnections,
+      pipeline: applyPipelines,
+      trigger: applyTriggers,
+    };
+    for (const kind of APPLY_ORDER) appliers[kind]();
 
     // #3 G8b-3 — the REVERSE gate: an import that left a connection UNREADY (a
     // fresh secret-requiring connection, or an existing one whose kind changed to
