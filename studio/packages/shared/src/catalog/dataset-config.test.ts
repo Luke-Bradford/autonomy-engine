@@ -17,7 +17,9 @@ describe('dataset config catalog', () => {
     // The `Record<DatasetKind, …>` type makes a MISSING kind a compile error;
     // this catches the other direction (a stale key left behind when a kind is
     // renamed or removed), exactly as the connection-config catalog does.
-    expect(Object.keys(DATASET_CONFIG_SCHEMAS).sort()).toEqual([...DatasetKindSchema.options].sort());
+    expect(Object.keys(DATASET_CONFIG_SCHEMAS).sort()).toEqual(
+      [...DatasetKindSchema.options].sort(),
+    );
     expect(DATASET_KINDS).toEqual(DatasetKindSchema.options);
   });
 
@@ -57,10 +59,14 @@ describe('SQL identifiers are refused, not accommodated', () => {
 
   it('refuses an injection-shaped table name at the schema boundary', () => {
     expect(tableDatasetConfigSchema.safeParse({ table: 'users' }).success).toBe(true);
-    expect(tableDatasetConfigSchema.safeParse({ schema: 'main', table: 'users' }).success).toBe(true);
+    expect(tableDatasetConfigSchema.safeParse({ schema: 'main', table: 'users' }).success).toBe(
+      true,
+    );
     const attack = tableDatasetConfigSchema.safeParse({ table: 'users; drop table users' });
     expect(attack.success).toBe(false);
-    expect(tableDatasetConfigSchema.safeParse({ schema: 'a b', table: 'users' }).success).toBe(false);
+    expect(tableDatasetConfigSchema.safeParse({ schema: 'a b', table: 'users' }).success).toBe(
+      false,
+    );
   });
 
   it('requires a table', () => {

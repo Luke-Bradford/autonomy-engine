@@ -122,9 +122,10 @@ describe('#1119 M4 — the sqlite store connection', () => {
     // `writable`, absent renders as unchecked AND means not-writable.
     const parsed = sqliteConnectionConfigSchema.parse({ roots: ['/db'], path: '/db/app.db' });
     expect(parsed.writable).toBeUndefined();
-    expect(sqliteConnectionConfigSchema.safeParse({ roots: ['/db'], path: '/db/app.db', readonly: true }).success).toBe(
-      true,
-    );
+    expect(
+      sqliteConnectionConfigSchema.safeParse({ roots: ['/db'], path: '/db/app.db', readonly: true })
+        .success,
+    ).toBe(true);
     // ...and `readonly` is not a key this schema knows: it parses (unknown keys
     // are stripped, as everywhere in this catalog) but carries no posture.
     expect(
@@ -168,4 +169,3 @@ describe('#1119 M4 — config keys no per-dispatch override may set', () => {
     expect(isNonOverridableConnectionConfigKey('fs', 'maxBytes')).toBe(false);
   });
 });
-

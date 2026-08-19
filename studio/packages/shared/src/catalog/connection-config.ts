@@ -104,9 +104,7 @@ export const fsConnectionConfigSchema = z.object({
  * what M5's copy SINK will consult before it opens the same file for writing.
  */
 export const sqliteConnectionConfigSchema = z.object({
-  roots: z
-    .array(z.string().min(1))
-    .min(1, 'a sqlite connection needs at least one allowed root'),
+  roots: z.array(z.string().min(1)).min(1, 'a sqlite connection needs at least one allowed root'),
   /** The database file, confined to `roots` at dispatch by the SAME extracted
    * `resolveWithinRoots` guard the `fs` connector uses — not a second copy. */
   path: z.string().min(1),
@@ -409,8 +407,7 @@ export const CONNECTION_SECRET_USE: Record<ConnectionKind, string> = {
   agent_cli: 'Injected into the environment variable named by `secretEnv`, never into argv.',
   http: 'Sent as an `Authorization: Bearer` header, under any header the request sets itself.',
   fs: 'Not used by this kind — an fs connection is credential-less; `roots` is its guard.',
-  sqlite:
-    'Not used by this kind — a local SQLite file takes no credential; `roots` is its guard.',
+  sqlite: 'Not used by this kind — a local SQLite file takes no credential; `roots` is its guard.',
 };
 
 /**
@@ -521,9 +518,7 @@ export function connectionConfigAdvisory(
   // guard is the only thing that would say so, at dispatch. Advisory, as the
   // whole function is.
   if (kind === 'sqlite' && typeof config.path === 'string' && !looksAbsolutePath(config.path)) {
-    notes.push(
-      `path: '${config.path}' is relative, so it resolves against the first allowed root`,
-    );
+    notes.push(`path: '${config.path}' is relative, so it resolves against the first allowed root`);
   }
 
   return notes.length === 0 ? null : notes.join('; ');

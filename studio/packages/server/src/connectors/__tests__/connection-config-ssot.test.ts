@@ -38,7 +38,6 @@ describe('connection config is one declaration, server and shared', () => {
     expect([...registry.keys()].sort()).toEqual(Object.keys(CONNECTION_CONFIG_SCHEMAS).sort());
   });
 
-
   const identicalKinds = (Object.keys(CONNECTION_CONFIG_SCHEMAS) as ConnectionKind[]).filter(
     (kind) => !DIVERGENT_KINDS.has(kind),
   );

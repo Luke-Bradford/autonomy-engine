@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3';
 import { isAbsolute } from 'node:path';
-import { z } from 'zod';
 import {
   datasetConfigSchema,
   datasetKindIsImplemented,
@@ -12,7 +11,12 @@ import {
 } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { resolveWithinRoots } from './confine.js';
-import type { ActivityContext, ActivityEvent, ConnectorAdapter, ConnectorErrorKind } from './types.js';
+import type {
+  ActivityContext,
+  ActivityEvent,
+  ConnectorAdapter,
+  ConnectorErrorKind,
+} from './types.js';
 
 /**
  * #1119 M4 — the `sqlite` STORE connector (data-movement spec §12's M4), and
@@ -244,7 +248,10 @@ export async function* readSqliteDatasetBatches(
 ): AsyncGenerator<SqliteRow[], void, undefined> {
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (!Number.isInteger(batchRows) || batchRows < 1) {
-    throw new DatasetReadError('permanent', `batchRows must be a positive integer, got ${batchRows}`);
+    throw new DatasetReadError(
+      'permanent',
+      `batchRows must be a positive integer, got ${batchRows}`,
+    );
   }
 
   // §8: "a file-backed dataset must re-validate at dispatch and must not assume
@@ -252,7 +259,10 @@ export async function* readSqliteDatasetBatches(
   // per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetReadError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
+    throw new DatasetReadError(
+      'permanent',
+      `invalid sqlite connection config: ${cfg.error.message}`,
+    );
   }
 
   const statement = statementFor(read.datasetKind, read.datasetConfig);
@@ -276,9 +286,7 @@ export async function* readSqliteDatasetBatches(
     try {
       const prepared = db.prepare(statement.sql);
       cursor = (
-        statement.parameters === null
-          ? prepared.iterate()
-          : prepared.iterate(statement.parameters)
+        statement.parameters === null ? prepared.iterate() : prepared.iterate(statement.parameters)
       ) as IterableIterator<unknown>;
     } catch (err) {
       throw readFailure(err, 'the dataset statement could not be prepared');
@@ -366,7 +374,6 @@ export const sqliteAdapter: ConnectorAdapter = {
     }
   },
 
-  // eslint-disable-next-line @typescript-eslint/require-await
   async *runActivity(ctx: ActivityContext): AsyncIterable<ActivityEvent> {
     // A store connection binds no activity of its own — reading one is `copy`
     // (M5), which resolves it as a dataset's store rather than as the node's

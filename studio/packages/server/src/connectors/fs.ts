@@ -1,6 +1,6 @@
 import { constants as fsConstants, type Dirent } from 'node:fs';
-import { lstat, open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import {
   FILE_COPY_ACTIVITY_TYPE,
@@ -180,7 +180,6 @@ function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
   // non-errno throw (a programming fault) — is permanent, never blind-retried.
   return failed('permanent', message);
 }
-
 
 /** Close a file handle, swallowing a close error so it never masks the result. */
 async function closeQuietly(fh: Awaited<ReturnType<typeof open>> | undefined): Promise<void> {

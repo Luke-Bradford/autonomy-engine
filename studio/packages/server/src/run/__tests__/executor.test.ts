@@ -896,7 +896,10 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
       secretRef: null,
     }).id;
     const pvId = seedVersion(db, [
-      { ...fsNode('n1', connId, { path: join(escapeDir, 'secret.txt') }), connectionParams: { roots: [escapeDir] } },
+      {
+        ...fsNode('n1', connId, { path: join(escapeDir, 'secret.txt') }),
+        connectionParams: { roots: [escapeDir] },
+      },
     ]);
     const run = seedRun(db, pvId);
 
