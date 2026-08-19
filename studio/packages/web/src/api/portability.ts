@@ -151,7 +151,7 @@ export function describeAttention(item: ImportAttentionItem): string {
     case 'unresolvedConnectionRef':
       return `Node “${item.nodeId}” has no connection — every export drops connection bindings. Open the pipeline and pick a connection for it, then save.`;
     case 'unresolvedDatasetRef':
-      return `Node “${item.nodeId}” has no datasets — every export drops dataset bindings. Open the pipeline and pick its source and sink datasets, then save.`;
+      return `Node “${item.nodeId}” has no datasets — an export drops any dataset binding that named a specific one. Open the pipeline and pick its source and sink datasets, then save.`;
     case 'requiresSecret':
       return 'This connection needs its secret — an export never carries one. Edit the connection and enter it before anything can call the provider.';
     case 'unboundPipelineVersion':

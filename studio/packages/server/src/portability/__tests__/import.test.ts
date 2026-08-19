@@ -217,6 +217,45 @@ describe('importEnvelope: pipeline', () => {
     ).toEqual(['mixed']);
   });
 
+  // An export carries EVERY immutable version, and a node id is stable across
+  // them — so a binding that was never re-authored appears identically in each.
+  // Reported once per version, the operator reads the same repair instruction
+  // three times for one node (`ImportPanel` renders `attention` verbatim).
+  it('M3 (#1117) — reports ONE unresolvedDatasetRef for a node whose pair survives several versions', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copies' });
+    const nodes = [
+      {
+        id: 'n1',
+        type: 'llm_call',
+        config: {},
+        datasetIds: { source: 'ds_local_id', sink: '${params.target}' },
+        position: { x: 0, y: 0 },
+      },
+    ];
+    const version = {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes,
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    // Three immutable versions, the node's stripped-literal pair unchanged
+    // across all of them.
+    createPipelineVersion(db, version);
+    createPipelineVersion(db, version);
+    createPipelineVersion(db, version);
+    expect(listPipelineVersions(db, pipeline.id)).toHaveLength(3);
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    expect(
+      result.attention.filter((a) => a.type === 'unresolvedDatasetRef').map((a) => a.nodeId),
+    ).toEqual(['n1']);
+  });
+
   it('#2 L13b — a literal-bound node with connectionParams round-trips WITHOUT bricking the import', () => {
     // The write gate refuses connectionParams without a connectionId, and export
     // nulls a literal connectionId — so export must have stripped the bindings

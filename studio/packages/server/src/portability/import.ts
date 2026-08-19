@@ -60,16 +60,25 @@ function toDbNode(node: NodeExport): Node {
  * nodes rather than from a stripped-refs list the exporter carries: the key is
  * emitted only when the node binds a pair, so a null end can only mean "export
  * stripped a literal" and a second SSOT would be a list that can disagree with
- * the thing it describes. */
+ * the thing it describes.
+ *
+ * DEDUPED across versions, and that is the whole reason this returns a `Set`'s
+ * contents rather than a plain push-list. An export carries EVERY immutable
+ * version of the pipeline, a node id is stable across them, and a binding that
+ * was never re-authored appears identically in each — so a per-version push
+ * would repeat one repair instruction once per version the node survived in,
+ * rendered verbatim by `ImportPanel`. `strippedConnectionRefs` gets this for
+ * free by being a `Set` threaded through all versions in `export.ts`; deriving
+ * the fact here means doing it explicitly. */
 function unresolvedDatasetNodeIds(versions: readonly { nodes: NodeExport[] }[]): string[] {
-  const ids: string[] = [];
+  const ids = new Set<string>();
   for (const version of versions) {
     for (const node of version.nodes) {
       const pair = node.datasetIds;
-      if (pair !== undefined && (pair.source === null || pair.sink === null)) ids.push(node.id);
+      if (pair !== undefined && (pair.source === null || pair.sink === null)) ids.add(node.id);
     }
   }
-  return ids;
+  return Array.from(ids);
 }
 
 /**
