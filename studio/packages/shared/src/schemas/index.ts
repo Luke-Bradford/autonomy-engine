@@ -4,6 +4,7 @@ export * from './update-status.js';
 export * from './api-error.js';
 export * from './pagination.js';
 export * from './connection.js';
+export * from './dataset.js';
 export * from './pipeline.js';
 export * from './recurrence.js';
 export * from './window.js';
