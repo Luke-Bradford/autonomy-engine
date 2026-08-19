@@ -629,6 +629,59 @@ export const FAILURE_CODES = {
    */
   CONFIG_SECRET_UNDECRYPTABLE: 'config_secret_undecryptable',
   /**
+   * M5 slice 4a (#1130) — the activity's catalog entry declares a DATASET
+   * binding (`datasetKinds`) but the node names no dataset for that side.
+   *
+   * The whole ladder below mirrors `CONNECTION_*` deliberately, code for code,
+   * because a dataset ref fails in exactly the same four ways a connection ref
+   * does and an operator should not have to learn two vocabularies. All are
+   * `permanent`: an address that does not exist, is not theirs, is the wrong
+   * kind, or contradicts its own store does not self-heal on retry.
+   */
+  DATASET_MISSING: 'dataset_missing',
+  /**
+   * The node's resolved dataset id names no row the run may read. A row that
+   * exists but belongs to ANOTHER owner folds in here rather than into a
+   * distinct "forbidden" — `resolveConnection` gives the reason verbatim: a
+   * separate code would confirm that the id names a real dataset
+   * (enumeration-resistant, fail-closed).
+   *
+   * Distinct from `DATASET_MISSING`, which means the node named nothing at all.
+   * A `${}` ref that resolved to `''` is BOUND-but-empty and lands here, not
+   * there — the same split `CONNECTION_NOT_FOUND` documents.
+   */
+  DATASET_NOT_FOUND: 'dataset_not_found',
+  /** The bound dataset's `kind` is not one this activity accepts on that side. */
+  DATASET_KIND_INVALID: 'dataset_kind_invalid',
+  /**
+   * The bound dataset's `connectionId` (the STORE it lives in) is not the
+   * connection the node bound for that side.
+   *
+   * This is the refusal that keeps a dataset an ADDRESS rather than a guess. A
+   * node carries both refs — the connection pair (M1) and the dataset pair (M3)
+   * — and nothing until this code made them agree, so a dataset declaring
+   * `users` in store X, bound on a node pointing at store Y, would have read
+   * `users` from Y: the right shape, the wrong data, and nothing thrown. Silent
+   * and wrong is the one outcome this codebase refuses everywhere else.
+   */
+  DATASET_CONNECTION_MISMATCH: 'dataset_connection_mismatch',
+  /**
+   * The node's source and sink name the SAME dataset.
+   *
+   * A data-loss guard, not tidiness. The sink's `overwrite` mode DELETEs inside
+   * the write transaction while the reader is still streaming the same table
+   * (`connectors/sqlite.ts`), so a self-copy destroys precisely the rows it was
+   * asked to move; `append` merely duplicates them. Neither is ever what was
+   * meant, so it is refused before the first row moves rather than left to the
+   * store to survive by luck.
+   *
+   * It catches the ID-identical case only. Two DIFFERENT dataset rows naming
+   * the same physical table are not detectable here — that needs the resolved
+   * ADDRESS, which is M6's dispatch record (spec §2.1). Stated rather than
+   * implied, so the residual is not mistaken for coverage.
+   */
+  DATASET_SELF_COPY: 'dataset_self_copy',
+  /**
    * #4 A7 — a `fail` control activity FORCE-FAILED the node with its authored
    * `${}` message. Always `permanent` (a deliberate fail is deterministic, so
    * retrying re-fails identically — `retryEligible` never fires on it). A stable
@@ -848,10 +901,18 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      */
     connectionId: z.string().optional(),
     /**
-     * M1 (#1104) — WHICH END of a PAIRED activity's source/sink connection pair
-     * this failure came from. A `copy` is heterogeneous by definition, so a
-     * failure that cannot say which end failed is a support problem: "connection
-     * not found" on a node bound to two connections names neither.
+     * M1 (#1104) — WHICH END of a PAIRED activity's source/sink pair this
+     * failure came from. A `copy` is heterogeneous by definition, so a failure
+     * that cannot say which end failed is a support problem: "connection not
+     * found" on a node bound to two connections names neither.
+     *
+     * M5 slice 4a (#1130) — it labels the DATASET pair on the identical
+     * argument, which is why this doc no longer says "connection pair". A node
+     * binds two connections AND two datasets, so both refs have two ends and
+     * both mint side-labelled refusals; the field's meaning is "which end",
+     * never "which KIND of ref". The failure `code` already carries that
+     * (`connection_*` vs `dataset_*`), so encoding it here as well would be the
+     * same doubling the paragraph below refuses.
      *
      * A structured FIELD, not a message prefix, for the reason
      * `resolveConnection`'s own docblock gives for `code`: an operator (and
@@ -1670,6 +1731,20 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * on each reduce and never persisted, so no replay/migration concern.
      */
     resolvedConnectionIds: z.object({ source: z.string(), sink: z.string() }).optional(),
+    /**
+     * M5 slice 4a (#1130) — the node's `datasetIds` after the reducer resolved
+     * each end's `${}` expression against the run env, on the IDENTICAL contract
+     * as `resolvedConnectionIds` above (same `buildCtx` env, same `String()`
+     * coercion), because spec §3.1 settles that a dataset ref follows
+     * `connectionId`'s rules rather than growing its own.
+     *
+     * The executor consumes THIS and never `node.datasetIds`: the raw field may
+     * be a `${}` template it has no run env to resolve. `undefined` when the node
+     * carries no pair. Ephemeral like its three neighbours — commands are
+     * re-derived on each reduce and never persisted in `run_events`, so adding
+     * it carries no replay or migration concern.
+     */
+    resolvedDatasetIds: z.object({ source: z.string(), sink: z.string() }).optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

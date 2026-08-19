@@ -371,6 +371,7 @@ type PreparedDispatch = {
   resolvedConnectionParams: Record<string, unknown> | undefined;
   /** M1 (#1104) — the paired source/sink binding, both ends `${}`-resolved. */
   resolvedConnectionIds: { source: string; sink: string } | undefined;
+  resolvedDatasetIds: { source: string; sink: string } | undefined;
 };
 
 /**
@@ -1157,6 +1158,34 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * M5 slice 4a (#1130) — resolve a node's `datasetIds` pair against the run env,
+   * a deliberate VERBATIM mirror of `resolveConnectionIds` above: same
+   * `substitute`, same `String()` coercion, same `undefined` when the node
+   * carries no pair. Spec §3.1 settles that a dataset ref follows `connectionId`
+   * rather than growing its own rules, so the two helpers staying byte-alike is
+   * the property, not an accident — a divergence between them would be a bug in
+   * whichever one drifted.
+   *
+   * `String()` matters and is not defensive noise: a whole-value `${}` reference
+   * PRESERVES its native type (`engine/params.ts`), so `${params.dsId}` bound to
+   * a number would otherwise reach the executor as a number and miss every
+   * string-keyed lookup. The existence, ownership and kind checks are the
+   * EXECUTOR's — this reducer is pure and has no dataset rows.
+   */
+  function resolveDatasetIds(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): { source: string; sink: string } | undefined {
+    if (node.datasetIds === undefined) return undefined;
+    const ctx = buildCtx(state);
+    return {
+      source: String(substitute(node.datasetIds.source, ctx, 0, item)),
+      sink: String(substitute(node.datasetIds.sink, ctx, 0, item)),
+    };
+  }
+
+  /**
    * #2 L13b — resolve a node's per-dispatch `connectionParams` bindings against
    * the run env. One `substitute` over the whole record (it walks nested
    * records/arrays), same `buildCtx`/`item` env as `prepInput` and
@@ -1200,6 +1229,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionId: resolveConnectionId(es, node, item),
       resolvedConnectionParams: resolveConnectionParams(es, node, item),
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
+      resolvedDatasetIds: resolveDatasetIds(es, node, item),
     };
   }
 
@@ -1224,6 +1254,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionId: prepared.resolvedConnectionId,
       resolvedConnectionParams: prepared.resolvedConnectionParams,
       resolvedConnectionIds: prepared.resolvedConnectionIds,
+      resolvedDatasetIds: prepared.resolvedDatasetIds,
     };
   }
 

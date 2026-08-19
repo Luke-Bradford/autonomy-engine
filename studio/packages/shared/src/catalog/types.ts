@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ConnectionKind } from '../schemas/connection.js';
+import type { DatasetKind } from '../schemas/dataset.js';
 import type { Output } from '../schemas/pipeline.js';
 
 /**
@@ -305,6 +306,38 @@ export interface ActivityCatalogEntry {
    * `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
    */
   sinkConnectionKinds?: ConnectionKind[];
+  /**
+   * M5 slice 4a (#1130, data-movement spec §3.1) — the DATASET kinds this
+   * activity accepts per side, and the declaration that makes it DATASET-BOUND.
+   *
+   * The posture is `sinkConnectionKinds`' above, for the same stated reason: the
+   * executor must be TOLD which activities address a dataset rather than infer
+   * it from the node, because a node's shape is operator input and inferring a
+   * contract from it would let a stray `datasetIds` change how an activity
+   * dispatches. ABSENT ⇒ not dataset-bound, and `Node.datasetIds` stays inert at
+   * dispatch (never read by the executor) exactly as it has been since M3.
+   *
+   * `sink` is OPTIONAL and that is load-bearing, not laxity: M12's `lookup`
+   * reads a SOURCE only, and both `schemas/pipeline.ts` (`datasetIds`) and
+   * `engine/params.ts` already say so in as many words. A required `sink` here
+   * would have to be widened by the very ticket those notes anticipate. The
+   * invariants the registry test pins are therefore:
+   *   - a DECLARED list is non-empty (`[]` is not "no datasets" — absence is —
+   *     it would mean "dataset-bound, but no kind is ever valid", i.e. an entry
+   *     every dispatch refuses with `DATASET_KIND_INVALID`);
+   *   - `datasetKinds.sink` declared ⇒ `sinkConnectionKinds` declared, because a
+   *     sink dataset with no sink CONNECTION names a store that does not exist.
+   *
+   * This is an ACTIVITY allowlist and is NOT `IMPLEMENTED_DATASET_KINDS`
+   * (`catalog/dataset-config.ts`), which says whether a READER/WRITER exists for
+   * a kind at all. The two answer different questions and both apply: `copy` may
+   * accept `delimited` before M7 builds the CSV reader, and the reader's absence
+   * is the reader's refusal to make, not the catalog's.
+   *
+   * NO entry declares this at slice 4a — `copy` (slice 4b) is the first, and
+   * owes the `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
+   */
+  datasetKinds?: { source: DatasetKind[]; sink?: DatasetKind[] };
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
   /** Zod schema for this activity's non-secret config settings blob. */
