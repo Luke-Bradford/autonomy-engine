@@ -175,7 +175,31 @@ interface CompiledFormat {
  * two capture different years, and picking one (first? last?) is a guess in the
  * one function whose whole contract is that it does not guess.
  */
+/**
+ * Compiled formats, memoised. `coerceValue` runs per value per ROW, so without
+ * this a million-row copy re-parses the same `dateFormat` string and allocates a
+ * fresh `RegExp` a million times.
+ *
+ * Still pure: the cache is keyed by the whole format string and a compile is a
+ * total function of it, so a hit and a miss are indistinguishable in the result.
+ * Bounded, because a cache that only grows is a leak — the cardinality here is
+ * "formats declared across a workspace's datasets", i.e. tiny, so exceeding the
+ * bound means something unforeseen and the honest response is to drop everything
+ * and start again rather than to evict cleverly.
+ */
+const FORMAT_CACHE_MAX = 32;
+const formatCache = new Map<string, CompiledFormat | CoercionFailureCode>();
+
 function compileFormat(format: string): CompiledFormat | CoercionFailureCode {
+  const hit = formatCache.get(format);
+  if (hit !== undefined) return hit;
+  const compiled = compileFormatUncached(format);
+  if (formatCache.size >= FORMAT_CACHE_MAX) formatCache.clear();
+  formatCache.set(format, compiled);
+  return compiled;
+}
+
+function compileFormatUncached(format: string): CompiledFormat | CoercionFailureCode {
   const fields: ParseToken['field'][] = [];
   const seen = new Set<string>();
   let pattern = '';
@@ -285,21 +309,21 @@ function integerFromString(text: string): CoercionResult {
     );
   }
   if (!DECIMAL_RE.test(text)) {
-    return fail('not_a_number', `'${text}' is not a decimal number`);
+    return fail('not_a_number', 'the value is not a decimal number');
   }
   const n = Number(text);
-  if (!Number.isFinite(n)) return fail('non_finite', `'${text}' is not a finite number`);
+  if (!Number.isFinite(n)) return fail('non_finite', 'the value is not a finite number');
   // `"1.5"` → integer FAILS, never truncates (§6.2). `"1e2"` is integral and is
   // accepted: the refusal is about LOSING a fractional part, not about the
   // notation it was written in.
-  if (!Number.isInteger(n)) return fail('not_integral', `'${text}' is not a whole number`);
+  if (!Number.isInteger(n)) return fail('not_integral', 'the value is not a whole number');
   return ok(n);
 }
 
 function numberFromString(text: string): CoercionResult {
-  if (!DECIMAL_RE.test(text)) return fail('not_a_number', `'${text}' is not a decimal number`);
+  if (!DECIMAL_RE.test(text)) return fail('not_a_number', 'the value is not a decimal number');
   const n = Number(text);
-  if (!Number.isFinite(n)) return fail('non_finite', `'${text}' is not a finite number`);
+  if (!Number.isFinite(n)) return fail('non_finite', 'the value is not a finite number');
   return ok(n);
 }
 
@@ -390,7 +414,7 @@ function toInteger(value: unknown): CoercionResult {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return fail('non_finite', 'the value is not a finite number');
     // A real `1.5` → integer fails for the same reason `"1.5"` does.
-    if (!Number.isInteger(value)) return fail('not_integral', `${value} is not a whole number`);
+    if (!Number.isInteger(value)) return fail('not_integral', 'the value is not a whole number');
     return ok(value);
   }
   if (typeof value === 'string') return integerFromString(value.trim());
@@ -406,7 +430,7 @@ function toNumber(value: unknown): CoercionResult {
     // Narrowing here WOULD be lossy above 2^53, and a `number` column cannot
     // hold the exact value — so it is refused rather than rounded.
     if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      return fail('lossy_integer', `${value} cannot be held exactly by a number column`);
+      return fail('lossy_integer', 'the value cannot be held exactly by a number column');
     }
     return ok(Number(value));
   }
@@ -420,7 +444,7 @@ function toBoolean(value: unknown): CoercionResult {
     const t = value.trim().toLowerCase();
     if (TRUE_TOKENS.has(t)) return ok(true);
     if (FALSE_TOKENS.has(t)) return ok(false);
-    return fail('not_a_boolean', `'${value}' is not a boolean`);
+    return fail('not_a_boolean', 'the value is not a boolean');
   }
   // A real number is NOT truthiness-tested: `2` has no boolean meaning, and
   // accepting `1`/`0` alone would make the rule depend on which of two equally
@@ -454,15 +478,23 @@ function toInstant(value: unknown, target: 'date' | 'timestamp', opts: CoercionO
   }
   const parsed = parseWithFormat(value.trim(), compiled);
   if (!parsed.ok) {
-    return fail(parsed.code, `'${value}' does not match dateFormat '${opts.dateFormat}'`);
+    return fail(parsed.code, `the value does not match dateFormat '${opts.dateFormat}'`);
   }
   return ok(target === 'date' ? renderDate(parsed.parts) : new Date(parsed.ms).toISOString());
 }
 
-/** A short, NON-ECHOING description of an unsupported source value. The type,
- * never the text: a coercion reason travels into a run log an operator reads,
- * and echoing an arbitrary value there would put source data into it — the same
- * posture `formatDateTime` takes when it reports a position rather than a run. */
+/** A short, NON-ECHOING description of an unsupported source value: the type,
+ * never the text.
+ *
+ * That rule is NOT local to this helper — no `reason` in this module echoes a
+ * source value, and the grid test asserts it for every (input kind x target)
+ * pair. A coercion reason travels into a run log an operator reads, and §6.1's
+ * `expression` arm can resolve a SECRET to a string, which then need only fail a
+ * numeric or boolean coercion to be written out verbatim. `formatDateTime` takes
+ * the same posture for the same reason, reporting a position rather than the
+ * offending run. What identifies a failure is the `code`, plus the column name
+ * the pump knows (slice 3) — never the value. The declared `dateFormat` IS
+ * echoed, and is the one safe exception: it is authored config, not data. */
 function describe(value: unknown): string {
   if (value instanceof Uint8Array) return 'binary value';
   if (Array.isArray(value)) return 'list';

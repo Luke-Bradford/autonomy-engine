@@ -275,11 +275,71 @@ describe('coerceValue — every (input kind x target) pair has an outcome', () =
     }
   });
 
-  it('a refusal reason never echoes an unsupported value back into the log', () => {
-    const secretish = { token: 'sk-live-abcdef' };
-    const r = coerceValue(secretish, 'string');
-    expect(r.ok).toBe(false);
-    expect(r.ok === false && r.reason).not.toContain('sk-live');
+  it('NO refusal reason echoes the source value — every kind, every target', () => {
+    // The container path was never the risk. §6.1's `expression` arm can resolve
+    // a SECRET to a string, and a secret need only fail a numeric or boolean
+    // coercion — the ordinary paths — to be written verbatim into a reason that
+    // lands in a run log. So the rule is asserted across the whole grid, not on
+    // the one arm that happens to describe rather than quote.
+    const SECRET = 'sk-live-abcdef0123456789';
+    const carriers: readonly unknown[] = [
+      SECRET,
+      { token: SECRET },
+      [SECRET],
+      new Uint8Array([1, 2]),
+    ];
+    for (const value of carriers) {
+      for (const target of TARGETS) {
+        for (const opts of [{}, { dateFormat: 'yyyy-MM-dd' }, { nullValue: 'NULL' }]) {
+          const r = coerceValue(value, target, opts);
+          if (!r.ok) expect(r.reason).not.toContain('sk-live');
+        }
+      }
+    }
+  });
+
+  it('a refusal reason quotes no source text at all, only the declared format', () => {
+    // Stronger than the secret probe above and not satisfiable by redaction: a
+    // reason may name the AUTHORED dateFormat (config, not data) and nothing else.
+    const probes: readonly unknown[] = ['ZZmarkerZZ', 12345.678, 98765n, new Uint8Array([7])];
+    for (const value of probes) {
+      for (const target of TARGETS) {
+        const r = coerceValue(value, target, { dateFormat: 'yyyy-MM-dd' });
+        if (!r.ok) {
+          expect(r.reason).not.toContain('ZZmarker');
+          expect(r.reason).not.toContain('12345');
+          expect(r.reason).not.toContain('98765');
+        }
+      }
+    }
+  });
+
+  it('a memoised dateFormat gives the identical answer on the second call', () => {
+    // The compile cache must be indistinguishable in the result — a hit and a
+    // miss agree, and a BAD format stays bad rather than being cached as good.
+    const opts = { dateFormat: 'dd/MM/yyyy' };
+    expectOk(coerceValue('03/04/2026', 'date', opts), '2026-04-03');
+    expectOk(coerceValue('03/04/2026', 'date', opts), '2026-04-03');
+    expectFail(coerceValue('2026-04-03', 'date', opts), 'unparseable_date');
+    const bad = { dateFormat: 'yy-MM-dd' };
+    expectFail(coerceValue('26-04-03', 'date', bad), 'invalid_date_format');
+    expectFail(coerceValue('26-04-03', 'date', bad), 'invalid_date_format');
+    // A different format is still compiled on its own terms after the cache is hot.
+    expectOk(coerceValue('03/04/2026', 'date', { dateFormat: 'MM/dd/yyyy' }), '2026-03-04');
+  });
+
+  it('eviction cannot corrupt a later answer — 40 distinct formats, then a fresh one', () => {
+    // NOT a test of the bound itself: the cache size is deliberately not
+    // observable through the public API, so this cannot and does not assert that
+    // eviction HAPPENED (it passes with the `clear()` removed — checked). What it
+    // pins is the property that matters to a caller: crossing the bound leaves
+    // results unchanged. The bound is a leak guard, and its evidence is the
+    // `FORMAT_CACHE_MAX` constant, not an assertion.
+    for (let i = 0; i < 40; i++) {
+      const sep = String.fromCharCode(33 + i); // 40 distinct literal separators
+      coerceValue(`2026${sep}08${sep}19`, 'date', { dateFormat: `yyyy${sep}MM${sep}dd` });
+    }
+    expectOk(coerceValue('2026-08-19', 'date', { dateFormat: 'yyyy-MM-dd' }), '2026-08-19');
   });
 
   it('every DataType in the closed set is handled — no target falls through', () => {
