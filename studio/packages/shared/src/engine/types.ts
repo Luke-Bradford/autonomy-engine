@@ -575,6 +575,19 @@ export const FAILURE_CODES = {
    */
   CONNECTION_PARAM_UNDECLARED: 'connection_param_undeclared',
   /**
+   * #1119 M4 — a resolved `connectionParams` key is a SECURITY-BOUNDARY config
+   * key that no per-dispatch override may set, whatever the connection's
+   * `parameters` allowlist says (`CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`).
+   *
+   * Distinct from `CONNECTION_PARAM_UNDECLARED` on purpose, and the difference
+   * is the whole point: that code means "the owner did not opt this key in",
+   * which the owner can fix by adding it. This one means "the owner CANNOT opt
+   * this key in" — `fs`/`sqlite` `roots` is the path-confinement allowlist and
+   * `sqlite` `path` is the store's address, and an allowlist the confined party
+   * can rewrite is not an allowlist. `permanent`.
+   */
+  CONNECTION_PARAM_NON_OVERRIDABLE: 'connection_param_non_overridable',
+  /**
    * #2 L13b — a resolved `connectionParams` VALUE is (or embeds) a
    * `{ "$secret": … }` marker. Parameters are non-secret by design, and a `${}`
    * binding can resolve run-supplied json — so a marker can be INJECTED at run

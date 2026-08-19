@@ -74,16 +74,19 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter, ConnectorErrorKi
  * refines it. It REFINES rather than re-declares, so the form and the adapter
  * can never describe different objects.
  */
-export const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.refine(
-  (cfg) => cfg.roots.every((root) => isAbsolute(root)),
-  (cfg) => ({
-    path: ['roots'],
-    // Name WHICH root is wrong: with several roots, "roots" alone is useless.
-    message: `every sqlite root must be an absolute path (${cfg.roots
-      .filter((root) => !isAbsolute(root))
-      .join(', ')})`,
+export const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
+  roots: sharedSqliteConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
+    roots.forEach((root, index) => {
+      if (isAbsolute(root)) return;
+      ctx.addIssue({
+        code: 'custom',
+        message: 'every sqlite root must be an absolute path',
+        // Indexed, so with several roots the message names WHICH one is wrong.
+        path: [index],
+      });
+    });
   }),
-);
+});
 
 /** A value SQLite can hand back for one column. */
 export type SqliteValue = string | number | bigint | Uint8Array | null;

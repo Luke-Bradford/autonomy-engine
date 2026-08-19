@@ -9,6 +9,10 @@ import {
   connectionConfigSchema,
   fsConnectionConfigSchema,
   looksAbsolutePath,
+  CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS,
+  isNonOverridableConnectionConfigKey,
+  ROOT_CONFINED_CONNECTION_KINDS,
+  sqliteConnectionConfigSchema,
 } from './connection-config.js';
 
 describe('connection config catalog', () => {
@@ -33,6 +37,7 @@ describe('connection config catalog', () => {
       agent_cli: { command: 'claude', args: ['-p'], timeoutMs: 60_000 },
       http: { baseUrl: 'https://example.test', headers: { accept: 'application/json' } },
       fs: { roots: ['/tmp/workspace'], maxBytes: 1024 },
+      sqlite: { roots: ['/tmp/workspace'], path: '/tmp/workspace/app.db' },
     };
     for (const kind of CONNECTION_KINDS) {
       expect(connectionConfigSchema(kind).safeParse(samples[kind]).success).toBe(true);
@@ -91,3 +96,76 @@ describe('connection config catalog', () => {
     });
   });
 });
+
+describe('#1119 M4 — the sqlite store connection', () => {
+  it('is APPENDED to the kind enum, never inserted', () => {
+    // `ConnectionsPage` seeds a new connection with `CONNECTION_KINDS[0]`, and
+    // an e2e pins that first kind by asserting its fields render. A kind added
+    // at the front would silently change the default kind of every new
+    // connection; this is the cheap assertion that says so.
+    expect(CONNECTION_KINDS[0]).toBe('anthropic_api');
+    expect(CONNECTION_KINDS[CONNECTION_KINDS.length - 1]).toBe('sqlite');
+  });
+
+  it('needs both an allowlist and a path', () => {
+    expect(sqliteConnectionConfigSchema.safeParse({ path: '/db/app.db' }).success).toBe(false);
+    expect(sqliteConnectionConfigSchema.safeParse({ roots: ['/db'] }).success).toBe(false);
+    expect(sqliteConnectionConfigSchema.safeParse({ roots: [], path: '/db/app.db' }).success).toBe(
+      false,
+    );
+  });
+
+  it('spells the write posture as `writable`, so absent means read-only', () => {
+    // The inversion is the point (see the schema docblock): the authoring form
+    // omits an unchecked optional boolean, so a `readonly` key defaulting true
+    // would render an UNCHECKED "readonly" box on a read-only connection. With
+    // `writable`, absent renders as unchecked AND means not-writable.
+    const parsed = sqliteConnectionConfigSchema.parse({ roots: ['/db'], path: '/db/app.db' });
+    expect(parsed.writable).toBeUndefined();
+    expect(sqliteConnectionConfigSchema.safeParse({ roots: ['/db'], path: '/db/app.db', readonly: true }).success).toBe(
+      true,
+    );
+    // ...and `readonly` is not a key this schema knows: it parses (unknown keys
+    // are stripped, as everywhere in this catalog) but carries no posture.
+    expect(
+      'readonly' in
+        sqliteConnectionConfigSchema.parse({ roots: ['/db'], path: '/db/app.db', readonly: true }),
+    ).toBe(false);
+  });
+
+  it('warns about a relative root and a relative path, naming which', () => {
+    expect(connectionConfigAdvisory('sqlite', { roots: ['rel'], path: '/db/app.db' })).toContain(
+      'every sqlite root must be an absolute path (rel)',
+    );
+    expect(connectionConfigAdvisory('sqlite', { roots: ['/db'], path: 'app.db' })).toContain(
+      "path: 'app.db' is relative",
+    );
+    expect(connectionConfigAdvisory('sqlite', { roots: ['/db'], path: '/db/app.db' })).toBeNull();
+  });
+});
+
+describe('#1119 M4 — config keys no per-dispatch override may set', () => {
+  it('covers every kind, and nothing that is not a kind', () => {
+    expect(Object.keys(CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS).sort()).toEqual(
+      [...ConnectionKindSchema.options].sort(),
+    );
+  });
+
+  it('protects the path-confinement allowlist on every root-confined kind', () => {
+    // The invariant this table exists for: an allowlist the confined party can
+    // rewrite is not an allowlist. Derived from ROOT_CONFINED_CONNECTION_KINDS
+    // rather than spelled per kind, so a future root-confined kind cannot be
+    // added with `roots` left overridable.
+    for (const kind of ROOT_CONFINED_CONNECTION_KINDS) {
+      expect(isNonOverridableConnectionConfigKey(kind, 'roots')).toBe(true);
+    }
+    expect(isNonOverridableConnectionConfigKey('sqlite', 'path')).toBe(true);
+  });
+
+  it('leaves ordinary settings overridable', () => {
+    expect(isNonOverridableConnectionConfigKey('anthropic_api', 'model')).toBe(false);
+    expect(isNonOverridableConnectionConfigKey('http', 'baseUrl')).toBe(false);
+    expect(isNonOverridableConnectionConfigKey('fs', 'maxBytes')).toBe(false);
+  });
+});
+
