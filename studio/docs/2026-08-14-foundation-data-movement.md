@@ -245,7 +245,7 @@ dataset kinds.
 
 | Kind | Non-secret `config` | Secret |
 |---|---|---|
-| `sqlite` | `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `readonly` | none |
+| `sqlite` | `roots` + `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `writable` | none |
 | `postgres` | `host`, `port`, `database`, `user`, `sslmode`, `connectTimeoutMs`, `statementTimeoutMs` | `secretRef` → password. **Joins `SECRET_REQUIRING_CONNECTION_KINDS`** (§8) |
 
 **Dataset kinds:**
@@ -256,6 +256,21 @@ dataset kinds.
 | `excel` | `path`, `sheet` (name or index), `headerRow`, `nullValue`, `dateFormat` |
 | `table` | `schema`, `table` — **identifiers, so save-time literal-only (§8)** |
 | `query` | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters` |
+
+**Two corrections from M4, which built this row** (#1119):
+
+- **`roots` is named explicitly**, because the parenthetical already required it and a terse key
+  list read as though it did not. `Connection.parameters` lets a node override a config key per
+  dispatch, so `path` is reachable from a pipeline and must be confined against something. M4 also
+  closed the hole that made that confinement conditional: `roots` and `path` joined
+  `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`, so no allowlist can bless an override of either — a
+  fix that lands for `fs` at the same time, where the hole was pre-existing.
+- **`readonly` became `writable`.** The polarity was wrong in both directions at once. The authoring
+  form omits an unchecked optional boolean, so a `readonly` key that defaults true renders an
+  UNCHECKED "readonly" box on a connection that genuinely is read-only — the form states the
+  opposite of the fact. And absent-means-writable is fail-OPEN. With `writable`, absent renders
+  truthfully AND withholds a permission. It governs SINK use only (M5); the M4 reader opens
+  read-only unconditionally, because a source scan has no reason to hold a write lock.
 
 `nullValue` and `dateFormat` sit on the file kinds and not the SQL kinds deliberately: a database
 column already has a type and a real `NULL`, so there is nothing to declare. They exist only where
