@@ -53,19 +53,17 @@ interface DriftItem {
   contentForm: string;
 }
 
-// #1112 — `WorkspaceGitDriftResource['kind']` IS `ResourceKind` (the drift
-// schema's kind field is `ExportKindSchema`, now derived from `RESOURCE_KINDS`).
-// Naming the SSOT directly means this file has one kind vocabulary, not a
-// same-shaped second one that could quietly stop agreeing.
-type ExportKind = ResourceKind;
-
 /** Diff one kind's DB-side items against its committed-side items by
  * `resourceId`, returning the drifted resources (clean ones are omitted). A
  * `null` resourceId never matches (only pre-G1 committed files carry it, and the
  * DB side always mints real ids): a null-id DB item is therefore `added`, a
  * null-id committed item `removed`. */
 function driftForKind(
-  kind: ExportKind,
+  // #1112 — `WorkspaceGitDriftResource['kind']` IS `ResourceKind` (the drift
+  // schema's kind field is `ExportKindSchema`, now derived from
+  // `RESOURCE_KINDS`), so this names the SSOT directly rather than keeping a
+  // same-shaped second name for it that could quietly stop agreeing.
+  kind: ResourceKind,
   dbItems: DriftItem[],
   committedItems: DriftItem[],
 ): WorkspaceGitDriftResource[] {
