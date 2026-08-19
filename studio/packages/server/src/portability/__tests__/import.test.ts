@@ -233,7 +233,7 @@ describe('importEnvelope: pipeline', () => {
         position: { x: 0, y: 0 },
       },
     ];
-    const version = {
+    const version: NewPipelineVersion = {
       pipelineId: pipeline.id,
       params: [{ name: 'target', type: 'string', required: true }],
       outputs: [],
