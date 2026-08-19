@@ -612,6 +612,76 @@ describe('M1 #1104 — connectionIds resolution on dispatchNode', () => {
 });
 
 // ===========================================================================
+// M5 slice 4a #1130 — datasetIds resolution on dispatchNode
+//
+// A deliberate mirror of the block above, because `resolveDatasetIds` is a
+// deliberate mirror of `resolveConnectionIds`: spec §3.1 settles that a dataset
+// ref follows `connectionId`'s rules rather than growing its own, so the two
+// staying byte-alike is the property being pinned.
+// ===========================================================================
+
+/** A node with a dataset pair (and the connection pair a copy also carries). */
+function dsNode(id: string, source: string, sink: string): Node {
+  return {
+    ...node(id),
+    connectionIds: { source: 'c-src', sink: 'c-dst' },
+    datasetIds: { source, sink },
+  };
+}
+
+describe('M5 #1130 — datasetIds resolution on dispatchNode', () => {
+  it('resolves BOTH ends and threads them as resolvedDatasetIds', () => {
+    const eng = engine([dsNode('a', '${params.from}', '${params.to}')]);
+    const r = eng.reduce(eng.seedState(), started({ from: 'ds-orders', to: 'ds-warehouse' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toEqual({
+      source: 'ds-orders',
+      sink: 'ds-warehouse',
+    });
+  });
+
+  it('passes literal ends through unchanged, and supports interpolation per end', () => {
+    const eng = engine([dsNode('a', 'ds-fixed', 'ds-${params.env}')]);
+    const r = eng.reduce(eng.seedState(), started({ env: 'staging' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toEqual({
+      source: 'ds-fixed',
+      sink: 'ds-staging',
+    });
+  });
+
+  it('COERCES a whole-value ref to a string, so a numeric param still keys a lookup', () => {
+    // `substitute` PRESERVES the native type of a whole-value reference, so
+    // without the `String()` this would reach the executor as a number and miss
+    // every string-keyed lookup. The connection pair coerces for the same reason.
+    const eng = engine([dsNode('a', '${params.n}', 'ds-fixed')]);
+    const r = eng.reduce(eng.seedState(), started({ n: 42 }));
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toEqual({
+      source: '42',
+      sink: 'ds-fixed',
+    });
+  });
+
+  it('leaves resolvedDatasetIds undefined when the node carries no dataset pair', () => {
+    const eng = engine([connNode('a', 'conn-single')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toBeUndefined();
+  });
+
+  it('the run.resumed re-emit (4th dispatch site) re-derives BOTH dataset ends', () => {
+    // The pair rides `PreparedDispatch`/`dispatchNodeCommand`, so all four
+    // emission sites are structurally covered — this pins the crash-window
+    // re-emit, the site most likely to drift.
+    const eng = engine([dsNode('a', '${params.from}', '${params.to}')]);
+    const s = eng.reduce(eng.seedState(), started({ from: 'ds-1', to: 'ds-2' })).state;
+    expect(s.nodes.a!.status).toBe('ready');
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(dispatchCmd(resumed.commands, 'a').resolvedDatasetIds).toEqual({
+      source: 'ds-1',
+      sink: 'ds-2',
+    });
+  });
+});
+
+// ===========================================================================
 // #2 L13b — connectionParams resolution on dispatchNode
 // ===========================================================================
 
