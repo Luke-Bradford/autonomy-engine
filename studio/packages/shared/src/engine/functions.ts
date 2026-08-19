@@ -1318,7 +1318,14 @@ function daysInMonth(y: number, month0: number): number {
  * `Date.UTC` for a full year — it maps years 0-99 to 1900+y, which would turn
  * `0026-01-01` into 1926. Corrected via `setUTCFullYear`, which does not.
  */
-function utcMs(
+/**
+ * Assemble a UTC instant from calendar fields, WITHOUT `Date.UTC`'s two-digit
+ * year trap (`Date.UTC(1, 0, 1)` is 1901, not year 1). Exported for `datamove/
+ * coerce.ts` (#1122), which assembles an instant from a parsed `dateFormat` and
+ * would otherwise need a second copy of this correction — one that a test for
+ * year 0001 is the only thing that ever catches.
+ */
+export function utcMs(
   y: number,
   month1: number,
   d: number,
@@ -1346,8 +1353,12 @@ function utcMs(
  * `parseTs` (so it holds of inputs — `\d{4}` admits year 0000) and `isoOf` (so
  * it holds of results).
  */
-const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
-const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
+/** The representable instant range — years 0001-9999. Exported as the ONE
+ * boundary every date-producing path checks: `isoOf` here, and `coerceValue`'s
+ * `date`/`timestamp` targets in `datamove/coerce.ts` (#1122). Re-deriving the
+ * years there would be a second copy of the same rule, free to drift. */
+export const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
+export const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
 
 /** Parse an accepted timestamp to epoch-ms, or throw. */
 function parseTs(fn: string, v: unknown, at: string): number {
@@ -1533,8 +1544,27 @@ function pad(n: number, width: number): string {
  * Closed + reject-unknown, like `float`'s decimal-only regex and `replace`'s
  * literal needle: emitting an unimplemented .NET token (`yy`) raw would hand the
  * author `yy-07-15` and let them believe it worked.
+ *
+ * The NAMES are exported (#1122, M5 slice 1) because a dataset's `dateFormat`
+ * PARSES over the same vocabulary this RENDERS over, and two date languages in
+ * one product is how `formatDateTime(t,'yyyy-MM-dd')` and a CSV's declared
+ * format come to mean different things. `datamove/coerce.ts` keys its parse
+ * table on `FormatTokenName`, so a token added HERE without a parse rule THERE
+ * is a compile error rather than a format that renders and cannot be read back.
+ * Only the names cross the boundary — the render functions stay private, like
+ * the rest of this module's seam (see `engine/index.ts`).
  */
-const FORMAT_TOKENS: Readonly<Record<string, (d: Date) => string>> = Object.freeze({
+export const FORMAT_TOKEN_NAMES = ['yyyy', 'MM', 'dd', 'HH', 'mm', 'ss', 'fff'] as const;
+export type FormatTokenName = (typeof FORMAT_TOKEN_NAMES)[number];
+
+/** Is this run of characters one of the closed tokens? The ONE membership test,
+ * shared by the renderer below and `datamove/coerce.ts`'s parser (#1122), so the
+ * two directions cannot disagree about what a token even is. */
+export function isFormatToken(run: string): run is FormatTokenName {
+  return (FORMAT_TOKEN_NAMES as readonly string[]).includes(run);
+}
+
+const FORMAT_TOKENS: Readonly<Record<FormatTokenName, (d: Date) => string>> = Object.freeze({
   yyyy: (d) => pad(d.getUTCFullYear(), 4),
   MM: (d) => pad(d.getUTCMonth() + 1, 2),
   dd: (d) => pad(d.getUTCDate(), 2),
@@ -1562,8 +1592,7 @@ function formatDateTime(fn: string, a: unknown[]): string {
   // change the output of a multi-line format.
   return format.replace(/([\s\S])\1*/g, (run, ch: string, offset: number) => {
     if (!/[A-Za-z]/.test(ch)) return run;
-    const token = FORMAT_TOKENS[run];
-    if (token === undefined) {
+    if (!isFormatToken(run)) {
       // Report the POSITION, never the text. The format arg is a resolved value
       // like any other — it can be a ref, not a literal — and `SubstituteError`
       // messages are client-safe by contract (`types.ts`), which is why `parseTs`
@@ -1575,7 +1604,7 @@ function formatDateTime(fn: string, a: unknown[]): string {
           'ASCII letters cannot appear literally — assemble with concat)',
       );
     }
-    return token(dt);
+    return FORMAT_TOKENS[run](dt);
   });
 }
 
