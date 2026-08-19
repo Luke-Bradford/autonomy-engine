@@ -142,11 +142,25 @@ function diagnostic(
  * owner's own DB values (see the note there on why that does not cross the
  * never-echo-committed-content rule).
  *
- * The closing clause is not decoration. A read path excludes the resource from
+ * The closing clause is not decoration, and it is per-KIND (see `REMEDY`). A
+ * read path excludes the resource from
  * its comparison, but the APPLY still writes it from the branch's own file (it
  * reads real DB rows, not this snapshot) — so an import genuinely may change it,
  * and a bare "could not be compared" would read as "nothing will happen here".
  */
+/**
+ * #1114 — the remedy depends on the KIND, so it cannot be one hardcoded phrase.
+ * A pipeline or trigger is repaired by editing the graph and saving a new
+ * version; a dataset is a mutable row with no node and no version, so telling
+ * its owner to re-point a node and save the pipeline would send them looking for
+ * something that does not exist.
+ */
+const REMEDY: Record<UnserializableResource['kind'], string> = {
+  pipeline: 'until the node is re-pointed or removed and the pipeline saved',
+  trigger: 'until the node is re-pointed or removed and the pipeline saved',
+  dataset: 'until it is pointed at a connection that exists, or that connection is restored',
+};
+
 export function unserializableDiagnostic(
   offender: UnserializableResource,
 ): WorkspaceParseDiagnostic {
@@ -155,7 +169,7 @@ export function unserializableDiagnostic(
     code: 'unserializable_ref',
     message:
       `"${offender.name}" ${describeUnserializable(offender)} — it cannot be committed or ` +
-      `compared until the node is re-pointed or removed and the pipeline saved. ` +
+      `compared ${REMEDY[offender.kind]}. ` +
       `An import may still change it.`,
   };
 }

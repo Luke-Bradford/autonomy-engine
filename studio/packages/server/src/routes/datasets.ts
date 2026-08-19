@@ -4,12 +4,15 @@ import { NewDatasetSchema } from '@autonomy-studio/shared';
 import {
   createDataset,
   deleteDataset,
+  getConnection,
   getDataset,
   listDatasetsPage,
   updateDataset,
 } from '../repo/index.js';
-import { NotFoundError } from '../errors.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
+import type { Db } from '../repo/types.js';
+import type { Principal } from '../auth/principal.js';
 
 /**
  * #1114 (M2, data-movement spec §2) — the `datasets` REST surface, mirroring
@@ -48,11 +51,38 @@ const DatasetWriteBodySchema = NewDatasetSchema.omit({
   parameters: z.array(z.string().min(1)).optional(),
 });
 
+/**
+ * A dataset's `connectionId` names the store it lives in, and it arrives as raw
+ * HTTP input — so being logged in is not evidence the caller may bind to it.
+ * Authentication is not authorisation, and the check is HERE (the untrusted
+ * boundary) rather than in the repo, which the workspace-git apply also calls
+ * with an id it has already resolved owner-scoped through `connById`.
+ *
+ * This is deliberately an OWNERSHIP + existence check at write time, not a
+ * standing guarantee — the connection can still be deleted afterwards, which is
+ * the dangling case the serializer discloses and a dispatch will refuse (§3.1's
+ * "refs to mutable rows are checked at dispatch" holds unchanged). What it stops
+ * is a caller pointing a dataset at a store belonging to someone else in the
+ * first place.
+ *
+ * A 400, not a 404: the dataset in the URL (on PATCH) is real and owned, so 404
+ * would be a lie about the wrong resource. The message deliberately does not
+ * distinguish "no such connection" from "not yours" — that difference is exactly
+ * the existence oracle an unauthorised caller would be probing for.
+ */
+function requireOwnedConnection(db: Db, principal: Principal, connectionId: string): void {
+  const connection = getConnection(db, connectionId);
+  if (!connection || connection.ownerId !== principal.ownerId) {
+    throw new BadRequestError(`no such connection "${connectionId}"`);
+  }
+}
+
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
   fastify.post('/api/datasets', async (request, reply) => {
     const body = DatasetWriteBodySchema.parse(request.body);
+    requireOwnedConnection(db, request.principal, body.connectionId);
     const created = createDataset(db, { ...body, ownerId: request.principal.ownerId });
     reply.status(201).send(created);
   });
@@ -80,6 +110,11 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     const patch = DatasetWriteBodySchema.partial().parse(request.body);
+    // Only when the patch actually re-points the dataset — an omitted key leaves
+    // the stored (already-checked) binding alone.
+    if (patch.connectionId !== undefined) {
+      requireOwnedConnection(db, request.principal, patch.connectionId);
+    }
     const updated = updateDataset(db, existing.id, patch);
     if (!updated) throw new NotFoundError('dataset', existing.id);
     return updated;

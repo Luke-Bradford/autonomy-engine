@@ -761,9 +761,9 @@ export function applyWorkspace(
      *
      * The DB side is read with `getDatasetByResourceId` rather than from the
      * serialized snapshot, which is the PIPELINE pattern and not the connection
-     * one. The difference matters: the snapshot is built by `serializeWorkspace`,
-     * which DROPS any dataset whose store connection was hard-deleted (it cannot
-     * remap the ref). Trusting the snapshot would therefore make such a dataset
+     * one. The difference matters: the snapshot is built by
+     * `serializeWorkspaceTolerant`, which DROPS any dataset whose store
+     * connection was hard-deleted (it cannot remap the ref). Trusting the snapshot would therefore make such a dataset
      * look absent and be re-created as a duplicate. The connection phase can take
      * the shortcut only because connections hold no refs and so are never dropped.
      */

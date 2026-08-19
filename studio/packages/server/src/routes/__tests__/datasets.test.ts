@@ -1,21 +1,34 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { createDataset, getDataset } from '../../repo/index.js';
+import { createConnection, createDataset, getDataset } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
-const body = {
+/** The store every fixture dataset lives in — a REAL owned connection, because
+ * a write now has to prove the caller may bind to it. */
+let store: string;
+
+const bodyFor = (connectionId: string) => ({
   name: 'Customers CSV',
-  connectionId: 'conn_store',
+  connectionId,
   kind: 'delimited',
   config: { path: 'customers.csv', header: true },
   columns: [{ name: 'id', type: 'integer', nullable: false }],
-};
+});
 
 describe('datasets routes', () => {
   let app: FastifyInstance;
+  let body: ReturnType<typeof bodyFor>;
 
   beforeAll(async () => {
     app = await buildTestApp();
+    store = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Warehouse',
+      kind: 'fs',
+      config: { roots: ['/data'] },
+      secretRef: null,
+    }).id;
+    body = bodyFor(store);
   });
 
   afterAll(async () => {
@@ -143,6 +156,70 @@ describe('datasets routes', () => {
     ).toBe(404);
     // ...and it is still there.
     expect(getDataset(app.db, other.id)).not.toBeNull();
+  });
+
+  // Authentication is not authorisation. `connectionId` is raw HTTP input, so a
+  // logged-in caller must still be shown to own the store it names.
+  it('refuses a create binding to a connection that is not the caller’s', async () => {
+    const theirs = createConnection(app.db, {
+      ownerId: 'someone_else',
+      name: 'Their warehouse',
+      kind: 'fs',
+      config: { roots: ['/theirs'] },
+      secretRef: null,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/datasets',
+      payload: bodyFor(theirs.id),
+    });
+    expect(res.statusCode).toBe(400);
+    // The message must not distinguish "not yours" from "no such connection" —
+    // that difference is the existence oracle a prober is after.
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/api/datasets',
+      payload: bodyFor('conn_does_not_exist'),
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(res.json().message.replace(theirs.id, 'X')).toBe(
+      missing.json().message.replace('conn_does_not_exist', 'X'),
+    );
+  });
+
+  it('refuses a PATCH that re-points a dataset at someone else’s connection', async () => {
+    const theirs = createConnection(app.db, {
+      ownerId: 'someone_else',
+      name: 'Their other warehouse',
+      kind: 'fs',
+      config: { roots: ['/theirs'] },
+      secretRef: null,
+    });
+    const created = (
+      await app.inject({ method: 'POST', url: '/api/datasets', payload: body })
+    ).json();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/datasets/${created.id}`,
+      payload: { connectionId: theirs.id },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(getDataset(app.db, created.id)?.connectionId).toBe(store);
+  });
+
+  it('a PATCH that omits connectionId leaves the checked binding alone', async () => {
+    const created = (
+      await app.inject({ method: 'POST', url: '/api/datasets', payload: body })
+    ).json();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/datasets/${created.id}`,
+      payload: { name: 'Renamed only' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().connectionId).toBe(store);
   });
 
   it('404s for a missing dataset', async () => {

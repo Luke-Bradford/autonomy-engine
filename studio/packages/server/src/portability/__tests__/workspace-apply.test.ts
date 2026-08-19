@@ -118,6 +118,18 @@ describe('APPLY_ORDER (#1112 — the apply phase order)', () => {
     expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
     expect(APPLY_ORDER.indexOf('pipeline')).toBeLessThan(APPLY_ORDER.indexOf('trigger'));
   });
+
+  // #1114 — `dataset` sits BETWEEN connections and pipelines, and both halves
+  // need pinning here rather than only in the functional tests. The first half
+  // is exercised there (a dataset resolves its store against `connById`); the
+  // SECOND is not exercised by anything yet, because nothing makes a pipeline
+  // reference a dataset until M3 — so without this assertion the ordering the
+  // ticket names as a deliverable could be silently reversed and every test
+  // would still pass, right up until M3 made it a real bug.
+  it('applies datasets after connections and before pipelines', () => {
+    expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('dataset'));
+    expect(APPLY_ORDER.indexOf('dataset')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
+  });
 });
 
 describe('applyWorkspace (#3 G5c-1)', () => {

@@ -78,6 +78,18 @@ import {
  * import") and are deferred to the G5c apply. A pre-G1 file (`resourceId: null`)
  * has no identity to match, so it always classifies `create`.
  *
+ * #1114 — one more incompleteness, on the DB side and specific to DATASETS. The
+ * `db` snapshot is `serializeWorkspaceTolerant` output, which DROPS a dataset
+ * whose store connection was hard-deleted (it cannot remap the ref), so such a
+ * dataset is missing from the baseline and classifies `create` rather than
+ * `update`. The preview route filters those resources out (`withoutResources`)
+ * and reports them as their own diagnostic instead, so the operator is told the
+ * truth; `applyWorkspace` is unaffected because its dataset phase resolves the
+ * real DB row via `getDatasetByResourceId` and never reads a dataset's
+ * disposition from this plan. Stated here so the next caller to wire
+ * `plan.resources` into something apply-visible for datasets knows it is not a
+ * complete picture on its own.
+ *
  * Archive inference is SOUND only over a complete snapshot: if `incoming` carries
  * any parse diagnostic (a file that failed to read/parse never reached
  * `incoming.pipelines`), NO archives are proposed — an absent id could be a real
