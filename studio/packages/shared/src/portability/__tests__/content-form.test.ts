@@ -143,6 +143,37 @@ describe('pipelineContentForm', () => {
     );
   });
 
+  // M3 (#1117) — `NodeExportSchema.datasetIds` is OPTIONAL, and this is what
+  // that buys. The content form excludes `position` and nothing else at node
+  // level, so an unconditionally-emitted key (`{source: null, sink: null}` on
+  // every node) would change the committed bytes of every pipeline file in every
+  // workspace and report the lot as drifted on the next pull.
+  //
+  // Asserted as "the substring is absent" rather than against a golden blob of
+  // the whole form: it fails on exactly the mutation it names and on nothing
+  // else, where a whole-form golden would also break on every unrelated schema
+  // addition and get updated by reflex.
+  it('OMITS datasetIds entirely for a node that binds none (no git churn)', () => {
+    expect(pipelineContentForm(pipelineData())).not.toContain('datasetIds');
+  });
+
+  // The positive twin, without which the assertion above passes with the whole
+  // feature deleted.
+  it('CARRIES datasetIds when a node binds them, and a changed end is a real edit', () => {
+    const bound = pipelineData({
+      version: { nodes: [node({ datasetIds: { source: 'res_ds_a', sink: 'res_ds_b' } })] },
+    });
+    const form = pipelineContentForm(bound);
+    expect(form).toContain('datasetIds');
+    expect(form).toContain('res_ds_a');
+    expect(form).not.toBe(pipelineContentForm(pipelineData()));
+
+    const repointed = pipelineData({
+      version: { nodes: [node({ datasetIds: { source: 'res_ds_a', sink: 'res_ds_OTHER' } })] },
+    });
+    expect(pipelineContentForm(repointed)).not.toBe(form);
+  });
+
   it('is insensitive to object key ordering (canonical)', () => {
     const reordered = pipelineData();
     reordered.versions[0]!.nodes[0]!.config = { z: 1, a: 2 };
