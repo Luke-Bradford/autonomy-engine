@@ -110,23 +110,34 @@ describe('reading a `table` dataset', () => {
   });
 
   it('YIELDS TO THE EVENT LOOP between batches', async () => {
-    // The §9 property, asserted by observation rather than by inspecting the
-    // implementation: a `setImmediate` scheduled before the read must get to
-    // run BEFORE the read finishes. A synchronous drain — or a microtask
-    // "yield", which does not turn the loop — would starve it to the end.
+    // The §9 property, and the version of this test that DOESN'T work is worth
+    // recording: scheduling the probe before the read passes even with a
+    // microtask "yield", because `resolveWithinRoots` does real `realpath`/
+    // `lstat` I/O before the first batch and that turns the loop on its own. It
+    // asserted nothing about the between-batch yield at all.
+    //
+    // So the probe is scheduled AFTER the first batch has been delivered, and
+    // the assertion is that it runs before the LAST one. Only a yield that
+    // actually turns the loop between batches can let it in — a microtask
+    // drains before the loop turns, which is why the tree's `queueMicrotask`
+    // idiom would be a silent no-op here (mutation-checked: swapping
+    // `setImmediate` for `queueMicrotask` turns this red).
     const root = tempRoot();
     seedDb(root, 50);
     const order: string[] = [];
-    setImmediate(() => order.push('event-loop'));
     const batches = readSqliteDatasetBatches({
       connectionConfig: { roots: [root], path: join(root, 'app.db') },
       datasetKind: 'table',
       datasetConfig: { table: 't' },
       batchRows: 5,
     });
-    for await (const _batch of batches) order.push('batch');
-    expect(order.indexOf('event-loop')).toBeGreaterThan(-1);
-    expect(order.indexOf('event-loop')).toBeLessThan(order.length - 1);
+    for await (const _batch of batches) {
+      void _batch;
+      if (order.length === 0) setImmediate(() => order.push('event-loop'));
+      order.push('batch');
+    }
+    expect(order).toContain('event-loop');
+    expect(order.indexOf('event-loop')).toBeLessThan(order.lastIndexOf('batch'));
   });
 
   it('reads an integer too large for a double WITHOUT truncating it', async () => {
