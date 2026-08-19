@@ -219,8 +219,8 @@ gets the ordering exactly backwards: the pin's whole value is being in place whe
 
 ### 2.5 Where format lives: on the DATASET **[SETTLED]**
 
-#996 asks this directly — *"is 'CSV vs Excel' a property of the dataset, the linked service, or the
-copy? ADF puts it on the dataset. Say which, and why."* It is the dataset, and the reasoning holds
+#996 asks this directly — _"is 'CSV vs Excel' a property of the dataset, the linked service, or the
+copy? ADF puts it on the dataset. Say which, and why."_ It is the dataset, and the reasoning holds
 independently of ADF:
 
 - **Not the linked service.** One folder holds CSV and Excel side by side, so format-on-connection
@@ -230,7 +230,7 @@ independently of ADF:
 - **Not the copy.** The mapping surface needs the source's columns to auto-map against (§6.3). If
   format lived on the copy, a dataset could not describe its own columns, so every copy would
   re-declare them — and two copies over one file could disagree about what that file is.
-- **The dataset**, because a dataset is precisely *"a thing in a store, in a shape"*. `kind` selects
+- **The dataset**, because a dataset is precisely _"a thing in a store, in a shape"_. `kind` selects
   the reader; `config` carries that kind's options.
 
 ### 2.6 What each kind's `config` carries
@@ -243,19 +243,19 @@ dataset kinds.
 
 **Store connections (new `ConnectionKind`s):**
 
-| Kind | Non-secret `config` | Secret |
-|---|---|---|
-| `sqlite` | `roots` + `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `writable` | none |
-| `postgres` | `host`, `port`, `database`, `user`, `sslmode`, `connectTimeoutMs`, `statementTimeoutMs` | `secretRef` → password. **Joins `SECRET_REQUIRING_CONNECTION_KINDS`** (§8) |
+| Kind       | Non-secret `config`                                                                                                                                                  | Secret                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `sqlite`   | `roots` + `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `writable` | none                                                                       |
+| `postgres` | `host`, `port`, `database`, `user`, `sslmode`, `connectTimeoutMs`, `statementTimeoutMs`                                                                              | `secretRef` → password. **Joins `SECRET_REQUIRING_CONNECTION_KINDS`** (§8) |
 
 **Dataset kinds:**
 
-| Kind | `config` |
-|---|---|
+| Kind        | `config`                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------ |
 | `delimited` | `path`, `delimiter` (default `,`), `quote`, `escape`, `header` (bool), `encoding`, `nullValue`, `dateFormat` |
-| `excel` | `path`, `sheet` (name or index), `headerRow`, `nullValue`, `dateFormat` |
-| `table` | `schema`, `table` — **identifiers, so save-time literal-only (§8)** |
-| `query` | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters` |
+| `excel`     | `path`, `sheet` (name or index), `headerRow`, `nullValue`, `dateFormat`                                      |
+| `table`     | `schema`, `table` — **identifiers, so save-time literal-only (§8)**                                          |
+| `query`     | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters`                      |
 
 **Two corrections from M4, which built this row** (#1119):
 
@@ -642,20 +642,20 @@ same PR, each citing #993:
 Strictly ordered. **M1 first and alone** — nothing else can be built on a seam that cannot express a
 source and a sink.
 
-| #       | Ticket                                                                                                                                                                                                                      | Notes                                                 |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **M1**  | **The paired-connection contract widening** (§1): `NodeSchema.connectionIds?`, `ActivityContext.sink?`, the fourth `runActivity` arg, two-sided `resolveConnection` + readiness gate + side-labelled failure codes          | additive; six adapters untouched. Co-owned with #1 D6 |
-| **M2**  | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers     | the pin precedes the kind, deliberately               |
-| **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                       |
-| **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                             |
-| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **Split when it becomes a queue item** — this is one spec-level ticket carrying at least three separable slices (the pump, the coercion matrix, the sink discipline) |
-| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                       |
-| **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                       |
-| **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                    |
-| **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                               |
-| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                       |
-| **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                       |
-| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                       |
+| #       | Ticket                                                                                                                                                                                                                      | Notes                                                                                                                                                                                                                                     |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **M1**  | **The paired-connection contract widening** (§1): `NodeSchema.connectionIds?`, `ActivityContext.sink?`, the fourth `runActivity` arg, two-sided `resolveConnection` + readiness gate + side-labelled failure codes          | additive; six adapters untouched. Co-owned with #1 D6                                                                                                                                                                                     |
+| **M2**  | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers     | the pin precedes the kind, deliberately                                                                                                                                                                                                   |
+| **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                                                                                                                                                                                                           |
+| **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                                                                                                                                                                                                                 |
+| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the catalog entry + the pump + `truncated` + the progress ticks + the version bump |
+| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                                                                                                                                                                                                           |
+| **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
+| **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                                                                                                                                                                                                        |
+| **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                                                                                                                                                                                                                   |
+| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                                                                                                                                                                                                           |
+| **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
+| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 
 **Dependencies are named, and checked against packaging, not merely "called out".** `#993` chose the
 data-movement build, so these are consequences of a settled decision rather than an open fork — but
