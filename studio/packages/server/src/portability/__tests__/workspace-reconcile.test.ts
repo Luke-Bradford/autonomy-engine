@@ -3,6 +3,7 @@ import { pipelineVersionContentForm } from '@autonomy-studio/shared';
 import type { PipelineVersionExport } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
+  DatasetExportData,
   NodeExport,
   PipelineExportData,
   TriggerExportData,
@@ -11,6 +12,7 @@ import { classifyWorkspace } from '../workspace-reconcile.js';
 import type { OwnedVersionForm } from '../workspace-serialize.js';
 import type {
   ParsedConnection,
+  ParsedDataset,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -126,7 +128,14 @@ function parsedTrigger(resourceId: string | null, name: string, enabled?: boolea
 }
 
 function ws(overrides: Partial<ParsedWorkspace> = {}): ParsedWorkspace {
-  return { pipelines: [], connections: [], triggers: [], diagnostics: [], ...overrides };
+  return {
+    pipelines: [],
+    connections: [],
+    datasets: [],
+    triggers: [],
+    diagnostics: [],
+    ...overrides,
+  };
 }
 
 const dispositionOf = (plan: ReturnType<typeof classifyWorkspace>, resourceId: string) =>
@@ -523,5 +532,83 @@ describe('classifyWorkspace', () => {
       'connection',
       'trigger',
     ]);
+  });
+});
+
+// #1114 (M2 slice 2) — datasets in the import PREVIEW.
+//
+// Written as add/edit/rename FIRST and "unchanged" last, for the same reason as
+// the drift pair: a classifier that returns `[]` for datasets would satisfy an
+// unchanged-reports-nothing assertion perfectly, while never showing the
+// operator a single dataset before they approve a pull.
+describe('classifyWorkspace — datasets (#1114)', () => {
+  function datasetData(name: string, path = 'customers.csv'): DatasetExportData {
+    return {
+      id: 'ds',
+      resourceId: 'IGNORED',
+      ownerId: 'local',
+      name,
+      connectionId: 'res_store',
+      kind: 'delimited',
+      config: { path, header: true },
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+      parameters: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  const parsedDataset = (
+    resourceId: string | null,
+    name: string,
+    path?: string,
+  ): ParsedDataset => ({
+    path: `datasets/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`,
+    resourceId,
+    data: datasetData(name, path),
+  });
+
+  it('classifies a NEW dataset as create', () => {
+    const plan = classify(ws(), ws({ datasets: [parsedDataset('res_1', 'Customers')] }));
+    expect(dispositionOf(plan, 'res_1')).toMatchObject({
+      kind: 'dataset',
+      disposition: 'create',
+    });
+  });
+
+  it('classifies an EDITED dataset as update', () => {
+    const plan = classify(
+      ws({ datasets: [parsedDataset('res_1', 'Customers', 'customers.csv')] }),
+      ws({ datasets: [parsedDataset('res_1', 'Customers', 'customers-v2.csv')] }),
+    );
+    expect(dispositionOf(plan, 'res_1')).toMatchObject({
+      kind: 'dataset',
+      disposition: 'update',
+      contentChanged: true,
+    });
+  });
+
+  it('classifies a RENAMED dataset as rename, not update', () => {
+    const plan = classify(
+      ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+      ws({ datasets: [parsedDataset('res_1', 'Clients')] }),
+    );
+    expect(dispositionOf(plan, 'res_1')).toMatchObject({
+      kind: 'dataset',
+      disposition: 'rename',
+      nameChanged: true,
+      contentChanged: false,
+    });
+  });
+
+  it('classifies an identical dataset as unchanged', () => {
+    const plan = classify(
+      ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+      ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+    );
+    expect(dispositionOf(plan, 'res_1')).toMatchObject({
+      kind: 'dataset',
+      disposition: 'unchanged',
+    });
   });
 });

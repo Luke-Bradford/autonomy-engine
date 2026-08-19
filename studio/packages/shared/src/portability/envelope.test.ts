@@ -93,6 +93,54 @@ describe('ExportEnvelopeSchema', () => {
     ).toThrow();
   });
 
+  // #1114 (M2 slice 2)
+  it('round-trips a dataset envelope, keeping the store ref as a resourceId', () => {
+    const datasetEnvelope = {
+      schemaVersion: SCHEMA_VERSION,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'dataset' as const,
+      exportedAt: 1700000000000,
+      data: {
+        id: 'ds_1',
+        resourceId: 'res_ds1',
+        ownerId: null,
+        name: 'Customers CSV',
+        connectionId: 'res_store',
+        kind: 'delimited' as const,
+        config: { path: 'customers.csv', header: true },
+        columns: [{ name: 'id', type: 'integer' as const, nullable: false }],
+        parameters: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    };
+    expect(ExportEnvelopeSchema.parse(datasetEnvelope)).toEqual(datasetEnvelope);
+  });
+
+  // The #473 / §2.2 contract survives the wire format too: an export that has
+  // lost its column list must not be readable as "this table has no columns".
+  it('rejects a dataset envelope with no columns rather than defaulting them', () => {
+    const datasetEnvelope = {
+      schemaVersion: SCHEMA_VERSION,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'dataset' as const,
+      exportedAt: 1700000000000,
+      data: {
+        id: 'ds_1',
+        resourceId: 'res_ds1',
+        ownerId: null,
+        name: 'Customers CSV',
+        connectionId: 'res_store',
+        kind: 'delimited' as const,
+        config: {},
+        parameters: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    };
+    expect(() => ExportEnvelopeSchema.parse(datasetEnvelope)).toThrow();
+  });
+
   it('defaults strippedConnectionRefs to [] for an older envelope that predates the field', () => {
     const { strippedConnectionRefs, ...dataWithoutField } = validPipelineEnvelope.data;
     void strippedConnectionRefs;

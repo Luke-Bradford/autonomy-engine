@@ -2,6 +2,7 @@ import {
   ExportEnvelopeSchema,
   ImportResultSchema,
   type ImportAttentionItem,
+  type ExportKind,
   type ImportResult,
 } from '@autonomy-studio/shared';
 import { apiFetch, apiFetchText } from './client';
@@ -104,7 +105,7 @@ const ENVELOPE_KINDS: ReadonlySet<string> = new Set(
  * meaning "send it".
  *
  * This exists so a mis-picked file is refused BEFORE any request. `POST
- * /api/import` takes all three kinds and mints a resource for whichever it
+ * /api/import` takes every importable kind and mints a resource for whichever it
  * gets, so dropping a connection export on the Triggers list would otherwise
  * succeed — creating a real row on a page that cannot show it, which the
  * operator then has to find and delete. There is no dry-run to fall back on.
@@ -118,10 +119,16 @@ const ENVELOPE_KINDS: ReadonlySet<string> = new Set(
 export function foreignEnvelopeKind(
   envelope: unknown,
   listKind: ImportResult['kind'],
-): ImportResult['kind'] | null {
+): ExportKind | null {
   const kind: unknown = (envelope as { kind?: unknown }).kind;
   if (typeof kind !== 'string' || !ENVELOPE_KINDS.has(kind)) return null;
-  return kind === listKind ? null : (kind as ImportResult['kind']);
+  // #1114 — `ExportKind`, NOT `ImportResult['kind']`. `ENVELOPE_KINDS` derives
+  // from `ExportEnvelopeSchema`, which since M2 declares a kind the import route
+  // refuses (`dataset`). The old narrower cast was a LIE the compiler accepted:
+  // it returned a value outside the type it claimed, and the caller's lookup
+  // table then handed back `undefined`. Widening it makes that case a real,
+  // typed possibility every consumer has to handle.
+  return kind === listKind ? null : (kind as ExportKind);
 }
 
 /** `POST /api/import` — the one entry point for every envelope kind. */

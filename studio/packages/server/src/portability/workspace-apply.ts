@@ -2,6 +2,7 @@ import {
   NewTriggerSchema,
   RESOURCE_KINDS,
   connectionContentForm,
+  datasetContentForm,
   interpolationMode,
   pipelineVersionContentForm,
   triggerContentForm,
@@ -30,6 +31,7 @@ import {
   listConnections,
   updateConnection,
 } from '../repo/connections.js';
+import { createDataset, getDatasetByResourceId, updateDataset } from '../repo/datasets.js';
 import {
   regateTriggersForConnection,
   unreadyConnectionsForVersion,
@@ -180,6 +182,30 @@ function literalCallRefs(version: PipelineVersionExport): string[] {
     if (ref !== undefined && interpolationMode(ref).mode === 'literal') refs.push(ref);
   }
   return refs;
+}
+
+/**
+ * #1114 (M2) — resolve a RESOURCE-level `resourceId` ref to a concrete DB id, or
+ * abort the apply.
+ *
+ * Deliberately NOT `remapNodeToDb`'s inner `toDbRef`, and the difference is the
+ * point rather than an oversight: that one carries a three-way rule (null →
+ * unbound, `${}` → preserved verbatim, literal → mapped or refused) because a
+ * NODE's ref is a dispatch-time binding. A dataset's `connectionId` is an
+ * ADDRESS — non-nullable and never an expression — so it has exactly one arm,
+ * and giving it the three-way rule would imply two states it can never be in.
+ *
+ * `what` is a caller-supplied phrase naming the referring resource, so the
+ * refusal says which dataset is broken rather than only which id was missing.
+ */
+function resourceRefToDb(ref: string, byResourceId: Map<string, string>, what: string): string {
+  const resolved = byResourceId.get(ref);
+  if (resolved === undefined) {
+    throw new WorkspaceApplyError(
+      `${what} "${ref}", which is not on the branch or in the workspace`,
+    );
+  }
+  return resolved;
 }
 
 /** Remap ONE node's `resourceId` refs to concrete DB ids (the inverse of
@@ -490,14 +516,17 @@ function assertTriggerWindowBindingsConsistent(data: TriggerExportData, label: s
  * the compiler cannot catch two kinds sharing a rank (a hand-typed number), so
  * `APPLY_ORDER`'s totality and injectivity are pinned by test.
  *
- * M2 slice 2 inserts `dataset` between connections and pipelines (a dataset
- * names the connection it lives in, and a copy node names the dataset), which is
- * a deliberate renumber here rather than an edit to a list somewhere else.
+ * #1114 (M2 slice 2) did exactly that: `dataset` is INSERTED between connections
+ * and pipelines, by renumbering here rather than editing a list somewhere else.
+ * A dataset names the connection it lives in, so it needs `connById` populated;
+ * a copy node will name the dataset (M3), so datasets must exist before the
+ * pipeline phase remaps node refs.
  */
 export const APPLY_RANK: Record<ResourceKind, number> = {
   connection: 0,
-  pipeline: 1,
-  trigger: 2,
+  dataset: 1,
+  pipeline: 2,
+  trigger: 3,
 };
 
 /** The apply phases in `APPLY_RANK` order — every `ResourceKind`, exactly once. */
@@ -538,10 +567,19 @@ export function applyWorkspace(
     // call to the corrupt-branch refusal above. That refusal exists to stop a
     // DESTRUCTIVE act: an incomplete branch snapshot would read a pipeline's
     // file as absent and ARCHIVE it. A DB-side gap cannot do that. This snapshot
-    // is read in exactly two places — the connection content forms just below
-    // (connections carry no refs, so it is complete for them) and `plan.archive`
-    // — so an offender's absence can only make the apply archive LESS, never
-    // more. The pipeline loop reads real DB rows via `getPipelineByResourceId`
+    // is read for the connection content forms just below (connections carry no
+    // refs, so it is complete for them), for the DATASET content forms (where it
+    // is NOT complete — see below), and for `plan.archive` — so an offender's
+    // absence can only make the apply archive LESS, never more.
+    //
+    // #1114 — datasets are the exception to "complete", and the dataset phase is
+    // written for it: a dataset whose store connection was hard-deleted cannot
+    // have its ref remapped, so `serializeWorkspaceTolerant` DROPS it and its
+    // content form is missing here. That reads as `contentChanged` (the
+    // `dbForm === undefined ||` arm), so such a dataset re-applies from the
+    // branch every time instead of being mistaken for absent — which is also why
+    // the dataset phase resolves the existing row with `getDatasetByResourceId`
+    // rather than trusting this snapshot. The pipeline loop reads real DB rows via `getPipelineByResourceId`
     // and compares through #1018's ref-tolerant `compareStoredVersion`, so an
     // offender IS still applied from the branch's own file.
     //
@@ -553,6 +591,10 @@ export function applyWorkspace(
     const dbConnFormByRid = new Map<string, string>();
     for (const c of dbSnapshot.connections) {
       if (c.resourceId !== null) dbConnFormByRid.set(c.resourceId, connectionContentForm(c.data));
+    }
+    const dbDatasetFormByRid = new Map<string, string>();
+    for (const d of dbSnapshot.datasets) {
+      if (d.resourceId !== null) dbDatasetFormByRid.set(d.resourceId, datasetContentForm(d.data));
     }
     // #3 G7 — the resolution domain for the plan's incoming-trigger normalization
     // (all owned versions incl. archived). The apply does NOT consume the plan's
@@ -706,6 +748,84 @@ export function applyWorkspace(
           resourceId: existing.resourceId,
           action,
           versionMinted: false, // connections have no versions
+          versionContentUnverified: false, // ...so no version content to judge
+        });
+      }
+    };
+
+    /**
+     * #1114 (M2) — the dataset phase. Runs AFTER connections (see `APPLY_RANK`)
+     * because a dataset's `connectionId` arrives as a stable `resourceId` and is
+     * resolved through `connById`, which the connection phase populates for
+     * every connection it created OR matched.
+     *
+     * The DB side is read with `getDatasetByResourceId` rather than from the
+     * serialized snapshot, which is the PIPELINE pattern and not the connection
+     * one. The difference matters: the snapshot is built by
+     * `serializeWorkspaceTolerant`, which DROPS any dataset whose store
+     * connection was hard-deleted (it cannot remap the ref). Trusting the snapshot would therefore make such a dataset
+     * look absent and be re-created as a duplicate. The connection phase can take
+     * the shortcut only because connections hold no refs and so are never dropped.
+     */
+    const applyDatasets = (): void => {
+      for (const inc of incoming.datasets) {
+        const data = inc.data;
+        const existing =
+          inc.resourceId === null ? null : getDatasetByResourceId(db, ownerId, inc.resourceId);
+
+        // The inverse of `serializeDataset`'s remap. An unresolvable store is a
+        // broken/incomplete branch and aborts the whole atomic apply — the same
+        // fail-closed posture as a node's unresolvable connection ref, rather
+        // than writing a dataset that points at nothing.
+        const connectionId = resourceRefToDb(
+          data.connectionId,
+          connById,
+          `dataset "${data.name}" lives in connection`,
+        );
+
+        const patch = {
+          name: data.name,
+          connectionId,
+          kind: data.kind,
+          config: data.config,
+          columns: data.columns,
+          parameters: data.parameters,
+        };
+
+        if (existing === null) {
+          const created = createDataset(
+            db,
+            { ...patch, ownerId },
+            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          );
+          applied.push({
+            path: inc.path,
+            kind: 'dataset',
+            resourceId: created.resourceId,
+            action: 'created',
+            versionMinted: false, // datasets have no versions
+            versionContentUnverified: false, // ...so no version content to judge
+          });
+          continue;
+        }
+
+        const dbForm = inc.resourceId !== null ? dbDatasetFormByRid.get(inc.resourceId) : undefined;
+        const contentChanged = dbForm === undefined || datasetContentForm(data) !== dbForm;
+        const nameChanged = data.name !== existing.name;
+        let action: WorkspaceGitAppliedAction = 'unchanged';
+        if (contentChanged) {
+          updateDataset(db, existing.id, patch);
+          action = 'updated';
+        } else if (nameChanged) {
+          updateDataset(db, existing.id, { name: data.name });
+          action = 'renamed';
+        }
+        applied.push({
+          path: inc.path,
+          kind: 'dataset',
+          resourceId: existing.resourceId,
+          action,
+          versionMinted: false, // datasets have no versions
           versionContentUnverified: false, // ...so no version content to judge
         });
       }
@@ -1001,6 +1121,7 @@ export function applyWorkspace(
 
     const appliers: Record<ResourceKind, () => void> = {
       connection: applyConnections,
+      dataset: applyDatasets,
       pipeline: applyPipelines,
       trigger: applyTriggers,
     };

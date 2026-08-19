@@ -9,22 +9,26 @@ import {
 import {
   archivePipeline,
   createConnection,
+  createDataset,
   createPipeline,
   createPipelineVersion,
   createSecret,
   createTrigger,
   deleteConnection,
   getConnectionByResourceId,
+  getDatasetByResourceId,
   getLatestPipelineVersion,
   getPipeline,
   getPipelineByResourceId,
   getTrigger,
   getTriggerByResourceId,
   listConnections,
+  listDatasets,
   listPipelineVersions,
   listPipelines,
   listTriggers,
   updateConnection,
+  updateDataset,
   updatePipeline,
   updateTrigger,
 } from '../../repo/index.js';
@@ -36,7 +40,11 @@ import {
   WorkspaceApplyError,
 } from '../workspace-apply.js';
 import { parseWorkspaceFiles, type ParsedWorkspace } from '../workspace-parse.js';
-import { serializeWorkspace } from '../workspace-serialize.js';
+import {
+  describeUnserializable,
+  serializeWorkspace,
+  serializeWorkspaceTolerant,
+} from '../workspace-serialize.js';
 
 /** The branch snapshot of a DB workspace: serialize + parse through the same
  * path a real committed branch takes. This IS the `incoming` an import applies. */
@@ -109,6 +117,18 @@ describe('APPLY_ORDER (#1112 — the apply phase order)', () => {
   it('applies connections before pipelines, and pipelines before triggers', () => {
     expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
     expect(APPLY_ORDER.indexOf('pipeline')).toBeLessThan(APPLY_ORDER.indexOf('trigger'));
+  });
+
+  // #1114 — `dataset` sits BETWEEN connections and pipelines, and both halves
+  // need pinning here rather than only in the functional tests. The first half
+  // is exercised there (a dataset resolves its store against `connById`); the
+  // SECOND is not exercised by anything yet, because nothing makes a pipeline
+  // reference a dataset until M3 — so without this assertion the ordering the
+  // ticket names as a deliverable could be silently reversed and every test
+  // would still pass, right up until M3 made it a real bug.
+  it('applies datasets after connections and before pipelines', () => {
+    expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('dataset'));
+    expect(APPLY_ORDER.indexOf('dataset')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
   });
 });
 
@@ -1705,5 +1725,143 @@ describe('applyWorkspace connection-readiness gate (#3 G8b-3)', () => {
     const result = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     expect(result.applied.find((a) => a.kind === 'connection')!.action).toBe('updated');
     expect(getTrigger(tgt, trig.id)!.enabled).toBe(true);
+  });
+});
+
+// #1114 (M2 slice 2) — the `dataset` resource across the portability seam. The
+// property under test throughout is the one that would break git most QUIETLY:
+// a dataset's `connectionId` is a LOCAL db id, and committing it verbatim would
+// put one workspace's private key into a shared repo, where it resolves to
+// nothing — or to a DIFFERENT connection — on import, with nothing thrown.
+describe('applyWorkspace — datasets (#1114)', () => {
+  const columns = [{ name: 'id', type: 'integer' as const, nullable: false }];
+
+  function sourceWorkspace() {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'Warehouse',
+      kind: 'fs',
+      config: { roots: ['/data'] },
+      secretRef: null,
+    });
+    const dataset = createDataset(src, {
+      ownerId: 'local',
+      name: 'Customers CSV',
+      connectionId: conn.id,
+      kind: 'delimited',
+      config: { path: 'customers.csv', header: true },
+      columns,
+      parameters: ['path'],
+    });
+    return { src, conn, dataset };
+  }
+
+  it('commits the store as a resourceId, never the local db id', () => {
+    const { src, conn, dataset } = sourceWorkspace();
+    const branch = snapshot(src);
+
+    expect(branch.datasets).toHaveLength(1);
+    const committed = branch.datasets[0]!;
+    expect(committed.path).toBe('datasets/customers-csv.json');
+    // THE assertion this whole slice turns on.
+    expect(committed.data.connectionId).toBe(conn.resourceId);
+    expect(committed.data.connectionId).not.toBe(conn.id);
+    expect(dataset.connectionId).toBe(conn.id);
+  });
+
+  it('round-trips into a DIFFERENT workspace, re-resolving the store locally', () => {
+    const { src, dataset } = sourceWorkspace();
+    const branch = snapshot(src);
+
+    // A genuinely separate workspace: its own db, so every local id differs.
+    const dst = freshDb().db;
+    const result = applyWorkspace(dst, 'local', branch, 'head1', 'main');
+    expect(result.refused).toBe(false);
+
+    const landed = getDatasetByResourceId(dst, 'local', dataset.resourceId)!;
+    expect(landed).not.toBeNull();
+    expect(landed.name).toBe('Customers CSV');
+    expect(landed.columns).toEqual(columns);
+    expect(landed.parameters).toEqual(['path']);
+    // The ref was resolved back to a LOCAL id — this workspace's own connection,
+    // created by the connection phase earlier in the same apply.
+    const localConn = listConnections(dst, 'local')[0]!;
+    expect(landed.connectionId).toBe(localConn.id);
+    expect(landed.connectionId).not.toBe(dataset.connectionId);
+  });
+
+  it('re-applying an unchanged branch reports `unchanged`, not a rewrite', () => {
+    const { src } = sourceWorkspace();
+    const branch = snapshot(src);
+    const dst = freshDb().db;
+
+    applyWorkspace(dst, 'local', branch, 'head1', 'main');
+    const second = applyWorkspace(dst, 'local', branch, 'head1', 'main');
+
+    const datasetApplied = second.applied.filter((a) => a.kind === 'dataset');
+    expect(datasetApplied).toHaveLength(1);
+    expect(datasetApplied[0]!.action).toBe('unchanged');
+    expect(listDatasets(dst, 'local')).toHaveLength(1);
+  });
+
+  it('an edited dataset re-applies as `updated`', () => {
+    const { src, dataset } = sourceWorkspace();
+    const dst = freshDb().db;
+    applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    updateDataset(src, dataset.id, { config: { path: 'customers-v2.csv', header: true } });
+    const second = applyWorkspace(dst, 'local', snapshot(src), 'head2', 'main');
+
+    const datasetApplied = second.applied.filter((a) => a.kind === 'dataset');
+    expect(datasetApplied[0]!.action).toBe('updated');
+    expect(getDatasetByResourceId(dst, 'local', dataset.resourceId)!.config).toEqual({
+      path: 'customers-v2.csv',
+      header: true,
+    });
+  });
+
+  // The apply is atomic and fail-closed: a branch naming a store that is neither
+  // on the branch nor in the workspace is BROKEN, and writing a dataset that
+  // points at nothing is worse than refusing.
+  it('refuses a branch whose dataset names an unresolvable store, naming the dataset', () => {
+    const { src } = sourceWorkspace();
+    const branch = snapshot(src);
+    // Drop the connection file, keeping the dataset that references it.
+    const broken: ParsedWorkspace = { ...branch, connections: [] };
+    const dst = freshDb().db;
+
+    expect(() => applyWorkspace(dst, 'local', broken, 'head1', 'main')).toThrow(
+      /dataset "Customers CSV" lives in connection/,
+    );
+    // Nothing was written — the whole apply rolled back.
+    expect(listDatasets(dst, 'local')).toHaveLength(0);
+  });
+
+  // The consequence of `datasets.connection_id` carrying NO foreign key (0036).
+  // The dataset survives its store's deletion, and the serializer then DISCLOSES
+  // it rather than committing a dangling id or silently dropping it.
+  it('discloses — never silently drops — a dataset whose store was hard-deleted', () => {
+    const { src, conn, dataset } = sourceWorkspace();
+    deleteConnection(src, conn.id);
+
+    const { files, unserializable } = serializeWorkspaceTolerant(src, 'local');
+
+    expect(files.some((f) => f.path.startsWith('datasets/'))).toBe(false);
+    expect(unserializable).toHaveLength(1);
+    expect(unserializable[0]).toMatchObject({
+      kind: 'dataset',
+      ref: 'store',
+      nodeId: null,
+      danglingId: conn.id,
+      resourceId: dataset.resourceId,
+      name: 'Customers CSV',
+      path: 'datasets/customers-csv.json',
+    });
+    // ...and the sentence says CONNECTION, not "pipeline version" — the tail the
+    // describe-chain would otherwise have fallen through to.
+    expect(describeUnserializable(unserializable[0]!)).toBe(
+      `binds connection "${conn.id}", which no longer exists`,
+    );
   });
 });

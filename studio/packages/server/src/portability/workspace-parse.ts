@@ -2,6 +2,7 @@ import {
   kindForDir,
   parseAndUpgradeEnvelope,
   type ConnectionExportData,
+  type DatasetExportData,
   type ExportEnvelope,
   type PipelineExportData,
   type PipelineVersionExport,
@@ -85,6 +86,15 @@ export function latestVersion(pipeline: ParsedPipeline): PipelineVersionExport |
   return versions.length > 0 ? versions[versions.length - 1] : undefined;
 }
 
+/** #1114 (M2) — a parsed dataset file. `data.connectionId` here is a stable
+ * `resourceId` (what the branch holds), NOT a local db id; the apply resolves
+ * it against connections applied earlier in the same run. */
+export interface ParsedDataset {
+  path: string;
+  resourceId: string | null;
+  data: DatasetExportData;
+}
+
 export interface ParsedTrigger {
   path: string;
   resourceId: string | null;
@@ -94,6 +104,7 @@ export interface ParsedTrigger {
 export interface ParsedWorkspace {
   pipelines: ParsedPipeline[];
   connections: ParsedConnection[];
+  datasets: ParsedDataset[];
   triggers: ParsedTrigger[];
   diagnostics: WorkspaceParseDiagnostic[];
 }
@@ -131,11 +142,25 @@ function diagnostic(
  * owner's own DB values (see the note there on why that does not cross the
  * never-echo-committed-content rule).
  *
- * The closing clause is not decoration. A read path excludes the resource from
+ * The closing clause is not decoration, and it is per-KIND (see `REMEDY`). A
+ * read path excludes the resource from
  * its comparison, but the APPLY still writes it from the branch's own file (it
  * reads real DB rows, not this snapshot) — so an import genuinely may change it,
  * and a bare "could not be compared" would read as "nothing will happen here".
  */
+/**
+ * #1114 — the remedy depends on the KIND, so it cannot be one hardcoded phrase.
+ * A pipeline or trigger is repaired by editing the graph and saving a new
+ * version; a dataset is a mutable row with no node and no version, so telling
+ * its owner to re-point a node and save the pipeline would send them looking for
+ * something that does not exist.
+ */
+const REMEDY: Record<UnserializableResource['kind'], string> = {
+  pipeline: 'until the node is re-pointed or removed and the pipeline saved',
+  trigger: 'until the node is re-pointed or removed and the pipeline saved',
+  dataset: 'until it is pointed at a connection that exists, or that connection is restored',
+};
+
 export function unserializableDiagnostic(
   offender: UnserializableResource,
 ): WorkspaceParseDiagnostic {
@@ -144,7 +169,7 @@ export function unserializableDiagnostic(
     code: 'unserializable_ref',
     message:
       `"${offender.name}" ${describeUnserializable(offender)} — it cannot be committed or ` +
-      `compared until the node is re-pointed or removed and the pipeline saved. ` +
+      `compared ${REMEDY[offender.kind]}. ` +
       `An import may still change it.`,
   };
 }
@@ -174,14 +199,15 @@ export function withoutResources(
   return {
     pipelines: keep('pipeline', workspace.pipelines),
     connections: keep('connection', workspace.connections),
+    datasets: keep('dataset', workspace.datasets),
     triggers: keep('trigger', workspace.triggers),
     diagnostics: workspace.diagnostics,
   };
 }
 
 /** The stable identity of a resource envelope: for a pipeline it is the
- * pipeline ROW's resourceId (NOT a version's); for a connection/trigger it is
- * the resource's own resourceId. */
+ * pipeline ROW's resourceId (NOT a version's); for every other kind it is the
+ * resource's own resourceId. */
 function envelopeResourceId(envelope: ExportEnvelope): string | null {
   return envelope.kind === 'pipeline'
     ? envelope.data.pipeline.resourceId
@@ -194,6 +220,7 @@ export function parseWorkspaceFiles(
 ): ParsedWorkspace {
   const pipelines: ParsedPipeline[] = [];
   const connections: ParsedConnection[] = [];
+  const datasets: ParsedDataset[] = [];
   const triggers: ParsedTrigger[] = [];
   // Unreadable files never made it into `files` — surface each as a diagnostic
   // up front so a preview shows the whole picture and an apply fails closed.
@@ -204,6 +231,7 @@ export function parseWorkspaceFiles(
   const seenResourceId: Record<ResourceKind, Set<string>> = {
     pipeline: new Set(),
     connection: new Set(),
+    dataset: new Set(),
     trigger: new Set(),
   };
 
@@ -258,11 +286,14 @@ export function parseWorkspaceFiles(
       case 'connection':
         connections.push({ path: file.path, resourceId, data: envelope.data });
         break;
+      case 'dataset':
+        datasets.push({ path: file.path, resourceId, data: envelope.data });
+        break;
       case 'trigger':
         triggers.push({ path: file.path, resourceId, data: envelope.data });
         break;
     }
   }
 
-  return { pipelines, connections, triggers, diagnostics };
+  return { pipelines, connections, datasets, triggers, diagnostics };
 }

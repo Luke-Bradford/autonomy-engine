@@ -57,7 +57,7 @@ import { formatWhen } from './runs/format';
  *
  * WHY COMMIT LIVES HERE rather than on the pipeline command bar, which is where
  * the settled three-act model (#662: Save / Commit / Publish) puts it: a commit
- * serializes the WHOLE workspace — every pipeline, connection and trigger — and
+ * serializes the WHOLE workspace — every pipeline, connection, dataset and trigger — and
  * returns the file set it wrote. It is not an act on the pipeline you happen to
  * have open, and dressing it as one would misreport its blast radius. An import
  * is the same shape in the other direction, which is why it is here too. The
@@ -571,7 +571,7 @@ function CommitSection({
     <section aria-labelledby="commit-heading">
       <h3 id="commit-heading">Commit</h3>
       <p className="page-hint">
-        A commit writes the whole workspace — every pipeline, connection and trigger — to{' '}
+        A commit writes the whole workspace — every pipeline, connection, dataset and trigger — to{' '}
         <code>{status.workingBranch}</code> and pushes it.
       </p>
 

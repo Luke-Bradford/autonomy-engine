@@ -30,8 +30,15 @@
  * `Record<ResourceKind, …>`, so a kind added here is a compile error at each
  * of them rather than a silent omission. Adding a member is therefore the
  * deliberate start of that work, not a one-line edit.
+ *
+ * #1114 (M2 slice 2) added `dataset` by APPENDING rather than inserting. The
+ * position is not cosmetic: this order drives `MANAGED_DIRS` and hence the order
+ * `serializeWorkspace` emits files in, and the order the drift report lists
+ * resources in. Appending leaves all three existing kinds where they were.
+ * Note this is deliberately NOT the apply order — that is `APPLY_RANK`'s job,
+ * and a dataset must be applied AFTER the connection it names.
  */
-export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger'] as const;
+export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger', 'dataset'] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
@@ -45,9 +52,10 @@ export const RESOURCE_KIND_DIRS: Record<ResourceKind, string> = {
   pipeline: 'pipelines',
   connection: 'connections',
   trigger: 'triggers',
+  dataset: 'datasets',
 };
 
-/** The three studio-managed repo directories, in `RESOURCE_KINDS` order. */
+/** The studio-managed repo directories, in `RESOURCE_KINDS` order. */
 export const MANAGED_DIRS: readonly string[] = RESOURCE_KINDS.map(
   (kind) => RESOURCE_KIND_DIRS[kind],
 );
@@ -58,8 +66,7 @@ const DIR_TO_KIND: Record<string, ResourceKind> = Object.fromEntries(
 
 /**
  * The resource kind a managed directory holds (the inverse of
- * `RESOURCE_KIND_DIRS`), or `null` when `dir` is not one of the three managed
- * dirs. Used by the G4 workspace parser to decide the kind a committed file is
+ * `RESOURCE_KIND_DIRS`), or `null` when `dir` is not one of the managed dirs. Used by the G4 workspace parser to decide the kind a committed file is
  * EXPECTED to carry from its path alone.
  */
 export function kindForDir(dir: string): ResourceKind | null {

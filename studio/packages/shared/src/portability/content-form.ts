@@ -1,5 +1,10 @@
 import { canonicalStringify } from './canonical.js';
-import type { ConnectionExportData, PipelineExportData, TriggerExportData } from './envelope.js';
+import type {
+  ConnectionExportData,
+  DatasetExportData,
+  PipelineExportData,
+  TriggerExportData,
+} from './envelope.js';
 
 /**
  * #3 G5b — the CANONICAL CONTENT FORM of an exported resource: a stable string
@@ -184,6 +189,22 @@ export function connectionContentForm(data: ConnectionExportData): string {
   // present (G8's readiness concern), not authoring content — exclude it so a
   // machine that has not re-entered the secret does not churn every connection.
   omitKeys(clone, [...RESOURCE_VOLATILE, 'requiresSecret']);
+  return canonicalStringify(clone);
+}
+
+/**
+ * #1114 (M2) — a dataset's content form. Straight `RESOURCE_VOLATILE` exclusion
+ * and nothing else: a dataset has no local-readiness field to strip (the reason
+ * `connectionContentForm` also drops `requiresSecret`).
+ *
+ * `connectionId` IS part of the content, and correctly so — it is already in
+ * export space here (a stable `resourceId`, remapped by `serializeDataset`), so
+ * two machines whose local connection ids differ still agree on the hash. It is
+ * a real authoring fact: re-pointing a dataset at a different store IS a change.
+ */
+export function datasetContentForm(data: DatasetExportData): string {
+  const clone = jsonClone(data);
+  omitKeys(clone, RESOURCE_VOLATILE);
   return canonicalStringify(clone);
 }
 

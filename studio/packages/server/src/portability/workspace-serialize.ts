@@ -1,6 +1,7 @@
 import {
   CATALOG_VERSION,
   ConnectionExportDataSchema,
+  DatasetExportDataSchema,
   ExportEnvelopeSchema,
   PipelineExportDataSchema,
   RESOURCE_KINDS,
@@ -12,6 +13,7 @@ import {
   pipelineVersionContentForm,
   resourceFilePaths,
   type Connection,
+  type Dataset,
   type ExportEnvelope,
   type Node,
   type NodeExport,
@@ -24,6 +26,7 @@ import {
 import {
   getLatestPipelineVersion,
   listConnections,
+  listDatasets,
   listPipelineVersions,
   listPipelines,
   listTriggers,
@@ -74,7 +77,15 @@ import type { Db } from '../repo/types.js';
  * binding), which has no node to blame.
  */
 export interface UnserializableRefDetail {
-  ref: 'connection' | 'connectionSource' | 'connectionSink' | 'call' | 'binding';
+  ref:
+    | 'connection'
+    | 'connectionSource'
+    | 'connectionSink'
+    | 'call'
+    | 'binding'
+    // #1114 (M2) — a DATASET's ref to the connection it lives in. Resource-level
+    // like `binding` (so `nodeId` is null), not node-level.
+    | 'store';
   nodeId: string | null;
   danglingId: string;
 }
@@ -85,7 +96,7 @@ export interface UnserializableRefDetail {
  * have occupied, so a diagnostic can key on it exactly as a branch-side one does.
  */
 export interface UnserializableResource extends UnserializableRefDetail {
-  kind: 'pipeline' | 'trigger';
+  kind: 'pipeline' | 'trigger' | 'dataset';
   resourceId: string;
   name: string;
   path: string;
@@ -96,8 +107,11 @@ export interface UnserializableResource extends UnserializableRefDetail {
  * from a committed file — so this does not cross the rule that keeps arbitrary
  * branch content out of API responses (`workspace-parse.ts`'s DIAGNOSTIC_MESSAGE). */
 export function describeUnserializable(detail: UnserializableRefDetail): string {
+  // #1114 — `store` needs its own arm rather than riding the fallthrough: the
+  // tail of this chain is `pipeline version`, so a new ref kind added without
+  // one is not merely unlabelled, it is labelled WRONG.
   const what =
-    detail.ref === 'connection'
+    detail.ref === 'connection' || detail.ref === 'store'
       ? `connection "${detail.danglingId}"`
       : detail.ref === 'connectionSource'
         ? `source connection "${detail.danglingId}"`
@@ -569,6 +583,37 @@ function serializeConnection(connection: Connection): ExportEnvelope {
  * binding is always in `maps.versionResourceId` (seeded from all versions, incl.
  * archived), so `remapRef` never throws on that path.
  */
+/**
+ * #1114 (M2) — a dataset, with the connection it lives in remapped from a LOCAL
+ * db id to that connection's stable `resourceId`.
+ *
+ * This remap is the whole reason a dataset goes through `collect` rather than
+ * being pushed straight into `files` the way a connection is. Committing
+ * `connectionId` verbatim would put one workspace's private key into a shared
+ * repo, where it resolves to nothing — or, worse, to a DIFFERENT connection —
+ * on import, and nothing would throw (spec §3's finding, one layer up from the
+ * node refs it was written about).
+ *
+ * A dataset's ref is always a literal: unlike a node's `connectionId` it is
+ * never a `${}` expression, because a dataset is an address rather than a
+ * dispatch. `remapRef` still handles that case correctly; there is simply no
+ * interpolation mode to branch on here.
+ */
+export function serializeDataset(dataset: Dataset, maps: OwnerRefMaps): ExportEnvelope {
+  const connectionId = remapRef(dataset.connectionId, maps.connectionResourceId, () => ({
+    ref: 'store',
+    nodeId: null,
+    danglingId: dataset.connectionId,
+  }));
+  return ExportEnvelopeSchema.parse({
+    schemaVersion: SCHEMA_VERSION,
+    catalogVersion: CATALOG_VERSION,
+    kind: 'dataset',
+    exportedAt: 0,
+    data: DatasetExportDataSchema.parse({ ...dataset, connectionId }),
+  });
+}
+
 export function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEnvelope {
   const webhook = trigger.webhook ? WebhookPublicConfigSchema.parse(trigger.webhook) : null;
   const pipelineVersionId = remapRef(trigger.pipelineVersionId, maps.versionResourceId, () => ({
@@ -617,6 +662,7 @@ export function serializeWorkspaceTolerant(
 ): { files: WorkspaceFile[]; unserializable: UnserializableResource[] } {
   const allPipelines = listPipelines(db, ownerId);
   const connections = listConnections(db, ownerId);
+  const datasets = listDatasets(db, ownerId);
   const triggers = listTriggers(db, { ownerId });
   // Ref map over ALL pipelines (incl. archived) so a live ref to an archived
   // version still resolves (faithful; dangle-on-import is G7's concern).
@@ -711,6 +757,25 @@ export function serializeWorkspaceTolerant(
           path: connectionPaths.get(connection.resourceId)!,
           contents: canonicalStringify(serializeConnection(connection)),
         });
+      }
+    },
+    // #1114 (M2) — a dataset goes through `collect`, like pipelines and
+    // triggers and unlike connections: `serializeDataset` remaps the store ref
+    // and so CAN throw `UnserializableRefError`. A dataset whose connection was
+    // hard-deleted is therefore disclosed as unserializable rather than
+    // committed with a dangling id — which is the whole point of the ref living
+    // in a typed field instead of inside the opaque `config` blob.
+    dataset: () => {
+      const datasetPaths = resourceFilePaths(
+        'dataset',
+        datasets.map((d) => ({ resourceId: d.resourceId, name: d.name })),
+      );
+      for (const dataset of datasets) {
+        collect(
+          { kind: 'dataset', resourceId: dataset.resourceId, name: dataset.name },
+          datasetPaths.get(dataset.resourceId)!,
+          () => serializeDataset(dataset, maps),
+        );
       }
     },
     trigger: () => {

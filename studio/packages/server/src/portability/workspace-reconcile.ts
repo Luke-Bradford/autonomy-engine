@@ -1,5 +1,6 @@
 import {
   connectionContentForm,
+  datasetContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
   RESOURCE_KINDS,
@@ -14,6 +15,7 @@ import { normalizedTriggerContentForm } from './trigger-content.js';
 import {
   latestVersion,
   type ParsedConnection,
+  type ParsedDataset,
   type ParsedPipeline,
   type ParsedTrigger,
   type ParsedWorkspace,
@@ -75,6 +77,18 @@ import {
  * delete/orphan semantics are undecided in the spec ("never DB-delete on
  * import") and are deferred to the G5c apply. A pre-G1 file (`resourceId: null`)
  * has no identity to match, so it always classifies `create`.
+ *
+ * #1114 — one more incompleteness, on the DB side and specific to DATASETS. The
+ * `db` snapshot is `serializeWorkspaceTolerant` output, which DROPS a dataset
+ * whose store connection was hard-deleted (it cannot remap the ref), so such a
+ * dataset is missing from the baseline and classifies `create` rather than
+ * `update`. The preview route filters those resources out (`withoutResources`)
+ * and reports them as their own diagnostic instead, so the operator is told the
+ * truth; `applyWorkspace` is unaffected because its dataset phase resolves the
+ * real DB row via `getDatasetByResourceId` and never reads a dataset's
+ * disposition from this plan. Stated here so the next caller to wire
+ * `plan.resources` into something apply-visible for datasets knows it is not a
+ * complete picture on its own.
  *
  * Archive inference is SOUND only over a complete snapshot: if `incoming` carries
  * any parse diagnostic (a file that failed to read/parse never reached
@@ -186,6 +200,7 @@ function dbMap<T>(
 
 const pipelineName = (p: ParsedPipeline): string => p.data.pipeline.name;
 const connectionName = (c: ParsedConnection): string => c.data.name;
+const datasetName = (d: ParsedDataset): string => d.data.name;
 const triggerName = (t: ParsedTrigger): string => t.data.name;
 
 /**
@@ -239,6 +254,12 @@ export function classifyWorkspace(
     (c) => c.resourceId,
     connectionName,
     (c) => connectionContentForm(c.data),
+  );
+  const dbDatasets = dbMap(
+    db.datasets,
+    (d) => d.resourceId,
+    datasetName,
+    (d) => datasetContentForm(d.data),
   );
   const dbTriggers = dbMap(
     db.triggers,
@@ -312,7 +333,7 @@ export function classifyWorkspace(
   // from a spelled-out list compiles clean and then never appears in an import
   // PREVIEW at all — the operator approves a pull having been shown nothing
   // about that kind, and the apply writes it anyway. The emitted order is
-  // `RESOURCE_KINDS` order (pipelines, connections, triggers), which is exactly
+  // `RESOURCE_KINDS` order (pipelines, connections, triggers, datasets), which is exactly
   // the stable preview order this function's docstring promises.
   const classifiers: Record<ResourceKind, () => WorkspaceGitPreviewResource[]> = {
     pipeline: () =>
@@ -338,6 +359,22 @@ export function classifyWorkspace(
           connectionName(c),
           connectionContentForm(c.data),
           dbConnections,
+        ),
+      ),
+    // #1114 (M2) — both sides are already in EXPORT space here (`db` is the DB
+    // run through the same serialize+parse pair as the branch), so a dataset's
+    // `connectionId` is a stable `resourceId` on both and two machines with
+    // different local connection ids still agree. No normalization arm is
+    // needed, unlike a trigger's binding.
+    dataset: () =>
+      incoming.datasets.map((d) =>
+        classifyResource(
+          'dataset',
+          d.path,
+          d.resourceId,
+          datasetName(d),
+          datasetContentForm(d.data),
+          dbDatasets,
         ),
       ),
     trigger: () =>
