@@ -376,7 +376,7 @@ export class CliGitProvider {
    * edit) can never enter studio's commit. Deletions are handled by the
    * preceding `rmCached`.
    *
-   * `-f` is load-bearing: studio OWNS the three managed dirs on its working
+   * `-f` is load-bearing: studio OWNS the managed dirs on its working
    * branch, but a base branch may carry a `.gitignore` matching one of them (or
    * a broad `*.json`), and `git add` of an explicitly-named IGNORED path EXITS
    * NON-ZERO (not a silent skip) — which would make every Commit a permanent

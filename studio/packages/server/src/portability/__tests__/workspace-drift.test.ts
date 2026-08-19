@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ConnectionExportData,
+  DatasetExportData,
   NodeExport,
   PipelineExportData,
   TriggerExportData,
@@ -8,6 +9,7 @@ import type {
 import { computeDrift } from '../workspace-drift.js';
 import type {
   ParsedConnection,
+  ParsedDataset,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -118,6 +120,29 @@ function triggerData(name: string, enabled = true): TriggerExportData {
     createdAt: 1,
     updatedAt: 1,
   };
+}
+
+function datasetData(name: string, path = 'customers.csv'): DatasetExportData {
+  return {
+    id: 'ds',
+    resourceId: 'IGNORED',
+    ownerId: 'local',
+    name,
+    // A stable connection `resourceId`, which is what a branch file holds — a
+    // local db id would never appear here (#1114).
+    connectionId: 'res_store',
+    kind: 'delimited',
+    config: { path, header: true },
+    columns: [{ name: 'id', type: 'integer', nullable: false }],
+    parameters: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function parsedDataset(resourceId: string | null, name: string, path?: string): ParsedDataset {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return { path: `datasets/${slug}.json`, resourceId, data: datasetData(name, path) };
 }
 
 function parsedTrigger(resourceId: string | null, name: string, enabled?: boolean): ParsedTrigger {
@@ -304,5 +329,46 @@ describe('computeDrift', () => {
         change: 'renamed',
       },
     ]);
+  });
+});
+
+// #1114 (M2 slice 2) — datasets in the drift differ.
+//
+// The NEGATIVE half of this pair is the one that needs care: an assertion that
+// an unchanged dataset reports CLEAN passes just as happily under a projection
+// that returns `[]` for datasets — which is precisely the "reports permanently
+// clean" failure the #1112 pin exists to prevent. So the positive case is what
+// gives the negative one meaning, and they are written together deliberately.
+describe('computeDrift — datasets (#1114)', () => {
+  it('reports an EDITED dataset as changed', () => {
+    const drift = computeDrift(
+      ws({ datasets: [parsedDataset('res_1', 'Customers', 'customers.csv')] }),
+      ws({ datasets: [parsedDataset('res_1', 'Customers', 'customers-v2.csv')] }),
+    );
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({ kind: 'dataset', resourceId: 'res_1', change: 'modified' });
+  });
+
+  it('reports an ADDED and a REMOVED dataset', () => {
+    const added = computeDrift(
+      ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+      ws({ datasets: [] }),
+    );
+    expect(added[0]).toMatchObject({ kind: 'dataset', change: 'added' });
+
+    const removed = computeDrift(
+      ws({ datasets: [] }),
+      ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+    );
+    expect(removed[0]).toMatchObject({ kind: 'dataset', change: 'removed' });
+  });
+
+  it('reports an unchanged dataset as clean (meaningful only alongside the cases above)', () => {
+    expect(
+      computeDrift(
+        ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+        ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+      ),
+    ).toEqual([]);
   });
 });

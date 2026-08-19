@@ -105,7 +105,7 @@ const ENVELOPE_KINDS: ReadonlySet<string> = new Set(
  * meaning "send it".
  *
  * This exists so a mis-picked file is refused BEFORE any request. `POST
- * /api/import` takes all three kinds and mints a resource for whichever it
+ * /api/import` takes every importable kind and mints a resource for whichever it
  * gets, so dropping a connection export on the Triggers list would otherwise
  * succeed — creating a real row on a page that cannot show it, which the
  * operator then has to find and delete. There is no dry-run to fall back on.

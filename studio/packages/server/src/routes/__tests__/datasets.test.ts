@@ -56,7 +56,8 @@ describe('datasets routes', () => {
   // The #473 / §2.2 contract at the HTTP boundary: a create with no `columns`
   // must be REFUSED, never silently accepted as an empty declared schema.
   it('refuses a create with no columns', async () => {
-    const { columns: _columns, ...noColumns } = body;
+    const { columns, ...noColumns } = body;
+    void columns;
     const res = await app.inject({ method: 'POST', url: '/api/datasets', payload: noColumns });
     expect(res.statusCode).toBe(400);
   });
@@ -125,12 +126,17 @@ describe('datasets routes', () => {
     const listRes = await app.inject({ method: 'GET', url: '/api/datasets' });
     expect(listRes.json().items.map((d: { id: string }) => d.id)).not.toContain(other.id);
 
+    expect((await app.inject({ method: 'GET', url: `/api/datasets/${other.id}` })).statusCode).toBe(
+      404,
+    );
     expect(
-      (await app.inject({ method: 'GET', url: `/api/datasets/${other.id}` })).statusCode,
-    ).toBe(404);
-    expect(
-      (await app.inject({ method: 'PATCH', url: `/api/datasets/${other.id}`, payload: { name: 'x' } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/datasets/${other.id}`,
+          payload: { name: 'x' },
+        })
+      ).statusCode,
     ).toBe(404);
     expect(
       (await app.inject({ method: 'DELETE', url: `/api/datasets/${other.id}` })).statusCode,

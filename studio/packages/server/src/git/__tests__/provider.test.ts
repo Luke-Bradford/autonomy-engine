@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MANAGED_DIRS } from '@autonomy-studio/shared';
 import { MASTER_KEY_ENV_VARS } from '../../secrets/secrets.js';
 import {
   applyHttpAuthEnv,
@@ -229,9 +230,11 @@ describe('CliGitProvider — G3a commit primitives', () => {
     await provider.add(checkout, ['pipelines/a.json']);
     await provider.commit(checkout, 'add a', { name: 'local', email: 'local@studio.local' });
 
-    // rmCached on all three managed dirs — only `pipelines` is tracked; the
-    // other two match nothing and must not error (--ignore-unmatch).
-    await provider.rmCached(checkout, ['pipelines', 'connections', 'triggers']);
+    // rmCached on all the managed dirs — only `pipelines` is tracked; the rest
+    // match nothing and must not error (--ignore-unmatch). Derived from
+    // `MANAGED_DIRS` rather than hand-listed, so a new resource kind is covered
+    // here the moment it exists (#1114 added a fourth).
+    await provider.rmCached(checkout, [...MANAGED_DIRS]);
     expect(await provider.hasStagedChanges(checkout)).toBe(true); // the deletion is staged
   });
 });

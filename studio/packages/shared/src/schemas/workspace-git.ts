@@ -322,7 +322,7 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
  * - `unparseable`: not valid JSON / failed envelope upgrade+validation.
  * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
  * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.
- * - `unknown_dir`: a file outside the three managed directories.
+ * - `unknown_dir`: a file outside the managed directories.
  * - `unreadable`: the committed blob could not be READ from the object store
  *   (over the provider's 1 MiB collected-output cap, or a per-blob git failure).
  *   Its content was never parsed, so — like `unparseable` — it makes a preview

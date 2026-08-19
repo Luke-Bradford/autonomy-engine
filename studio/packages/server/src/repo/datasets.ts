@@ -23,11 +23,7 @@ import type { Db } from './types.js';
  * no `active` pointer and no publish. Its whole job is to hold an ADDRESS.
  */
 
-export function createDataset(
-  db: Db,
-  input: NewDataset,
-  opts?: CreateResourceOptions,
-): Dataset {
+export function createDataset(db: Db, input: NewDataset, opts?: CreateResourceOptions): Dataset {
   const parsed = NewDatasetSchema.parse(input);
   const now = Date.now();
   const row: Dataset = {

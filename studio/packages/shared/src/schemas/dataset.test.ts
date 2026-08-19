@@ -70,7 +70,8 @@ describe('DatasetSchema', () => {
   // schema (the #473 lesson): an empty declared schema reads as "this table has
   // no columns", and auto-map (§6.3) would silently produce an empty mapping.
   it('REJECTS an absent columns list rather than manufacturing []', () => {
-    const { columns: _columns, ...withoutColumns } = validDataset;
+    const { columns, ...withoutColumns } = validDataset;
+    void columns;
     expect(() => DatasetSchema.parse(withoutColumns)).toThrow();
   });
 
@@ -79,7 +80,8 @@ describe('DatasetSchema', () => {
   });
 
   it('rejects a missing required field', () => {
-    const { connectionId: _connectionId, ...withoutConnection } = validDataset;
+    const { connectionId, ...withoutConnection } = validDataset;
+    void connectionId;
     expect(() => DatasetSchema.parse(withoutConnection)).toThrow();
   });
 
@@ -96,7 +98,8 @@ describe('DatasetSchema', () => {
   // overridable. That is the opposite polarity to `columns`, where an absent
   // value would manufacture a FACT — hence one defaults and the other refuses.
   it('defaults an absent parameters to [] (declares nothing overridable — fail-closed)', () => {
-    const { parameters: _parameters, ...withoutParameters } = validDataset;
+    const { parameters, ...withoutParameters } = validDataset;
+    void parameters;
     expect(DatasetSchema.parse(withoutParameters).parameters).toEqual([]);
   });
 
