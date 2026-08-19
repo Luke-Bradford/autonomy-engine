@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { CANVAS_TOKEN, FLUENT_PORTAL_ROOT, fluentRootReady } from './support/theme';
+import { CANVAS_TOKEN, FLUENT_PORTAL_ROOT, fluentRootReady, themeSwitch } from './support/theme';
 
 /**
  * U2 — the hub rail and the hash route tree.
@@ -171,7 +171,7 @@ test.describe('U2 hub rail', () => {
     await page.goto('/');
     await fluentRootReady(page);
 
-    const toggle = page.getByRole('switch', { name: 'Dark mode' });
+    const toggle = themeSwitch(page);
     await expect(toggle).toBeChecked();
     await toggle.click();
     await expect(toggle).not.toBeChecked();
@@ -179,7 +179,7 @@ test.describe('U2 hub rail', () => {
     await railLink(page, 'Manage').click();
     await expect(page.getByRole('heading', { name: 'Connections' })).toBeVisible();
 
-    await expect(page.getByRole('switch', { name: 'Dark mode' })).not.toBeChecked();
+    await expect(themeSwitch(page)).not.toBeChecked();
     await expect
       .poll(() => page.evaluate(() => document.documentElement.dataset.theme))
       .toBe('light');

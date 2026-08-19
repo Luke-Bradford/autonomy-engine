@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * Shared vocabulary for the theme specs. These lived in two spec files as
@@ -198,19 +198,35 @@ export async function surfaceBehind(
  * leaving each caller to discover it. Any surface may grow a third toggle; the
  * rail's is the one that cannot go away, because it is the shell.
  *
- * SIX SPECS STILL QUERY THAT SWITCH UNSCOPED rather than through this helper
- * (`theme-toggle`, `hub-nav`, `canvas-chrome`, `container-rendering`,
- * `edge-typing`, `connect-validation`). None of them visits `#/settings`, so
- * none is broken — but each is one navigation away from a strict-mode failure
- * that reads as "the toggle vanished". Sweeping them is #1096; scope the
- * locator to this nav if you write a seventh.
+ * The locator itself is `themeSwitch` below, so a spec that needs the CONTROL
+ * (to assert its checked state, or that it survives a route change) and a spec
+ * that just needs a THEME share one definition of where the switch is.
  */
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
-  const toggle = page
-    .getByRole('navigation', { name: 'Primary' })
-    .getByRole('switch', { name: 'Dark mode' });
+  const toggle = themeSwitch(page);
   if ((await toggle.isChecked()) !== (theme === 'dark')) await toggle.click();
   await expect.poll(() => documentTheme(page)).toBe(theme);
+}
+
+/**
+ * THE theme switch — the rail's, scoped to it (#1096, #1033).
+ *
+ * `#/settings` renders a SECOND `ThemeToggle` against the same store (#1094), so
+ * a bare `getByRole('switch', { name: 'Dark mode' })` is ambiguous on that route
+ * and Playwright's strict mode fails the whole spec — reported as "the toggle
+ * vanished", which is a very convincing wrong answer for what is a locator bug.
+ *
+ * Seven specs had open-coded that unscoped query, plus `settings.spec.ts`'s own
+ * byte-identical `railToggle`. None was broken (none combined a theme assertion
+ * with a visit to Settings), and that is exactly the drift this module's header
+ * warns about: the copies were latent, not wrong, so nothing would have made
+ * them converge. Any surface may grow a third toggle; the rail's is the one that
+ * cannot go away, because it IS the shell — so it is the one named here.
+ */
+export function themeSwitch(page: Page): Locator {
+  return page
+    .getByRole('navigation', { name: 'Primary' })
+    .getByRole('switch', { name: 'Dark mode' });
 }
 
 /**

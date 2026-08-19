@@ -17,6 +17,7 @@ import {
   customProperty,
   documentTheme,
   isOpaque,
+  setTheme,
 } from './support/theme';
 
 /**
@@ -251,8 +252,11 @@ test.describe('U6a typed edge styling', () => {
   test('every stroke stays readable after the theme toggle', async ({ page }) => {
     await openCanvas(page, 'e2e u6a light');
     await seedSelectedEdge(page, 'If Condition');
-    await page.getByRole('switch', { name: 'Dark mode' }).click();
-    await expect.poll(() => documentTheme(page)).toBe('light');
+    // Anchor the baseline — see `container-rendering.spec.ts`: `setTheme` does
+    // nothing when the app is already in `theme`, so the dark start is asserted
+    // rather than assumed.
+    expect(await documentTheme(page)).toBe('dark');
+    await setTheme(page, 'light');
 
     const canvasBg = await canvasBackground(page);
     expect(isOpaque(canvasBg)).toBe(true);

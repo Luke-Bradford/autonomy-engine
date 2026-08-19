@@ -1,6 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { CANVAS_TOKEN, customProperty, documentTheme, fluentRootReady } from './support/theme';
+import {
+  CANVAS_TOKEN,
+  customProperty,
+  documentTheme,
+  fluentRootReady,
+  themeSwitch,
+} from './support/theme';
 
 /**
  * U1 — the runtime light/dark toggle. The claim under test is the SSOT one:
@@ -19,10 +25,6 @@ async function themedSurfaces(page: Page) {
     customProperty(page, '--xy-background-color'),
   ]);
   return { theme, token, xyCanvas };
-}
-
-function themeSwitch(page: Page) {
-  return page.getByRole('switch', { name: 'Dark mode' });
 }
 
 test.describe('U1 theme toggle', () => {

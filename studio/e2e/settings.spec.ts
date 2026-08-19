@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { documentTheme, fluentRootReady, resolvedPaletteColor } from './support/theme';
+import { documentTheme, fluentRootReady, resolvedPaletteColor, themeSwitch } from './support/theme';
 
 /**
  * U15 slice 2 (#1094) — `#/settings`.
@@ -28,13 +28,6 @@ import { documentTheme, fluentRootReady, resolvedPaletteColor } from './support/
  * `SettingsPage.test.tsx` owns all three sources, and `settings.test.ts` owns
  * the route's payload for each.
  */
-
-/** The rail's toggle — the one that is on every route. */
-function railToggle(page: import('@playwright/test').Page) {
-  return page
-    .getByRole('navigation', { name: 'Primary' })
-    .getByRole('switch', { name: 'Dark mode' });
-}
 
 test('U15 — Settings names the auto-generated key file and says to back it up', async ({
   page,
@@ -117,7 +110,7 @@ test('U15 — the Settings theme switch and the rail’s are one control', async
   await page.goto('/#/settings');
   await fluentRootReady(page);
 
-  const rail = railToggle(page);
+  const rail = themeSwitch(page);
   const onPage = page
     .getByRole('region', { name: 'Appearance' })
     .getByRole('switch', { name: 'Dark mode' });
