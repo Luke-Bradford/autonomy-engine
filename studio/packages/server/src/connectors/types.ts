@@ -75,7 +75,7 @@ export interface ResolvedDataset {
   /** The dataset's kind-specific, NON-SECRET options. Re-validated by the adapter. */
   readonly config: Record<string, unknown>;
   /** The DECLARED schema (spec §7 schema (1)) — an authoring aid, never the drift gate. */
-  readonly columns: DatasetColumn[];
+  readonly columns: readonly DatasetColumn[];
 }
 
 export interface ActivityContext {

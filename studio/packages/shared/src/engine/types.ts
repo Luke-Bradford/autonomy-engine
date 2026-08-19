@@ -632,11 +632,15 @@ export const FAILURE_CODES = {
    * M5 slice 4a (#1130) — the activity's catalog entry declares a DATASET
    * binding (`datasetKinds`) but the node names no dataset for that side.
    *
-   * The whole ladder below mirrors `CONNECTION_*` deliberately, code for code,
-   * because a dataset ref fails in exactly the same four ways a connection ref
-   * does and an operator should not have to learn two vocabularies. All are
-   * `permanent`: an address that does not exist, is not theirs, is the wrong
-   * kind, or contradicts its own store does not self-heal on retry.
+   * The ladder below deliberately mirrors `CONNECTION_*` for the three refusals
+   * the two refs SHARE — named nothing, resolves to nothing, wrong kind — so an
+   * operator does not have to learn two vocabularies for one shape of mistake.
+   * The remaining two have no connection counterpart and are not claimed to:
+   * `DATASET_CONNECTION_MISMATCH` exists only because a dataset names a store of
+   * its own, and `DATASET_SELF_COPY` only because a pair can name one address
+   * twice. All five are `permanent`: an address that does not exist, is not
+   * theirs, is the wrong kind, contradicts its own store, or is its own
+   * destination does not self-heal on retry.
    */
   DATASET_MISSING: 'dataset_missing',
   /**

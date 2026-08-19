@@ -2053,6 +2053,70 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     expect(seen).toMatchObject({ source: { id: sourceDs } });
     expect(seen).not.toHaveProperty('sink');
   });
+
+  it('does NOT label a source-only dataset failure with a side — there is no end to contrast', async () => {
+    // The M1 rule the connection ladder states and this one follows: an UNPAIRED
+    // failure must not claim an end. A source-only activity has no sink dataset,
+    // so `side:'source'` would point an operator at a ref that does not exist.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: 'ds_gone', sink: 'ds_ignored' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, { catalog: datasetCatalog({ datasetKinds: { source: ['table'] } }) }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({
+      code: 'dataset_not_found',
+      // The noun is still right even with no side to prefix it.
+      error: "dataset 'ds_gone' not found",
+    });
+    expect(failure).not.toHaveProperty('side');
+  });
+
+  it('reads the SINGULAR connectionId for a dataset-bound activity that is not connection-paired', async () => {
+    // The two pairings are independent: an activity may bind ONE connection and
+    // still address a dataset (M12 `lookup`'s shape). The store-agreement check
+    // must then compare against `resolvedConnectionId`, not the pair — and this
+    // is the branch that proves it, by putting the dataset in a DIFFERENT store
+    // and requiring the refusal.
+    const db = freshDb().db;
+    const boundConn = await seedConnection(db, 'http', {}, null);
+    const otherConn = await seedConnection(db, 'http', {}, null);
+    const strayDs = seedDataset(db, otherConn);
+    const pvId = seedVersion(db, [
+      {
+        ...nodeOfType('test_lookup', boundConn),
+        datasetIds: { source: strayDs, sink: strayDs },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        catalog: catalogOf({
+          type: 'test_lookup',
+          kind: 'execution',
+          connectionKinds: ['http'],
+          datasetKinds: { source: ['table'] },
+        }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_connection_mismatch',
+      error: expect.stringContaining(boundConn),
+    });
+  });
 });
 
 describe('createExecutor — error taxonomy → node.failed{kind, code} (#1 F0)', () => {

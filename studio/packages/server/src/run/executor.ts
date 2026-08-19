@@ -610,9 +610,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // two-sided readiness gate reads statically (`connection-readiness.ts`) and
     // what the secret side-channel decrypts. This check makes the dataset agree
     // with that, rather than replacing it.
-    if (boundConnectionId !== undefined && dataset.connectionId !== boundConnectionId) {
+    //
+    // `undefined` REFUSES rather than skipping, and the polarity is the point.
+    // It is unreachable today — both call sites pass an id that already survived
+    // `resolveConnection` — but a guard that silently admits a mismatched store
+    // when it cannot see the bound one is fail-OPEN, which is the one direction
+    // this codebase never leaves available to a later change.
+    if (boundConnectionId === undefined || dataset.connectionId !== boundConnectionId) {
       return {
-        error: `dataset '${datasetId}' lives in connection '${dataset.connectionId}', but the node bound connection '${boundConnectionId}' for this side`,
+        error:
+          boundConnectionId === undefined
+            ? `dataset '${datasetId}' lives in connection '${dataset.connectionId}', but the node bound no connection for this side`
+            : `dataset '${datasetId}' lives in connection '${dataset.connectionId}', but the node bound connection '${boundConnectionId}' for this side`,
         code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
       };
     }
@@ -1104,16 +1113,36 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // Source first, and it SHORT-CIRCUITS the sink — `resolveConnection`'s
       // stated posture: a node with both ends wrong reports the source only,
       // rather than doing work for a dispatch that cannot happen.
-      const paired = entry.sinkConnectionKinds !== undefined;
+      //
+      // TWO independent pairings meet here and must not be conflated, which is
+      // why neither is called just `paired`. A node's CONNECTION pairing decides
+      // where the bound store id comes from; its DATASET pairing decides whether
+      // a refusal may claim an end. A source-only `lookup` (M12) is dataset-
+      // UNPAIRED while still being connection-single, and a `copy` is both.
+      const connectionPaired = entry.sinkConnectionKinds !== undefined;
+      const sinkDatasetKinds = datasetKinds.sink;
+      const datasetPaired = sinkDatasetKinds !== undefined;
       const resolvedSourceDs = resolveDataset(
         command.resolvedDatasetIds?.source,
         datasetKinds.source,
         node.type,
         ownerId,
-        paired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
+        connectionPaired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
       );
       if ('error' in resolvedSourceDs) {
-        yield preflightFailure(runId, nodeId, attemptId, resolvedSourceDs, 'source', 'dataset');
+        // Labelled ONLY when the dataset binding is genuinely a pair — M1's rule
+        // for the connection ladder, followed here rather than diverged from: an
+        // unpaired failure must not claim an end. A source-only activity has no
+        // sink dataset for `side:'source'` to contrast with, so the label would
+        // point an operator at a second ref that does not exist.
+        yield preflightFailure(
+          runId,
+          nodeId,
+          attemptId,
+          resolvedSourceDs,
+          datasetPaired ? 'source' : undefined,
+          'dataset',
+        );
         return;
       }
       datasets = { source: resolvedSourceDs.dataset };
@@ -1121,10 +1150,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // no sink dataset to resolve and its `datasetIds.sink` — which `NodeSchema`
       // still requires today — is inert, on the same "the catalog decides"
       // argument as above.
-      if (datasetKinds.sink !== undefined) {
+      if (sinkDatasetKinds !== undefined) {
         const resolvedSinkDs = resolveDataset(
           command.resolvedDatasetIds?.sink,
-          datasetKinds.sink,
+          sinkDatasetKinds,
           node.type,
           ownerId,
           command.resolvedConnectionIds?.sink,
