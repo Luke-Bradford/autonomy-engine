@@ -8,14 +8,7 @@ import {
   type SqliteWriteMode,
 } from '../sqlite.js';
 import { classifySinkFailure } from '../error-kind.js';
-import {
-  cleanupTempRoots,
-  rowsOf,
-  seedDb,
-  seedSink,
-  tempRoot,
-  writableConfig,
-} from './sqlite-fixtures.js';
+import { cleanupTempRoots, rowsOf, seedSink, tempRoot, writableConfig } from './sqlite-fixtures.js';
 
 /**
  * #1125 M5 slice 2 — the `sqlite` SINK.

@@ -61,7 +61,10 @@ describe('the straight copy', () => {
         ],
         [{ id: 3n, name: 'c' }],
       ),
-      [map({ source: 'id', sink: 'ident', type: 'integer' }), map({ source: 'name', sink: 'label' })],
+      [
+        map({ source: 'id', sink: 'ident', type: 'integer' }),
+        map({ source: 'name', sink: 'label' }),
+      ],
     );
 
     expect(await batches).toEqual([
@@ -101,10 +104,9 @@ describe('the straight copy', () => {
 
 describe('a per-row failure', () => {
   it('drops ONLY the offending row and keeps copying (`onError: fail`)', async () => {
-    const { counters, batches } = run(
-      batchesOf([{ n: '1' }, { n: '1.5' }, { n: '3' }]),
-      [map({ source: 'n', sink: 'n', type: 'integer' })],
-    );
+    const { counters, batches } = run(batchesOf([{ n: '1' }, { n: '1.5' }, { n: '3' }]), [
+      map({ source: 'n', sink: 'n', type: 'integer' }),
+    ]);
 
     expect(await batches).toEqual([[{ n: 1 }, { n: 3 }]]);
     expect(counters.rowsRead).toBe(3);
@@ -141,10 +143,9 @@ describe('a per-row failure', () => {
   });
 
   it('aggregates failures BY CODE across batches, which is what the bounded code is for', async () => {
-    const { counters, batches } = run(
-      batchesOf([{ n: '1.5' }, { n: 'nope' }], [{ n: '2.5' }]),
-      [map({ source: 'n', sink: 'n', type: 'integer' })],
-    );
+    const { counters, batches } = run(batchesOf([{ n: '1.5' }, { n: 'nope' }], [{ n: '2.5' }]), [
+      map({ source: 'n', sink: 'n', type: 'integer' }),
+    ]);
     await batches;
     expect(counters.failuresByCode).toEqual({ not_integral: 2, not_a_number: 1 });
     expect(counters.rowsFailed).toBe(3);

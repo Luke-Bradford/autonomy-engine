@@ -50,10 +50,7 @@ import {
 
 /** Why a copy was refused before it moved a row. Bounded, like `CoercionFailureCode`. */
 export type CopyMappingErrorCode =
-  | 'empty_mapping'
-  | 'missing_source_column'
-  | 'ambiguous_source_column'
-  | 'uncoercible_constant';
+  'empty_mapping' | 'missing_source_column' | 'ambiguous_source_column' | 'uncoercible_constant';
 
 /**
  * A copy-wide refusal.
@@ -176,7 +173,12 @@ export interface CopyPumpOptions {
 
 /** How one sink column gets its value, resolved ONCE for the whole copy. */
 type ColumnPlan =
-  | { readonly kind: 'source'; readonly sink: string; readonly key: string; readonly entry: CopyPumpMappingEntry }
+  | {
+      readonly kind: 'source';
+      readonly sink: string;
+      readonly key: string;
+      readonly entry: CopyPumpMappingEntry;
+    }
   | { readonly kind: 'constant'; readonly sink: string; readonly value: CoercedValue };
 
 function byteSizeOf(value: unknown): number {

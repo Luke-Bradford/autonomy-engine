@@ -75,4 +75,8 @@ export function rowsOf(path: string, sql = 'SELECT * FROM sink ORDER BY rowid'):
 }
 
 /** A `sqlite` connection config with the `writable` gate OPEN. */
-export const writableConfig = (root: string, path: string) => ({ roots: [root], path, writable: true });
+export const writableConfig = (root: string, path: string) => ({
+  roots: [root],
+  path,
+  writable: true,
+});
