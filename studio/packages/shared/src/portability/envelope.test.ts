@@ -3,11 +3,13 @@ import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import {
   ConnectionExportDataSchema,
   ExportEnvelopeSchema,
+  ExportKindSchema,
   ImportError,
   NodeExportSchema,
   parseAndUpgradeEnvelope,
   type Upgrader,
 } from './envelope.js';
+import { RESOURCE_KINDS } from './paths.js';
 
 const validPipelineEnvelope = {
   schemaVersion: SCHEMA_VERSION,
@@ -61,6 +63,16 @@ describe('NodeExportSchema', () => {
   it('rejects an omitted connectionId (must be explicitly null, unlike NodeSchema)', () => {
     const node = { id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } };
     expect(() => NodeExportSchema.parse(node)).toThrow();
+  });
+});
+
+// #1112 — `ExportKindSchema` used to be a hand-written `z.enum([...])` sitting
+// beside `RESOURCE_KINDS` with the same three strings in it. Two lists of one
+// fact is the drift the M2 exhaustiveness pin exists to remove, so the enum now
+// derives from the SSOT and this pins that it still does.
+describe('ExportKindSchema (derived from RESOURCE_KINDS)', () => {
+  it('has exactly the RESOURCE_KINDS members, in that order', () => {
+    expect(ExportKindSchema.options).toEqual([...RESOURCE_KINDS]);
   });
 });
 
@@ -498,6 +510,36 @@ describe('parseAndUpgradeEnvelope', () => {
       const result = parseAndUpgradeEnvelope(v3ConnectionEnvelope);
       if (result.kind !== 'connection') throw new Error('expected a connection envelope');
       expect(result.data.resourceId).toBeNull();
+    });
+
+    // #1112 — the v3→v4 backfill dispatches per KIND, and `kind` at this point
+    // is raw parsed JSON that no schema has validated yet (validation is the
+    // LAST step of `parseAndUpgradeEnvelope`). So the dispatch is the one site
+    // in the exhaustiveness pin indexed by UNTRUSTED input: an unrecognized
+    // kind must fall through leaving `data` untouched and be refused by the
+    // final `ExportEnvelopeSchema.safeParse` as a clean `ImportError` — never
+    // reach a missing handler and throw a raw TypeError, which the import
+    // route would surface as a 500 instead of a 400.
+    it('refuses a v3 envelope with an UNRECOGNIZED kind as an ImportError, not a raw TypeError', () => {
+      const v3UnknownKindEnvelope = {
+        ...validPipelineEnvelope,
+        schemaVersion: 3,
+        kind: 'not_a_real_kind',
+        data: { anything: true },
+      };
+      expect(() => parseAndUpgradeEnvelope(v3UnknownKindEnvelope)).toThrow(ImportError);
+    });
+
+    // The same, for a `kind` that is not even a string — `isPlainObject` says
+    // nothing about the type of a member, so the dispatch must not assume one.
+    it('refuses a v3 envelope whose kind is not a string as an ImportError', () => {
+      const v3NonStringKindEnvelope = {
+        ...validPipelineEnvelope,
+        schemaVersion: 3,
+        kind: 42,
+        data: { anything: true },
+      };
+      expect(() => parseAndUpgradeEnvelope(v3NonStringKindEnvelope)).toThrow(ImportError);
     });
 
     // #3 G8a — `secretStatus`/`enabled` are LOCAL readiness, never authoring

@@ -3,6 +3,7 @@ import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { NodeSchema, PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
+import { RESOURCE_KINDS } from './paths.js';
 
 /**
  * A pipeline node as it appears in an EXPORT: `connectionId` is always
@@ -167,7 +168,19 @@ export const TriggerExportDataSchema = TriggerPublicSchema.omit({
 });
 export type TriggerExportData = z.infer<typeof TriggerExportDataSchema>;
 
-export const ExportKindSchema = z.enum(['pipeline', 'connection', 'trigger']);
+/**
+ * The portable resource kinds, derived from `RESOURCE_KINDS` (`paths.ts`) so the
+ * export vocabulary and the git-directory vocabulary can never be two lists of
+ * one fact. #1112 — this WAS a hand-written `z.enum(['pipeline','connection',
+ * 'trigger'])` sitting a few files away from the SSOT with the same three
+ * strings in it; the M2 exhaustiveness pin removes the duplicate rather than
+ * adding a fourth place to remember.
+ *
+ * `ExportEnvelopeSchema` below stays a spelled-out discriminated union on
+ * purpose: a new resource kind must not become importable merely by joining
+ * `RESOURCE_KINDS` — it needs a `data` schema written for it first.
+ */
+export const ExportKindSchema = z.enum(RESOURCE_KINDS);
 export type ExportKind = z.infer<typeof ExportKindSchema>;
 
 const EnvelopeBaseShape = {
@@ -272,24 +285,44 @@ function upgradeV2ToV3(env: unknown): unknown {
  * so it can never MINT an id — see `exportResourceId`); an already-present
  * key is never clobbered.
  */
+const V3_TO_V4_BACKFILLS: Record<
+  ExportKind,
+  (data: Record<string, unknown>) => Record<string, unknown>
+> = {
+  // A pipeline envelope carries identity in two NESTED places as well as the
+  // top level, so it is the one kind whose backfill is not a one-liner.
+  pipeline: (data) => {
+    const next: Record<string, unknown> = { ...data };
+    if (isPlainObject(next.pipeline)) {
+      next.pipeline = { resourceId: null, ...next.pipeline };
+    }
+    if (Array.isArray(next.versions)) {
+      next.versions = next.versions.map((version) =>
+        isPlainObject(version) ? { resourceId: null, ...version } : version,
+      );
+    }
+    return next;
+  },
+  connection: (data) => ({ resourceId: null, ...data }),
+  trigger: (data) => ({ resourceId: null, ...data }),
+};
+
 function upgradeV3ToV4(env: unknown): unknown {
   if (!isPlainObject(env)) return env; // parseAndUpgradeEnvelope rejects it next
   const upgraded: Record<string, unknown> = { ...env, schemaVersion: 4 };
   if (!isPlainObject(env.data)) return upgraded; // final validation rejects it
-  if (env.kind === 'pipeline') {
-    const data: Record<string, unknown> = { ...env.data };
-    if (isPlainObject(data.pipeline)) {
-      data.pipeline = { resourceId: null, ...data.pipeline };
-    }
-    if (Array.isArray(data.versions)) {
-      data.versions = data.versions.map((version) =>
-        isPlainObject(version) ? { resourceId: null, ...version } : version,
-      );
-    }
-    upgraded.data = data;
-  } else if (env.kind === 'connection' || env.kind === 'trigger') {
-    upgraded.data = { resourceId: null, ...env.data };
-  }
+  // The ONE site in the #1112 pin indexed by UNTRUSTED input: at this point in
+  // the chain `env` is raw parsed JSON that no schema has seen (validation is
+  // the LAST step of `parseAndUpgradeEnvelope`), so `kind` may be an unknown
+  // string, a number, or absent. Validate before indexing — a bare
+  // `V3_TO_V4_BACKFILLS[env.kind as ExportKind]` would return `undefined` and
+  // then throw a raw TypeError, turning the import route's clean 400 into a
+  // 500. Falling through leaves `data` untouched, exactly as the old
+  // if/else-if chain did, and the final `ExportEnvelopeSchema.safeParse`
+  // refuses it as an `ImportError`.
+  const kind = ExportKindSchema.safeParse(env.kind);
+  if (!kind.success) return upgraded;
+  upgraded.data = V3_TO_V4_BACKFILLS[kind.data](env.data);
   return upgraded;
 }
 
