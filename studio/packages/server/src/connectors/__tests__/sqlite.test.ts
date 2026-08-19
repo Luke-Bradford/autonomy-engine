@@ -1,11 +1,9 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DatasetReadError,
+  DatasetIoError,
   isTransientSqliteCode,
   readSqliteDatasetBatches,
   sqliteAdapter,
@@ -13,6 +11,7 @@ import {
 } from '../sqlite.js';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import type { ActivityContext } from '../types.js';
+import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
 
 /**
  * #1119 M4 — the `sqlite` store connector and its dataset reader.
@@ -24,34 +23,6 @@ import type { ActivityContext } from '../types.js';
  * that this file's own assumptions are self-consistent.
  */
 
-const dirs: string[] = [];
-
-/** A temp dir whose path is REALPATH'd.
- *
- * On macOS `os.tmpdir()` is itself a symlink (`/var` → `/private/var`), so a
- * root taken straight from `mkdtemp` never canonically contains the paths
- * resolved under it, and a confinement test would pass for the wrong reason —
- * or fail for one. `connectors/__tests__/fs.test.ts` wraps it for exactly this. */
-function tempRoot(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'm4-sqlite-')));
-  dirs.push(dir);
-  return dir;
-}
-
-/** A database file under `root`, seeded with `rows` rows in `t(id, name)`. */
-function seedDb(root: string, rows: number, name = 'app.db'): string {
-  const path = join(root, name);
-  const db = new Database(path);
-  db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
-  const insert = db.prepare('INSERT INTO t (id, name) VALUES (?, ?)');
-  const many = db.transaction((count: number) => {
-    for (let i = 1; i <= count; i += 1) insert.run(i, `row-${i}`);
-  });
-  many(rows);
-  db.close();
-  return path;
-}
-
 async function collect(
   batches: AsyncGenerator<SqliteRow[], void, undefined>,
 ): Promise<SqliteRow[][]> {
@@ -60,15 +31,7 @@ async function collect(
   return out;
 }
 
-afterEach(() => {
-  // REMOVE them, as `fs.test.ts` does. The earlier "the OS reaps them" note was
-  // true and beside the point: these dirs hold real database files, one test
-  // writes a WAL sidecar pair, and `/tmp` is not reaped between runs on every
-  // platform — so the departure from the sibling suite's convention just left
-  // litter accumulating.
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  dirs.length = 0;
-});
+afterEach(cleanupTempRoots);
 
 describe('reading a `table` dataset', () => {
   it('streams every row, in bounded batches', async () => {
@@ -232,7 +195,7 @@ describe('reading a `query` dataset', () => {
           datasetConfig: { sql: `ATTACH DATABASE '${join(outside, 'secret.db')}' AS o` },
         }),
       ),
-    ).rejects.toThrow(DatasetReadError);
+    ).rejects.toThrow(DatasetIoError);
   });
 
   it('refuses a multi-statement string', async () => {
@@ -304,7 +267,7 @@ describe('the confinement guard applies to the database file', () => {
    * classifies it. `fs.ts` does that in `resolveOrFail`; this reader has to do
    * the same, or an `ENOENT` on the target's parent directory escapes as a raw
    * Node error with no `kind` on it, and M5's `copy` adapter — which maps
-   * `DatasetReadError.kind` straight onto `node.failed` — gets something it
+   * `DatasetIoError.kind` straight onto `node.failed` — gets something it
    * cannot classify.
    */
   it('classifies a filesystem error from the guard rather than letting it escape raw', async () => {
@@ -323,8 +286,8 @@ describe('the confinement guard applies to the database file', () => {
       () => null,
       (e: unknown) => e,
     );
-    expect(err).toBeInstanceOf(DatasetReadError);
-    expect((err as DatasetReadError).kind).toBe('permanent');
+    expect(err).toBeInstanceOf(DatasetIoError);
+    expect((err as DatasetIoError).kind).toBe('permanent');
   });
 
   it('refuses a relative root, server-side', async () => {
@@ -419,8 +382,8 @@ describe('failure classification', () => {
       () => null,
       (e: unknown) => e,
     );
-    expect(err).toBeInstanceOf(DatasetReadError);
-    expect((err as DatasetReadError).kind).toBe('permanent');
+    expect(err).toBeInstanceOf(DatasetIoError);
+    expect((err as DatasetIoError).kind).toBe('permanent');
   });
 });
 
