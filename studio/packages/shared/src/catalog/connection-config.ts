@@ -75,6 +75,43 @@ export const fsConnectionConfigSchema = z.object({
   maxEntries: z.number().int().positive().optional(),
 });
 
+/**
+ * #1119 M4 — the Connection-level (non-secret) config for a `sqlite` STORE
+ * connection (data-movement spec §2.6).
+ *
+ * `roots` is here, and §2.6's terse key list ("`path`, `readonly`") is not an
+ * argument against it: the same row says the path is "confined by the same
+ * `roots` allowlist model as `fs` — a SQLite file is a file, and an unconfined
+ * path is the same traversal risk". `roots` IS that model. Reusing the key name
+ * `fs` already uses is deliberate — the connections form carries same-named
+ * fields across a kind change, so retyping an `fs` connection as `sqlite` keeps
+ * the allowlist it was already confined to.
+ *
+ * `writable` rather than `readonly`, and the inversion is load-bearing on TWO
+ * counts:
+ *   - **It renders truthfully.** The authoring form seeds an absent boolean as
+ *     `false` and omits the key when the box is unchecked (`configForm.ts`), so
+ *     a `readonly` key defaulting `true` would display an UNCHECKED "readonly"
+ *     box on a connection that genuinely is read-only — the form would state
+ *     the opposite of the fact.
+ *   - **It fails closed.** Absent means "not writable", so a store nobody
+ *     declared writable cannot be written. That withholds a permission rather
+ *     than manufacturing a fact — the same polarity `parameters: []` takes, and
+ *     the opposite of the `.default([])` that #473 turned into data loss.
+ *
+ * It has NO effect on reading: the M4 reader opens read-only unconditionally
+ * (there is no reason for a source scan to hold a write lock). `writable` is
+ * what M5's copy SINK will consult before it opens the same file for writing.
+ */
+export const sqliteConnectionConfigSchema = z.object({
+  roots: z.array(z.string().min(1)).min(1, 'a sqlite connection needs at least one allowed root'),
+  /** The database file, confined to `roots` at dispatch by the SAME extracted
+   * `resolveWithinRoots` guard the `fs` connector uses — not a second copy. */
+  path: z.string().min(1),
+  /** Whether this store may be used as a copy SINK (M5). Absent = read-only. */
+  writable: z.boolean().optional(),
+});
+
 /** True iff `pattern` compiles as a `RegExp` (a boundary guard so a malformed
  * `quota.exhaustionPattern` is refused at config-save, never thrown at emit). */
 function isCompilableRegex(pattern: string): boolean {
@@ -345,6 +382,7 @@ export const CONNECTION_CONFIG_SCHEMAS: Record<ConnectionKind, z.ZodObject> = {
   agent_cli: agentConnectionConfigSchema,
   http: httpConnectionConfigSchema,
   fs: fsConnectionConfigSchema,
+  sqlite: sqliteConnectionConfigSchema,
 };
 
 /**
@@ -369,7 +407,68 @@ export const CONNECTION_SECRET_USE: Record<ConnectionKind, string> = {
   agent_cli: 'Injected into the environment variable named by `secretEnv`, never into argv.',
   http: 'Sent as an `Authorization: Bearer` header, under any header the request sets itself.',
   fs: 'Not used by this kind — an fs connection is credential-less; `roots` is its guard.',
+  sqlite: 'Not used by this kind — a local SQLite file takes no credential; `roots` is its guard.',
 };
+
+/**
+ * #1119 M4 — the connection kinds whose `config.roots` is a PATH-CONFINEMENT
+ * ALLOWLIST rather than ordinary settings.
+ *
+ * Named once because two things key off it: this module's advisory (a relative
+ * root is a config error the form can say before dispatch), and
+ * `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS` below, which is what stops the
+ * allowlist being rewritten by the thing it confines.
+ */
+export const ROOT_CONFINED_CONNECTION_KINDS: ReadonlySet<ConnectionKind> = new Set<ConnectionKind>([
+  'fs',
+  'sqlite',
+]);
+
+/**
+ * #1119 M4 — config keys a node may NEVER override per dispatch, whatever the
+ * connection's `parameters` allowlist says.
+ *
+ * `Connection.parameters` (#2 L13b) lets an owner declare which config keys a
+ * node may set per dispatch, and the executor merges the resolved values over
+ * the stored config. That is right for a model name or a base URL. It is NOT
+ * right for a SECURITY BOUNDARY: `fs`'s adapter docblock states its own trust
+ * model as "the connection `config.roots` is ADMIN-authored, server-side, never
+ * pipeline-supplied", and an allowlist the confined party can rewrite is not an
+ * allowlist. With `roots` overridable, a node could dispatch `roots: ['/']` and
+ * confine itself to the entire filesystem; with `path` overridable, a `sqlite`
+ * node could repoint the whole store.
+ *
+ * The hole is PRE-EXISTING for `fs` — M4 closes it rather than inheriting it,
+ * because `sqlite`'s confinement rests on exactly the same field. It is an
+ * exhaustive `Record`, so a kind added without a decision is a compile error;
+ * `[]` is the honest answer for every kind whose config carries no boundary.
+ *
+ * Enforced at the MERGE (`run/executor.ts`), not only at the allowlist write
+ * path, because a row authored before this rule existed could already carry one
+ * of these keys — a gate that only guards new writes would not gate those.
+ */
+export const CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS: Record<ConnectionKind, readonly string[]> = {
+  anthropic_api: [],
+  openai_api: [],
+  ollama: [],
+  agent_cli: [],
+  http: [],
+  fs: ['roots'],
+  // `writable` joins the two path keys even though NOTHING consumes it yet (the
+  // M4 reader opens read-only unconditionally). It is a PERMISSION, not a
+  // setting: once M5's copy sink reads it, an overridable `writable` would let a
+  // node grant itself write access to a store its owner marked read-only. Closing
+  // it now costs one entry and cannot break a consumer that does not exist;
+  // closing it after M5 would mean closing it after it was reachable.
+  sqlite: ['roots', 'path', 'writable'],
+};
+
+/** Whether `key` is a security-boundary config key that no per-dispatch
+ * override may set for `kind` (the `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
+ * predicate — never a bare string comparison at a call site). */
+export function isNonOverridableConnectionConfigKey(kind: ConnectionKind, key: string): boolean {
+  return CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS[kind].includes(key);
+}
 
 /**
  * Advisory-only: does this look like an absolute path?
@@ -411,13 +510,21 @@ export function connectionConfigAdvisory(
   const parsed = CONNECTION_CONFIG_SCHEMAS[kind].safeParse(config);
   if (!parsed.success) notes.push(formatZodIssues(parsed.error.issues));
 
-  if (kind === 'fs' && Array.isArray(config.roots)) {
+  if (ROOT_CONFINED_CONNECTION_KINDS.has(kind) && Array.isArray(config.roots)) {
     const relative = config.roots.filter(
       (root): root is string => typeof root === 'string' && !looksAbsolutePath(root),
     );
     if (relative.length > 0) {
-      notes.push(`roots: every fs root must be an absolute path (${relative.join(', ')})`);
+      notes.push(`roots: every ${kind} root must be an absolute path (${relative.join(', ')})`);
     }
+  }
+
+  // A sqlite `path` is resolved against the first root when it is relative, so a
+  // relative path is legal — but it is very often a mistake, and the server-side
+  // guard is the only thing that would say so, at dispatch. Advisory, as the
+  // whole function is.
+  if (kind === 'sqlite' && typeof config.path === 'string' && !looksAbsolutePath(config.path)) {
+    notes.push(`path: '${config.path}' is relative, so it resolves against the first allowed root`);
   }
 
   return notes.length === 0 ? null : notes.join('; ');

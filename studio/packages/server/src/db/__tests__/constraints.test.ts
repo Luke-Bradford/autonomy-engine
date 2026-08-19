@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { ConnectionKindSchema } from '@autonomy-studio/shared';
 import {
   connections,
   pipelineVersions,
@@ -37,6 +38,37 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         })
         .run(),
     ).toThrow(/CHECK constraint failed/);
+  });
+
+  /**
+   * #1119 M4 — ENUM-DRIVEN, deliberately.
+   *
+   * The two hand-written arms below (`fs` accepted, `not_a_real_kind` rejected)
+   * are what let the `sqlite` kind reach a review CI-green with no migration at
+   * all: `connections.kind` is a SQL CHECK constraint, so a kind the schema, the
+   * adapter and the form all accept still fails at INSERT — and nothing in the
+   * suite would have said so. This arm loops the enum, so the migration is owed
+   * by construction the next time a kind is added.
+   */
+  it('CHECK accepts EVERY kind ConnectionKindSchema declares', () => {
+    const { db } = freshDb();
+    for (const [index, kind] of ConnectionKindSchema.options.entries()) {
+      expect(() =>
+        db
+          .insert(connections)
+          .values({
+            id: `conn_${kind}`,
+            ownerId: null,
+            name: kind,
+            kind,
+            config: {},
+            secretRef: null,
+            createdAt: index,
+            updatedAt: index,
+          })
+          .run(),
+      ).not.toThrow();
+    }
   });
 
   it('CHECK accepts the `fs` connection kind (#4 A11 migration 0012)', () => {

@@ -16,6 +16,16 @@ export const ConnectionKindSchema = z.enum([
   // Credential-less (no `secretRef`); its non-secret `config.roots` is the
   // server-side allowlist the `fs` adapter confines every file activity to.
   'fs',
+  // #1119 M4 (data-movement spec §2.6) — the first STORE kind: a linked service
+  // that HOLDS data rather than one that computes. Credential-less (a SQLite
+  // file needs no password), so it stays out of
+  // `SECRET_REQUIRING_CONNECTION_KINDS`; its guard is `config.roots`, the same
+  // allowlist model `fs` uses, because a SQLite database IS a file.
+  //
+  // APPENDED, never inserted. `ConnectionsPage` seeds a new connection with
+  // `CONNECTION_KINDS[0]`, so a kind added at the front would silently change
+  // the default kind of every new connection (and break the e2e that pins it).
+  'sqlite',
 ]);
 export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
 

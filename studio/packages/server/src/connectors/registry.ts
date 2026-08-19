@@ -7,6 +7,7 @@ import { anthropicAdapter } from './anthropic.js';
 import { openaiAdapter } from './openai.js';
 import { ollamaAdapter } from './ollama.js';
 import { createAgentAdapter } from './agent.js';
+import { sqliteAdapter } from './sqlite.js';
 
 /** A lookup of connector adapters by Connection kind. */
 export type ConnectorRegistry = ReadonlyMap<ConnectionKind, ConnectorAdapter>;
@@ -20,8 +21,8 @@ export interface ConnectorRegistryDeps {
 
 /**
  * Build the connector registry with an adapter for every Connection kind
- * (`http`, `anthropic_api`, `openai_api`, `ollama`, `agent_cli`, and — #4 A11 —
- * the local `fs` connector). A run that dispatches an activity whose Connection
+ * (`http`, `anthropic_api`, `openai_api`, `ollama`, `agent_cli`, the #4 A11 local
+ * `fs` connector and the #1119 M4 `sqlite` STORE connector). A run that dispatches an activity whose Connection
  * kind has no adapter still fails that node LOUDLY at the executor ("no adapter
  * for connection kind …"), never a silent hang.
  */
@@ -33,6 +34,7 @@ export function createConnectorRegistry(deps: ConnectorRegistryDeps): ConnectorR
     openaiAdapter,
     ollamaAdapter,
     createAgentAdapter(deps.supervisor),
+    sqliteAdapter,
   ];
   return new Map<ConnectionKind, ConnectorAdapter>(adapters.map((a) => [a.kind, a]));
 }

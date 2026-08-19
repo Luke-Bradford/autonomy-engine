@@ -878,6 +878,44 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
     });
   });
 
+  it('#1119 M4 — a node may NOT override `roots`, even when the allowlist declares it', async () => {
+    // The confinement allowlist is admin-authored and server-side; an allowlist
+    // the confined party can rewrite is not an allowlist. `Connection.parameters`
+    // is the OWNER's per-key opt-in, so this test opts `roots` in DELIBERATELY —
+    // the gate must refuse anyway, which is what distinguishes it from the
+    // `connection_param_undeclared` refusal.
+    const escapeDir = await realpath(await mkdtemp(join(tmpdir(), 'exec-fs-escape-')));
+    await writeFile(join(escapeDir, 'secret.txt'), 'not yours', 'utf8');
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'fs',
+      config: { roots: [root] },
+      parameters: ['roots'],
+      secretRef: null,
+    }).id;
+    const pvId = seedVersion(db, [
+      {
+        ...fsNode('n1', connId, { path: join(escapeDir, 'secret.txt') }),
+        connectionParams: { roots: [escapeDir] },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('may never be overridden per dispatch'),
+      kind: 'permanent',
+      code: 'connection_param_non_overridable',
+    });
+    // And the file it was reaching for was never read.
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded')).toBeUndefined();
+    await rm(escapeDir, { recursive: true, force: true });
+  });
+
   it('dispatches a file_write node and the bytes land on disk', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'fs', { roots: [root] }, null);

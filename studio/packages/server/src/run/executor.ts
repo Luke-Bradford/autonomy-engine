@@ -20,6 +20,7 @@ import {
   type FailureKind,
   type Node,
   type WarningCode,
+  isNonOverridableConnectionConfigKey,
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
@@ -433,7 +434,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // the other config-shape checks, BEFORE the L14c transient gate, for the
     // same reason it sits after them: a genuine misconfig must surface its
     // permanent error, never a spurious transient):
-    //   (i) every bound key must be on the connection's declared `parameters`
+    //   (0) no bound key may be a SECURITY-BOUNDARY config key
+    //       (`CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`) — `fs`/`sqlite` `roots`
+    //       is the path-confinement allowlist and `sqlite` `path` is the store
+    //       address, so an override would let the confined party rewrite its own
+    //       confinement. Checked FIRST: the allowlist cannot bless these.
+    //   (i) every other bound key must be on the connection's declared `parameters`
     //       allowlist — the OWNER's per-key opt-in (a shared connection's
     //       borrower must not override e.g. `baseUrl` and redirect the
     //       decrypted credential). Enforced HERE, not at save: connections are
@@ -449,6 +455,20 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     let connectionConfig = connection.config;
     if (resolvedParams !== undefined) {
       for (const [key, value] of Object.entries(resolvedParams)) {
+        // #1119 M4 — refused BEFORE the allowlist check, because this refusal
+        // is not about what the owner opted into: a key on this list may never
+        // be overridden even if the allowlist names it. Enforced at the MERGE
+        // rather than only at the allowlist write path, because a connection
+        // row authored before this rule existed can already carry one.
+        if (isNonOverridableConnectionConfigKey(connection.kind, key)) {
+          return {
+            error:
+              `connection parameter '${key}' may never be overridden per dispatch on a ` +
+              `'${connection.kind}' connection — it is a security boundary (the path ` +
+              'confinement allowlist / the store address), not a setting',
+            code: FAILURE_CODES.CONNECTION_PARAM_NON_OVERRIDABLE,
+          };
+        }
         if (!connection.parameters.includes(key)) {
           return {
             error:

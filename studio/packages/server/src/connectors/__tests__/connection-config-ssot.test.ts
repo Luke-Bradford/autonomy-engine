@@ -15,6 +15,20 @@ import type { Supervisor } from '../../workers/process-supervisor.js';
  * object the form derives its controls from — asserted here by IDENTITY, so a
  * re-declared local schema fails even if it happens to be equivalent today.
  */
+/**
+ * #1119 M4 — the kinds whose adapter DELIBERATELY refines the shared schema
+ * server-side, and therefore cannot assert object identity against it.
+ *
+ * Named as an exception set, and DERIVED from rather than duplicating the kind
+ * list, because the hand-written `it.each([...5 kinds])` this replaces had
+ * already gone stale: it excluded `fs` for this reason and would silently have
+ * given `sqlite` — the second divergent kind — no assertion at all, which is the
+ * opposite of what an exclusion is for. Both divergences are the same one:
+ * `node:path`'s `isAbsolute` is platform-aware and cannot live in a
+ * browser-safe package, so the adapter refines the shared `roots`.
+ */
+const DIVERGENT_KINDS: ReadonlySet<ConnectionKind> = new Set<ConnectionKind>(['fs', 'sqlite']);
+
 const supervisor = {} as Supervisor;
 
 describe('connection config is one declaration, server and shared', () => {
@@ -24,12 +38,48 @@ describe('connection config is one declaration, server and shared', () => {
     expect([...registry.keys()].sort()).toEqual(Object.keys(CONNECTION_CONFIG_SCHEMAS).sort());
   });
 
-  it.each(['anthropic_api', 'openai_api', 'ollama', 'agent_cli', 'http'] as ConnectionKind[])(
-    '%s parses the SAME schema object the form renders',
-    (kind) => {
-      expect(registry.get(kind)?.configSchema).toBe(connectionConfigSchema(kind));
-    },
+  const identicalKinds = (Object.keys(CONNECTION_CONFIG_SCHEMAS) as ConnectionKind[]).filter(
+    (kind) => !DIVERGENT_KINDS.has(kind),
   );
+
+  it.each(identicalKinds)('%s parses the SAME schema object the form renders', (kind) => {
+    expect(registry.get(kind)?.configSchema).toBe(connectionConfigSchema(kind));
+  });
+
+  it('accounts for every kind — identical or a NAMED divergence', () => {
+    // The exclusion set cannot quietly grow: a kind that is neither asserted
+    // identical nor listed as divergent fails here.
+    expect([...identicalKinds, ...DIVERGENT_KINDS].sort()).toEqual(
+      Object.keys(CONNECTION_CONFIG_SCHEMAS).sort(),
+    );
+  });
+
+  it('sqlite adds the absolute-root check, and nothing else', () => {
+    // The `fs` case below states the reasoning; this is the SECOND kind with the
+    // identical divergence, asserted here rather than only functionally in
+    // `sqlite.test.ts`, because this file is where per-kind schema identity is
+    // the subject.
+    const schema = registry.get('sqlite')!.configSchema;
+
+    expect(schema.safeParse({ roots: ['relative/path'], path: '/db/app.db' }).success).toBe(false);
+    expect(
+      connectionConfigSchema('sqlite').safeParse({ roots: ['relative/path'], path: '/db/app.db' })
+        .success,
+    ).toBe(true);
+
+    const mixed = schema.safeParse({ roots: ['/ok', 'relative/path'], path: '/db/app.db' });
+    expect(mixed.success).toBe(false);
+    expect(mixed.error?.issues[0]?.path).toEqual(['roots', 1]);
+
+    // Everything else still comes from shared, messages included — `path` is
+    // still required and the empty-roots message is still the shared one.
+    expect(schema.safeParse({ roots: ['/db'] }).success).toBe(false);
+    const empty = schema.safeParse({ roots: [], path: '/db/app.db' });
+    expect(empty.success).toBe(false);
+    expect(empty.error?.issues[0]?.message).toBe(
+      'a sqlite connection needs at least one allowed root',
+    );
+  });
 
   it('fs adds the absolute-root check, and nothing else', () => {
     const schema = registry.get('fs')!.configSchema;
