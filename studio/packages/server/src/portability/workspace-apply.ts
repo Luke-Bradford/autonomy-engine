@@ -18,6 +18,7 @@ import {
   type WorkspaceGitArchivedResult,
   type WorkspaceGitDeferredResource,
 } from '@autonomy-studio/shared';
+import { ZodError } from 'zod';
 import { archivePipeline } from '../repo/archive.js';
 import {
   connectionNotReadyReason,
@@ -398,6 +399,54 @@ function buildTriggerWriteInput(
  * row: a canonical CONTENT edit → `updated`; else a display-name-only change →
  * `renamed`; else `unchanged`. (Triggers have no version to mint and no archive
  * state, so `created`/the pipeline-only `restored` never arise here.) */
+/**
+ * Gate a fully-resolved trigger write through the STRICT create-path schema, and
+ * say WHICH file failed if it does not pass (#1091).
+ *
+ * `updateTrigger` re-parses through the LENIENT `TriggerSchema`, so it does NOT
+ * run the concurrency (`parallel ⇒ max`) or param-binding (`${trigger.*}`-only)
+ * WRITE rules the CREATE path gets via `NewTriggerSchema`. Both apply paths are
+ * gated here so a corrupt branch is refused symmetrically, never silently
+ * laundered. On the create path this is deliberately a SECOND parse —
+ * `createTrigger` runs the same schema itself (`repo/triggers.ts`) — because the
+ * repo layer knows nothing about branch files and so cannot name one; that parse
+ * stays as the repo-level backstop.
+ *
+ * ## Why this re-throws a `ZodError` rather than a `WorkspaceApplyError`
+ *
+ * The obvious fix — the one the ticket proposed — is to convert this to the
+ * file's own `WorkspaceApplyError`. That would make the operator's experience
+ * WORSE, not better, and the reason is worth writing down so it is not
+ * "corrected" later: `registerErrorHandler` has no branch for
+ * `WorkspaceApplyError`, so it falls to the generic `500 internal_error` whose
+ * body carries NO message at all, while a `ZodError` is answered by the handler's
+ * first branch as `400 validation_error` WITH the failing paths. Converting would
+ * have traded a specific 400 for an opaque 500.
+ *
+ * So the refusal keeps its shape and gains the attribution it was missing: every
+ * issue path is prefixed with the branch file that carried the trigger, which is
+ * the thing the operator actually edits. The idiom is `runWindowsForm.ts`'s
+ * `labelRowPaths` — rewrite the path to name what is on screen, rather than
+ * inventing a second error channel.
+ *
+ * That `WorkspaceApplyError` itself answers as a message-less 500 is a real
+ * defect, and a wider one than this ticket (it covers ten other throw sites, and
+ * `createConnection`/`createPipeline` have the same unattributed-`ZodError` hole
+ * this closes for triggers). It is filed rather than widened into here.
+ *
+ * The apply is NOT continued past a bad trigger: it is one transaction, so a
+ * refusal leaves the target untouched, and a partial import is not a state this
+ * module is allowed to produce. Aborting is the correct behaviour — only the
+ * silence about WHICH resource aborted it was wrong.
+ */
+function gateTriggerWrite(writeInput: NewTrigger, path: string): void {
+  const parsed = NewTriggerSchema.safeParse(writeInput);
+  if (parsed.success) return;
+  throw new ZodError(
+    parsed.error.issues.map((issue) => ({ ...issue, path: [`trigger ${path}`, ...issue.path] })),
+  );
+}
+
 function triggerAction(contentChanged: boolean, nameChanged: boolean): WorkspaceGitAppliedAction {
   if (contentChanged) return 'updated';
   if (nameChanged) return 'renamed';
@@ -829,9 +878,11 @@ export function applyWorkspace(
         // webhook: the branch carries only the PUBLIC config (no `secretRef`,
         // which `NewTriggerSchema` requires), so a fresh webhook trigger starts
         // with no secret — the operator provisions it via the normal route (G8).
+        const writeInput = buildTriggerWriteInput(data, ownerId, binding, null, connectionsReady);
+        gateTriggerWrite(writeInput, inc.path);
         const created = createTrigger(
           db,
-          buildTriggerWriteInput(data, ownerId, binding, null, connectionsReady),
+          writeInput,
           inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
         );
         action = 'created';
@@ -873,12 +924,7 @@ export function applyWorkspace(
             webhook,
             connectionsReady,
           );
-          // `updateTrigger` re-parses through the LENIENT `TriggerSchema`, so it
-          // does NOT run the concurrency (`parallel ⇒ max`) or param-binding
-          // (`${trigger.*}`-only) WRITE rules the CREATE path gets via
-          // `NewTriggerSchema`. Gate the fully-resolved write through it here so a
-          // corrupt branch is refused symmetrically, never silently laundered.
-          NewTriggerSchema.parse(writeInput);
+          gateTriggerWrite(writeInput, inc.path);
           updateTrigger(db, existing.id, writeInput);
         } else if (action === 'renamed') {
           updateTrigger(db, existing.id, { name: data.name });
