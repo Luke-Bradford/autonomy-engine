@@ -1,5 +1,6 @@
 import {
   connectionContentForm,
+  datasetContentForm,
   pipelineContentForm,
   RESOURCE_KINDS,
   triggerContentForm,
@@ -8,6 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import type {
   ParsedConnection,
+  ParsedDataset,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -140,6 +142,15 @@ function connectionItem(c: ParsedConnection): DriftItem {
   };
 }
 
+function datasetItem(d: ParsedDataset): DriftItem {
+  return {
+    path: d.path,
+    resourceId: d.resourceId,
+    name: d.data.name,
+    contentForm: datasetContentForm(d.data),
+  };
+}
+
 function triggerItem(t: ParsedTrigger): DriftItem {
   return {
     path: t.path,
@@ -175,6 +186,7 @@ const DRIFT_PROJECTIONS: Record<ResourceKind, (workspace: ParsedWorkspace) => Dr
   pipeline: (workspace) => workspace.pipelines.map(pipelineItem),
   connection: (workspace) => workspace.connections.map(connectionItem),
   trigger: (workspace) => workspace.triggers.map(triggerItem),
+  dataset: (workspace) => workspace.datasets.map(datasetItem),
 };
 
 export function computeDrift(

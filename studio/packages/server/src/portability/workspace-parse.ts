@@ -2,6 +2,7 @@ import {
   kindForDir,
   parseAndUpgradeEnvelope,
   type ConnectionExportData,
+  type DatasetExportData,
   type ExportEnvelope,
   type PipelineExportData,
   type PipelineVersionExport,
@@ -85,6 +86,15 @@ export function latestVersion(pipeline: ParsedPipeline): PipelineVersionExport |
   return versions.length > 0 ? versions[versions.length - 1] : undefined;
 }
 
+/** #1114 (M2) — a parsed dataset file. `data.connectionId` here is a stable
+ * `resourceId` (what the branch holds), NOT a local db id; the apply resolves
+ * it against connections applied earlier in the same run. */
+export interface ParsedDataset {
+  path: string;
+  resourceId: string | null;
+  data: DatasetExportData;
+}
+
 export interface ParsedTrigger {
   path: string;
   resourceId: string | null;
@@ -94,6 +104,7 @@ export interface ParsedTrigger {
 export interface ParsedWorkspace {
   pipelines: ParsedPipeline[];
   connections: ParsedConnection[];
+  datasets: ParsedDataset[];
   triggers: ParsedTrigger[];
   diagnostics: WorkspaceParseDiagnostic[];
 }
@@ -174,14 +185,15 @@ export function withoutResources(
   return {
     pipelines: keep('pipeline', workspace.pipelines),
     connections: keep('connection', workspace.connections),
+    datasets: keep('dataset', workspace.datasets),
     triggers: keep('trigger', workspace.triggers),
     diagnostics: workspace.diagnostics,
   };
 }
 
 /** The stable identity of a resource envelope: for a pipeline it is the
- * pipeline ROW's resourceId (NOT a version's); for a connection/trigger it is
- * the resource's own resourceId. */
+ * pipeline ROW's resourceId (NOT a version's); for every other kind it is the
+ * resource's own resourceId. */
 function envelopeResourceId(envelope: ExportEnvelope): string | null {
   return envelope.kind === 'pipeline'
     ? envelope.data.pipeline.resourceId
@@ -194,6 +206,7 @@ export function parseWorkspaceFiles(
 ): ParsedWorkspace {
   const pipelines: ParsedPipeline[] = [];
   const connections: ParsedConnection[] = [];
+  const datasets: ParsedDataset[] = [];
   const triggers: ParsedTrigger[] = [];
   // Unreadable files never made it into `files` — surface each as a diagnostic
   // up front so a preview shows the whole picture and an apply fails closed.
@@ -204,6 +217,7 @@ export function parseWorkspaceFiles(
   const seenResourceId: Record<ResourceKind, Set<string>> = {
     pipeline: new Set(),
     connection: new Set(),
+    dataset: new Set(),
     trigger: new Set(),
   };
 
@@ -258,11 +272,14 @@ export function parseWorkspaceFiles(
       case 'connection':
         connections.push({ path: file.path, resourceId, data: envelope.data });
         break;
+      case 'dataset':
+        datasets.push({ path: file.path, resourceId, data: envelope.data });
+        break;
       case 'trigger':
         triggers.push({ path: file.path, resourceId, data: envelope.data });
         break;
     }
   }
 
-  return { pipelines, connections, triggers, diagnostics };
+  return { pipelines, connections, datasets, triggers, diagnostics };
 }

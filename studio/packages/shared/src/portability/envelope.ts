@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
+import { DatasetSchema } from '../schemas/dataset.js';
 import { NodeSchema, PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 import { RESOURCE_KINDS } from './paths.js';
@@ -137,6 +138,28 @@ export const ConnectionExportDataSchema = ConnectionPublicSchema.omit({
 export type ConnectionExportData = z.infer<typeof ConnectionExportDataSchema>;
 
 /**
+ * `data` for a `kind: 'dataset'` envelope (#1114, M2).
+ *
+ * Nothing is stripped and nothing is added beyond the `resourceId` reshape every
+ * kind gets, because a dataset has no local-readiness state and no secret: its
+ * store credential lives on the connection it names (spec §2.6), and its
+ * `config` is declared non-secret. So — unlike a connection, which has to shed
+ * `secretRef`/`secretStatus`/`enabled` — the whole row is authoring content.
+ *
+ * `connectionId` IS present here and is NOT a local db id: `serializeDataset`
+ * remaps it to the connection's stable `resourceId` on the way out, and the
+ * apply resolves it back. That is the difference between a portable address and
+ * one workspace's private key committed into a shared repo (spec §3, one layer
+ * up from the node refs it was written about).
+ */
+export const DatasetExportDataSchema = DatasetSchema.omit({
+  resourceId: true,
+}).extend({
+  resourceId: exportResourceId,
+});
+export type DatasetExportData = z.infer<typeof DatasetExportDataSchema>;
+
+/**
  * The ALREADY-public webhook config shape an export's `data.webhook` field
  * carries — i.e. `WebhookPublicConfigSchema`'s output type, but as a plain
  * (non-transforming) schema. This is deliberately NOT `WebhookPublicConfigSchema`
@@ -204,6 +227,7 @@ export const ExportEnvelopeSchema = z.discriminatedUnion('kind', [
     data: ConnectionExportDataSchema,
   }),
   z.object({ ...EnvelopeBaseShape, kind: z.literal('trigger'), data: TriggerExportDataSchema }),
+  z.object({ ...EnvelopeBaseShape, kind: z.literal('dataset'), data: DatasetExportDataSchema }),
 ]);
 export type ExportEnvelope = z.infer<typeof ExportEnvelopeSchema>;
 
@@ -304,6 +328,12 @@ const V3_TO_V4_BACKFILLS: Record<
     return next;
   },
   connection: (data) => ({ resourceId: null, ...data }),
+  // #1114 — IDENTITY, deliberately, and not merely "nothing to do". `dataset`
+  // postdates schemaVersion 4, so no v3 dataset envelope can exist to upgrade.
+  // Backfilling `resourceId: null` the way the older kinds do would manufacture
+  // an "exported before stable identity existed" fact for a kind that never
+  // lacked one — the same class of lie as a defaulted `columns`.
+  dataset: (data) => data,
   trigger: (data) => ({ resourceId: null, ...data }),
 };
 

@@ -239,5 +239,28 @@ export function importEnvelope(db: Db, ownerId: string, raw: unknown): ImportRes
       return importConnectionEnvelope(db, ownerId, envelope);
     case 'trigger':
       return importTriggerEnvelope(db, ownerId, envelope);
+    case 'dataset':
+      // #1114 (M2) — REFUSED on this route, and the refusal is the honest
+      // answer rather than a gap.
+      //
+      // This function's contract (see its docstring) is that a cross-entity ref
+      // is left NULL for the importer to rebind afterwards. `Dataset.connectionId`
+      // cannot be null — a dataset with no store is not a dataset — so there is
+      // no "import it now, bind it later" state to land in. The alternatives are
+      // both worse: inventing a nullable column would weaken the schema for
+      // every other reader, and silently resolving the ref by `resourceId` would
+      // make a single-file import succeed or fail depending on what else happens
+      // to be in the workspace, with no way for the caller to know which.
+      //
+      // Datasets round-trip through workspace-git instead, where the apply
+      // resolves `connectionId` against connections created in the SAME import
+      // (which is why `APPLY_RANK` puts datasets after connections). A
+      // single-file path can be added alongside the Manage → Datasets page that
+      // would give it somewhere to land.
+      throw new ImportError(
+        'a dataset cannot be imported from a single file: it names the connection it lives in, ' +
+          'and that reference only resolves against a whole workspace — import it with the ' +
+          'workspace from git',
+      );
   }
 }

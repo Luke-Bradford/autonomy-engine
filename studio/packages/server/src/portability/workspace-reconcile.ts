@@ -1,5 +1,6 @@
 import {
   connectionContentForm,
+  datasetContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
   RESOURCE_KINDS,
@@ -14,6 +15,7 @@ import { normalizedTriggerContentForm } from './trigger-content.js';
 import {
   latestVersion,
   type ParsedConnection,
+  type ParsedDataset,
   type ParsedPipeline,
   type ParsedTrigger,
   type ParsedWorkspace,
@@ -186,6 +188,7 @@ function dbMap<T>(
 
 const pipelineName = (p: ParsedPipeline): string => p.data.pipeline.name;
 const connectionName = (c: ParsedConnection): string => c.data.name;
+const datasetName = (d: ParsedDataset): string => d.data.name;
 const triggerName = (t: ParsedTrigger): string => t.data.name;
 
 /**
@@ -239,6 +242,12 @@ export function classifyWorkspace(
     (c) => c.resourceId,
     connectionName,
     (c) => connectionContentForm(c.data),
+  );
+  const dbDatasets = dbMap(
+    db.datasets,
+    (d) => d.resourceId,
+    datasetName,
+    (d) => datasetContentForm(d.data),
   );
   const dbTriggers = dbMap(
     db.triggers,
@@ -312,7 +321,7 @@ export function classifyWorkspace(
   // from a spelled-out list compiles clean and then never appears in an import
   // PREVIEW at all — the operator approves a pull having been shown nothing
   // about that kind, and the apply writes it anyway. The emitted order is
-  // `RESOURCE_KINDS` order (pipelines, connections, triggers), which is exactly
+  // `RESOURCE_KINDS` order (pipelines, connections, triggers, datasets), which is exactly
   // the stable preview order this function's docstring promises.
   const classifiers: Record<ResourceKind, () => WorkspaceGitPreviewResource[]> = {
     pipeline: () =>
@@ -338,6 +347,22 @@ export function classifyWorkspace(
           connectionName(c),
           connectionContentForm(c.data),
           dbConnections,
+        ),
+      ),
+    // #1114 (M2) — both sides are already in EXPORT space here (`db` is the DB
+    // run through the same serialize+parse pair as the branch), so a dataset's
+    // `connectionId` is a stable `resourceId` on both and two machines with
+    // different local connection ids still agree. No normalization arm is
+    // needed, unlike a trigger's binding.
+    dataset: () =>
+      incoming.datasets.map((d) =>
+        classifyResource(
+          'dataset',
+          d.path,
+          d.resourceId,
+          datasetName(d),
+          datasetContentForm(d.data),
+          dbDatasets,
         ),
       ),
     trigger: () =>

@@ -126,7 +126,14 @@ function parsedTrigger(resourceId: string | null, name: string, enabled?: boolea
 }
 
 function ws(overrides: Partial<ParsedWorkspace> = {}): ParsedWorkspace {
-  return { pipelines: [], connections: [], triggers: [], diagnostics: [], ...overrides };
+  return {
+    pipelines: [],
+    connections: [],
+    datasets: [],
+    triggers: [],
+    diagnostics: [],
+    ...overrides,
+  };
 }
 
 describe('computeDrift', () => {

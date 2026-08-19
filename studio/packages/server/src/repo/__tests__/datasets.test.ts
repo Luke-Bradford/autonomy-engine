@@ -9,6 +9,7 @@ import {
   updateDataset,
 } from '../datasets.js';
 import { createConnection, deleteConnection } from '../connections.js';
+import type { NewDataset } from '@autonomy-studio/shared';
 import { decodeCursor } from '../pagination.js';
 import { freshDb } from './helpers.js';
 
@@ -67,7 +68,7 @@ describe('datasets repo', () => {
     // `PageArgs.cursor` is the decoded key (`pageArgsFromQuery` does this).
     const second = listDatasetsPage(db, 'local', {
       limit: 2,
-      cursor: decodeCursor(first.nextCursor!),
+      cursor: decodeCursor(first.nextCursor!) ?? undefined,
     });
     expect(second.items).toHaveLength(1);
     expect(second.nextCursor).toBeNull();
