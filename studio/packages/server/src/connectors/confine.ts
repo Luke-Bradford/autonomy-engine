@@ -17,6 +17,17 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
  *   - Lexical `..` collapse, `realpath` on the roots AND on the target's
  *     PARENT, and containment compared canonical-against-canonical.
  *   - An `lstat` refusal of a symlink AT the target itself.
+ *   - **IT CAN THROW, and a caller must catch it.** `realpath` on the target's
+ *     PARENT is deliberately left unguarded, so a missing or unreadable parent
+ *     directory raises a raw `ENOENT`/`EACCES` rather than becoming an
+ *     `{ ok: false }` result. That is on purpose: the two callers classify a
+ *     genuine filesystem error differently from a POLICY refusal (`fs` maps the
+ *     errno through `failFromError`, which can call it transient; a policy
+ *     refusal is always permanent), and folding the throw into the result here
+ *     would flatten that distinction for everyone. `fs.ts` catches it in
+ *     `resolveOrFail`, `sqlite.ts` in `confineStorePath`. A third caller owes
+ *     the same wrapper — #1119 shipped without it on the sqlite side and an
+ *     unclassified error escaped, which is why this bullet exists.
  *   - It does NOT close the lstat→open race on its own. `fs.ts` closes it by
  *     passing `O_NOFOLLOW` to its own `open()`; a caller that hands the returned
  *     path to a library which opens the file ITSELF — `better-sqlite3` does —

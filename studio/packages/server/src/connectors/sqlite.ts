@@ -78,7 +78,7 @@ import type {
  * refines it. It REFINES rather than re-declares, so the form and the adapter
  * can never describe different objects.
  */
-export const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
+const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
   roots: sharedSqliteConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
     roots.forEach((root, index) => {
       if (isAbsolute(root)) return;
@@ -120,15 +120,30 @@ export class DatasetReadError extends Error {
 /** SQLite result codes that mean "try again", not "this will never work". */
 const TRANSIENT_SQLITE_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_PROTOCOL']);
 
+/**
+ * Whether a SQLite result code means "busy right now" rather than "this will
+ * never work" — the fail-safe classification rule, named and exported so the
+ * claim `readFailure` rests on can be asserted directly.
+ *
+ * The prefix reduction is the part worth pinning. better-sqlite3 reports
+ * EXTENDED result codes (`SQLITE_<PRIMARY>_<EXTENDED>`), so a real lock
+ * contention arrives as `SQLITE_BUSY_SNAPSHOT`, not `SQLITE_BUSY`; taking the
+ * first two segments is what makes the set match it. It also has to NOT
+ * over-match: `SQLITE_IOERR_READ` reduces to `SQLITE_IOERR`, which is absent
+ * from the set and therefore stays permanent — a disk read error is not
+ * something to retry into.
+ */
+export function isTransientSqliteCode(code: string): boolean {
+  return TRANSIENT_SQLITE_CODES.has(code.split('_').slice(0, 2).join('_'));
+}
+
 /** Map a thrown store error onto a `DatasetReadError` (fail-safe: unrecognised → permanent). */
 function readFailure(err: unknown, context: string): DatasetReadError {
   if (err instanceof DatasetReadError) return err;
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as { code?: unknown } | undefined)?.code;
   const kind: ConnectorErrorKind =
-    typeof code === 'string' && TRANSIENT_SQLITE_CODES.has(code.split('_').slice(0, 2).join('_'))
-      ? 'transient'
-      : 'permanent';
+    typeof code === 'string' && isTransientSqliteCode(code) ? 'transient' : 'permanent';
   return new DatasetReadError(kind, `${context}: ${message}`, { cause: err });
 }
 

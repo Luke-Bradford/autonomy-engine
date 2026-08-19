@@ -1,4 +1,4 @@
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DatasetReadError,
+  isTransientSqliteCode,
   readSqliteDatasetBatches,
   sqliteAdapter,
   type SqliteRow,
@@ -60,8 +61,12 @@ async function collect(
 }
 
 afterEach(() => {
-  // Nothing to tear down beyond the temp dirs the OS reaps; kept explicit so a
-  // future handle leak has an obvious home.
+  // REMOVE them, as `fs.test.ts` does. The earlier "the OS reaps them" note was
+  // true and beside the point: these dirs hold real database files, one test
+  // writes a WAL sidecar pair, and `/tmp` is not reaped between runs on every
+  // platform — so the departure from the sibling suite's convention just left
+  // litter accumulating.
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
 });
 
@@ -376,6 +381,46 @@ describe('what the reader refuses before it opens anything', () => {
         }),
       ),
     ).rejects.toThrow(/invalid sqlite connection config/);
+  });
+});
+
+describe('failure classification', () => {
+  /**
+   * `readFailure`'s fail-safe rule is a claim the file makes in prose and
+   * nothing asserted. Pinned on the PREDICATE rather than by forcing a real
+   * lock, because what can actually be got wrong here is the extended-result-code
+   * reduction, not whether SQLite reports a busy database.
+   */
+  it('treats a busy/locked EXTENDED code as transient and everything else as permanent', () => {
+    // The shapes better-sqlite3 really reports: primary + extended.
+    expect(isTransientSqliteCode('SQLITE_BUSY')).toBe(true);
+    expect(isTransientSqliteCode('SQLITE_BUSY_SNAPSHOT')).toBe(true);
+    expect(isTransientSqliteCode('SQLITE_LOCKED_SHAREDCACHE')).toBe(true);
+    expect(isTransientSqliteCode('SQLITE_PROTOCOL')).toBe(true);
+
+    // And the over-match this must NOT make: a disk read error reduces to
+    // SQLITE_IOERR, which is not something to retry into.
+    expect(isTransientSqliteCode('SQLITE_IOERR_READ')).toBe(false);
+    expect(isTransientSqliteCode('SQLITE_CORRUPT_VTAB')).toBe(false);
+    expect(isTransientSqliteCode('SQLITE_ERROR')).toBe(false);
+    expect(isTransientSqliteCode('SQLITE_READONLY_DBMOVED')).toBe(false);
+  });
+
+  it('classifies an unrecognised throw as permanent, never blind-retried', async () => {
+    const root = tempRoot();
+    seedDb(root, 1);
+    const err = await collect(
+      readSqliteDatasetBatches({
+        connectionConfig: { roots: [root], path: join(root, 'app.db') },
+        datasetKind: 'query',
+        datasetConfig: { sql: 'SELECT * FROM no_such_table' },
+      }),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(DatasetReadError);
+    expect((err as DatasetReadError).kind).toBe('permanent');
   });
 });
 

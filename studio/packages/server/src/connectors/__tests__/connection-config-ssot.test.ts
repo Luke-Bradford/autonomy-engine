@@ -54,6 +54,33 @@ describe('connection config is one declaration, server and shared', () => {
     );
   });
 
+  it('sqlite adds the absolute-root check, and nothing else', () => {
+    // The `fs` case below states the reasoning; this is the SECOND kind with the
+    // identical divergence, asserted here rather than only functionally in
+    // `sqlite.test.ts`, because this file is where per-kind schema identity is
+    // the subject.
+    const schema = registry.get('sqlite')!.configSchema;
+
+    expect(schema.safeParse({ roots: ['relative/path'], path: '/db/app.db' }).success).toBe(false);
+    expect(
+      connectionConfigSchema('sqlite').safeParse({ roots: ['relative/path'], path: '/db/app.db' })
+        .success,
+    ).toBe(true);
+
+    const mixed = schema.safeParse({ roots: ['/ok', 'relative/path'], path: '/db/app.db' });
+    expect(mixed.success).toBe(false);
+    expect(mixed.error?.issues[0]?.path).toEqual(['roots', 1]);
+
+    // Everything else still comes from shared, messages included — `path` is
+    // still required and the empty-roots message is still the shared one.
+    expect(schema.safeParse({ roots: ['/db'] }).success).toBe(false);
+    const empty = schema.safeParse({ roots: [], path: '/db/app.db' });
+    expect(empty.success).toBe(false);
+    expect(empty.error?.issues[0]?.message).toBe(
+      'a sqlite connection needs at least one allowed root',
+    );
+  });
+
   it('fs adds the absolute-root check, and nothing else', () => {
     const schema = registry.get('fs')!.configSchema;
 
