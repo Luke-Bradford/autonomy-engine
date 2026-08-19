@@ -960,9 +960,7 @@ export function applyWorkspace(
           // redundant version. A redundant immutable version is additive and
           // harmless; a dropped one is not.
           const dbLatest = getLatestPipelineVersion(db, existing.id);
-          const dbLatestForm = dbLatest
-            ? dbVersionForm(dbLatest, dbRefMaps)
-            : undefined;
+          const dbLatestForm = dbLatest ? dbVersionForm(dbLatest, dbRefMaps) : undefined;
           const versionChanged =
             version !== undefined &&
             (dbLatestForm === undefined || pipelineVersionContentForm(version) !== dbLatestForm);
@@ -1062,9 +1060,7 @@ export function applyWorkspace(
           {
             ...m.version,
             pipelineId: m.pipelineId,
-            nodes: m.version.nodes.map((n) =>
-              remapNodeToDb(n, connById, datasetById, versionById),
-            ),
+            nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, datasetById, versionById)),
           },
           {
             // Preserve the file's version resourceId (G5c) when present; else the

@@ -345,24 +345,47 @@ describe('applyWorkspace (#3 G5c-1)', () => {
   // the one the obvious implementation causes: seed `datasetById` only from what
   // the dataset phase creates and a branch pipeline addressing a dataset that
   // lives ONLY in the target workspace throws, aborting the whole atomic import.
+  //
+  // The target is built to force a MINT. Applying the same branch twice does not
+  // test this: the second apply finds the version unchanged, never mints, and so
+  // never calls `remapNodeToDb` at all — a green test that exercises nothing.
   it('M3 (#1117) — resolves a dataset that exists in the TARGET but is not on the branch', () => {
     const src = freshDb().db;
     const { source, sink, pipe, incoming } = datasetSnapshot(src);
 
-    // A target that already holds both datasets (same resourceIds, its own db
-    // ids) — then drop them from the incoming branch entirely.
+    // A target that already holds both datasets under the SAME resourceIds (its
+    // own db ids), and no pipeline at all.
     const tgt = freshDb().db;
-    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
-    const tgtSource = getDatasetByResourceId(tgt, 'local', source.resourceId)!;
-    const tgtSink = getDatasetByResourceId(tgt, 'local', sink.resourceId)!;
+    const store = createConnection(tgt, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const mkHeld = (name: string, resourceId: string) =>
+      createDataset(
+        tgt,
+        {
+          ownerId: 'local',
+          name,
+          connectionId: store.id,
+          kind: 'table' as const,
+          config: {},
+          columns: [],
+        },
+        { resourceId },
+      );
+    const tgtSource = mkHeld('Src', source.resourceId);
+    const tgtSink = mkHeld('Snk', sink.resourceId);
 
+    // The branch carries the pipeline but NOT the datasets it addresses.
     const branchWithoutDatasets = { ...incoming, datasets: [] };
-    expect(
-      applyWorkspace(tgt, 'local', branchWithoutDatasets, 'sha2', 'main').refused,
-    ).toBe(false);
+    expect(applyWorkspace(tgt, 'local', branchWithoutDatasets, 'sha1', 'main').refused).toBe(false);
 
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
-    expect(getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!.datasetIds).toEqual({
+    const version = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(version.nodes[0]!.datasetIds).toEqual({
       source: tgtSource.id,
       sink: tgtSink.id,
     });

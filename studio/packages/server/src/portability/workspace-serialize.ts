@@ -420,9 +420,7 @@ export function compareStoredVersion(
   }
   const storedForm = pipelineVersionContentForm({
     ...stored,
-    nodes: stored.nodes.map((n) =>
-      maskNode(forwardRemapNode(n, maps), masks),
-    ),
+    nodes: stored.nodes.map((n) => maskNode(forwardRemapNode(n, maps), masks)),
   } as PipelineVersionExport);
   const branchForm = pipelineVersionContentForm({
     ...branch,
