@@ -426,6 +426,13 @@ export async function* readSqliteDatasetBatches(
  * `Uint8Array`, because the M4 reader hands BLOBs back as `Buffer` (a
  * `Uint8Array`) and a BLOB→BLOB copy must not be silently unsupported. The
  * widening is written down here rather than left implicit at the call site.
+ *
+ * AMENDED by slice 3 (#1129), because that last sentence now overstates what
+ * the product can do: `DataTypeSchema` has no binary member, so `coerceValue`
+ * fails every `Uint8Array` against every declared target and no BLOB can reach
+ * this sink THROUGH A COPY. The member stays — a direct caller may bind one, and
+ * removing it would put the cast back — but the capability is filed as #1131
+ * rather than implied by a type.
  */
 export type SinkValue = CoercedValue | Uint8Array;
 

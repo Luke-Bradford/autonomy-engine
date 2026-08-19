@@ -141,19 +141,13 @@ describe('a per-row failure', () => {
   });
 
   it('aggregates failures BY CODE across batches, which is what the bounded code is for', async () => {
-    const { counters } = run(
-      batchesOf([{ n: '1.5' }, { n: 'nope' }], [{ n: '2.5' }]),
-      [map({ source: 'n', sink: 'n', type: 'integer' })],
-    );
-    await new Promise((r) => setTimeout(r, 0));
-    const { counters: c2, batches } = run(
+    const { counters, batches } = run(
       batchesOf([{ n: '1.5' }, { n: 'nope' }], [{ n: '2.5' }]),
       [map({ source: 'n', sink: 'n', type: 'integer' })],
     );
     await batches;
-    expect(c2.failuresByCode).toEqual({ not_integral: 2, not_a_number: 1 });
-    expect(c2.rowsFailed).toBe(3);
-    void counters;
+    expect(counters.failuresByCode).toEqual({ not_integral: 2, not_a_number: 1 });
+    expect(counters.rowsFailed).toBe(3);
   });
 
   it('fails a BLOB row rather than stringifying it — no declared type can hold one (#1131)', async () => {

@@ -24,7 +24,18 @@ const CopyMappingEntrySchema = z
   .object({
     /** A source column name — XOR `expression`. */
     source: z.string().min(1).optional(),
-    /** A `${}` expression producing the value — XOR `source`. */
+    /**
+     * A `${}` expression producing the value — XOR `source`.
+     *
+     * NOTE for the DISPATCH path (#1130): by the time a copy reaches an adapter
+     * this field has been through the reducer, and a whole-value `${}` reference
+     * PRESERVES ITS NATIVE TYPE (`engine/params.ts:740`) — so
+     * `expression: '${params.limit}'` arrives as a NUMBER, and re-parsing
+     * `preparedInput` through this schema as-is would refuse a working pipeline
+     * at dispatch. The pump types the substituted constant `unknown` for exactly
+     * this reason (`datamove/pump.ts`), and it is a constant per DISPATCH rather
+     * than per row, because §8 puts substitution in the reducer.
+     */
     expression: z.string().optional(),
     /** The sink column this row writes. */
     sink: z.string().min(1),

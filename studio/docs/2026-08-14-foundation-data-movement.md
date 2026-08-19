@@ -399,6 +399,19 @@ node.succeeded { outputs: { rowsRead, rowsWritten, rowsFailed, bytesRead, trunca
 per chunk (`:459`) and deliberately no byte cap, because a streamed copy is memory-bounded regardless
 of size.
 
+**`bytesRead` is a DEFINITION, not a derivation, so it is written down here
+rather than left to each source to invent.** It is the size of the source values
+**as measured at the copy boundary** — every value the reader materialised for a
+row, including columns the mapping ignores (they were read regardless), with a
+string charged its UTF-8 length and a BLOB its byte length. It is not the store's
+on-disk size and not a wire size: M7's CSV source will read a rather different
+number of FILE bytes (delimiters, quoting, encoding) than it counts in parsed
+values, and both numbers are honest about different things. `fs.ts:353`'s
+`bytesWritten` is the in-tree precedent for "bytes of the payload moved". One
+detail with an expiry date: SQLite charges an `INTEGER` at most 8 bytes and a
+`REAL` exactly 8, so v1 counts 8 for both — M10's arbitrary-precision `numeric`
+is where that constant has to become a per-source measurement.
+
 **`truncated` is REQUIRED and must be honest.** The codebase has receipts both ways:
 
 - the honest pattern — `server/src/limits.ts:11`, `errors.ts:107-121`: a cap whose truncation is
@@ -648,7 +661,7 @@ source and a sink.
 | **M2**  | **The portability exhaustiveness pin FIRST** (§2.3's five silent sites), then the `dataset` resource: schema, table, repo, REST, `RESOURCE_KINDS` widening, apply ordered connections → datasets → pipelines → triggers     | the pin precedes the kind, deliberately                                                                                                                                                                                                   |
 | **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                                                                                                                                                                                                           |
 | **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                                                                                                                                                                                                                 |
-| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the catalog entry + the pump + `truncated` + the progress ticks + the version bump |
+| **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT INTO FOUR, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the pump, the counters incl. `truncated`, and the progress ticks (#1129); slice 4 = the DISPATCH seam (#1130) — dataset resolution into `ActivityContext`, the catalog entry + first populated `sinkConnectionKinds`, the `onError:'null'` vs `nullable:false` refusal, §8's literal-only identifier gate, and the version bump. **Slice 4 is the split's whole point:** nothing resolves `Node.datasetIds` into the executor yet, so a catalog entry landed alongside the pump would have been a user-visible activity that always fails at dispatch |
 | **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                                                                                                                                                                                                           |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                                                                                                                                                                                                        |
@@ -682,7 +695,10 @@ is not representable**, so it degrades to a raw JSON textarea (`:154-164`, fail-
 
 So M8 is a **dedicated panel**, specified as such rather than discovered late: a source→sink table
 with per-row target type and `onError`, an **Auto-map** button that writes an explicit mapping (§6.3),
-a per-row expression escape hatch, and an explicit _unmapped_ state — a column deliberately not copied
+a per-column expression escape hatch (**per DISPATCH, not per row** — §8 puts
+substitution in the reducer, so a mapping's `expression` is one substituted
+constant applied to every row, and a value that varies BY ROW is not expressible
+in v1; #1129 records this at the seam), and an explicit _unmapped_ state — a column deliberately not copied
 must be visibly so, never merely absent.
 
 Everything else about a copy node (two dataset pickers, batch size, write mode) is flat scalars and

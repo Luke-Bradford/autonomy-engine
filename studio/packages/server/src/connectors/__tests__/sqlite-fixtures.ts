@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 
 /**
- * Temp-database fixtures shared by the `sqlite` connector's READ suite (#1119)
- * and its SINK suite (#1125).
+ * Temp-database fixtures shared by the `sqlite` connector's READ suite (#1119),
+ * its SINK suite (#1125) and the reader→pump→sink composition suite (#1129).
  *
  * Extracted rather than copied. `tempRoot`'s `realpathSync` is load-bearing, and
  * the idiom already existed twice as a same-shaped `tempRoot()` before this file
@@ -52,3 +52,27 @@ export function cleanupTempRoots(): void {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
 }
+
+/** A sink database: `t(id,name)` from `seedDb` plus a wider `sink` table. */
+export function seedSink(root: string, name = 'app.db'): string {
+  const path = seedDb(root, 0, name);
+  const db = new Database(path);
+  db.exec(
+    'CREATE TABLE sink (id INTEGER, name TEXT, flag INTEGER, big INTEGER, payload BLOB, note TEXT)',
+  );
+  db.close();
+  return path;
+}
+
+/** Read a table back, for asserting what actually landed. */
+export function rowsOf(path: string, sql = 'SELECT * FROM sink ORDER BY rowid'): unknown[] {
+  const db = new Database(path, { readonly: true });
+  try {
+    return db.prepare(sql).all();
+  } finally {
+    db.close();
+  }
+}
+
+/** A `sqlite` connection config with the `writable` gate OPEN. */
+export const writableConfig = (root: string, path: string) => ({ roots: [root], path, writable: true });
