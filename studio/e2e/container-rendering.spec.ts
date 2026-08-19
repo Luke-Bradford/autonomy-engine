@@ -14,6 +14,7 @@ import {
   contrastRatio,
   customProperty,
   documentTheme,
+  setTheme,
 } from './support/theme';
 
 /**
@@ -478,9 +479,12 @@ test.describe('U6c container rendering', () => {
       canvas: await canvasBackground(page),
     });
 
+    // Anchor the baseline: `setTheme` is a no-op when the app is ALREADY in the
+    // target theme, so without this a flipped default would silently compare
+    // light against light and pass on one reading taken twice.
+    expect(await documentTheme(page)).toBe('dark');
     const dark = await readTheme();
-    await page.getByRole('switch', { name: 'Dark mode' }).click();
-    await expect.poll(() => documentTheme(page)).toBe('light');
+    await setTheme(page, 'light');
     const light = await readTheme();
 
     for (const [theme, read] of [

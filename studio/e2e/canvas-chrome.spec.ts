@@ -6,9 +6,9 @@ import {
   computedStyleOf,
   contrastRatio,
   customProperty,
-  documentTheme,
   isOpaque,
   luminanceOf,
+  setTheme,
 } from './support/theme';
 
 /**
@@ -140,8 +140,7 @@ test.describe('React Flow chrome follows the Fluent theme', () => {
       before.set(selector, await expectSurface(page, name, selector, 'dark'));
     }
 
-    await page.getByRole('switch', { name: 'Dark mode' }).click();
-    await expect.poll(() => documentTheme(page)).toBe('light');
+    await setTheme(page, 'light');
 
     for (const [name, selector] of PAINTED_SURFACES) {
       // Not merely "different": each surface must now be LIGHT. A bridge that

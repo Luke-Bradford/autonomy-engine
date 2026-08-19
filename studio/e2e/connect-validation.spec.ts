@@ -12,7 +12,7 @@ import {
   selectEdge,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { computedStyleOf, documentTheme, resolvedPaletteColor } from './support/theme';
+import { computedStyleOf, resolvedPaletteColor, setTheme } from './support/theme';
 
 /**
  * The condition → palette-var mapping, as `index.css` declares it and
@@ -247,10 +247,9 @@ test.describe('U6b connect-time validation', () => {
     await expect(edgeGroup(page)).toHaveCount(1);
 
     for (const theme of ['dark', 'light'] as const) {
-      if (theme === 'light') await page.getByRole('switch', { name: 'Dark mode' }).click();
-      await expect
-        .poll(() => documentTheme(page), { message: `theme never became ${theme}` })
-        .toBe(theme);
+      // `setTheme` is idempotent and waits on `data-theme`, so it covers the
+      // dark pass (already there) and the light one (a click) identically.
+      await setTheme(page, theme);
       for (const [variant, cssVar] of VARIANT_HUES) {
         const expected = await resolvedPaletteColor(page, cssVar);
         expect(expected, `${cssVar} resolved to nothing`).toMatch(/^rgb/);

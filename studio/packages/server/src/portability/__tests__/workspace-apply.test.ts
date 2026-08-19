@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 import { CATALOG_VERSION, type NewPipelineVersion, type NewTrigger } from '@autonomy-studio/shared';
 import {
   archivePipeline,
@@ -870,6 +871,73 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(tgtTrig.pipelineVersionId).toBeNull();
     // Belt-and-braces: an unbound trigger is force-disabled.
     expect(tgtTrig.enabled).toBe(false);
+  });
+
+  /**
+   * #1091 — the strict write gate refuses a corrupt branch trigger, and the
+   * refusal now says WHICH FILE carried it.
+   *
+   * `concurrency: {policy:'parallel'}` with no `max` is the reachable case:
+   * `ConcurrencySchema` (the STORED shape) accepts it, so it survives serialize
+   * and parse, while `ConcurrencyWriteSchema` — which only `NewTriggerSchema`
+   * applies — refuses it as an unbounded fan-out footgun. A hand-edited branch
+   * is exactly how one arrives.
+   *
+   * The thrown error stays a `ZodError` on purpose: `registerErrorHandler`
+   * answers it `400 validation_error` WITH the failing paths, whereas
+   * `WorkspaceApplyError` has no branch there and falls to a message-less
+   * `500 internal_error`. See `gateTriggerWrite`'s docblock.
+   */
+  it('#1091 REFUSES a corrupt branch trigger on the CREATE path, naming the file', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+    incoming.triggers[0]!.data.concurrency = { policy: 'parallel' };
+
+    const tgt = freshDb().db;
+    let thrown: unknown;
+    try {
+      applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    // Attribution: the operator is told which branch file to fix, and the
+    // original field path is still there behind it.
+    expect(paths).toContain(`trigger ${incoming.triggers[0]!.path}.concurrency.max`);
+    // Atomic: nothing from this branch was written.
+    expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(0);
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
+  it('#1091 REFUSES a corrupt branch trigger on the UPDATE path, leaving the row untouched', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, baseVersion(pipe.id));
+    const trig = createTrigger(db, triggerOn(version.id));
+    const incoming = snapshot(db);
+    // A content edit (so the apply takes the `updated` branch) PLUS the corrupt
+    // concurrency the lenient `TriggerSchema` behind `updateTrigger` would let
+    // through — which is the hole this gate exists to close.
+    incoming.triggers[0]!.data.schedule = '0 5 * * *';
+    incoming.triggers[0]!.data.concurrency = { policy: 'parallel' };
+
+    let thrown: unknown;
+    try {
+      applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    expect((thrown as ZodError).issues.map((i) => i.path.join('.'))).toContain(
+      `trigger ${incoming.triggers[0]!.path}.concurrency.max`,
+    );
+    const after = getTrigger(db, trig.id)!;
+    expect(after.schedule).toBe('0 2 * * *');
+    expect(after.concurrency).toEqual({ policy: 'skip_if_running' });
   });
 
   it('an authored NULL binding with enabled:true is force-disabled (finding 1)', () => {
