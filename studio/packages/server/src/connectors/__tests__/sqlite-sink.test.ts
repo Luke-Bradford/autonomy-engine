@@ -1,7 +1,12 @@
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DatasetIoError, writeSqliteDatasetRows, type SinkValue } from '../sqlite.js';
+import {
+  DatasetIoError,
+  writeSqliteDatasetRows,
+  type SinkValue,
+  type SqliteWriteMode,
+} from '../sqlite.js';
 import { classifySinkFailure } from '../error-kind.js';
 import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
 
@@ -83,9 +88,13 @@ describe('the `writable` gate', () => {
     expect(rowsOf(path)).toHaveLength(0);
   });
 
-  it('REFUSES `writable: false` explicitly, and does not open the store', async () => {
+  it('REFUSES `writable: false` explicitly, BEFORE opening the store', async () => {
     const root = tempRoot();
-    const path = seedSink(root);
+    // The same discriminator the abort test uses: a path with no database at
+    // it. If the gate runs first the answer names `writable`; if the copy opens
+    // first, the answer is "cannot open the sqlite database". Without this the
+    // test's own name was an unproven claim.
+    const path = join(root, 'never-created.db');
     const err = await failure(
       writeSqliteDatasetRows(
         {
@@ -99,6 +108,7 @@ describe('the `writable` gate', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(/writable/);
     expect(err.partialWritePossible).toBe(false);
   });
 
@@ -166,7 +176,7 @@ describe('what may be a sink at all', () => {
     expect(err.message).toMatch(/no sink writer exists for the 'delimited'/);
   });
 
-  it('REFUSES a table name that is not a bare identifier (dispatch proof for quoteIdentifier)', async () => {
+  it('REFUSES a table name that is not a bare identifier', async () => {
     const root = tempRoot();
     const path = seedSink(root);
     const err = await failure(
@@ -182,7 +192,15 @@ describe('what may be a sink at all', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
-    // The table is still there — nothing was executed.
+    // NOT a dispatch proof for `quoteIdentifier`, and the earlier label saying so
+    // was wrong — verified by mutation: replace both `quoteIdentifier` calls with
+    // naive interpolation and this test still passes. The refusal comes earlier,
+    // from `tableDatasetConfigSchema`'s own `sqlIdentifier` check inside
+    // `sinkTargetFor`, so the string never reaches a statement at all. That is
+    // the better place for it; the test simply pins that gate, not the quoting.
+    // The genuinely live `quoteIdentifier` call is for COLUMN names, which come
+    // from the store rather than from a validated schema — covered below.
+    expect(err.message).toMatch(/invalid table dataset config/);
     expect(rowsOf(path)).toHaveLength(0);
   });
 
@@ -258,6 +276,46 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     expect(err.message).toMatch(/'v' is a view, not a table/);
   });
 
+  it('ACCEPTS a table named in a different CASE — SQLite resolves table names case-insensitively too', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    const result = await writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'SINK' },
+        columns: ['id'],
+        mode: 'append',
+      },
+      one([{ id: 3 }]),
+    );
+    // `sqlite_master.name` compares BINARY, so an exact-match lookup refuses
+    // this — while `INSERT INTO "SINK"` would have succeeded. The columns were
+    // given case-insensitive treatment from the start; the table was not, and
+    // that asymmetry is what this pins.
+    expect(result.rowsWritten).toBe(1);
+    expect(rowsOf(path, 'SELECT id FROM sink')).toEqual([{ id: 3 }]);
+  });
+
+  it('REPORTS a missing column AND a duplicate together, not whichever came first', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'sink' },
+          columns: ['id', 'ID', 'nosuchcolumn'],
+          mode: 'append',
+        },
+        one([{ id: 1, ID: 2, nosuchcolumn: 3 }]),
+      ),
+    );
+    expect(err.message).toMatch(/nosuchcolumn/);
+    expect(err.message).toMatch(/both resolve to the sink column 'id'/);
+  });
+
   it('REFUSES a mapped column absent from the sink, naming it', async () => {
     const root = tempRoot();
     const path = seedSink(root);
@@ -311,6 +369,38 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     );
     expect(err.kind).toBe('permanent');
     expect(err.message).toMatch(/id/i);
+  });
+
+  it('REFUSES a STORE column that is not a bare identifier — the one live `quoteIdentifier` arm', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    const db = new Database(path);
+    db.exec('CREATE TABLE spaced (id INTEGER, "my col" TEXT)');
+    db.close();
+
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'spaced' },
+          columns: ['id', 'my col'],
+          mode: 'append',
+        },
+        one([{ id: 1, 'my col': 'x' }]),
+      ),
+    );
+    // Column names reach the statement from `pragma_table_info`, NOT from a
+    // schema-validated field, so this is the only path where `quoteIdentifier`
+    // is what decides. §8's rule is that a name only a quoting rule makes safe
+    // is refused rather than accommodated, and the sink follows the reader in
+    // applying it. The consequence is a real limitation — an ordinary column
+    // called `first name` cannot be a copy target — and it is filed rather than
+    // hidden (#1127), because the refusal is at least loud and rolls back
+    // cleanly.
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(/not a bare SQL identifier/);
+    expect(rowsOf(path, 'SELECT id FROM spaced')).toHaveLength(0);
   });
 
   it('REFUSES an empty column list rather than building a valueless INSERT', async () => {
@@ -488,6 +578,40 @@ describe('write modes', () => {
     expect(rowsOf(path, 'SELECT id FROM sink')).toEqual([{ id: 9 }]);
   });
 
+  it('REFUSES an unrecognised mode rather than silently appending', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    await writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id'],
+        mode: 'append',
+      },
+      one([{ id: 1 }]),
+    );
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'sink' },
+          columns: ['id'],
+          // The cast is the test: `mode` is typed, so this can only arrive from
+          // a future caller that outruns the type — and the wrong outcome there
+          // is not a type error, it is the operator's existing rows quietly
+          // surviving a copy that meant to replace them (or the reverse).
+          mode: 'replace-all' as SqliteWriteMode,
+        },
+        one([{ id: 2 }]),
+      ),
+    );
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(/unknown copy write mode 'replace-all'/);
+    expect(rowsOf(path, 'SELECT id FROM sink')).toEqual([{ id: 1 }]);
+  });
+
   it('OVERWRITE with ZERO source rows EMPTIES the table — that is what overwrite means', async () => {
     const root = tempRoot();
     const path = seedSink(root);
@@ -651,13 +775,95 @@ describe('the one state the sink cannot prove clean', () => {
       );
       expect(err.partialWritePossible).toBe(true);
       expect(err.message).toMatch(/rollback FAILED/);
-      // And §4.2 then turns that fact into a verdict: a cause that would
-      // otherwise be retryable must not be retried into a possible duplicate.
-      expect(
-        classifySinkFailure({ kind: 'transient', partialWritePossible: err.partialWritePossible }),
-      ).toBe('permanent');
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('DOWNGRADES a transient cause to permanent when the rollback failed (§4.2, applied not just reported)', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+
+    const exec = Database.prototype.exec;
+    const spy = vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
+      this: Database.Database,
+      sql: string,
+    ) {
+      if (sql === 'rollback') throw new Error('disk I/O error');
+      return exec.call(this, sql);
+    });
+
+    try {
+      async function* locked(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+        yield [{ id: 1 }];
+        // The shape a real lock contention arrives in — and on its own it is
+        // `transient`, which is what makes this the dangerous case.
+        throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+      }
+      const err = await failure(
+        writeSqliteDatasetRows(
+          {
+            connectionConfig: writableConfig(root, path),
+            datasetKind: 'table',
+            datasetConfig: { table: 'sink' },
+            columns: ['id'],
+            mode: 'append',
+          },
+          locked(),
+        ),
+      );
+      // The whole point. `retryEligible` reads only `kind`, so shipping
+      // `transient` next to `partialWritePossible: true` would be a retry from
+      // row 0 into a table that may already hold these rows.
+      expect(err.partialWritePossible).toBe(true);
+      expect(err.kind).toBe('permanent');
+      // The same cause WITHOUT a failed rollback stays transient — the downgrade
+      // is caused by the unprovable state, not by the cause.
+      expect(classifySinkFailure({ kind: 'transient', partialWritePossible: false })).toBe(
+        'transient',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('the busy timeout (§9)', () => {
+  it('reports a contended store as `transient` FAST, rather than busy-waiting the default 5s', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+
+    // A second connection holding the write lock. better-sqlite3's busy wait is
+    // SYNCHRONOUS, so the default 5000ms would freeze the event loop for five
+    // seconds; `SQLITE_BUSY_TIMEOUT_MS` is what bounds it.
+    const blocker = new Database(path);
+    blocker.exec('begin immediate');
+    const started = Date.now();
+    try {
+      const err = await failure(
+        writeSqliteDatasetRows(
+          {
+            connectionConfig: writableConfig(root, path),
+            datasetKind: 'table',
+            datasetConfig: { table: 'sink' },
+            columns: ['id'],
+            mode: 'append',
+          },
+          one([{ id: 1 }]),
+        ),
+      );
+      const elapsed = Date.now() - started;
+      // `transient` is the correct classification: nothing was written, so a
+      // retry from row 0 is safe (§4.1).
+      expect(err.kind).toBe('transient');
+      expect(err.partialWritePossible).toBe(false);
+      // The margin is deliberately wide (250ms configured vs 5000ms default), so
+      // this asserts the constant is threaded through without being a timing
+      // race. Restore the default and it goes red.
+      expect(elapsed).toBeLessThan(2000);
+    } finally {
+      blocker.exec('rollback');
+      blocker.close();
     }
   });
 });

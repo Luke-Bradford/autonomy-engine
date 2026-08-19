@@ -12,6 +12,7 @@ import {
 } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { resolveWithinRoots } from './confine.js';
+import { classifySinkFailure } from './error-kind.js';
 import type {
   ActivityContext,
   ActivityEvent,
@@ -194,7 +195,7 @@ function quoteIdentifier(value: string, label: string): string {
   if (!isSqlIdentifier(value)) {
     throw new DatasetIoError(
       'permanent',
-      `${label} '${value}' is not a bare SQL identifier, so it cannot be used as a table name`,
+      `${label} '${value}' is not a bare SQL identifier, so it cannot be quoted into a statement`,
     );
   }
   return `"${value.replace(/"/g, '""')}"`;
@@ -443,12 +444,17 @@ export interface SqliteDatasetWrite {
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
-   * §5's progress channel: the RUNNING TOTAL after each batch commits to the
-   * open transaction. Per batch, never per row — one event per row is the
+   * §5's progress channel: the RUNNING TOTAL after each batch is inserted into
+   * the OPEN transaction. Per batch, never per row — one event per row is the
    * log-volume problem §5 forbids. It exists now rather than at slice 3 because
    * a `Promise<{rowsWritten}>` gives the pump nothing to tick from until the
    * write has already finished, and adding it later would change a shipped
    * signature.
+   *
+   * **A tick is progress, not committed truth**, and the pump must not present
+   * it as the latter: these rows sit in an uncommitted transaction, so a later
+   * failure rolls every ticked row back. An operator can legitimately see
+   * "500 rows" moments before the copy reports that it wrote none.
    */
   readonly onBatch?: (rowsWritten: number) => void;
 }
@@ -473,7 +479,7 @@ export interface SqliteWriteResult {
  * a silent null in the operator's data — the shape of failure this codebase
  * refuses elsewhere as "an absent fact must never be manufactured".
  */
-function bindValue(value: SinkValue | undefined, column: string): SqliteValue | number {
+function bindValue(value: SinkValue | undefined, column: string): SqliteValue {
   if (value === undefined) {
     throw new DatasetIoError(
       'permanent',
@@ -507,11 +513,20 @@ function describeSinkTable(
   db: Database.Database,
   schemaName: string,
   table: string,
-): { ok: true; columns: string[] } | { ok: false; reason: string } {
+): { ok: true; name: string; columns: string[] } | { ok: false; reason: string } {
   const qualifiedSchema = quoteIdentifier(schemaName, 'schema');
+  // `COLLATE NOCASE`, for the same reason `resolveSinkColumns` lower-cases:
+  // SQLite resolves identifiers case-insensitively, so `SELECT * FROM "SINK"`
+  // finds a table created as `sink` — but `sqlite_master.name` compares with
+  // BINARY collation, so an exact match would refuse a dataset SQLite would
+  // happily have executed. Getting this right for columns and wrong for the
+  // table would have been one bug in two spellings. At most one row can come
+  // back: SQLite refuses to create `SINK` alongside `sink`.
   const found = db
-    .prepare(`SELECT type FROM ${qualifiedSchema}.sqlite_master WHERE name = ?`)
-    .get(table) as { type?: unknown } | undefined;
+    .prepare(
+      `SELECT name, type FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE`,
+    )
+    .get(table) as { name: string; type?: unknown } | undefined;
   if (found === undefined) {
     return { ok: false, reason: `there is no table '${table}' in the store` };
   }
@@ -521,10 +536,11 @@ function describeSinkTable(
       reason: `'${table}' is a ${String(found.type)}, not a table, so it cannot be written to`,
     };
   }
-  const columns = db.prepare('SELECT name FROM pragma_table_info(?, ?)').all(table, schemaName) as {
-    name: string;
-  }[];
-  return { ok: true, columns: columns.map((c) => c.name) };
+  // The store's own spelling from here on, so the statement reads like the schema.
+  const columns = db
+    .prepare('SELECT name FROM pragma_table_info(?, ?)')
+    .all(found.name, schemaName) as { name: string }[];
+  return { ok: true, name: found.name, columns: columns.map((c) => c.name) };
 }
 
 /**
@@ -562,6 +578,7 @@ function resolveSinkColumns(mapped: readonly string[], actual: readonly string[]
   const resolved: SinkColumn[] = [];
   const claimed = new Map<string, string>();
   const missing: string[] = [];
+  const collisions: string[] = [];
   for (const name of mapped) {
     const match = byLowerCase.get(name.toLowerCase());
     if (match === undefined) {
@@ -570,20 +587,23 @@ function resolveSinkColumns(mapped: readonly string[], actual: readonly string[]
     }
     const earlier = claimed.get(match);
     if (earlier !== undefined) {
-      throw new DatasetIoError(
-        'permanent',
-        `the mapped columns '${earlier}' and '${name}' both resolve to the sink column '${match}' (each sink column may be written by one mapping row)`,
-      );
+      collisions.push(`'${earlier}' and '${name}' both resolve to the sink column '${match}'`);
+      continue;
     }
     claimed.set(match, name);
     resolved.push({ mapped: name, actual: match });
   }
+  // BOTH problems, in ONE refusal. Throwing on the first collision mid-pass
+  // reports only whichever defect the array order happened to reach first, so a
+  // mapping with two faults takes two runs to diagnose.
+  const problems: string[] = [];
   if (missing.length > 0) {
-    throw new DatasetIoError(
-      'permanent',
-      `the sink has no column named ${missing.map((m) => `'${m}'`).join(', ')}`,
-    );
+    problems.push(`the sink has no column named ${missing.map((m) => `'${m}'`).join(', ')}`);
   }
+  if (collisions.length > 0) {
+    problems.push(`${collisions.join('; ')} (each sink column may be written by one mapping row)`);
+  }
+  if (problems.length > 0) throw new DatasetIoError('permanent', problems.join('. '));
   return resolved;
 }
 
@@ -710,11 +730,29 @@ export async function writeSqliteDatasetRows(
 
       const qualified =
         target.schema === 'main'
-          ? quoteIdentifier(target.table, 'table')
-          : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(target.table, 'table')}`;
+          ? quoteIdentifier(described.name, 'table')
+          : `${quoteIdentifier(target.schema, 'schema')}.${quoteIdentifier(described.name, 'table')}`;
 
+      if (write.mode !== 'append' && write.mode !== 'overwrite') {
+        // `mode` is typed, so this is unreachable from in-repo callers — but an
+        // unrecognised value silently behaving like `append` is the wrong
+        // failure mode for the field that decides whether the operator's
+        // existing rows survive.
+        throw new DatasetIoError('permanent', `unknown copy write mode '${String(write.mode)}'`);
+      }
       if (write.mode === 'overwrite') {
         // Inside the transaction, so a later failure restores these rows.
+        //
+        // ONE unbatched statement, and its bound is worth stating: SQLite's
+        // truncate optimisation makes this cheap on a plain table (measured,
+        // 2,000,000 rows in 27ms), but better-sqlite3 enables `foreign_keys` by
+        // default and that optimisation is disabled once the sink is an FK
+        // parent (measured, ~198ms per 1,000,000 rows, scaling with row count
+        // rather than with batch size). That is a synchronous block, so on a
+        // large enough FK-parent table it becomes the §9 event-loop stall the
+        // rest of this file is careful about. Batching it wants a rowid cursor,
+        // which is wrong for a WITHOUT ROWID table — so it is filed rather than
+        // bodged: #1126.
         db.prepare(`DELETE FROM ${qualified}`).run();
       }
 
@@ -753,8 +791,15 @@ export async function writeSqliteDatasetRows(
         }
       }
       if (unwound) throw failure;
+      // §4.2 is APPLIED here, not merely reported. Carrying `transient` out
+      // alongside `partialWritePossible: true` would be the fail-open this whole
+      // section exists to prevent: `retryEligible` reads only `kind`, so a
+      // `SQLITE_BUSY` whose rollback also failed would be retried from row 0
+      // into a table that may already hold some of these rows. The fact and the
+      // verdict travel together, and the caller does not have to remember to
+      // combine them.
       throw new DatasetIoError(
-        failure.kind,
+        classifySinkFailure({ kind: failure.kind, partialWritePossible: true }),
         `${failure.message} — and the rollback FAILED, so rows may have landed in '${target.table}'`,
         { cause: err, partialWritePossible: true },
       );

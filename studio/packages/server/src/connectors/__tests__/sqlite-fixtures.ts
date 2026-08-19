@@ -7,11 +7,12 @@ import Database from 'better-sqlite3';
  * Temp-database fixtures shared by the `sqlite` connector's READ suite (#1119)
  * and its SINK suite (#1125).
  *
- * Extracted rather than copied. `tempRoot`'s `realpathSync` is load-bearing and
- * was already duplicated three times before this file existed
- * (`sqlite.test.ts`, `confine.test.ts`, `fs.test.ts`); a fourth copy in the sink
- * suite would have been the one that eventually drifted. The two remaining
- * copies belong to suites this ticket does not touch.
+ * Extracted rather than copied. `tempRoot`'s `realpathSync` is load-bearing, and
+ * the idiom already existed twice as a same-shaped `tempRoot()` before this file
+ * did (`sqlite.test.ts`, `confine.test.ts`) plus once as an inline async variant
+ * in `fs.test.ts`'s `beforeEach`; a fourth copy in the sink suite would have been
+ * the one that eventually drifted. The remaining copies belong to suites this
+ * ticket does not touch.
  */
 
 const dirs: string[] = [];
