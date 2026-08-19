@@ -336,6 +336,31 @@ the node loudly**, with the node panel filtering the picker to accepted kinds _p
 currently bound_, so a node bound to an off-kind dataset still shows its real binding
 (`PipelineCanvas.tsx:2341-2345`'s rule).
 
+**As built (M5 slice 4a, #1130) — two things this section did not settle, decided in code.**
+
+**① The node's connection pair and the dataset's own `connectionId` MUST AGREE.** §1 was written
+before datasets existed, so it never said what happens when a node bound to store Y carries a dataset
+declaring `users` in store X. Left unchecked, the copy reads `users` out of **Y**: the right shape,
+the wrong data, nothing thrown. Refused `permanent` as `DATASET_CONNECTION_MISMATCH`, per side, and
+refused rather than resolved in either direction — neither ref is subordinate to the other, and
+guessing is what produces the silent-wrong run. The node's binding stays what the ADAPTER runs on
+(it is what `connection-readiness.ts` gates statically and what the secret side-channel decrypts);
+the dataset is made to agree with it, not to replace it. **Its cost, stated:** one physical file
+reachable through both a read-only and a `writable` connection (§2.6) needs two dataset rows, one per
+connection. That is the price of the pair being checkable at all.
+
+**② `datasetKinds.sink` is OPTIONAL.** M12's `lookup` reads a source only, which both
+`schemas/pipeline.ts` and `engine/params.ts` already anticipated in prose; a required `sink` here
+would have to be widened by the very ticket those notes name. A DECLARED list must still be
+non-empty, and a declared `sink` implies `sinkConnectionKinds` — a sink dataset with no sink
+connection names a store that does not exist.
+
+**Also decided: source and sink may not name the SAME dataset** (`DATASET_SELF_COPY`, unlabelled by
+side — the pair is at fault, not an end). §4's atomic-swap discipline DELETEs inside the write
+transaction while the reader is still streaming, so a self-copy destroys the rows it was asked to
+move. It catches the id-identical case only; two different dataset rows naming one physical table
+need the resolved ADDRESS, which is M6's dispatch record (§2.1).
+
 ---
 
 ## §4 — partial copies, retry, and why `idempotent` is not the answer **[SETTLED]**
