@@ -18,6 +18,7 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
+import { createDataset } from '../../repo/datasets.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
@@ -74,11 +75,15 @@ function httpNode(
   return { id, type: 'http_request', config, connectionId, position: { x: seq, y: 0 } };
 }
 
-function seedVersion(db: Db, nodes: Node[]): string {
+function seedVersion(
+  db: Db,
+  nodes: Node[],
+  params: { name: string; type: 'string'; required: boolean }[] = [],
+): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
-    params: [],
+    params,
     outputs: [],
     nodes,
     edges: [],
@@ -1467,13 +1472,22 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     });
   }
 
-  function pairedNode(type: string, source: string | undefined, sink: string | undefined): Node {
+  function pairedNode(
+    type: string,
+    source: string | undefined,
+    sink: string | undefined,
+    // M5 slice 4a (#1130) — the DATASET pair, widened onto the existing builder
+    // rather than added as a second one: a copy binds both pairs on one node, so
+    // a separate builder would let the two drift apart in fixtures.
+    datasetIds?: { source: string; sink: string },
+  ): Node {
     seq += 1;
     return {
       id: 'n1',
       type,
       config: {},
       ...(source !== undefined && sink !== undefined ? { connectionIds: { source, sink } } : {}),
+      ...(datasetIds !== undefined ? { datasetIds } : {}),
       position: { x: seq, y: 0 },
     };
   }
@@ -1663,6 +1677,381 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     const failure = failureOf(db, run.id);
     expect(failure).toMatchObject({ code: 'connection_missing', kind: 'permanent' });
     expect(failure).not.toHaveProperty('side');
+  });
+
+  // -------------------------------------------------------------------------
+  // M5 slice 4a (#1130) — the DATASET dispatch seam. A connection says WHICH
+  // STORE; a dataset says WHERE IN IT. Being dataset-bound is a CATALOG
+  // declaration (`datasetKinds`), never a property of the node, so these live
+  // beside the M1 paired tests and reuse the same fixtures.
+  //
+  // The connection kinds stay `http`/`anthropic_api` from the block above even
+  // though `table` datasets really live in a `sqlite` store: this seam checks
+  // existence, ownership, kind and store-agreement and never opens the store, so
+  // borrowing the fixture keeps the tests about the seam. The reader/writer
+  // joins are covered against REAL databases in `copy-pipeline.test.ts`.
+  // -------------------------------------------------------------------------
+
+  /** A dataset-bound PAIRED catalog: both sides accept `table` only. */
+  function datasetCatalog(over: Partial<ActivityCatalogEntry> = {}): ActivityCatalog {
+    return catalogOf({
+      type: 'test_copy',
+      kind: 'execution',
+      connectionKinds: ['http'],
+      sinkConnectionKinds: ['anthropic_api'],
+      datasetKinds: { source: ['table'], sink: ['table'] },
+      ...over,
+    });
+  }
+
+  function seedDataset(
+    db: Db,
+    connectionId: string,
+    over: { ownerId?: string | null; kind?: 'table' | 'query' | 'delimited' | 'excel' } = {},
+  ): string {
+    return createDataset(db, {
+      ownerId: over.ownerId === undefined ? 'local' : over.ownerId,
+      name: `D${(seq += 1)}`,
+      connectionId,
+      kind: over.kind ?? 'table',
+      config: { table: 'rows' },
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+      parameters: [],
+    }).id;
+  }
+
+  it('resolves BOTH dataset ends into ctx.datasets, as a PROJECTION of the row', async () => {
+    let seen: unknown = null;
+    const adapters = pairedRegistry(async function* (ctx) {
+      seen = ctx.datasets;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters, catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('success');
+    // A PROJECTION, not the row: `ownerId`/`resourceId`/timestamps are server
+    // bookkeeping, and `connectionId` is omitted because the executor has already
+    // proved it equals the bound connection — carrying it would invite an adapter
+    // to re-derive a store from it and bypass the check that made it safe.
+    expect(seen).toEqual({
+      source: {
+        id: sourceDs,
+        name: expect.any(String),
+        kind: 'table',
+        config: { table: 'rows' },
+        columns: [{ name: 'id', type: 'integer', nullable: false }],
+      },
+      sink: {
+        id: sinkDs,
+        name: expect.any(String),
+        kind: 'table',
+        config: { table: 'rows' },
+        columns: [{ name: 'id', type: 'integer', nullable: false }],
+      },
+    });
+  });
+
+  it('OMITS ctx.datasets entirely for an activity the catalog does not declare dataset-bound', async () => {
+    // Being dataset-bound is the CATALOG's answer: a stray `datasetIds` must not
+    // change how an activity dispatches. Omitted, not present-undefined, so
+    // `'datasets' in ctx` stays an honest test.
+    let hasDatasets = true;
+    const adapters = pairedRegistry(async function* (ctx) {
+      hasDatasets = 'datasets' in ctx;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const pvId = seedVersion(db, [
+      // A pair of ids that resolve to NOTHING — inert is inert, so this still runs.
+      pairedNode('test_paired', sourceConn, sinkConn, { source: 'ds_nope', sink: 'ds_nope2' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters, catalog: pairedCatalog() }), run);
+
+    expect(state.status).toBe('success');
+    expect(hasDatasets).toBe(false);
+  });
+
+  it('fails a dataset-bound node that names no dataset as DATASET_MISSING on the source', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const pvId = seedVersion(db, [pairedNode('test_copy', sourceConn, sinkConn)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    // The LABEL says "dataset", not "connection" — the noun is what sends an
+    // operator to the right ref, and this is the whole reason `labelSide` takes
+    // one rather than hardcoding it.
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_missing',
+      kind: 'permanent',
+      side: 'source',
+      error: "source dataset: activity 'test_copy' requires a dataset but the node has none",
+    });
+    // A pure read, so it fails while still `ready` — no spurious durable dispatch.
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+  });
+
+  it('distinguishes a BOUND-but-empty ${} ref (NOT_FOUND) from naming none (MISSING)', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(
+      db,
+      [pairedNode('test_copy', sourceConn, sinkConn, { source: '${params.ds}', sink: sinkDs })],
+      [{ name: 'ds', type: 'string', required: false }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { ds: '' },
+    });
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({ code: 'dataset_not_found', side: 'source' });
+  });
+
+  it('folds ANOTHER owner’s dataset into NOT_FOUND, with a message that does not distinguish it', async () => {
+    // authn is not authz. `datasetId` derives from run params via a `${}` ref, so
+    // a bare id lookup would let a run steer a copy onto another owner's dataset
+    // — and, since the dataset carries the table name, read or overwrite their
+    // data. A distinct "forbidden" would confirm the id names a real dataset.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const foreignDs = seedDataset(db, sourceConn, { ownerId: 'someone-else' });
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: foreignDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'dataset_not_found', side: 'source' });
+    // Byte-identical to the message a genuinely absent id produces.
+    expect(failure).toMatchObject({
+      error: `source dataset: dataset '${foreignDs}' not found`,
+    });
+  });
+
+  it('RESOLVES a null-owner (shared) dataset for an owned run', async () => {
+    // The positive arm of the ownership fold: `null` means shared, not orphaned,
+    // and refusing it would break every global address.
+    let seen: unknown = null;
+    const adapters = pairedRegistry(async function* (ctx) {
+      seen = ctx.datasets;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sharedDs = seedDataset(db, sourceConn, { ownerId: null });
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sharedDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters, catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('success');
+    expect(seen).toMatchObject({ source: { id: sharedDs } });
+  });
+
+  it('refuses a dataset whose kind is outside the side’s declared datasetKinds, naming both', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn, { kind: 'delimited' });
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_kind_invalid',
+      side: 'source',
+      error: expect.stringContaining("'delimited'"),
+    });
+    expect(failureOf(db, run.id)).toMatchObject({ error: expect.stringContaining('table') });
+  });
+
+  it('refuses a dataset that lives in a DIFFERENT store than the node bound for that side', async () => {
+    // Without this the copy would read the dataset's table out of the NODE's
+    // store: the right shape, the wrong data, and nothing thrown.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const otherConn = await seedConnection(db, 'http', {}, null);
+    const strayDs = seedDataset(db, otherConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: strayDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_connection_mismatch',
+      side: 'source',
+      error: expect.stringContaining(otherConn),
+    });
+  });
+
+  it('refuses a CROSS-WIRED pair — the source dataset living in the SINK’s store', async () => {
+    // A naive "does it match EITHER bound connection" check passes this. The
+    // check is per SIDE, so it does not.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const crossedDs = seedDataset(db, sinkConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: crossedDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_connection_mismatch',
+      side: 'source',
+    });
+  });
+
+  it('SHORT-CIRCUITS on the source: a node with both dataset ends wrong reports the source only', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: 'ds_gone', sink: 'ds_also_gone' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'dataset_not_found', side: 'source' });
+    expect(failure).toMatchObject({ error: expect.stringContaining('ds_gone') });
+    expect(failure).not.toMatchObject({ error: expect.stringContaining('ds_also_gone') });
+  });
+
+  it('labels a SINK-end dataset failure side:sink while the source resolves cleanly', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: 'ds_missing' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { catalog: datasetCatalog() }), run);
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_not_found',
+      side: 'sink',
+      error: "sink dataset: dataset 'ds_missing' not found",
+    });
+  });
+
+  it('refuses a SELF-COPY — source and sink naming one dataset — with NO side', async () => {
+    // A data-loss guard: an `overwrite` sink DELETEs inside the write transaction
+    // while the reader streams the same table, so a self-copy destroys the rows
+    // it was asked to move. No `side` because neither end is at fault — the PAIR
+    // is, and labelling one would send an operator to fix the wrong ref.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    // Same dataset on both ends, so its store must satisfy both sides: bind the
+    // node's two ends to ONE connection, which the agreement check then accepts.
+    const oneDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sourceConn, { source: oneDs, sink: oneDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        // Both ends bound to the SAME store, so the mismatch check cannot be what
+        // fires here — the self-copy refusal has to be reached on its own merits.
+        catalog: datasetCatalog({ sinkConnectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({
+      code: 'dataset_self_copy',
+      kind: 'permanent',
+      error: expect.stringContaining(oneDs),
+    });
+    expect(failure).not.toHaveProperty('side');
+  });
+
+  it('resolves a SOURCE-ONLY dataset activity (M12 lookup’s shape) and omits datasets.sink', async () => {
+    // `datasetKinds.sink` is optional so a source-only reader is expressible
+    // without widening it later; the node's `datasetIds.sink` (which `NodeSchema`
+    // still requires) is then inert, on the same "the catalog decides" argument
+    // as a stray pair.
+    let seen: Record<string, unknown> | undefined;
+    const adapters = pairedRegistry(async function* (ctx) {
+      seen = ctx.datasets as Record<string, unknown>;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: 'ds_ignored' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters,
+        catalog: datasetCatalog({ datasetKinds: { source: ['table'] } }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    expect(seen).toMatchObject({ source: { id: sourceDs } });
+    expect(seen).not.toHaveProperty('sink');
   });
 });
 
