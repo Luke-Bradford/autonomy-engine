@@ -31,7 +31,12 @@ import {
   listConnections,
   updateConnection,
 } from '../repo/connections.js';
-import { createDataset, getDatasetByResourceId, updateDataset } from '../repo/datasets.js';
+import {
+  createDataset,
+  getDatasetByResourceId,
+  listDatasets,
+  updateDataset,
+} from '../repo/datasets.js';
 import {
   regateTriggersForConnection,
   unreadyConnectionsForVersion,
@@ -215,20 +220,32 @@ function resourceRefToDb(ref: string, byResourceId: Map<string, string>, what: s
 function remapNodeToDb(
   node: NodeExport,
   connById: Map<string, string>,
+  datasetById: Map<string, string>,
   versionById: Map<string, string>,
 ): Node {
   // M1 (#1104) — `connectionIds` MUST be destructured out here, not left to ride
   // `rest`: this is the resourceId→dbId boundary, and a pair carried through
   // untouched would land resourceIds in the DB as though they were connection
   // ids — a binding that resolves to nothing at dispatch, written silently.
-  const { connectionId, connectionIds, call, ...rest } = node;
+  // M3 (#1117) — `datasetIds` joins `connectionIds` in being destructured OUT
+  // for the same reason: this is the resourceId→dbId boundary, and a pair
+  // carried through on `rest` would land resourceIds in the DB as though they
+  // were dataset ids — an address that resolves to nothing, written silently.
+  const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
   const base = rest as Node;
 
-  /** One ref: `null` → unbound, `${}` → verbatim, literal → mapped or refused. */
-  const toDbRef = (ref: string | null, what: string): string | undefined => {
+  /** One ref: `null` → unbound, `${}` → verbatim, literal → mapped or refused.
+   * The map is an ARGUMENT rather than a closed-over `connById` (M3, #1117):
+   * datasets resolve through their own map on the identical three-way rule, and
+   * a second near-identical closure is how the two rules drift apart. */
+  const toDbRef = (
+    ref: string | null,
+    byResourceId: Map<string, string>,
+    what: string,
+  ): string | undefined => {
     if (ref === null) return undefined;
     if (interpolationMode(ref).mode !== 'literal') return ref; // dynamic — preserve verbatim
-    const resolved = connById.get(ref);
+    const resolved = byResourceId.get(ref);
     if (resolved === undefined) {
       throw new WorkspaceApplyError(
         `node "${node.id}" references ${what} "${ref}", which is not on the branch or in the workspace`,
@@ -238,17 +255,32 @@ function remapNodeToDb(
   };
 
   let dbNode: Node;
-  const resolvedSingular = toDbRef(connectionId, 'connection');
+  const resolvedSingular = toDbRef(connectionId, connById, 'connection');
   dbNode = resolvedSingular === undefined ? base : { ...base, connectionId: resolvedSingular };
 
   if (connectionIds !== undefined) {
-    const source = toDbRef(connectionIds.source, 'source connection');
-    const sink = toDbRef(connectionIds.sink, 'sink connection');
+    const source = toDbRef(connectionIds.source, connById, 'source connection');
+    const sink = toDbRef(connectionIds.sink, connById, 'sink connection');
     // A half-resolved pair drops WHOLE: `NodeSchema.connectionIds` requires both
     // ends, so keeping one would be unsavable, and inventing the other is the
     // fail-open this codebase refuses. The importer rebinds it.
     if (source !== undefined && sink !== undefined) {
       dbNode = { ...dbNode, connectionIds: { source, sink } };
+    }
+  }
+
+  // M3 (#1117) — the dataset pair, resolved through the DATASET map. Applied
+  // independently of the connection block above rather than as an `else`: the
+  // two are orthogonal (a copy binds two stores AND two addresses), so a fork
+  // would silently drop one of them. Same drop-whole rule as the connection
+  // pair — `NodeSchema.datasetIds` requires both ends, so a half-resolved pair
+  // is unsavable and inventing the missing end is the fail-open this codebase
+  // refuses.
+  if (datasetIds !== undefined) {
+    const source = toDbRef(datasetIds.source, datasetById, 'source dataset');
+    const sink = toDbRef(datasetIds.sink, datasetById, 'sink dataset');
+    if (source !== undefined && sink !== undefined) {
+      dbNode = { ...dbNode, datasetIds: { source, sink } };
     }
   }
 
@@ -643,6 +675,26 @@ export function applyWorkspace(
     // not collected — its readiness cannot have changed, so it can strand nothing.
     const touchedConnectionIds = new Set<string>();
 
+    // --- Datasets ---
+    // M3 (#1117) — `datasetById` (resourceId → DB id) resolves a node's dataset
+    // refs on the way IN; `datasetRidByDbId` (the inverse) puts a stored
+    // version's dataset refs into resourceId-space for the change decision.
+    //
+    // SEEDED FROM THE DB up front, exactly as `connById` is, and not merely from
+    // what the dataset phase creates. A branch pipeline may reference a dataset
+    // that already exists in this workspace and is not on the branch (a
+    // partial-branch pull, or a dataset authored locally); resolving only
+    // branch-created rows would throw `WorkspaceApplyError` and refuse the whole
+    // atomic import for a ref that resolves perfectly well. The phase then ADDS
+    // the rows it creates, so a co-arriving dataset resolves too — the ordering
+    // `APPLY_RANK` exists to guarantee.
+    const datasetById = new Map<string, string>();
+    const datasetRidByDbId = new Map<string, string>();
+    for (const d of listDatasets(db, ownerId)) {
+      datasetById.set(d.resourceId, d.id);
+      datasetRidByDbId.set(d.id, d.resourceId);
+    }
+
     // --- Pipelines ---
     // Seed the version map with EVERY owned version (incl. archived pipelines'
     // versions — a call ref to an archived pipeline's still-present version must
@@ -676,6 +728,7 @@ export function applyWorkspace(
     const dbRefMaps: OwnerRefMaps = {
       versionResourceId: versionRidByDbId,
       connectionResourceId: connRidByDbId,
+      datasetResourceId: datasetRidByDbId,
     };
     // #3 G8b-3 — readiness of a resolved binding's connections (the git-import
     // FORWARD twin of the enable-time gate). `unreadyConnectionsForVersion`
@@ -798,6 +851,10 @@ export function applyWorkspace(
             { ...patch, ownerId },
             inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
           );
+          // M3 (#1117) — a pipeline node in the SAME apply may address this
+          // dataset, and the pipeline phase runs after this one (`APPLY_RANK`).
+          datasetById.set(created.resourceId, created.id);
+          datasetRidByDbId.set(created.id, created.resourceId);
           applied.push({
             path: inc.path,
             kind: 'dataset',
@@ -904,7 +961,7 @@ export function applyWorkspace(
           // harmless; a dropped one is not.
           const dbLatest = getLatestPipelineVersion(db, existing.id);
           const dbLatestForm = dbLatest
-            ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
+            ? dbVersionForm(dbLatest, dbRefMaps)
             : undefined;
           const versionChanged =
             version !== undefined &&
@@ -941,12 +998,7 @@ export function applyWorkspace(
             // anywhere else in the same doc — what it no longer does is accuse the
             // operator of tampering because they deleted a connection, which wedged
             // every future pull of the branch with nothing they could act on.
-            const comparison = compareStoredVersion(
-              owner,
-              version,
-              connRidByDbId,
-              versionRidByDbId,
-            );
+            const comparison = compareStoredVersion(owner, version, dbRefMaps);
             if (!comparison.identical) {
               throw new WorkspaceApplyError(
                 `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
@@ -1010,7 +1062,9 @@ export function applyWorkspace(
           {
             ...m.version,
             pipelineId: m.pipelineId,
-            nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, versionById)),
+            nodes: m.version.nodes.map((n) =>
+              remapNodeToDb(n, connById, datasetById, versionById),
+            ),
           },
           {
             // Preserve the file's version resourceId (G5c) when present; else the

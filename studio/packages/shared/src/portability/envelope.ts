@@ -17,6 +17,7 @@ import { RESOURCE_KINDS } from './paths.js';
 export const NodeExportSchema = NodeSchema.omit({
   connectionId: true,
   connectionIds: true,
+  datasetIds: true,
 }).extend({
   connectionId: z.string().min(1).nullable(),
   /**
@@ -34,6 +35,32 @@ export const NodeExportSchema = NodeSchema.omit({
    * honest reading.
    */
   connectionIds: z
+    .object({
+      source: z.string().min(1).nullable(),
+      sink: z.string().min(1).nullable(),
+    })
+    .optional(),
+  /**
+   * M3 (#1117) — the paired dataset ADDRESS in export form, shaped exactly like
+   * `connectionIds` above and for the identical reasons: each END independently
+   * nullable (each is independently literal-or-`${}`, and nulling the pair as a
+   * unit would destroy the portable half), and the whole key OPTIONAL so a node
+   * that binds no datasets gains no key.
+   *
+   * That optionality is load-bearing rather than tidy. The git content form
+   * serializes node fields verbatim (`portability/content-form.ts` excludes
+   * `position` alone), so emitting the key unconditionally would change the
+   * committed bytes of every pipeline in every workspace and report them all as
+   * drifted.
+   *
+   * It also removes the need for an envelope-level stripped-refs list. The
+   * singular `connectionId` needs `strippedConnectionRefs` because it is ALWAYS
+   * present-and-nulled, so "was it bound?" is genuinely underivable from the
+   * node. Here a null end can only mean "export stripped a literal", which is
+   * the flag itself — `import.ts` derives the `unresolvedDatasetRef` attention
+   * item from it directly rather than carrying a second SSOT for the same fact.
+   */
+  datasetIds: z
     .object({
       source: z.string().min(1).nullable(),
       sink: z.string().min(1).nullable(),

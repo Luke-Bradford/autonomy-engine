@@ -25,7 +25,11 @@ import type { Db } from '../repo/types.js';
  * export; the M1 (#1104) pair is present only when the node binds one, and
  * carries its two ends independently. */
 function toDbNode(node: NodeExport): Node {
-  const { connectionId, connectionIds, ...rest } = node;
+  // M3 (#1117) — `datasetIds` MUST be destructured out alongside the connection
+  // fields: `rest` is spread straight into a live `Node`, and an export-shaped
+  // pair (ends `string | null`) riding through would put a `null` where
+  // `NodeSchema.datasetIds` requires a string. It is rebuilt below.
+  const { connectionId, connectionIds, datasetIds, ...rest } = node;
   const base = connectionId === null ? rest : { ...rest, connectionId };
   // M1 (#1104) — the paired binding's inverse. An end nulled by export is
   // UNBOUND on import, and `NodeSchema.connectionIds` requires BOTH ends, so a
@@ -33,9 +37,39 @@ function toDbNode(node: NodeExport): Node {
   // (the node is flagged in `strippedConnectionRefs`). Keeping a half pair would
   // be unsavable, and manufacturing an id for the missing end is the fail-open
   // this codebase refuses. A fully-`${}` pair survives intact.
-  if (connectionIds === undefined) return base;
-  const { source, sink } = connectionIds;
-  return source === null || sink === null ? base : { ...base, connectionIds: { source, sink } };
+  const withConn =
+    connectionIds === undefined || connectionIds.source === null || connectionIds.sink === null
+      ? base
+      : { ...base, connectionIds: { source: connectionIds.source, sink: connectionIds.sink } };
+  // M3 (#1117) — the dataset pair's inverse, on the identical drop-whole rule and
+  // applied to the RESULT rather than inside the connection branch: the two
+  // fields are orthogonal (a copy binds both), so returning early on one would
+  // drop the other. An end nulled by export is unbound, and
+  // `NodeSchema.datasetIds` requires both, so a half pair drops whole — keeping
+  // one end would be unsavable and inventing the other is the fail-open this
+  // codebase refuses. The node is reported as an `unresolvedDatasetRef`. A
+  // fully-`${}` pair survives intact and is correctly not reported.
+  if (datasetIds === undefined || datasetIds.source === null || datasetIds.sink === null) {
+    return withConn;
+  }
+  return { ...withConn, datasetIds: { source: datasetIds.source, sink: datasetIds.sink } };
+}
+
+/** M3 (#1117) — the node ids whose exported `datasetIds` has at least one end
+ * nulled, i.e. the pairs `toDbNode` dropped. Derived from the envelope's own
+ * nodes rather than from a stripped-refs list the exporter carries: the key is
+ * emitted only when the node binds a pair, so a null end can only mean "export
+ * stripped a literal" and a second SSOT would be a list that can disagree with
+ * the thing it describes. */
+function unresolvedDatasetNodeIds(versions: readonly { nodes: NodeExport[] }[]): string[] {
+  const ids: string[] = [];
+  for (const version of versions) {
+    for (const node of version.nodes) {
+      const pair = node.datasetIds;
+      if (pair !== undefined && (pair.source === null || pair.sink === null)) ids.push(node.id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -90,6 +124,12 @@ function importPipelineEnvelopeInTx(
     type: 'unresolvedConnectionRef',
     nodeId,
   }));
+  // M3 (#1117) — one item per node whose dataset pair was dropped. A node may
+  // legitimately appear in BOTH lists (its connection and its datasets were each
+  // stripped); they are separate repairs, so both are reported.
+  for (const nodeId of unresolvedDatasetNodeIds(exportedVersions)) {
+    attention.push({ type: 'unresolvedDatasetRef', nodeId });
+  }
   const versions = exportedVersions.map((exportedVersion) => {
     // SPREAD, not a field-by-field rebuild (#473). Listing the fields by hand
     // is what silently dropped `containers` on import: every field of
