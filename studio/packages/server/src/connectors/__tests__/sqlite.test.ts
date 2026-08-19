@@ -484,7 +484,10 @@ describe('the adapter', () => {
     const root = tempRoot();
     seedDb(root, 1);
     await expect(
-      sqliteAdapter.testConnection({ roots: [root], path: join(root, 'no-such-dir', 'db.sqlite') }),
+      sqliteAdapter.testConnection(
+        { roots: [root], path: join(root, 'no-such-dir', 'db.sqlite') },
+        null,
+      ),
     ).resolves.toMatchObject({ ok: false });
   });
 
