@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DatasetIoError, writeSqliteDatasetRows, type SinkValue } from '../sqlite.js';
 import { classifySinkFailure } from '../error-kind.js';
 import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
@@ -139,7 +139,9 @@ describe('what may be a sink at all', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
-    expect(err.message).toMatch(/query/);
+    // Specifically the "no insert target" refusal. Drop it and `query` falls to
+    // the not-yet-implemented arm, whose message also says "query".
+    expect(err.message).toMatch(/has no insert target/);
   });
 
   it('REFUSES a dataset kind with no writer yet', async () => {
@@ -158,6 +160,10 @@ describe('what may be a sink at all', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
+    // Without this arm, `delimited` reaches `tableDatasetConfigSchema` and is
+    // refused as an invalid table config — permanent either way, but for a
+    // reason that would mislead whoever reads the run log.
+    expect(err.message).toMatch(/no sink writer exists for the 'delimited'/);
   });
 
   it('REFUSES a table name that is not a bare identifier (dispatch proof for quoteIdentifier)', async () => {
@@ -218,7 +224,10 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
-    expect(err.message).toMatch(/nope/);
+    // The wording, not just the name: without the existence check the copy
+    // fails anyway (reading `.type` off `undefined`), and that message quotes
+    // the table name too.
+    expect(err.message).toMatch(/there is no table 'nope' in the store/);
   });
 
   it('REFUSES a VIEW — `pragma_table_info` reports its columns, so an empty-columns check would pass', async () => {
@@ -241,7 +250,12 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
-    expect(err.message).toMatch(/view/i);
+    // The PRE-FLIGHT wording specifically. Without the `sqlite_master` type
+    // check the copy still fails — but from `DELETE FROM v` INSIDE the
+    // transaction, reporting "cannot modify v because it is a view". Matching
+    // only /view/i would pass on that, certifying the gate while the gate is
+    // gone.
+    expect(err.message).toMatch(/'v' is a view, not a table/);
   });
 
   it('REFUSES a mapped column absent from the sink, naming it', async () => {
@@ -314,7 +328,9 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
         one([{}]),
       ),
     );
-    expect(err.kind).toBe('permanent');
+    // The refusal, not the SQL syntax error a valueless INSERT would raise
+    // later — both are permanent, and only one of them is this guard.
+    expect(err.message).toMatch(/at least one mapped column/);
   });
 });
 
@@ -601,16 +617,79 @@ describe('atomicity (§4)', () => {
   });
 });
 
+describe('the one state the sink cannot prove clean', () => {
+  it('reports `partialWritePossible` when the ROLLBACK ITSELF fails — the one state it cannot prove clean', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+
+    // The only mock in this file, and it is here because this branch is
+    // otherwise unreachable: SQLite does not offer a way to make a rollback
+    // fail on demand. The property is worth reaching for — it is the whole
+    // reason the rollback is explicit rather than left to `close()`, which
+    // unwinds silently and would let the sink report "nothing landed" without
+    // ever having checked. Everything else in this suite runs against a real
+    // store.
+    const exec = Database.prototype.exec;
+    const spy = vi
+      .spyOn(Database.prototype, 'exec')
+      .mockImplementation(function (this: Database.Database, sql: string) {
+        if (sql === 'rollback') throw new Error('disk I/O error');
+        return exec.call(this, sql);
+      });
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async function* explodes(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+        yield [{ id: 1 }];
+        throw new Error('the source died');
+      }
+      const err = await failure(
+        writeSqliteDatasetRows(
+          {
+            connectionConfig: writableConfig(root, path),
+            datasetKind: 'table',
+            datasetConfig: { table: 'sink' },
+            columns: ['id'],
+            mode: 'append',
+          },
+          explodes(),
+        ),
+      );
+      expect(err.partialWritePossible).toBe(true);
+      expect(err.message).toMatch(/rollback FAILED/);
+      // And §4.2 then turns that fact into a verdict: a cause that would
+      // otherwise be retryable must not be retried into a possible duplicate.
+      expect(
+        classifySinkFailure({ kind: 'transient', partialWritePossible: err.partialWritePossible }),
+      ).toBe('permanent');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('cancellation (§10)', () => {
   it('aborts at a batch boundary and leaves the sink in its pre-copy state', async () => {
     const root = tempRoot();
     const path = seedSink(root);
     const controller = new AbortController();
+    // THREE batches, and `pulled`, are what make this a BATCH-BOUNDARY test
+    // rather than a "cancelled eventually" one. `for await` pulls before the
+    // body runs, so batch two is always drawn from the source; what the in-loop
+    // check decides is whether the copy stops THERE. Without it, batch two is
+    // inserted and batch three is pulled and inserted too, and only the
+    // pre-commit check refuses — the same `cancelled` and the same empty table,
+    // reached after doing all the work the abort was meant to stop.
+    let pulled = 0;
     // eslint-disable-next-line @typescript-eslint/require-await
-    async function* twoBatches(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+    async function* threeBatches(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      pulled += 1;
       yield [{ id: 1 }];
       controller.abort();
+      pulled += 1;
       yield [{ id: 2 }];
+      pulled += 1;
+      yield [{ id: 3 }];
     }
     const err = await failure(
       writeSqliteDatasetRows(
@@ -622,21 +701,26 @@ describe('cancellation (§10)', () => {
           mode: 'append',
           signal: controller.signal,
         },
-        twoBatches(),
+        threeBatches(),
       ),
     );
     expect(err.kind).toBe('cancelled');
     expect(err.partialWritePossible).toBe(false);
+    expect(pulled).toBe(2);
     expect(rowsOf(path)).toHaveLength(0);
   });
 
-  it('refuses an ALREADY-aborted signal before opening the store', async () => {
+  it('refuses an ALREADY-aborted signal BEFORE opening the store', async () => {
     const root = tempRoot();
-    const path = seedSink(root);
+    // A path that does not exist, which is the whole trick: if the pre-open
+    // check is doing its job the answer is `cancelled`; if the copy opens first
+    // and only notices the abort later, the answer is `permanent` ("cannot open
+    // the sqlite database"). Nothing else distinguishes the two.
+    const path = join(root, 'never-created.db');
     const err = await failure(
       writeSqliteDatasetRows(
         {
-          connectionConfig: writableConfig(root, path),
+          connectionConfig: { roots: [root], path, writable: true },
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
           columns: ['id'],
