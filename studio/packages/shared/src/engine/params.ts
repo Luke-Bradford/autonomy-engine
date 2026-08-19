@@ -1350,6 +1350,26 @@ export function validateRefs(
         );
       }
     }
+    // M3 (#1117) — the paired dataset ADDRESS's two ends, scanned exactly as the
+    // connection pair above: same env, same per-END path so the diagnostic names
+    // which side is wrong, and the same `foreachChildIds` argument (dropping it
+    // would strip `${item}` from the scope inside a foreach body and badge a
+    // VALID ref as invalid). Not a secret sink — `scan` itself refuses a
+    // secret-typed ref, and a dataset address carries no credential (its store's
+    // credential lives on the connection the dataset names).
+    if (node.datasetIds !== undefined) {
+      for (const side of ['source', 'sink'] as const) {
+        scan(
+          `nodes.${node.id}.datasetIds.${side}`,
+          node.datasetIds[side],
+          scope,
+          errors,
+          0,
+          undefined,
+          foreachChildIds.has(node.id),
+        );
+      }
+    }
     // #2 L13b — per-dispatch connection-parameter bindings. `scan` walks the
     // whole record (nested records/arrays included), so an embedded `${}`
     // string anywhere in a binding value is validated against the SAME env the
@@ -2158,6 +2178,26 @@ export function validateDoc(
             '(which one binds would be undecidable) — keep the single or the pair, not both',
         );
       }
+    }
+    // M3 (#1117) — the dataset pair's own shape rule, and there is exactly ONE.
+    // A `call` node's dispatch and refs belong to the child pipeline, so a
+    // dataset address on it could never apply: silently-inert config is refused
+    // with a diagnostic, never dropped (the L12 call-node precedent, same idiom
+    // as the two blocks above).
+    //
+    // What is DELIBERATELY absent is a mutual exclusion with `connectionId` or
+    // `connectionIds`. A store and an address within that store are two
+    // different facts, so a heterogeneous `copy` binds both, and a source-only
+    // reader (M12 `lookup`) will bind a single `connectionId` alongside a
+    // dataset. Refusing either combination here would make the M5/M12 activities
+    // unauthorable. Whether a node's ACTIVITY accepts datasets at all is a
+    // catalog question and stays at DISPATCH, exactly as it does for a stray
+    // `connectionId` on a connection-less activity.
+    if (node.datasetIds !== undefined && node.call !== undefined) {
+      errors.push(
+        `node.${node.id}: datasetIds have no effect on a call node ` +
+          "(its dispatch and refs are the child pipeline's) — remove them",
+      );
     }
   }
 

@@ -81,6 +81,12 @@ export interface UnserializableRefDetail {
     | 'connection'
     | 'connectionSource'
     | 'connectionSink'
+    // M3 (#1117) — a NODE's ref to the dataset it reads from / writes to. Two
+    // separate arms, never one `dataset`, for the same reason the connection
+    // pair has two: "node X references a dataset that no longer exists" is not
+    // actionable on a node that binds two of them.
+    | 'datasetSource'
+    | 'datasetSink'
     | 'call'
     | 'binding'
     // #1114 (M2) — a DATASET's ref to the connection it lives in. Resource-level
@@ -117,7 +123,11 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
         ? `source connection "${detail.danglingId}"`
         : detail.ref === 'connectionSink'
           ? `sink connection "${detail.danglingId}"`
-          : `pipeline version "${detail.danglingId}"`;
+          : detail.ref === 'datasetSource'
+            ? `source dataset "${detail.danglingId}"`
+            : detail.ref === 'datasetSink'
+              ? `sink dataset "${detail.danglingId}"`
+              : `pipeline version "${detail.danglingId}"`;
   return detail.nodeId === null
     ? `binds ${what}, which no longer exists`
     : `node "${detail.nodeId}" references ${what}, which no longer exists`;
@@ -198,9 +208,16 @@ export interface OwnerRefMaps {
   versionResourceId: Map<string, string>;
   /** Every owned connection's DB id → its stable `resourceId`. */
   connectionResourceId: Map<string, string>;
+  /** M3 (#1117) — every owned DATASET's DB id → its stable `resourceId`. */
+  datasetResourceId: Map<string, string>;
 }
 
-function buildOwnerRefMaps(db: Db, pipelines: Pipeline[], connections: Connection[]): OwnerRefMaps {
+function buildOwnerRefMaps(
+  db: Db,
+  pipelines: Pipeline[],
+  connections: Connection[],
+  datasets: Dataset[],
+): OwnerRefMaps {
   const versionResourceId = new Map<string, string>();
   for (const pipeline of pipelines) {
     for (const version of listPipelineVersions(db, pipeline.id)) {
@@ -211,7 +228,11 @@ function buildOwnerRefMaps(db: Db, pipelines: Pipeline[], connections: Connectio
   for (const connection of connections) {
     connectionResourceId.set(connection.id, connection.resourceId);
   }
-  return { versionResourceId, connectionResourceId };
+  const datasetResourceId = new Map<string, string>();
+  for (const dataset of datasets) {
+    datasetResourceId.set(dataset.id, dataset.resourceId);
+  }
+  return { versionResourceId, connectionResourceId, datasetResourceId };
 }
 
 /**
@@ -231,33 +252,53 @@ function buildOwnerRefMaps(db: Db, pipelines: Pipeline[], connections: Connectio
  * wrong when merely comparing two versions, where the honest answer is "these
  * forms differ".
  */
-function forwardRemapNode(
-  node: Node,
-  connRidByDbId: Map<string, string>,
-  versionRidByDbId: Map<string, string>,
-): NodeExport {
-  const { connectionId, connectionIds, call, ...rest } = node;
-  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function, so
-  // the singular and each end of the M1 (#1104) pair cannot drift apart —
+function forwardRemapNode(node: Node, maps: OwnerRefMaps): NodeExport {
+  // M3 (#1117) — the three functions in this reverse-map family take the
+  // `OwnerRefMaps` STRUCT rather than loose positional `Map<string, string>`
+  // arguments. With three same-typed maps a mis-ordered call compiles clean
+  // across four call sites, and the failure is silent in exactly the worst way:
+  // an empty map makes every literal ref read as undecidable, which masks both
+  // sides of the comparison and reports a real hand-edit as `identical`.
+  const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
+  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function
+  // taking its map as an ARGUMENT, so no ref position can drift from another —
   // divergence here manufactures a false "changed" in the stored-vs-branch
   // compare, which is worse than a loud failure because it silently mints a
   // version nobody authored.
-  const forwardRef = (id: string): string =>
-    interpolationMode(id).mode !== 'literal' ? id : (connRidByDbId.get(id) ?? id);
-  const connExport: string | null = connectionId === undefined ? null : forwardRef(connectionId);
+  //
+  // M3 (#1117) made the map a parameter rather than a closed-over variable. With
+  // the singular, two pairs and `call` there are now FIVE ref positions across
+  // THREE maps, and a per-position closure is how they become five subtly
+  // different copies of one rule — the same reasoning `remapNodeToDb`'s
+  // `toDbRef` states in `workspace-apply.ts`.
+  const forwardRef = (id: string, byDbId: Map<string, string>): string =>
+    interpolationMode(id).mode !== 'literal' ? id : (byDbId.get(id) ?? id);
+  const conn = maps.connectionResourceId;
+  const connExport: string | null =
+    connectionId === undefined ? null : forwardRef(connectionId, conn);
 
   const exported: NodeExport = { ...rest, connectionId: connExport };
   if (connectionIds !== undefined) {
     exported.connectionIds = {
-      source: forwardRef(connectionIds.source),
-      sink: forwardRef(connectionIds.sink),
+      source: forwardRef(connectionIds.source, conn),
+      sink: forwardRef(connectionIds.sink, conn),
+    };
+  }
+  // M3 (#1117) — the dataset pair, forward-mapped through the DATASET map on the
+  // same rule. Emitted only when the node binds one, so a node with no datasets
+  // produces the byte-identical content form it did before M3.
+  if (datasetIds !== undefined) {
+    const ds = maps.datasetResourceId;
+    exported.datasetIds = {
+      source: forwardRef(datasetIds.source, ds),
+      sink: forwardRef(datasetIds.sink, ds),
     };
   }
   if (call) {
-    const ref = call.pipelineVersionId;
-    const refExport =
-      interpolationMode(ref).mode !== 'literal' ? ref : (versionRidByDbId.get(ref) ?? ref);
-    exported.call = { ...call, pipelineVersionId: refExport };
+    exported.call = {
+      ...call,
+      pipelineVersionId: forwardRef(call.pipelineVersionId, maps.versionResourceId),
+    };
   }
   return exported;
 }
@@ -274,14 +315,10 @@ function forwardRemapNode(
  * question could disagree about the one comparison the whole `superseded`
  * decision turns on. Exported for the same reason `serializeTrigger` is.
  */
-export function dbVersionForm(
-  version: PipelineVersion,
-  connRidByDbId: Map<string, string>,
-  versionRidByDbId: Map<string, string>,
-): string {
+export function dbVersionForm(version: PipelineVersion, maps: OwnerRefMaps): string {
   const exportForm = {
     ...version,
-    nodes: version.nodes.map((n) => forwardRemapNode(n, connRidByDbId, versionRidByDbId)),
+    nodes: version.nodes.map((n) => forwardRemapNode(n, maps)),
   } as PipelineVersionExport;
   return pipelineVersionContentForm(exportForm);
 }
@@ -342,13 +379,16 @@ export interface StoredVersionComparison {
 export function compareStoredVersion(
   stored: PipelineVersion,
   branch: PipelineVersionExport,
-  connRidByDbId: Map<string, string>,
-  versionRidByDbId: Map<string, string>,
+  maps: OwnerRefMaps,
 ): StoredVersionComparison {
+  const connRidByDbId = maps.connectionResourceId;
+  const versionRidByDbId = maps.versionResourceId;
   const masks: NodeRefMasks = {
     connection: new Set<string>(),
     source: new Set<string>(),
     sink: new Set<string>(),
+    datasetSource: new Set<string>(),
+    datasetSink: new Set<string>(),
     call: new Set<string>(),
   };
   for (const node of stored.nodes) {
@@ -359,23 +399,33 @@ export function compareStoredVersion(
     // real hand-edit to that end behind the other end's undecidability.
     if (isUndecidableRef(node.connectionIds?.source, connRidByDbId)) masks.source.add(node.id);
     if (isUndecidableRef(node.connectionIds?.sink, connRidByDbId)) masks.sink.add(node.id);
+    // M3 (#1117) — the dataset ends, judged per end against the DATASET map for
+    // the identical reason: over-masking a decidable end would hide a real
+    // hand-edit to it behind the other end's undecidability.
+    if (isUndecidableRef(node.datasetIds?.source, maps.datasetResourceId)) {
+      masks.datasetSource.add(node.id);
+    }
+    if (isUndecidableRef(node.datasetIds?.sink, maps.datasetResourceId)) {
+      masks.datasetSink.add(node.id);
+    }
     if (isUndecidableRef(node.call?.pipelineVersionId, versionRidByDbId)) masks.call.add(node.id);
   }
   const undecidableRefs =
-    masks.connection.size + masks.source.size + masks.sink.size + masks.call.size;
+    masks.connection.size +
+    masks.source.size +
+    masks.sink.size +
+    masks.datasetSource.size +
+    masks.datasetSink.size +
+    masks.call.size;
   if (undecidableRefs === 0) {
     return {
-      identical:
-        dbVersionForm(stored, connRidByDbId, versionRidByDbId) ===
-        pipelineVersionContentForm(branch),
+      identical: dbVersionForm(stored, maps) === pipelineVersionContentForm(branch),
       undecidableRefs,
     };
   }
   const storedForm = pipelineVersionContentForm({
     ...stored,
-    nodes: stored.nodes.map((n) =>
-      maskNode(forwardRemapNode(n, connRidByDbId, versionRidByDbId), masks),
-    ),
+    nodes: stored.nodes.map((n) => maskNode(forwardRemapNode(n, maps), masks)),
   } as PipelineVersionExport);
   const branchForm = pipelineVersionContentForm({
     ...branch,
@@ -401,6 +451,12 @@ interface NodeRefMasks {
   connection: Set<string>;
   source: Set<string>;
   sink: Set<string>;
+  /** M3 (#1117) — the dataset pair's ends. Separate from `source`/`sink` (the
+   * CONNECTION pair's) because a node binds both and each is decidable on its
+   * own: a copy whose source connection is dangling may still have a perfectly
+   * resolvable source dataset. */
+  datasetSource: Set<string>;
+  datasetSink: Set<string>;
   call: Set<string>;
 }
 
@@ -412,14 +468,27 @@ interface NodeRefMasks {
 function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
   let masked = node;
   if (masks.connection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
+  /** One pair, blanked per END. M3 (#1117) — shared by both pairs so "mask only
+   * the end that is actually undecidable" cannot be got right for one and wrong
+   * for the other; over-masking hides a real hand-edit, which is silent. */
+  const maskedPair = (
+    pair: { source: string | null; sink: string | null },
+    sourceMask: Set<string>,
+    sinkMask: Set<string>,
+  ) => ({
+    source: sourceMask.has(node.id) ? UNDECIDABLE_REF : pair.source,
+    sink: sinkMask.has(node.id) ? UNDECIDABLE_REF : pair.sink,
+  });
   if (masked.connectionIds !== undefined) {
-    const pair = masked.connectionIds;
     masked = {
       ...masked,
-      connectionIds: {
-        source: masks.source.has(node.id) ? UNDECIDABLE_REF : pair.source,
-        sink: masks.sink.has(node.id) ? UNDECIDABLE_REF : pair.sink,
-      },
+      connectionIds: maskedPair(masked.connectionIds, masks.source, masks.sink),
+    };
+  }
+  if (masked.datasetIds !== undefined) {
+    masked = {
+      ...masked,
+      datasetIds: maskedPair(masked.datasetIds, masks.datasetSource, masks.datasetSink),
     };
   }
   if (masks.call.has(node.id) && masked.call !== undefined) {
@@ -467,14 +536,18 @@ export function ownedVersionForms(
   if (versionResourceIds.size === 0) return forms;
 
   const pipelines = listPipelines(db, ownerId);
-  const maps = buildOwnerRefMaps(db, pipelines, listConnections(db, ownerId));
+  const maps = buildOwnerRefMaps(
+    db,
+    pipelines,
+    listConnections(db, ownerId),
+    listDatasets(db, ownerId),
+  );
   for (const pipeline of pipelines) {
     for (const version of listPipelineVersions(db, pipeline.id)) {
       if (!versionResourceIds.has(version.resourceId)) continue;
       forms.set(version.resourceId, {
         pipelineResourceId: pipeline.resourceId,
-        compare: (branch) =>
-          compareStoredVersion(version, branch, maps.connectionResourceId, maps.versionResourceId),
+        compare: (branch) => compareStoredVersion(version, branch, maps),
       });
     }
   }
@@ -499,7 +572,7 @@ function remapRef(
 }
 
 function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
-  const { connectionId, connectionIds, call, ...rest } = node;
+  const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
   const mappedConnectionId = remapRef(connectionId, maps.connectionResourceId, () => ({
     ref: 'connection',
     nodeId: node.id,
@@ -521,6 +594,24 @@ function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
         ref: 'connectionSink',
         nodeId: node.id,
         danglingId: connectionIds.sink,
+      })),
+    };
+  }
+  // M3 (#1117) — the dataset pair, remapped through the DATASET map. Each end
+  // names WHICH end it is when it dangles, and the ends are remapped
+  // INDEPENDENTLY of the connection pair above: the two are orthogonal, so a
+  // node may carry either, both or neither.
+  if (datasetIds !== undefined) {
+    exported.datasetIds = {
+      source: remapRef(datasetIds.source, maps.datasetResourceId, () => ({
+        ref: 'datasetSource',
+        nodeId: node.id,
+        danglingId: datasetIds.source,
+      })),
+      sink: remapRef(datasetIds.sink, maps.datasetResourceId, () => ({
+        ref: 'datasetSink',
+        nodeId: node.id,
+        danglingId: datasetIds.sink,
       })),
     };
   }
@@ -666,7 +757,7 @@ export function serializeWorkspaceTolerant(
   const triggers = listTriggers(db, { ownerId });
   // Ref map over ALL pipelines (incl. archived) so a live ref to an archived
   // version still resolves (faithful; dangle-on-import is G7's concern).
-  const maps = buildOwnerRefMaps(db, allPipelines, connections);
+  const maps = buildOwnerRefMaps(db, allPipelines, connections, datasets);
 
   // Every version DB id that belongs to an archived pipeline — used to omit the
   // archived pipelines themselves and their dependent triggers.

@@ -190,6 +190,12 @@ describe('describeAttention', () => {
     expect(describeAttention({ type: 'requiresSecret' })).toMatch(/secret/i);
     expect(describeAttention({ type: 'unboundPipelineVersion' })).toMatch(/never fire/i);
     expect(describeAttention({ type: 'requiresWebhookSecret' })).toMatch(/webhook/i);
+    // M3 (#1117) — names the node, and says "datasets" rather than reusing the
+    // connection sentence: the repair is a different one.
+    const ds = describeAttention({ type: 'unresolvedDatasetRef', nodeId: 'copyRows' });
+    expect(ds).toMatch(/copyRows/);
+    expect(ds).toMatch(/dataset/i);
+    expect(ds).not.toMatch(/connection/i);
   });
 });
 

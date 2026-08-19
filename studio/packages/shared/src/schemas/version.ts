@@ -247,6 +247,21 @@
 // WHAT VOIDS THIS: the first catalog entry to declare a sink — `copy` (M5) —
 // makes the field load-bearing, and owes the bump. That is a bump for POPULATING
 // the field, not merely for the new activity type.
+// NO BUMP for M3 (#1117) either, recorded for the same reason and on the same
+// argument. `NodeSchema.datasetIds` (the paired source/sink dataset ADDRESS) is
+// additive and INERT *at dispatch*: no catalog entry declares a dataset, so
+// neither the executor nor the readiness gate reads it, and the reducer does not
+// resolve it — a doc authored here runs identically on a pre-M3 build. As with
+// M1, the save-time validator DOES read it (`engine/params.ts` scans both ends
+// and refuses it on a call node), which is not a counter-example: a save-time
+// refusal cannot make a stored doc run differently, and that is the only
+// property this ledger is about. Apply the governing rule in `catalog/types.ts`
+// ("does an EXPORT now carry an artifact an older build would MIS-RUN") and the
+// answer is no — a pre-M3 build drops the key and dispatches exactly as it
+// would have without it. Bumping would refuse imports that cannot differ.
+// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5), the first
+// catalog entry to declare a dataset, makes the field load-bearing and owes the
+// bump. One bump covers both fields; they become load-bearing together.
 export const CATALOG_VERSION = 21;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

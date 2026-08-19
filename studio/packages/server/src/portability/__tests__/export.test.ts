@@ -207,6 +207,73 @@ describe('exportPipeline', () => {
     expect(JSON.stringify(envelope)).not.toContain(connection.id);
   });
 
+  // M3 (#1117) — the dataset pair gets the SAME L13a rule, and the cases below
+  // are a deliberate CROSS-PRODUCT with the connection field. `datasetIds` is
+  // orthogonal to `connectionId`/`connectionIds` (a copy binds two stores and
+  // two addresses; a lookup will bind one of each), so the dataset rule is
+  // COMPOSED over the connection rule's result rather than added to one of its
+  // three branches. Bolt it into a branch and it silently disappears on the
+  // other two — which is exactly what these four nodes measure.
+  it('M3 (#1117) — nulls each LITERAL dataset end independently, on every connection shape', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Copies' });
+    const DS = 'ds_local_primary_key';
+    const node = (id: string, extra: Record<string, unknown>) => ({
+      id,
+      type: 'llm_call',
+      config: {},
+      position: { x: 0, y: 0 },
+      datasetIds: { source: DS, sink: '${params.target}' },
+      ...extra,
+    });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        // datasets alone — no connection field at all.
+        node('alone', {}),
+        // datasets + a LITERAL singular connectionId (the nulled-singular branch).
+        node('withLiteralConn', { connectionId: 'conn_literal' }),
+        // datasets + a ${} singular connectionId (the preserved-singular branch).
+        node('withDynamicConn', { connectionId: '${params.target}' }),
+        // datasets + a connection PAIR (the pair fork's own return path).
+        node('withConnPair', {
+          connectionIds: { source: 'conn_literal', sink: '${params.target}' },
+        }),
+        // No datasets at all — must NOT gain the key, or every pipeline file in
+        // every workspace changes bytes and reports as drifted.
+        { id: 'plain', type: 'llm_call', config: {}, position: { x: 9, y: 9 } },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = envelope.data.versions[0]!.nodes;
+    const byId = (id: string) => nodes.find((n) => n.id === id)!;
+
+    for (const id of ['alone', 'withLiteralConn', 'withDynamicConn', 'withConnPair']) {
+      expect(byId(id).datasetIds, `node ${id}`).toEqual({
+        source: null,
+        sink: '${params.target}',
+      });
+    }
+    expect(byId('plain').datasetIds).toBeUndefined();
+    // The local primary key never leaves the workspace — the whole point of §3.
+    expect(JSON.stringify(envelope)).not.toContain(DS);
+    // And the connection rule still ran on every one of them.
+    expect(byId('withLiteralConn').connectionId).toBeNull();
+    expect(byId('withDynamicConn').connectionId).toBe('${params.target}');
+    expect(byId('withConnPair').connectionIds).toEqual({
+      source: null,
+      sink: '${params.target}',
+    });
+    // Dataset stripping does NOT flag a connection rebind — separate repairs.
+    expect(envelope.data.strippedConnectionRefs).toEqual(['withLiteralConn', 'withConnPair']);
+  });
+
   it('#2 L13b — strips connectionParams alongside a LITERAL connectionId, keeps them on a dynamic one', () => {
     const { db } = freshDb();
     const connection = createConnection(db, {

@@ -138,6 +138,34 @@ describe('NodeSchema', () => {
       NodeSchema.parse({ ...node, connectionIds: { source: '', sink: 'conn_sink' } }),
     ).toThrow();
   });
+
+  // M3 (#1117) — the paired dataset ADDRESS, beside the paired store binding.
+  it('round-trips datasetIds (either end may be a ${} expression)', () => {
+    const value = {
+      ...node,
+      connectionId: undefined,
+      datasetIds: { source: 'ds_src', sink: '${params.sink}' },
+    };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('carries datasetIds ALONGSIDE connectionIds — a store and an address are two facts', () => {
+    const value = {
+      ...node,
+      connectionId: undefined,
+      connectionIds: { source: 'conn_src', sink: 'conn_sink' },
+      datasetIds: { source: 'ds_src', sink: 'ds_sink' },
+    };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('rejects a half dataset pair, and an empty-string end', () => {
+    expect(() => NodeSchema.parse({ ...node, datasetIds: { source: 'ds_src' } })).toThrow();
+    expect(() => NodeSchema.parse({ ...node, datasetIds: { sink: 'ds_sink' } })).toThrow();
+    expect(() =>
+      NodeSchema.parse({ ...node, datasetIds: { source: '', sink: 'ds_sink' } }),
+    ).toThrow();
+  });
 });
 
 describe('EdgeOnSchema', () => {

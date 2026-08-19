@@ -10,6 +10,7 @@ import {
   deletePipeline,
 } from '../../repo/index.js';
 import { deleteConnection } from '../../repo/connections.js';
+import { createDataset, deleteDataset } from '../../repo/datasets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import {
   ownedVersionForms,
@@ -189,6 +190,110 @@ describe('serializeWorkspace', () => {
     // "node n1 references a connection that no longer exists" is not actionable
     // on a node that binds two of them.
     expect(() => serializeWorkspace(db, 'local')).toThrow(/sink connection/);
+  });
+
+  // M3 (#1117) — a dataset ref reaches the branch as a stable `resourceId` or it
+  // does not reach it at all. Committing a LOCAL primary key into a shared repo
+  // is the exact failure §3 exists to prevent, and it throws nothing.
+  it('M3 (#1117) — remaps BOTH ends of a datasetIds pair to resourceIds', () => {
+    const { db } = freshDb();
+    const store = createConnection(db, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const mkDataset = (name: string) =>
+      createDataset(db, {
+        ownerId: 'local',
+        name,
+        connectionId: store.id,
+        kind: 'table',
+        config: {},
+        columns: [],
+      });
+    const src = mkDataset('Src');
+    const snk = mkDataset('Snk');
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      params: [{ name: 'target', type: 'string', required: true }],
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: src.id, sink: snk.id },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'n2',
+          type: 'llm_call',
+          config: {},
+          // A dynamic end beside a remapped one, and a CONNECTION pair on the
+          // same node — the two fields are remapped through different maps and
+          // must not be able to resolve each other's ids.
+          connectionIds: { source: store.id, sink: store.id },
+          datasetIds: { source: '${params.target}', sink: snk.id },
+          position: { x: 1, y: 1 },
+        },
+      ],
+    });
+
+    const env = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/p.json');
+    expect(env.data.versions[0].nodes[0].datasetIds).toEqual({
+      source: src.resourceId,
+      sink: snk.resourceId,
+    });
+    expect(env.data.versions[0].nodes[1].datasetIds).toEqual({
+      source: '${params.target}',
+      sink: snk.resourceId,
+    });
+    expect(env.data.versions[0].nodes[1].connectionIds).toEqual({
+      source: store.resourceId,
+      sink: store.resourceId,
+    });
+    // No dataset DB id reaches the branch.
+    expect(JSON.stringify(env)).not.toContain(src.id);
+    expect(JSON.stringify(env)).not.toContain(snk.id);
+  });
+
+  it('M3 (#1117) — a dangling dataset END refuses the serialize, naming WHICH end', () => {
+    const { db } = freshDb();
+    const store = createConnection(db, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const src = createDataset(db, {
+      ownerId: 'local',
+      name: 'Src',
+      connectionId: store.id,
+      kind: 'table',
+      config: {},
+      columns: [],
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: src.id, sink: 'ds_does_not_exist' },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    // Not "a connection", and not the ternary tail's "pipeline version" — a ref
+    // kind without its own arm in `describeUnserializable` is labelled WRONG
+    // rather than merely unlabelled.
+    expect(() => serializeWorkspace(db, 'local')).toThrow(/sink dataset/);
   });
 
   it('remaps a literal call_pipeline pipelineVersionId to the target version resourceId', () => {
@@ -756,6 +861,79 @@ describe('ownedVersionForms — compare (#1018)', () => {
         nodes: [
           { ...branch.nodes[0]!, connectionIds: { source: 'someone-elses-ref', sink: null } },
         ],
+      };
+      expect(compareFor(db, version.resourceId)(tampered).identical).toBe(false);
+    });
+  });
+
+  // M3 (#1117) — the same compare hazard, one map further out. `ownedVersionForms`
+  // builds its own `OwnerRefMaps`; if it forgets to seed the DATASET map, every
+  // literal dataset end reads as undecidable, BOTH sides get masked, and a real
+  // hand-edit to a dataset ref compares `identical`. That is silent, and only on
+  // the read-only preview path.
+  describe('a dataset-addressed node (M3)', () => {
+    function datasetVersionUsing(db: ReturnType<typeof freshDb>['db']) {
+      const store = createConnection(db, {
+        ownerId: 'local',
+        name: 'Store',
+        kind: 'http',
+        config: {},
+        secretRef: null,
+      });
+      const mk = (name: string) =>
+        createDataset(db, {
+          ownerId: 'local',
+          name,
+          connectionId: store.id,
+          kind: 'table',
+          config: {},
+          columns: [],
+        });
+      const src = mk('Src');
+      const snk = mk('Snk');
+      const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const version = createPipelineVersion(db, {
+        ...baseVersion(pipe.id),
+        nodes: [
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            datasetIds: { source: src.id, sink: snk.id },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+        .versions[0]!;
+      return { src, snk, version, branch };
+    }
+
+    it('compares IDENTICAL round-tripped, with NO undecidable refs', () => {
+      const db = freshDb().db;
+      const { version, branch } = datasetVersionUsing(db);
+
+      expect(compareFor(db, version.resourceId)(branch)).toEqual({
+        identical: true,
+        undecidableRefs: 0,
+      });
+    });
+
+    it('masks only the DELETED dataset end — the surviving end still speaks', () => {
+      const db = freshDb().db;
+      const { snk, version, branch } = datasetVersionUsing(db);
+      deleteDataset(db, snk.id);
+
+      expect(compareFor(db, version.resourceId)(branch)).toEqual({
+        identical: true,
+        undecidableRefs: 1,
+      });
+
+      // Over-masking would hide this: the SOURCE end was hand-edited on the
+      // branch, and that is a real difference even though the sink is dangling.
+      const tampered = {
+        ...branch,
+        nodes: [{ ...branch.nodes[0]!, datasetIds: { source: 'someone-elses-ref', sink: null } }],
       };
       expect(compareFor(db, version.resourceId)(tampered).identical).toBe(false);
     });

@@ -104,13 +104,48 @@ function stripNodeConnectionId(node: Node, strippedIds: Set<string>): NodeExport
   return { ...portable, connectionId: null };
 }
 
+/**
+ * M3 (#1117, data-movement spec §3) — the L13a literal-vs-`${}` rule applied to
+ * the paired dataset ADDRESS, per end. A literal dataset id is a local primary
+ * key and is nulled; a `${}` id names an expression rather than an environment,
+ * so it is PORTABLE and preserved verbatim. Identical to the connection rule
+ * above; that is the point of §3 rather than a coincidence.
+ *
+ * COMPOSED over `stripNodeConnectionId`'s result instead of living inside one of
+ * its branches, and that is load-bearing. `connectionId` and `connectionIds` are
+ * a FORK (mutually exclusive, so a pair takes its own return path), but
+ * `datasetIds` is ORTHOGONAL to both — a copy binds two stores AND two
+ * addresses, a lookup will bind one store and one address. Adding a dataset arm
+ * to any single branch would silently drop the field on the other two.
+ *
+ * No `strippedIds` set, unlike the connection rule. That list exists only
+ * because the singular `connectionId` is nulled on EVERY node whether or not it
+ * was ever bound, so "needs a rebind" is underivable from the export. Here the
+ * key is present only when the node binds a pair, so a null end IS the flag and
+ * `import.ts` reads it directly.
+ */
+function stripNodeDatasetIds(node: NodeExport): NodeExport {
+  if (node.datasetIds === undefined) return node;
+  const portableEnd = (id: string | null): string | null =>
+    id !== null && interpolationMode(id).mode !== 'literal' ? id : null;
+  return {
+    ...node,
+    datasetIds: {
+      source: portableEnd(node.datasetIds.source),
+      sink: portableEnd(node.datasetIds.sink),
+    },
+  };
+}
+
 function toPipelineVersionExport(
   version: PipelineVersion,
   strippedIds: Set<string>,
 ): PipelineVersionExport {
   return {
     ...version,
-    nodes: version.nodes.map((node) => stripNodeConnectionId(node, strippedIds)),
+    nodes: version.nodes.map((node) =>
+      stripNodeDatasetIds(stripNodeConnectionId(node, strippedIds)),
+    ),
   };
 }
 

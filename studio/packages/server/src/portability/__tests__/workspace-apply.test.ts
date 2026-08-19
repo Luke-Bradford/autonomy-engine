@@ -260,6 +260,137 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(node.connectionIds).toBeUndefined();
   });
 
+  /** M3 (#1117) — a one-pipeline workspace whose only node ADDRESSES a source and
+   * a sink dataset, plus the branch snapshot of it. */
+  function datasetSnapshot(src: ReturnType<typeof freshDb>['db']) {
+    const store = createConnection(src, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const mk = (name: string) =>
+      createDataset(src, {
+        ownerId: 'local',
+        name,
+        connectionId: store.id,
+        kind: 'table' as const,
+        config: {},
+        columns: [],
+      });
+    const source = mk('Src');
+    const sink = mk('Snk');
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: source.id, sink: sink.id },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    return { store, source, sink, pipe, incoming: snapshot(src) };
+  }
+
+  it('M3 (#1117) — remaps BOTH ends of a datasetIds pair to TARGET db ids', () => {
+    const src = freshDb().db;
+    const { source, sink, pipe, incoming } = datasetSnapshot(src);
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtSource = getDatasetByResourceId(tgt, 'local', source.resourceId)!;
+    const tgtSink = getDatasetByResourceId(tgt, 'local', sink.resourceId)!;
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const node = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!;
+
+    // Each end resolves to the TARGET row — and (the real hazard) NOT the
+    // resourceId riding through untouched on a rest spread, which would be a DB
+    // write of an address that resolves to nothing, with nothing thrown.
+    expect(node.datasetIds).toEqual({ source: tgtSource.id, sink: tgtSink.id });
+    expect(node.datasetIds!.source).not.toBe(source.resourceId);
+    expect(node.datasetIds!.sink).not.toBe(sink.id);
+  });
+
+  it('M3 (#1117) — a dangling dataset END refuses the apply, naming WHICH end', () => {
+    const src = freshDb().db;
+    const { incoming } = datasetSnapshot(src);
+    incoming.pipelines[0]!.data.versions[0]!.nodes[0]!.datasetIds!.sink = 'rid_not_here';
+
+    const tgt = freshDb().db;
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      /sink dataset "rid_not_here"/,
+    );
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
+  it('M3 (#1117) — a dataset end nulled by a portable export drops the pair WHOLE', () => {
+    const src = freshDb().db;
+    const { pipe, incoming } = datasetSnapshot(src);
+    incoming.pipelines[0]!.data.versions[0]!.nodes[0]!.datasetIds!.sink = null;
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    expect(getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!.datasetIds).toBeUndefined();
+  });
+
+  // The failure this pins is a REFUSAL of valid work, not a bad write, and it is
+  // the one the obvious implementation causes: seed `datasetById` only from what
+  // the dataset phase creates and a branch pipeline addressing a dataset that
+  // lives ONLY in the target workspace throws, aborting the whole atomic import.
+  //
+  // The target is built to force a MINT. Applying the same branch twice does not
+  // test this: the second apply finds the version unchanged, never mints, and so
+  // never calls `remapNodeToDb` at all — a green test that exercises nothing.
+  it('M3 (#1117) — resolves a dataset that exists in the TARGET but is not on the branch', () => {
+    const src = freshDb().db;
+    const { source, sink, pipe, incoming } = datasetSnapshot(src);
+
+    // A target that already holds both datasets under the SAME resourceIds (its
+    // own db ids), and no pipeline at all.
+    const tgt = freshDb().db;
+    const store = createConnection(tgt, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const mkHeld = (name: string, resourceId: string) =>
+      createDataset(
+        tgt,
+        {
+          ownerId: 'local',
+          name,
+          connectionId: store.id,
+          kind: 'table' as const,
+          config: {},
+          columns: [],
+        },
+        { resourceId },
+      );
+    const tgtSource = mkHeld('Src', source.resourceId);
+    const tgtSink = mkHeld('Snk', sink.resourceId);
+
+    // The branch carries the pipeline but NOT the datasets it addresses.
+    const branchWithoutDatasets = { ...incoming, datasets: [] };
+    expect(applyWorkspace(tgt, 'local', branchWithoutDatasets, 'sha1', 'main').refused).toBe(false);
+
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const version = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(version.nodes[0]!.datasetIds).toEqual({
+      source: tgtSource.id,
+      sink: tgtSink.id,
+    });
+  });
+
   it('is idempotent: re-applying the same branch writes nothing new', () => {
     const src = freshDb().db;
     const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });

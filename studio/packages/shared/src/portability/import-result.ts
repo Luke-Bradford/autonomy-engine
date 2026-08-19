@@ -14,6 +14,19 @@ export const ImportAttentionItemSchema = z.discriminatedUnion('type', [
    * `PipelineVersion` (versions are immutable) once a connection exists in
    * this workspace. */
   z.object({ type: z.literal('unresolvedConnectionRef'), nodeId: z.string().min(1) }),
+  /** M3 (#1117) — a pipeline node's `datasetIds` had at least one LITERAL end,
+   * which the export nulled (a concrete dataset id from another workspace is
+   * meaningless). `NodeSchema.datasetIds` requires BOTH ends, so the import
+   * dropped the pair whole rather than manufacture the missing half — re-point
+   * it by authoring a new `PipelineVersion` once the datasets exist here.
+   *
+   * Unlike `unresolvedConnectionRef` this needs no envelope-side list: the
+   * singular `connectionId` is nulled on EVERY node whether or not it was bound,
+   * so a stripped-refs list is the only way to tell those apart, whereas
+   * `datasetIds` is emitted only when the node binds a pair and a null end can
+   * only mean a stripped literal. A `${}` pair is portable, survives intact, and
+   * is correctly NOT reported here. */
+  z.object({ type: z.literal('unresolvedDatasetRef'), nodeId: z.string().min(1) }),
   /** The exported connection had a secret bound — the ciphertext is NEVER
    * exported (see `ConnectionExportDataSchema.requiresSecret`); the importer
    * must `PATCH` a new plaintext secret in before this connection can call

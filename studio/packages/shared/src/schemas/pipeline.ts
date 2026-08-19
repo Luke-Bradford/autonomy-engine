@@ -406,6 +406,47 @@ export const NodeSchema = z.object({
    */
   connectionIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
   /**
+   * M3 (#1117, data-movement spec §3) — the dataset ADDRESSES a `copy` reads
+   * from and writes to. Sits BESIDE `connectionIds` and is deliberately NOT
+   * mutually exclusive with it (nor with `connectionId`): a store and an address
+   * within that store are two different facts, and a heterogeneous copy needs
+   * both. The only inert combination refused at save is on a `call` node, whose
+   * dispatch and refs belong to the child pipeline (`engine/params.ts`).
+   *
+   * A FIRST-CLASS FIELD, never a `config` key, and that is the whole ticket.
+   * `config` is `z.record(z.string(), z.unknown())` — an opaque blob no
+   * portability site remaps — so `config.sourceDatasetId` would commit ONE
+   * workspace's local primary key into a shared repo and resolve to nothing, or
+   * to something else, on import, with nothing thrown. Every other
+   * cross-resource ref in this codebase is a named field for exactly that
+   * reason, and this one is remapped alongside them at all four sites.
+   *
+   * Both ends are REQUIRED within the object, mirroring `connectionIds`: a pair
+   * with one end missing is not a pair, and a `.partial()` would let a
+   * half-addressed copy reach dispatch instead of failing at save. M12's
+   * `lookup` reads a SOURCE only — when it lands it should widen `sink` to
+   * `.optional()` here, which is safe on immutable rows (no stored doc changes
+   * shape and no stored doc becomes invalid). It must NOT reach for `.partial()`
+   * (which would also make `source` droppable) or for a `config` key (which
+   * would reintroduce the unremapped-ref bug this field exists to kill).
+   *
+   * Either end may be a `${}` expression (dynamic routing, #2 L13a), and the
+   * existence / ownership / kind-compatibility checks live at DISPATCH, not
+   * save — datasets are mutable rows (a save-time check would go stale) and the
+   * ref may itself be an expression, so the target is unknowable here. That is
+   * `connectionId`'s argument verbatim; `call.pipelineVersionId`'s injected
+   * `resolvePipeline` resolver is the right tool for an IMMUTABLE target and the
+   * wrong one here (spec §3.1, which names it so a later ticket does not reach
+   * for it by analogy).
+   *
+   * NO `CATALOG_VERSION` bump, on M1's identical argument (`schemas/version.ts`
+   * carries the ledger entry): the field is inert at dispatch — no catalog entry
+   * declares a dataset, so the executor never reads it and a doc authored here
+   * runs identically on a pre-M3 build. `copy` (M5) is the first entry to
+   * consume a dataset ref, and owes the bump then.
+   */
+  datasetIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
+  /**
    * #2 L13b — per-dispatch bindings for the bound connection's declared
    * `parameters` allowlist (`ConnectionSchema.parameters`). String values may
    * be `${}` expressions; the reducer resolves them at dispatch (same env as
