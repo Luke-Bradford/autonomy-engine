@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DatasetReadError,
   readSqliteDatasetBatches,
@@ -293,6 +293,35 @@ describe('the confinement guard applies to the database file', () => {
     ).rejects.toThrow(/symlink/);
   });
 
+  /**
+   * `resolveWithinRoots` deliberately does NOT fold a genuine filesystem error
+   * into its `{ok:false}` result — it lets `realpath` throw, so the CALLER
+   * classifies it. `fs.ts` does that in `resolveOrFail`; this reader has to do
+   * the same, or an `ENOENT` on the target's parent directory escapes as a raw
+   * Node error with no `kind` on it, and M5's `copy` adapter — which maps
+   * `DatasetReadError.kind` straight onto `node.failed` — gets something it
+   * cannot classify.
+   */
+  it('classifies a filesystem error from the guard rather than letting it escape raw', async () => {
+    const root = tempRoot();
+    seedDb(root, 1);
+    // A parent directory that does not exist: `realpath(dirname(target))` throws
+    // ENOENT from inside the guard.
+    const missing = join(root, 'no-such-dir', 'db.sqlite');
+    const err = await collect(
+      readSqliteDatasetBatches({
+        connectionConfig: { roots: [root], path: missing },
+        datasetKind: 'table',
+        datasetConfig: { table: 't' },
+      }),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(DatasetReadError);
+    expect((err as DatasetReadError).kind).toBe('permanent');
+  });
+
   it('refuses a relative root, server-side', async () => {
     const root = tempRoot();
     seedDb(root, 1);
@@ -347,6 +376,36 @@ describe('what the reader refuses before it opens anything', () => {
         }),
       ),
     ).rejects.toThrow(/invalid sqlite connection config/);
+  });
+});
+
+describe('teardown', () => {
+  /**
+   * A consumer that `break`s out of `for await` calls the generator's own
+   * `.return()`, which is a DIFFERENT route into the `finally` than the abort
+   * check throwing — and it is the route a real `copy` will take when its sink
+   * fails part-way. Asserted by spying on `close` rather than by inspecting a
+   * handle the caller cannot reach, so deleting the `db.close()` in the `finally`
+   * makes it red.
+   */
+  it('closes the database when the CONSUMER stops early', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 10);
+    const closeSpy = vi.spyOn(Database.prototype, 'close');
+    try {
+      for await (const batch of readSqliteDatasetBatches({
+        connectionConfig: { roots: [root], path },
+        datasetKind: 'table',
+        datasetConfig: { table: 't' },
+        batchRows: 2,
+      })) {
+        expect(batch).toHaveLength(2);
+        break;
+      }
+      expect(closeSpy).toHaveBeenCalled();
+    } finally {
+      closeSpy.mockRestore();
+    }
   });
 });
 
@@ -415,6 +474,18 @@ describe('the adapter', () => {
     const probe = await sqliteAdapter.testConnection({ roots: [root], path: notADb }, null);
     expect(probe.ok).toBe(false);
     expect(probe.error).toMatch(/not a database/i);
+  });
+
+  /** `ConnectorAdapter.testConnection` is typed to RESOLVE, never reject, so the
+   * guard's raw throw has to be caught here too — otherwise wiring a
+   * "test connection" route turns a missing directory into an unhandled
+   * rejection instead of a message the operator can read. */
+  it('RESOLVES rather than rejecting when the guard throws a filesystem error', async () => {
+    const root = tempRoot();
+    seedDb(root, 1);
+    await expect(
+      sqliteAdapter.testConnection({ roots: [root], path: join(root, 'no-such-dir', 'db.sqlite') }),
+    ).resolves.toMatchObject({ ok: false });
   });
 
   it('reports a path outside the roots as the probe failure', async () => {

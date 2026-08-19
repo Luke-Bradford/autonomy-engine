@@ -454,7 +454,13 @@ export const CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS: Record<ConnectionKind, read
   agent_cli: [],
   http: [],
   fs: ['roots'],
-  sqlite: ['roots', 'path'],
+  // `writable` joins the two path keys even though NOTHING consumes it yet (the
+  // M4 reader opens read-only unconditionally). It is a PERMISSION, not a
+  // setting: once M5's copy sink reads it, an overridable `writable` would let a
+  // node grant itself write access to a store its owner marked read-only. Closing
+  // it now costs one entry and cannot break a consumer that does not exist;
+  // closing it after M5 would mean closing it after it was reachable.
+  sqlite: ['roots', 'path', 'writable'],
 };
 
 /** Whether `key` is a security-boundary config key that no per-dispatch

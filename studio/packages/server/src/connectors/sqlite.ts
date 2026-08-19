@@ -151,6 +151,29 @@ function quoteIdentifier(value: string, label: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Resolve the store's path through the shared confinement guard, CLASSIFYING the
+ * guard's own throws.
+ *
+ * `resolveWithinRoots` deliberately does not fold a genuine filesystem error
+ * into its `{ ok: false }` result — it lets `realpath` throw so the CALLER
+ * decides what kind of failure it is, which is exactly what `fs.ts` does in its
+ * `resolveOrFail`. Without this wrapper an `ENOENT` on the target's parent
+ * directory (or an `EACCES` on a root) escapes as a raw Node error carrying no
+ * failure `kind`, which breaks the one contract `DatasetReadError` exists to
+ * uphold: that M5's `copy` adapter can map `.kind` straight onto `node.failed`.
+ */
+async function confineStorePath(roots: readonly string[], requested: string): Promise<string> {
+  let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
+  try {
+    confined = await resolveWithinRoots(roots, requested);
+  } catch (err) {
+    throw readFailure(err, `cannot resolve the sqlite database path '${requested}'`);
+  }
+  if (!confined.ok) throw new DatasetReadError('permanent', confined.error);
+  return confined.path;
+}
+
 /** What one dataset read needs to know. */
 export interface SqliteDatasetRead {
   /** The `sqlite` connection's stored config — RE-PARSED here, never trusted. */
@@ -267,14 +290,13 @@ export async function* readSqliteDatasetBatches(
 
   const statement = statementFor(read.datasetKind, read.datasetConfig);
 
-  const confined = await resolveWithinRoots(cfg.data.roots, cfg.data.path);
-  if (!confined.ok) throw new DatasetReadError('permanent', confined.error);
+  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
 
   if (read.signal?.aborted) throw new DatasetReadError('cancelled', 'dataset read aborted');
 
   let db: Database.Database;
   try {
-    db = new Database(confined.path, { readonly: true, fileMustExist: true });
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch (err) {
     throw readFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
   }
@@ -351,12 +373,19 @@ export const sqliteAdapter: ConnectorAdapter = {
     if (!cfg.success) {
       return { ok: false, error: `invalid sqlite connection config: ${cfg.error.message}` };
     }
-    const confined = await resolveWithinRoots(cfg.data.roots, cfg.data.path);
-    if (!confined.ok) return { ok: false, error: confined.error };
+    // `testConnection` is typed to RESOLVE, never reject, so the guard's raw
+    // throw is caught here too — otherwise a missing directory reaches a caller
+    // as an unhandled rejection instead of a message an operator can read.
+    let dbPath: string;
+    try {
+      dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
 
     let db: Database.Database | undefined;
     try {
-      db = new Database(confined.path, { readonly: true, fileMustExist: true });
+      db = new Database(dbPath, { readonly: true, fileMustExist: true });
       // The query is what actually tests it. Measured: opening a NON-SQLite file
       // read-only SUCCEEDS, and it is the first statement that reports "file is
       // not a database" — so an open alone would call a text file a working

@@ -163,6 +163,14 @@ describe('#1119 M4 — config keys no per-dispatch override may set', () => {
     expect(isNonOverridableConnectionConfigKey('sqlite', 'path')).toBe(true);
   });
 
+  it('protects the store write PERMISSION before anything consumes it', () => {
+    // `writable` has no consumer until M5's copy sink. Pinned now precisely
+    // because it has none: an overridable permission is only observably wrong
+    // once something reads it, by which point a node could already have granted
+    // itself write access to a store its owner marked read-only.
+    expect(isNonOverridableConnectionConfigKey('sqlite', 'writable')).toBe(true);
+  });
+
   it('leaves ordinary settings overridable', () => {
     expect(isNonOverridableConnectionConfigKey('anthropic_api', 'model')).toBe(false);
     expect(isNonOverridableConnectionConfigKey('http', 'baseUrl')).toBe(false);
