@@ -864,6 +864,75 @@ describe('M1 (#1104) — connectionIds ${} refs at SAVE time', () => {
   });
 });
 
+describe('M3 (#1117) — datasetIds ${} refs at SAVE time', () => {
+  /** A node carrying the paired dataset ADDRESS. */
+  function dsNode(id: string, source: string, sink: string): Node {
+    return { ...node(id, {}), datasetIds: { source, sink } };
+  }
+
+  it('ACCEPTS a literal pair (no ${} — the scan no-ops on both ends)', () => {
+    expect(validateRefs(doc([dsNode('n', 'ds-a', 'ds-b')], []))).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} end whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [dsNode('n', 'ds-a', '${params.target}')],
+        [],
+        [{ name: 'target', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS an undeclared ref on the SOURCE end, naming that end by path', () => {
+    const errors = validateRefs(doc([dsNode('n', '${params.nope}', 'ds-b')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/nodes\.n\.datasetIds\.source/);
+  });
+
+  it('REJECTS an undeclared ref on the SINK end, naming that end by path', () => {
+    const errors = validateRefs(doc([dsNode('n', 'ds-a', '${params.nope}')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/nodes\.n\.datasetIds\.sink/);
+  });
+
+  it('REJECTS a malformed ${} expression on either end', () => {
+    expect(validateRefs(doc([dsNode('n', '${params.a[0}', 'ds-b')], []))).toHaveLength(1);
+    expect(validateRefs(doc([dsNode('n', 'ds-a', '${params.a[0}')], []))).toHaveLength(1);
+  });
+
+  // Pins the `foreachChildIds` argument the scan passes as its 7th parameter.
+  // Drop it and `${item}` leaves the scope, so a VALID dynamic address badges as
+  // an undeclared ref — the failure is a refusal to save a correct doc.
+  it('binds ${item} on a dataset end INSIDE a foreach body, and refuses it outside one', () => {
+    const inBody = doc(
+      [dsNode('n', 'ds-a', '${item}')],
+      [],
+      [{ name: 'xs', type: 'json', required: true }],
+      [{ id: 'fe', kind: 'foreach', children: ['n'], items: '${params.xs}' }],
+    );
+    expect(validateRefs(inBody)).toEqual([]);
+
+    const outside = validateRefs(doc([dsNode('n', 'ds-a', '${item}')], []));
+    expect(outside).toHaveLength(1);
+    expect(outside[0]).toMatch(/nodes\.n\.datasetIds\.sink/);
+  });
+
+  it('scans BOTH pairs on one node — a copy binds two stores and two addresses', () => {
+    const both: Node = {
+      ...node('n', {}),
+      connectionIds: { source: '${params.nope}', sink: 'conn-b' },
+      datasetIds: { source: 'ds-a', sink: '${params.nope}' },
+    };
+    const errors = validateRefs(doc([both], []));
+    expect(errors).toHaveLength(2);
+    expect(errors.join(' ')).toMatch(/nodes\.n\.connectionIds\.source/);
+    expect(errors.join(' ')).toMatch(/nodes\.n\.datasetIds\.sink/);
+  });
+});
+
 describe('#2 L13b — connectionParams ${} refs at SAVE time', () => {
   /** A node with a connectionId + per-dispatch parameter bindings. */
   function paramsNode(id: string, connectionParams: Record<string, unknown>): Node {

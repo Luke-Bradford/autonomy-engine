@@ -1391,6 +1391,39 @@ describe('validateDoc — connectionIds shape (M1)', () => {
 });
 
 // ===========================================================================
+// datasetIds — the paired dataset ADDRESS's shape rules at SAVE time (M3, #1117)
+// ===========================================================================
+
+describe('validateDoc — datasetIds shape (M3)', () => {
+  const datasets = { source: 'ds_src', sink: 'ds_sink' };
+  const conns = { source: 'conn_src', sink: 'conn_sink' };
+
+  it('accepts a dataset pair on its own', () => {
+    expect(validateDoc(doc([node('n', {}, { datasetIds: datasets })]))).toEqual([]);
+  });
+
+  // The combination M5's `copy` is made of. `toEqual([])` rather than a
+  // not-to-match: a doc broken for some OTHER reason must fail this too, or the
+  // assertion certifies nothing.
+  it('accepts a dataset pair ALONGSIDE a connection pair — stores and addresses', () => {
+    const d = doc([node('n', {}, { connectionIds: conns, datasetIds: datasets })]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  // The combination M12's source-only `lookup` will be made of: one store, one
+  // address. Refusing it would make that activity unauthorable.
+  it('accepts a dataset pair ALONGSIDE a singular connectionId', () => {
+    const d = doc([node('n', {}, { connectionId: 'conn_1', datasetIds: datasets })]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('rejects a dataset pair on a call node (child pipeline owns dispatch)', () => {
+    const withPair = { ...callNode('c', 'ver_1'), datasetIds: datasets };
+    expect(validateDoc(doc([withPair])).join(' ')).toMatch(/node\.c: datasetIds .*call node/);
+  });
+});
+
+// ===========================================================================
 // parallel foreach — batchCount (#566 slice 2 / #4 A4b)
 // ===========================================================================
 
