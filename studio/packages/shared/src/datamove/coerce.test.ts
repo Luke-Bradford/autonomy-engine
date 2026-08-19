@@ -88,6 +88,49 @@ describe('coerceValue — §6.2 string sources', () => {
     expectOk(coerceValue('1e2', 'integer'), 100);
   });
 
+  it('signed and zero-padded integer literals are read exactly, and never throw', () => {
+    // The BigInt path is the one place in this module that could throw rather
+    // than return, which would take down a whole pump on one bad row. `BigInt`'s
+    // string grammar is NOT `Number`'s — so what `INTEGER_RE` admits is pinned
+    // against what `BigInt` accepts, rather than assumed to agree.
+    expectOk(coerceValue('+42', 'integer'), 42);
+    expectOk(coerceValue('-42', 'integer'), -42);
+    expectOk(coerceValue('007', 'integer'), 7);
+    expectOk(coerceValue('+007', 'integer'), 7);
+    expectOk(coerceValue('-0', 'integer'), 0);
+    expectOk(coerceValue('+9007199254740993', 'integer'), 9007199254740993n);
+    // The sign survives into the other targets too.
+    expectOk(coerceValue('+1.5', 'number'), 1.5);
+    expectOk(coerceValue('+42', 'string'), '+42');
+    // A lone sign is not an integer, and is refused rather than reaching BigInt.
+    expectFail(coerceValue('+', 'integer'), 'not_a_number');
+    expectFail(coerceValue('-', 'integer'), 'not_a_number');
+  });
+
+  it('nothing in the matrix THROWS — every input kind returns a result', () => {
+    // The never-throw contract, asserted rather than described: a throw from one
+    // row crashes the pump instead of failing that row.
+    const hostile: readonly unknown[] = [
+      '+42',
+      '-',
+      '+',
+      '.',
+      '1e',
+      '--1',
+      '0x',
+      ''.padEnd(400, '9'),
+      '9'.repeat(400),
+      Symbol('s'),
+      () => 1,
+      new Map(),
+    ];
+    for (const value of hostile) {
+      for (const target of TARGETS) {
+        expect(() => coerceValue(value, target, { dateFormat: 'yyyy-MM-dd' })).not.toThrow();
+      }
+    }
+  });
+
   it('a 17-digit id survives as an exact bigint rather than losing its last digit', () => {
     expectOk(coerceValue('9007199254740993', 'integer'), 9007199254740993n);
     expect(Number('9007199254740993')).toBe(9007199254740992); // the loss, demonstrated
