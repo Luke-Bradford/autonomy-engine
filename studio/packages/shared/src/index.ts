@@ -41,3 +41,7 @@ export * from './pricing/display.js';
 // #2 L6 — the run-cost projection: a pure fold that SUMS the stamped
 // `costEstimate` per run + per pipeline (fail-closed on an absent estimate).
 export * from './pricing/run-cost.js';
+
+// #996 M5 — the data-movement runtime layer (the §6.2 coercion matrix). Pure:
+// every conversion produces a value or fails the row with a named code.
+export * from './datamove/index.js';

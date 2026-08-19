@@ -2,6 +2,7 @@ import {
   FORMAT_TOKEN_NAMES,
   MAX_TIME_MS,
   MIN_TIME_MS,
+  utcMs,
   type FormatTokenName,
 } from '../engine/functions.js';
 import type { DataType } from '../schemas/dataset.js';
@@ -235,9 +236,13 @@ function parseWithFormat(
     return { ok: false, code: 'invalid_date_format' };
   }
 
-  const ms = Date.UTC(
+  // `utcMs`, not `Date.UTC`: the latter maps years 0-99 onto 1900+y, so a
+  // declared `0001-01-01` would silently become 1901 and still round-trip
+  // against ITSELF. Shared rather than re-corrected here — that correction is
+  // invisible until something tests year 1.
+  const ms = utcMs(
     parts.year,
-    parts.month - 1,
+    parts.month,
     parts.day,
     parts.hour,
     parts.minute,

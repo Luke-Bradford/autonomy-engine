@@ -1318,7 +1318,14 @@ function daysInMonth(y: number, month0: number): number {
  * `Date.UTC` for a full year — it maps years 0-99 to 1900+y, which would turn
  * `0026-01-01` into 1926. Corrected via `setUTCFullYear`, which does not.
  */
-function utcMs(
+/**
+ * Assemble a UTC instant from calendar fields, WITHOUT `Date.UTC`'s two-digit
+ * year trap (`Date.UTC(1, 0, 1)` is 1901, not year 1). Exported for `datamove/
+ * coerce.ts` (#1122), which assembles an instant from a parsed `dateFormat` and
+ * would otherwise need a second copy of this correction — one that a test for
+ * year 0001 is the only thing that ever catches.
+ */
+export function utcMs(
   y: number,
   month1: number,
   d: number,
