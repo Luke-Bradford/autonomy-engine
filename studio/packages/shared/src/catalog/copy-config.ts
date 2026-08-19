@@ -54,8 +54,12 @@ export const CopyMappingSchema = z.array(CopyMappingEntrySchema).superRefine((ro
   const seenSinks = new Set<string>();
   rows.forEach((row, i) => {
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own
-    // row rather than the whole array — #1087's precedent, and the same reason
-    // `refuseDuplicateNames` (`schemas/pipeline.ts`) emits `[i, 'name']`.
+    // row rather than the whole array. Two precedents, both in-tree: #1087's
+    // `roots.superRefine` (`server/src/connectors/fs.ts`, `path: [index]`),
+    // whose docstring makes the argument — "a whole-array check would have
+    // reported only `roots`, which reads fine with one root and uselessly with
+    // several" — and `refuseDuplicateNames` (`schemas/pipeline.ts`), which emits
+    // `[i, 'name']` for the same reason.
     const hasSource = row.source !== undefined;
     const hasExpression = row.expression !== undefined;
     if (hasSource === hasExpression) {
