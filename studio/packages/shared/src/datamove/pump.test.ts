@@ -51,6 +51,15 @@ function run(
   };
 }
 
+const failed = async (p: Promise<unknown>): Promise<CopyMappingError> => {
+  const err = await p.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(CopyMappingError);
+  return err as CopyMappingError;
+};
+
 describe('the straight copy', () => {
   it('maps every row of every batch, renaming columns, and counts what it read', async () => {
     const { counters, batches } = run(
@@ -172,18 +181,28 @@ describe('a per-row failure', () => {
 });
 
 describe('the copy-wide refusal — a broken mapping is not a million failed rows', () => {
-  const failed = async (p: Promise<unknown>): Promise<CopyMappingError> => {
-    const err = await p.then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(CopyMappingError);
-    return err as CopyMappingError;
-  };
-
   it('refuses an empty mapping rather than yielding key-less rows at the sink', async () => {
     const err = await failed(run(batchesOf([{ a: '1' }]), []).batches);
     expect(err.code).toBe('empty_mapping');
+  });
+
+  it('refuses two mappings writing the SAME sink column — last-writer-wins is data loss', async () => {
+    const { counters, batches } = run(batchesOf([{ a: 'A', b: 'B' }]), [
+      map({ source: 'a', sink: 'id' }),
+      map({ source: 'b', sink: 'id' }),
+    ]);
+    const err = await failed(batches);
+    expect(err.code).toBe('duplicate_sink_column');
+    expect(err.message).toContain('id');
+    expect(counters.rowsRead).toBe(0);
+  });
+
+  it('refuses a duplicate sink even against an EMPTY source — it is a mapping fact', async () => {
+    const err = await failed(
+      run(batchesOf(), [map({ source: 'a', sink: 'id' }), map({ source: 'b', sink: 'id' })])
+        .batches,
+    );
+    expect(err.code).toBe('duplicate_sink_column');
   });
 
   it('refuses a source column the rows do not have, BEFORE a row moves', async () => {
@@ -252,6 +271,17 @@ describe('source column identity', () => {
   it('matches case-insensitively when there is exactly one candidate', async () => {
     const { batches } = run(batchesOf([{ Name: 'ci' }]), [map({ source: 'nAmE', sink: 'n' })]);
     expect(await batches).toEqual([[{ n: 'ci' }]]);
+  });
+
+  it("folds ASCII only, as SQLite's NOCASE does — U+212A is not a `k`", async () => {
+    // `'\u212A'.toLowerCase()` is `'k'` in JavaScript, and SQLite would never
+    // fold it. A mapping naming `temp_k` must therefore NOT bind a column
+    // spelled with the KELVIN SIGN.
+    const { counters, batches } = run(batchesOf([{ 'TEMP_\u212A': 12 }]), [
+      map({ source: 'temp_k', sink: 't', type: 'number', onError: 'null' }),
+    ]);
+    expect(await batches).toEqual([[{ t: null }]]);
+    expect(counters.rowsFailed).toBe(0);
   });
 });
 

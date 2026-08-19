@@ -41,6 +41,14 @@ import {
  * depends on `shared` and not the reverse, and a third policy invented at M7
  * would be the drift. If you change one, change both.
  *
+ * ONE CONSEQUENCE OF RESOLVING AGAINST DATA, stated because it is a decision
+ * rather than an oversight: the source's column names come from its first row,
+ * so a copy from a currently-EMPTY table validates nothing and succeeds with
+ * `rowsRead: 0`. A mapping naming a column that does not exist then looks fine
+ * until data arrives. Checking a mapping against a dataset's DECLARED schema
+ * before dispatch is §7's drift gate (M6) — a different check, at a different
+ * time, on a different input, and deliberately not faked here from one row.
+ *
  * CANCELLATION is not handled here and that is deliberate (§10). The reader and
  * the writer each throw `DatasetIoError('cancelled')` at their own batch
  * boundaries, which are the same boundaries; a third check in the middle would
@@ -50,7 +58,11 @@ import {
 
 /** Why a copy was refused before it moved a row. Bounded, like `CoercionFailureCode`. */
 export type CopyMappingErrorCode =
-  'empty_mapping' | 'missing_source_column' | 'ambiguous_source_column' | 'uncoercible_constant';
+  | 'empty_mapping'
+  | 'duplicate_sink_column'
+  | 'missing_source_column'
+  | 'ambiguous_source_column'
+  | 'uncoercible_constant';
 
 /**
  * A copy-wide refusal.
@@ -181,6 +193,19 @@ type ColumnPlan =
     }
   | { readonly kind: 'constant'; readonly sink: string; readonly value: CoercedValue };
 
+/**
+ * Fold for comparison the way SQLite's `NOCASE` does — ASCII `A-Z` ONLY.
+ *
+ * Not `toLowerCase()`, which is Unicode-aware and therefore folds MORE than the
+ * collation this claims to mirror: `'\u212A'` (KELVIN SIGN) lowercases to `k` in
+ * JavaScript while SQLite treats the two as different identifiers entirely, so a
+ * mapping naming one would silently bind to the other. Exotic, and that is
+ * precisely why it would never be found later.
+ */
+function nocaseFold(value: string): string {
+  return value.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
 function byteSizeOf(value: unknown): number {
   if (value === null || value === undefined) return 0;
   if (typeof value === 'string') return utf8ByteLength(value);
@@ -213,7 +238,7 @@ function planColumns(
   const exact = new Set(sourceKeys);
   const lowered = new Map<string, string[]>();
   for (const key of sourceKeys) {
-    const lower = key.toLowerCase();
+    const lower = nocaseFold(key);
     const bucket = lowered.get(lower);
     if (bucket) bucket.push(key);
     else lowered.set(lower, [key]);
@@ -235,7 +260,7 @@ function planColumns(
       plans.push({ kind: 'source', sink: entry.sink, key: entry.source, entry });
       continue;
     }
-    const candidates = lowered.get(entry.source.toLowerCase()) ?? [];
+    const candidates = lowered.get(nocaseFold(entry.source)) ?? [];
     if (candidates.length > 1) {
       ambiguous.push(entry.source);
       continue;
@@ -323,6 +348,25 @@ export async function* pumpCopyRows(
 ): AsyncGenerator<readonly Record<string, CoercedValue>[], void, undefined> {
   if (opts.mapping.length === 0) {
     throw new CopyMappingError('empty_mapping', 'the copy maps no columns');
+  }
+  // The schema refuses a duplicate `sink` (`catalog/copy-config.ts`), and this
+  // module is not entitled to assume the schema ran: it is `shared`, M7's CSV
+  // source and M10's postgres sink reuse it, and #1130's adapter builds the
+  // mapping. Without this, two entries writing `id` are LAST-WRITER-WINS —
+  // silent data loss, which is the one outcome this file exists to prevent, and
+  // relying on a guard the caller might not have run is the exact defect this
+  // branch already paid for once (`f0bc0dea`).
+  const duplicated = new Set<string>();
+  const seenSinks = new Set<string>();
+  for (const entry of opts.mapping) {
+    if (seenSinks.has(entry.sink)) duplicated.add(entry.sink);
+    seenSinks.add(entry.sink);
+  }
+  if (duplicated.size > 0) {
+    throw new CopyMappingError(
+      'duplicate_sink_column',
+      `more than one mapping writes ${[...duplicated].map((c) => `\`${c}\``).join(', ')}`,
+    );
   }
   const { counters } = opts;
   const coercion = opts.coercion ?? {};
