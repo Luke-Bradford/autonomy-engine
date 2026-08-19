@@ -211,7 +211,10 @@ describe('coerceValue — dateFormat parses over formatDateTime vocabulary', () 
   });
 
   it('a repeated token is refused rather than resolved by a guess', () => {
-    expectFail(coerceValue('2026-2026', 'date', { dateFormat: 'yyyy-yyyy' }), 'invalid_date_format');
+    expectFail(
+      coerceValue('2026-2026', 'date', { dateFormat: 'yyyy-yyyy' }),
+      'invalid_date_format',
+    );
   });
 
   it('a date that does not exist is refused, NOT rolled forward', () => {
@@ -228,7 +231,10 @@ describe('coerceValue — dateFormat parses over formatDateTime vocabulary', () 
   it('the representable range is the one isoOf enforces — years 0001-9999', () => {
     expectOk(coerceValue('0001-01-01', 'date', { dateFormat: 'yyyy-MM-dd' }), '0001-01-01');
     expectOk(coerceValue('9999-12-31', 'date', { dateFormat: 'yyyy-MM-dd' }), '9999-12-31');
-    expectFail(coerceValue('0000-12-31', 'date', { dateFormat: 'yyyy-MM-dd' }), 'date_out_of_range');
+    expectFail(
+      coerceValue('0000-12-31', 'date', { dateFormat: 'yyyy-MM-dd' }),
+      'date_out_of_range',
+    );
   });
 
   it('date truncates the instant while timestamp keeps it', () => {

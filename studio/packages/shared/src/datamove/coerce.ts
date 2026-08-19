@@ -1,5 +1,5 @@
 import {
-  FORMAT_TOKEN_NAMES,
+  isFormatToken,
   MAX_TIME_MS,
   MIN_TIME_MS,
   utcMs,
@@ -68,8 +68,7 @@ export type CoercionFailureCode =
 export type CoercedValue = string | number | bigint | boolean | null;
 
 export type CoercionResult =
-  | { ok: true; value: CoercedValue }
-  | { ok: false; code: CoercionFailureCode; reason: string };
+  { ok: true; value: CoercedValue } | { ok: false; code: CoercionFailureCode; reason: string };
 
 /**
  * The per-source-dataset format facts (§2.6). They are passed IN rather than
@@ -152,10 +151,6 @@ const PARSE_TOKENS: Readonly<Record<FormatTokenName, ParseToken>> = Object.freez
   ss: { pattern: '(\\d{2})', field: 'second' },
   fff: { pattern: '(\\d{3})', field: 'ms' },
 });
-
-function isFormatToken(run: string): run is FormatTokenName {
-  return (FORMAT_TOKEN_NAMES as readonly string[]).includes(run);
-}
 
 /** Escape a literal run for embedding in the assembled pattern. */
 function escapeLiteral(run: string): string {

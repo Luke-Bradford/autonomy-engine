@@ -1557,6 +1557,13 @@ function pad(n: number, width: number): string {
 export const FORMAT_TOKEN_NAMES = ['yyyy', 'MM', 'dd', 'HH', 'mm', 'ss', 'fff'] as const;
 export type FormatTokenName = (typeof FORMAT_TOKEN_NAMES)[number];
 
+/** Is this run of characters one of the closed tokens? The ONE membership test,
+ * shared by the renderer below and `datamove/coerce.ts`'s parser (#1122), so the
+ * two directions cannot disagree about what a token even is. */
+export function isFormatToken(run: string): run is FormatTokenName {
+  return (FORMAT_TOKEN_NAMES as readonly string[]).includes(run);
+}
+
 const FORMAT_TOKENS: Readonly<Record<FormatTokenName, (d: Date) => string>> = Object.freeze({
   yyyy: (d) => pad(d.getUTCFullYear(), 4),
   MM: (d) => pad(d.getUTCMonth() + 1, 2),
@@ -1585,8 +1592,7 @@ function formatDateTime(fn: string, a: unknown[]): string {
   // change the output of a multi-line format.
   return format.replace(/([\s\S])\1*/g, (run, ch: string, offset: number) => {
     if (!/[A-Za-z]/.test(ch)) return run;
-    const token = FORMAT_TOKENS[run];
-    if (token === undefined) {
+    if (!isFormatToken(run)) {
       // Report the POSITION, never the text. The format arg is a resolved value
       // like any other — it can be a ref, not a literal — and `SubstituteError`
       // messages are client-safe by contract (`types.ts`), which is why `parseTs`
@@ -1598,7 +1604,7 @@ function formatDateTime(fn: string, a: unknown[]): string {
           'ASCII letters cannot appear literally — assemble with concat)',
       );
     }
-    return token(dt);
+    return FORMAT_TOKENS[run](dt);
   });
 }
 
