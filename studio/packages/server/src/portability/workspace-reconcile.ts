@@ -2,7 +2,9 @@ import {
   connectionContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
+  RESOURCE_KINDS,
   triggerContentForm,
+  type ResourceKind,
   type WorkspaceGitArchiveProposal,
   type WorkspaceGitDisposition,
   type WorkspaceGitPreviewResource,
@@ -304,44 +306,59 @@ export function classifyWorkspace(
     };
   };
 
-  const resources: WorkspaceGitPreviewResource[] = [
-    ...incoming.pipelines.map((p) => {
-      const { supersedes, versionContentUnverified } = supersession(p);
-      return classifyResource(
-        'pipeline',
-        p.path,
-        p.resourceId,
-        pipelineName(p),
-        pipelineContentForm(p.data),
-        dbPipelines,
-        supersedes,
-        versionContentUnverified,
-      );
-    }),
-    ...incoming.connections.map((c) =>
-      classifyResource(
-        'connection',
-        c.path,
-        c.resourceId,
-        connectionName(c),
-        connectionContentForm(c.data),
-        dbConnections,
+  // #1112 (M2, data-movement spec §2.3) — the per-kind classifiers as an
+  // EXHAUSTIVE `Record<ResourceKind, …>`, driven by `RESOURCE_KINDS`. This is
+  // one of the five sites the spec measured as failing SILENTLY: a kind missing
+  // from a spelled-out list compiles clean and then never appears in an import
+  // PREVIEW at all — the operator approves a pull having been shown nothing
+  // about that kind, and the apply writes it anyway. The emitted order is
+  // `RESOURCE_KINDS` order (pipelines, connections, triggers), which is exactly
+  // the stable preview order this function's docstring promises.
+  const classifiers: Record<ResourceKind, () => WorkspaceGitPreviewResource[]> = {
+    pipeline: () =>
+      incoming.pipelines.map((p) => {
+        const { supersedes, versionContentUnverified } = supersession(p);
+        return classifyResource(
+          'pipeline',
+          p.path,
+          p.resourceId,
+          pipelineName(p),
+          pipelineContentForm(p.data),
+          dbPipelines,
+          supersedes,
+          versionContentUnverified,
+        );
+      }),
+    connection: () =>
+      incoming.connections.map((c) =>
+        classifyResource(
+          'connection',
+          c.path,
+          c.resourceId,
+          connectionName(c),
+          connectionContentForm(c.data),
+          dbConnections,
+        ),
       ),
-    ),
-    ...incoming.triggers.map((t) =>
-      classifyResource(
-        'trigger',
-        t.path,
-        t.resourceId,
-        triggerName(t),
-        // #3 G7 — the incoming side is normalized to resolved space (the DB side,
-        // via `serializeTrigger`, is already resolved). #3 G8b-3 — plus the
-        // readiness fold (a bound-but-unready trigger folds `enabled`→false).
-        normalizedTriggerContentForm(t.data, bindingResolves, connectionsReady),
-        dbTriggers,
+    trigger: () =>
+      incoming.triggers.map((t) =>
+        classifyResource(
+          'trigger',
+          t.path,
+          t.resourceId,
+          triggerName(t),
+          // #3 G7 — the incoming side is normalized to resolved space (the DB side,
+          // via `serializeTrigger`, is already resolved). #3 G8b-3 — plus the
+          // readiness fold (a bound-but-unready trigger folds `enabled`→false).
+          normalizedTriggerContentForm(t.data, bindingResolves, connectionsReady),
+          dbTriggers,
+        ),
       ),
-    ),
-  ];
+  };
+
+  const resources: WorkspaceGitPreviewResource[] = RESOURCE_KINDS.flatMap((kind) =>
+    classifiers[kind](),
+  );
 
   // A DB pipeline whose resourceId is absent from the branch would be archived
   // by a pull (git-delete → archive, G5a). Only non-null incoming ids can match
