@@ -57,6 +57,25 @@ async function pick(file: File) {
 }
 
 describe('ImportPanel', () => {
+  // #1114 (M2) — the crash this test exists for is NOT type-visible. `dataset`
+  // joined `ExportEnvelopeSchema`, so `foreignEnvelopeKind` started returning
+  // it, while `SECTION` was still keyed by the narrower import type — making
+  // `SECTION[foreign.kind].label` a read on `undefined`. The panel rendered a
+  // blank error boundary instead of a refusal.
+  it('refuses a dataset export without crashing, and offers no destination', async () => {
+    renderWithRouter(<ImportPanel listKind="connection" onImported={vi.fn()} />);
+
+    await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /is a dataset export.*this panel cannot import it.*nothing was created/i,
+    );
+    // Nothing was SENT — the refusal is local, before any request.
+    expect(importMock).not.toHaveBeenCalled();
+    // ...and no link is offered, because every page on offer would refuse it too.
+    expect(screen.queryByRole('link', { name: /dataset/i })).not.toBeInTheDocument();
+  });
+
   it('imports a picked file, refreshes the list, and names the NEW id', async () => {
     importMock.mockResolvedValue(pipelineResult());
     const onImported = vi.fn().mockResolvedValue(undefined);

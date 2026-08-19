@@ -9,7 +9,7 @@ import {
   parseEnvelopeText,
   type ImportedResource,
 } from '../api/portability';
-import type { ImportAttentionItem } from '@autonomy-studio/shared';
+import type { ExportKind, ImportAttentionItem } from '@autonomy-studio/shared';
 import { pipelinePath } from './author/pipelinePath';
 
 /**
@@ -34,11 +34,28 @@ import { pipelinePath } from './author/pipelinePath';
  * section at once, and a page that fetches on mount has to be mocked there.
  */
 
-/** Where each kind lives — both this page's own name and the refusal pointer. */
-const SECTION: Record<ImportedResource['kind'], { label: string; path: string }> = {
+/**
+ * Where each kind lives — both this page's own name and the refusal pointer.
+ *
+ * Keyed by `ExportKind`, NOT by `ImportedResource['kind']`, and the difference
+ * is load-bearing (#1114). `foreignEnvelopeKind` recognises every kind
+ * `ExportEnvelopeSchema` declares, which since M2 includes `dataset` — a kind
+ * `POST /api/import` deliberately refuses. Keying this by the narrower import
+ * type would leave `SECTION[foreign.kind]` UNDEFINED for a dataset file and
+ * crash the panel on `.label`, which no type error would have caught.
+ *
+ * `path` is nullable for exactly that case: a kind with nowhere to send the
+ * operator renders its name as plain text. Pointing a dataset at any existing
+ * page would be worse than saying nothing — the single-file route refuses
+ * datasets outright (they name a connection that only resolves against a whole
+ * workspace), so every destination on offer would reject the file too. When the
+ * Manage → Datasets page lands, this becomes a path like the others.
+ */
+const SECTION: Record<ExportKind, { label: string; path: string | null }> = {
   pipeline: { label: 'Author → Pipelines', path: '/author/pipelines' },
   connection: { label: 'Manage → Connections', path: '/manage/connections' },
   trigger: { label: 'Manage → Triggers', path: '/manage/triggers' },
+  dataset: { label: 'a dataset', path: null },
 };
 
 interface Outcome {
@@ -72,10 +89,10 @@ export interface ImportPanelProps {
 export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** A file that belongs to another section: refused locally, nothing sent. */
-  const [foreign, setForeign] = useState<{ kind: ImportedResource['kind']; name: string } | null>(
-    null,
-  );
+  /** A file that belongs to another section: refused locally, nothing sent.
+   * `ExportKind`, not `ImportedResource['kind']` — this can be a kind the import
+   * route refuses outright (#1114). */
+  const [foreign, setForeign] = useState<{ kind: ExportKind; name: string } | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -181,9 +198,18 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
       {foreign && (
         <p className="error" role="alert">
           “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
-          list. Import it from{' '}
-          <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
-          created.
+          list.{' '}
+          {SECTION[foreign.kind].path !== null ? (
+            <>
+              Import it from{' '}
+              <Link to={SECTION[foreign.kind].path!}>{SECTION[foreign.kind].label}</Link>.{' '}
+            </>
+          ) : (
+            // No page to send them to, so the sentence stops rather than
+            // offering a destination that would refuse the file as well.
+            <>This panel cannot import it. </>
+          )}
+          Nothing was created.
         </p>
       )}
       {outcome && <ImportOutcome outcome={outcome} />}

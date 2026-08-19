@@ -11,7 +11,9 @@ import {
 describe('dir↔kind SSOT', () => {
   it('MANAGED_DIRS is exactly the kind dirs in RESOURCE_KINDS order', () => {
     expect(MANAGED_DIRS).toEqual(RESOURCE_KINDS.map((k) => RESOURCE_KIND_DIRS[k]));
-    expect(MANAGED_DIRS).toEqual(['pipelines', 'connections', 'triggers']);
+    // #1114 — `datasets` is APPENDED, so the three existing dirs keep their
+    // positions and the emitted-file order for them is unchanged.
+    expect(MANAGED_DIRS).toEqual(['pipelines', 'connections', 'triggers', 'datasets']);
   });
 
   it('kindForDir is the exact inverse of RESOURCE_KIND_DIRS', () => {
