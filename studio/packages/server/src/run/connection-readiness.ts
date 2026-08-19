@@ -1,4 +1,9 @@
-import { catalog, interpolationMode } from '@autonomy-studio/shared';
+import {
+  catalog,
+  interpolationMode,
+  type ActivityCatalogEntry,
+  type Node,
+} from '@autonomy-studio/shared';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getPipelineVersion, listPipelineVersions } from '../repo/pipeline-versions.js';
 import { listPipelines } from '../repo/pipelines.js';
@@ -21,6 +26,13 @@ import type { Db } from '../repo/types.js';
  * - only nodes whose ACTIVITY binds a connection (`connectionKinds.length > 0`)
  *   are checked — a stray `connectionId` on a connection-less activity is never
  *   dispatched, so it must not block enable;
+ * - M1 (#1104): which BINDING is checked is likewise the CATALOG's answer, not
+ *   the node's. An activity the catalog declares `sinkConnectionKinds` for is
+ *   PAIRED, and both ends of `Node.connectionIds` are checked; every other
+ *   activity is checked on `Node.connectionId` alone and its `connectionIds` is
+ *   inert — a stray pair must not block enable, exactly as a stray singular
+ *   ref does not. No entry declares a sink at M1, so this widening reports
+ *   nothing new in this build;
  * - a `${}`-DYNAMIC `connectionId` is skipped — it is unresolvable statically
  *   (it routes on run values); the dispatch gate checks it at fire time;
  * - owner-scope EXACTLY as the dispatch gate: a null or cross-owner connection
@@ -46,10 +58,46 @@ export interface UnreadyConnection {
   reason: UnreadyConnectionReason;
 }
 
+/**
+ * The catalog these gates decide "does this node bind a connection, and is it
+ * PAIRED" against. Defaults to the shipped one; overridable EXACTLY as the
+ * executor's `ExecutorDeps.catalog` is (`run/executor.ts`), and for the same
+ * reason — this module's decisions are catalog-driven, so a test cannot exercise
+ * a shape no shipped entry declares. M1's paired branch is the first such shape:
+ * no entry declares `sinkConnectionKinds` in this build, so without the seam the
+ * pair handling below would be unreachable and therefore untested.
+ *
+ * Threaded through all three exported gates, not just the scanner, so "the
+ * reverse gate and the import-preview readiness domain inherit the pair for
+ * free" is an ASSERTED claim rather than a stated one.
+ */
+export type CatalogOverride = typeof catalog;
+
+/**
+ * The connection refs one node contributes to the readiness scan, in the shape
+ * the catalog says the node's ACTIVITY binds. ONE place decides singular-vs-pair
+ * so the scanner, and any future caller, cannot disagree:
+ *  - the activity binds no connection ⇒ nothing (a stray ref on it is never
+ *    dispatched, so it must not block enable);
+ *  - the activity is PAIRED (`sinkConnectionKinds` declared) ⇒ both ends of
+ *    `Node.connectionIds`, and NOT `connectionId` (`validateDoc` refuses the
+ *    two together, and dispatch reads only the pair);
+ *  - otherwise ⇒ `Node.connectionId` alone, `connectionIds` inert.
+ */
+function connectionRefsOfNode(node: Node, entry: ActivityCatalogEntry | undefined): string[] {
+  if (entry === undefined || entry.connectionKinds.length === 0) return [];
+  if (entry.sinkConnectionKinds !== undefined) {
+    const pair = node.connectionIds;
+    return pair === undefined ? [] : [pair.source, pair.sink];
+  }
+  return node.connectionId === undefined ? [] : [node.connectionId];
+}
+
 export function unreadyConnectionsForVersion(
   db: Db,
   ownerId: string | null,
   versionId: string,
+  activityCatalog: CatalogOverride = catalog,
 ): UnreadyConnection[] {
   const version = getPipelineVersion(db, versionId);
   if (version === null) return [];
@@ -57,23 +105,26 @@ export function unreadyConnectionsForVersion(
   const unready: UnreadyConnection[] = [];
   const seen = new Set<string>();
   for (const node of version.nodes) {
-    const connectionId = node.connectionId;
-    if (connectionId === undefined) continue; // structural/unbound — dispatch's domain
-    const entry = catalog.get(node.type);
-    if (entry === undefined || entry.connectionKinds.length === 0) continue;
-    if (interpolationMode(connectionId).mode !== 'literal') continue; // dynamic — dispatch's domain
-    if (seen.has(connectionId)) continue;
-    seen.add(connectionId);
+    // Every ref this node contributes — one, or a pair's two. The per-ref skips
+    // below apply per END: a paired node may legitimately have a literal source
+    // and a `${}`-dynamic sink, and reporting the dynamic one as `missing`
+    // (`getConnection` on a raw template returns null) would refuse to enable a
+    // trigger that dispatches perfectly well.
+    for (const connectionId of connectionRefsOfNode(node, activityCatalog.get(node.type))) {
+      if (interpolationMode(connectionId).mode !== 'literal') continue; // dynamic — dispatch's domain
+      if (seen.has(connectionId)) continue;
+      seen.add(connectionId);
 
-    const connection = getConnection(db, connectionId);
-    // Owner authorization, mirroring `resolveConnection`: a null or cross-owner
-    // (or null-owner-run vs owned-connection) hit folds into `missing`.
-    if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
-      unready.push({ connectionId, reason: 'missing' });
-      continue;
+      const connection = getConnection(db, connectionId);
+      // Owner authorization, mirroring `resolveConnection`: a null or cross-owner
+      // (or null-owner-run vs owned-connection) hit folds into `missing`.
+      if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
+        unready.push({ connectionId, reason: 'missing' });
+        continue;
+      }
+      const reason = connectionNotReadyReason(connection);
+      if (reason !== null) unready.push({ connectionId, reason });
     }
-    const reason = connectionNotReadyReason(connection);
-    if (reason !== null) unready.push({ connectionId, reason });
   }
   return unready;
 }
@@ -93,11 +144,15 @@ export function unreadyConnectionsForVersion(
  * the four can never disagree. Every owned version is included (a trigger may pin
  * an older or an archived pipeline's version), keyed by stable `resourceId`.
  */
-export function readyVersionResourceIds(db: Db, ownerId: string): Set<string> {
+export function readyVersionResourceIds(
+  db: Db,
+  ownerId: string,
+  activityCatalog: CatalogOverride = catalog,
+): Set<string> {
   const ready = new Set<string>();
   for (const pipeline of listPipelines(db, ownerId)) {
     for (const version of listPipelineVersions(db, pipeline.id)) {
-      if (unreadyConnectionsForVersion(db, ownerId, version.id).length === 0) {
+      if (unreadyConnectionsForVersion(db, ownerId, version.id, activityCatalog).length === 0) {
         ready.add(version.resourceId);
       }
     }
@@ -147,13 +202,22 @@ export function readyVersionResourceIds(db: Db, ownerId: string): Set<string> {
  * who each connection is actually resolvable for. A `null`-version (unbound)
  * trigger never fires, so it is never a dependent.
  */
-export function regateTriggersForConnection(db: Db, connectionId: string): string[] {
+export function regateTriggersForConnection(
+  db: Db,
+  connectionId: string,
+  activityCatalog: CatalogOverride = catalog,
+): string[] {
   return db.transaction((tx) => {
     const disabled: string[] = [];
     for (const trigger of listTriggers(tx)) {
       if (!trigger.enabled) continue;
       if (trigger.pipelineVersionId === null) continue;
-      const unready = unreadyConnectionsForVersion(tx, trigger.ownerId, trigger.pipelineVersionId);
+      const unready = unreadyConnectionsForVersion(
+        tx,
+        trigger.ownerId,
+        trigger.pipelineVersionId,
+        activityCatalog,
+      );
       if (unready.some((u) => u.connectionId === connectionId)) {
         updateTrigger(tx, trigger.id, { enabled: false });
         disabled.push(trigger.id);

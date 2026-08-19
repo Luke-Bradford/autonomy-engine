@@ -528,6 +528,90 @@ describe('#2 L13a — connectionId resolution on dispatchNode', () => {
 });
 
 // ===========================================================================
+// M1 (#1104) — the PAIRED source/sink binding resolves on the same env
+// ===========================================================================
+
+/** A node with the paired top-level `connectionIds` (no singular `connectionId`). */
+function pairNode(
+  id: string,
+  source: string,
+  sink: string,
+  config: Record<string, unknown> = {},
+): Node {
+  return { ...node(id, config), connectionIds: { source, sink } };
+}
+
+describe('M1 #1104 — connectionIds resolution on dispatchNode', () => {
+  it('resolves BOTH ends and threads them as resolvedConnectionIds', () => {
+    const eng = engine([pairNode('a', '${params.from}', '${params.to}')]);
+    const r = eng.reduce(eng.seedState(), started({ from: 'csv-prod', to: 'warehouse-eu' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionIds).toEqual({
+      source: 'csv-prod',
+      sink: 'warehouse-eu',
+    });
+  });
+
+  it('passes literal ends through unchanged, and supports interpolation per end', () => {
+    const eng = engine([pairNode('a', 'conn-fixed-src', 'sink-${params.env}')]);
+    const r = eng.reduce(eng.seedState(), started({ env: 'staging' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionIds).toEqual({
+      source: 'conn-fixed-src',
+      sink: 'sink-staging',
+    });
+  });
+
+  it('leaves resolvedConnectionIds undefined when the node carries no pair', () => {
+    const eng = engine([connNode('a', 'conn-single')]);
+    const r = eng.reduce(eng.seedState(), started());
+    const cmd = dispatchCmd(r.commands, 'a');
+    expect(cmd.resolvedConnectionIds).toBeUndefined();
+    // The singular binding is untouched by the widening.
+    expect(cmd.resolvedConnectionId).toBe('conn-single');
+  });
+
+  it('resolves both ends against the SAME env as config — an upstream output routes the sink', () => {
+    const eng = engine(
+      [node('a'), pairNode('b', 'csv-in', '${nodes.a.output.target}', { msg: 'hi' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { target: 'sink-from-output' }));
+    const b = dispatchCmd(r.commands, 'b');
+    expect(b.resolvedConnectionIds).toEqual({ source: 'csv-in', sink: 'sink-from-output' });
+    // One env for config and both ends — no drift between the three.
+    expect(b.preparedInput).toEqual({ msg: 'hi' });
+  });
+
+  it('fails the run (invalid_event) when either end references an unknown var', () => {
+    // The SINK end specifically: a prep throw on the second resolution must
+    // terminalize exactly like the first one, not dispatch a half-resolved pair.
+    const eng = engine([pairNode('a', 'csv-in', '${nodes.ghost.output.x}')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(r.commands.some((c) => c.type === 'dispatchNode')).toBe(false);
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+  });
+
+  it('the run.resumed re-emit (4th dispatch site) re-derives BOTH ends', () => {
+    // The pair rides `PreparedDispatch`/`dispatchNodeCommand`, so all four
+    // emission sites are structurally covered — this pins the one most likely to
+    // drift (the crash-window re-emit), the same site the L13a suite pins.
+    const eng = engine([pairNode('a', '${params.from}', '${params.to}')]);
+    const s = eng.reduce(eng.seedState(), started({ from: 'src-1', to: 'dst-1' })).state;
+    expect(s.nodes.a!.status).toBe('ready');
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(dispatchCmd(resumed.commands, 'a').resolvedConnectionIds).toEqual({
+      source: 'src-1',
+      sink: 'dst-1',
+    });
+  });
+});
+
+// ===========================================================================
 // #2 L13b — connectionParams resolution on dispatchNode
 // ===========================================================================
 

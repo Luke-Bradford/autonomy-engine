@@ -36,7 +36,55 @@ import type { Db } from '../repo/types.js';
  * preserved dynamic id needs no rebind, so it is NOT added to `strippedIds`.
  * `interpolationMode` is the SSOT literal-vs-dynamic classifier (`$$`-escaped
  * text is `literal`) — the same one `literalCallTargets` uses for call targets. */
+/**
+ * M1 (#1104) — the same literal-vs-`${}` rule as `stripNodeConnectionId`,
+ * applied PER END of the paired binding. Each end is decided on its own: a copy
+ * whose source routes dynamically and whose sink is pinned to a concrete row
+ * exports as `{ source: '${…}', sink: null }`, preserving the portable half
+ * instead of nulling the pair as a unit.
+ *
+ * Returns whether ANY end was a stripped literal, so the caller can flag the
+ * node in `strippedConnectionRefs`. That list is node-granular (a flat array of
+ * node ids), so a node with one stripped end and one preserved end is flagged
+ * whole — deliberately imprecise rather than a schema change: the flag means
+ * "this node needs a look at its connection bindings", and over-pointing at a
+ * two-connection node costs the importer one glance. Under-pointing would cost
+ * them a silently unbound sink.
+ */
+function stripNodeConnectionPair(
+  node: Node,
+  pair: NonNullable<Node['connectionIds']>,
+  strippedIds: Set<string>,
+): NodeExport {
+  // `connectionIds` is NOT destructured out — the return below rebuilds it from
+  // the classified ends, so excluding it here would be redundant. Only
+  // `connectionParams` must go: it is refused alongside a pair at save
+  // (`engine/params.ts`), so it is never re-exported. Same `void` idiom as
+  // `stripNodeConnectionId` below (this file's existing convention; a leading
+  // `_` is not exempt under this repo's `no-unused-vars` config).
+  const { connectionParams, ...rest } = node;
+  void connectionParams;
+  let stripped = false;
+  const portableEnd = (id: string): string | null => {
+    if (interpolationMode(id).mode !== 'literal') return id;
+    stripped = true;
+    return null;
+  };
+  // Both ends are evaluated BEFORE the flag is read — `&&`/`||` short-circuiting
+  // would skip the second end's classification entirely.
+  const source = portableEnd(pair.source);
+  const sink = portableEnd(pair.sink);
+  if (stripped) strippedIds.add(node.id);
+  return { ...rest, connectionId: null, connectionIds: { source, sink } };
+}
+
 function stripNodeConnectionId(node: Node, strippedIds: Set<string>): NodeExport {
+  // M1 (#1104) — the PAIRED binding takes its own path. The two are mutually
+  // exclusive on one node (`engine/params.ts` refuses both), so this is a fork,
+  // not a second field to thread through the singular's branches.
+  if (node.connectionIds !== undefined) {
+    return stripNodeConnectionPair(node, node.connectionIds, strippedIds);
+  }
   const { connectionId, ...rest } = node;
   if (connectionId != null && interpolationMode(connectionId).mode !== 'literal') {
     // Dynamic (`${}`) — portable, keep it (and any `connectionParams`: they

@@ -82,9 +82,22 @@ optional at every point**:
   stored docs would be unfixable. Additive is not a preference here.
 - `ActivityContext` gains an optional `sink?: { connectionConfig }`; `runActivity` an optional fourth
   `sinkSecret`. Six existing adapters ignore both.
+- **`ActivityCatalogEntry` gains `sinkConnectionKinds?`** — the sink end's kind allowlist, and the
+  declaration that makes an activity PAIRED. The executor must be TOLD, not left to infer it from
+  the node: a node's shape is operator input, and inferring the contract from it would let a stray
+  `connectionIds` change how an activity dispatches. Absent ⇒ single-connection, and `connectionIds`
+  is inert everywhere but the save-time validator. A declared list must be non-empty (absence
+  already carries "no sink", so `[]` would have to mean "paired, but no sink kind is ever valid").
+  This is a new declared `ActivityDefinition` field, so it is #1 D6 territory — see §10.
 - `resolveConnection` (`executor.ts:327`) is called twice for a paired activity, and its structured
   codes (`SECRET_NOT_FOUND` / `SECRET_UNDECRYPTABLE`) gain a **side label**. A failure that cannot say
-  which end failed is a support problem, not a detail.
+  which end failed is a support problem, not a detail. **As built (M1):** the label is a `side` FIELD
+  on `node.failed` beside `code`, not a SINK_ variant of all ten codes — the side is orthogonal to
+  the cause, and `resolveConnection`'s own docblock forbids making an operator string-match the
+  message. The message names the side too, so the run log is honest before a UI ticket renders it.
+- **`ActivityContext.sink` carries the sink's `kind`**, not only its config: the SOURCE adapter is
+  the one running, and no adapter's `configSchema` validates the other end — which is exactly why
+  §8 requires a file-backed sink to re-validate at dispatch. That is impossible without the kind.
 - `connection-readiness` gates BOTH ends: a copy whose sink lacks its secret must not dispatch.
 
 **M1 is the prerequisite for the whole series.** It is a framework change (#1's D6 contract), specced

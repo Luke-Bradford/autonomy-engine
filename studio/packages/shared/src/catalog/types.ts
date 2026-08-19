@@ -272,10 +272,39 @@ export interface ActivityCatalogEntry {
   /**
    * The Connection kinds this activity can bind. `[]` means it needs NO
    * connection (a self-contained activity). A non-empty list REQUIRES the node
-   * to carry a `connectionId` whose Connection's `kind` is in the list — the
+   * to carry a connection binding whose Connection's `kind` is in the list — the
    * executor fails the node loudly otherwise.
+   *
+   * For a SINGLE-connection activity (every entry today) that binding is
+   * `Node.connectionId`. For a PAIRED activity (`sinkConnectionKinds` below)
+   * this list is the SOURCE end's allowlist and the binding is
+   * `Node.connectionIds.source`.
    */
   connectionKinds: ConnectionKind[];
+  /**
+   * M1 (#1104, data-movement spec §1) — the SINK end's kind allowlist, and the
+   * declaration that makes this activity PAIRED. A `copy` is heterogeneous by
+   * definition (it reads one store and writes another), so the executor must be
+   * TOLD which activities bind two connections rather than infer it from the
+   * node — a node's shape is operator input, and inferring a contract from it
+   * would let a stray `connectionIds` change how an activity dispatches.
+   *
+   * `undefined` ⇒ NOT paired: the node binds one connection via
+   * `Node.connectionId`, and `Node.connectionIds` is inert (never read by the
+   * executor or the readiness gate — the same posture as a stray `connectionId`
+   * on a connection-less activity, which is refused at DISPATCH, not save).
+   *
+   * A DECLARED list must be NON-EMPTY, and a paired entry must also declare a
+   * non-empty `connectionKinds`. `[]` is not "no sink" (that is `undefined`) —
+   * it would mean "paired, but no kind is ever valid", i.e. an entry every
+   * dispatch refuses with `CONNECTION_KIND_INVALID`. The polarity is deliberately
+   * NOT the same as `connectionKinds: []` (= needs no connection), because
+   * absence already carries that meaning here. Pinned by the registry test.
+   *
+   * NO entry declares this at M1 — `copy` (M5) is the first, and owes the
+   * `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
+   */
+  sinkConnectionKinds?: ConnectionKind[];
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
   /** Zod schema for this activity's non-secret config settings blob. */

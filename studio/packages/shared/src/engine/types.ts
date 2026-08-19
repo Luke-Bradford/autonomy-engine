@@ -834,6 +834,27 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * every pre-L14c `node.failed` in a durable log stays valid.
      */
     connectionId: z.string().optional(),
+    /**
+     * M1 (#1104) — WHICH END of a PAIRED activity's source/sink connection pair
+     * this failure came from. A `copy` is heterogeneous by definition, so a
+     * failure that cannot say which end failed is a support problem: "connection
+     * not found" on a node bound to two connections names neither.
+     *
+     * A structured FIELD, not a message prefix, for the reason
+     * `resolveConnection`'s own docblock gives for `code`: an operator (and
+     * F9a's `errorMap`) must be able to tell the causes apart WITHOUT
+     * string-matching the message. The side is orthogonal to the cause, so it
+     * sits BESIDE `code` rather than doubling the `FAILURE_CODES` vocabulary
+     * with a SINK_ variant of all ten causes. The human message names the side
+     * too — that duplication is deliberate, so the existing run-log surface is
+     * honest before a UI ticket renders the field.
+     *
+     * Absent on every single-connection failure (which is all of them at M1 —
+     * no catalog entry declares a sink). The REDUCER never reads it: additive +
+     * optional, exactly like `connectionId` above, so every pre-M1
+     * `node.failed` in a durable log stays valid.
+     */
+    side: z.enum(['source', 'sink']).optional(),
   }),
   z.object({
     /**
@@ -1621,6 +1642,21 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * replay/migration concern.
      */
     resolvedConnectionParams: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * M1 (#1104) — the node's PAIRED `connectionIds` after the reducer resolved
+     * each end's `${}` expression against the run env, exactly as
+     * `resolvedConnectionId` above resolves the singular one (same `buildCtx`
+     * env, same `String()` coercion), so a paired route that reads
+     * `${params.env}` sees what the config sees. `undefined` when the node
+     * carries no pair.
+     *
+     * The executor consumes THIS for a PAIRED activity (one the catalog declares
+     * `sinkConnectionKinds` for) and never `node.connectionIds`, for the same
+     * reason as the singular: the raw field may be a `${}` template it has no run
+     * env to resolve. Ephemeral like its two neighbours — commands are re-derived
+     * on each reduce and never persisted, so no replay/migration concern.
+     */
+    resolvedConnectionIds: z.object({ source: z.string(), sink: z.string() }).optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

@@ -376,6 +376,36 @@ export const NodeSchema = z.object({
   config: z.record(z.string(), z.unknown()),
   connectionId: z.string().min(1).optional(),
   /**
+   * M1 (#1104) — the PAIRED binding: a source store and a sink store, for an
+   * activity that is heterogeneous by definition (`copy` reads from one store
+   * and writes to another, usually of a different kind). Sits BESIDE
+   * `connectionId`, which remains the binding for every single-connection
+   * activity; the two are mutually exclusive on one node (`engine/params.ts`
+   * refuses both, since which one binds would otherwise be undecidable).
+   *
+   * ADDITIVE and optional deliberately, not as a preference: `pipeline_versions`
+   * are immutable (`0002_p1a_data_model.sql`), so a re-interpretation of stored
+   * docs would be unfixable. No stored node changes shape.
+   *
+   * Both ends are REQUIRED within the object — a pair with one end missing is
+   * not a pair, and a `.partial()` here would let a half-bound copy reach
+   * dispatch and fail there instead of at save. Either end may be a `${}`
+   * expression (dynamic routing, #2 L13a), resolved by the reducer at dispatch
+   * exactly as `connectionId` is; the existence/kind/readiness checks live at
+   * DISPATCH, not save, for the same reason they do for `connectionId`
+   * (connections are mutable rows, so a save-time check would go stale).
+   *
+   * NO `CATALOG_VERSION` bump, unlike `connectionParams` (17→18): that bump
+   * existed because a pre-18 build silently DROPPED the field and dispatched on
+   * unmodified config — a silent-WRONG run. This field has no consumer that
+   * changes behaviour yet. Nothing in the catalog declares a sink
+   * (`sinkConnectionKinds`), so the executor, the readiness gate and the
+   * validator all leave it inert, in this build exactly as in a pre-M1 one.
+   * `copy` (M5) introduces the first paired activity as a NEW runnable TYPE,
+   * and bumps then — the point at which a doc first RUNS differently.
+   */
+  connectionIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
+  /**
    * #2 L13b — per-dispatch bindings for the bound connection's declared
    * `parameters` allowlist (`ConnectionSchema.parameters`). String values may
    * be `${}` expressions; the reducer resolves them at dispatch (same env as

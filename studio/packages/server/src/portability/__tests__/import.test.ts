@@ -103,6 +103,59 @@ describe('importEnvelope: pipeline', () => {
     expect(result.attention).toEqual([]);
   });
 
+  it('M1 (#1104) — a connectionIds pair round-trips: all-dynamic survives, a stripped end drops the pair WHOLE', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Paired' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'provider', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'dynamic',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: '${params.provider}', sink: '${params.provider}' },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'mixed',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: '${params.provider}', sink: connection.id },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = result.versions[0]!.nodes;
+
+    // Wholly portable — the pair survives intact.
+    expect(nodes.find((n) => n.id === 'dynamic')!.connectionIds).toEqual({
+      source: '${params.provider}',
+      sink: '${params.provider}',
+    });
+    // One end was env-specific and nulled. `NodeSchema.connectionIds` requires
+    // BOTH ends, so the pair drops WHOLE and the node is flagged for a rebind —
+    // a half pair would be unsavable, and inventing the missing end is the
+    // fail-open an absent fact must never become.
+    expect(nodes.find((n) => n.id === 'mixed')!.connectionIds).toBeUndefined();
+    expect(
+      result.attention.filter((a) => a.type === 'unresolvedConnectionRef').map((a) => a.nodeId),
+    ).toContain('mixed');
+  });
+
   it('#2 L13b — a literal-bound node with connectionParams round-trips WITHOUT bricking the import', () => {
     // The write gate refuses connectionParams without a connectionId, and export
     // nulls a literal connectionId — so export must have stripped the bindings

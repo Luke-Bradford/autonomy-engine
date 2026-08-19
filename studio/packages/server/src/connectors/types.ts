@@ -59,6 +59,29 @@ export interface ActivityContext {
   input: Record<string, unknown>;
   /** The bound Connection's non-secret `config`. */
   connectionConfig: Record<string, unknown>;
+  /**
+   * M1 (#1104) — the SINK end of a PAIRED activity's connection pair (an
+   * activity the catalog declares `sinkConnectionKinds` for, first `copy` at
+   * M5). `connectionConfig` above is then the SOURCE end, and the SOURCE
+   * adapter is the one running — it reads from its own store and writes to this
+   * one, which is what makes a heterogeneous copy expressible at all.
+   *
+   * NOTE the name collision, which is why this doc is explicit: "sink" elsewhere
+   * in this module and in the executor (`secretSinkFields`,
+   * `resolveConfigSecrets`) means a config SECRET sink — an unrelated concept.
+   * This is the data sink.
+   *
+   * `kind` is carried, not just the config: the running adapter is the SOURCE's
+   * and has no other way to know which store it is writing to, and no adapter's
+   * `configSchema` validates this end (the usual validation boundary does not
+   * apply to a connection whose adapter is not running). Spec §8 requires a
+   * file-backed sink to re-validate at dispatch rather than assume the stored
+   * connection is well-formed; that is only possible with the kind in hand.
+   *
+   * `undefined` for every single-connection activity — which is all of them at
+   * M1. The six existing adapters ignore it.
+   */
+  sink?: { kind: ConnectionKind; connectionConfig: Record<string, unknown> };
   /** Aborts in-flight work (run cancel / server shutdown). */
   signal: AbortSignal;
 }
@@ -258,10 +281,20 @@ export interface ConnectorAdapter {
    * declared sink omits/ignores it). NEVER echo a resolved value back into an
    * output or error message — the executor scrubs them defensively, but the
    * adapter is the first line (see the http adapter, S4).
+   *
+   * `sinkSecret` (M1 #1104) is the plaintext credential for `ctx.sink` — the
+   * SINK end of a PAIRED activity, decrypted at dispatch into this side channel
+   * exactly as `secret` is for the source, and never placed in `ctx` or an
+   * event. Optional + backward-compatible: `undefined` for every
+   * single-connection activity, and the six existing adapters ignore it. The
+   * executor redacts it out of this node's events as a backstop (a paired
+   * activity resolves two plaintexts, and the SOURCE adapter's own redaction
+   * cannot know about the other one).
    */
   runActivity(
     ctx: ActivityContext,
     secret: string | null,
     secretFields?: Readonly<Record<string, string>>,
+    sinkSecret?: string | null,
   ): AsyncIterable<ActivityEvent>;
 }

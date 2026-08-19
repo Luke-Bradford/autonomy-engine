@@ -188,22 +188,39 @@ function remapNodeToDb(
   connById: Map<string, string>,
   versionById: Map<string, string>,
 ): Node {
-  const { connectionId, call, ...rest } = node;
+  // M1 (#1104) — `connectionIds` MUST be destructured out here, not left to ride
+  // `rest`: this is the resourceId→dbId boundary, and a pair carried through
+  // untouched would land resourceIds in the DB as though they were connection
+  // ids — a binding that resolves to nothing at dispatch, written silently.
+  const { connectionId, connectionIds, call, ...rest } = node;
   const base = rest as Node;
 
-  let dbNode: Node;
-  if (connectionId === null) {
-    dbNode = base;
-  } else if (interpolationMode(connectionId).mode !== 'literal') {
-    dbNode = { ...base, connectionId }; // dynamic — preserve verbatim
-  } else {
-    const resolved = connById.get(connectionId);
+  /** One ref: `null` → unbound, `${}` → verbatim, literal → mapped or refused. */
+  const toDbRef = (ref: string | null, what: string): string | undefined => {
+    if (ref === null) return undefined;
+    if (interpolationMode(ref).mode !== 'literal') return ref; // dynamic — preserve verbatim
+    const resolved = connById.get(ref);
     if (resolved === undefined) {
       throw new WorkspaceApplyError(
-        `node "${node.id}" references connection "${connectionId}", which is not on the branch or in the workspace`,
+        `node "${node.id}" references ${what} "${ref}", which is not on the branch or in the workspace`,
       );
     }
-    dbNode = { ...base, connectionId: resolved };
+    return resolved;
+  };
+
+  let dbNode: Node;
+  const resolvedSingular = toDbRef(connectionId, 'connection');
+  dbNode = resolvedSingular === undefined ? base : { ...base, connectionId: resolvedSingular };
+
+  if (connectionIds !== undefined) {
+    const source = toDbRef(connectionIds.source, 'source connection');
+    const sink = toDbRef(connectionIds.sink, 'sink connection');
+    // A half-resolved pair drops WHOLE: `NodeSchema.connectionIds` requires both
+    // ends, so keeping one would be unsavable, and inventing the other is the
+    // fail-open this codebase refuses. The importer rebinds it.
+    if (source !== undefined && sink !== undefined) {
+      dbNode = { ...dbNode, connectionIds: { source, sink } };
+    }
   }
 
   if (call) {

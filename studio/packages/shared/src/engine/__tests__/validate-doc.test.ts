@@ -1359,6 +1359,38 @@ describe('validateDoc — connectionParams shape (L13b)', () => {
 });
 
 // ===========================================================================
+// connectionIds — the paired binding's shape rules at SAVE time (M1, #1104)
+// ===========================================================================
+
+describe('validateDoc — connectionIds shape (M1)', () => {
+  const pair = { source: 'conn_src', sink: 'conn_sink' };
+
+  it('accepts a pair on its own', () => {
+    expect(validateDoc(doc([node('n', {}, { connectionIds: pair })]))).toEqual([]);
+  });
+
+  it('rejects a pair ALONGSIDE a singular connectionId (which one binds is undecidable)', () => {
+    const d = doc([node('n', {}, { connectionId: 'conn_1', connectionIds: pair })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: connectionId and connectionIds/);
+  });
+
+  it('rejects a pair on a call node (child pipeline owns dispatch)', () => {
+    const withPair = { ...callNode('c', 'ver_1'), connectionIds: pair };
+    expect(validateDoc(doc([withPair])).join(' ')).toMatch(/node\.c: connectionIds .*call node/);
+  });
+
+  it('rejects connectionParams alongside a pair (which END they bind is not modelled)', () => {
+    const d = doc([node('n', {}, { connectionIds: pair, connectionParams: { model: 'x' } })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: connectionParams/);
+  });
+
+  it('still rejects connectionParams when NEITHER binding is present', () => {
+    const d = doc([node('n', {}, { connectionParams: { model: 'x' } })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: connectionParams/);
+  });
+});
+
+// ===========================================================================
 // parallel foreach — batchCount (#566 slice 2 / #4 A4b)
 // ===========================================================================
 

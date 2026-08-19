@@ -149,6 +149,64 @@ describe('exportPipeline', () => {
     expect(JSON.stringify(envelope)).not.toContain(connection.id);
   });
 
+  it('M1 (#1104) — nulls each LITERAL end of a connectionIds pair independently, preserving a ${} end', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Paired' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        // A MIXED pair: a concrete source row, a portable dynamic sink.
+        {
+          id: 'mixed',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: connection.id, sink: '${params.target}' },
+          position: { x: 0, y: 0 },
+        },
+        // Both ends dynamic — wholly portable, no rebind owed.
+        {
+          id: 'dynamic',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: '${params.target}', sink: '${params.target}' },
+          position: { x: 1, y: 1 },
+        },
+        // No pair at all — must NOT gain the key (it would churn git drift for
+        // every existing pipeline in every workspace).
+        { id: 'plain', type: 'llm_call', config: {}, position: { x: 2, y: 2 } },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = envelope.data.versions[0]!.nodes;
+    const mixed = nodes.find((n) => n.id === 'mixed')!;
+    const dynamic = nodes.find((n) => n.id === 'dynamic')!;
+    const plain = nodes.find((n) => n.id === 'plain')!;
+
+    expect(mixed.connectionIds).toEqual({ source: null, sink: '${params.target}' });
+    expect(dynamic.connectionIds).toEqual({
+      source: '${params.target}',
+      sink: '${params.target}',
+    });
+    expect(plain.connectionIds).toBeUndefined();
+    // The node with ONE stripped end is flagged whole; the all-dynamic one is not.
+    expect(envelope.data.strippedConnectionRefs).toEqual(['mixed']);
+    // The concrete id never leaves the workspace.
+    expect(JSON.stringify(envelope)).not.toContain(connection.id);
+  });
+
   it('#2 L13b — strips connectionParams alongside a LITERAL connectionId, keeps them on a dynamic one', () => {
     const { db } = freshDb();
     const connection = createConnection(db, {

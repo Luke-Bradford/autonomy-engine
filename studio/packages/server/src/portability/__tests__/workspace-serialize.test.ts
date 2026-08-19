@@ -110,6 +110,87 @@ describe('serializeWorkspace', () => {
     expect(env.data.versions[0].nodes[0].connectionId).toBe('${params.conn}');
   });
 
+  it('M1 (#1104) — remaps BOTH ends of a connectionIds pair to resourceIds', () => {
+    const { db } = freshDb();
+    const source = createConnection(db, {
+      ownerId: 'local',
+      name: 'Src',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const sink = createConnection(db, {
+      ownerId: 'local',
+      name: 'Snk',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      params: [{ name: 'conn', type: 'string', required: true }],
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: source.id, sink: sink.id },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'n2',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: '${params.conn}', sink: sink.id },
+          position: { x: 1, y: 1 },
+        },
+      ],
+    });
+
+    const env = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/p.json');
+    expect(env.data.versions[0].nodes[0].connectionIds).toEqual({
+      source: source.resourceId,
+      sink: sink.resourceId,
+    });
+    // A dynamic end survives verbatim beside a remapped one.
+    expect(env.data.versions[0].nodes[1].connectionIds).toEqual({
+      source: '${params.conn}',
+      sink: sink.resourceId,
+    });
+    // Neither DB id reaches the branch.
+    expect(JSON.stringify(env)).not.toContain(source.id);
+    expect(JSON.stringify(env)).not.toContain(sink.id);
+  });
+
+  it('M1 (#1104) — a dangling END refuses the serialize, and the message names WHICH end', () => {
+    const { db } = freshDb();
+    const source = createConnection(db, {
+      ownerId: 'local',
+      name: 'Src',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: source.id, sink: 'conn_does_not_exist' },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    // "node n1 references a connection that no longer exists" is not actionable
+    // on a node that binds two of them.
+    expect(() => serializeWorkspace(db, 'local')).toThrow(/sink connection/);
+  });
+
   it('remaps a literal call_pipeline pipelineVersionId to the target version resourceId', () => {
     const { db } = freshDb();
     const child = createPipeline(db, { ownerId: 'local', name: 'Child' });
@@ -606,6 +687,77 @@ describe('ownedVersionForms — compare (#1018)', () => {
     expect(compareFor(db, version.resourceId)(tampered)).toEqual({
       identical: false,
       undecidableRefs: 1,
+    });
+  });
+
+  // M1 (#1104) — the compare direction is where a forgotten field does its worst
+  // damage: if the stored form kept DB ids while the branch form holds
+  // resourceIds, the two can never match and the version re-classifies as an
+  // UPDATE on every single import, forever. That is silent churn, not a failure.
+  describe('a paired node (M1)', () => {
+    function pairedVersionUsing(db: ReturnType<typeof freshDb>['db']) {
+      const src = createConnection(db, {
+        ownerId: 'local',
+        name: 'Src',
+        kind: 'http',
+        config: {},
+        secretRef: null,
+      });
+      const snk = createConnection(db, {
+        ownerId: 'local',
+        name: 'Snk',
+        kind: 'http',
+        config: {},
+        secretRef: null,
+      });
+      const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const version = createPipelineVersion(db, {
+        ...baseVersion(pipe.id),
+        nodes: [
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            connectionIds: { source: src.id, sink: snk.id },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+        .versions[0]!;
+      return { src, snk, version, branch };
+    }
+
+    it('compares IDENTICAL round-tripped — no phantom update on every import', () => {
+      const db = freshDb().db;
+      const { version, branch } = pairedVersionUsing(db);
+
+      expect(compareFor(db, version.resourceId)(branch)).toEqual({
+        identical: true,
+        undecidableRefs: 0,
+      });
+    });
+
+    it('masks only the DELETED end — the surviving end still speaks', () => {
+      const db = freshDb().db;
+      const { snk, version, branch } = pairedVersionUsing(db);
+      deleteConnection(db, snk.id);
+
+      // Only the sink became unjudgeable; the source is decidable and unchanged.
+      expect(compareFor(db, version.resourceId)(branch)).toEqual({
+        identical: true,
+        undecidableRefs: 1,
+      });
+
+      // Over-masking would hide this: the SOURCE end was hand-edited on the
+      // branch, and that is a real difference even though the sink is dangling.
+      const tampered = {
+        ...branch,
+        nodes: [
+          { ...branch.nodes[0]!, connectionIds: { source: 'someone-elses-ref', sink: null } },
+        ],
+      };
+      expect(compareFor(db, version.resourceId)(tampered).identical).toBe(false);
     });
   });
 });

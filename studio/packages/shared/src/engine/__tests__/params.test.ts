@@ -824,6 +824,46 @@ describe('#2 L13a — connectionId ${} refs at SAVE time', () => {
   });
 });
 
+describe('M1 (#1104) — connectionIds ${} refs at SAVE time', () => {
+  /** A node carrying the PAIRED binding instead of the singular. */
+  function pairNode(id: string, source: string, sink: string): Node {
+    return { ...node(id, {}), connectionIds: { source, sink } };
+  }
+
+  it('ACCEPTS a literal pair (no ${} — the scan no-ops on both ends)', () => {
+    expect(validateRefs(doc([pairNode('n', 'conn-a', 'conn-b')], []))).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} end whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [pairNode('n', 'conn-a', '${params.target}')],
+        [],
+        [{ name: 'target', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS an undeclared ref on the SOURCE end, naming that end', () => {
+    const errors = validateRefs(doc([pairNode('n', '${params.nope}', 'conn-b')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/connectionIds\.source/);
+  });
+
+  it('REJECTS an undeclared ref on the SINK end, naming that end', () => {
+    const errors = validateRefs(doc([pairNode('n', 'conn-a', '${params.nope}')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionIds\.sink/);
+  });
+
+  it('REJECTS a malformed ${} expression on either end', () => {
+    expect(validateRefs(doc([pairNode('n', '${params.a[0}', 'conn-b')], []))).toHaveLength(1);
+    expect(validateRefs(doc([pairNode('n', 'conn-a', '${params.a[0}')], []))).toHaveLength(1);
+  });
+});
+
 describe('#2 L13b — connectionParams ${} refs at SAVE time', () => {
   /** A node with a connectionId + per-dispatch parameter bindings. */
   function paramsNode(id: string, connectionParams: Record<string, unknown>): Node {

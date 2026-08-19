@@ -12,8 +12,31 @@ import { TriggerPublicSchema } from '../schemas/trigger.js';
  * live DB row) because the export/import DTOs are their own contract, not
  * the same shape as the stored entity.
  */
-export const NodeExportSchema = NodeSchema.omit({ connectionId: true }).extend({
+export const NodeExportSchema = NodeSchema.omit({
+  connectionId: true,
+  connectionIds: true,
+}).extend({
   connectionId: z.string().min(1).nullable(),
+  /**
+   * M1 (#1104) — the PAIRED binding in export form. Each END is independently
+   * nullable, because each is independently literal-or-`${}`: a copy may route
+   * its source dynamically and pin its sink literally, and nulling the pair as a
+   * unit would destroy the portable half.
+   *
+   * OPTIONAL, unlike the singular (which every export emits as present-and-
+   * nulled). A node with no pair must NOT gain an empty pair in its export: the
+   * git content form serializes node fields verbatim
+   * (`portability/content-form.ts`), so emitting the key unconditionally would
+   * change the committed bytes of every pipeline in every workspace and report
+   * them all as drifted. Absent means "this node binds no pair", which is the
+   * honest reading.
+   */
+  connectionIds: z
+    .object({
+      source: z.string().min(1).nullable(),
+      sink: z.string().min(1).nullable(),
+    })
+    .optional(),
 });
 export type NodeExport = z.infer<typeof NodeExportSchema>;
 
