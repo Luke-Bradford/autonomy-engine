@@ -216,8 +216,10 @@ export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<voi
  * and Playwright's strict mode fails the whole spec — reported as "the toggle
  * vanished", which is a very convincing wrong answer for what is a locator bug.
  *
- * Seven specs had open-coded that unscoped query, plus `settings.spec.ts`'s own
- * byte-identical `railToggle`. None was broken (none combined a theme assertion
+ * SIX specs had open-coded that unscoped query, plus `settings.spec.ts`'s own
+ * byte-identical `railToggle` — already rail-scoped, and so the copy that shows
+ * the scoping itself was worth sharing rather than re-deriving. None was broken
+ * (none combined a theme assertion
  * with a visit to Settings), and that is exactly the drift this module's header
  * warns about: the copies were latent, not wrong, so nothing would have made
  * them converge. Any surface may grow a third toggle; the rail's is the one that
