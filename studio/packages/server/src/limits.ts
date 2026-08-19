@@ -43,3 +43,33 @@ export const ISSUE_LIST_CAP = 100;
  * consumes it, so it belongs with `copy` at M5.
  */
 export const COPY_BATCH_ROWS = 1000;
+
+/**
+ * #1125 M5 slice 2 — how long a SQLite open/lock may wait before it reports
+ * `SQLITE_BUSY`, in milliseconds.
+ *
+ * This exists because better-sqlite3's default is 5000ms and that default is a
+ * **synchronous busy-wait**, which is precisely the §9 hazard the data-movement
+ * spec forbids: "an in-process SQLite scan blocks the event loop, and with it
+ * the driver pump, the SSE stream and the whole HTTP API."
+ *
+ * Measured cross-process on better-sqlite3 12.11.1: with process A holding
+ * `BEGIN IMMEDIATE`, process B's `db.exec('begin immediate')` blocked for
+ * **2868ms during which ZERO `setInterval` ticks fired**. Nothing yields; the
+ * whole server is frozen for the duration. Lowering the ceiling does not make
+ * contention succeed more often — it makes the failure arrive fast, as
+ * `SQLITE_BUSY`, which `isTransientSqliteCode` already classifies `transient`
+ * and which a copy can therefore retry from row 0 safely (§4.1: the transaction
+ * guarantees no partial write survived).
+ *
+ * 250ms is chosen to absorb a brief overlap — a checkpoint, another connection
+ * committing — without ever being a stall an operator would notice. The tradeoff
+ * is stated rather than hidden: a store under sustained write contention will
+ * report `transient` sooner than it would with the default, and retry is the
+ * mechanism that handles it. That is the correct polarity for a shared server.
+ *
+ * It applies to the READER too, whose opens carried the 5000ms default from M4.
+ * The residual is the same on both sides and there is no reason to fix half of
+ * it in the file being edited.
+ */
+export const SQLITE_BUSY_TIMEOUT_MS = 250;

@@ -9,7 +9,7 @@ import {
   tableDatasetConfigSchema,
   type DatasetKind,
 } from '@autonomy-studio/shared';
-import { COPY_BATCH_ROWS } from '../limits.js';
+import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { resolveWithinRoots } from './confine.js';
 import type {
   ActivityContext,
@@ -44,7 +44,7 @@ import type {
  *    construction instead of by escaping.
  *
  * And one property that is doing more work than it looks like it is:
- * **the reader only ever `prepare(...).iterate()`s the operator's SQL — never
+ * **the READER only ever `prepare(...).iterate()`s the operator's SQL — never
  * `run()` and never `exec()`.** Measured on `better-sqlite3@12.11.1`: under a
  * `readonly: true` open, `prepare("attach database '<any path>' as o").run()`
  * SUCCEEDS, and the attached database — anywhere on disk, outside every root —
@@ -54,6 +54,16 @@ import type {
  * refused by `prepare` itself, and `load_extension` is "not authorized". So the
  * confinement above holds only for as long as this rule does, which is why it is
  * stated here and pinned by a test rather than left as an implementation detail.
+ *
+ * **That rule is reader-scoped, and #1125's SINK breaks it by construction** —
+ * it opens read-WRITE and it does `run()` and `exec()`. The invariant survives
+ * because it was never "no `run()`" for its own sake; it was "the operator's SQL
+ * is never handed to a method that would execute an `ATTACH`". The sink executes
+ * NO operator-supplied SQL at all: every statement it runs is built here from an
+ * identifier that `quoteIdentifier` has already refused unless it matches
+ * `SQL_IDENTIFIER_RE`, and every value BINDS. A `query` dataset — the only place
+ * operator SQL exists — is refused as a sink outright. So the two halves reach
+ * the same guarantee by different routes, and neither weakens the other.
  *
  * TWO RESIDUALS, stated so "it reuses the hardened `fs` guard" is not read as
  * "it has the same guarantees":
@@ -98,22 +108,42 @@ export type SqliteValue = string | number | bigint | Uint8Array | null;
 export type SqliteRow = Record<string, SqliteValue>;
 
 /**
- * A dataset read that failed, carrying the failure `kind` the M5 `copy` adapter
- * will map straight onto its terminal `node.failed` event (#1 F0's structured
- * failure kind).
+ * A dataset READ or WRITE that failed, carrying the failure `kind` the M5 `copy`
+ * adapter maps straight onto its terminal `node.failed` event (#1 F0's
+ * structured failure kind).
+ *
+ * ONE class for both directions, deliberately. It was `DatasetReadError` when M4
+ * shipped only a reader; a second `DatasetWriteError` would have meant a second
+ * near-identical mapper over the same `TRANSIENT_SQLITE_CODES` set — the
+ * duplication `confine.ts` was extracted to prevent. (It would also have collided
+ * in name with `DatasetWriteBodySchema` in `routes/datasets.ts`, where "dataset
+ * write" means HTTP CRUD on the dataset ROW, not moving data into a store.)
  *
  * Classification is FAIL-SAFE, exactly as `fs.ts`'s errno mapper is: only the
- * two SQLite codes that genuinely mean "busy right now" are `transient`, and
+ * SQLite codes that genuinely mean "busy right now" are `transient`, and
  * everything else — including any unrecognised throw — is `permanent`, never
  * blind-retried.
+ *
+ * `partialWritePossible` carries §4.2's one input: whether rows may already have
+ * landed in the sink. It is false for every read (a read writes nothing) and for
+ * a sink whose transaction demonstrably rolled back; it is true ONLY where this
+ * code cannot prove the store was left in its pre-copy state. Turning it into a
+ * verdict is `classifySinkFailure`'s job (`error-kind.ts`), never this class's —
+ * this only reports the fact.
  */
-export class DatasetReadError extends Error {
+export class DatasetIoError extends Error {
   readonly kind: ConnectorErrorKind;
+  readonly partialWritePossible: boolean;
 
-  constructor(kind: ConnectorErrorKind, message: string, options?: { cause?: unknown }) {
+  constructor(
+    kind: ConnectorErrorKind,
+    message: string,
+    options?: { cause?: unknown; partialWritePossible?: boolean },
+  ) {
     super(message, options);
-    this.name = 'DatasetReadError';
+    this.name = 'DatasetIoError';
     this.kind = kind;
+    this.partialWritePossible = options?.partialWritePossible ?? false;
   }
 }
 
@@ -137,14 +167,17 @@ export function isTransientSqliteCode(code: string): boolean {
   return TRANSIENT_SQLITE_CODES.has(code.split('_').slice(0, 2).join('_'));
 }
 
-/** Map a thrown store error onto a `DatasetReadError` (fail-safe: unrecognised → permanent). */
-function readFailure(err: unknown, context: string): DatasetReadError {
-  if (err instanceof DatasetReadError) return err;
+/** Map a thrown store error onto a `DatasetIoError` (fail-safe: unrecognised → permanent).
+ *
+ * `partialWritePossible` defaults to false and is passed explicitly by the SINK,
+ * the only caller that can leave rows behind. A read never can. */
+function storeFailure(err: unknown, context: string, partialWritePossible = false): DatasetIoError {
+  if (err instanceof DatasetIoError) return err;
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as { code?: unknown } | undefined)?.code;
   const kind: ConnectorErrorKind =
     typeof code === 'string' && isTransientSqliteCode(code) ? 'transient' : 'permanent';
-  return new DatasetReadError(kind, `${context}: ${message}`, { cause: err });
+  return new DatasetIoError(kind, `${context}: ${message}`, { cause: err, partialWritePossible });
 }
 
 /**
@@ -158,7 +191,7 @@ function readFailure(err: unknown, context: string): DatasetReadError {
  */
 function quoteIdentifier(value: string, label: string): string {
   if (!isSqlIdentifier(value)) {
-    throw new DatasetReadError(
+    throw new DatasetIoError(
       'permanent',
       `${label} '${value}' is not a bare SQL identifier, so it cannot be used as a table name`,
     );
@@ -175,7 +208,7 @@ function quoteIdentifier(value: string, label: string): string {
  * decides what kind of failure it is, which is exactly what `fs.ts` does in its
  * `resolveOrFail`. Without this wrapper an `ENOENT` on the target's parent
  * directory (or an `EACCES` on a root) escapes as a raw Node error carrying no
- * failure `kind`, which breaks the one contract `DatasetReadError` exists to
+ * failure `kind`, which breaks the one contract `DatasetIoError` exists to
  * uphold: that M5's `copy` adapter can map `.kind` straight onto `node.failed`.
  */
 async function confineStorePath(roots: readonly string[], requested: string): Promise<string> {
@@ -183,9 +216,9 @@ async function confineStorePath(roots: readonly string[], requested: string): Pr
   try {
     confined = await resolveWithinRoots(roots, requested, 'sqlite');
   } catch (err) {
-    throw readFailure(err, `cannot resolve the sqlite database path '${requested}'`);
+    throw storeFailure(err, `cannot resolve the sqlite database path '${requested}'`);
   }
-  if (!confined.ok) throw new DatasetReadError('permanent', confined.error);
+  if (!confined.ok) throw new DatasetIoError('permanent', confined.error);
   return confined.path;
 }
 
@@ -207,7 +240,7 @@ function statementFor(
   datasetConfig: Record<string, unknown>,
 ): { sql: string; parameters: Record<string, unknown> | null } {
   if (!datasetKindIsImplemented(datasetKind)) {
-    throw new DatasetReadError(
+    throw new DatasetIoError(
       'permanent',
       `no reader exists for the '${datasetKind}' dataset kind yet`,
     );
@@ -215,7 +248,7 @@ function statementFor(
 
   const parsed = datasetConfigSchema(datasetKind).safeParse(datasetConfig);
   if (!parsed.success) {
-    throw new DatasetReadError(
+    throw new DatasetIoError(
       'permanent',
       `invalid ${datasetKind} dataset config: ${parsed.error.message}`,
     );
@@ -286,7 +319,7 @@ export async function* readSqliteDatasetBatches(
 ): AsyncGenerator<SqliteRow[], void, undefined> {
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (!Number.isInteger(batchRows) || batchRows < 1) {
-    throw new DatasetReadError(
+    throw new DatasetIoError(
       'permanent',
       `batchRows must be a positive integer, got ${batchRows}`,
     );
@@ -297,7 +330,7 @@ export async function* readSqliteDatasetBatches(
   // per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetReadError(
+    throw new DatasetIoError(
       'permanent',
       `invalid sqlite connection config: ${cfg.error.message}`,
     );
@@ -307,13 +340,13 @@ export async function* readSqliteDatasetBatches(
 
   const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
 
-  if (read.signal?.aborted) throw new DatasetReadError('cancelled', 'dataset read aborted');
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = new Database(dbPath, { readonly: true, fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
   } catch (err) {
-    throw readFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
+    throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
   }
 
   let iterator: IterableIterator<unknown> | undefined;
@@ -326,7 +359,7 @@ export async function* readSqliteDatasetBatches(
         statement.parameters === null ? prepared.iterate() : prepared.iterate(statement.parameters)
       ) as IterableIterator<unknown>;
     } catch (err) {
-      throw readFailure(err, 'the dataset statement could not be prepared');
+      throw storeFailure(err, 'the dataset statement could not be prepared');
     }
     iterator = cursor;
 
@@ -336,7 +369,7 @@ export async function* readSqliteDatasetBatches(
       // batch is a scheduling quantum, so this is the one place the loop is not
       // holding the event loop hostage.
       if (!first) await yieldToEventLoop();
-      if (read.signal?.aborted) throw new DatasetReadError('cancelled', 'dataset read aborted');
+      if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
       first = false;
 
       const batch: SqliteRow[] = [];
@@ -354,7 +387,7 @@ export async function* readSqliteDatasetBatches(
           batch.push(normalised);
         }
       } catch (err) {
-        throw readFailure(err, 'the dataset statement failed mid-scan');
+        throw storeFailure(err, 'the dataset statement failed mid-scan');
       }
 
       if (batch.length > 0) yield batch;
@@ -400,7 +433,7 @@ export const sqliteAdapter: ConnectorAdapter = {
 
     let db: Database.Database | undefined;
     try {
-      db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      db = new Database(dbPath, { readonly: true, fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
       // The query is what actually tests it. Measured: opening a NON-SQLite file
       // read-only SUCCEEDS, and it is the first statement that reports "file is
       // not a database" — so an open alone would call a text file a working
