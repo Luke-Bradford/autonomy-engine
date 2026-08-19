@@ -207,7 +207,7 @@ async function resolveOrFail(
   signal: AbortSignal,
 ): Promise<Resolved> {
   try {
-    const resolved = await resolveWithinRoots(cfg.roots, requested);
+    const resolved = await resolveWithinRoots(cfg.roots, requested, 'fs');
     if (!resolved.ok) return { ok: false, event: failed('permanent', resolved.error) };
     return { ok: true, path: resolved.path };
   } catch (err) {

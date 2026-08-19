@@ -181,7 +181,7 @@ function quoteIdentifier(value: string, label: string): string {
 async function confineStorePath(roots: readonly string[], requested: string): Promise<string> {
   let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
   try {
-    confined = await resolveWithinRoots(roots, requested);
+    confined = await resolveWithinRoots(roots, requested, 'sqlite');
   } catch (err) {
     throw readFailure(err, `cannot resolve the sqlite database path '${requested}'`);
   }

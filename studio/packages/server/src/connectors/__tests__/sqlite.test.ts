@@ -295,7 +295,7 @@ describe('the confinement guard applies to the database file', () => {
           datasetConfig: { table: 't' },
         }),
       ),
-    ).rejects.toThrow(/symlink/);
+    ).rejects.toThrow(/symlink; the sqlite connector does not follow symlinks/);
   });
 
   /**

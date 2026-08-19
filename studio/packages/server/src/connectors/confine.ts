@@ -2,6 +2,18 @@ import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
+ * Which connector is asking — it names ITSELF in the refusal messages below.
+ *
+ * REQUIRED, deliberately: this guard was extracted from `fs.ts` with "fs" baked
+ * into its two refusal strings, so a `sqlite` connection whose roots were all
+ * inaccessible refused with a message blaming "the fs connection" — a lie that
+ * would send an operator to the wrong connection. A DEFAULT of `'fs'` would
+ * merely re-arm that trap for the third caller; a required argument makes the
+ * misattribution unrepresentable.
+ */
+export type ConnectorLabel = 'fs' | 'sqlite';
+
+/**
  * #1119 M4 — the path-confinement guard, EXTRACTED so more than one connector
  * can share it (data-movement spec §8, in as many words: "EXTRACT and share
  * `fs`'s guard — do not mirror it … a second copy of that logic is a defect by
@@ -37,6 +49,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 export async function resolveWithinRoots(
   roots: readonly string[],
   requested: string,
+  connector: ConnectorLabel,
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   // Canonicalise the roots (resolve symlinks + trailing separators) so the
   // containment comparison is canonical-vs-canonical. A root that does not
@@ -52,7 +65,10 @@ export async function resolveWithinRoots(
     }
   }
   if (canonicalRoots.length === 0) {
-    return { ok: false, error: 'no accessible allowed root directory on the fs connection' };
+    return {
+      ok: false,
+      error: `no accessible allowed root directory on the ${connector} connection`,
+    };
   }
 
   // A relative request resolves against the first root; an absolute one is taken
@@ -90,7 +106,7 @@ export async function resolveWithinRoots(
     if ((await lstat(finalPath)).isSymbolicLink()) {
       return {
         ok: false,
-        error: `path '${requested}' is a symlink; the fs connector does not follow symlinks`,
+        error: `path '${requested}' is a symlink; the ${connector} connector does not follow symlinks`,
       };
     }
   } catch (err) {
