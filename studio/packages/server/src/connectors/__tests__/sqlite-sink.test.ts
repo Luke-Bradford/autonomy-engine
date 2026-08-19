@@ -8,7 +8,7 @@ import {
   type SqliteWriteMode,
 } from '../sqlite.js';
 import { classifySinkFailure } from '../error-kind.js';
-import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
+import { cleanupTempRoots, rowsOf, seedSink, tempRoot, writableConfig } from './sqlite-fixtures.js';
 
 /**
  * #1125 M5 slice 2 — the `sqlite` SINK.
@@ -30,33 +30,11 @@ import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
 
 afterEach(cleanupTempRoots);
 
-/** A sink database: `t(id,name)` from the shared fixture plus a wider `sink` table. */
-function seedSink(root: string, name = 'app.db'): string {
-  const path = seedDb(root, 0, name);
-  const db = new Database(path);
-  db.exec(
-    'CREATE TABLE sink (id INTEGER, name TEXT, flag INTEGER, big INTEGER, payload BLOB, note TEXT)',
-  );
-  db.close();
-  return path;
-}
-
-function rowsOf(path: string, sql = 'SELECT * FROM sink ORDER BY rowid'): unknown[] {
-  const db = new Database(path, { readonly: true });
-  try {
-    return db.prepare(sql).all();
-  } finally {
-    db.close();
-  }
-}
-
 async function* one(
   rows: Record<string, SinkValue>[],
 ): AsyncIterable<readonly Record<string, SinkValue>[]> {
   yield rows;
 }
-
-const writableConfig = (root: string, path: string) => ({ roots: [root], path, writable: true });
 
 async function failure(promise: Promise<unknown>): Promise<DatasetIoError> {
   const err = await promise.then(

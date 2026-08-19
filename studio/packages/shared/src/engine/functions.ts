@@ -466,6 +466,29 @@ function utf8Bytes(s: string): number[] {
   return out;
 }
 
+/**
+ * The UTF-8 byte length of a string, WITHOUT encoding it (#1129).
+ *
+ * `utf8Bytes` above allocates a `number[]` per call, which is right for base64
+ * and wrong for a copy's `bytesRead` — that is one call per value per row, so a
+ * million-row copy of ten columns would allocate ten million arrays to learn ten
+ * million lengths. Same traversal, same lone-surrogate handling (a bare
+ * surrogate is charged 3 bytes exactly as `utf8Bytes` encodes it), no garbage.
+ *
+ * Lives HERE, beside the encoder it mirrors, so the two cannot drift, and
+ * because this package may not reach for `Buffer.byteLength` or `TextEncoder`:
+ * `shared` is the pure engine and `lib` is ES2023 with no DOM or node types.
+ */
+export function utf8ByteLength(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const cp = s.codePointAt(i) as number;
+    if (cp > 0xffff) i += 1; // a surrogate PAIR was consumed by codePointAt
+    n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
 function utf8Str(bytes: number[]): string {
   let out = '';
   for (let i = 0; i < bytes.length;) {
