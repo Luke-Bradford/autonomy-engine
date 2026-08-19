@@ -260,40 +260,45 @@ function forwardRemapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   // an empty map makes every literal ref read as undecidable, which masks both
   // sides of the comparison and reports a real hand-edit as `identical`.
   const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
-  const connRidByDbId = maps.connectionResourceId;
-  const versionRidByDbId = maps.versionResourceId;
-  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function, so
-  // the singular and each end of the M1 (#1104) pair cannot drift apart —
+  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function
+  // taking its map as an ARGUMENT, so no ref position can drift from another —
   // divergence here manufactures a false "changed" in the stored-vs-branch
   // compare, which is worse than a loud failure because it silently mints a
   // version nobody authored.
-  const forwardRef = (id: string): string =>
-    interpolationMode(id).mode !== 'literal' ? id : (connRidByDbId.get(id) ?? id);
-  const connExport: string | null = connectionId === undefined ? null : forwardRef(connectionId);
+  //
+  // M3 (#1117) made the map a parameter rather than a closed-over variable. With
+  // the singular, two pairs and `call` there are now FIVE ref positions across
+  // THREE maps, and a per-position closure is how they become five subtly
+  // different copies of one rule — the same reasoning `remapNodeToDb`'s
+  // `toDbRef` states in `workspace-apply.ts`.
+  const forwardRef = (id: string, byDbId: Map<string, string>): string =>
+    interpolationMode(id).mode !== 'literal' ? id : (byDbId.get(id) ?? id);
+  const conn = maps.connectionResourceId;
+  const connExport: string | null =
+    connectionId === undefined ? null : forwardRef(connectionId, conn);
 
   const exported: NodeExport = { ...rest, connectionId: connExport };
   if (connectionIds !== undefined) {
     exported.connectionIds = {
-      source: forwardRef(connectionIds.source),
-      sink: forwardRef(connectionIds.sink),
+      source: forwardRef(connectionIds.source, conn),
+      sink: forwardRef(connectionIds.sink, conn),
     };
   }
   // M3 (#1117) — the dataset pair, forward-mapped through the DATASET map on the
-  // same three-way rule. Emitted only when the node binds one, so a node with no
-  // datasets produces the byte-identical content form it did before M3.
+  // same rule. Emitted only when the node binds one, so a node with no datasets
+  // produces the byte-identical content form it did before M3.
   if (datasetIds !== undefined) {
-    const forwardDatasetRef = (id: string): string =>
-      interpolationMode(id).mode !== 'literal' ? id : (maps.datasetResourceId.get(id) ?? id);
+    const ds = maps.datasetResourceId;
     exported.datasetIds = {
-      source: forwardDatasetRef(datasetIds.source),
-      sink: forwardDatasetRef(datasetIds.sink),
+      source: forwardRef(datasetIds.source, ds),
+      sink: forwardRef(datasetIds.sink, ds),
     };
   }
   if (call) {
-    const ref = call.pipelineVersionId;
-    const refExport =
-      interpolationMode(ref).mode !== 'literal' ? ref : (versionRidByDbId.get(ref) ?? ref);
-    exported.call = { ...call, pipelineVersionId: refExport };
+    exported.call = {
+      ...call,
+      pipelineVersionId: forwardRef(call.pipelineVersionId, maps.versionResourceId),
+    };
   }
   return exported;
 }
@@ -463,24 +468,27 @@ interface NodeRefMasks {
 function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
   let masked = node;
   if (masks.connection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
+  /** One pair, blanked per END. M3 (#1117) — shared by both pairs so "mask only
+   * the end that is actually undecidable" cannot be got right for one and wrong
+   * for the other; over-masking hides a real hand-edit, which is silent. */
+  const maskedPair = (
+    pair: { source: string | null; sink: string | null },
+    sourceMask: Set<string>,
+    sinkMask: Set<string>,
+  ) => ({
+    source: sourceMask.has(node.id) ? UNDECIDABLE_REF : pair.source,
+    sink: sinkMask.has(node.id) ? UNDECIDABLE_REF : pair.sink,
+  });
   if (masked.connectionIds !== undefined) {
-    const pair = masked.connectionIds;
     masked = {
       ...masked,
-      connectionIds: {
-        source: masks.source.has(node.id) ? UNDECIDABLE_REF : pair.source,
-        sink: masks.sink.has(node.id) ? UNDECIDABLE_REF : pair.sink,
-      },
+      connectionIds: maskedPair(masked.connectionIds, masks.source, masks.sink),
     };
   }
   if (masked.datasetIds !== undefined) {
-    const pair = masked.datasetIds;
     masked = {
       ...masked,
-      datasetIds: {
-        source: masks.datasetSource.has(node.id) ? UNDECIDABLE_REF : pair.source,
-        sink: masks.datasetSink.has(node.id) ? UNDECIDABLE_REF : pair.sink,
-      },
+      datasetIds: maskedPair(masked.datasetIds, masks.datasetSource, masks.datasetSink),
     };
   }
   if (masks.call.has(node.id) && masked.call !== undefined) {

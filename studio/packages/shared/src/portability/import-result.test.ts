@@ -4,6 +4,8 @@ import { ImportAttentionItemSchema, ImportResultSchema } from './import-result.j
 describe('ImportAttentionItemSchema', () => {
   it.each([
     { type: 'unresolvedConnectionRef', nodeId: 'n1' },
+    // M3 (#1117)
+    { type: 'unresolvedDatasetRef', nodeId: 'n1' },
     { type: 'requiresSecret' },
     { type: 'unboundPipelineVersion' },
     { type: 'requiresWebhookSecret' },
@@ -17,6 +19,14 @@ describe('ImportAttentionItemSchema', () => {
 
   it('rejects unresolvedConnectionRef missing nodeId', () => {
     expect(() => ImportAttentionItemSchema.parse({ type: 'unresolvedConnectionRef' })).toThrow();
+  });
+
+  // M3 (#1117) — a node-scoped item with no node names nothing actionable.
+  it('rejects unresolvedDatasetRef missing nodeId', () => {
+    expect(() => ImportAttentionItemSchema.parse({ type: 'unresolvedDatasetRef' })).toThrow();
+    expect(() =>
+      ImportAttentionItemSchema.parse({ type: 'unresolvedDatasetRef', nodeId: '' }),
+    ).toThrow();
   });
 });
 
