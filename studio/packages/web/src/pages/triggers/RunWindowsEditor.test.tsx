@@ -36,7 +36,7 @@ function Host({ initialRows }: { initialRows: number }) {
 const startInput = (n: number) => screen.getByLabelText(`Window ${n} start`);
 
 describe('#1092 run-window row removal and focus', () => {
-  it('keyboard removal of a middle row leaves focus on a button that now removes a DIFFERENT window', async () => {
+  it('keyboard removal of the FIRST of three rows leaves focus on a button that now removes a DIFFERENT window', async () => {
     const user = userEvent.setup();
     render(<Host initialRows={3} />);
     expect(startInput(3)).toHaveValue('03:00');

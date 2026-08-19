@@ -205,7 +205,12 @@ export async function surfaceBehind(
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
   const toggle = themeSwitch(page);
   if ((await toggle.isChecked()) !== (theme === 'dark')) await toggle.click();
-  await expect.poll(() => documentTheme(page)).toBe(theme);
+  // The message is the one `connect-validation.spec.ts` carried on its own poll
+  // before it moved here — a timeout that says WHICH theme never arrived beats
+  // one that says an unnamed poll expired, and now every caller gets it.
+  await expect
+    .poll(() => documentTheme(page), { message: `theme never became ${theme}` })
+    .toBe(theme);
 }
 
 /**
