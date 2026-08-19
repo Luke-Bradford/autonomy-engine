@@ -224,11 +224,11 @@ export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<voi
  * SIX specs had open-coded that unscoped query, plus `settings.spec.ts`'s own
  * byte-identical `railToggle` — already rail-scoped, and so the copy that shows
  * the scoping itself was worth sharing rather than re-deriving. None was broken
- * (none combined a theme assertion
- * with a visit to Settings), and that is exactly the drift this module's header
- * warns about: the copies were latent, not wrong, so nothing would have made
- * them converge. Any surface may grow a third toggle; the rail's is the one that
- * cannot go away, because it IS the shell — so it is the one named here.
+ * (none combined a theme assertion with a visit to Settings), and that is
+ * exactly the drift this module's header warns about: the copies were latent,
+ * not wrong, so nothing would have made them converge. Any surface may grow a
+ * third toggle; the rail's is the one that cannot go away, because it IS the
+ * shell — so it is the one named here.
  */
 export function themeSwitch(page: Page): Locator {
   return page
