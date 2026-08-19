@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ZodError } from 'zod';
-import { CATALOG_VERSION, type NewPipelineVersion, type NewTrigger } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  RESOURCE_KINDS,
+  type NewPipelineVersion,
+  type NewTrigger,
+} from '@autonomy-studio/shared';
 import {
   archivePipeline,
   createConnection,
@@ -24,7 +29,12 @@ import {
   updateTrigger,
 } from '../../repo/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { applyWorkspace, WorkspaceApplyError } from '../workspace-apply.js';
+import {
+  APPLY_ORDER,
+  APPLY_RANK,
+  applyWorkspace,
+  WorkspaceApplyError,
+} from '../workspace-apply.js';
 import { parseWorkspaceFiles, type ParsedWorkspace } from '../workspace-parse.js';
 import { serializeWorkspace } from '../workspace-serialize.js';
 
@@ -74,6 +84,33 @@ function triggerOn(pipelineVersionId: string): NewTrigger {
     enabled: true,
   };
 }
+
+// #1112 (M2, data-movement spec §2.3) — the apply's phase ORDER. The `appliers`
+// record inside `applyWorkspace` is exhaustive over `ResourceKind` by type, so
+// the compiler already refuses a kind with no handler. What the compiler CANNOT
+// see is a rank: `APPLY_RANK` holds hand-typed numbers, and two kinds sharing
+// one would sort by `RESOURCE_KINDS` declaration order instead — silently, since
+// `Array.prototype.sort` is stable. These pin what the type cannot.
+describe('APPLY_ORDER (#1112 — the apply phase order)', () => {
+  it('runs every resource kind exactly once', () => {
+    expect([...APPLY_ORDER].sort()).toEqual([...RESOURCE_KINDS].sort());
+    expect(APPLY_ORDER).toHaveLength(RESOURCE_KINDS.length);
+  });
+
+  it('gives every kind a DISTINCT rank, so the order is never decided by a tie', () => {
+    const ranks = RESOURCE_KINDS.map((kind) => APPLY_RANK[kind]);
+    expect(new Set(ranks).size).toBe(ranks.length);
+  });
+
+  // The dependency order itself, stated as the two properties that make it
+  // load-bearing rather than as a literal list: a pipeline version's nodes remap
+  // connection refs onto DB ids (so connections must already exist), and a
+  // trigger binds a version that the pipeline phase mints (#3 G5c-2 #670).
+  it('applies connections before pipelines, and pipelines before triggers', () => {
+    expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
+    expect(APPLY_ORDER.indexOf('pipeline')).toBeLessThan(APPLY_ORDER.indexOf('trigger'));
+  });
+});
 
 describe('applyWorkspace (#3 G5c-1)', () => {
   it('creates connections + pipelines from a branch, preserving resourceIds and remapping node refs', () => {

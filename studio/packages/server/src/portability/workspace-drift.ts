@@ -1,7 +1,9 @@
 import {
   connectionContentForm,
   pipelineContentForm,
+  RESOURCE_KINDS,
   triggerContentForm,
+  type ResourceKind,
   type WorkspaceGitDriftResource,
 } from '@autonomy-studio/shared';
 import type {
@@ -51,15 +53,17 @@ interface DriftItem {
   contentForm: string;
 }
 
-type ExportKind = WorkspaceGitDriftResource['kind'];
-
 /** Diff one kind's DB-side items against its committed-side items by
  * `resourceId`, returning the drifted resources (clean ones are omitted). A
  * `null` resourceId never matches (only pre-G1 committed files carry it, and the
  * DB side always mints real ids): a null-id DB item is therefore `added`, a
  * null-id committed item `removed`. */
 function driftForKind(
-  kind: ExportKind,
+  // #1112 — `WorkspaceGitDriftResource['kind']` IS `ResourceKind` (the drift
+  // schema's kind field is `ExportKindSchema`, now derived from
+  // `RESOURCE_KINDS`), so this names the SSOT directly rather than keeping a
+  // same-shaped second name for it that could quietly stop agreeing.
+  kind: ResourceKind,
   dbItems: DriftItem[],
   committedItems: DriftItem[],
 ): WorkspaceGitDriftResource[] {
@@ -154,21 +158,31 @@ function triggerItem(t: ParsedTrigger): DriftItem {
  * folds into `hasUncommittedChanges` — an uncomparable committed file is a
  * pending change the next Commit would drop, never a silent `clean`).
  */
+/**
+ * #1112 (M2, data-movement spec §2.3) — the per-kind projections, as an
+ * EXHAUSTIVE `Record<ResourceKind, …>` rather than three spelled-out
+ * `driftForKind` calls.
+ *
+ * This site is one of the five the spec measured as failing SILENTLY: a kind
+ * missing from a spelled-out list compiles clean and then reports **permanently
+ * clean** — the working copy could diverge from the branch forever and this
+ * differ would say there was nothing to commit. A `Record` keyed by
+ * `ResourceKind` makes the omission a compile error instead, the same idiom
+ * `CONNECTION_CONFIG_SCHEMAS` (`shared/src/catalog/connection-config.ts`) uses
+ * for connection kinds.
+ */
+const DRIFT_PROJECTIONS: Record<ResourceKind, (workspace: ParsedWorkspace) => DriftItem[]> = {
+  pipeline: (workspace) => workspace.pipelines.map(pipelineItem),
+  connection: (workspace) => workspace.connections.map(connectionItem),
+  trigger: (workspace) => workspace.triggers.map(triggerItem),
+};
+
 export function computeDrift(
   db: ParsedWorkspace,
   committed: ParsedWorkspace,
 ): WorkspaceGitDriftResource[] {
-  return [
-    ...driftForKind(
-      'pipeline',
-      db.pipelines.map(pipelineItem),
-      committed.pipelines.map(pipelineItem),
-    ),
-    ...driftForKind(
-      'connection',
-      db.connections.map(connectionItem),
-      committed.connections.map(connectionItem),
-    ),
-    ...driftForKind('trigger', db.triggers.map(triggerItem), committed.triggers.map(triggerItem)),
-  ];
+  return RESOURCE_KINDS.flatMap((kind) => {
+    const project = DRIFT_PROJECTIONS[kind];
+    return driftForKind(kind, project(db), project(committed));
+  });
 }

@@ -3,6 +3,7 @@ import {
   ConnectionExportDataSchema,
   ExportEnvelopeSchema,
   PipelineExportDataSchema,
+  RESOURCE_KINDS,
   SCHEMA_VERSION,
   TriggerExportDataSchema,
   WebhookPublicConfigSchema,
@@ -17,6 +18,7 @@ import {
   type Pipeline,
   type PipelineVersion,
   type PipelineVersionExport,
+  type ResourceKind,
   type Trigger,
 } from '@autonomy-studio/shared';
 import {
@@ -668,48 +670,71 @@ export function serializeWorkspaceTolerant(
   // subset would let one pipeline's dangling ref silently move an UNRELATED
   // same-named pipeline from `report-<rid>.json` back to `report.json`, which
   // drift would then report as a rename nobody performed.
-  const pipelinePaths = resourceFilePaths(
-    'pipeline',
-    livePipelines.map((p) => ({ resourceId: p.resourceId, name: p.name })),
-  );
-  for (const pipeline of livePipelines) {
-    const latest = getLatestPipelineVersion(db, pipeline.id);
-    if (!latest) continue;
-    collect(
-      { kind: 'pipeline', resourceId: pipeline.resourceId, name: pipeline.name },
-      pipelinePaths.get(pipeline.resourceId)!,
-      () => serializePipeline(pipeline, latest, maps),
-    );
-  }
+  // #1112 (M2, data-movement spec §2.3) — the per-kind emitters as an EXHAUSTIVE
+  // `Record<ResourceKind, …>`, iterated in `RESOURCE_KINDS` order (the order the
+  // three blocks already ran in, so the emitted `files` order is unchanged).
+  //
+  // This is the worst of the five silent sites the spec measured: a kind missing
+  // from a spelled-out list compiles clean and is then simply NEVER COMMITTED to
+  // git. Worse than a no-op — Commit's managed-dir reconcile stages the removal
+  // of every previously committed managed file and re-adds only what this
+  // returns (`routes/workspace-git.ts`), so a silently-skipped kind is committed
+  // as a DELETION of every resource of that kind from the branch.
+  //
+  // The blocks keep their existing asymmetry deliberately: pipelines and
+  // triggers go through `collect` (their serializers call `remapRef` and can
+  // throw `UnserializableRefError`), while a connection is pushed directly
+  // because `serializeConnection` holds no refs and so has no failure to catch.
+  const emitters: Record<ResourceKind, () => void> = {
+    pipeline: () => {
+      const pipelinePaths = resourceFilePaths(
+        'pipeline',
+        livePipelines.map((p) => ({ resourceId: p.resourceId, name: p.name })),
+      );
+      for (const pipeline of livePipelines) {
+        const latest = getLatestPipelineVersion(db, pipeline.id);
+        if (!latest) continue;
+        collect(
+          { kind: 'pipeline', resourceId: pipeline.resourceId, name: pipeline.name },
+          pipelinePaths.get(pipeline.resourceId)!,
+          () => serializePipeline(pipeline, latest, maps),
+        );
+      }
+    },
+    connection: () => {
+      const connectionPaths = resourceFilePaths(
+        'connection',
+        connections.map((c) => ({ resourceId: c.resourceId, name: c.name })),
+      );
+      for (const connection of connections) {
+        files.push({
+          path: connectionPaths.get(connection.resourceId)!,
+          contents: canonicalStringify(serializeConnection(connection)),
+        });
+      }
+    },
+    trigger: () => {
+      const triggerPaths = resourceFilePaths(
+        'trigger',
+        liveTriggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
+      );
+      for (const trigger of liveTriggers) {
+        // A trigger's binding has no producer for this state — `triggers.
+        // pipeline_version_id` is `onDelete: 'cascade'` (db/schema.ts), so deleting
+        // the pipeline takes the trigger with it. It goes through the same seam for
+        // uniformity, and to keep the write path fail-closed if that FK ever
+        // changes; there is deliberately no test asserting a dangling binding,
+        // because nothing can produce one.
+        collect(
+          { kind: 'trigger', resourceId: trigger.resourceId, name: trigger.name },
+          triggerPaths.get(trigger.resourceId)!,
+          () => serializeTrigger(trigger, maps),
+        );
+      }
+    },
+  };
 
-  const connectionPaths = resourceFilePaths(
-    'connection',
-    connections.map((c) => ({ resourceId: c.resourceId, name: c.name })),
-  );
-  for (const connection of connections) {
-    files.push({
-      path: connectionPaths.get(connection.resourceId)!,
-      contents: canonicalStringify(serializeConnection(connection)),
-    });
-  }
-
-  const triggerPaths = resourceFilePaths(
-    'trigger',
-    liveTriggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
-  );
-  for (const trigger of liveTriggers) {
-    // A trigger's binding has no producer for this state — `triggers.
-    // pipeline_version_id` is `onDelete: 'cascade'` (db/schema.ts), so deleting
-    // the pipeline takes the trigger with it. It goes through the same seam for
-    // uniformity, and to keep the write path fail-closed if that FK ever
-    // changes; there is deliberately no test asserting a dangling binding,
-    // because nothing can produce one.
-    collect(
-      { kind: 'trigger', resourceId: trigger.resourceId, name: trigger.name },
-      triggerPaths.get(trigger.resourceId)!,
-      () => serializeTrigger(trigger, maps),
-    );
-  }
+  for (const kind of RESOURCE_KINDS) emitters[kind]();
 
   return { files, unserializable };
 }

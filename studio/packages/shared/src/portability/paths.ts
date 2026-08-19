@@ -21,9 +21,15 @@
 /**
  * The resource kinds in a fixed canonical order — drives `MANAGED_DIRS` and is
  * the ONE list every other kind/dir construct derives from (`ResourceKind`
- * below is derived from it, so the two can never drift). The serializer emits
- * in this same order, though it currently spells its three loops out rather
- * than iterating this list.
+ * below is derived from it, so the two can never drift).
+ *
+ * #1112 (M2, data-movement spec §2.3) — every portability enumeration now
+ * DERIVES from this list rather than spelling its kinds out: the serializer,
+ * the drift differ, the import-preview classifier, the apply's phases and the
+ * export envelope's v3→v4 backfill each dispatch through a
+ * `Record<ResourceKind, …>`, so a kind added here is a compile error at each
+ * of them rather than a silent omission. Adding a member is therefore the
+ * deliberate start of that work, not a one-line edit.
  */
 export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger'] as const;
 
