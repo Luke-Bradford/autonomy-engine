@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getTableColumns } from 'drizzle-orm';
 import {
   ConnectionSchema,
+  DatasetSchema,
   PipelineSchema,
   PipelineVersionSchema,
   RunDiagnosticSchema,
@@ -14,6 +15,7 @@ import {
 import type { z } from 'zod';
 import {
   connections,
+  datasets,
   pipelines,
   pipelineVersions,
   runDiagnostics,
@@ -67,6 +69,10 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     { name: 'pipeline_versions', table: pipelineVersions, schema: PipelineVersionSchema },
     { name: 'triggers', table: triggers, schema: TriggerSchema },
     { name: 'connections', table: connections, schema: ConnectionSchema },
+    // #1114 (M2) — the fourth resource kind. Earns the guard for the same
+    // reason every other row does: it round-trips through `DatasetSchema` on
+    // every repo read, so a schema field with no column is the #473 defect.
+    { name: 'datasets', table: datasets, schema: DatasetSchema },
     { name: 'runs', table: runs, schema: RunSchema },
     // #497. Infra-ish (driver-written, never client-authored) but it CROSSES the
     // API boundary with a 1:1 Zod counterpart — `GET /api/runs/:id/diagnostics`

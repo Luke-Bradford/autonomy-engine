@@ -10,6 +10,7 @@ import {
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   ConnectionKindSchema,
+  DatasetKindSchema,
   ExternalAgentOutcomeSchema,
   ExternalWaitStatusSchema,
   RunStatusSchema,
@@ -19,6 +20,8 @@ import {
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
   type ConnectionKind,
+  type DatasetColumn,
+  type DatasetKind,
   type SecretStatus,
   type Container,
   type Edge,
@@ -125,6 +128,50 @@ export const connections = sqliteTable(
     // collide. NULL owner_ids compare distinct in SQLite unique indexes
     // (legacy single-user rows) — documented in the 0024 migration.
     uniqueIndex('connections_owner_resource_id_idx').on(table.ownerId, table.resourceId),
+  ],
+);
+
+/**
+ * #1114 (M2, data-movement spec §2) — a DATASET: the ADDRESS half of a copy
+ * ("a thing in a store, in a shape"). Mutable, like `connections`: only
+ * pipelines are versioned, and run binding is preserved by
+ * `runs.pipeline_version_id`, not by every resource being versioned.
+ */
+export const datasets = sqliteTable(
+  'datasets',
+  {
+    id: text('id').primaryKey(),
+    // #3 G1 — stable cross-workspace identity; nullable-in-SQL, Zod-enforced
+    // NOT NULL (see the `connections.resourceId` note + the 0024 migration).
+    resourceId: text('resource_id'),
+    ownerId: text('owner_id'),
+    name: text('name').notNull(),
+    // The STORE this dataset lives in. Deliberately NOT a foreign key — see the
+    // 0036 migration's header for the argument: RESTRICT would break the
+    // connection route's designed hard-delete path, and CASCADE would silently
+    // destroy authored datasets as a side effect of removing a credential. A
+    // dangling ref instead fails loudly at serialize and at dispatch.
+    connectionId: text('connection_id').notNull(),
+    kind: text('kind', { enum: asEnumTuple(DatasetKindSchema.options) })
+      .notNull()
+      .$type<DatasetKind>(),
+    config: text('config', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    // The DECLARED schema. NOT NULL with NO DB default: an absent column list
+    // must fail loudly rather than read as "this table has no columns" (#473).
+    // Contrast `parameters` directly below, which DOES default — that default
+    // withholds a permission, this one would manufacture a fact.
+    columns: text('columns', { mode: 'json' }).notNull().$type<DatasetColumn[]>(),
+    // #2 L13b — the per-dispatch override allowlist, reused verbatim from
+    // `connections.parameters`, including its fail-closed DB-side DEFAULT '[]'.
+    // (`mode: 'json'` defaults take the JS value — a string would double-encode.)
+    parameters: text('parameters', { mode: 'json' }).notNull().default([]).$type<string[]>(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('datasets_owner_id_idx').on(table.ownerId),
+    // OWNER-scoped uniqueness, never global — same reasoning as `connections`.
+    uniqueIndex('datasets_owner_resource_id_idx').on(table.ownerId, table.resourceId),
   ],
 );
 
