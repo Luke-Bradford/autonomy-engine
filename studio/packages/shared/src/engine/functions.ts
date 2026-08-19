@@ -1346,8 +1346,12 @@ function utcMs(
  * `parseTs` (so it holds of inputs — `\d{4}` admits year 0000) and `isoOf` (so
  * it holds of results).
  */
-const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
-const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
+/** The representable instant range — years 0001-9999. Exported as the ONE
+ * boundary every date-producing path checks: `isoOf` here, and `coerceValue`'s
+ * `date`/`timestamp` targets in `datamove/coerce.ts` (#1122). Re-deriving the
+ * years there would be a second copy of the same rule, free to drift. */
+export const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
+export const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
 
 /** Parse an accepted timestamp to epoch-ms, or throw. */
 function parseTs(fn: string, v: unknown, at: string): number {
@@ -1533,8 +1537,20 @@ function pad(n: number, width: number): string {
  * Closed + reject-unknown, like `float`'s decimal-only regex and `replace`'s
  * literal needle: emitting an unimplemented .NET token (`yy`) raw would hand the
  * author `yy-07-15` and let them believe it worked.
+ *
+ * The NAMES are exported (#1122, M5 slice 1) because a dataset's `dateFormat`
+ * PARSES over the same vocabulary this RENDERS over, and two date languages in
+ * one product is how `formatDateTime(t,'yyyy-MM-dd')` and a CSV's declared
+ * format come to mean different things. `datamove/coerce.ts` keys its parse
+ * table on `FormatTokenName`, so a token added HERE without a parse rule THERE
+ * is a compile error rather than a format that renders and cannot be read back.
+ * Only the names cross the boundary — the render functions stay private, like
+ * the rest of this module's seam (see `engine/index.ts`).
  */
-const FORMAT_TOKENS: Readonly<Record<string, (d: Date) => string>> = Object.freeze({
+export const FORMAT_TOKEN_NAMES = ['yyyy', 'MM', 'dd', 'HH', 'mm', 'ss', 'fff'] as const;
+export type FormatTokenName = (typeof FORMAT_TOKEN_NAMES)[number];
+
+const FORMAT_TOKENS: Readonly<Record<FormatTokenName, (d: Date) => string>> = Object.freeze({
   yyyy: (d) => pad(d.getUTCFullYear(), 4),
   MM: (d) => pad(d.getUTCMonth() + 1, 2),
   dd: (d) => pad(d.getUTCDate(), 2),
