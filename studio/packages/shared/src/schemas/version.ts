@@ -262,7 +262,20 @@
 // WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5), the first
 // catalog entry to declare a dataset, makes the field load-bearing and owes the
 // bump. One bump covers both fields; they become load-bearing together.
-export const CATALOG_VERSION = 21;
+// CATALOG_VERSION 22 (#1119 M4): the `sqlite` STORE connection kind.
+// A BUMP, and the ledger already settled why a kind is different in kind from a
+// field: bump 8 was taken for `fs` on exactly this argument — a new
+// `ConnectionKind` "is not even parseable by an older `ConnectionKindSchema`, so
+// an export using them carries artifacts an older build mis-runs and must refuse
+// to import" — and bump 9 recorded the converse ("No new connection kind this
+// time — `fs` already parses at 8 — so no migration"). Measured consequence of
+// NOT bumping: an older build's `workspace-parse` turns the connection file into
+// a generic `unparseable` diagnostic and CONTINUES, so the connection is
+// silently dropped from the apply set instead of refused with a version message
+// that names the real cause. That is the "mis-run" this number exists to
+// prevent, and it is why M4 bumps where M1 and M3 (both additive INERT fields)
+// deliberately did not.
+export const CATALOG_VERSION = 22;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
