@@ -222,10 +222,13 @@ function planColumns(
   const plans: ColumnPlan[] = [];
   const missing: string[] = [];
   const ambiguous: string[] = [];
+  const uncoercible: string[] = [];
 
   for (const entry of mapping) {
     if (entry.source === undefined) {
-      plans.push(constantPlan(entry, coercion));
+      const constant = constantPlan(entry, coercion);
+      if ('reason' in constant) uncoercible.push(constant.reason);
+      else plans.push(constant.plan);
       continue;
     }
     if (exact.has(entry.source)) {
@@ -264,20 +267,34 @@ function planColumns(
       `the source has no column named ${missing.map((c) => `\`${c}\``).join(', ')}`,
     );
   }
+  if (uncoercible.length > 0) {
+    throw new CopyMappingError('uncoercible_constant', uncoercible.join('; '));
+  }
   return plans;
 }
 
-function constantPlan(entry: CopyPumpMappingEntry, coercion: CoercionOptions): ColumnPlan {
+/**
+ * Plan one `expression` column, whose value is the same for every row.
+ *
+ * REPORTS rather than throws, so a mapping with two broken constants names both
+ * — the same completeness `planColumns` gives missing and ambiguous columns.
+ * An authoring session that fixes one problem only to be told about the next is
+ * the experience that rule exists to avoid.
+ */
+function constantPlan(
+  entry: CopyPumpMappingEntry,
+  coercion: CoercionOptions,
+): { plan: ColumnPlan } | { reason: string } {
   const result = coerceValue(entry.expression, entry.type, coercion);
-  if (result.ok) return { kind: 'constant', sink: entry.sink, value: result.value };
-  if (entry.onError === 'null') return { kind: 'constant', sink: entry.sink, value: null };
+  if (result.ok) return { plan: { kind: 'constant', sink: entry.sink, value: result.value } };
+  if (entry.onError === 'null')
+    return { plan: { kind: 'constant', sink: entry.sink, value: null } };
   // Failing this per row would produce a copy in which EVERY row fails for the
   // same reason — a million identical failures reported as data trouble when it
   // is one authoring mistake.
-  throw new CopyMappingError(
-    'uncoercible_constant',
-    `the expression mapped to \`${entry.sink}\` cannot be a ${entry.type}: ${result.reason}`,
-  );
+  return {
+    reason: `the expression mapped to \`${entry.sink}\` cannot be a ${entry.type}: ${result.reason}`,
+  };
 }
 
 function recordFailure(counters: CopyCounters, failure: CopyRowFailure): void {

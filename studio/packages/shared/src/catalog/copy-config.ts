@@ -54,8 +54,9 @@ const CopyMappingEntrySchema = z
      * is `nullable: false`, because accepting it pushes the failure into the
      * store as a constraint violation, by which time part of the output is
      * already written — needs the RESOLVED sink dataset's columns and therefore
-     * lands with the activity in slice 3. It is named here so the split is
-     * legible rather than lost between tickets.
+     * lands with the activity, which slice 3's re-split put in **slice 4**
+     * (#1130) along with dataset resolution itself. It is named here so the
+     * split is legible rather than lost between tickets.
      */
     onError: z.enum(['fail', 'null']).default('fail'),
   })

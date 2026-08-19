@@ -294,6 +294,22 @@ describe('the `expression` arm — a constant per DISPATCH, not per row (§8)', 
     expect(err.message).toContain('n');
   });
 
+  it('names EVERY uncoercible constant, not just the first', async () => {
+    const err = await run(batchesOf([{ a: '1' }]), [
+      map({ expression: 'nope', sink: 'x', type: 'integer' }),
+      map({ expression: 'also-nope', sink: 'y', type: 'number' }),
+    ])
+      .batches.then(
+        () => undefined,
+        (e: unknown) => e as CopyMappingError,
+      )
+      .then((e) => e as CopyMappingError);
+
+    expect(err.code).toBe('uncoercible_constant');
+    expect(err.message).toContain('x');
+    expect(err.message).toContain('y');
+  });
+
   it('nulls an uncoercible constant that opted out, without refusing the copy', async () => {
     const { batches } = run(batchesOf([{ a: '1' }]), [
       map({ expression: 'not-a-number', sink: 'n', type: 'integer', onError: 'null' }),
