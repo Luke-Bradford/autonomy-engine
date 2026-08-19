@@ -115,8 +115,19 @@ const ok = (value: CoercedValue): CoercionResult => ({ ok: true, value });
  */
 const DECIMAL_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 /** An INTEGER literal with no fraction and no exponent — the form that can be
- * read exactly by `BigInt`, so a 17-digit id survives (see `toInteger`). */
+ * read exactly by `BigInt`, so a 17-digit id survives (see `toInteger`).
+ *
+ * What it admits is pinned against what `BigInt` ACCEPTS, by test: the two are
+ * different grammars that this code requires to agree. `BigInt` takes a leading
+ * sign and leading zeros (`+007` → `7n`) but refuses a decimal point or an
+ * exponent, which is why neither reaches it from here. Widen this and the
+ * never-throw test goes red. */
 const INTEGER_RE = /^[+-]?\d+$/;
+
+/** The safe-integer bounds as bigints. Hoisted rather than rebuilt per call for
+ * the same reason the format cache exists: this module runs per value per ROW. */
+const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /**
  * §6.2's boolean row lists only the TRUTHY tokens (`"true"`, `"yes"`, `"1"`).
@@ -302,11 +313,7 @@ function renderDate(parts: DateParts): string {
 function integerFromString(text: string): CoercionResult {
   if (INTEGER_RE.test(text)) {
     const big = BigInt(text);
-    return ok(
-      big >= BigInt(Number.MIN_SAFE_INTEGER) && big <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? Number(big)
-        : big,
-    );
+    return ok(big >= MIN_SAFE && big <= MAX_SAFE ? Number(big) : big);
   }
   if (!DECIMAL_RE.test(text)) {
     return fail('not_a_number', 'the value is not a decimal number');
@@ -429,7 +436,7 @@ function toNumber(value: unknown): CoercionResult {
   if (typeof value === 'bigint') {
     // Narrowing here WOULD be lossy above 2^53, and a `number` column cannot
     // hold the exact value — so it is refused rather than rounded.
-    if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    if (value < MIN_SAFE || value > MAX_SAFE) {
       return fail('lossy_integer', 'the value cannot be held exactly by a number column');
     }
     return ok(Number(value));
