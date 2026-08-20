@@ -10,7 +10,7 @@ import {
   sqliteAdapter,
   type SqliteRow,
 } from '../sqlite.js';
-import { sameDatasetAddress } from '@autonomy-studio/shared';
+import { sameDatasetAddress, type DatasetKind } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import type { ActivityContext } from '../types.js';
 import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
@@ -670,7 +670,7 @@ describe('resolveDatasetAddress', () => {
    * must fail this suite rather than skip it. */
   function resolveAddress(
     connectionConfig: Record<string, unknown>,
-    dataset: { kind: 'table' | 'query' | 'delimited'; config: Record<string, unknown> },
+    dataset: { kind: DatasetKind; config: Record<string, unknown> },
   ) {
     const resolve = sqliteAdapter.resolveDatasetAddress;
     if (resolve === undefined) throw new Error('the sqlite adapter must resolve dataset addresses');

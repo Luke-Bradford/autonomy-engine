@@ -42,6 +42,11 @@ async function seedStore(page: Page, name: string): Promise<string> {
   return seedConnection(page, name, 'sqlite', { path: `/tmp/${name}.db`, writable: true });
 }
 
+/** An `fs` store — where a `delimited` dataset lives (#1167). */
+async function seedFileStore(page: Page, name: string): Promise<string> {
+  return seedConnection(page, name, 'fs', { roots: ['/tmp'] });
+}
+
 function form(page: Page) {
   return page.getByRole('form', { name: 'Dataset form' });
 }
@@ -157,12 +162,16 @@ test.describe('#1115 Manage → Datasets', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
+    const storeId = await seedStore(page, `e2e-ds-kinds-${Date.now()}`);
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
+    // Pinned to a store we control. The suite database is SHARED and
+    // `blankForm` opens on `connections[0]`, so since #1167 derived the opening
+    // kind from that store, which kind the form starts on is not this test's to
+    // inherit — the spec below owns that question deterministically.
+    await form(page).getByLabel('Store').selectOption(storeId);
 
-    // A NEW dataset opens on the first kind that HAS a reader — `table`, not
-    // the enum's first member `delimited`.
-    await expect(form(page).getByLabel('Kind')).toHaveValue('table');
+    await form(page).getByLabel('Kind').selectOption('table');
     await expect(form(page).getByLabel('table', { exact: true })).toBeVisible();
 
     await form(page).getByLabel('Kind').selectOption('query');
@@ -173,22 +182,51 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(form(page).getByLabel('sql', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('table', { exact: true })).toBeHidden();
 
+    // #1167 gave `delimited` a READER, so it gets §2.6's typed controls now.
+    // The gate that forces JSON is the reader and never an absent field form,
+    // which is exactly why this kind changed sides while its schema did not.
     await form(page).getByLabel('Kind').selectOption('delimited');
-    // No READER, so the JSON editor — not because the shape cannot be derived
-    // (#1163 gave `delimited` §2.6's eight keys and it derives controls fine),
-    // but because a typed form would present a dataset as ready to copy while
-    // every copy naming it still refuses at dispatch. And not the "This kind
-    // has no settings" line, which would be false either way.
-    await expect(form(page).getByLabel('Config (JSON)')).toBeVisible();
-    await expect(form(page).getByText('This kind has no settings.')).toBeHidden();
+    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
     await expect(
       form(page).getByText(/no reader exists for a delimited dataset yet/),
-    ).toBeVisible();
-    // #1145 can land a SECOND note here, but this test does NOT assert it: the
-    // form opens on `connections[0]` (`DatasetsPage.tsx` `blankForm`) and the
-    // suite database is shared, so whether that first connection is a `sqlite`
-    // store — which `delimited` disagrees with — is not this test's to control.
-    // The pile-up is asserted deterministically in the #1145 test below.
+    ).toBeHidden();
+    // The MIS-STORE note survives on its own, which is what keeps #1145's
+    // advisory and #1120's two independent facts rather than one: this is a
+    // `sqlite` store and `delimited` lives on `fs`.
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      "dataset kind 'delimited' lives in a store of kind 'fs'",
+    );
+
+    // `excel` holds the reader gate open now — same branch, same reason. Kept
+    // so this spec still has an arm that can fail rather than becoming a
+    // restatement of the enum.
+    await form(page).getByLabel('Kind').selectOption('excel');
+    await expect(form(page).getByLabel('Config (JSON)')).toBeVisible();
+    await expect(form(page).getByText('This kind has no settings.')).toBeHidden();
+    await expect(form(page).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
+  test('authors a delimited dataset on an fs store, cleanly', async ({ page }) => {
+    // #1167's user-visible step: the pair a CSV -> SQLite copy needs is now
+    // authorable end to end — typed controls, no no-reader note, no mis-store
+    // note. Deliberately NOT an assertion about the DEFAULT kind: `blankForm`
+    // opens on `connections[0]` and the suite database is shared, so which
+    // connection that is cannot be fixed from here. `DatasetsPage.test.tsx`
+    // pins the store-aware default deterministically instead.
+    const problems = collectPageProblems(page);
+    const fileStore = await seedFileStore(page, `e2e-ds-fs-${Date.now()}`);
+
+    await gotoDatasets(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    await form(page).getByLabel('Store').selectOption(fileStore);
+    // `delimited` is what lives in an `fs` store, and the form must reach it
+    // without the operator being told the pair disagrees.
+    await form(page).getByLabel('Kind').selectOption('delimited');
+    await expect(form(page).getByText(/Kind and store disagree/)).toBeHidden();
+    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
   });
