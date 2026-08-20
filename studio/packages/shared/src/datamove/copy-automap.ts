@@ -45,8 +45,15 @@ export interface AutoMapResult {
   readonly ambiguous: readonly string[];
   /** Sink columns the source has no column for. */
   readonly unmatched: readonly string[];
-  /** Sink columns some row already claims — the ADDITIVE rule's skip list. */
+  /** Sink columns an EXISTING mapping row already claims — the ADDITIVE skip. */
   readonly alreadyMapped: readonly string[];
+  /**
+   * Sink columns skipped because an EARLIER DECLARED column folded onto the same
+   * target. Kept apart from {@link alreadyMapped}, which the author caused: this
+   * one is a fault in the dataset's declared list, and reporting it as "already
+   * mapped" would tell them they mapped a column they have never touched.
+   */
+  readonly duplicateDeclared: readonly string[];
 }
 
 /**
@@ -77,16 +84,24 @@ export function autoMapMapping(
   const ambiguous: string[] = [];
   const unmatched: string[] = [];
   const alreadyMapped: string[] = [];
+  const duplicateDeclared: string[] = [];
+  /** Folds bound by THIS pass — what separates a declared duplicate from an author's row. */
+  const declaredFolds = new Set<string>();
 
   for (const column of sinkColumns) {
     const fold = nocaseFold(column.name);
-    // Also catches two DECLARED sink columns that fold together: `columns` has
-    // no uniqueness refine, so a declared list really can carry `id` and `ID`,
-    // and emitting both would author that same collision.
+    // Two DECLARED sink columns can fold together — `columns` has no uniqueness
+    // refine, so a declared list really can carry `id` and `ID` — and emitting
+    // both would author the collision the store refuses. FIRST DECLARED WINS,
+    // which is deterministic for a given dataset but is still arbitrary between
+    // two columns whose `type`/`nullable` disagree; the loser is reported rather
+    // than dropped, because the real defect is the declared list.
     if (claimed.has(fold)) {
-      alreadyMapped.push(column.name);
+      if (declaredFolds.has(fold)) duplicateDeclared.push(column.name);
+      else alreadyMapped.push(column.name);
       continue;
     }
+    declaredFolds.add(fold);
     const resolved = resolveSourceColumn({ source: column.name, onError: 'fail' }, index);
     if (resolved.kind === 'bound') {
       claimed.add(fold);
@@ -100,7 +115,7 @@ export function autoMapMapping(
     }
   }
 
-  return { rows, ambiguous, unmatched, alreadyMapped };
+  return { rows, ambiguous, unmatched, alreadyMapped, duplicateDeclared };
 }
 
 export interface SinkCoverage {
@@ -118,6 +133,21 @@ export interface SinkCoverage {
    * longer declares, with nothing on screen to say so.
    */
   readonly undeclared: readonly string[];
+  /**
+   * Pairs of rows whose `sink` names differ only by ASCII case, so both write the
+   * SAME store column.
+   *
+   * This is the hazard auto-map's own fold-dedupe cannot reach, because the
+   * author can type it directly. `refineMapping` dedupes sinks by EXACT string
+   * and so accepts `id` beside `ID`; the store then refuses the pair
+   * (`resolveSinkColumns` — "each sink column may be written by one mapping
+   * row") at DISPATCH, on a version that is already immutable. Naming it here is
+   * the only place an author can still act on it.
+   *
+   * An EXACT duplicate is deliberately NOT reported: `refineMapping` refuses that
+   * one on Apply, in better words, and two advisories for one fault is noise.
+   */
+  readonly duplicateWrites: readonly { readonly first: string; readonly second: string }[];
 }
 
 /**
@@ -135,17 +165,25 @@ export function checkSinkCoverage(
   sinkColumns: readonly DatasetColumn[],
 ): SinkCoverage {
   const declared = new Set(sinkColumns.map((c) => nocaseFold(c.name)));
-  const written = new Set<string>();
+  /** The first row to write each fold, so a collision can name BOTH spellings. */
+  const writtenBy = new Map<string, string>();
   const undeclared: string[] = [];
+  const duplicateWrites: { first: string; second: string }[] = [];
 
   for (const entry of mapping) {
     const fold = nocaseFold(entry.sink);
-    if (declared.has(fold)) written.add(fold);
-    else undeclared.push(entry.sink);
+    if (!declared.has(fold)) {
+      undeclared.push(entry.sink);
+      continue;
+    }
+    const first = writtenBy.get(fold);
+    if (first === undefined) writtenBy.set(fold, entry.sink);
+    else if (first !== entry.sink) duplicateWrites.push({ first, second: entry.sink });
   }
 
   return {
-    notWritten: sinkColumns.filter((c) => !written.has(nocaseFold(c.name))),
+    notWritten: sinkColumns.filter((c) => !writtenBy.has(nocaseFold(c.name))),
     undeclared,
+    duplicateWrites,
   };
 }

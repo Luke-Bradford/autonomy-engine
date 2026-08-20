@@ -16,10 +16,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * identical text, so a `useEffect` keyed on the message would not re-run and
  * the second copy would inherit the first's half-spent window.
  *
+ * `clear` is for the other way a notice can stop being true: not time passing,
+ * but the thing it described going away. A gesture report on a panel that has
+ * since re-seeded onto a different doc is stale immediately, and waiting out the
+ * window would leave it claiming to describe work the author has already
+ * committed.
+ *
  * @param ms how long the notice stays up, from the most recent `show`.
- * @returns the current notice (or `null`), and the function that raises one.
+ * @returns the current notice (or `null`), the function that raises one, and the
+ *   function that drops it early.
  */
-export function useTransientNotice(ms: number): [string | null, (text: string) => void] {
+export function useTransientNotice(
+  ms: number,
+): [string | null, (text: string) => void, () => void] {
   const [notice, setNotice] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -32,6 +41,12 @@ export function useTransientNotice(ms: number): [string | null, (text: string) =
     [ms],
   );
 
+  const clear = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+    setNotice(null);
+  }, []);
+
   // A pending timer outliving the component would set state on a dead one.
   useEffect(
     () => () => {
@@ -40,5 +55,5 @@ export function useTransientNotice(ms: number): [string | null, (text: string) =
     [],
   );
 
-  return [notice, show];
+  return [notice, show, clear];
 }

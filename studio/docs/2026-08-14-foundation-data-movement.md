@@ -906,6 +906,12 @@ a second row for `ID` beside an author's `id`, pass `.min(1)`, pass `refineMappi
 gate, mint an immutable version — and fail `permanent` at dispatch, hours later. The same fold
 covers two DECLARED sink columns that collide, since `columns` has no uniqueness refine.
 
+**The advisory also names the fold collision an AUTHOR can still type.** Auto-map's own dedupe only
+governs auto-map's output; a hand-typed `id` beside `ID` passes `refineMapping`'s exact-string
+dedupe, saves, and dies `permanent` at dispatch on an immutable version. The coverage check already
+builds the fold set, so it reports the pair — the only place an author can still act on it. An
+EXACT duplicate is deliberately left to `refineMapping`, which refuses it on Apply in better words.
+
 **§6.3's "trimmed" is DELIBERATELY NOT IMPLEMENTED, and this supersedes that parenthetical.**
 Neither the source resolver nor the store's sink resolver trims. A trimmed match would bind a
 declared `" id "` to source `id` and emit a row whose `sink` is `" id "`, which

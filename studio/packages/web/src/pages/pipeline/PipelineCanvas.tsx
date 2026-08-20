@@ -19,7 +19,6 @@ import {
   type Container,
   type ConnectionPublic,
   type ContainerKind,
-  type AutoMapResult,
   type Dataset,
   type Edge,
   type Node,
@@ -60,6 +59,7 @@ import {
   type Selection,
 } from './canvasStore';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
+import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
 import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
@@ -72,7 +72,6 @@ import {
   parseFieldInput,
   seedFieldInputs,
   unrepresentableFields,
-  type ConfigField,
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
@@ -2332,55 +2331,6 @@ function useExpressionPicker(
  * The connection dropdown is filtered to the kinds this activity accepts.
  * Container membership (U6d) is `ContainerSection` above.
  */
-/**
- * #1170 M8 slice 2 — the `copy` mapping's authoring aids: auto-map (§6.3) and
- * §13's explicit *unmapped* state.
- *
- * §13 asks that "a column deliberately not copied must be visibly so, never
- * merely absent". That is implemented as an ADVISORY read off the two bound
- * datasets, not as a persisted per-column acknowledgment: the mapping element is
- * `.strict()` and has no key for one, so persisting it would mean a schema
- * change and a `CATALOG_VERSION` bump that this slice does not carry.
- */
-const MAPPING_FIELD = 'mapping';
-
-/** The cells auto-map writes. See {@link autoMappableField}. */
-const AUTOMAP_CELLS = ['source', 'sink', 'type', 'onError'] as const;
-
-/**
- * The `mapping` field, IF its rows carry the cells auto-map writes.
- *
- * Gated on the derived ELEMENT SHAPE rather than on the activity type, because
- * the shape is the actual precondition: `formatFieldValue`'s objectList arm
- * refuses any undeclared column key, so a row list without these four cells is
- * one auto-map could only write a refusal into. Reading it off the DERIVED
- * fields also keeps the Zod schema the single source of truth (U7) — rename a
- * cell and this follows, where a hand-written activity list would drift.
- */
-function autoMappableField(fields: readonly ConfigField[] | null): ConfigField | null {
-  const field = fields?.find((f) => f.name === MAPPING_FIELD);
-  if (!field || field.kind !== 'objectList') return null;
-  const cells = new Set((field.elementFields ?? []).map((c) => c.name));
-  return AUTOMAP_CELLS.every((name) => cells.has(name)) ? field : null;
-}
-
-/** What auto-map did NOT do, so a press that maps nothing still says why. */
-function describeSkips(result: AutoMapResult): string {
-  const parts: string[] = [];
-  if (result.alreadyMapped.length > 0) {
-    parts.push(`${result.alreadyMapped.length} already mapped`);
-  }
-  if (result.ambiguous.length > 0) {
-    // Named, not counted: the author has to pick the source column by hand, and
-    // cannot without knowing which sink column is stuck.
-    parts.push(`${result.ambiguous.join(', ')} matched more than one source column`);
-  }
-  if (result.unmatched.length > 0) {
-    parts.push(`${result.unmatched.join(', ')} had no source column of that name`);
-  }
-  return parts.length > 0 ? ` Skipped: ${parts.join('; ')}.` : '';
-}
-
 export function NodePanel({
   store,
   connections,
@@ -2457,6 +2407,9 @@ export function NodePanel({
   const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
   const [inputs, setInputs] = useState(() => seedFieldInputs(fields, editable));
   const [error, setError] = useState<string | null>(null);
+  // Declared HERE, above the render-phase re-seed below that clears it.
+  const [autoMapNotice, showAutoMapNotice, clearAutoMapNotice] =
+    useTransientNotice(CANVAS_NOTICE_MS);
   // The author's PREFERENCE, not the mode: the mode is this OR forced. Kept
   // apart so that repairing an unrenderable value hands the form back, instead of
   // leaving the author in an editor they never chose.
@@ -2482,6 +2435,11 @@ export function NodePanel({
     setText(JSON.stringify(editable, null, 2));
     setInputs(seedFieldInputs(fields, editable));
     setError(null);
+    // The auto-map line describes a DRAFT. A new `config` identity means that
+    // draft is gone (usually because Apply just committed it), so a notice still
+    // saying "Apply config to save" would be telling the author to do something
+    // they have already done.
+    clearAutoMapNotice();
   }
 
   // Kinds this activity accepts, PLUS whatever is currently bound — so a node
@@ -2590,7 +2548,6 @@ export function NodePanel({
   // store's ACTUAL columns (3) instead, so none of this may ever refuse
   // anything: it advises, and a stale declared list is a wrong warning rather
   // than a blocked copy.
-  const [autoMapNotice, showAutoMapNotice] = useTransientNotice(CANVAS_NOTICE_MS);
   const mappingField = useMemo(() => autoMappableField(fields), [fields]);
   const sourceDataset = datasets.find((d) => d.id === boundDatasets?.source);
   const sinkDataset = datasets.find((d) => d.id === boundDatasets?.sink);
@@ -2601,9 +2558,15 @@ export function NodePanel({
    * `parseFieldInput` is the ONE draft→config rule (it owns "a cleared optional
    * cell omits its key" and every per-cell kind), so going through it makes the
    * advisory describe what Apply would actually write rather than a second
-   * reading of the same cells. `null` when the draft cannot be projected at all
-   * — a cell mid-edit — and the aids then go quiet instead of describing a shape
-   * that does not exist.
+   * reading of the same cells.
+   *
+   * The `null` branch is DEFENSIVE and unreachable for this field as it stands:
+   * `parseFieldInput` refuses only a `number` cell ("must be a number"), and the
+   * mapping element is four text/enum cells. It is kept because the cell that
+   * makes it live is one schema edit away — add a numeric cell (a batch size, a
+   * column width) and a half-typed value would otherwise reach the aids as a
+   * shape that does not exist. A test for it would assert nothing today, so
+   * there is not one.
    */
   const draftMapping = useMemo(() => {
     if (!mappingField) return null;
@@ -2920,6 +2883,13 @@ export function NodePanel({
               Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
             </p>
           )}
+          {sinkAdvisory !== null &&
+            sinkAdvisory.duplicateWrites.map((pair) => (
+              <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
+                {pair.first} and {pair.second} differ only by case, so both write the same sink
+                column — the store refuses that when the copy runs.
+              </p>
+            ))}
           {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
             <p className="contract-advisory">
               {sinkAdvisory.undeclared.join(', ')}{' '}

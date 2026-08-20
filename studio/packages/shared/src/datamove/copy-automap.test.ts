@@ -85,7 +85,22 @@ describe('autoMapMapping (#1170, spec §6.3)', () => {
     const result = autoMapMapping([col('id'), col('ID')], [col('id'), col('ID')], []);
 
     expect(result.rows).toHaveLength(1);
-    expect(result.alreadyMapped).toEqual(['ID']);
+    // Reported APART from a column the author's own row claims: this one is a
+    // fault in the declared list, not something they did.
+    expect(result.duplicateDeclared).toEqual(['ID']);
+    expect(result.alreadyMapped).toEqual([]);
+  });
+
+  it('does NOT trim — a declared name with padding is a different column', () => {
+    // §6.3's parenthetical says "case-insensitive, trimmed", and the trimmed half
+    // is deliberately not implemented: neither the source resolver nor the
+    // store's sink resolver trims, so a trimmed match would emit a row whose
+    // `sink` is `' id '` and which `resolveSinkColumns` cannot then bind to the
+    // actual column `id` -- an unrunnable row, authored by the button.
+    const result = autoMapMapping([col('id', 'integer')], [col(' id ', 'integer')], []);
+
+    expect(result.rows).toEqual([]);
+    expect(result.unmatched).toEqual([' id ']);
   });
 
   it('maps nothing when either side declares no columns', () => {
@@ -123,6 +138,21 @@ describe('checkSinkCoverage (#1170, spec §13)', () => {
     const coverage = checkSinkCoverage([{ sink: 'a' }], [col('a')]);
 
     expect(coverage.notWritten).toEqual([]);
+  });
+
+  it('names two rows that write the SAME column in different case', () => {
+    // The hazard auto-map's own dedupe cannot reach, because an author can type
+    // it. `refineMapping` dedupes sinks EXACTLY and lets this through; the store
+    // refuses it at dispatch, on an immutable version.
+    const coverage = checkSinkCoverage([{ sink: 'id' }, { sink: 'ID' }], [col('id', 'integer')]);
+
+    expect(coverage.duplicateWrites).toEqual([{ first: 'id', second: 'ID' }]);
+  });
+
+  it('leaves an EXACT duplicate to refineMapping, which says it better', () => {
+    const coverage = checkSinkCoverage([{ sink: 'id' }, { sink: 'id' }], [col('id', 'integer')]);
+
+    expect(coverage.duplicateWrites).toEqual([]);
   });
 
   it('reports a NOT NULL column that nothing writes, so it can be flagged apart', () => {

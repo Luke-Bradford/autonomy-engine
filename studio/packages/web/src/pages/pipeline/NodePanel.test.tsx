@@ -970,4 +970,62 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
 
     expect(screen.queryByRole('button', { name: 'Auto-map columns' })).toBeNull();
   });
+
+  it('names the sink column that matched more than one source column', () => {
+    // Counted would be useless: the author has to pick the source column by
+    // hand and cannot without knowing which sink column is stuck.
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', [col('name'), col('NAME')]),
+      dset('d_sink', 'staff', [col('Name')]),
+    ]);
+
+    autoMap();
+
+    expect(screen.getByText(/Name matched more than one source column/)).toBeTruthy();
+  });
+
+  it('counts the columns an existing row already claims', () => {
+    mount(
+      { mapping: [{ source: 'id', sink: 'id', type: 'integer', onError: 'fail' }], mode: 'append' },
+      [
+        dset('d_src', 'people', [col('id', 'integer')]),
+        dset('d_sink', 'staff', [col('id', 'integer')]),
+      ],
+    );
+
+    autoMap();
+
+    expect(screen.getByText(/1 already mapped/)).toBeTruthy();
+  });
+
+  it('says two rows differing only by case write the same sink column', () => {
+    // `refineMapping` dedupes sinks EXACTLY, so it lets this pair through; the
+    // store refuses it at dispatch, on a version that is already immutable.
+    mount(
+      {
+        mapping: [
+          { source: 'a', sink: 'id', type: 'integer', onError: 'fail' },
+          { source: 'b', sink: 'ID', type: 'integer', onError: 'fail' },
+        ],
+        mode: 'append',
+      },
+      [
+        dset('d_src', 'people', [col('a'), col('b')]),
+        dset('d_sink', 'staff', [col('id', 'integer')]),
+      ],
+    );
+
+    expect(screen.getByText(/id and ID differ only by case/)).toBeTruthy();
+  });
+
+  it('drops the auto-map line once the draft it describes is applied', () => {
+    const panel = mount({ mapping: [ROW], mode: 'append' });
+
+    autoMap();
+    expect(screen.getByText(/Apply config to save/)).toBeTruthy();
+
+    panel.apply();
+
+    expect(screen.queryByText(/Apply config to save/)).toBeNull();
+  });
 });
