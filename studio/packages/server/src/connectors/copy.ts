@@ -2,6 +2,7 @@ import {
   checkSourceDrift,
   copyDispatchInputSchema,
   CopyMappingError,
+  formatZodIssues,
   newCopyCounters,
   nocaseFold,
   pumpCopyRows,
@@ -289,7 +290,14 @@ export async function* runCopyActivity(
 
   const parsed = copyDispatchInputSchema.safeParse(ctx.input);
   if (!parsed.success) {
-    yield failed('permanent', `invalid copy activity config: ${parsed.error.message}`);
+    // Through `formatZodIssues`, not `error.message` — the raw `.message` on
+    // Zod 4 is a pretty-printed JSON array, so a one-line fault arrived as a
+    // multi-line blob in the run log. #1172 made that reachable for a config an
+    // operator could plausibly hold: a version minted with `mapping: []` before
+    // that refusal existed now fails HERE, and this is the sentence it fails
+    // with. First use of the helper in `packages/server` — it was written for
+    // the same job on the web side.
+    yield failed('permanent', `invalid copy activity config: ${formatZodIssues(parsed.error.issues)}`);
     return;
   }
   const { mapping, mode } = parsed.data;
@@ -313,10 +321,18 @@ export async function* runCopyActivity(
   // described and being read. They share one predicate (`schema-drift.ts`) so
   // they cannot disagree about what "the same column" means.
   //
-  // An EMPTY mapping skips the describe entirely. The schema permits `[]` and
-  // the pump refuses it (`empty_mapping`), so describing first would open the
-  // source store for a dispatch that is already doomed — and would report
-  // whatever that open happened to fail with instead of the actual fault.
+  // An EMPTY mapping skips the describe entirely, so as not to open the source
+  // store for a dispatch that is already doomed — which would report whatever
+  // that open happened to fail with instead of the actual fault.
+  //
+  // Since #1172 nothing reaches here with one: `copyDispatchInputSchema` above
+  // refuses `[]` outright, so `mapping` is non-empty by construction and this
+  // guard cannot fire. It is kept rather than deleted because it is the
+  // structure of the ladder, not an assertion about the schema — the parse
+  // above is one line, and a future change that moves or loosens it should find
+  // the rungs below still ordered correctly rather than silently opening a
+  // store for nothing. `pump.ts`'s `empty_mapping` is the same call, one layer
+  // further down, and its docblock makes the argument at length.
   let sourceColumns: readonly string[] = [];
   let coercion: CoercionOptions = {};
   try {
