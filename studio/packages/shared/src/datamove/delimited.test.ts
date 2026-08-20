@@ -34,10 +34,38 @@ async function collect(
 
 /** Every case that must parse identically whole, and one character at a time. */
 const CORPUS: [name: string, text: string, expected: string[][]][] = [
-  ['plain LF rows', 'a,b\n1,2\n', [['a', 'b'], ['1', '2']]],
-  ['CRLF rows', 'a,b\r\n1,2\r\n', [['a', 'b'], ['1', '2']]],
-  ['lone CR rows', 'a,b\r1,2\r', [['a', 'b'], ['1', '2']]],
-  ['no trailing terminator', 'a,b\n1,2', [['a', 'b'], ['1', '2']]],
+  [
+    'plain LF rows',
+    'a,b\n1,2\n',
+    [
+      ['a', 'b'],
+      ['1', '2'],
+    ],
+  ],
+  [
+    'CRLF rows',
+    'a,b\r\n1,2\r\n',
+    [
+      ['a', 'b'],
+      ['1', '2'],
+    ],
+  ],
+  [
+    'lone CR rows',
+    'a,b\r1,2\r',
+    [
+      ['a', 'b'],
+      ['1', '2'],
+    ],
+  ],
+  [
+    'no trailing terminator',
+    'a,b\n1,2',
+    [
+      ['a', 'b'],
+      ['1', '2'],
+    ],
+  ],
   ['empty fields', 'a,,b\n', [['a', '', 'b']]],
   ['a wholly empty row of one field', ',\n', [['', '']]],
   ['quoted delimiter', '"a,b",c\n', [['a,b', 'c']]],
@@ -49,7 +77,14 @@ const CORPUS: [name: string, text: string, expected: string[][]][] = [
   ['whitespace before a quote means the field is not quoted', ' "a",b\n', [[' "a"', 'b']]],
   ['a blank line is skipped', 'a\n\n\nb\n', [['a'], ['b']]],
   ['ragged rows are yielded VERBATIM', 'a,b,c\n1\n2,3\n', [['a', 'b', 'c'], ['1'], ['2', '3']]],
-  ['duplicate header names are NOT deduped', 'id,id\n1,2\n', [['id', 'id'], ['1', '2']]],
+  [
+    'duplicate header names are NOT deduped',
+    'id,id\n1,2\n',
+    [
+      ['id', 'id'],
+      ['1', '2'],
+    ],
+  ],
   ['a NUL is ordinary data', 'a\0b\n', [['a\0b']]],
   ['a lone CR at EOF terminates the row', 'a\r', [['a']]],
 ];

@@ -88,14 +88,18 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
   });
 
   it('keeps `header: false` expressible — it is a real property of a real file', () => {
-    expect(delimitedDatasetConfigSchema.parse({ path: '/f.csv', header: false }).header).toBe(false);
+    expect(delimitedDatasetConfigSchema.parse({ path: '/f.csv', header: false }).header).toBe(
+      false,
+    );
   });
 
   it('refuses a multi-character delimiter rather than half-supporting it', () => {
     for (const delimiter of ['', ';;', '||']) {
       expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter }).success).toBe(false);
     }
-    expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter: '\t' }).success).toBe(true);
+    expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter: '\t' }).success).toBe(
+      true,
+    );
   });
 
   it('refuses a delimiter, quote or escape that is a row terminator', () => {
@@ -106,7 +110,9 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
         false,
       );
       expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, quote: ch }).success).toBe(false);
-      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, escape: ch }).success).toBe(false);
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, escape: ch }).success).toBe(
+        false,
+      );
     }
   });
 
@@ -153,8 +159,9 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
     // Reuses the matrix's own compiler rather than restating the token rules:
     // otherwise a format every row will reject saves clean, and the operator
     // learns about it once per row at run time.
-    expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, dateFormat: 'yyyy-MM-dd' }).success)
-      .toBe(true);
+    expect(
+      delimitedDatasetConfigSchema.safeParse({ ...minimal, dateFormat: 'yyyy-MM-dd' }).success,
+    ).toBe(true);
     for (const bad of ['nonsense', 'yyyy-yyyy', 'YYYY']) {
       const parsed = delimitedDatasetConfigSchema.safeParse({ ...minimal, dateFormat: bad });
       expect(parsed.success).toBe(false);

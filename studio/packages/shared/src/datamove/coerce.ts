@@ -74,9 +74,14 @@ export type CoercionResult =
 /**
  * The per-source-dataset format facts (§2.6). They are passed IN rather than
  * read from a dataset config because they live on the FILE kinds (`delimited`,
- * `excel`), whose config schemas are still `unimplementedDatasetConfigSchema`
- * until M7/M11. §2.6 states why they are absent from the SQL kinds: *"a database
- * column already has a type and a real `NULL`, so there is nothing to declare."*
+ * `excel`) and this matrix is pure — it is handed values, never a resource.
+ * §2.6 states why they are absent from the SQL kinds: *"a database column
+ * already has a type and a real `NULL`, so there is nothing to declare."*
+ *
+ * `delimited`'s config now DECLARES both (#1163); `excel`'s waits for M11. What
+ * is still owed is the wiring — `connectors/copy.ts` does not yet read them off
+ * the source dataset and pass them here, which is the TODO on
+ * `CopyPumpOptions.coercion` and lands with M7's reader slices.
  */
 export interface CoercionOptions {
   /**

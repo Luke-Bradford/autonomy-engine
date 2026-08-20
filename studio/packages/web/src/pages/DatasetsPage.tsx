@@ -387,12 +387,20 @@ function DatasetForm({
    * A kind with NO READER forces it too, and that is not the same reason.
    *
    * `unimplementedDatasetConfigSchema` is a `looseObject`, so `deriveConfigFields`
-   * yields no controls for `delimited`/`excel` — and the empty-fields branch
-   * would then print "This kind has no settings", which is FALSE: spec §2.6
-   * lists `path`, `delimiter`, `quote`, `header`, `encoding`, `nullValue` and
-   * `dateFormat` for `delimited`. They are simply not described yet. The JSON
-   * editor is the honest surface for a shape this build cannot name, and the
-   * advisory below says why it is showing.
+   * yields no controls for `excel` — and the empty-fields branch would then
+   * print "This kind has no settings", which is FALSE: spec §2.6 lists `path`,
+   * `sheet`, `headerRow`, `nullValue` and `dateFormat` for it. They are simply
+   * not described yet. The JSON editor is the honest surface for a shape this
+   * build cannot name, and the advisory below says why it is showing.
+   *
+   * `delimited` is NO LONGER such a kind (#1163 gave it §2.6's eight keys:
+   * `path`, `delimiter`, `quote`, `escape`, `header`, `encoding`, `nullValue`,
+   * `dateFormat`), so `deriveConfigFields` DOES yield controls for it. It is
+   * still forced to JSON here, and the gate is the right one for a different
+   * reason: no reader exists yet, so a typed form would present a dataset as
+   * ready to copy when every copy naming it still refuses at dispatch. The two
+   * facts are separate and both are checked — which is why this branch keys on
+   * `datasetKindIsImplemented` and not on `fields.length`.
    */
   const kindHasReader = datasetKindIsImplemented(form.kind);
   /*

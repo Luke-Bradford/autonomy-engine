@@ -174,9 +174,11 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(form(page).getByLabel('table', { exact: true })).toBeHidden();
 
     await form(page).getByLabel('Kind').selectOption('delimited');
-    // No reader, so no derived controls — and the JSON editor rather than the
-    // "This kind has no settings" line, which would be false (§2.6 lists seven
-    // keys for `delimited`; they are undescribed, not absent).
+    // No READER, so the JSON editor — not because the shape cannot be derived
+    // (#1163 gave `delimited` §2.6's eight keys and it derives controls fine),
+    // but because a typed form would present a dataset as ready to copy while
+    // every copy naming it still refuses at dispatch. And not the "This kind
+    // has no settings" line, which would be false either way.
     await expect(form(page).getByLabel('Config (JSON)')).toBeVisible();
     await expect(form(page).getByText('This kind has no settings.')).toBeHidden();
     await expect(
