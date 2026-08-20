@@ -621,9 +621,17 @@ function DatasetForm({
    * server accepts. `null` when no connection resolves, which is exactly the
    * two states the notes above already own.
    */
-  const storeKindAdvisory = datasetConnectionKindAdvisory(
-    form.kind,
-    connections.find((conn) => conn.id === form.connectionId)?.kind ?? null,
+  const storeKindAdvisory = useMemo(
+    () =>
+      datasetConnectionKindAdvisory(
+        form.kind,
+        connections.find((conn) => conn.id === form.connectionId)?.kind ?? null,
+      ),
+    // The three inputs, not `form` whole — the same rule the config advisory
+    // above states and for the same reason: `form` is a new object on every
+    // keystroke, so depending on it would re-resolve the store while the
+    // operator types a NAME.
+    [form.kind, form.connectionId, connections],
   );
 
   return (
@@ -671,7 +679,7 @@ function DatasetForm({
         </p>
       )}
       {storeKindAdvisory !== null && (
-        <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}.`}</p>
+        <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
       )}
 
       <label>

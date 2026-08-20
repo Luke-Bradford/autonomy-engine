@@ -201,7 +201,10 @@ describe('DATASET_CONNECTION_KINDS (#1145)', () => {
     for (const entry of catalog.values()) {
       const sides = [
         { kinds: entry.datasetKinds?.source, stores: entry.connectionKinds },
-        { kinds: entry.datasetKinds?.sink, stores: entry.sinkConnectionKinds ?? entry.connectionKinds },
+        {
+          kinds: entry.datasetKinds?.sink,
+          stores: entry.sinkConnectionKinds ?? entry.connectionKinds,
+        },
       ];
       for (const side of sides) {
         if (side.kinds === undefined) continue;

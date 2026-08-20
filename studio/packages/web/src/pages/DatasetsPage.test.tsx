@@ -443,7 +443,9 @@ describe('DatasetsPage', () => {
     // refused when a copy is dispatched — which is what the note exists to say
     // earlier.
     const user = userEvent.setup();
-    listConnectionsMock.mockResolvedValue([store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' })]);
+    listConnectionsMock.mockResolvedValue([
+      store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' }),
+    ]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
@@ -452,7 +454,7 @@ describe('DatasetsPage', () => {
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
 
     expect(within(form()).getByText(/Kind and store disagree/)).toHaveTextContent(
-      /a table dataset lives in a sqlite store, but this one names a anthropic_api connection/,
+      /dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'anthropic_api'/,
     );
     // ADVISORY, never a gate: the server accepts this row, so the form must not
     // refuse it. This is the assertion that keeps it from being hardened into a

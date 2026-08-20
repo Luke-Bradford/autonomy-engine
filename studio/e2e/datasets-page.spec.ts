@@ -23,13 +23,23 @@ async function gotoDatasets(page: Page): Promise<void> {
   await fluentRootReady(page);
 }
 
-/** A `sqlite` store, minted through the real route. */
-async function seedStore(page: Page, name: string): Promise<string> {
+/** Any connection, minted through the real route. */
+async function seedConnection(
+  page: Page,
+  name: string,
+  kind: string,
+  config: Record<string, unknown>,
+): Promise<string> {
   const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'sqlite', config: { path: `/tmp/${name}.db`, writable: true } },
+    data: { name, kind, config },
   });
-  expect(res.status(), `creating connection '${name}': ${await res.text()}`).toBe(201);
+  expect(res.status(), `creating ${kind} connection '${name}': ${await res.text()}`).toBe(201);
   return ((await res.json()) as { id: string }).id;
+}
+
+/** A `sqlite` store — what most of this file needs. */
+async function seedStore(page: Page, name: string): Promise<string> {
+  return seedConnection(page, name, 'sqlite', { path: `/tmp/${name}.db`, writable: true });
 }
 
 function form(page: Page) {
@@ -176,7 +186,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // leave the pile-up to be discovered: a `delimited` dataset lives on `fs`
     // and this form is bound to a `sqlite` store. Two true, independent things.
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      'a delimited dataset lives in a fs store',
+      "dataset kind 'delimited' lives in a store of kind 'fs'",
     );
 
     await expectQuiet(page, problems);
@@ -199,6 +209,7 @@ test.describe('#1115 Manage → Datasets', () => {
 
     await expectQuiet(page, problems);
   });
+
   test('says the kind and the store disagree, without refusing the save (#1145)', async ({
     page,
   }) => {
@@ -206,11 +217,9 @@ test.describe('#1115 Manage → Datasets', () => {
     const stamp = Date.now();
     // `http` rather than `anthropic_api`: it is a real non-store connection and
     // is credential-less, so it needs no secret dance to exist.
-    const res = await page.request.post('/api/connections', {
-      data: { name: `e2e-ds-nonstore-${stamp}`, kind: 'http', config: { baseUrl: 'https://example.com' } },
+    const nonStoreId = await seedConnection(page, `e2e-ds-nonstore-${stamp}`, 'http', {
+      baseUrl: 'https://example.com',
     });
-    expect(res.status(), `creating http connection: ${await res.text()}`).toBe(201);
-    const nonStoreId = ((await res.json()) as { id: string }).id;
 
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
@@ -218,7 +227,7 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Kind').selectOption('table');
 
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      'but this one names a http connection',
+      "names a connection of kind 'http'",
     );
     // ADVISORY, never a gate — the server stores this row today, and a form that
     // refused what the server accepts would be the worse defect.
