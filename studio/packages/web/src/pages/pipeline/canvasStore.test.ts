@@ -3030,3 +3030,106 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
     });
   });
 });
+
+describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', () => {
+  const copyNode = (): Node => ({ id: 'c', type: 'copy', name: 'copy', config: {} });
+  const setup = () => {
+    const store = createCanvasStore();
+    store.setState({ nodes: [copyNode()] });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it('holds the FIRST end pending — the node stays NodeSchema-valid', () => {
+    // The load-bearing property: `api/pipelines.ts` runs
+    // `PipelineVersionWriteSchema.parse` on the body before every POST, and
+    // `NodeSchema.connectionIds` requires both ends. A half pair on the node
+    // would throw a raw ZodError there, on a path ("Save anyway") that does not
+    // consult the issues gate.
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    expect(node(store).connectionIds).toBeUndefined();
+    expect(store.getState().pendingBindings['c']?.connections).toEqual({
+      source: 'conn_a',
+      sink: undefined,
+    });
+  });
+
+  it('commits the pair once BOTH ends are picked, and clears the pending half', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().setNodeBindingEnd('c', 'connections', 'sink', 'conn_b');
+    expect(node(store).connectionIds).toEqual({ source: 'conn_a', sink: 'conn_b' });
+    expect(store.getState().pendingBindings['c']).toBeUndefined();
+  });
+
+  it('keeps connections and datasets independent', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'datasets', 'source', 'ds_a');
+    store.getState().setNodeBindingEnd('c', 'datasets', 'sink', 'ds_b');
+    expect(node(store).datasetIds).toEqual({ source: 'ds_a', sink: 'ds_b' });
+    expect(node(store).connectionIds).toBeUndefined();
+  });
+
+  it('DELETES the key when an end of a committed pair is cleared, keeping the other pending', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().setNodeBindingEnd('c', 'connections', 'sink', 'conn_b');
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', undefined);
+    expect(node(store).connectionIds).toBeUndefined();
+    expect('connectionIds' in node(store)).toBe(false);
+    expect(store.getState().pendingBindings['c']?.connections).toEqual({
+      source: undefined,
+      sink: 'conn_b',
+    });
+  });
+
+  it('re-picking the cleared end re-commits the pair', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().setNodeBindingEnd('c', 'connections', 'sink', 'conn_b');
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', undefined);
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_z');
+    expect(node(store).connectionIds).toEqual({ source: 'conn_z', sink: 'conn_b' });
+  });
+
+  it('picking ONE end does not dirty the doc or push an undo step', () => {
+    // Undo is document history; a half-picked binding is selection state. If it
+    // dirtied the doc, opening a pipeline and touching one select would prompt a
+    // save of a change that is not in the document.
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    expect(store.getState().dirty).toBe(false);
+    expect(store.getState().past).toHaveLength(0);
+  });
+
+  it('COMMITTING the pair is ONE undoable step', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().setNodeBindingEnd('c', 'connections', 'sink', 'conn_b');
+    expect(store.getState().dirty).toBe(true);
+    expect(store.getState().past).toHaveLength(1);
+    store.getState().undo();
+    expect(node(store).connectionIds).toBeUndefined();
+  });
+
+  it('is a no-op for a node id the doc does not hold', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('nope', 'connections', 'source', 'conn_a');
+    expect(store.getState().pendingBindings).toEqual({});
+  });
+
+  it('drops a half-picked binding when its node is deleted', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().deleteNode('c');
+    expect(store.getState().pendingBindings).toEqual({});
+  });
+
+  it('drops half-picked bindings when a different version is loaded', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().loadVersion(null);
+    expect(store.getState().pendingBindings).toEqual({});
+  });
+});
