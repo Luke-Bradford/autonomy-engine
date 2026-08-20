@@ -156,7 +156,11 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(form(page).getByLabel('table', { exact: true })).toBeVisible();
 
     await form(page).getByLabel('Kind').selectOption('query');
-    await expect(form(page).getByLabel('sql')).toBeVisible();
+    // `exact` here: `getByLabel` substring-matches, and a `<select>`'s
+    // accessible name absorbs its option text — so a plain 'sql' also matches
+    // the Store picker whenever any connection in the shared suite database is
+    // a `sqlite` one, which is most of them.
+    await expect(form(page).getByLabel('sql', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('table', { exact: true })).toBeHidden();
 
     await form(page).getByLabel('Kind').selectOption('delimited');
