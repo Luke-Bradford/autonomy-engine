@@ -132,6 +132,21 @@ export interface SourceDrift {
   readonly unmapped: readonly string[];
 }
 
+/**
+ * The prose for each source-side refusal — ONE spelling, used by both callers.
+ *
+ * The dispatch gate and the pump refuse the same two things at different moments,
+ * and an operator who saw one wording at dispatch and a different one at bind
+ * time would have to work out whether they are the same problem. Nothing but
+ * this function stopped the two drifting apart, so it is a function.
+ */
+export const SOURCE_DRIFT_MESSAGES = {
+  ambiguous: (names: readonly string[]): string =>
+    `the source has more than one column matching ${names.map((c) => `\`${c}\``).join(', ')} case-insensitively; name the column exactly`,
+  missing: (names: readonly string[]): string =>
+    `the source has no column named ${names.map((c) => `\`${c}\``).join(', ')}`,
+} as const;
+
 export function checkSourceDrift(
   mapping: readonly CopyPumpMappingEntry[],
   sourceColumns: readonly string[],

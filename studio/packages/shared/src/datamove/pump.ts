@@ -6,7 +6,7 @@ import {
   type CoercionFailureCode,
   type CoercionOptions,
 } from './coerce.js';
-import { indexSourceColumns, resolveSourceColumn } from './schema-drift.js';
+import { indexSourceColumns, resolveSourceColumn, SOURCE_DRIFT_MESSAGES } from './schema-drift.js';
 
 /**
  * #996 M5 slice 3 (#1129) — the copy PUMP (data-movement spec §5, §6, §9).
@@ -265,14 +265,11 @@ function planColumns(
   if (ambiguous.length > 0) {
     throw new CopyMappingError(
       'ambiguous_source_column',
-      `the source has more than one column matching ${ambiguous.map((c) => `\`${c}\``).join(', ')} case-insensitively; name the column exactly`,
+      SOURCE_DRIFT_MESSAGES.ambiguous(ambiguous),
     );
   }
   if (missing.length > 0) {
-    throw new CopyMappingError(
-      'missing_source_column',
-      `the source has no column named ${missing.map((c) => `\`${c}\``).join(', ')}`,
-    );
+    throw new CopyMappingError('missing_source_column', SOURCE_DRIFT_MESSAGES.missing(missing));
   }
   if (uncoercible.length > 0) {
     throw new CopyMappingError('uncoercible_constant', uncoercible.join('; '));

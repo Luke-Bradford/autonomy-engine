@@ -5,6 +5,7 @@ import {
   newCopyCounters,
   nocaseFold,
   pumpCopyRows,
+  SOURCE_DRIFT_MESSAGES,
   WARNING_CODES,
   type CoercedValue,
   type CopyCounters,
@@ -281,9 +282,16 @@ export async function* runCopyActivity(
   // seen the rows, and it is what catches a source that changed between being
   // described and being read. They share one predicate (`schema-drift.ts`) so
   // they cannot disagree about what "the same column" means.
-  let sourceColumns: readonly string[];
+  //
+  // An EMPTY mapping skips the describe entirely. The schema permits `[]` and
+  // the pump refuses it (`empty_mapping`), so describing first would open the
+  // source store for a dispatch that is already doomed — and would report
+  // whatever that open happened to fail with instead of the actual fault.
+  let sourceColumns: readonly string[] = [];
   try {
-    sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+    if (mapping.length > 0) {
+      sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+    }
   } catch (err) {
     // Through the SAME mapper the copy body uses, so a store that could not be
     // REACHED keeps its own `kind`. Reporting a `SQLITE_BUSY` here as a
@@ -304,11 +312,11 @@ export async function* runCopyActivity(
       drift.ambiguous.length > 0
         ? new CopyMappingError(
             'ambiguous_source_column',
-            `the source has more than one column matching ${drift.ambiguous.map((c) => `\`${c}\``).join(', ')} case-insensitively; name the column exactly`,
+            SOURCE_DRIFT_MESSAGES.ambiguous(drift.ambiguous),
           )
         : new CopyMappingError(
             'missing_source_column',
-            `the source has no column named ${drift.missing.map((c) => `\`${c}\``).join(', ')}`,
+            SOURCE_DRIFT_MESSAGES.missing(drift.missing),
           );
     yield copyFailure(error);
     return;

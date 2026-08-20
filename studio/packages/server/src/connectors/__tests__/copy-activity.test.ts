@@ -331,7 +331,13 @@ describe('copy activity — the refusal ladder', () => {
           root,
           sourcePath: seedDb(root, 2, 'src.db'),
           sinkPath: seedSink(root, 'dst.db'),
-          input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+          // An UNCOERCIBLE CONSTANT, not a missing source column. The pump
+          // still raises this one from inside the sink's transaction, which is
+          // what this test is about; #1148's dispatch-time gate now intercepts
+          // a missing source column BEFORE the pump runs, so that fixture would
+          // exercise `copyFailure`'s direct branch and leave the `.cause`
+          // unwrap — the thing under test — with no coverage at all.
+          input: { mapping: [{ expression: 'abc', sink: 'id', type: 'integer' }] },
         }),
       ),
     );
@@ -340,7 +346,7 @@ describe('copy activity — the refusal ladder', () => {
     // error loses the one word that tells an author what to fix.
     expect(end).toMatchObject({
       kind: 'permanent',
-      error: expect.stringContaining('missing_source_column'),
+      error: expect.stringContaining('uncoercible_constant'),
     });
   });
 });
@@ -553,6 +559,44 @@ describe('copy activity — §7 the source-side drift gate runs before the first
       events.filter((e) => e.type === 'warned' && e.code === 'copy_source_columns_unmapped'),
     ).toHaveLength(1);
     expect(terminal(events).type).toBe('failed');
+  });
+
+  it('refuses an ambiguous source column through the adapter, ahead of any missing one', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        datasets: {
+          // Two result columns differing only in case, so `id` matches neither
+          // exactly and both loosely. A `query` dataset is the only way to
+          // produce this — a table cannot hold `ID` alongside `Id`.
+          source: {
+            id: 'ds-1',
+            name: 'src',
+            kind: 'query',
+            config: { sql: 'SELECT id AS "ID", name AS "Id" FROM t' },
+            columns: [],
+          },
+          sink: { id: 'ds-2', name: 'dst', kind: 'table', config: { table: 'sink' }, columns: [] },
+        },
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'alsonosuch', sink: 'name', type: 'string' },
+          ],
+        },
+      }),
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.kind : '').toBe('permanent');
+    // Ambiguity is reported even though a MISSING column is also present: an
+    // ambiguous name cannot be resolved at all, where a missing one still has a
+    // legitimate `onError: 'null'` answer. Same precedence as `planColumns`.
+    expect(end.type === 'failed' ? end.error : '').toContain('ambiguous_source_column');
+    expect(end.type === 'failed' ? end.error : '').toContain('case-insensitively');
   });
 
   it('does not warn when the mapping reads every source column', async () => {
