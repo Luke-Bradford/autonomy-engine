@@ -26,16 +26,22 @@ async function gotoDatasets(page: Page): Promise<void> {
 /**
  * Any connection, minted through the real route.
  *
- * A CONNECTION NAME MUST NOT CONTAIN 'store' OR 'kind', in any case. Every
- * connection this suite mints shows up as an OPTION in the dataset form's Store
- * picker, and Playwright's `getByLabel(string)` does a case-insensitive
- * SUBSTRING match against the wrapping label's text — which, for a `<label>`
- * around a `<select>`, includes every option. So a store named
- * `e2e-ds-kinds-…` makes `getByLabel('Kind')` resolve to the Store select AS
- * WELL as the Kind one, and every `getByLabel('Kind')` in the file dies of a
- * strict-mode violation. The suite database is SHARED across spec files, so the
- * blast radius is not the test that seeded it — this cost six failures once
- * (#1167) and the name is the only thing that prevents it.
+ * A CONNECTION NAME MUST NOT CONTAIN THE LABEL TEXT OF ANY OTHER CONTROL ON THE
+ * DATASET FORM — 'Kind', 'Name', 'Columns'. Every connection this suite mints
+ * becomes an OPTION in the form's Store picker, and Playwright's
+ * `getByLabel(string)` is a case-insensitive SUBSTRING match against the
+ * wrapping label's text, which for a `<label>` around a `<select>` includes
+ * every option. So a store named `e2e-ds-kinds-…` makes `getByLabel('Kind')`
+ * resolve to the Store select AS WELL as the Kind one, and every
+ * `getByLabel('Kind')` in the file dies of a strict-mode violation.
+ *
+ * 'Store' itself is the exception and `e2e-ds-store-…` below is fine: the Store
+ * select's own label already contains it, so a Store OPTION carrying it adds no
+ * second match. It is other controls' labels that a name must stay clear of.
+ *
+ * The suite database is SHARED across spec files, so the blast radius is not
+ * the test that seeded it — this cost six failures across two files once
+ * (#1167), and the name is the only thing that prevents it.
  */
 async function seedConnection(
   page: Page,
