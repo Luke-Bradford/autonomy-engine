@@ -11,11 +11,7 @@ vi.mock('node:fs/promises', async (importActual) => {
 });
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  newCopyCounters,
-  pumpCopyRows,
-  type CopyPumpMappingEntry,
-} from '@autonomy-studio/shared';
+import { newCopyCounters, pumpCopyRows, type CopyPumpMappingEntry } from '@autonomy-studio/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DatasetIoError } from '../dataset-io-error.js';
 import {
@@ -85,7 +81,7 @@ async function refusalOf(run: () => Promise<unknown>): Promise<DatasetIoError> {
     await run();
   } catch (err) {
     if (err instanceof DatasetIoError) return err;
-    throw new Error(`expected a DatasetIoError, got ${String(err)}`);
+    throw new Error(`expected a DatasetIoError, got ${String(err)}`, { cause: err });
   }
   throw new Error('expected a refusal, but the read succeeded');
 }
@@ -287,9 +283,7 @@ describe('config validation at dispatch (§8)', () => {
   it('refuses a malformed delimited dataset config', async () => {
     const path = await seed('c.csv', 'a\n1\n');
     // `header` is REQUIRED with no default, deliberately (#1163).
-    const err = await refusalOf(() =>
-      rowsOf({ ...read(path), datasetConfig: { path } }),
-    );
+    const err = await refusalOf(() => rowsOf({ ...read(path), datasetConfig: { path } }));
     expect(err.kind).toBe('permanent');
     expect(err.message).toContain('invalid delimited dataset config');
   });
@@ -410,8 +404,8 @@ describe('the seam the pump actually consumes', () => {
   it('feeds pumpCopyRows: a short row fails ITS OWN row and the copy continues', async () => {
     const path = await seed('p.csv', 'id,name\n1,ada\n2\n3,grace\n');
     const mapping: CopyPumpMappingEntry[] = [
-      { source: 'id', sink: 'id', type: 'integer', nullable: false, onError: 'fail' },
-      { source: 'name', sink: 'name', type: 'string', nullable: false, onError: 'fail' },
+      { source: 'id', sink: 'id', type: 'integer', onError: 'fail' },
+      { source: 'name', sink: 'name', type: 'string', onError: 'fail' },
     ];
     const counters = newCopyCounters();
     const out: Record<string, unknown>[] = [];

@@ -89,10 +89,7 @@ export function isAbortError(err: unknown, signal: AbortSignal | undefined): boo
  * `failFromError` has always checked abort FIRST; making the signal a parameter
  * here is what stops the store reader having to remember to.
  */
-export function classifyFsError(
-  err: unknown,
-  signal: AbortSignal | undefined,
-): ConnectorErrorKind {
+export function classifyFsError(err: unknown, signal: AbortSignal | undefined): ConnectorErrorKind {
   if (isAbortError(err, signal)) return 'cancelled';
   const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
   if (code !== undefined && TRANSIENT_ERRNOS.has(code)) return 'transient';
