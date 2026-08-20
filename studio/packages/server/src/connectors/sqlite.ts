@@ -384,6 +384,73 @@ export async function* readSqliteDatasetBatches(
   }
 }
 
+/**
+ * #1148 M6 (spec §7) — the source's ACTUAL column names, WITHOUT reading a row.
+ *
+ * This is the source half of §7's gate: the mapping (schema 2) is checked
+ * against what the store really has (schema 3) BEFORE the first row moves. Until
+ * M6 there was no source introspection at all — `planColumns` resolved from the
+ * first row's key set, which meant the check ran from inside the sink's open
+ * write transaction and did not run AT ALL against an empty source (a mapping
+ * naming a column that does not exist reported success over 0 rows).
+ *
+ * `Statement.columns()` AND NOTHING ELSE, and that is a security invariant, not
+ * a performance one. This function is handed operator SQL for a `query` dataset,
+ * and the reader's confinement (`:52-62`) rests entirely on never passing that
+ * SQL to a method that EXECUTES — `prepare("attach database '…' as o")`
+ * succeeds even under a read-only open. Measured (better-sqlite3 12.11.1):
+ * `.columns()` on that statement refuses outright with "The columns() method is
+ * only for statements that return data", so the seam is safe exactly as long as
+ * it stays a `.columns()` call. A later `.get()` "to make describe more
+ * informative" would silently reopen the hole. Measured too: `.columns()` needs
+ * NO parameters bound, works on an empty table, and reports a computed column
+ * with `type: null` — only names are taken here, so that is immaterial.
+ *
+ * Every throw goes through `storeFailure`, which is what keeps #1148's
+ * constraint honest: "a failure to REACH the store to describe it is `transient`
+ * and must not be reported as drift". Measured: a missing file raises
+ * `SQLITE_CANTOPEN` (permanent, correctly — retrying will not create it) while a
+ * store held by a concurrent writer raises `SQLITE_BUSY` from `prepare` ITSELF
+ * (transient). Classified anywhere but here, a busy store would be reported as a
+ * mapping the operator has to go and fix.
+ */
+export async function describeSqliteDatasetColumns(read: SqliteDatasetRead): Promise<string[]> {
+  const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
+  if (!cfg.success) {
+    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
+  }
+  const statement = statementFor(read.datasetKind, read.datasetConfig);
+  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset describe aborted');
+
+  let db: Database.Database;
+  try {
+    // A second read-only open, separate from the scan's. It creates the usual
+    // `-wal`/`-shm` sidecars beside a WAL store, as the reader already does.
+    db = new Database(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    });
+  } catch (err) {
+    throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
+  }
+  try {
+    return db
+      .prepare(statement.sql)
+      .columns()
+      .map((column) => column.name);
+  } catch (err) {
+    throw storeFailure(err, 'the dataset statement could not be described');
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // Never let a close failure replace the outcome the caller is unwinding with.
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // #1125 M5 slice 2 — the SINK.
 // ---------------------------------------------------------------------------
@@ -869,6 +936,13 @@ export const sqliteAdapter: ConnectorAdapter = {
           connection.kind === 'sqlite'
             ? null
             : `a sqlite copy writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+        describeSource: ({ dataset, signal }) =>
+          describeSqliteDatasetColumns({
+            connectionConfig: cfg.data,
+            datasetKind: dataset.kind,
+            datasetConfig: dataset.config,
+            ...(signal === undefined ? {} : { signal }),
+          }),
         readBatches: ({ dataset, signal }) =>
           readSqliteDatasetBatches({
             connectionConfig: cfg.data,

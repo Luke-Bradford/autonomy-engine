@@ -351,7 +351,11 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
         root,
         sourcePath: seedDb(root, 2, 'src.db'),
         sinkPath: seedSink(root, 'dst.db'),
-        input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+        // A SINK column that does not exist, so the failure lands inside the
+        // write — M6's source-side gate (below) now refuses a missing SOURCE
+        // column BEFORE any of this, which is the point of the milestone but
+        // makes it the wrong way to provoke a mid-copy failure.
+        input: { mapping: [{ source: 'id', sink: 'nosuch', type: 'integer' }] },
       }),
     );
 

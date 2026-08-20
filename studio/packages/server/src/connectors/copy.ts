@@ -1,4 +1,5 @@
 import {
+  checkSourceDrift,
   copyDispatchInputSchema,
   CopyMappingError,
   newCopyCounters,
@@ -54,6 +55,23 @@ export interface CopyIo {
    * of rows as the store reports them, yielding to the event loop between
    * batches (§9) — a bounded read is a SCHEDULING quantum, not just a read unit.
    */
+  /**
+   * #1148 M6 (§7) — the source's ACTUAL column names, discovered WITHOUT reading
+   * a row, so the gate below can run "before the first row moves".
+   *
+   * REQUIRED rather than optional, and that polarity is the point: an optional
+   * describe is a gate a store can decline, and a store that declines it copies
+   * with no source-side drift checking at all while reading exactly like one
+   * that passed. M7's `delimited` source implements it from the CSV header row;
+   * M10's postgres from its result-set description.
+   *
+   * It must classify its OWN failures — a store that cannot be REACHED is
+   * `transient` and is not drift.
+   */
+  readonly describeSource: (args: {
+    readonly dataset: ResolvedDataset;
+    readonly signal: AbortSignal | undefined;
+  }) => Promise<readonly string[]>;
   readonly readBatches: (args: {
     readonly dataset: ResolvedDataset;
     readonly signal: AbortSignal | undefined;
@@ -251,12 +269,75 @@ export async function* runCopyActivity(
     return;
   }
 
+  // §7's SOURCE half, and the reason M6 exists: until now the only source-column
+  // check ran inside `planColumns`, from the FIRST ROW's key set. That meant it
+  // fired from inside the sink's already-open write transaction, and did not
+  // fire AT ALL against an empty source — a mapping naming a column the store
+  // does not have reported SUCCESS over 0 rows.
+  //
+  // This rung sits AFTER the refusals above and BEFORE anything is opened for
+  // writing, which is exactly what §7 means by "checked before the first row
+  // moves". The pump's own check STAYS: it is the binding-time truth, it has
+  // seen the rows, and it is what catches a source that changed between being
+  // described and being read. They share one predicate (`schema-drift.ts`) so
+  // they cannot disagree about what "the same column" means.
+  let sourceColumns: readonly string[];
+  try {
+    sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+  } catch (err) {
+    // Through the SAME mapper the copy body uses, so a store that could not be
+    // REACHED keeps its own `kind`. Reporting a `SQLITE_BUSY` here as a
+    // permanent mapping fault would send an operator to fix a mapping that is
+    // correct, and would deny a retry that would have worked.
+    yield copyFailure(err);
+    return;
+  }
+  const drift = checkSourceDrift(mapping as readonly CopyPumpMappingEntry[], sourceColumns);
+  if (drift.ambiguous.length > 0 || drift.missing.length > 0) {
+    // Ambiguity first, and missing second, matching the order `planColumns`
+    // reports them in: an ambiguous name cannot be resolved at all, where a
+    // missing one at least has a legitimate `onError: 'null'` answer. The two
+    // paths must read identically — an operator who sees one message at dispatch
+    // and a differently-worded one at bind time has to work out whether they are
+    // the same problem.
+    const error =
+      drift.ambiguous.length > 0
+        ? new CopyMappingError(
+            'ambiguous_source_column',
+            `the source has more than one column matching ${drift.ambiguous.map((c) => `\`${c}\``).join(', ')} case-insensitively; name the column exactly`,
+          )
+        : new CopyMappingError(
+            'missing_source_column',
+            `the source has no column named ${drift.missing.map((c) => `\`${c}\``).join(', ')}`,
+          );
+    yield copyFailure(error);
+    return;
+  }
+
   // The sink's write column list is the mapping's OWN sink names — every row,
   // including expression-only ones, which write a constant and are as much a
   // written column as a copied one. It cannot be derived from the rows the pump
   // yields: a batch whose rows all failed yields nothing at all.
   const columns = mapping.map((row) => row.sink);
   const counters = newCopyCounters();
+
+  // §7 row 4 — ALLOWED, so it never blocks the copy, and never silent either.
+  // Yielded HERE, before the write, rather than beside the terminal like
+  // `COPY_ROWS_FAILED`: that one is a fact the copy only learns by running,
+  // while this one is already known. Emitting it once up front is what puts it
+  // on the FAILING path too — and a copy that then failed for an unrelated
+  // reason is exactly the one whose operator is reading the log. The executor
+  // buffers every adapter event and replays them in order around the terminal
+  // (`executor.ts`), so an early yield costs nothing in the run log's ordering.
+  if (drift.unmapped.length > 0) {
+    yield {
+      type: 'warned',
+      code: WARNING_CODES.COPY_SOURCE_COLUMNS_UNMAPPED,
+      reason:
+        `the source carries ${drift.unmapped.length} column(s) the mapping does not read: ` +
+        `${drift.unmapped.map((c) => `'${c}'`).join(', ')}`,
+    };
+  }
 
   try {
     const result = await io.writeRows({

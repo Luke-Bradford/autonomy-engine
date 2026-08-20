@@ -756,6 +756,19 @@ export const WARNING_CODES = {
    * exactly the ones nothing else records.
    */
   COPY_ROWS_FAILED: 'copy_rows_failed',
+  /**
+   * #1148 M6 (data-movement spec §7 row 4) — the source carries columns the
+   * node's mapping does not mention. ALLOWED, and deliberately so: additive
+   * drift must never break a working pipeline, which is why this row of §7's
+   * table is the only one whose verdict is a warning rather than `permanent`.
+   *
+   * It is still said out loud, because silent additive drift is how a mapping
+   * quietly stops covering its source — a column added upstream months ago that
+   * no copy has ever carried reads, from the run log, exactly like a source that
+   * never had it. Distinct from §7 row 5 (an UNMAPPED column that DISAPPEARED),
+   * which stays silent because it was never read and nothing can observe it go.
+   */
+  COPY_SOURCE_COLUMNS_UNMAPPED: 'copy_source_columns_unmapped',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */
