@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DatasetKindSchema } from '../schemas/dataset.js';
+import { catalog } from './registry.js';
 import {
   DATASET_CONFIG_SCHEMAS,
+  DATASET_CONNECTION_KINDS,
+  datasetConnectionKindAdvisory,
   DATASET_KINDS,
   IMPLEMENTED_DATASET_KINDS,
   datasetConfigAdvisory,
@@ -141,6 +145,113 @@ describe('datasetConfigAdvisory (#1120)', () => {
     // error; this pins that the advisory itself never throws on one.
     for (const kind of DATASET_KINDS) {
       expect(() => datasetConfigAdvisory(kind, {})).not.toThrow();
+    }
+  });
+});
+
+describe('DATASET_CONNECTION_KINDS (#1145)', () => {
+  it('covers every dataset kind, and nothing that is not one', () => {
+    // `Record<DatasetKind, …>` makes a MISSING kind a compile error; this
+    // catches the other direction — a stale key left behind by a rename.
+    expect(Object.keys(DATASET_CONNECTION_KINDS).sort()).toEqual(
+      [...DatasetKindSchema.options].sort(),
+    );
+  });
+
+  it('names only real connection kinds, and never an empty list', () => {
+    // An empty list would make EVERY store wrong for that kind — an advisory
+    // that can only ever complain is worse than one that stays quiet.
+    for (const kind of DATASET_KINDS) {
+      const stores = DATASET_CONNECTION_KINDS[kind];
+      expect(stores.length).toBeGreaterThan(0);
+      for (const store of stores) expect(ConnectionKindSchema.options).toContain(store);
+    }
+  });
+
+  it('reds this file when a CONNECTION kind is added', () => {
+    // The pin `Record<DatasetKind, …>` cannot provide. A new dataset kind is a
+    // type error; a new CONNECTION kind is the direction that makes this module
+    // LIE — when `postgres` joins the enum, a `table` dataset on a postgres
+    // store would be told to expect `sqlite`. So the enum is pinned to a
+    // literal: adding a kind fails here, next to the mapping that must widen.
+    //
+    // Adding a kind? Decide whether it is a STORE. If it is, add it to every
+    // dataset kind that can live in it below, then extend this list.
+    expect([...ConnectionKindSchema.options]).toEqual([
+      'anthropic_api',
+      'openai_api',
+      'ollama',
+      'agent_cli',
+      'http',
+      'fs',
+      'sqlite',
+    ]);
+  });
+
+  it('agrees with the activity catalog about where a dataset kind lives', () => {
+    // `registry.ts` states the same fact one layer up — `copy` couples
+    // `connectionKinds` with `datasetKinds` — so two SSOTs now describe "a
+    // `table` lives in a SQL store" and they would drift at M7.
+    //
+    // INTERSECTION, not containment, and that is load-bearing: M7 widens
+    // `copy.connectionKinds` to `['sqlite', 'fs']` to admit `delimited`, at
+    // which point containment would falsely fail for `table` (whose stores stay
+    // `['sqlite']`). What must hold is that every dataset kind an activity
+    // accepts has at least one store that activity can also connect to.
+    for (const entry of catalog.values()) {
+      const sides = [
+        { kinds: entry.datasetKinds?.source, stores: entry.connectionKinds },
+        { kinds: entry.datasetKinds?.sink, stores: entry.sinkConnectionKinds ?? entry.connectionKinds },
+      ];
+      for (const side of sides) {
+        if (side.kinds === undefined) continue;
+        for (const datasetKind of side.kinds) {
+          const shared = DATASET_CONNECTION_KINDS[datasetKind].filter((store) =>
+            side.stores.includes(store),
+          );
+          expect(
+            shared,
+            `${entry.type} accepts a ${datasetKind} dataset but connects to no store one can live in`,
+          ).not.toHaveLength(0);
+        }
+      }
+    }
+  });
+});
+
+describe('datasetConnectionKindAdvisory (#1145)', () => {
+  it('says nothing when the kind agrees with the store', () => {
+    expect(datasetConnectionKindAdvisory('table', 'sqlite')).toBeNull();
+    expect(datasetConnectionKindAdvisory('query', 'sqlite')).toBeNull();
+    expect(datasetConnectionKindAdvisory('delimited', 'fs')).toBeNull();
+  });
+
+  it('names the dataset kind, the store it needs and the store it got', () => {
+    // The ticket's own example: a `table` dataset on an LLM connection, which
+    // `routes/datasets.ts` stores today because it checks existence and
+    // ownership and nothing else.
+    const note = datasetConnectionKindAdvisory('table', 'anthropic_api');
+    expect(note).toContain('table');
+    expect(note).toContain('sqlite');
+    expect(note).toContain('anthropic_api');
+  });
+
+  it('says nothing when no connection is resolved', () => {
+    // The form owns both of those states already (no connections at all, or a
+    // connection that no longer exists) and says so in its own words. A
+    // complaint derived from a connection nobody resolved would be invented.
+    for (const kind of DATASET_KINDS) {
+      expect(datasetConnectionKindAdvisory(kind, null)).toBeNull();
+    }
+  });
+
+  it('is total over every kind pair, and complains about exactly the mismatches', () => {
+    for (const datasetKind of DATASET_KINDS) {
+      for (const connectionKind of ConnectionKindSchema.options) {
+        const note = datasetConnectionKindAdvisory(datasetKind, connectionKind);
+        const agrees = DATASET_CONNECTION_KINDS[datasetKind].includes(connectionKind);
+        expect(note === null, `${datasetKind} on ${connectionKind}`).toBe(agrees);
+      }
     }
   });
 });

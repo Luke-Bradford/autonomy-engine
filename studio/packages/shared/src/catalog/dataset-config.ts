@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { formatZodIssues } from '../schemas/zod-issues.js';
+import type { ConnectionKind } from '../schemas/connection.js';
 import { DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
 
 /**
@@ -189,3 +190,83 @@ export function datasetConfigSchema(kind: DatasetKind): z.ZodObject {
 
 /** Every kind, in the enum's own order — the form's kind picker reads this. */
 export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
+
+/**
+ * #1145 — which store kinds a dataset of each kind can actually live in.
+ *
+ * `Dataset.connectionId` is checked for EXISTENCE and OWNERSHIP on write
+ * (`routes/datasets.ts` → `requireOwnedConnection`) and for nothing else, so a
+ * `table` dataset may name an `anthropic_api` connection and the server stores
+ * it. This is the fact that was missing to say so.
+ *
+ * WHERE EACH ROW COMES FROM, because half of it was called unsettled when the
+ * ticket was filed and only two thirds of that was still true:
+ * - `table`, `query` → a SQL store. §2.6's store-connection table names exactly
+ *   two, `sqlite` and `postgres`, and only `sqlite` is in `ConnectionKindSchema`
+ *   today — so this lists the store kinds that EXIST, not the ones that will.
+ * - `delimited` → `fs`. SETTLED: §12's M7 row is "`delimited` dataset kind over
+ *   the existing `fs` connection", §7 ② says "`fs` becomes a store when
+ *   `delimited` lands", and `registry.ts`'s `copy` entry already says in prose
+ *   that "a `delimited` dataset lives on an `fs` connection".
+ * - `excel` → `fs`. INFERRED, and flagged as inference rather than dressed up as
+ *   a citation: M11's row names no connection. The support is §2.5 — format
+ *   lives on the dataset precisely BECAUSE one folder holds CSV and Excel side
+ *   by side — plus §2.6 giving `excel` a `path`. M11 restates it or corrects it.
+ *
+ * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
+ * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION
+ * kind, which is the direction that would make this lie: when `postgres` joins
+ * the enum, a perfectly good `table` dataset on a postgres store would be told
+ * to expect `sqlite`. A docblock cannot prevent that, so the test file pins
+ * `ConnectionKindSchema.options` against a literal list — adding a connection
+ * kind reds this module, which is M2's "the pin precedes the kind" convention
+ * pointed at the axis that actually needs it.
+ */
+export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKind[]> = {
+  delimited: ['fs'],
+  excel: ['fs'],
+  table: ['sqlite'],
+  query: ['sqlite'],
+};
+
+/**
+ * #1145 — whether this dataset's kind agrees with the kind of store it names,
+ * as ONE operator-facing sentence, or `null` when it has nothing to say.
+ *
+ * ADVISORY, never a gate, for `datasetConfigAdvisory`'s reason above: the server
+ * stores these rows today, so refusing one here would make an already-saved
+ * dataset unsaveable after an unrelated rename, and the form must never refuse
+ * what the server accepts.
+ *
+ * WHAT REFUSES AT DISPATCH, stated precisely because the obvious guess is wrong.
+ * A mismatched pair cannot reach a reader with a poor message — it cannot reach
+ * a reader at all. Two refusals form a pincer, and which one fires depends on
+ * what the copy NODE bound:
+ * - node bound the non-store connection → `CONNECTION_KIND_INVALID`
+ *   (`run/executor.ts:401`), because `copy` declares `connectionKinds:
+ *   ['sqlite']` and the executor resolves the CONNECTION (`:1098`, `:1124`)
+ *   before it resolves any dataset (`:1194`, `:1223`);
+ * - node bound the store, dataset names the non-store →
+ *   `DATASET_CONNECTION_MISMATCH` (`run/executor.ts:629`), the identity check.
+ * Both are `permanent`. So dispatch is fail-SAFE and this closes a diagnostics
+ * gap, not a correctness hole. That property is INHERITED, not owned: it holds
+ * while `copy.connectionKinds` lists store kinds only. An activity that accepted
+ * a non-store connection would drop the first arm, and this advisory would then
+ * be the only thing that had ever mentioned the mismatch.
+ *
+ * A `null` `connectionKind` — no connection selected, or one that no longer
+ * exists — says NOTHING, deliberately. The form already has its own notes for
+ * both of those states (`DatasetsPage.tsx:642-647` for a workspace with no
+ * connections, `:648-653` for a dataset naming one that is gone), and a second
+ * sentence derived from a connection nobody resolved would be a complaint
+ * invented on a fact that was never established.
+ */
+export function datasetConnectionKindAdvisory(
+  kind: DatasetKind,
+  connectionKind: ConnectionKind | null,
+): string | null {
+  if (connectionKind === null) return null;
+  const expected = DATASET_CONNECTION_KINDS[kind];
+  if (expected.includes(connectionKind)) return null;
+  return `a ${kind} dataset lives in a ${expected.join(' or ')} store, but this one names a ${connectionKind} connection`;
+}
