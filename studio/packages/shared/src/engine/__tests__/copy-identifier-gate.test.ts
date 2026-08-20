@@ -28,8 +28,8 @@ function doc(
 const copyNode = (mapping: unknown): Node => ({
   id: 'c',
   type: COPY_ACTIVITY_TYPE,
-  name: 'copy',
   config: { mapping, mode: 'append' },
+  position: { x: 0, y: 0 },
 });
 
 const literalRow = { source: 'id', sink: 'id', type: 'integer', onError: 'fail' };
@@ -82,8 +82,8 @@ describe('§8 — a copy mapping column name must be a literal identifier', () =
     const other: Node = {
       id: 'n',
       type: 'file_read',
-      name: 'read',
       config: { mapping: [{ ...literalRow, sink: '${params.col}' }] },
+      position: { x: 0, y: 0 },
     };
     expect(validateDoc(doc([other]))).toEqual([]);
   });

@@ -3032,7 +3032,7 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
 });
 
 describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', () => {
-  const copyNode = (): Node => ({ id: 'c', type: 'copy', name: 'copy', config: {} });
+  const copyNode = (): Node => ({ id: 'c', type: 'copy', config: {}, position: { x: 0, y: 0 } });
   const setup = () => {
     const store = createCanvasStore();
     store.setState({ nodes: [copyNode()] });

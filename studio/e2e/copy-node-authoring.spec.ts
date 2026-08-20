@@ -76,8 +76,13 @@ test.describe('#1139 — copy-node authoring', () => {
     await canvasNodes(page).first().click();
 
     // FOUR pickers, and NOT the singular one: `validateDoc` refuses
-    // `connectionId` and `connectionIds` on the same node.
-    await expect(panel(page).getByRole('combobox', { name: 'Connection' })).toHaveCount(0);
+    // `connectionId` and `connectionIds` on the same node. `exact` is
+    // load-bearing — Playwright matches an accessible name by SUBSTRING by
+    // default, so a loose 'Connection' matches the two paired pickers and this
+    // assertion would fail against a correct panel.
+    await expect(
+      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+    ).toHaveCount(0);
     for (const label of ['Source connection', 'Sink connection', 'Source dataset']) {
       await expect(panel(page).getByRole('combobox', { name: label })).toBeVisible();
     }
