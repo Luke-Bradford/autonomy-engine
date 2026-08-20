@@ -234,7 +234,9 @@ describe('DatasetsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Edit' }));
     expect(within(form()).getByLabelText('Store')).toHaveValue('conn_gone');
-    expect(within(form()).getByText(/names a connection that no longer exists/)).toBeInTheDocument();
+    expect(
+      within(form()).getByText(/names a connection that no longer exists/),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() =>
@@ -289,7 +291,9 @@ describe('DatasetsPage', () => {
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
     expect(within(form()).getByText(/no reader exists for a delimited dataset yet/)).toBeVisible();
     // No mode toggle: there is no field form to switch to.
-    expect(within(form()).queryByRole('button', { name: 'Edit as fields' })).not.toBeInTheDocument();
+    expect(
+      within(form()).queryByRole('button', { name: 'Edit as fields' }),
+    ).not.toBeInTheDocument();
   });
 
   it('deletes only on confirmation, and says what breaks', async () => {

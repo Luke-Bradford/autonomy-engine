@@ -320,7 +320,10 @@ function ConnectionForm({
     // a schema-only advisory would say nothing about the one path-safety key in
     // the catalog — the exact silent-until-dispatch failure this ticket ends.
     return connectionConfigAdvisory(form.kind, candidate);
-  }, [jsonMode, form.config, form.jsonText, form.kind, form.inputs, fields]);
+    // `form` whole, not its parts: `readConfigDraft` reads three of its fields
+    // and adding a fourth must not leave a stale advisory behind. `form` is
+    // replaced on every keystroke anyway, so listing the parts bought nothing.
+  }, [jsonMode, form, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {

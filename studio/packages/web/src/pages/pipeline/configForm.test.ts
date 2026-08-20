@@ -450,19 +450,15 @@ describe('readConfigDraft', () => {
   });
 
   it('reports the JSON parse failure in JSON mode and the field failure in field mode', () => {
-    const bad = readConfigDraft(
-      true,
-      { config: {}, jsonText: '{oops', inputs: {} },
-      [{ name: 'n', kind: 'number', optional: true }],
-    );
+    const bad = readConfigDraft(true, { config: {}, jsonText: '{oops', inputs: {} }, [
+      { name: 'n', kind: 'number', optional: true },
+    ]);
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.message).toMatch(/^Invalid config JSON: /);
 
-    const badField = readConfigDraft(
-      false,
-      { config: {}, jsonText: '{}', inputs: { n: 'abc' } },
-      [{ name: 'n', kind: 'number', optional: true }],
-    );
+    const badField = readConfigDraft(false, { config: {}, jsonText: '{}', inputs: { n: 'abc' } }, [
+      { name: 'n', kind: 'number', optional: true },
+    ]);
     expect(badField.ok).toBe(false);
     if (!badField.ok) expect(badField.message).toMatch(/^n: /);
   });
