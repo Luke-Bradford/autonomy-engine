@@ -312,8 +312,11 @@ function renderDate(parts: DateParts): string {
  */
 function integerFromString(text: string): CoercionResult {
   if (INTEGER_RE.test(text)) {
-    const big = BigInt(text);
-    return ok(big >= MIN_SAFE && big <= MAX_SAFE ? Number(big) : big);
+    /* NEVER narrowed to `number`, however small. #1150: better-sqlite3 binds
+       every JS number as REAL, so a narrowed 42 lands in a TEXT column as
+       "42.0" — a different value than the one that was read. The declared type
+       is a choice of STORAGE CLASS, and only a bigint expresses it. */
+    return ok(BigInt(text));
   }
   if (!DECIMAL_RE.test(text)) {
     return fail('not_a_number', 'the value is not a decimal number');
@@ -324,7 +327,7 @@ function integerFromString(text: string): CoercionResult {
   // accepted: the refusal is about LOSING a fractional part, not about the
   // notation it was written in.
   if (!Number.isInteger(n)) return fail('not_integral', 'the value is not a whole number');
-  return ok(n);
+  return ok(BigInt(n));
 }
 
 function numberFromString(text: string): CoercionResult {
@@ -422,7 +425,8 @@ function toInteger(value: unknown): CoercionResult {
     if (!Number.isFinite(value)) return fail('non_finite', 'the value is not a finite number');
     // A real `1.5` → integer fails for the same reason `"1.5"` does.
     if (!Number.isInteger(value)) return fail('not_integral', 'the value is not a whole number');
-    return ok(value);
+    // Widened, not narrowed — see `integerFromString`. A JS number binds REAL.
+    return ok(BigInt(value));
   }
   if (typeof value === 'string') return integerFromString(value.trim());
   return fail('unsupported_source_type', `a ${describe(value)} is not an integer`);

@@ -330,6 +330,44 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     expect(rowsOf(path, 'SELECT id, name FROM sink')).toEqual([{ id: 7, name: 'cased' }]);
   });
 
+  it('folds identifiers the way SQLITE does — ASCII only, so KELVIN SIGN is a different column', async () => {
+    /* #1151 — the sink resolved names with `toLowerCase()` while the source-side
+       gate and the pump use `nocaseFold`, which folds ASCII `A-Z` ONLY. That is
+       not a style difference: SQLite's `NOCASE` collation is ASCII-only, so
+       `\u212A` (KELVIN SIGN) and `k` are DIFFERENT identifiers to SQLite, while
+       JavaScript's `toLowerCase()` folds one onto the other.
+
+       `toLowerCase()` therefore made the sink CLAIM a store column SQLite would
+       never have matched — the two halves of one copy disagreeing about whether
+       two names are the same column. The honest answer is to refuse: the mapping
+       names a column this table does not have.
+
+       Needs its own table, because the shared fixture has no column containing a
+       literal `k` — and without one both folds agree and the test proves
+       nothing. That is how the first version of this test passed against the
+       unfixed code. */
+    const root = tempRoot();
+    const path = seedSink(root);
+    const db = new Database(path);
+    db.exec('CREATE TABLE kt (sku TEXT)');
+    db.close();
+
+    await expect(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'kt' },
+          // `s\u212Au` folds to `sku` under toLowerCase, and to itself under
+          // SQLite's ASCII-only NOCASE. Only the latter is what the store does.
+          columns: ['s\u212Au'],
+          mode: 'append',
+        },
+        one([{ 's\u212Au': 'kelvin' }]),
+      ),
+    ).rejects.toThrow(/sku|s\u212Au|column/i);
+  });
+
   it('REFUSES two mapped columns that resolve to ONE sink column — silent last-wins otherwise', async () => {
     const root = tempRoot();
     const path = seedSink(root);
