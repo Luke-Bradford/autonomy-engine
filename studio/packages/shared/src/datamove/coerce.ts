@@ -390,10 +390,49 @@ function integerFromString(text: string): CoercionResult {
   // accepted: the refusal is about LOSING a fractional part, not about the
   // notation it was written in.
   if (!Number.isInteger(n)) return fail('not_integral', 'the value is not a whole number');
+  /* #1156 — the VALUE comes from the digits, never from `n`.
+     `n` above is a double, and it is used only for the two VERDICTS it can give
+     honestly: finite, and integral. Converting it would round anything above
+     2^53 before `BigInt` ever saw it — `"9.007199254740993e15"` came back as
+     ...992n, one digit short, silently, and well inside the int64 bound so the
+     range check could not catch it either. `exactIntegerFromDecimal` reads the
+     literal instead, so the notation a value is written in cannot change it. */
+  const exact = exactIntegerFromDecimal(text);
+  // Unreachable via `n` being integral, but stated rather than asserted: a
+  // parser disagreeing with `Number` is a bug to report, not to round.
+  if (exact === null) return fail('not_integral', 'the value is not a whole number');
   // The bound comes LAST on purpose: `"1e400"` must stay `non_finite` and
   // `"1.5"` must stay `not_integral`, rather than both collapsing into a range
   // verdict that describes them less precisely.
-  return okInteger(BigInt(n));
+  return okInteger(exact);
+}
+
+/**
+ * A DECIMAL_RE literal to an exact bigint, or `null` if it has a fractional part.
+ *
+ * Digit arithmetic, no double anywhere: `1.5e3` is the digits `15` with the
+ * point moved three places right, which is `1500`. The point's final position is
+ * `(digits before the point) + exponent`; everything at or beyond it is the
+ * integer, and anything after it must be zero or the value is not whole.
+ */
+function exactIntegerFromDecimal(text: string): bigint | null {
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(text);
+  if (match === null) return null;
+  const [, sign, whole = '', fraction = '', exponent] = match;
+  const digits = `${whole}${fraction}`;
+  if (digits === '') return null;
+  const point = whole.length + (exponent === undefined ? 0 : Number(exponent));
+
+  // The point sits at or past the end: pad with zeros. `1e2` → `1` + `00`.
+  if (point >= digits.length) {
+    return BigInt(`${sign}${digits}${'0'.repeat(point - digits.length)}`);
+  }
+  // The point sits before the start (`1e-3`): nothing but a fraction remains.
+  if (point <= 0) return digits.split('').every((d) => d === '0') ? 0n : null;
+  // Otherwise everything after the point must be zeros for this to be whole.
+  const tail = digits.slice(point);
+  if (!tail.split('').every((d) => d === '0')) return null;
+  return BigInt(`${sign}${digits.slice(0, point)}`);
 }
 
 function numberFromString(text: string): CoercionResult {
