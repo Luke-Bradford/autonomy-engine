@@ -182,12 +182,11 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(
       form(page).getByText(/no reader exists for a delimited dataset yet/),
     ).toBeVisible();
-    // #1145 landed a SECOND note on this exact state, so assert it rather than
-    // leave the pile-up to be discovered: a `delimited` dataset lives on `fs`
-    // and this form is bound to a `sqlite` store. Two true, independent things.
-    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      "dataset kind 'delimited' lives in a store of kind 'fs'",
-    );
+    // #1145 can land a SECOND note here, but this test does NOT assert it: the
+    // form opens on `connections[0]` (`DatasetsPage.tsx` `blankForm`) and the
+    // suite database is shared, so whether that first connection is a `sqlite`
+    // store — which `delimited` disagrees with — is not this test's to control.
+    // The pile-up is asserted deterministically in the #1145 test below.
 
     await expectQuiet(page, problems);
   });
@@ -232,6 +231,21 @@ test.describe('#1115 Manage → Datasets', () => {
     // ADVISORY, never a gate — the server stores this row today, and a form that
     // refused what the server accepts would be the worse defect.
     await expect(page.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
+
+    // The PILE-UP, asserted where both store kinds are controlled rather than
+    // inherited from whatever the shared database happens to hold first. A
+    // `delimited` dataset on a `sqlite` store is BOTH unreadable (no reader
+    // yet) and mis-stored (`delimited` lives on `fs`) — two true, independent
+    // notes, and #1145 must not have swallowed #1120's.
+    const storeId = await seedStore(page, `e2e-ds-pileup-${stamp}`);
+    await form(page).getByLabel('Store').selectOption(storeId);
+    await form(page).getByLabel('Kind').selectOption('delimited');
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      "dataset kind 'delimited' lives in a store of kind 'fs'",
+    );
+    await expect(
+      form(page).getByText(/no reader exists for a delimited dataset yet/),
+    ).toBeVisible();
 
     await expectQuiet(page, problems);
   });
