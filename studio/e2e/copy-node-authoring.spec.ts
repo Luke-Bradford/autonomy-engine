@@ -193,13 +193,9 @@ test.describe('#1139 — copy-node authoring', () => {
       [2, 'label', 'full_name', 'string'],
     ] as const) {
       await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-      await panel(page)
-        .getByLabel(`mapping row ${row} source (optional)`)
-        .fill(source);
+      await panel(page).getByLabel(`mapping row ${row} source (optional)`).fill(source);
       await panel(page).getByLabel(`mapping row ${row} sink`).fill(sink);
-      await panel(page)
-        .getByLabel(`mapping row ${row} type`)
-        .selectOption(type);
+      await panel(page).getByLabel(`mapping row ${row} type`).selectOption(type);
     }
 
     // Row 2 takes an explicit `onError`; row 1 is left alone. A defaulted enum

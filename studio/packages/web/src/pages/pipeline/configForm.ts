@@ -225,8 +225,16 @@ function deriveElementFields(element: unknown): ConfigField[] | null {
     // one-per-line list degrades the whole field to JSON rather than nesting.
     // Neither has a designed shape inside a row card, and `stringList`'s
     // newlines are structural, so a row of them cannot be read back honestly.
-    // Depth-1 also makes the recursion finite by construction, which matters
-    // because `unwrap` sees through `lazy`.
+    //
+    // The `nestable: false` argument is ALSO what bounds the recursion, and it
+    // is the only thing that does: `classify(inner, false)` cannot re-enter this
+    // function, whatever the schema's shape. (An earlier version of this comment
+    // credited `unwrap` seeing through `lazy` instead. It does not — zod v4's
+    // `ZodLazy` holds its target under `def.getter`, not `def.innerType`, so
+    // `unwrap` breaks on it and a lazy field simply classifies `json`. Right
+    // conclusion, wrong reason, and the wrong reason is the dangerous half:
+    // acting on it, someone could teach `unwrap` to follow `getter` believing
+    // recursion was already handled elsewhere.)
     const { kind, enumOptions } = classify(inner, false);
     if (kind === 'objectList' || kind === 'stringList') return null;
     cells.push({
@@ -342,6 +350,32 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
             // widening of the cell kinds fails here instead of rendering `[object
             // Object]` into a text box.
             return { ok: false, reason: `row ${index + 1} ${cell.name}: not a cell value` };
+          }
+          // The CELL-level counterpart of `assembleConfig`'s clearing-gesture
+          // rule, and it has to be a refusal rather than a preservation.
+          //
+          // Reading a row back OMITS an optional cell that is empty — the same
+          // rule every optional control follows. At field level `assembleConfig`
+          // can tell "the author cleared this" from "this was already empty" by
+          // comparing against the stored config. A cell has no such anchor:
+          // rows carry no identity, so after a removal control row `i` is not
+          // stored row `i`, and there is nothing to compare against. Without
+          // this, an explicitly-stored `false` or `''` in an optional cell would
+          // vanish on an apply that touched a different row entirely.
+          //
+          // Reachable today on `copy.mapping`: `expression` is
+          // `z.string().optional()` with no `.min()`, so `''` is storable, and
+          // dropping it leaves a row satisfying neither `source` nor
+          // `expression` — a refusal citing a row the author never touched.
+          if (
+            cell.optional &&
+            stored[cell.name] !== undefined &&
+            sameControlValue(rendered.value, emptyControlValue(cell))
+          ) {
+            return {
+              ok: false,
+              reason: `row ${index + 1} ${cell.name}: an empty optional value a row would drop`,
+            };
           }
           cellValues[cell.name] = rendered.value;
         }

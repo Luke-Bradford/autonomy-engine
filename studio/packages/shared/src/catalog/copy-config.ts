@@ -190,12 +190,11 @@ const copyInputShape = <T extends z.ZodType>(mapping: T) =>
  * `mapping` is REQUIRED, with no `.default([])`. An empty default would author a
  * copy that runs clean and moves nothing, which is the silent-wrong direction
  * every refusal in this file exists to avoid; a missing mapping should be a
- * refusal an author can see. The cost, stated because it is real and temporary:
- * `deriveConfigFields` cannot represent an array-of-objects
- * (`web/.../configForm.ts`), so the whole copy form degrades to the JSON
- * textarea and `mode` cannot be set without hand-typing a `mapping` beside it.
- * §13 owns the fix — M8's dedicated mapping panel, built as a general
- * `objectList` control rather than a copy-specific one.
+ * refusal an author can see. The cost this used to carry is PAID: until #1169
+ * `deriveConfigFields` could not represent an array-of-objects, so the whole
+ * copy form degraded to the JSON textarea and `mode` could not be set without
+ * hand-typing a `mapping` beside it. M8 slice 1 built the general `objectList`
+ * control §13 asked for, so a mapping is now authored as named row controls.
  */
 export const copyInputSchema = copyInputShape(CopyMappingSchema);
 

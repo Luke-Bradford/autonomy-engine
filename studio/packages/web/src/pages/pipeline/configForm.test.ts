@@ -556,6 +556,53 @@ describe('objectList (#1169)', () => {
       expect(formatFieldValue(rows, [{ a: 'one', b: 'x', extra: 1 }]).ok).toBe(false);
     });
 
+    /**
+     * The cell-level counterpart of `assembleConfig`'s clearing-gesture rule,
+     * and the reason it has to be a REFUSAL rather than a preservation: rows
+     * carry no identity, so after a removal control row `i` is not stored row
+     * `i`, and there is no stored row to compare a cell against.
+     */
+    it('refuses a row whose optional cell holds a value reading it back would DROP', () => {
+      const withOptional = field(
+        deriveConfigFields(
+          z.object({
+            rows: z.array(z.object({ a: z.string(), flag: z.boolean().optional() }).strict()),
+          }),
+        ),
+        'rows',
+      );
+      // An optional cell that is empty is OMITTED from its row on read-back, so
+      // an explicitly-stored `false` would vanish on an apply that touched a
+      // different row entirely.
+      expect(formatFieldValue(withOptional, [{ a: 'one', flag: false }]).ok).toBe(false);
+      // Absent is fine — there is nothing to lose.
+      expect(formatFieldValue(withOptional, [{ a: 'one' }]).ok).toBe(true);
+      // And an optional STRING stored empty, which is the shape reachable today:
+      // `copy.mapping`'s `expression` is `z.string().optional()` with no `.min()`.
+      const withOptionalText = field(
+        deriveConfigFields(
+          z.object({
+            rows: z.array(z.object({ a: z.string(), note: z.string().optional() }).strict()),
+          }),
+        ),
+        'rows',
+      );
+      expect(formatFieldValue(withOptionalText, [{ a: 'one', note: '' }]).ok).toBe(false);
+    });
+
+    it('does NOT refuse a REQUIRED cell stored empty, which reads back verbatim', () => {
+      // A required text cell writes `''` through rather than omitting it, so
+      // nothing is lost and the row stays renderable.
+      const required = field(
+        deriveConfigFields(z.object({ rows: z.array(z.object({ a: z.string() }).strict()) })),
+        'rows',
+      );
+      expect(formatFieldValue(required, [{ a: '' }])).toEqual({
+        ok: true,
+        value: [{ a: '' }],
+      });
+    });
+
     it("refuses a cell whose stored type disagrees with its column's control", () => {
       expect(formatFieldValue(rows, [{ a: 5, b: 'x' }]).ok).toBe(false);
       expect(formatFieldValue(rows, [{ a: 'one', b: 'not-an-option' }]).ok).toBe(false);
