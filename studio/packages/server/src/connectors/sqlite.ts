@@ -7,10 +7,14 @@ import {
   queryDatasetConfigSchema,
   sqliteConnectionConfigSchema as sharedSqliteConnectionConfigSchema,
   tableDatasetConfigSchema,
+  COPY_ACTIVITY_TYPE,
   type CoercedValue,
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
+import { failed } from './activity-events.js';
+import { DatasetIoError } from './dataset-io-error.js';
+import { runCopyActivity } from './copy.js';
 import { resolveWithinRoots } from './confine.js';
 import { classifySinkFailure } from './error-kind.js';
 import type {
@@ -110,44 +114,12 @@ export type SqliteValue = string | number | bigint | Uint8Array | null;
 export type SqliteRow = Record<string, SqliteValue>;
 
 /**
- * A dataset READ or WRITE that failed, carrying the failure `kind` the M5 `copy`
- * adapter maps straight onto its terminal `node.failed` event (#1 F0's
- * structured failure kind).
- *
- * ONE class for both directions, deliberately. It was `DatasetReadError` when M4
- * shipped only a reader; a second `DatasetWriteError` would have meant a second
- * near-identical mapper over the same `TRANSIENT_SQLITE_CODES` set — the
- * duplication `confine.ts` was extracted to prevent. (It would also have collided
- * in name with `DatasetWriteBodySchema` in `routes/datasets.ts`, where "dataset
- * write" means HTTP CRUD on the dataset ROW, not moving data into a store.)
- *
- * Classification is FAIL-SAFE, exactly as `fs.ts`'s errno mapper is: only the
- * SQLite codes that genuinely mean "busy right now" are `transient`, and
- * everything else — including any unrecognised throw — is `permanent`, never
- * blind-retried.
- *
- * `partialWritePossible` carries §4.2's one input: whether rows may already have
- * landed in the sink. It is false for every read (a read writes nothing) and for
- * a sink whose transaction demonstrably rolled back; it is true ONLY where this
- * code cannot prove the store was left in its pre-copy state. Turning it into a
- * verdict is `classifySinkFailure`'s job (`error-kind.ts`), never this class's —
- * this only reports the fact.
+ * Re-exported so the three test suites and every existing importer keep their
+ * `from './sqlite.js'` path: #1134 moved the class to its own module only to
+ * break an import cycle (`copy.ts` needs it to unwrap a mapping failure, and
+ * this module imports `copy.ts` to dispatch), not to re-home its public name.
  */
-export class DatasetIoError extends Error {
-  readonly kind: ConnectorErrorKind;
-  readonly partialWritePossible: boolean;
-
-  constructor(
-    kind: ConnectorErrorKind,
-    message: string,
-    options?: { cause?: unknown; partialWritePossible?: boolean },
-  ) {
-    super(message, options);
-    this.name = 'DatasetIoError';
-    this.kind = kind;
-    this.partialWritePossible = options?.partialWritePossible ?? false;
-  }
-}
+export { DatasetIoError };
 
 /** SQLite result codes that mean "try again", not "this will never work". */
 const TRANSIENT_SQLITE_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_PROTOCOL']);
@@ -867,20 +839,83 @@ export const sqliteAdapter: ConnectorAdapter = {
   },
 
   async *runActivity(ctx: ActivityContext): AsyncIterable<ActivityEvent> {
-    // A store connection binds no activity of its own — reading one is `copy`
-    // (M5), which resolves it as a dataset's store rather than as the node's
-    // adapter. This body exists because the registry must be TOTAL over
-    // `ConnectionKind` (`connection-config-ssot.test.ts` asserts an adapter for
-    // every kind), and refusing loudly is the honest content for it.
+    // #1134 (M5 slice 4b) — `copy` is the ONE activity a store connection runs,
+    // and it runs as the SOURCE end: the executor dispatches by the source
+    // connection's kind, resolves the sink connection alongside it, and hands
+    // both dataset ends over on `ctx` (slice 4a). Everything store-agnostic —
+    // the dispatch schema, the mapping refusals, the counters and the failure
+    // mapping — lives in `copy.ts`; this branch supplies only the two halves
+    // that are sqlite's.
+    if (ctx.activityType === COPY_ACTIVITY_TYPE) {
+      const cfg = sqliteConnectionConfigSchema.safeParse(ctx.connectionConfig);
+      if (!cfg.success) {
+        yield failed('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
+        return;
+      }
+      // The sink is resolved from `ctx.sink`, never from this adapter's own
+      // connection: the running adapter is the SOURCE's and a paired node may
+      // well write into a different store. Its KIND is checked here because
+      // nothing else can — the catalog's `sinkConnectionKinds` allowlist lands
+      // with the entry in 4c, so until then this is the only gate, and an
+      // unchecked non-sqlite config would reach the writer to be refused as
+      // "invalid sqlite connection config", which is a true statement about the
+      // wrong thing.
+      if (ctx.sink !== undefined && ctx.sink.kind !== 'sqlite') {
+        yield failed(
+          'permanent',
+          `a sqlite copy writes into a sqlite store, but the sink connection is '${ctx.sink.kind}'`,
+        );
+        return;
+      }
+      yield* runCopyActivity(ctx, {
+        readBatches: ({ dataset, signal }) =>
+          readSqliteDatasetBatches({
+            connectionConfig: cfg.data,
+            datasetKind: dataset.kind,
+            datasetConfig: dataset.config,
+            ...(signal === undefined ? {} : { signal }),
+          }),
+        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
+          // Parsed HERE, where the sink connection is proved present, rather
+          // than defaulted to this adapter's own config further up. A fallback
+          // to the source store is the one wrong answer available — it would
+          // write the right rows into the wrong database and report success.
+          const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
+          if (!parsedSink.success) {
+            throw new DatasetIoError(
+              'permanent',
+              `invalid sqlite sink connection config: ${parsedSink.error.message}`,
+            );
+          }
+          return writeSqliteDatasetRows(
+            {
+              connectionConfig: parsedSink.data,
+              datasetKind: dataset.kind,
+              datasetConfig: dataset.config,
+              columns,
+              mode,
+              onBatch,
+              ...(signal === undefined ? {} : { signal }),
+            },
+            batches,
+          );
+        },
+      });
+      return;
+    }
+
+    // Any OTHER activity type: a store connection binds none of its own. This
+    // body exists because the registry must be TOTAL over `ConnectionKind`
+    // (`connection-config-ssot.test.ts` asserts an adapter for every kind), and
+    // refusing loudly is the honest content for it.
     //
-    // It is also unreachable today, and that is worth knowing before someone
-    // "fixes" it: no catalog entry lists `sqlite` in `connectionKinds`, so the
-    // executor refuses with `CONNECTION_KIND_INVALID` before dispatch ever
-    // reaches an adapter, and the node picker never offers it.
-    yield {
-      type: 'failed',
-      kind: 'permanent',
-      error: `a sqlite connection is a STORE binding and runs no activity of its own (got '${ctx.activityType}')`,
-    };
+    // Still unreachable today, and worth knowing before someone "fixes" it: no
+    // catalog entry lists `sqlite` in `connectionKinds` — the `copy` entry lands
+    // in 4c with the canvas pickers — so the executor refuses with
+    // `CONNECTION_KIND_INVALID` before dispatch reaches an adapter at all.
+    yield failed(
+      'permanent',
+      `a sqlite connection is a STORE binding and runs no activity of its own (got '${ctx.activityType}')`,
+    );
   },
 };

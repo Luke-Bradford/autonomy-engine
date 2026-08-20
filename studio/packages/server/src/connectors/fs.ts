@@ -27,6 +27,7 @@ import type {
 // connector shares the one hardened implementation rather than mirroring it
 // (data-movement spec §8). `fs` is still its primary caller and still layers
 // `O_NOFOLLOW` on top at open time.
+import { failed } from './activity-events.js';
 import { resolveWithinRoots } from './confine.js';
 
 /**
@@ -158,10 +159,6 @@ const fsConnectionConfigSchema = sharedFsConnectionConfigSchema.extend({
 // config.ts`), imported here so the palette metadata and this live-request guard
 // can never drift. `input` here is the node's prepared (substituted) value.
 
-/** Build a terminal `failed` event. */
-function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
-  return { type: 'failed', kind, error };
-}
 
 /** Whether a thrown error is an abort (run cancel / shutdown). */
 function isAbort(err: unknown, signal: AbortSignal): boolean {
