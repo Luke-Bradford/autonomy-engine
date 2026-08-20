@@ -522,8 +522,21 @@ async function resolveSqliteDatasetAddress(args: {
     const stats = await stat(dbPath);
     storeIdentity = `${stats.dev}:${stats.ino}`;
   } catch {
-    // Unidentifiable — recorded as such. See the docblock: this must never
-    // become a refusal, and it must never become a FALSE identity either.
+    // Unidentifiable — recorded as such. This must never become a refusal, and
+    // never a FALSE identity either.
+    //
+    // UNIFORM across errno, deliberately, and the argument is not "ENOENT is
+    // the only case worth handling": every way `stat` can fail here leaves the
+    // COPY unable to proceed anyway, so the degraded comparison cannot admit a
+    // copy that would otherwise have been refused. `stat` needs exactly what
+    // `better-sqlite3` needs to open the file — the path, and search permission
+    // on its parent. ENOENT ⇒ the open raises `SQLITE_CANTOPEN`;
+    // EACCES/EPERM/ELOOP/ENAMETOOLONG ⇒ the open hits the same wall; a genuine
+    // I/O error ⇒ the first read does. In each the STORE refuses the copy, with
+    // a message about the store, which is strictly better than a dispatch-time
+    // refusal about an address. Branching on errno would buy nothing and would
+    // add the one path this seam must not have: an unidentifiable store
+    // becoming a `permanent` refusal.
   }
 
   const object =
