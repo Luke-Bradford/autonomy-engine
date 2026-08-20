@@ -247,6 +247,7 @@
 // WHAT VOIDS THIS: the first catalog entry to declare a sink — `copy` (M5) —
 // makes the field load-bearing, and owes the bump. That is a bump for POPULATING
 // the field, not merely for the new activity type.
+// DISCHARGED at 23 below (M5 slice 4c, #1139), which is where that entry landed.
 // NO BUMP for M3 (#1117) either, recorded for the same reason and on the same
 // argument. `NodeSchema.datasetIds` (the paired source/sink dataset ADDRESS) is
 // additive and INERT *at dispatch*: no catalog entry declares a dataset, so
@@ -269,10 +270,14 @@
 // dispatches identically. The clause is struck rather than left standing because
 // a ledger whose stated reasons have quietly stopped being true cannot be
 // audited, which is the one job it has.
-// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5 slice 4b),
-// the first catalog entry to declare BOTH `sinkConnectionKinds` and
+// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5 slice 4c,
+// #1139), the first catalog entry to declare BOTH `sinkConnectionKinds` and
 // `datasetKinds`, makes the fields load-bearing and owes the bump. One bump
 // covers both; they become load-bearing together.
+// DISCHARGED at 23 below. Written here as "slice 4b" until #1139: the ADAPTER
+// landed at 4b (#1134) and the ENTRY at 4c, and this clause is about the entry.
+// A predicted-void clause naming the wrong event is the drift this ledger exists
+// to catch, so it is corrected rather than left to read as still pending.
 // CATALOG_VERSION 22 (#1119 M4): the `sqlite` STORE connection kind.
 // A BUMP, and the ledger already settled why a kind is different in kind from a
 // field: bump 8 was taken for `fs` on exactly this argument — a new
