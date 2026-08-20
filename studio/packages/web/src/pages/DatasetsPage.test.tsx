@@ -296,6 +296,53 @@ describe('DatasetsPage', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('carries a typed field into the JSON editor a reader-less kind forces open', async () => {
+    // The one mode change that does not run through the explicit toggle: a kind
+    // with no reader forces `jsonMode` on. Without committing the field draft
+    // first, the textarea opens on a `jsonText` written before anything was
+    // typed — showing a config the operator did not build, and saving it.
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.type(within(form()).getByLabelText('Name'), 'Orders');
+    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+
+    expect(within(form()).getByLabelText('Config (JSON)')).toHaveValue(
+      JSON.stringify({ table: 'orders' }, null, 2),
+    );
+
+    // And the value that is on screen is the value that is SAVED.
+    await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), '[]');
+    await user.click(screen.getByRole('button', { name: 'Create dataset' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'excel', config: { table: 'orders' } }),
+      ),
+    );
+  });
+
+  it('names the unreadable control instead of opening JSON on a draft that omits it', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      dataset({ kind: 'query', config: { sql: 'select 1', parameters: { a: 1 } } }),
+    ]);
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText('Orders');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+
+    // `parameters` is a record, so it derives a JSON control; typing something
+    // unparseable into it makes the field draft unreadable.
+    await pasteInto(user, within(form()).getByLabelText(/^parameters \(optional\)/), '{oops');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
+
+    expect(await within(form()).findByRole('alert')).toHaveTextContent(/parameters/);
+    // The kind still changed — the operator is not trapped in it.
+    expect(within(form()).getByLabelText('Kind')).toHaveValue('delimited');
+  });
+
   it('deletes only on confirmation, and says what breaks', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);

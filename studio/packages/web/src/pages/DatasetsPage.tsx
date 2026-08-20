@@ -394,6 +394,16 @@ function DatasetForm({
    * advisory below says why it is showing.
    */
   const kindHasReader = datasetKindIsImplemented(form.kind);
+  /*
+   * The config editor below (the mode toggle, the two advisories, the
+   * fields-vs-textarea branch) is the THIRD copy of a pattern `ConnectionForm`
+   * and `NodePanel` already carry — #1088's subject, now widened rather than
+   * paid down, which is recorded honestly in #1146 rather than left for the
+   * next reader to notice. The correctness-critical half is NOT duplicated:
+   * `parseConfigText`, `deriveFieldsWithCarried` and `readConfigDraft` all live
+   * in `configForm.ts` and are shared. What is copied is presentation plus
+   * three thin handlers, one of which (`onKindChange`) has genuinely diverged.
+   */
   const jsonMode = form.jsonMode || unrenderable.length > 0 || !kindHasReader;
 
   /**
@@ -413,7 +423,11 @@ function DatasetForm({
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) return null; // submit reports the parse / per-field message
     return datasetConfigAdvisory(form.kind, draft.owned);
-  }, [jsonMode, form, fields]);
+    // The three draft fields, not `form` whole: `form` is a new object on every
+    // keystroke, so depending on it would re-parse and re-validate the config
+    // while the operator types a NAME. Listing exactly what `readConfigDraft`
+    // reads keeps that honest — a fourth field added to it must be added here.
+  }, [jsonMode, form.config, form.jsonText, form.inputs, form.kind, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: DatasetKind) {
@@ -423,11 +437,38 @@ function DatasetForm({
     // already typed win. A plain re-seed would drop every in-progress edit; no
     // re-seed at all would leave a key the new kind owns showing an empty
     // control, which `assembleConfig` reads as a clearing gesture and DELETES.
-    onChange({
-      ...form,
-      kind,
-      inputs: { ...seedFieldInputs(next.fields, form.config), ...form.inputs },
-    });
+    const inputs = { ...seedFieldInputs(next.fields, form.config), ...form.inputs };
+
+    // A kind with NO READER forces `jsonMode` on (see its declaration), and that
+    // is the one mode change that does not run through `toJsonMode` — so the
+    // textarea would open on a `jsonText` last written before anything was typed
+    // into the field controls, showing the operator a config that is not the one
+    // they built, and SAVING it. Every other route into JSON mode commits the
+    // field draft first; this one has to as well.
+    //
+    // Deliberately narrow: a kind change still rewrites neither draft in the
+    // ordinary case, so an operator's JSON is never edited under them. This
+    // fires only when the switch itself takes the field form away.
+    if (!jsonMode && !datasetKindIsImplemented(kind)) {
+      const assembled = assembleConfig(form.config, fields, form.inputs);
+      if (assembled.ok) {
+        onChange({
+          ...form,
+          kind,
+          inputs,
+          config: assembled.config,
+          jsonText: JSON.stringify(assembled.config, null, 2),
+        });
+        return;
+      }
+      // A control that will not read back (non-numeric text in a number box)
+      // has no committed form to carry over. The kind still changes — the
+      // operator is not trapped — but the message names the field rather than
+      // letting the JSON editor open on a draft that silently omits it.
+      setError(assembled.message);
+    }
+
+    onChange({ ...form, kind, inputs });
   }
 
   /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
@@ -584,7 +625,7 @@ function DatasetForm({
       </label>
 
       <div className="dataset-config" role="group" aria-label="Config">
-        <div className="connection-config-header">
+        <div className="config-header">
           <span>Config</span>
           {/* Hidden, not disabled, when the kind has no reader: there is no field
               form to switch TO, so a control that can only refuse is furniture. */}

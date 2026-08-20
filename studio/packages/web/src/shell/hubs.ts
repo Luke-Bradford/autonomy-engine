@@ -136,11 +136,11 @@ export const HUBS: readonly Hub[] = [
     // is where a hub's second section becomes navigable at all.
     sections: [
       { label: 'Connections', path: '/manage/connections' },
-      // #1115 — beside Connections, which the data-movement spec (§13) scopes
-      // it as in as many words: "a Datasets list + detail beside Connections.
-      // No new hub, no parallel authoring idiom." A dataset is an ADDRESS in a
-      // store, so it is meaningless without the connection above it, and an
-      // operator hunting for one will look at the other.
+      // #1115 — beside Connections, which is where the data-movement spec
+      // (§13) puts it in as many words: "a Datasets list + detail beside
+      // Connections. No new hub, no parallel authoring idiom." A dataset is an
+      // ADDRESS in a store, so it is meaningless without the connection above
+      // it, and an operator hunting for one will look at the other.
       { label: 'Datasets', path: '/manage/datasets' },
       // #1060 — beside Connections, because they are the two places credentials
       // enter the product and an operator looking for one will look at the

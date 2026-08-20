@@ -320,10 +320,12 @@ function ConnectionForm({
     // a schema-only advisory would say nothing about the one path-safety key in
     // the catalog — the exact silent-until-dispatch failure this ticket ends.
     return connectionConfigAdvisory(form.kind, candidate);
-    // `form` whole, not its parts: `readConfigDraft` reads three of its fields
-    // and adding a fourth must not leave a stale advisory behind. `form` is
-    // replaced on every keystroke anyway, so listing the parts bought nothing.
-  }, [jsonMode, form, fields]);
+    // The three draft fields plus `kind`, not `form` whole: `form` is a new
+    // object on every keystroke, so depending on it would re-parse and
+    // re-validate the config while the operator types a NAME or a SECRET.
+    // Listing exactly what `readConfigDraft` reads keeps that honest — a fourth
+    // field added to it must be added here.
+  }, [jsonMode, form.config, form.jsonText, form.inputs, form.kind, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
@@ -453,7 +455,7 @@ function ConnectionForm({
       </label>
 
       <div className="connection-config" role="group" aria-label="Config">
-        <div className="connection-config-header">
+        <div className="config-header">
           <span>Config</span>
           <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
             {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
