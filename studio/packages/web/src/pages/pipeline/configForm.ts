@@ -66,7 +66,7 @@ export type FieldInput = string | boolean | readonly ObjectListRow[];
  * `readonly T[]` member from the FALSE branch of a union — so the scalar paths
  * below would still see a possible array. This guard is what makes them total.
  */
-function isRowList(value: FieldInput | undefined): value is readonly ObjectListRow[] {
+export function isRowList(value: FieldInput | undefined): value is readonly ObjectListRow[] {
   return Array.isArray(value);
 }
 

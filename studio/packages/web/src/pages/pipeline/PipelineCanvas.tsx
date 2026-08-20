@@ -63,6 +63,7 @@ import { insertModeFor } from './expressionInsert';
 import {
   assembleConfig,
   deriveConfigFields,
+  emptyControlValue,
   seedFieldInputs,
   unrepresentableFields,
 } from './configForm';
@@ -2696,7 +2697,7 @@ export function NodePanel({
             <ConfigFieldControl
               key={field.name}
               field={field}
-              value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+              value={inputs[field.name] ?? emptyControlValue(field)}
               onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
               picker={picker}
             />

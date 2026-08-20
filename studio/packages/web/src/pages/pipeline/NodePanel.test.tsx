@@ -639,3 +639,124 @@ describe('paired binding pickers (#1139)', () => {
     expect(store.getState().nodes[0]?.connectionId).toBeUndefined();
   });
 });
+
+/**
+ * #1169 — M8 slice 1. A `copy` node's column mapping is an array of objects,
+ * which had no typed control and therefore rendered as a raw JSON textarea —
+ * the blank box the data-movement spec's §13 exists to remove.
+ */
+describe('NodePanel (the objectList control, #1169)', () => {
+  const copyNode = (config: Record<string, unknown>): Node => ({
+    id: 'n_copy',
+    type: 'copy',
+    name: 'Copy 1',
+    position: { x: 0, y: 0 },
+    config,
+  });
+
+  const oneRow = [{ source: 'name', sink: 'full_name', type: 'string', onError: 'fail' }];
+
+  it('names every cell of every row, instead of one JSON blob for the whole mapping', () => {
+    mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+
+    expect(screen.getByLabelText('mapping row 1 source (optional)')).toBeTruthy();
+    expect(screen.getByLabelText('mapping row 1 sink')).toBeTruthy();
+    expect(screen.getByLabelText('mapping row 1 type')).toBeTruthy();
+    // The JSON textarea it replaces — for the FIELD, and for the whole config.
+    expect(screen.queryByLabelText('mapping — JSON')).toBeNull();
+    expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
+  });
+
+  it('writes an edited cell into the row it belongs to, leaving its siblings alone', () => {
+    const panel = mountOver(
+      copyNode({
+        mapping: [...oneRow, { source: 'age', sink: 'age', type: 'integer', onError: 'fail' }],
+        mode: 'append',
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), {
+      target: { value: 'years' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [
+        { source: 'name', sink: 'full_name', type: 'string', onError: 'fail' },
+        { source: 'age', sink: 'years', type: 'integer', onError: 'fail' },
+      ],
+    });
+  });
+
+  it('appends a row and stores it once its required columns are filled', () => {
+    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
+    fireEvent.change(screen.getByLabelText('mapping row 2 source (optional)'), {
+      target: { value: 'age' },
+    });
+    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), { target: { value: 'years' } });
+    fireEvent.change(screen.getByLabelText('mapping row 2 type'), {
+      target: { value: 'integer' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [oneRow[0], { source: 'age', sink: 'years', type: 'integer' }],
+    });
+  });
+
+  it('removes the row the author asked for, not the one that shifts into its place', () => {
+    const panel = mountOver(
+      copyNode({
+        mapping: [...oneRow, { source: 'age', sink: 'years', type: 'integer', onError: 'fail' }],
+        mode: 'append',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [{ source: 'age', sink: 'years', type: 'integer', onError: 'fail' }],
+    });
+  });
+
+  it("lets the activity's own cross-row rule refuse a mapping the cells each accept", () => {
+    // Two rows writing one sink column is silent LAST-WINS into the operator's
+    // store. No single cell can see it; `refineMapping` can, and the panel must
+    // surface that rather than save.
+    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
+    fireEvent.change(screen.getByLabelText('mapping row 2 source (optional)'), {
+      target: { value: 'other' },
+    });
+    fireEvent.change(screen.getByLabelText('mapping row 2 sink'), {
+      target: { value: 'full_name' },
+    });
+    fireEvent.change(screen.getByLabelText('mapping row 2 type'), { target: { value: 'string' } });
+    panel.apply();
+
+    expect(screen.getByText(/duplicate sink column/)).toBeTruthy();
+    expect(panel.storedConfig()).toMatchObject({ mapping: oneRow });
+  });
+
+  it('keeps the derived form for an llm_call whose history is the expression its save gate demands', () => {
+    // The regression the strictness gate exists to stop. `history` is typed
+    // `z.array(...)` but `validateDoc` refuses any non-string value, so a row
+    // control would find a STRING there, refuse to render it, and take the whole
+    // node into the JSON editor — this ticket's own defect, on the catalog's
+    // most-used activity.
+    mountOver({
+      id: 'n_llm',
+      type: 'llm_call',
+      name: 'LLM 1',
+      position: { x: 0, y: 0 },
+      config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
+    });
+
+    expect(screen.getByLabelText('prompt (optional)')).toBeTruthy();
+    expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
+  });
+});

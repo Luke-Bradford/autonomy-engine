@@ -2771,6 +2771,19 @@ td button + button {
   gap: 0.25rem;
 }
 
+/* #1169 — an array-of-objects config field. The rows themselves are
+   `.contract-row`, the panel's existing card idiom (see `ObjectListControl`'s
+   docblock for why this is a stack of cards and not a `<table>`); this only has
+   to space them and name the group the way a `<label>` would name a control. */
+.object-list {
+  gap: 0.5rem;
+}
+
+.object-list-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .expression-picker {
   display: flex;
   flex-direction: column;
