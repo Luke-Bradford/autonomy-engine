@@ -177,9 +177,7 @@ function copyFailure(err: unknown): ActivityEvent {
     return failed('permanent', `copy mapping refused (${mapping.code}): ${mapping.message}`);
   }
   if (err instanceof DatasetIoError) {
-    const partial = err.partialWritePossible
-      ? ' (the sink may hold a partial write)'
-      : '';
+    const partial = err.partialWritePossible ? ' (the sink may hold a partial write)' : '';
     return failed(err.kind, `${err.message}${partial}`);
   }
   // Fail-safe: an unrecognised throw is a programming fault, never something to
@@ -251,7 +249,11 @@ export async function* runCopyActivity(
     });
     counters.rowsWritten = result.rowsWritten;
     if (counters.rowsFailed > 0) {
-      yield { type: 'warned', code: WARNING_CODES.COPY_ROWS_FAILED, reason: failureSummary(counters) };
+      yield {
+        type: 'warned',
+        code: WARNING_CODES.COPY_ROWS_FAILED,
+        reason: failureSummary(counters),
+      };
     }
     yield { type: 'succeeded', outputs: copyOutputs(counters) };
   } catch (err) {
@@ -264,7 +266,11 @@ export async function* runCopyActivity(
       yield { type: 'output', name, value };
     }
     if (counters.rowsFailed > 0) {
-      yield { type: 'warned', code: WARNING_CODES.COPY_ROWS_FAILED, reason: failureSummary(counters) };
+      yield {
+        type: 'warned',
+        code: WARNING_CODES.COPY_ROWS_FAILED,
+        reason: failureSummary(counters),
+      };
     }
     yield copyFailure(err);
   }

@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { COPY_ACTIVITY_TYPE, type DatasetColumn } from '@autonomy-studio/shared';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
-import { cleanupTempRoots, rowsOf, seedDb, seedSink, tempRoot, writableConfig } from './sqlite-fixtures.js';
+import {
+  cleanupTempRoots,
+  rowsOf,
+  seedDb,
+  seedSink,
+  tempRoot,
+  writableConfig,
+} from './sqlite-fixtures.js';
 
 /**
  * #996 M5 slice 4b (#1134) — the `copy` ACTIVITY, at the adapter boundary.
@@ -78,7 +85,8 @@ async function run(ctx: ActivityContext): Promise<ActivityEvent[]> {
   return events;
 }
 
-const terminal = (events: ActivityEvent[]): ActivityEvent => events[events.length - 1] as ActivityEvent;
+const terminal = (events: ActivityEvent[]): ActivityEvent =>
+  events[events.length - 1] as ActivityEvent;
 
 describe('copy activity — the happy path contract', () => {
   it('yields ONE terminal event carrying the five declared outputs', async () => {
@@ -172,7 +180,10 @@ describe('copy activity — the refusal ladder', () => {
         }),
       ),
     );
-    expect(end).toMatchObject({ kind: 'permanent', error: expect.stringContaining('sink connection') });
+    expect(end).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('sink connection'),
+    });
   });
 
   it('refuses a NON-sqlite sink by naming the kind, not the config', async () => {
@@ -327,7 +338,9 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
       'bytesRead',
       'truncated',
     ]);
-    expect(events.indexOf(outputs[0] as ActivityEvent)).toBeLessThan(events.indexOf(terminal(events)));
+    expect(events.indexOf(outputs[0] as ActivityEvent)).toBeLessThan(
+      events.indexOf(terminal(events)),
+    );
     expect(terminal(events).type).toBe('failed');
   });
 });

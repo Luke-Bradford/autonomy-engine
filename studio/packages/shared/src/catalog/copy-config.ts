@@ -33,41 +33,41 @@ import { DataTypeSchema } from '../schemas/dataset.js';
  * with an extra step, and 4c's catalog `configSchema` would make it three.
  */
 const copyMappingEntryShape = {
-    /** A source column name — XOR `expression`. */
-    source: z.string().min(1).optional(),
-    /**
-     * A `${}` expression producing the value — XOR `source`.
-     *
-     * NOTE for the DISPATCH path (#1130): by the time a copy reaches an adapter
-     * this field has been through the reducer, and a whole-value `${}` reference
-     * PRESERVES ITS NATIVE TYPE (`engine/params.ts:740`) — so
-     * `expression: '${params.limit}'` arrives as a NUMBER, and re-parsing
-     * `preparedInput` through this schema as-is would refuse a working pipeline
-     * at dispatch. The pump types the substituted constant `unknown` for exactly
-     * this reason (`datamove/pump.ts`), and it is a constant per DISPATCH rather
-     * than per row, because §8 puts substitution in the reducer.
-     */
-    /** The sink column this row writes. */
-    sink: z.string().min(1),
-    /**
-     * The TARGET type, declared and never inferred. Drawn from the closed
-     * `DataTypeSchema` set (`schemas/dataset.ts`) precisely because §6.2 defines
-     * an outcome for every (source value → target type) pair: a type reachable
-     * here without a matrix row would be a silent corruption path.
-     */
-    type: DataTypeSchema,
-    /**
-     * §6.2's per-column opt-out. `'fail'` (the default) fails the ROW on a
-     * coercion failure; `'null'` writes a null instead.
-     *
-     * The refusal that pairs with it — `'null'` is REFUSED where the sink column
-     * is `nullable: false`, because accepting it pushes the failure into the
-     * store as a constraint violation, by which time part of the output is
-     * already written — needs the RESOLVED sink dataset's columns and therefore
-     * lands with the activity, which slice 3's re-split put in **slice 4**
-     * (#1130) along with dataset resolution itself. It is named here so the
-     * split is legible rather than lost between tickets.
-     */
+  /** A source column name — XOR `expression`. */
+  source: z.string().min(1).optional(),
+  /**
+   * A `${}` expression producing the value — XOR `source`.
+   *
+   * NOTE for the DISPATCH path (#1130): by the time a copy reaches an adapter
+   * this field has been through the reducer, and a whole-value `${}` reference
+   * PRESERVES ITS NATIVE TYPE (`engine/params.ts:740`) — so
+   * `expression: '${params.limit}'` arrives as a NUMBER, and re-parsing
+   * `preparedInput` through this schema as-is would refuse a working pipeline
+   * at dispatch. The pump types the substituted constant `unknown` for exactly
+   * this reason (`datamove/pump.ts`), and it is a constant per DISPATCH rather
+   * than per row, because §8 puts substitution in the reducer.
+   */
+  /** The sink column this row writes. */
+  sink: z.string().min(1),
+  /**
+   * The TARGET type, declared and never inferred. Drawn from the closed
+   * `DataTypeSchema` set (`schemas/dataset.ts`) precisely because §6.2 defines
+   * an outcome for every (source value → target type) pair: a type reachable
+   * here without a matrix row would be a silent corruption path.
+   */
+  type: DataTypeSchema,
+  /**
+   * §6.2's per-column opt-out. `'fail'` (the default) fails the ROW on a
+   * coercion failure; `'null'` writes a null instead.
+   *
+   * The refusal that pairs with it — `'null'` is REFUSED where the sink column
+   * is `nullable: false`, because accepting it pushes the failure into the
+   * store as a constraint violation, by which time part of the output is
+   * already written — needs the RESOLVED sink dataset's columns and therefore
+   * lands with the activity, which slice 3's re-split put in **slice 4**
+   * (#1130) along with dataset resolution itself. It is named here so the
+   * split is legible rather than lost between tickets.
+   */
   onError: z.enum(['fail', 'null']).default('fail'),
 };
 
@@ -78,7 +78,10 @@ const copyMappingEntryShape = {
  * rules are `superRefine` checks over the whole array: they cannot be inherited
  * by extension, only re-run.
  */
-const refineMapping = (rows: readonly { source?: unknown; expression?: unknown; sink: string }[], ctx: z.RefinementCtx) => {
+const refineMapping = (
+  rows: readonly { source?: unknown; expression?: unknown; sink: string }[],
+  ctx: z.RefinementCtx,
+) => {
   const seenSinks = new Set<string>();
   rows.forEach((row, i) => {
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own

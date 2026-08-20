@@ -107,9 +107,9 @@ describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)',
   });
 
   it('the AUTHORED schema refuses that same value — the two variants differ ONLY there', () => {
-    expect(CopyMappingSchema.safeParse([{ expression: 42, sink: 'id', type: 'integer' }]).success).toBe(
-      false,
-    );
+    expect(
+      CopyMappingSchema.safeParse([{ expression: 42, sink: 'id', type: 'integer' }]).success,
+    ).toBe(false);
   });
 
   it('keeps the XOR, so a dispatch payload cannot carry both arms', () => {
