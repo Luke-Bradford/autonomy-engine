@@ -308,7 +308,12 @@ describe('the confinement guard applies to the database file', () => {
 });
 
 describe('what the reader refuses before it opens anything', () => {
-  it('refuses a dataset kind with no reader yet', async () => {
+  it('refuses a dataset kind that does not live in a SQLITE store', async () => {
+    // Was "a kind with no reader yet", and #1167 is why the question changed
+    // rather than the answer: `delimited` now HAS a reader — `delimited-io.ts`'s,
+    // over an `fs` connection — so "no reader exists" became false while "this
+    // store cannot read it" stayed true. Reporting the old sentence here would
+    // send an operator to wait for a reader that already shipped.
     const root = tempRoot();
     seedDb(root, 1);
     await expect(
@@ -319,7 +324,25 @@ describe('what the reader refuses before it opens anything', () => {
           datasetConfig: { path: '/data/in.csv' },
         }),
       ),
-    ).rejects.toThrow(/no reader exists for the 'delimited' dataset kind/);
+    ).rejects.toThrow(/the sqlite store reads 'table' and 'query' datasets; this one is 'delimited'/);
+  });
+
+  it('refuses a delimited config BY KIND, never by trying to parse it as a table', async () => {
+    // The failure the guard exists to prevent, pinned by its MESSAGE. A
+    // `delimited` config carries `path` and no `table`, so a kind check that had
+    // fallen through would still refuse — as "invalid table dataset config",
+    // which is a true statement about the wrong thing.
+    const root = tempRoot();
+    seedDb(root, 1);
+    await expect(
+      collect(
+        readSqliteDatasetBatches({
+          connectionConfig: { roots: [root], path: join(root, 'app.db') },
+          datasetKind: 'delimited',
+          datasetConfig: { path: '/data/in.csv', header: true },
+        }),
+      ),
+    ).rejects.toThrow(/^(?!.*invalid table dataset config).*$/s);
   });
 
   it('refuses an injection-shaped table identifier', async () => {
@@ -751,12 +774,21 @@ describe('resolveDatasetAddress', () => {
     ).rejects.toMatchObject({ kind: 'permanent' });
   });
 
-  it('refuses a dataset kind no reader exists for', async () => {
+  it('refuses a dataset kind that does not live in a SQLITE store', async () => {
+    // Both guards moved together (#1167) and both are pinned by message, so the
+    // address seam and the reader cannot start describing the same mismatch
+    // differently. `excel` is the kind that has no reader ANYWHERE and it is
+    // refused by the same sentence — one guard, one message.
     const root = tempRoot();
     const path = seedDb(root, 1);
-    await expect(
-      resolveAddress({ roots: [root], path }, { kind: 'delimited', config: {} }),
-    ).rejects.toMatchObject({ kind: 'permanent' });
+    for (const kind of ['delimited', 'excel'] as const) {
+      await expect(
+        resolveAddress({ roots: [root], path }, { kind, config: {} }),
+      ).rejects.toMatchObject({
+        kind: 'permanent',
+        message: `the sqlite store reads 'table' and 'query' datasets; this one is '${kind}'`,
+      });
+    }
   });
 
   it('refuses a table dataset whose config is not a table config', async () => {

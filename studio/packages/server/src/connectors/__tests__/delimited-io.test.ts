@@ -15,8 +15,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import {
+  delimitedCoercionFor,
   describeDelimitedDatasetColumns,
   readDelimitedDatasetBatches,
+  resolveDelimitedDatasetAddress,
   type DelimitedDatasetRead,
 } from '../delimited-io.js';
 
@@ -602,3 +604,131 @@ function utf16le(text: string): number[] {
   }
   return bytes;
 }
+
+/**
+ * #1167 M7 slice 3 — §2.1's ADDRESS, the fact a dispatch records and the
+ * self-copy gate compares.
+ */
+describe('where a delimited dataset physically is', () => {
+  const resolve = (path: string, config: Record<string, unknown> = {}, roots = [root]) =>
+    resolveDelimitedDatasetAddress({
+      connectionConfig: { roots },
+      dataset: { kind: 'delimited', config: { path, header: true, ...config } },
+    });
+
+  it('reports the CONFINED path as both the store and the object', async () => {
+    const path = await seed('a.csv', 'id\n1\n');
+    // Both halves, deliberately: for a flat file the store and the object are
+    // the same physical thing, and a `null` object would make a CSV copied onto
+    // itself unrefusable (`sameDatasetAddress`: "a null object never matches,
+    // not even another null").
+    await expect(resolve(path)).resolves.toEqual({
+      kind: 'fs',
+      store: path,
+      storeIdentity: expect.stringMatching(/^\d+:\d+$/),
+      object: path,
+    });
+  });
+
+  it('gives a CASE-ALIAS pair ONE identity, which is why the field exists', async () => {
+    // The measured reason `store` alone is not an identity. `resolveWithinRoots`
+    // joins the final component AS SPELLED, so on a case-insensitive volume
+    // (APFS, the operator's Mac) these are two paths and one inode. On a
+    // case-SENSITIVE one they are genuinely two files — so the assertion is
+    // "the identity tracks the filesystem", not "the identities are equal".
+    const path = await seed('Data.csv', 'id\n1\n');
+    const aliased = join(root, 'data.csv');
+    const [spelled, alias] = await Promise.all([resolve(path), resolve(aliased)]);
+
+    expect(spelled.store).not.toBe(alias.store);
+    let sameFile = true;
+    try {
+      const { stat } = await import('node:fs/promises');
+      const [a, b] = await Promise.all([stat(path), stat(aliased)]);
+      sameFile = a.ino === b.ino;
+    } catch {
+      sameFile = false;
+    }
+    if (sameFile) {
+      expect(alias.storeIdentity).toBe(spelled.storeIdentity);
+    } else {
+      expect(alias.storeIdentity).not.toBe(spelled.storeIdentity);
+    }
+  });
+
+  it('records an unidentifiable store as null rather than refusing', async () => {
+    // A missing file is not a dispatch-time refusal: the READ is what refuses
+    // it, with a message about the store. Minting a `permanent` here would
+    // report an address problem for a store problem.
+    const address = await resolve(join(root, 'not-here.csv'));
+    expect(address).toMatchObject({ store: join(root, 'not-here.csv'), storeIdentity: null });
+  });
+
+  it('refuses a path outside the connection roots', async () => {
+    const path = join(outside, 'escape.csv');
+    await writeFile(path, 'id\n1\n');
+    await expect(resolve(path)).rejects.toBeInstanceOf(DatasetIoError);
+    await expect(resolve(path)).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('refuses a symlinked target, like every other path this connection takes', async () => {
+    const target = join(outside, 'target.csv');
+    await writeFile(target, 'id\n1\n');
+    const link = join(root, 'link.csv');
+    await symlink(target, link);
+    await expect(resolve(link)).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('refuses a kind this store does not read, BY NAME', async () => {
+    await expect(
+      resolveDelimitedDatasetAddress({
+        connectionConfig: { roots: [root] },
+        dataset: { kind: 'excel', config: { path: join(root, 'book.xlsx') } },
+      }),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      message: "the fs store reads 'delimited' datasets; this one is 'excel'",
+    });
+  });
+});
+
+/**
+ * #1167 — the §6.4 projection `CopyIo.sourceCoercion` travels through.
+ */
+describe('the coercion options a delimited dataset declares', () => {
+  it('returns only the DECLARED keys, so an absent one stays absent', async () => {
+    // Not `{ nullValue: undefined }`: `coerceValue` tests
+    // `opts.nullValue !== undefined`, and `exactOptionalPropertyTypes` is what
+    // keeps the two spellings distinguishable at the type level.
+    expect(delimitedCoercionFor({ path: '/a.csv', header: true })).toEqual({});
+    expect(Object.keys(delimitedCoercionFor({ path: '/a.csv', header: true }))).toEqual([]);
+  });
+
+  it('carries an EMPTY-STRING nullValue, which is a real declaration', async () => {
+    // The one value a truthiness check would silently drop. #1163 gave
+    // `nullValue` no `.min(1)` precisely so "an empty field means NULL" is
+    // expressible.
+    expect(delimitedCoercionFor({ path: '/a.csv', header: true, nullValue: '' })).toEqual({
+      nullValue: '',
+    });
+  });
+
+  it('carries both keys when both are declared', async () => {
+    expect(
+      delimitedCoercionFor({
+        path: '/a.csv',
+        header: true,
+        nullValue: '\\N',
+        dateFormat: 'dd/MM/yyyy',
+      }),
+    ).toEqual({ nullValue: '\\N', dateFormat: 'dd/MM/yyyy' });
+  });
+
+  it('THROWS on a config it cannot parse rather than degrading to no options', async () => {
+    // The fail-open alternative is the whole reason this is not `?? {}`: an
+    // unparseable config would otherwise run the copy with the operator's
+    // declared sentinel doing nothing.
+    expect(() => delimitedCoercionFor({ header: true })).toThrow(DatasetIoError);
+    expect(() => delimitedCoercionFor({ header: true })).toThrow(/invalid delimited dataset config/);
+  });
+});

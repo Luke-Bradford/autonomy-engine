@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  DATASET_CONNECTION_KINDS,
   DATASET_KINDS,
   DatasetColumnSchema,
   datasetConfigAdvisory,
@@ -140,22 +141,55 @@ function formFor(
 }
 
 /**
- * The kind a NEW dataset opens on: the first one that has a READER.
+ * The kind a NEW dataset opens on: the first one that has a READER **and lives
+ * in the store the form is about to open on**.
  *
- * Not `KINDS[0]`, which is `delimited` — a kind whose reader arrives at M7, so
- * every new dataset would start on a kind that cannot run and whose config this
- * build cannot even describe. The enum's order is an address-vocabulary order,
- * not a usefulness order, and defaulting to it would hand the operator a broken
- * dataset unless they knew to change the picker. Falls back to `KINDS[0]` so
- * this stays total if the implemented set is ever empty.
+ * The second clause is #1167's, and the widening is what made it necessary. Two
+ * facts decide this and both have to be consulted:
+ *
+ *  - Not `KINDS[0]` alone. The enum's order is an ADDRESS-VOCABULARY order, not
+ *    a usefulness order, so `KINDS[0]` is `delimited` for reasons that have
+ *    nothing to do with what an operator wants first.
+ *  - Not "the first kind with a reader" alone, which is what this was until M7
+ *    slice 3. That rule was stable only while ONE store had a reader; the
+ *    moment `delimited` joined `IMPLEMENTED_DATASET_KINDS` it began returning
+ *    `delimited` for every new dataset — including one opening on a `sqlite`
+ *    store, where the form would render "Kind and store disagree" on mount
+ *    (#1145's advisory), before the operator had touched anything.
+ *
+ * So the default is derived from the STORE the form opens on. On an `fs`
+ * connection it is `delimited`; on a `sqlite` one, `table`. With no connection
+ * at all there is no store to agree with, and it falls back to the first kind
+ * with a reader — the old rule, kept for exactly the case it is still right for.
+ *
+ * This is a DEFAULT and never a restriction: the picker still offers every kind,
+ * and an operator who deliberately wants a mismatched pair gets the advisory
+ * rather than a refusal, which is the polarity `datasetConnectionKindAdvisory`
+ * insists on.
  */
-const DEFAULT_KIND: DatasetKind = KINDS.find(datasetKindIsImplemented) ?? KINDS[0]!;
+function defaultKindFor(connection: ConnectionPublic | undefined): DatasetKind {
+  const readable = KINDS.filter(datasetKindIsImplemented);
+  const kind = connection === undefined
+    ? undefined
+    : readable.find((k) => DATASET_CONNECTION_KINDS[k].includes(connection.kind));
+  // Falls back through "first readable" to `KINDS[0]`, so this stays TOTAL —
+  // for a store no readable kind lives in (an `http` connection, say) and for
+  // the degenerate case of an empty implemented set.
+  return kind ?? readable[0] ?? KINDS[0]!;
+}
 
 function blankForm(connections: readonly ConnectionPublic[]): FormState {
   // The store is left UNSET when there are no connections rather than
   // defaulting to a store that does not exist; the form's own hint says what to
   // do about it.
-  return formFor(null, '', connections[0]?.id ?? '', DEFAULT_KIND, {}, '');
+  return formFor(
+    null,
+    '',
+    connections[0]?.id ?? '',
+    defaultKindFor(connections[0]),
+    {},
+    '',
+  );
 }
 
 function formForEdit(dataset: Dataset): FormState {
@@ -393,14 +427,16 @@ function DatasetForm({
    * not described yet. The JSON editor is the honest surface for a shape this
    * build cannot name, and the advisory below says why it is showing.
    *
-   * `delimited` is NO LONGER such a kind (#1163 gave it §2.6's eight keys:
-   * `path`, `delimiter`, `quote`, `escape`, `header`, `encoding`, `nullValue`,
-   * `dateFormat`), so `deriveConfigFields` DOES yield controls for it. It is
-   * still forced to JSON here, and the gate is the right one for a different
-   * reason: no reader exists yet, so a typed form would present a dataset as
-   * ready to copy when every copy naming it still refuses at dispatch. The two
-   * facts are separate and both are checked — which is why this branch keys on
-   * `datasetKindIsImplemented` and not on `fields.length`.
+   * `delimited` is NO LONGER such a kind, on EITHER count, and the two arrived
+   * one slice apart. #1163 gave it §2.6's eight keys (`path`, `delimiter`,
+   * `quote`, `escape`, `header`, `encoding`, `nullValue`, `dateFormat`), so
+   * `deriveConfigFields` yields controls for it; #1167 then gave it a reader, so
+   * a typed form no longer presents a dataset as ready to copy while every copy
+   * naming it refuses at dispatch. It gets the field form. That the two facts
+   * moved separately is exactly why this branch keys on
+   * `datasetKindIsImplemented` and not on `fields.length` — `excel` is the kind
+   * that now holds this branch open, and it holds it for the READER reason with
+   * no fields of its own either.
    */
   const kindHasReader = datasetKindIsImplemented(form.kind);
   /*
@@ -704,11 +740,11 @@ function DatasetForm({
       <div className="dataset-config" role="group" aria-label="Config">
         <div className="config-header">
           <span>Config</span>
-          {/* Hidden, not disabled, when the kind has no reader. The reason is the
-              READER, not an absent field form — since #1163 `delimited` derives
-              a full set of controls and is still hidden here, because a typed
-              form would present a dataset as ready to copy while every copy
-              naming it refuses at dispatch. A control that can only refuse is
+          {/* Hidden, not disabled, when the kind has no reader — `excel` alone
+              as of #1167, which gave `delimited` its reader and so this toggle.
+              The reason is the READER and never an absent field form: a typed
+              form for a kind every copy refuses at dispatch would present a
+              dataset as ready to copy. A control that can only refuse is
               furniture either way. */}
           {kindHasReader && (
             <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>

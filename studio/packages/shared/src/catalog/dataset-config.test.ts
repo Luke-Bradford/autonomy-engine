@@ -37,9 +37,14 @@ describe('dataset config catalog', () => {
   it('names the kinds a reader exists for as a POSITIVE fact', () => {
     // Not inferred from "the schema is permissive": a future kind whose real
     // schema happened to be permissive would then become silently readable.
-    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['query', 'table']);
+    //
+    // `delimited` joined at M7 slice 3 (#1167) — the slice that wired the `fs`
+    // copy arm, which is what "a reader exists" means here. `excel` is the last
+    // holdout and waits for M11, which is why this pin still has a `false` arm
+    // to fail on rather than becoming a restatement of the enum.
+    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'query', 'table']);
     expect(datasetKindIsImplemented('table')).toBe(true);
-    expect(datasetKindIsImplemented('delimited')).toBe(false);
+    expect(datasetKindIsImplemented('delimited')).toBe(true);
     expect(datasetKindIsImplemented('excel')).toBe(false);
   });
 
@@ -176,11 +181,17 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
     expect(note).toMatch(/header/);
   });
 
-  it('still says a reader does not exist, because that gate is a separate fact', () => {
-    // A well-formed config must NOT read as "ready". `IMPLEMENTED_DATASET_KINDS`
-    // is untouched by this slice — the reader lands in M7's next one.
-    expect(datasetKindIsImplemented('delimited')).toBe(false);
-    expect(datasetConfigAdvisory('delimited', { path: '/f.csv', header: true })).toMatch(/reader/i);
+  it('has a reader as of slice 3, so a well-formed config draws no advisory', () => {
+    // The inversion of what this asserted at slice 1, and it is kept rather than
+    // deleted because the SEPARATION it was written to pin is what changed: the
+    // config shape (#1163) and the reader (#1167) are two facts, they landed one
+    // slice apart, and `datasetConfigAdvisory` reads the second one.
+    expect(datasetKindIsImplemented('delimited')).toBe(true);
+    expect(datasetConfigAdvisory('delimited', { path: '/f.csv', header: true })).toBeNull();
+    // A MALFORMED one still speaks — the advisory did not go quiet altogether.
+    expect(datasetConfigAdvisory('delimited', { header: true })).toMatch(/path/i);
+    // And `excel` still carries the no-reader note this arm used to prove.
+    expect(datasetConfigAdvisory('excel', { path: '/f.xlsx' })).toMatch(/reader/i);
   });
 });
 

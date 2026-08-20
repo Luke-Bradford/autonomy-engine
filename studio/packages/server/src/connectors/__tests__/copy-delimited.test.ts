@@ -311,6 +311,28 @@ describe('the refusals a CSV source brings', () => {
     expect(end.type === 'failed' ? end.error : '').toMatch(/NOT NULL/);
   });
 
+  it('names the COPY when an already-cancelled dispatch aborts', async () => {
+    // Not "file activity aborted": a `copy` on an `fs` connection is not one of
+    // the six file activities, and reporting it as one sends an operator
+    // looking for a `file_*` node their pipeline does not contain.
+    const root = tempRoot('copy-delim-');
+    const controller = new AbortController();
+    controller.abort();
+    const events = await run({
+      ...copyCtx({
+        root,
+        csvPath: seedCsv(root, 'id,name\n1,ada\n'),
+        sinkPath: seedSink(root, 'dst.db'),
+      }),
+      signal: controller.signal,
+    } as unknown as ActivityContext);
+
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.kind : '').toBe('cancelled');
+    expect(end.type === 'failed' ? end.error : '').toBe('dataset copy aborted');
+  });
+
   it('refuses a CSV outside the connection roots', async () => {
     const root = tempRoot('copy-delim-');
     const outside = tempRoot('copy-delim-out-');

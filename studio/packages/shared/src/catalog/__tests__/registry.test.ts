@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DATASET_CONNECTION_KINDS } from '../dataset-config.js';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
   ACTIVITY_CATEGORIES,
@@ -127,11 +128,42 @@ describe('activity catalog', () => {
     // Not a policy choice this entry could have made differently:
     // `connectors/sqlite.ts` reads a `query` dataset and refuses any non-`table`
     // for the WRITE. Pinned here so widening `sink` later has to confront the
-    // writer rather than just the allowlist.
+    // writer rather than just the allowlist — which M7 slice 3 (#1167) is the
+    // first slice to have done: it widened both SOURCE lists and left both SINK
+    // lists exactly where they were, because it built a `delimited` reader and
+    // no writer.
     const copy = catalog.get('copy');
-    expect(copy?.datasetKinds).toEqual({ source: ['table', 'query'], sink: ['table'] });
-    expect(copy?.connectionKinds).toEqual(['sqlite']);
+    expect(copy?.datasetKinds).toEqual({
+      source: ['table', 'query', 'delimited'],
+      sink: ['table'],
+    });
+    expect(copy?.connectionKinds).toEqual(['sqlite', 'fs']);
     expect(copy?.sinkConnectionKinds).toEqual(['sqlite']);
+  });
+
+  it('every source dataset kind `copy` accepts can live in a source connection it accepts', () => {
+    // The pairing rule #1167's ticket states: widening one list without the
+    // other produces an entry every dispatch refuses —
+    // `DATASET_CONNECTION_MISMATCH` for a dataset kind whose store is not on the
+    // connection list, and an unusable store for the reverse. Asserted as an
+    // INTERSECTION over `DATASET_CONNECTION_KINDS` rather than as a literal
+    // pair, so the next store to join has to satisfy the rule rather than
+    // restate it.
+    const copy = catalog.get('copy');
+    for (const kind of copy?.datasetKinds?.source ?? []) {
+      expect(
+        DATASET_CONNECTION_KINDS[kind].some((store) => copy?.connectionKinds.includes(store)),
+      ).toBe(true);
+    }
+    // And the same for the sink halves, which is what would catch a `delimited`
+    // sink added before a `delimited` writer exists.
+    for (const kind of copy?.datasetKinds?.sink ?? []) {
+      expect(
+        DATASET_CONNECTION_KINDS[kind].some((store) =>
+          copy?.sinkConnectionKinds?.includes(store),
+        ),
+      ).toBe(true);
+    }
   });
 
   it('a declared datasetKinds list is non-empty, and a sink one implies a sink connection', () => {
