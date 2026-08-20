@@ -80,3 +80,50 @@ export const COPY_BATCH_ROWS = 1000;
  * it in the file being edited.
  */
 export const SQLITE_BUSY_TIMEOUT_MS = 250;
+
+/**
+ * #996 M7 slice 2 (#1165) — how much of a file a streaming read pulls per
+ * syscall, in bytes.
+ *
+ * ONE constant for both streaming file readers, which is the point of naming
+ * it: `file_copy` has streamed at 64 KiB since A12 (as a bare
+ * `Buffer.allocUnsafe(64 * 1024)`) and the `delimited` dataset reader wants the
+ * identical granularity for the identical reason — a read that is memory-bounded
+ * regardless of file size. Two spellings of one number is how they drift.
+ *
+ * It is a throughput/RSS tradeoff and nothing more: no behaviour depends on the
+ * value, because both consumers are chunk-boundary-independent by construction
+ * (the CSV grammar is a single pass with no lookahead, and `TextDecoder`
+ * carries a partial multi-byte sequence across `{ stream: true }` calls).
+ */
+export const FS_STREAM_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * #996 M7 slice 2 (#1165) — the `delimited` reader's accumulation bounds, in
+ * CODE POINTS.
+ *
+ * NOT BYTES, and the distinction is the parser's, not a nicety
+ * (`shared/datamove/delimited.ts`): the grammar runs on already-decoded text and
+ * iterates code points, so charging UTF-16 units would bill an astral character
+ * twice to one bound and once to the other. `bytesRead` is a different
+ * measurement made at a different place (§5, at the copy boundary).
+ *
+ * They exist because "yields a stream" and "never holds the whole file" are
+ * different properties and only the second is what §12 asks M7 for. A binary, a
+ * gzip, or a CSV with one unclosed quote has no row terminator the grammar can
+ * find, so an UNBOUNDED machine would accumulate the entire file into a single
+ * field — satisfying the streaming signature while violating its whole point.
+ *
+ * `DELIMITED_MAX_ROW_CHARS` must stay >= `DELIMITED_MAX_FIELD_CHARS`, or the
+ * field bound is unreachable and only ever reports as a row overflow. The row
+ * bound charges EVERY character the row consumed, including delimiters and
+ * quoting, because the row ARRAY is the accumulator that has to be bounded —
+ * `,,,,,…` adds no character to any field and would otherwise grow without
+ * limit.
+ *
+ * The values are deliberately generous. A 1 MiB single CSV field is already
+ * pathological, and 8 MiB per row is far more than any real record; the bounds
+ * are here to make a MALFORMED file fail fast, not to police a large one.
+ */
+export const DELIMITED_MAX_FIELD_CHARS = 1_048_576;
+export const DELIMITED_MAX_ROW_CHARS = 8_388_608;

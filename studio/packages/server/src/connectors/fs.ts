@@ -1,6 +1,5 @@
 import { constants as fsConstants, type Dirent } from 'node:fs';
 import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import {
   FILE_COPY_ACTIVITY_TYPE,
@@ -9,7 +8,6 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
-  fsConnectionConfigSchema as sharedFsConnectionConfigSchema,
   fileCopyConfigSchema,
   fileDeleteConfigSchema,
   fileListConfigSchema,
@@ -24,6 +22,11 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 // `O_NOFOLLOW` on top at open time.
 import { failed } from './activity-events.js';
 import { resolveWithinRoots } from './confine.js';
+// #1165 M7 slice 2 — the connection schema and the errno classifier moved OUT
+// to `fs-connection.ts` so the `delimited` store reader can re-validate and
+// classify WITHOUT importing this adapter, which slice 3 makes import IT.
+import { classifyFsError, fsConnectionConfigSchema } from './fs-connection.js';
+import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
  * The `fs` connector adapter (#4 A11 + A12) — the FIRST non-http/LLM connector,
@@ -96,80 +99,24 @@ const DEFAULT_MAX_LIST_ENTRIES = 10_000;
  */
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
-/**
- * OS errno codes we positively classify as RETRYABLE. Everything else (missing
- * file, no permission, is-a-directory, name-too-long, symlink-refused, …) is
- * `permanent` — see the class doc for why the default is fail-safe-permanent.
- */
-const TRANSIENT_ERRNOS: ReadonlySet<string> = new Set([
-  'EAGAIN', // resource temporarily unavailable
-  'EBUSY', // device/resource busy
-  'EMFILE', // per-process fd limit
-  'ENFILE', // system-wide fd limit
-  'ETIMEDOUT', // network FS timeout
-  'EINTR', // interrupted syscall
-  'ENOSPC', // no space (may free up)
-  'EDQUOT', // quota exceeded (may free up)
-  'EIO', // low-level I/O error (may be a transient device hiccup)
-]);
-
-/**
- * The Connection-level (non-secret) config for an `fs` connection.
- *
- * #1087 — the SHAPE lives in `shared/catalog/connection-config.ts`, so the
- * Manage › Connections form derives its controls from the same declaration this
- * adapter parses at dispatch. This is the ONE place server and shared diverge,
- * and only by one check: each root MUST be absolute — a relative root would
- * resolve against the server's cwd (ambiguous + a traversal risk) — and that is
- * `node:path`'s platform-aware `isAbsolute`, which cannot live in a
- * browser-safe package.
- *
- * Refining the shared `roots` rather than re-declaring it keeps the `.min(1)`
- * and its message in ONE file (re-typing them here would reintroduce exactly
- * the drift the move exists to kill), and any key added to the shared shape
- * appears here automatically. The refine is invisible to the form: a
- * `.refine()` is a CHECK, not a wrapper, so `deriveConfigFields` still sees a
- * list of strings either way.
- *
- * `superRefine` with an explicit `path` rather than a whole-array `refine`, so
- * the issue still names WHICH root is relative (`roots.<i>`) exactly as the
- * per-element refine it replaces did. A whole-array check would have reported
- * only `roots`, which reads fine with one root and uselessly with several.
- */
-const fsConnectionConfigSchema = sharedFsConnectionConfigSchema.extend({
-  roots: sharedFsConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
-    roots.forEach((root, index) => {
-      if (isAbsolute(root)) return;
-      ctx.addIssue({
-        code: 'custom',
-        message: 'every fs root must be an absolute path',
-        path: [index],
-      });
-    });
-  }),
-});
-
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
 // SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-
 // config.ts`), imported here so the palette metadata and this live-request guard
 // can never drift. `input` here is the node's prepared (substituted) value.
 
-/** Whether a thrown error is an abort (run cancel / shutdown). */
-function isAbort(err: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted) return true;
-  if (!(err instanceof Error)) return false;
-  return err.name === 'AbortError' || (err as NodeJS.ErrnoException).code === 'ABORT_ERR';
-}
-
-/** Map a thrown fs error to a terminal `failed` event (errno → kind). */
+/**
+ * Map a thrown fs error to a terminal `failed` event.
+ *
+ * The classification itself is `classifyFsError` (`fs-connection.ts`), shared
+ * with the `delimited` store reader so the two cannot disagree about whether a
+ * given errno is retryable. This wrapper adds only the ACTIVITY-shaped part: an
+ * abort reports a fixed sentence rather than whatever errno the unwinding
+ * syscall happened to raise.
+ */
 function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
-  if (isAbort(err, signal)) return failed('cancelled', 'file activity aborted');
-  const message = err instanceof Error ? err.message : String(err);
-  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-  if (code !== undefined && TRANSIENT_ERRNOS.has(code)) return failed('transient', message);
-  // Fail-safe: any errno we do not positively recognise as transient — and any
-  // non-errno throw (a programming fault) — is permanent, never blind-retried.
-  return failed('permanent', message);
+  const kind = classifyFsError(err, signal);
+  if (kind === 'cancelled') return failed('cancelled', 'file activity aborted');
+  return failed(kind, err instanceof Error ? err.message : String(err));
 }
 
 /** Close a file handle, swallowing a close error so it never masks the result. */
@@ -377,7 +324,7 @@ async function doCopy(
     src = source;
     const st = await source.stat();
     if (!st.isFile()) return failed('permanent', `source '${sourcePath}' is not a regular file`);
-    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const buffer = Buffer.allocUnsafe(FS_STREAM_CHUNK_BYTES);
     const failure = await atomicReplace(destPath, tmpSuffix, signal, async (dst) => {
       for (;;) {
         if (signal.aborted) throw new Error('file copy aborted');
