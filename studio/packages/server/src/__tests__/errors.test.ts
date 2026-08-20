@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { NotFoundError, registerErrorHandler } from '../errors.js';
 import { InvalidPipelineDocError, PipelineHasRunsError } from '../repo/index.js';
 import { GitPushRejectedError } from '../git/provider.js';
+import { WorkspaceApplyError } from '../portability/workspace-apply.js';
 
 function buildMinimalApp() {
   const app = Fastify({ logger: false });
@@ -35,6 +36,18 @@ function buildMinimalApp() {
   app.get<{ Params: { count: string } }>('/manydoc/:count', async (request) => {
     const count = Number(request.params.count);
     throw new InvalidPipelineDocError(Array.from({ length: count }, (_v, i) => `issue ${i}`));
+  });
+  // #1110 — the two faults `WorkspaceApplyError` now carries. The classification
+  // is made at the THROW SITE inside the apply; these drive the handler branch it
+  // selects, which is the part that decides what the operator is told.
+  app.get('/apply-conflict', async () => {
+    throw new WorkspaceApplyError(
+      'conflict',
+      'node "send" references connection "res_9", which is not on the branch or in the workspace',
+    );
+  });
+  app.get('/apply-internal', async () => {
+    throw new WorkspaceApplyError('internal', 'serializeTrigger produced a non-trigger envelope');
   });
   app.post('/echo', async (request) => {
     return request.body;
@@ -162,6 +175,46 @@ describe('registerErrorHandler', () => {
     const body = res.json();
     expect(body).toEqual({ error: 'bad_request', message: 'Malformed request' });
     expect(JSON.stringify(body)).not.toContain('fragment_marker_xyz');
+    await app.close();
+  });
+});
+
+/**
+ * #1110 — before this, ALL ten `WorkspaceApplyError` throw sites answered the
+ * generic message-less 500, so an operator whose git import failed was told
+ * nothing: not which resourceId was unresolvable, not which file to edit.
+ *
+ * The pair below is the whole contract. It is deliberately asserted as TWO
+ * outcomes rather than one: a blanket 409 for the class would have been the easy
+ * change and the wrong one, because `serializeTrigger produced a non-trigger
+ * envelope` describes OUR code, not the caller's branch — telling an operator to
+ * go fix that is worse than telling them nothing.
+ */
+describe('registerErrorHandler — WorkspaceApplyError fault classification (#1110)', () => {
+  it('answers a `conflict` fault 409 WITH the message that names what to fix', async () => {
+    const app = buildMinimalApp();
+    await app.ready();
+    const res = await app.inject({ method: 'GET', url: '/apply-conflict' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'conflict',
+      message:
+        'node "send" references connection "res_9", which is not on the branch or in the workspace',
+    });
+    await app.close();
+  });
+
+  it('leaves an `internal` fault on the message-less 500, leaking nothing about our code', async () => {
+    const app = buildMinimalApp();
+    await app.ready();
+    const res = await app.inject({ method: 'GET', url: '/apply-internal' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({
+      error: 'internal_error',
+      message: 'An unexpected error occurred.',
+    });
+    // The specific text stays server-side: it names an internal function.
+    expect(res.body).not.toContain('serializeTrigger');
     await app.close();
   });
 });
