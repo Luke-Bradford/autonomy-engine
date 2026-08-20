@@ -6,6 +6,7 @@ import {
   type CoercionFailureCode,
   type CoercionOptions,
 } from './coerce.js';
+import { indexSourceColumns, resolveSourceColumn, SOURCE_DRIFT_MESSAGES } from './schema-drift.js';
 
 /**
  * #996 M5 slice 3 (#1129) — the copy PUMP (data-movement spec §5, §6, §9).
@@ -193,19 +194,6 @@ type ColumnPlan =
     }
   | { readonly kind: 'constant'; readonly sink: string; readonly value: CoercedValue };
 
-/**
- * Fold for comparison the way SQLite's `NOCASE` does — ASCII `A-Z` ONLY.
- *
- * Not `toLowerCase()`, which is Unicode-aware and therefore folds MORE than the
- * collation this claims to mirror: `'\u212A'` (KELVIN SIGN) lowercases to `k` in
- * JavaScript while SQLite treats the two as different identifiers entirely, so a
- * mapping naming one would silently bind to the other. Exotic, and that is
- * precisely why it would never be found later.
- */
-export function nocaseFold(value: string): string {
-  return value.replace(/[A-Z]/g, (c) => c.toLowerCase());
-}
-
 function byteSizeOf(value: unknown): number {
   if (value === null || value === undefined) return 0;
   if (typeof value === 'string') return utf8ByteLength(value);
@@ -235,14 +223,12 @@ function planColumns(
   sourceKeys: readonly string[],
   coercion: CoercionOptions,
 ): ColumnPlan[] {
-  const exact = new Set(sourceKeys);
-  const lowered = new Map<string, string[]>();
-  for (const key of sourceKeys) {
-    const lower = nocaseFold(key);
-    const bucket = lowered.get(lower);
-    if (bucket) bucket.push(key);
-    else lowered.set(lower, [key]);
-  }
+  // M6 (#1148): the SHARED resolver, so the dispatch-time gate
+  // (`checkSourceDrift`) and this binding-time check cannot disagree about what
+  // "the same column" means. Everything below is unchanged behaviour — the
+  // exact-match preference, the ambiguity refusal and `onError: 'null'`
+  // absorbing an absent column all moved WITH the predicate, not around it.
+  const index = indexSourceColumns(sourceKeys);
 
   const plans: ColumnPlan[] = [];
   const missing: string[] = [];
@@ -256,22 +242,18 @@ function planColumns(
       else plans.push(constant.plan);
       continue;
     }
-    if (exact.has(entry.source)) {
-      plans.push({ kind: 'source', sink: entry.sink, key: entry.source, entry });
+    const resolved = resolveSourceColumn(entry, index);
+    if (resolved.kind === 'bound') {
+      plans.push({ kind: 'source', sink: entry.sink, key: resolved.key, entry });
       continue;
     }
-    const candidates = lowered.get(nocaseFold(entry.source)) ?? [];
-    if (candidates.length > 1) {
+    if (resolved.kind === 'ambiguous') {
       ambiguous.push(entry.source);
-      continue;
-    }
-    if (candidates.length === 1) {
-      plans.push({ kind: 'source', sink: entry.sink, key: candidates[0] as string, entry });
       continue;
     }
     // Absent. `onError: 'null'` is the column's own opt-out and covers this:
     // the operator said "if this column cannot produce a value, write null".
-    if (entry.onError === 'null') {
+    if (resolved.kind === 'null') {
       plans.push({ kind: 'constant', sink: entry.sink, value: null });
       continue;
     }
@@ -283,14 +265,11 @@ function planColumns(
   if (ambiguous.length > 0) {
     throw new CopyMappingError(
       'ambiguous_source_column',
-      `the source has more than one column matching ${ambiguous.map((c) => `\`${c}\``).join(', ')} case-insensitively; name the column exactly`,
+      SOURCE_DRIFT_MESSAGES.ambiguous(ambiguous),
     );
   }
   if (missing.length > 0) {
-    throw new CopyMappingError(
-      'missing_source_column',
-      `the source has no column named ${missing.map((c) => `\`${c}\``).join(', ')}`,
-    );
+    throw new CopyMappingError('missing_source_column', SOURCE_DRIFT_MESSAGES.missing(missing));
   }
   if (uncoercible.length > 0) {
     throw new CopyMappingError('uncoercible_constant', uncoercible.join('; '));

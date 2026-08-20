@@ -563,6 +563,47 @@ Checked before the first row moves:
 Additive drift must not break a working pipeline; that is why row 4 is a warning. It is still said out
 loud, because silent additive drift is how a mapping quietly stops covering its source.
 
+**As built (M6 slice A, #1148) — the SOURCE half, and one row this section could not have known.**
+
+Rows 1, 4 and 5 now gate at dispatch through a `CopyIo.describeSource` seam that reports the source's
+actual column names **without reading a row** (`Statement.columns()` for `sqlite`; M7's `delimited`
+implements it from the CSV header row). Row 2 was already built by M5 slice 2 and stays exactly where
+it is — inside `begin immediate`, so the sink gate has no TOCTOU against its own write.
+
+Three things this section did not settle, decided against measurement:
+
+**① The pump's check STAYS, and is not the gate's duplicate.** Before M6 the only source-column check
+resolved from the FIRST ROW's key set, which meant it fired from inside the sink's open write
+transaction and **did not fire at all against an empty source** — a mapping naming a column the store
+does not have reported SUCCESS over 0 rows. The gate is the early, well-named refusal; the pump
+remains the binding-time truth that has actually seen the rows, and catches a source that changed
+between being described and being read. They share ONE predicate (`datamove/schema-drift.ts`) rather
+than agreeing by coincidence.
+
+**② A duplicated result column is collapsed before the gate sees it.** `SELECT i, i` reports
+`['i','i']` from `columns()` while the row it yields is an object carrying `i` ONCE. Left
+uncollapsed, the gate would refuse `ambiguous_source_column` for a copy the pump binds without
+complaint — a `permanent` refusal of working work, which is the one direction a gate must never fail
+in.
+
+**③ Row 3 (type incompatibility) is deliberately NOT built for `sqlite`, and the reason is a
+measurement, not an omission.** This table's `permanent` verdict assumes a declared type mismatch is
+a fact about the TYPES. Under SQLite it is a fact about each VALUE: a STRICT table coerces by the
+usual affinity rules and rejects only what cannot be converted **losslessly**. Measured on
+better-sqlite3 12.11.1 / SQLite 3.53.2 — `INSERT` of `'123'` into a STRICT `INTEGER` column
+**succeeds** (`typeof` `integer`), while `'abc'` is rejected (`cannot store TEXT value in INTEGER
+column`). A per-type `permanent` refusal would therefore break working copies, and would break
+exactly M7's shape: every CSV column is text, and most of them are meant for numeric sink columns.
+On a NON-strict table nothing is rejected at all, so there is no refusal to make. Row 3 becomes
+honest at **M10's postgres**, where a declared type mismatch really does reject before any value is
+seen; it is deferred there rather than approximated here. The harm it would have prevented under
+`sqlite` is already prevented: the sink is one transaction that rolls back reporting
+`partialWritePossible: false`, so an ungated type mismatch costs a wasted scan and a provably clean
+store, not the mid-copy partial write §6.2 and this row exist to stop.
+
+The **resolved-address dispatch record** (§2.1) and the physical-address self-copy refusal §3.1 names
+are M6 **slice B**, and remain outstanding.
+
 ---
 
 ## §8 — security **[SETTLED]**
@@ -687,7 +728,7 @@ source and a sink.
 | **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                                                                                                                                                                                                           |
 | **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                                                                                                                                                                                                                 |
 | **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT INTO FOUR, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the pump, the counters incl. `truncated`, and the progress ticks (#1129); slice 4 = the DISPATCH seam, itself split THREE ways once built — 4a (#1130) dataset resolution into `ActivityContext` + the `onError:'null'` vs `nullable:false` refusal, 4b (#1134) the adapter, 4c (#1139) the catalog entry, the first populated `sinkConnectionKinds`/`datasetKinds`, §8's literal-only NODE gate, `CATALOG_VERSION` 23, and the four paired canvas pickers without which the entry would put an unbindable node on the canvas. **Slice 4 is the split's whole point:** nothing resolved `Node.datasetIds` into the executor until 4a, so a catalog entry landed alongside the pump would have been a user-visible activity that always fails at dispatch. **M5 is COMPLETE as of 4c**, with two knowing residuals: the mapping grid is a JSON textarea until §13/M8 builds an `objectList` control, and §9's `COPY_CONCURRENCY` has no consumer to slot into (#1140) |
-| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1)                                                                                                                                                 |                                                                                                                                                                                                                                           |
+| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1). **SPLIT IN TWO** — slice A (#1148) is the source half of §7: the `describeSource` seam, rows 1/4/5 gated before the first row moves, and the empty-source blind spot closed; row 3 deliberately deferred to M10 (see §7's as-built block). Slice B is §2.1's resolved-address record + §3.1's physical-address self-copy refusal, which needs it                                                                                                                                                 |                                                                                                                                                                                                                                           |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                                                                                                                                                                                                                   |

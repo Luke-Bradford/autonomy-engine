@@ -3,3 +3,4 @@
 // (`catalog/copy-config.ts`) and the store connectors that do the I/O (server).
 export * from './coerce.js';
 export * from './pump.js';
+export * from './schema-drift.js';

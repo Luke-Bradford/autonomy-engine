@@ -2,6 +2,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { COPY_ACTIVITY_TYPE, type DatasetColumn } from '@autonomy-studio/shared';
+import { runCopyActivity } from '../copy.js';
+import { DatasetIoError } from '../dataset-io-error.js';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import {
@@ -329,7 +331,13 @@ describe('copy activity — the refusal ladder', () => {
           root,
           sourcePath: seedDb(root, 2, 'src.db'),
           sinkPath: seedSink(root, 'dst.db'),
-          input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+          // An UNCOERCIBLE CONSTANT, not a missing source column. The pump
+          // still raises this one from inside the sink's transaction, which is
+          // what this test is about; #1148's dispatch-time gate now intercepts
+          // a missing source column BEFORE the pump runs, so that fixture would
+          // exercise `copyFailure`'s direct branch and leave the `.cause`
+          // unwrap — the thing under test — with no coverage at all.
+          input: { mapping: [{ expression: 'abc', sink: 'id', type: 'integer' }] },
         }),
       ),
     );
@@ -338,7 +346,7 @@ describe('copy activity — the refusal ladder', () => {
     // error loses the one word that tells an author what to fix.
     expect(end).toMatchObject({
       kind: 'permanent',
-      error: expect.stringContaining('missing_source_column'),
+      error: expect.stringContaining('uncoercible_constant'),
     });
   });
 });
@@ -351,7 +359,11 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
         root,
         sourcePath: seedDb(root, 2, 'src.db'),
         sinkPath: seedSink(root, 'dst.db'),
-        input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+        // A SINK column that does not exist, so the failure lands inside the
+        // write — M6's source-side gate (below) now refuses a missing SOURCE
+        // column BEFORE any of this, which is the point of the milestone but
+        // makes it the wrong way to provoke a mid-copy failure.
+        input: { mapping: [{ source: 'id', sink: 'nosuch', type: 'integer' }] },
       }),
     );
 
@@ -443,5 +455,188 @@ describe('copy activity — identifier matching folds case, as SQLite does', () 
       kind: 'permanent',
       error: expect.stringContaining('NOT NULL'),
     });
+  });
+});
+
+describe('copy activity — §7 the source-side drift gate runs before the first row moves (#1148 M6)', () => {
+  it('refuses a mapped source column the store does not have, naming it, with nothing written', () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    return run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 3, 'src.db'),
+        sinkPath,
+        input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+      }),
+    ).then((events) => {
+      const end = terminal(events);
+      expect(end.type).toBe('failed');
+      expect(end.type === 'failed' ? end.kind : '').toBe('permanent');
+      expect(end.type === 'failed' ? end.error : '').toContain('nosuch');
+      // The gate ran BEFORE the pump, so there are no counters to report: the
+      // copy never started. That is the observable difference from the pre-M6
+      // behaviour, where the same mapping failed from inside the open write
+      // transaction with `rowsRead` already ticking.
+      expect(events.filter((e) => e.type === 'output')).toEqual([]);
+      expect(rowsOf(sinkPath)).toEqual([]);
+    });
+  });
+
+  it('refuses it against an EMPTY source, which before M6 reported SUCCESS over 0 rows', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        // 0 rows: `planColumns` resolves from the FIRST ROW's keys, so it never
+        // ran at all here and the copy succeeded having silently copied nothing
+        // through a mapping that names a column the store does not have.
+        sourcePath: seedDb(root, 0, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: { mapping: [{ source: 'nosuch', sink: 'id', type: 'integer' }] },
+      }),
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toContain('nosuch');
+  });
+
+  it("does not refuse an absent column the mapping opted out of with onError:'null'", async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'nosuch', sink: 'note', type: 'string', onError: 'null' },
+          ],
+        },
+      }),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(rowsOf(sinkPath, 'SELECT id, note FROM sink ORDER BY rowid')).toEqual([
+      { id: 1, note: null },
+      { id: 2, note: null },
+    ]);
+  });
+
+  it('warns about a source column the mapping does not read, and still copies (§7 row 4)', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        input: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
+      }),
+    );
+    const warned = events.filter((e) => e.type === 'warned');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({
+      code: 'copy_source_columns_unmapped',
+      reason: expect.stringContaining("'name'"),
+    });
+    expect(terminal(events).type).toBe('succeeded');
+  });
+
+  it('emits that warning on a FAILING copy too — the run whose log is being read', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        // `name` goes unread AND the sink column does not exist, so the copy
+        // fails inside the write, after the warning was already emitted.
+        input: { mapping: [{ source: 'id', sink: 'nosuch', type: 'integer' }] },
+      }),
+    );
+    expect(
+      events.filter((e) => e.type === 'warned' && e.code === 'copy_source_columns_unmapped'),
+    ).toHaveLength(1);
+    expect(terminal(events).type).toBe('failed');
+  });
+
+  it('refuses an ambiguous source column through the adapter, ahead of any missing one', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+        datasets: {
+          // Two result columns differing only in case, so `id` matches neither
+          // exactly and both loosely. A `query` dataset is the only way to
+          // produce this — a table cannot hold `ID` alongside `Id`.
+          source: {
+            id: 'ds-1',
+            name: 'src',
+            kind: 'query',
+            config: { sql: 'SELECT id AS "ID", name AS "Id" FROM t' },
+            columns: [],
+          },
+          sink: { id: 'ds-2', name: 'dst', kind: 'table', config: { table: 'sink' }, columns: [] },
+        },
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'alsonosuch', sink: 'name', type: 'string' },
+          ],
+        },
+      }),
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.kind : '').toBe('permanent');
+    // Ambiguity is reported even though a MISSING column is also present: an
+    // ambiguous name cannot be resolved at all, where a missing one still has a
+    // legitimate `onError: 'null'` answer. Same precedence as `planColumns`.
+    expect(end.type === 'failed' ? end.error : '').toContain('ambiguous_source_column');
+    expect(end.type === 'failed' ? end.error : '').toContain('case-insensitively');
+  });
+
+  it('does not warn when the mapping reads every source column', async () => {
+    const root = tempRoot();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+      }),
+    );
+    expect(events.filter((e) => e.type === 'warned')).toEqual([]);
+    expect(terminal(events).type).toBe('succeeded');
+  });
+
+  it("reports a store it could not REACH with the store's own kind, never as drift", async () => {
+    // #1148: "a failure to reach the store to describe it is `transient` and
+    // must not be reported as drift". Driven through a stub `CopyIo` rather than
+    // a real lock, because the fact under test is the CLASSIFICATION, and a
+    // timing-dependent SQLITE_BUSY would pin it only by luck.
+    const events: ActivityEvent[] = [];
+    const ctx = copyCtx({
+      root: tempRoot(),
+      sourcePath: 'unused',
+      sinkPath: 'unused',
+      input: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
+    });
+    for await (const event of runCopyActivity(ctx, {
+      describeSource: () => Promise.reject(new DatasetIoError('transient', 'database is locked')),
+      readBatches: () => {
+        throw new Error('the reader must never be reached');
+      },
+      writeRows: () => {
+        throw new Error('the writer must never be reached');
+      },
+    })) {
+      events.push(event);
+    }
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.kind : '').toBe('transient');
   });
 });
