@@ -6,6 +6,7 @@ import {
   BranchFork20Regular,
   Clock20Regular,
   Copy20Regular,
+  DatabaseArrowRight20Regular,
   Delete20Regular,
   Document20Regular,
   DocumentArrowDown20Regular,
@@ -65,6 +66,12 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   file_move: FolderArrowRight20Regular,
   file_delete: Delete20Regular,
   file_list: Folder20Regular,
+  /* #996 M5 — the data-movement `copy`, NOT `Copy20Regular`: `file_copy` already
+     draws that, and one glyph across two unrelated activities is exactly the
+     "quietly wearing somebody else's icon" failure this map's test exists to
+     catch. A database with an outbound arrow says what a copy does — reads one
+     store, writes another — where a pair of pages says only "duplicate". */
+  copy: DatabaseArrowRight20Regular,
 };
 
 /**

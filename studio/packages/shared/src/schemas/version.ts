@@ -286,7 +286,32 @@
 // that names the real cause. That is the "mis-run" this number exists to
 // prevent, and it is why M4 bumps where M1 and M3 (both additive INERT fields)
 // deliberately did not.
-export const CATALOG_VERSION = 22;
+// CATALOG_VERSION 23 (#1139, M5 slice 4c): the `copy` ACTIVITY. A bump, and it
+// discharges the two standing "WHAT VOIDS THIS" clauses above (M1's
+// `connectionIds`, M3's `datasetIds`) in one, exactly as M3's entry said it
+// would: they become load-bearing together and one bump covers both. THREE
+// reasons, not two, and the third is the one easiest to miss:
+//  (i) a new runnable EXECUTION type. A pre-23 build has no `copy` entry, so
+//      `executor.ts` refuses the node with `UNKNOWN_ACTIVITY` — a hard refusal,
+//      not a mis-run, but bump 21 settled that an artifact which is not runnable
+//      AS AUTHORED must be refused at import rather than fail at run time.
+//  (ii) the first POPULATED `sinkConnectionKinds` + `datasetKinds`. This is what
+//      the two clauses were waiting for: a pre-M1/M3 build DROPS `connectionIds`
+//      and `datasetIds` and dispatches as though they were never there, which
+//      was harmless only while nothing read them. It now reads both, so the same
+//      dropped keys become a copy dispatching against the wrong ends.
+//  (iii) F13b lowering flips this node's `config.outputs` from absent to five
+//      DECLARED required outputs at SAVE (`catalog/lower.ts`), and
+//      `validateOutputs` then fails the node for any the adapter omits. That is
+//      bump 21's `agent_task.truncated` argument verbatim, applied to five
+//      outputs instead of one. Benign in THIS build — `connectors/copy.ts`
+//      yields all five unconditionally — and recorded anyway, because the reason
+//      a bump was taken is the only thing that makes the next one auditable.
+// NOT an upgrader. `portability/envelope.ts` checks `catalogVersion` as a
+// CEILING (refuse an artifact newer than this build) and keys `UPGRADERS` on
+// `schemaVersion` alone, so a catalog bump is purely an import floor and
+// migrates nothing.
+export const CATALOG_VERSION = 23;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

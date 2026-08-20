@@ -19,6 +19,7 @@ import {
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   AGENT_TASK_ACTIVITY_TYPE,
+  COPY_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -2129,6 +2130,8 @@ export function validateDoc(
     }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
+    // #996 §8 — a `copy`'s mapping column names must be LITERAL identifiers.
+    if (node.type === COPY_ACTIVITY_TYPE) validateCopyMappingIdentifiers(node, errors);
     // #2 L13b — connectionParams shape rules (activity-agnostic: any
     // connection-bound node may carry bindings). Both refusals follow the L12
     // call-node precedent: config that would be silently INERT is refused with
@@ -2587,6 +2590,52 @@ function validateIfCondition(node: Node, errors: string[]): void {
  * case routes deterministically regardless — but a save-time author error worth
  * surfacing, matching `if`'s advisory posture.
  */
+/**
+ * #996 §8 (M5 slice 4c, #1139) — a `copy`'s mapping COLUMN NAMES must be literal.
+ *
+ * IDENTIFIER-ONLY, and deliberately not a shape gate like `validateSwitchConfig`
+ * below. A copy's config shape is the adapter's to enforce
+ * (`copyDispatchInputSchema`), because `Node.config` is opaque to this validator
+ * and §13 gives the authoring surface to M8's mapping panel; duplicating the
+ * shape here would be a second reader of one rule. So every malformed shape
+ * below is a SILENT SKIP — there is nothing for this gate to say about it.
+ *
+ * Why the rule cannot live at dispatch, which is where every other
+ * `copy` check lives. §8's argument, and it is the whole reason this function
+ * exists: substitution happens in the REDUCER, so by the time a mapping reaches
+ * an adapter an interpolated column name is an ordinary string and the adapter
+ * cannot tell it came from an expression. The distinction only exists at save
+ * time, so the rule has to be enforced at save time or not at all.
+ *
+ * `source` and `sink` are the only identifier fields on a copy NODE. `mode` is a
+ * closed enum re-parsed at dispatch, not an identifier; `expression` is a VALUE
+ * and is explicitly ALLOWED to be `${}` — §8's first bullet is that values bind
+ * as query parameters, which is what makes them safe by construction rather than
+ * by escaping. Refusing `expression` here would break the one escape hatch the
+ * section grants.
+ *
+ * The DATASET half of §8 is already enforced elsewhere and needs nothing here:
+ * `catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE` makes a `${}` table or schema
+ * name unparseable as a `table`/`query` dataset config in the first place.
+ */
+function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
+  const rows = node.config['mapping'];
+  if (!Array.isArray(rows)) return;
+  rows.forEach((row, i) => {
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) return;
+    for (const field of ['source', 'sink'] as const) {
+      const value = (row as Record<string, unknown>)[field];
+      if (typeof value !== 'string') continue;
+      if (interpolationMode(value).mode === 'literal') continue;
+      errors.push(
+        `node.${node.id}.mapping[${i}].${field}: a column name must be a literal, not a ` +
+          `\${} expression — §8 prohibits a dynamic identifier because it cannot bind as a ` +
+          `query parameter (put the expression in 'expression', which is a VALUE and may be dynamic)`,
+      );
+    }
+  });
+}
+
 function validateSwitchConfig(node: Node, errors: string[]): void {
   const where = `node.${node.id}`;
   const on = node.config['on'];

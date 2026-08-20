@@ -17,6 +17,7 @@ describe('activity catalog', () => {
     // catalog TYPE (its config rides `node.call`, not `node.config`).
     expect([...catalog.keys()].sort()).toEqual([
       'agent_task',
+      'copy',
       'execute_pipeline',
       'fail',
       'file_copy',
@@ -78,20 +79,21 @@ describe('activity catalog', () => {
     expect(withSink).toEqual(['http_request']);
   });
 
-  it('M1 (#1104): NO activity declares a sink, so the paired binding is inert in this build', () => {
-    // The load-bearing pin for `schemas/version.ts`'s deliberate NO-BUMP: a doc
-    // carrying `Node.connectionIds` runs identically on a pre-M1 build precisely
-    // because nothing here declares `sinkConnectionKinds`, so neither the
-    // executor nor the readiness gate reads the pair. `copy` (M5) is the first
-    // entry to declare one and owes the CATALOG_VERSION bump — this test is what
-    // makes that ticket notice.
+  it('M5 slice 4c (#1139): `copy` is the ONLY activity that declares a sink', () => {
+    // This pin used to read `toEqual([])` and carried M1's deliberate NO-BUMP in
+    // `schemas/version.ts`: a doc holding `Node.connectionIds` ran identically on
+    // a pre-M1 build precisely because nothing declared `sinkConnectionKinds`.
+    // Slice 4c is the event that entry named as voiding it, so the pin flips
+    // rather than goes away — the CATALOG_VERSION 23 bump is the discharge, and
+    // this list is what makes the NEXT entry to declare a sink notice that it is
+    // joining a set with a version story rather than starting one.
     //
     // Asserted across the FULL catalog (the `secretSinkFields` pin's idiom), not
     // a named subset, so an entry cannot gain a sink silently.
     const paired = [...catalog.values()]
       .filter((entry) => entry.sinkConnectionKinds !== undefined)
       .map((entry) => entry.type);
-    expect(paired).toEqual([]);
+    expect(paired).toEqual(['copy']);
   });
 
   it('a declared sink allowlist must be non-empty, and pair with a non-empty source one', () => {
@@ -110,16 +112,26 @@ describe('activity catalog', () => {
     }
   });
 
-  it('M5 slice 4a (#1130): NO activity declares a dataset binding, so datasetIds stays inert', () => {
-    // The same load-bearing pin as the sink one above, for the same reason: M3's
-    // deliberate NO-BUMP in `schemas/version.ts` rests on nothing here declaring
-    // `datasetKinds`, so a doc carrying `Node.datasetIds` runs identically on a
-    // pre-M3 build. `copy` (slice 4b) is the first entry to declare one and owes
-    // the CATALOG_VERSION bump — this test is what makes that ticket notice.
+  it('M5 slice 4c (#1139): `copy` is the ONLY activity that declares a dataset binding', () => {
+    // Flipped from `toEqual([])` by the same event, and carrying M3's NO-BUMP the
+    // same way the sink pin above carries M1's. One CATALOG_VERSION bump (23)
+    // discharges both, which is what M3's ledger entry predicted: the two fields
+    // become load-bearing together.
     const bound = [...catalog.values()]
       .filter((entry) => entry.datasetKinds !== undefined)
       .map((entry) => entry.type);
-    expect(bound).toEqual([]);
+    expect(bound).toEqual(['copy']);
+  });
+
+  it('`copy` declares a sink of `table` only — a query dataset has nothing to write into', () => {
+    // Not a policy choice this entry could have made differently:
+    // `connectors/sqlite.ts` reads a `query` dataset and refuses any non-`table`
+    // for the WRITE. Pinned here so widening `sink` later has to confront the
+    // writer rather than just the allowlist.
+    const copy = catalog.get('copy');
+    expect(copy?.datasetKinds).toEqual({ source: ['table', 'query'], sink: ['table'] });
+    expect(copy?.connectionKinds).toEqual(['sqlite']);
+    expect(copy?.sinkConnectionKinds).toEqual(['sqlite']);
   });
 
   it('a declared datasetKinds list is non-empty, and a sink one implies a sink connection', () => {

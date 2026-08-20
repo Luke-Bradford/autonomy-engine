@@ -38,9 +38,16 @@ export const ISSUE_LIST_CAP = 100;
  * the ones still to come (`LOOKUP_ROW_CAP`, `LOOKUP_BYTE_CAP` at M12) are read
  * by more than one consumer, so the set belongs in one place.
  *
- * `COPY_CONCURRENCY` — §9's OTHER budget — deliberately does NOT land here yet.
- * It bounds how many copies run at once, which is meaningless until an activity
- * consumes it, so it belongs with `copy` at M5.
+ * `COPY_CONCURRENCY` — §9's OTHER budget — deliberately does NOT land here yet,
+ * and this note is AMENDED rather than discharged by M5 finishing. It said the
+ * constant "belongs with `copy` at M5"; slice 4c (#1139) is M5's last slice and
+ * did not add it, because the premise was wrong. Nothing in the executor reads a
+ * PER-ACTIVITY concurrency limit: `executor.ts` holds one global `pLimit`, and
+ * `driver.ts` a per-run dispatch cap. A copy budget is therefore net-new
+ * plumbing, not a constant slotting into an existing consumer. Filed separately;
+ * the residual is that `copy` is reachable from 4c onward, so §9's "long copies
+ * hold every global adapter slot" hazard is live, mitigated by the batch-yield
+ * half of §9 which IS built (the reader yields between batches).
  */
 export const COPY_BATCH_ROWS = 1000;
 
