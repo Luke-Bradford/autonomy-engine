@@ -2574,23 +2574,6 @@ function validateIfCondition(node: Node, errors: string[]): void {
 }
 
 /**
- * #4 A2 — the SAVE-TIME half of the `switch` `on`/`cases` rule the reducer's
- * `evalSwitchBranch` enforces at run time (both halves, or the rule is
- * decorative). Advisory like every rule here (canvas badge + the #444 write gate).
- *
- * Deliberately UNLIKE `validateIfCondition`: an `if`'s boolean can only come from
- * a whole-value `${}`, so an embedded template is refused; a `switch` matches on a
- * STRING, and an embedded template (`"tier-${x}"`) resolves to a valid string, so
- * `on` is NOT whole-value-gated here — its `${}` refs are already existence+grammar
- * checked doc-wide by `validateRefs`, and the string TYPE of the result is enforced
- * by the reducer at run time (`evalSwitchBranch` throws a non-string →
- * `invalid_event`), the same deferral `validateIfCondition` documents for its
- * boolean type. The `cases` rules (non-empty, unique strings, no `default`
- * collision) are hygiene the reducer does not need — a duplicate or a `'default'`
- * case routes deterministically regardless — but a save-time author error worth
- * surfacing, matching `if`'s advisory posture.
- */
-/**
  * #996 §8 (M5 slice 4c, #1139) — a `copy`'s mapping COLUMN NAMES must be literal.
  *
  * IDENTIFIER-ONLY, and deliberately not a shape gate like `validateSwitchConfig`
@@ -2636,6 +2619,23 @@ function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
   });
 }
 
+/**
+ * #4 A2 — the SAVE-TIME half of the `switch` `on`/`cases` rule the reducer's
+ * `evalSwitchBranch` enforces at run time (both halves, or the rule is
+ * decorative). Advisory like every rule here (canvas badge + the #444 write gate).
+ *
+ * Deliberately UNLIKE `validateIfCondition`: an `if`'s boolean can only come from
+ * a whole-value `${}`, so an embedded template is refused; a `switch` matches on a
+ * STRING, and an embedded template (`"tier-${x}"`) resolves to a valid string, so
+ * `on` is NOT whole-value-gated here — its `${}` refs are already existence+grammar
+ * checked doc-wide by `validateRefs`, and the string TYPE of the result is enforced
+ * by the reducer at run time (`evalSwitchBranch` throws a non-string →
+ * `invalid_event`), the same deferral `validateIfCondition` documents for its
+ * boolean type. The `cases` rules (non-empty, unique strings, no `default`
+ * collision) are hygiene the reducer does not need — a duplicate or a `'default'`
+ * case routes deterministically regardless — but a save-time author error worth
+ * surfacing, matching `if`'s advisory posture.
+ */
 function validateSwitchConfig(node: Node, errors: string[]): void {
   const where = `node.${node.id}`;
   const on = node.config['on'];

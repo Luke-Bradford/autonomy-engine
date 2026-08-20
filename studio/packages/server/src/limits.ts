@@ -44,7 +44,7 @@ export const ISSUE_LIST_CAP = 100;
  * did not add it, because the premise was wrong. Nothing in the executor reads a
  * PER-ACTIVITY concurrency limit: `executor.ts` holds one global `pLimit`, and
  * `driver.ts` a per-run dispatch cap. A copy budget is therefore net-new
- * plumbing, not a constant slotting into an existing consumer. Filed separately;
+ * plumbing, not a constant slotting into an existing consumer. Filed as #1140;
  * the residual is that `copy` is reachable from 4c onward, so §9's "long copies
  * hold every global adapter slot" hazard is live, mitigated by the batch-yield
  * half of §9 which IS built (the reader yields between batches).

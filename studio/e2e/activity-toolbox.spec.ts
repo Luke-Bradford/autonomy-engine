@@ -125,7 +125,11 @@ test.describe('U5 activities toolbox', () => {
 
     // Assert WHERE focus landed before asserting how it looks — otherwise a
     // changed tab order would silently move this test onto another element.
-    const item = toolbox(page).getByRole('button', { name: 'Copy File' });
+    // The name is pinned to whatever sorts FIRST in the first group, which
+    // `activityGroups.ts` orders by `title.localeCompare`: 'Copy Data' (#1139)
+    // took that place from 'Copy File'. Re-pin it when a new general activity
+    // sorts ahead of it — that is this assertion doing its job, not breaking.
+    const item = toolbox(page).getByRole('button', { name: 'Copy Data', exact: true });
     await expect(item).toBeFocused();
 
     const ring = await item.evaluate((el) => {
