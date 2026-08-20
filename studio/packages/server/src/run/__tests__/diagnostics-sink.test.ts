@@ -9,7 +9,7 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
-import { RUN_DIAGNOSTIC_CAP } from '@autonomy-studio/shared';
+import { RUN_DIAGNOSTIC_CAP, capMarkerMessage } from '@autonomy-studio/shared';
 import { listRunDiagnostics, recordRunDiagnostics } from '../../repo/run-diagnostics.js';
 import { runDiagnostics } from '../../db/schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
@@ -210,7 +210,13 @@ describe('#497 — the reducer diagnostics sink', () => {
     // was all of them" (the F13a/#473 rule).
     const marker = found.filter((d) => d.phase === 'cap');
     expect(marker).toHaveLength(1);
-    expect(marker[0]!.message).toContain(`reached the cap of ${RUN_DIAGNOSTIC_CAP}`);
+    /* #1069 — the WHOLE sentence, from the one shared export both this and the
+       web assertions now read. Asserting a prefix was what let the web copy drop
+       the closing "(see the diagnostics below)" clause unnoticed — and that
+       clause is a claim about LAYOUT (the marker renders ABOVE the list it
+       qualifies), so losing it silently unpins the property it states. */
+    expect(marker[0]!.message).toBe(capMarkerMessage(RUN_DIAGNOSTIC_CAP));
+    expect(marker[0]!.message).toContain('(see the diagnostics below).');
     // It sorts FIRST, so a reader learns the list is incomplete before reading it.
     expect(found[0]!.phase).toBe('cap');
   });
