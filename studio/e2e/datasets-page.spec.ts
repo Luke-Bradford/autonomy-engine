@@ -306,18 +306,20 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(page.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
 
     // The PILE-UP, asserted where both store kinds are controlled rather than
-    // inherited from whatever the shared database happens to hold first. A
-    // `delimited` dataset on a `sqlite` store is BOTH unreadable (no reader
-    // yet) and mis-stored (`delimited` lives on `fs`) — two true, independent
-    // notes, and #1145 must not have swallowed #1120's.
+    // inherited from whatever the shared database happens to hold first. The
+    // kind carrying it is `excel` as of #1167, NOT `delimited`: this arm needs a
+    // kind that is BOTH unreadable and mis-stored, and #1167 gave `delimited` a
+    // reader, so it can now only be the second of those. `excel` still lives on
+    // `fs` (`DATASET_CONNECTION_KINDS`) and still has no reader
+    // (`IMPLEMENTED_DATASET_KINDS`), so it is the pair this test was written
+    // for — two true, independent notes, and #1145 must not have swallowed
+    // #1120's.
     await form(page).getByLabel('Store').selectOption(storeId);
-    await form(page).getByLabel('Kind').selectOption('delimited');
+    await form(page).getByLabel('Kind').selectOption('excel');
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      "dataset kind 'delimited' lives in a store of kind 'fs'",
+      "dataset kind 'excel' lives in a store of kind 'fs'",
     );
-    await expect(
-      form(page).getByText(/no reader exists for a delimited dataset yet/),
-    ).toBeVisible();
+    await expect(form(page).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
 
     await expectQuiet(page, problems);
   });
