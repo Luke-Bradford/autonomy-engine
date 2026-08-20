@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import { TriggerContextSchema } from '../schemas/trigger-context.js';
+import { DatasetAddressSchema } from '../datamove/address.js';
 import type {
   Param,
   Output,
@@ -679,12 +680,50 @@ export const FAILURE_CODES = {
    * meant, so it is refused before the first row moves rather than left to the
    * store to survive by luck.
    *
-   * It catches the ID-identical case only. Two DIFFERENT dataset rows naming
-   * the same physical table are not detectable here — that needs the resolved
-   * ADDRESS, which is M6's dispatch record (spec §2.1). Stated rather than
-   * implied, so the residual is not mistaken for coverage.
+   * M6 slice B (#1149) CLOSED the residual this doc used to state. It caught
+   * the ID-identical case only; two DIFFERENT dataset rows naming one physical
+   * table went through, which the atomic-swap sink turns into deletion of the
+   * rows being read. The same code now also fires when the two ends RESOLVE to
+   * one physical address (`sameDatasetAddress`, spec §2.1's dispatch record) —
+   * one code, because it is one fault: the pair names a single address twice,
+   * and an operator fixes it the same way whichever spelling produced it.
+   *
+   * ONE residual survives and is stated rather than implied: a `query` source
+   * names no single object, so a query reading the very table its sink
+   * overwrites is not detectable. Deciding it means parsing the operator's SQL,
+   * and the gate refuses to guess (`datamove/address.ts`).
    */
   DATASET_SELF_COPY: 'dataset_self_copy',
+  /**
+   * M6 slice B (#1149) — the store this dataset lives in cannot say WHERE the
+   * dispatch would land, so the run refuses to make it.
+   *
+   * The seam (`ConnectorAdapter.resolveDatasetAddress`) is optional on the
+   * interface, because six of the seven adapters are not stores and a dataset
+   * means nothing to them, but it is REQUIRED AT THE POINT OF USE: §7's
+   * `describeSource` polarity, applied one layer up. A gate a store can decline
+   * is not a gate — an adapter with no address resolves nothing, records
+   * nothing, and would copy with the physical self-copy refusal silently
+   * switched off while reading exactly like one that passed.
+   *
+   * `permanent`: a missing implementation does not self-heal. It is reachable
+   * only by binding a dataset-declaring activity to a store kind that has not
+   * implemented the seam — M7's `fs`-backed `delimited` owes it before its
+   * first copy can dispatch.
+   */
+  DATASET_ADDRESS_UNSUPPORTED: 'dataset_address_unsupported',
+  /**
+   * M6 slice B (#1149) — the store COULD resolve an address and the attempt
+   * failed: an unconfinable path, an unreadable parent directory, a dataset
+   * config the store rejects.
+   *
+   * Distinct from `DATASET_ADDRESS_UNSUPPORTED`, which is a fact about the
+   * BUILD, where this is a fact about this address right now. The `kind` is
+   * whatever the store classified it as (`toEngineFailure`), so an unreachable
+   * store stays `transient` and is not reported as a configuration error the
+   * operator has to go and fix.
+   */
+  DATASET_ADDRESS_UNRESOLVABLE: 'dataset_address_unresolvable',
   /**
    * #4 A7 — a `fail` control activity FORCE-FAILED the node with its authored
    * `${}` message. Always `permanent` (a deliberate fail is deterministic, so
@@ -885,6 +924,30 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     /** Decided at dispatch time from the P3 catalog and PERSISTED here; the boot
      * reconciler reads this flag from the event log, never recomputes it. */
     idempotent: z.boolean(),
+    /**
+     * #996 M6 slice B (#1149, data-movement spec §2.1) — WHERE this dispatch
+     * actually resolved to, for a DATASET-BOUND activity (`copy`).
+     *
+     * The node holds a dataset *ref*, and a dataset is a MUTABLE row: a rerun
+     * pinned to the same `pipelineVersionId` writes wherever that dataset points
+     * TODAY. §2.1 names the compensating control and this is it — the run log
+     * says where it wrote, not merely which dataset it named, so a run can
+     * answer "where did this data go" from its own log.
+     *
+     * ADDITIVE and OPTIONAL, which is the durability contract every field on a
+     * persisted event obeys here: `EngineEventSchema.parse` runs on every READ
+     * of `run_events` (`server/src/run/events.ts`), so a required field would
+     * reject every `node.dispatched` written before this slice. Absent means
+     * "not recorded" — for a non-dataset activity there IS no address, and for
+     * a pre-M6 log there is no fact to invent.
+     *
+     * The REDUCER never reads it. It is an audit fact on `node.failed
+     * .connectionId`'s exact posture, so replay stays deterministic and no
+     * already-bound run log re-folds differently.
+     */
+    datasetAddresses: z
+      .object({ source: DatasetAddressSchema, sink: DatasetAddressSchema.optional() })
+      .optional(),
   }),
   z.object({
     type: z.literal('node.succeeded'),

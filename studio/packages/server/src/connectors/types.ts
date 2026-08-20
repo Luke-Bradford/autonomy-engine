@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   ConnectionKind,
+  DatasetAddress,
   DatasetColumn,
   DatasetKind,
   MeteringStatus,
@@ -355,4 +356,43 @@ export interface ConnectorAdapter {
     secretFields?: Readonly<Record<string, string>>,
     sinkSecret?: string | null,
   ): AsyncIterable<ActivityEvent>;
+  /**
+   * #996 M6 slice B (#1149, spec §2.1) — WHERE a dataset on this store
+   * physically is, resolved at DISPATCH.
+   *
+   * Two things depend on it, and neither can be done by the executor itself: the
+   * durable record §2.1 owes ("the run log says where it actually wrote"), and
+   * §3.1's physical self-copy refusal, which is a DATA-LOSS guard — two
+   * different dataset rows naming one table make the sink DELETE the rows the
+   * source is streaming. Only the store knows how its own address resolves
+   * (which path confinement, which default schema, what counts as one object),
+   * so it is asked rather than guessed at.
+   *
+   * A PURE READ: it may touch the filesystem to canonicalise, and must not open
+   * a transaction, write, or otherwise change the store. The executor calls it
+   * BEFORE `node.dispatched`, where every other pure read lives, so an
+   * unresolvable address fails the node while it is still `ready`.
+   *
+   * NON-SECRET components only (§8) — see `DatasetAddress`, which lands in the
+   * event log verbatim.
+   *
+   * OPTIONAL HERE, REQUIRED AT THE POINT OF USE. Six of the seven adapters are
+   * not stores and a dataset means nothing to them, so the interface does not
+   * make them implement it; the executor refuses a dataset-bound dispatch whose
+   * adapter omits it (`DATASET_ADDRESS_UNSUPPORTED`). That is §7's
+   * `describeSource` polarity — a gate a store can decline is not a gate —
+   * placed where it costs the non-stores nothing. M7's `fs`-backed `delimited`
+   * owes an implementation before its first copy can dispatch.
+   *
+   * WHY IT IS NOT ON `CopyIo`, which also carries a store-specific describe. The
+   * two run at different times for different reasons and merging them by
+   * analogy would break both: `CopyIo.describeSource` is ACTIVITY-time, supplied
+   * by the adapter that is already running, and describes the source's columns.
+   * This is DISPATCH-time, and it must be answerable for the SINK — whose
+   * adapter never runs — before the running adapter is even chosen.
+   */
+  resolveDatasetAddress?(args: {
+    readonly connectionConfig: Record<string, unknown>;
+    readonly dataset: ResolvedDataset;
+  }): Promise<DatasetAddress>;
 }

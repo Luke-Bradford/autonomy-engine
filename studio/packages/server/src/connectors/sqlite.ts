@@ -1,14 +1,17 @@
 import Database from 'better-sqlite3';
+import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import {
   datasetConfigSchema,
   datasetKindIsImplemented,
   isSqlIdentifier,
+  nocaseFold,
   queryDatasetConfigSchema,
   sqliteConnectionConfigSchema as sharedSqliteConnectionConfigSchema,
   tableDatasetConfigSchema,
   COPY_ACTIVITY_TYPE,
   type CoercedValue,
+  type DatasetAddress,
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
@@ -451,6 +454,102 @@ export async function describeSqliteDatasetColumns(read: SqliteDatasetRead): Pro
   }
 }
 
+/**
+ * The `table` dataset config both the SINK writer and the address resolver
+ * need, with SQLite's default database applied.
+ *
+ * A SQLite "schema" is an ATTACHed database and this connector attaches
+ * nothing, so an unqualified dataset means `main`. Shared rather than
+ * duplicated because the address gate and the writer MUST agree on what "the
+ * same table" is: two spellings of one default would let the gate compare
+ * `users` against `main.users` and find them different, which is precisely the
+ * silent pass this slice exists to remove.
+ */
+function parseTableTarget(datasetConfig: Record<string, unknown>): {
+  schema: string;
+  table: string;
+} {
+  const parsed = tableDatasetConfigSchema.safeParse(datasetConfig);
+  if (!parsed.success) {
+    throw new DatasetIoError('permanent', `invalid table dataset config: ${parsed.error.message}`);
+  }
+  return { schema: parsed.data.schema ?? 'main', table: parsed.data.table };
+}
+
+/**
+ * #1149 M6 slice B (spec §2.1) — where a `sqlite` dataset PHYSICALLY is.
+ *
+ * A pure read: it confines the path (which canonicalises the parent, so a
+ * traversal or a symlinked directory cannot smuggle the address out of
+ * `config.roots`) and asks the OS for the file's identity. Nothing is opened,
+ * prepared or executed — in particular the operator SQL of a `query` dataset is
+ * never handed to anything, which is the same invariant
+ * `describeSqliteDatasetColumns` states for `.columns()`.
+ *
+ * `storeIdentity` is `dev:ino`, and it is the reason this is not just the path.
+ * Measured on this machine's APFS volume: `/private/tmp/x/db.sqlite` and
+ * `/private/tmp/x/DB.sqlite` confine to two DIFFERENT strings and one inode
+ * (`resolveWithinRoots` joins the final component as spelled). A path-only
+ * comparison would therefore let a case-alias pair past the self-copy gate and
+ * the sink would delete the rows the source was streaming. A `stat` failure
+ * yields `null` rather than throwing: an address that cannot be identified
+ * still RECORDS, and the comparison degrades to the path rather than inventing
+ * a refusal — the copy's own `fileMustExist: true` open is what refuses a store
+ * that is not there, with a message about the store rather than about drift.
+ *
+ * `object` is `schema.table` folded the way SQLite compares identifiers, and
+ * `null` for a `query`: a SELECT names no single object, and guessing one from
+ * its text is not something a gate may do.
+ */
+async function resolveSqliteDatasetAddress(args: {
+  readonly connectionConfig: Record<string, unknown>;
+  readonly dataset: { readonly kind: DatasetKind; readonly config: Record<string, unknown> };
+}): Promise<DatasetAddress> {
+  const cfg = sqliteConnectionConfigSchema.safeParse(args.connectionConfig);
+  if (!cfg.success) {
+    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
+  }
+  if (!datasetKindIsImplemented(args.dataset.kind)) {
+    throw new DatasetIoError(
+      'permanent',
+      `no reader exists for the '${args.dataset.kind}' dataset kind yet`,
+    );
+  }
+  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
+
+  let storeIdentity: string | null = null;
+  try {
+    const stats = await stat(dbPath);
+    storeIdentity = `${stats.dev}:${stats.ino}`;
+  } catch {
+    // Unidentifiable — recorded as such. This must never become a refusal, and
+    // never a FALSE identity either.
+    //
+    // UNIFORM across errno, deliberately, and the argument is not "ENOENT is
+    // the only case worth handling": every way `stat` can fail here leaves the
+    // COPY unable to proceed anyway, so the degraded comparison cannot admit a
+    // copy that would otherwise have been refused. `stat` needs exactly what
+    // `better-sqlite3` needs to open the file — the path, and search permission
+    // on its parent. ENOENT ⇒ the open raises `SQLITE_CANTOPEN`;
+    // EACCES/EPERM/ELOOP/ENAMETOOLONG ⇒ the open hits the same wall; a genuine
+    // I/O error ⇒ the first read does. In each the STORE refuses the copy, with
+    // a message about the store, which is strictly better than a dispatch-time
+    // refusal about an address. Branching on errno would buy nothing and would
+    // add the one path this seam must not have: an unidentifiable store
+    // becoming a `permanent` refusal.
+  }
+
+  const object =
+    args.dataset.kind === 'query'
+      ? null
+      : (() => {
+          const target = parseTableTarget(args.dataset.config);
+          return `${nocaseFold(target.schema)}.${nocaseFold(target.table)}`;
+        })();
+
+  return { kind: 'sqlite', store: dbPath, storeIdentity, object };
+}
+
 // ---------------------------------------------------------------------------
 // #1125 M5 slice 2 — the SINK.
 // ---------------------------------------------------------------------------
@@ -670,14 +769,12 @@ function sinkTargetFor(
       `no sink writer exists for the '${datasetKind}' dataset kind yet`,
     );
   }
-  const parsed = tableDatasetConfigSchema.safeParse(datasetConfig);
-  if (!parsed.success) {
-    throw new DatasetIoError('permanent', `invalid table dataset config: ${parsed.error.message}`);
-  }
   // A SQLite "schema" is an ATTACHed database, and this connector attaches
   // nothing — so an unqualified dataset means `main`. A different name reaches
-  // `pragma_table_info`, which refuses it with "unknown database".
-  return { schema: parsed.data.schema ?? 'main', table: parsed.data.table };
+  // `pragma_table_info`, which refuses it with "unknown database". Shared with
+  // the address resolver so the gate and the writer cannot disagree about which
+  // table a dataset names.
+  return parseTableTarget(datasetConfig);
 }
 
 /**
@@ -865,6 +962,8 @@ export async function writeSqliteDatasetRows(
 export const sqliteAdapter: ConnectorAdapter = {
   kind: 'sqlite',
   configSchema: sqliteConnectionConfigSchema,
+
+  resolveDatasetAddress: resolveSqliteDatasetAddress,
 
   async testConnection(config) {
     const cfg = sqliteConnectionConfigSchema.safeParse(config);

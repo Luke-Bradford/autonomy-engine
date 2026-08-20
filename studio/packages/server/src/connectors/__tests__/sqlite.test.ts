@@ -1,4 +1,4 @@
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import {
   sqliteAdapter,
   type SqliteRow,
 } from '../sqlite.js';
+import { sameDatasetAddress } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import type { ActivityContext } from '../types.js';
 import { cleanupTempRoots, seedDb, tempRoot } from './sqlite-fixtures.js';
@@ -630,5 +631,139 @@ describe("describeSqliteDatasetColumns (#1148 M6 — §7's source describe seam)
       signal: controller.signal,
     }).catch((err: unknown) => err);
     expect((error as DatasetIoError).kind).toBe('cancelled');
+  });
+});
+
+/**
+ * #1149 M6 slice B (spec §2.1) — the resolved-address seam.
+ *
+ * Real files again, and for a sharper reason than the suite's usual one: the
+ * property under test IS the filesystem's answer to "are these one store", and
+ * a mock would only confirm that this file agrees with itself.
+ */
+describe('resolveDatasetAddress', () => {
+  /** The seam, proved present rather than asserted away — it is optional on
+   * `ConnectorAdapter` and REQUIRED at the point of use, so a build that lost it
+   * must fail this suite rather than skip it. */
+  function resolveAddress(
+    connectionConfig: Record<string, unknown>,
+    dataset: { kind: 'table' | 'query' | 'delimited'; config: Record<string, unknown> },
+  ) {
+    const resolve = sqliteAdapter.resolveDatasetAddress;
+    if (resolve === undefined) throw new Error('the sqlite adapter must resolve dataset addresses');
+    return resolve({
+      connectionConfig,
+      dataset: { id: 'ds_1', name: 'D', kind: dataset.kind, config: dataset.config, columns: [] },
+    });
+  }
+
+  it('names the confined store, its OS identity and the qualified table', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    const address = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { table: 't' } },
+    );
+    expect(address).toEqual({
+      kind: 'sqlite',
+      store: path,
+      // `dev:ino`, whose exact values are the OS's business — the SHAPE is what
+      // this asserts, and the next test asserts what it is FOR.
+      storeIdentity: expect.stringMatching(/^\d+:\d+$/),
+      object: 'main.t',
+    });
+  });
+
+  it('gives two names for ONE file the same identity, and different paths', async () => {
+    // A hard link, deliberately, rather than a case-spelling alias: the alias
+    // that motivated `storeIdentity` is a case-insensitive filesystem (the
+    // operator's APFS Mac), which CI's ext4 does not reproduce. A hard link is
+    // the same defect — two paths, one inode — on every platform this runs on.
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    const alias = join(root, 'alias.db');
+    linkSync(path, alias);
+
+    const a = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { table: 't' } },
+    );
+    const b = await resolveAddress(
+      { roots: [root], path: alias },
+      { kind: 'table', config: { table: 't' } },
+    );
+
+    expect(a.store).not.toBe(b.store);
+    expect(a.storeIdentity).toBe(b.storeIdentity);
+    // Which is the whole point: the pair is one physical address, so the gate
+    // that refuses a self-copy sees it as one.
+    expect(sameDatasetAddress(a, b)).toBe(true);
+  });
+
+  it('resolves an unqualified table to `main` and folds case the way SQLite does', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    const bare = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { table: 'T' } },
+    );
+    const qualified = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { schema: 'MAIN', table: 't' } },
+    );
+    expect(bare.object).toBe('main.t');
+    expect(qualified.object).toBe('main.t');
+  });
+
+  it('gives a `query` dataset NO object, so it can never be refused as a self-copy', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    const address = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'query', config: { sql: 'SELECT * FROM t' } },
+    );
+    expect(address.object).toBeNull();
+    expect(address.store).toBe(path);
+    expect(sameDatasetAddress(address, address)).toBe(false);
+  });
+
+  it('still resolves when the database file does not exist, with a NULL identity', async () => {
+    // Unidentifiable is recorded, never thrown and never faked: the copy's own
+    // `fileMustExist: true` open is what refuses a store that is not there,
+    // with a message about the store rather than about an address.
+    const root = tempRoot();
+    const address = await resolveAddress(
+      { roots: [root], path: join(root, 'absent.db') },
+      { kind: 'table', config: { table: 't' } },
+    );
+    expect(address.storeIdentity).toBeNull();
+    expect(address.object).toBe('main.t');
+  });
+
+  it('refuses a path outside the connection roots, permanently', async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    await expect(
+      resolveAddress(
+        { roots: [root], path: join(outside, 'app.db') },
+        { kind: 'table', config: { table: 't' } },
+      ),
+    ).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('refuses a dataset kind no reader exists for', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    await expect(
+      resolveAddress({ roots: [root], path }, { kind: 'delimited', config: {} }),
+    ).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('refuses a table dataset whose config is not a table config', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1);
+    await expect(
+      resolveAddress({ roots: [root], path }, { kind: 'table', config: { nope: 1 } }),
+    ).rejects.toBeInstanceOf(DatasetIoError);
   });
 });

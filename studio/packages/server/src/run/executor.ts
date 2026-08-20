@@ -5,6 +5,8 @@ import {
   collectSecretSinkMarkers,
   computeCostEstimate,
   containsSecretMarker,
+  describeDatasetAddress,
+  sameDatasetAddress,
   resolveDocNode,
   FAILURE_CODES,
   findLlmMessagesRowIndex,
@@ -16,6 +18,7 @@ import {
   WARNING_CODES,
   type ActivityCatalog,
   type ConnectionKind,
+  type DatasetAddress,
   type DatasetKind,
   type EngineEvent,
   type FailureKind,
@@ -33,6 +36,7 @@ import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connector
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
+import { DatasetIoError } from '../connectors/dataset-io-error.js';
 import { emptyTruncationWarning } from '../connectors/llm-shared.js';
 import type {
   ActivityContext,
@@ -637,6 +641,56 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /**
+   * M6 slice B (#1149, spec §2.1) — ask a store WHERE one resolved dataset
+   * physically is.
+   *
+   * A thin wrapper over the adapter's seam that exists to do two things the
+   * call sites must not each decide for themselves. First, the MISSING-seam
+   * refusal: `resolveDatasetAddress` is optional on `ConnectorAdapter` (six of
+   * the seven adapters are not stores), so a store that has not implemented it
+   * is refused rather than skipped — a dispatch that cannot say where it lands
+   * gets no dispatch record AND no physical self-copy check, which is the
+   * "optional gate" shape §7 refuses.
+   *
+   * Second, the classification. A `DatasetIoError` carries the store's own
+   * verdict and goes through `toEngineFailure`, so a store that is merely
+   * UNREACHABLE stays `transient` instead of being reported as a config error
+   * the operator has to go and fix. Anything else that escapes is `permanent`:
+   * an unclassified throw is a defect, and guessing `transient` for it would
+   * retry a bug on a timer.
+   *
+   * Only the KIND is taken from that mapping — the `code` stays
+   * `DATASET_ADDRESS_UNRESOLVABLE`, because what an operator acts on here is
+   * "this address did not resolve", and the provider-flavoured cause is in the
+   * message. It costs nothing today (a `sqlite` store classifies only
+   * `permanent`/`transient`) and is written down because M10's networked store
+   * can mint `auth`/`rate_limit`, at which point the choice becomes visible.
+   */
+  async function resolveDatasetAddressFor(
+    adapter: ConnectorAdapter,
+    connectionConfig: Record<string, unknown>,
+    dataset: ResolvedDataset,
+  ): Promise<{ error: string; code: string; kind?: FailureKind } | { address: DatasetAddress }> {
+    if (adapter.resolveDatasetAddress === undefined) {
+      return {
+        error: `connection kind '${adapter.kind}' cannot resolve a physical address for dataset '${dataset.id}', so this dispatch cannot record where it would land`,
+        code: FAILURE_CODES.DATASET_ADDRESS_UNSUPPORTED,
+      };
+    }
+    try {
+      return { address: await adapter.resolveDatasetAddress({ connectionConfig, dataset }) };
+    } catch (err) {
+      const kind =
+        err instanceof DatasetIoError ? toEngineFailure(err.kind).kind : ('permanent' as const);
+      return {
+        error: `dataset '${dataset.id}' could not be resolved to an address: ${err instanceof Error ? err.message : String(err)}`,
+        code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE,
+        kind,
+      };
+    }
+  }
+
+  /**
    * M1 (#1104) — attach the source/sink `side` to a pre-flight resolution
    * failure, for a PAIRED activity only. The ONE place the label is applied, so
    * a new error return inside `resolveConnection` (or, since slice 4a,
@@ -1011,6 +1065,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // `undefined` for every single-connection activity (all of them at M1).
     let sink: { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
     let sinkSecret: string | null | undefined;
+    // M6 slice B (#1149) — the SINK's adapter. Kept rather than discarded (see
+    // below) because the sink's ADDRESS can only be resolved by the store that
+    // owns it, and that store's adapter never runs.
+    let sinkAdapter: ConnectorAdapter | undefined;
     // The id the QUOTA-window writer keys off (#2 L14c). For a paired node this
     // is the SOURCE end: the source adapter is the one that runs, so a
     // `rate_limit` it reports came from the source's connection. Without this a
@@ -1021,6 +1079,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // catalog entry declares `datasetKinds`. `undefined` for every activity that
     // is not dataset-bound (all of them at 4a — `copy` lands at 4b).
     let datasets: { source: ResolvedDataset; sink?: ResolvedDataset } | undefined;
+    // M6 slice B (#1149) — the PHYSICAL addresses those datasets resolved to,
+    // stamped on `node.dispatched` so the run log can answer "where did this
+    // data go" from itself (§2.1). `undefined` in lockstep with `datasets`.
+    let datasetAddresses: { source: DatasetAddress; sink?: DatasetAddress } | undefined;
     if (entry.connectionKinds.length > 0) {
       // M1 — a PAIRED activity is one the CATALOG declares a sink for. Read from
       // the catalog, never inferred from the node: a stray `connectionIds` on a
@@ -1070,16 +1132,23 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           yield preflightFailure(runId, nodeId, attemptId, resolvedSink, 'sink', 'connection');
           return;
         }
-        // The sink's ADAPTER is deliberately discarded: the SOURCE adapter is the
-        // one that runs. The sink contributes its non-secret config, its `kind`
-        // (so the running adapter knows which store it writes to, and can
-        // re-validate per spec §8) and its plaintext credential — the last on the
+        // The sink's adapter never RUNS — the SOURCE adapter is the one that
+        // does. It is nonetheless kept (M6 slice B, #1149): resolving the sink's
+        // physical address is a question only the sink's own store can answer,
+        // and re-fetching it from the registry by `kind` would hand back a
+        // `ConnectorAdapter | undefined` that the code would then have to assert
+        // away — the same claim, made again with less evidence.
+        //
+        // The sink otherwise contributes its non-secret config, its `kind` (so
+        // the running adapter knows which store it writes to, and can re-validate
+        // per spec §8) and its plaintext credential — the last on the
         // `runActivity` side channel, never in `ctx`.
         sink = {
           kind: resolvedSink.connectionKind,
           connectionConfig: resolvedSink.connectionConfig,
         };
         sinkSecret = resolvedSink.secret;
+        sinkAdapter = resolvedSink.adapter;
       }
     } else {
       // An EXECUTION activity is connector-dispatched by definition (spec #4),
@@ -1184,6 +1253,95 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         }
         datasets = { source: resolvedSourceDs.dataset, sink: resolvedSinkDs.dataset };
       }
+
+      // M6 slice B (#1149, spec §2.1) — resolve the PHYSICAL address of each
+      // end, then re-run the self-copy refusal against the addresses rather
+      // than the ids.
+      //
+      // WHY IT IS A SECOND CHECK and not a replacement for the id-identical one
+      // above. They refuse the same fault at different resolutions, and the
+      // cheaper one gives the better message: "source and sink name the same
+      // dataset 'ds_7'" points at the ref an operator has to change, where the
+      // address can only say which table two different refs happen to share.
+      // The id check also needs no store I/O, so a node that is obviously
+      // self-copying never touches the filesystem to learn it.
+      //
+      // Placed BEFORE `node.dispatched`, with every other pure read: an
+      // unresolvable address fails the node while it is still `ready`, leaving
+      // no dispatch event for the boot reconciler to reconcile. The observable
+      // consequence is stated rather than hidden — a bad store path on a copy
+      // now fails at dispatch with a `dataset_address_*` code instead of inside
+      // the adapter with activity events. Same `permanent` verdict, earlier and
+      // better named.
+      const sourceAddress = await resolveDatasetAddressFor(
+        adapter,
+        connectionConfig,
+        datasets.source,
+      );
+      if ('error' in sourceAddress) {
+        yield preflightFailure(
+          runId,
+          nodeId,
+          attemptId,
+          sourceAddress,
+          datasetPaired ? 'source' : undefined,
+          'dataset',
+        );
+        return;
+      }
+      datasetAddresses = { source: sourceAddress.address };
+      const sinkDataset = datasets.sink;
+      if (sinkDataset !== undefined) {
+        // The SINK's own adapter, not the running one: a heterogeneous copy
+        // writes into a different store, and only that store knows how its
+        // address resolves. `sink` is proved present alongside `datasets.sink`
+        // by the catalog rule that a declared `datasetKinds.sink` implies
+        // `sinkConnectionKinds`; the guard is fail-closed rather than a cast,
+        // because a catalog that ever broke that rule must refuse, not resolve
+        // the sink's address out of the SOURCE's store.
+        if (sinkAdapter === undefined || sink === undefined) {
+          yield preflightFailure(
+            runId,
+            nodeId,
+            attemptId,
+            {
+              error: `activity '${node.type}' declares a sink dataset but bound no sink connection to resolve its address in`,
+              code: FAILURE_CODES.DATASET_ADDRESS_UNRESOLVABLE,
+            },
+            'sink',
+            'dataset',
+          );
+          return;
+        }
+        const sinkAddress = await resolveDatasetAddressFor(
+          sinkAdapter,
+          sink.connectionConfig,
+          sinkDataset,
+        );
+        if ('error' in sinkAddress) {
+          yield preflightFailure(runId, nodeId, attemptId, sinkAddress, 'sink', 'dataset');
+          return;
+        }
+        // The PHYSICAL self-copy refusal §3.1 named and could not build: two
+        // DIFFERENT dataset rows resolving to one table. Unlabelled by side for
+        // the same reason as the id-identical case — the PAIR is at fault, and
+        // labelling one end would send an operator to fix the wrong ref.
+        if (sameDatasetAddress(sourceAddress.address, sinkAddress.address)) {
+          yield preflightFailure(
+            runId,
+            nodeId,
+            attemptId,
+            {
+              error: `source dataset '${datasets.source.id}' and sink dataset '${sinkDataset.id}' resolve to the same address ${describeDatasetAddress(sourceAddress.address)} — a copy cannot read and overwrite one address`,
+              code: FAILURE_CODES.DATASET_SELF_COPY,
+            },
+            undefined,
+            'dataset',
+          );
+          return;
+        }
+        datasetAddresses = { source: sourceAddress.address, sink: sinkAddress.address };
+      }
     }
 
     // Resolve config-sink `{$secret}` markers (item 7 / S3) in the PRE-FLIGHT,
@@ -1217,6 +1375,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       nodeId,
       attemptId,
       idempotent: entry.idempotent,
+      // OMITTED, not present-undefined, for every activity that is not
+      // dataset-bound — the same honesty rule `ctx.datasets` follows, and here
+      // it also keeps a non-copy `node.dispatched` byte-identical to the one
+      // this build wrote before the field existed.
+      ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
     };
 
     const controller = new AbortController();
