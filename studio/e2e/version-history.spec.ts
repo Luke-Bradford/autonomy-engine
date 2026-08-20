@@ -417,6 +417,80 @@ test.describe('pipeline version history', () => {
     ]);
   });
   /**
+   * #1141 — the override obeys the badge gate, like every other save.
+   *
+   * The conflict banner used to be the ONE save path that skipped it. Its guard
+   * was `saving || previewing !== null`, so an author who hit the 409 and then
+   * edited the doc into an invalid state found Save dead and this button alive —
+   * and clicking it threw out of the client-side
+   * `PipelineVersionWriteSchema.parse`, printing `Save failed: <raw ZodError>`.
+   * The write was always going to be refused; the defect was that the one path
+   * escaping the gate was also the one whose refusal was unreadable.
+   *
+   * Only reachable here. It needs two real writers against one server to raise
+   * the banner at all, and the assertion is about a live React Flow canvas being
+   * edited underneath it, which does not render in jsdom. The REASON string
+   * itself is unit-tested (`canvasDoc.test.ts`); what this adds is that the
+   * rendered button is really wired to it.
+   */
+  test('the conflict override is refused while the doc badges, and lives again once it does not', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict invalid ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    // Raise the banner: another writer lands v2, this tab saves from v1.
+    await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+    await addActivity(page, 'HTTP Request');
+    await page.getByRole('button', { name: 'Save version' }).click();
+
+    const override = page.getByRole('button', { name: 'Save as v3 anyway' });
+    await expect(page.locator('.notice-conflict')).toBeVisible();
+    // Alive first — otherwise the assertion below would pass on a banner that
+    // never offered the act at all.
+    await expect(override).toBeEnabled();
+
+    // Now the edit that invalidates the doc. A call node added with no `call`
+    // has no honest default target, so the validator refuses it and the canvas
+    // badges — the same recipe `call-node-authoring.spec.ts` uses.
+    await addActivity(page, 'Execute Pipeline');
+    await expect(page.locator('.badge-list li')).toContainText('needs a call config');
+
+    // Both buttons dead, for the SAME stated reason: that is the property, not
+    // just that the override happens to be disabled.
+    const reason = 'Fix the 1 validation issue(s) listed below to save.';
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+    await expect(override).toBeDisabled();
+    await expect(override).toHaveAttribute('title', reason);
+
+    // And it is not a dead end. Undo — not a node click plus Delete, which
+    // `onlyRenderVisibleElements` can cull out from under — walks the invalid
+    // edit back out and the override is live again.
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.locator('.badge-list li')).toHaveCount(0);
+    await expect(override).toBeEnabled();
+
+    // The exit still works, so nothing above traded a raw ZodError for a stuck
+    // banner: the operator's original work reaches v3.
+    await override.click();
+    await expect(page.locator('.notice')).toHaveText('Saved v3.');
+    const after = await page.request.get(
+      `/api/pipelines/${encodeURIComponent(pipelineId)}/versions`,
+    );
+    const versions = (await after.json()) as { version: number; nodes: unknown[] }[];
+    expect(versions.find((v) => v.version === 3)?.nodes).toHaveLength(3);
+
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
+  });
+  /**
    * #904 — a THIRD save landing while the conflict banner is up.
    *
    * The one client transition where the banner could go stale: the override
