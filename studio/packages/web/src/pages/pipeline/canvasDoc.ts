@@ -118,24 +118,32 @@ export function saveDisabledReason({
   if (previewing !== null) return 'Leave the preview to save your working graph.';
   if (!ready) return 'Wait for the pipeline to load.';
   // Says how many and where they are, rather than restating them: the badge
-  // list below the canvas already names each one, and its own copy is
-  // "N validation issue(s) — fix these to save."
+  // list already names each one, and its own copy is
+  // "N validation issue(s) — fix these to save." "Below" is accurate for both
+  // buttons that read this — the list renders after the toolbar AND after the
+  // conflict banner, though it sits ABOVE the graph canvas itself.
   if (issues.length > 0)
     return `Fix the ${String(issues.length)} validation issue(s) listed below to save.`;
   return null;
 }
 
 /**
- * Whether the Save button is enabled. Gated on `issues` as of #444: the server
- * now REFUSES an invalid doc, so an enabled Save would just round-trip to a
- * 400. The server remains the real gate — this only spares the author a
- * pointless request.
+ * Whether a doc is savable, ignoring anything the SCREEN is doing. Gated on
+ * `issues` as of #444: the server REFUSES an invalid doc, so an enabled Save
+ * would just round-trip to a 400. The server remains the real gate — this only
+ * spares the author a pointless request.
  *
  * DERIVED from `saveDisabledReason` as of #1141 rather than restating its terms,
- * so a rule added there can never be missing here. Asks the question with no
- * preview open, because the preview is a property of the SCREEN rather than of
- * the document, and the store-level callers that use this predicate have no
- * preview to report.
+ * so a rule added there can never be missing here. Passes `previewing: null`
+ * because a preview is a property of the screen rather than of the document.
+ *
+ * That leaves it with NO render-site caller — both buttons need the reason, not
+ * the boolean, so both read `saveDisabledReason` directly. It survives as the
+ * document-level form, which is what the store tests assert through on purpose:
+ * their subject is "the operator gets Save back" (#746), and the boolean is that
+ * claim, where an empty `issues` array is only its mechanism. Folding it into
+ * those call sites would trade four legible assertions for the same expression
+ * written out four times — the exact shape this ticket removed from the JSX.
  */
 export function canSave(args: { saving: boolean; ready: boolean; issues: string[] }): boolean {
   return saveDisabledReason({ ...args, previewing: null }) === null;

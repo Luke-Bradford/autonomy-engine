@@ -212,17 +212,4 @@ describe('saveDisabledReason (#1141)', () => {
       saveDisabledReason({ saving: false, ready: false, issues: ['x'], previewing: null }),
     ).toBe('Wait for the pipeline to load.');
   });
-
-  it('is what `canSave` is made of — the two cannot drift', () => {
-    // `canSave` asks the same question with no preview open, so every refusal
-    // it reports is one of the reasons above.
-    for (const args of [
-      OK,
-      { ...OK, saving: true },
-      { ...OK, ready: false },
-      { ...OK, issues: ['x'] },
-    ]) {
-      expect(canSave(args)).toBe(saveDisabledReason({ ...args, previewing: null }) === null);
-    }
-  });
 });
