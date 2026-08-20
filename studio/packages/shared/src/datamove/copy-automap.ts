@@ -74,7 +74,7 @@ export function autoMapMapping(
   mappedSinks: readonly string[],
 ): AutoMapResult {
   const index = indexSourceColumns(sourceColumns.map((c) => c.name));
-  // FOLDED, not exact. `refineMapping` dedupes sinks by exact string, but the
+  // FOLDED, not exact. `copyMappingShapeIssues` dedupes sinks by exact string, but the
   // store resolves them folded and refuses the collision ("each sink column may
   // be written by one mapping row"). An exact-only skip list would add a second
   // row for `ID` beside the author's `id`, pass every save-time check, and fail
@@ -152,13 +152,13 @@ export interface SinkCoverage {
    * SAME store column.
    *
    * This is the hazard auto-map's own fold-dedupe cannot reach, because the
-   * author can type it directly. `refineMapping` dedupes sinks by EXACT string
+   * author can type it directly. `copyMappingShapeIssues` dedupes sinks by EXACT string
    * and so accepts `id` beside `ID`; the store then refuses the pair
    * (`resolveSinkColumns` — "each sink column may be written by one mapping
    * row") at DISPATCH, on a version that is already immutable. Naming it here is
    * the only place an author can still act on it.
    *
-   * An EXACT duplicate is deliberately NOT reported: `refineMapping` refuses that
+   * An EXACT duplicate is deliberately NOT reported: `copyMappingShapeIssues` refuses that
    * one on Apply, in better words, and two advisories for one fault is noise.
    */
   readonly duplicateWrites: readonly { readonly first: string; readonly second: string }[];

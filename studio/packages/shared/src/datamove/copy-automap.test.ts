@@ -66,7 +66,7 @@ describe('autoMapMapping (#1170, spec §6.3)', () => {
   });
 
   it('folds CASE when deciding a sink column is already claimed', () => {
-    // The load-bearing one. `refineMapping` dedupes sinks by EXACT string, but
+    // The load-bearing one. `copyMappingShapeIssues` dedupes sinks by EXACT string, but
     // the store resolves them folded and refuses the collision
     // (`sqlite.ts` -- "each sink column may be written by one mapping row").
     // An exact-only check here would add a second row for `ID` beside the
@@ -168,14 +168,14 @@ describe('checkSinkCoverage (#1170, spec §13)', () => {
 
   it('names two rows that write the SAME column in different case', () => {
     // The hazard auto-map's own dedupe cannot reach, because an author can type
-    // it. `refineMapping` dedupes sinks EXACTLY and lets this through; the store
+    // it. `copyMappingShapeIssues` dedupes sinks EXACTLY and lets this through; the store
     // refuses it at dispatch, on an immutable version.
     const coverage = checkSinkCoverage([{ sink: 'id' }, { sink: 'ID' }], [col('id', 'integer')]);
 
     expect(coverage.duplicateWrites).toEqual([{ first: 'id', second: 'ID' }]);
   });
 
-  it('leaves an EXACT duplicate to refineMapping, which says it better', () => {
+  it('leaves an EXACT duplicate to copyMappingShapeIssues, which says it better', () => {
     const coverage = checkSinkCoverage([{ sink: 'id' }, { sink: 'id' }], [col('id', 'integer')]);
 
     expect(coverage.duplicateWrites).toEqual([]);

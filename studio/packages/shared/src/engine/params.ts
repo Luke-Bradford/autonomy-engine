@@ -38,6 +38,7 @@ import {
   llmToolsSurfaceSchema,
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
+import { copyMappingShapeIssues } from '../catalog/copy-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -2131,7 +2132,10 @@ export function validateDoc(
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
     // #996 §8 — a `copy`'s mapping column names must be LITERAL identifiers.
-    if (node.type === COPY_ACTIVITY_TYPE) validateCopyMappingIdentifiers(node, errors);
+    if (node.type === COPY_ACTIVITY_TYPE) {
+      validateCopyMappingIdentifiers(node, errors);
+      validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
+    }
     // #2 L13b — connectionParams shape rules (activity-agnostic: any
     // connection-bound node may carry bindings). Both refusals follow the L12
     // call-node precedent: config that would be silently INERT is refused with
@@ -2576,12 +2580,12 @@ function validateIfCondition(node: Node, errors: string[]): void {
 /**
  * #996 §8 (M5 slice 4c, #1139) — a `copy`'s mapping COLUMN NAMES must be literal.
  *
- * IDENTIFIER-ONLY, and deliberately not a shape gate like `validateSwitchConfig`
- * below. A copy's config shape is the adapter's to enforce
- * (`copyDispatchInputSchema`), because `Node.config` is opaque to this validator
- * and §13 gives the authoring surface to M8's mapping panel; duplicating the
- * shape here would be a second reader of one rule. So every malformed shape
- * below is a SILENT SKIP — there is nothing for this gate to say about it.
+ * IDENTIFIER-ONLY. It is not the whole of what this gate says about a copy —
+ * `validateCopyMappingShape` below adds the three CROSS-ROW rules (#1176) — but
+ * per-FIELD types remain the adapter's (`copyDispatchInputSchema`) and the
+ * canvas schema's, because `Node.config` is opaque to this validator and §13
+ * gives the authoring surface to M8's mapping panel. So every malformed shape
+ * below is a SILENT SKIP — there is nothing THIS rule has to say about it.
  *
  * Why the rule cannot live at dispatch, which is where every other
  * `copy` check lives. §8's argument, and it is the whole reason this function
@@ -2617,6 +2621,54 @@ function validateCopyMappingIdentifiers(node: Node, errors: string[]): void {
       );
     }
   });
+}
+
+/**
+ * #1176 — the copy mapping's three CROSS-ROW rules, at the #444 write gate.
+ *
+ * They are declared once, in `catalog/copy-config.ts`'s `copyMappingShapeIssues`,
+ * and replayed here. Before this they were reached by exactly two things: the
+ * canvas Apply pre-check, whose own docblock calls itself *"a UX PRE-CHECK,
+ * never the gate"*, and `connectors/copy.ts`'s dispatch parse. So a version
+ * minted by git-import or a direct POST could hold an empty mapping, a duplicate
+ * sink or a broken `source`/`expression` XOR and validate clean — surfacing only
+ * when the copy RAN, which for a scheduled pipeline is hours later. A rule only
+ * the canvas enforces is not enforced, which is the argument #444 was built on.
+ *
+ * WHY THESE THREE AND NOT THE WHOLE SCHEMA. Each is invisible to every other
+ * reader until the operator's data has already moved: a duplicate sink is silent
+ * LAST-WINS into their table and perfectly valid SQL, an empty mapping is a copy
+ * that succeeds and moves nothing, and a row with both `source` and `expression`
+ * has no defined meaning. A per-field TYPE error is not like that — the canvas
+ * refuses it on Apply and the adapter refuses it at dispatch, both legibly — so
+ * it stays out, and the silent skips `validateCopyMappingIdentifiers` documents
+ * stay skips.
+ *
+ * A NON-ARRAY `mapping` IS STILL A SILENT SKIP, and that is a rule rather than
+ * an omission. `mapping` may be a whole-value `${}` expression that resolves to
+ * an array at dispatch (`copy-identifier-gate.test.ts` pins
+ * `'${params.everything}'`), and substitution happens in the reducer — so
+ * refusing a non-array here would refuse a working pipeline at save time. The
+ * cross-row rules presuppose rows this gate can see; where it cannot see them,
+ * it says nothing. That costs nothing in safety on the §8 side either: a
+ * dynamically-supplied `sink` name never reaches SQL as written, because
+ * `resolveSinkColumns` only ever emits the STORE's own spelling of a column it
+ * actually has.
+ */
+function validateCopyMappingShape(node: Node, errors: string[]): void {
+  const rows = node.config['mapping'];
+  if (!Array.isArray(rows)) return;
+  for (const issue of copyMappingShapeIssues(rows)) {
+    // `path: []` is the cardinality rule — an empty mapping has no row to name —
+    // so it renders as the FIELD, matching how the same issue emerges from
+    // `copyInputSchema` as `['mapping']`. The other arm destructures the tuple
+    // rather than indexing it, so `CopyMappingShapeIssue`'s two-arm union is
+    // what makes this render TOTAL: a third path shape would fail to compile
+    // here rather than print `mapping[0].undefined` at an operator.
+    const where =
+      issue.path.length === 0 ? 'mapping' : `mapping[${issue.path[0]}].${issue.path[1]}`;
+    errors.push(`node.${node.id}.${where}: ${issue.message}`);
+  }
 }
 
 /**

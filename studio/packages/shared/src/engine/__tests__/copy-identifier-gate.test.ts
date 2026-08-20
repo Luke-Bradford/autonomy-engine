@@ -58,7 +58,16 @@ describe('§8 — a copy mapping column name must be a literal identifier', () =
 
   it('names the OFFENDING ROW, not just the node', () => {
     const issues = validateDoc(
-      doc([copyNode([literalRow, literalRow, { ...literalRow, sink: '${params.col}' }])]),
+      doc([
+        copyNode([
+          literalRow,
+          // Distinct sinks: since #1176 two `literalRow`s would ALSO be a
+          // duplicate-sink refusal, which would make the assertion below pass
+          // for a reason that has nothing to do with §8.
+          { ...literalRow, source: 'name', sink: 'name' },
+          { ...literalRow, sink: '${params.col}' },
+        ]),
+      ]),
     );
     expect(issues.join(' ')).toContain('mapping[2].sink');
   });
@@ -87,11 +96,14 @@ describe('§8 — a copy mapping column name must be a literal identifier', () =
   });
 });
 
-describe('§8 gate is identifier-only — a malformed SHAPE is the adapter’s to refuse', () => {
-  // Shape is `copyDispatchInputSchema`'s job: `Node.config` is opaque to this
-  // validator and §13 gives the authoring surface to M8. A second reader of the
-  // shape rules here would be one more thing to keep in step. So each of these
-  // must be a SILENT SKIP — not a throw, and not a refusal.
+describe('the §8 rule is identifier-only — a malformed per-FIELD shape is not its business', () => {
+  // Per-field TYPES are `copyDispatchInputSchema`'s job: `Node.config` is opaque
+  // to this validator, and the canvas schema and the adapter both refuse a type
+  // error legibly. So each of these must be a SILENT SKIP for THIS rule — not a
+  // throw, and not a refusal. (The gate as a whole is no longer identifier-only:
+  // #1176 added the three CROSS-ROW rules, pinned in
+  // `copy-mapping-shape-gate.test.ts`. These fixtures are chosen to be clean
+  // under those too, so a skip here stays a statement about §8.)
   it('skips a mapping that is not an array', () => {
     expect(validateDoc(doc([copyNode({ not: 'an array' })]))).toEqual([]);
     expect(validateDoc(doc([copyNode(undefined)]))).toEqual([]);

@@ -511,6 +511,26 @@ CopyMappingSchema = z.array(
 The XOR is enforced by `superRefine` with a per-element `path`, so an issue names its row rather than
 the whole array (#1087's precedent).
 
+**As built (#1176) — the mapping's cross-row rules are enforced at the WRITE gate, not only on the canvas.**
+
+Three rules hold over the mapping as a whole rather than over any one field: a copy that maps no
+columns, two rows writing one sink column (silent LAST-WINS into the operator's table, and perfectly
+valid SQL), and a row carrying both `source` and `expression`. They were declared in
+`catalog/copy-config.ts` and therefore reached by exactly two things — the canvas Apply pre-check,
+whose own docblock calls itself *"a UX PRE-CHECK, never the gate"*, and the adapter's dispatch parse.
+`validateDoc` is what `createPipelineVersion` funnels every mint through, **git import and a direct
+POST included**, and for a `copy` node it ran the §8 identifier rule alone. So a doc arriving from a
+repo could carry any of the three, validate clean, and fail hours later when a scheduled copy ran.
+
+The three are now declared ONCE (`copyMappingShapeIssues`) and replayed by both, so a rule the canvas
+enforces is a rule the gate enforces. Per-FIELD types deliberately did NOT move: the canvas schema and
+the adapter each refuse a type error legibly, so the gate has nothing to add. Neither did a
+**non-array** `mapping` — it may be a whole-value `${}` resolving to an array at dispatch, and
+refusing it at save time would refuse a working pipeline.
+
+**Behaviour change:** a git import of a repo holding an already-bad copy doc is now REFUSED at import
+rather than imported and failed at run time.
+
 ### 6.2 The coercion matrix
 
 Under-specifying this is how silent data corruption ships. The closed type set is
@@ -703,6 +723,29 @@ exists — save time.
   (`shared/src/schemas/connection.ts:41`, currently only the two hosted LLM kinds). Omit it and
   `deriveSecretStatus` returns `not_required`, so a credential-less `postgres` connection sails
   through the `CONNECTION_NOT_READY` dispatch gate. This is a named build step in M10, not a detail.
+
+**As built (#1127) — the rule is about PROVENANCE, and one carve-out makes that explicit.**
+
+Nothing above is retracted: every bullet is about a name reaching SQL from operator-authored text,
+and all of them stand. What the section did not distinguish is a name that reaches SQL from the
+**store itself**, and the sink implementation had been applying the config rule to both.
+
+`writeSqliteDatasetRows` builds its INSERT column list from `pragma_table_info` on the confined
+database file — the schema's own content, created by the operator's own DDL, never operator input to
+this pipeline. Running it through the `SQL_IDENTIFIER_RE` refusal meant an ordinary sink table with a
+column called `first name`, `total (£)` or `order-id` could not be a copy target at all, which is a
+real gap against the any-to-any intent of `#993` and one CSV headers hit immediately. Those names are
+now `"`-quoted with embedded quotes doubled (`quoteStoreIdentifier`) rather than refused.
+
+**Table and schema names are unchanged and stay refused** — they come from a dataset's `config`, which
+is exactly the operator-authored text this section is about.
+
+The property that makes the carve-out safe is worth stating, because "we relaxed an identifier check"
+deserves an argument under it: **a mapping's authored `sink` name never reaches SQL as written.**
+`resolveSinkColumns` resolves it onto the store's own spelling of a column the store already has, or
+refuses the mapping. So the set of names that can reach the statement is exactly the set the store
+already has, and a relaxed quoting rule cannot widen it. That holds even for a mapping supplied
+through a whole-value `${}`, which is why the save-time gate can leave that shape alone (#1176).
 
 ---
 
@@ -900,17 +943,19 @@ tidiness.** Auto-map's entire output is a mapping the gate will later resolve, s
 fine and the gate then refuses. A button that authors a broken copy is worse than no button.
 
 **The sink dedupe folds case, which is the one defect that would have shipped silently.**
-`refineMapping` dedupes sinks by EXACT string, but the store resolves them folded and refuses the
+`copyMappingShapeIssues` dedupes sinks by EXACT string, but the store resolves them folded and refuses the
 collision ("each sink column may be written by one mapping row"). An exact-only skip list would add
-a second row for `ID` beside an author's `id`, pass `.min(1)`, pass `refineMapping`, pass the write
-gate, mint an immutable version — and fail `permanent` at dispatch, hours later. The same fold
-covers two DECLARED sink columns that collide, since `columns` has no uniqueness refine.
+a second row for `ID` beside an author's `id`, pass every cross-row rule, pass the write gate (#1176
+put the same three rules there, and they compare as strings too — deliberately, since folding is the
+store's answer to give), mint an immutable version — and fail `permanent` at dispatch, hours later.
+The same fold covers two DECLARED sink columns that collide, since `columns` has no uniqueness refine.
 
 **The advisory also names the fold collision an AUTHOR can still type.** Auto-map's own dedupe only
-governs auto-map's output; a hand-typed `id` beside `ID` passes `refineMapping`'s exact-string
-dedupe, saves, and dies `permanent` at dispatch on an immutable version. The coverage check already
+governs auto-map's output; a hand-typed `id` beside `ID` passes the exact-string cross-row
+dedupe on both the canvas and the write gate, saves, and dies `permanent` at dispatch on an immutable version. The coverage check already
 builds the fold set, so it reports the pair — the only place an author can still act on it. An
-EXACT duplicate is deliberately left to `refineMapping`, which refuses it on Apply in better words.
+EXACT duplicate is deliberately left to `copyMappingShapeIssues`, which refuses it on Apply — and, since
+#1176, at the write gate too — in better words.
 
 **§6.3's "trimmed" is DELIBERATELY NOT IMPLEMENTED, and this supersedes that parenthetical.**
 Neither the source resolver nor the store's sink resolver trims. A trimmed match would bind a
