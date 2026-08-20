@@ -18,6 +18,9 @@ import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
+// #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
+// reader rather than duplicated (the macrotask choice is not the obvious one).
+import { yieldToEventLoop } from './scheduling.js';
 import { resolveWithinRoots } from './confine.js';
 import { classifySinkFailure } from './error-kind.js';
 import type {
@@ -269,18 +272,6 @@ function normaliseValue(value: unknown): SqliteValue {
       : value;
   }
   return value as SqliteValue;
-}
-
-/** Yield to the event loop between batches — a MACROTASK, deliberately.
- *
- * Measured, because the tree's existing yield idiom would silently be a no-op
- * here: 200 `queueMicrotask` yields served ZERO pending HTTP requests, while 5
- * `setImmediate` yields served one. A microtask drains before the loop turns, so
- * it does not let I/O in — which is the whole purpose of §9's between-batch
- * yield. `run/launcher.ts`, `run/child.ts` and `scheduler/tumbling.ts` all use
- * `queueMicrotask` correctly for ordering; this is not that. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 /**

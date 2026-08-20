@@ -1,16 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  mkdir,
-  mkdtemp,
-  open,
-  readdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 
 // Mock `node:fs/promises` but pass every export straight through to the real
 // implementation — only `rename` and `open` become spies (real-behaving
@@ -24,9 +13,9 @@ vi.mock('node:fs/promises', async (importActual) => {
   return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
 import type { FileHandle } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fsAdapter } from '../fs.js';
+import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 
 async function drain(iter: AsyncIterable<ActivityEvent>): Promise<ActivityEvent[]> {
@@ -41,18 +30,18 @@ function invoke(c: ActivityContext): AsyncIterable<ActivityEvent> {
   return fsAdapter.runActivity(c, null);
 }
 
-// A canonical (realpath'd) temp root per test — os.tmpdir() is itself a symlink
-// on macOS (/var → /private/var), so canonicalise up front to compare like-for-like.
+// Canonical (realpath'd) temp roots per test, from the shared helper — the
+// `realpath` matters because os.tmpdir() is itself a symlink on macOS
+// (/var → /private/var), so an uncanonicalised root never contains the paths
+// resolved under it. This was the inline copy `sqlite-fixtures.ts`'s docblock
+// named; #1165 retired it into `temp-roots.ts`.
 let root: string;
 let outside: string;
-beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), 'fs-conn-root-')));
-  outside = await realpath(await mkdtemp(join(tmpdir(), 'fs-conn-out-')));
+beforeEach(() => {
+  root = tempRoot('fs-conn-root-');
+  outside = tempRoot('fs-conn-out-');
 });
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-  await rm(outside, { recursive: true, force: true });
-});
+afterEach(cleanupTempRoots);
 
 function ctx(
   activityType: string,
