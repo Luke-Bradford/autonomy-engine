@@ -525,10 +525,15 @@ function buildTriggerWriteInput(
  * `labelRowPaths` — rewrite the path to name what is on screen, rather than
  * inventing a second error channel.
  *
- * That `WorkspaceApplyError` itself answers as a message-less 500 is a real
- * defect, and a wider one than this ticket (it covers ten other throw sites, and
- * `createConnection`/`createPipeline` have the same unattributed-`ZodError` hole
- * this closes for triggers). It is filed rather than widened into here.
+ * The wider defect this once deferred — `WorkspaceApplyError` answering as a
+ * message-less 500, and `createConnection`/`createPipeline` carrying the same
+ * unattributed-`ZodError` hole — was #1110, and is now FIXED (see
+ * `WorkspaceApplyFault` and `attributedTo` below). This gate survives that fix
+ * rather than folding into it, and the reason is not obvious: `attributedTo`
+ * would attribute `createTrigger`'s own parse just as well, but the UPDATE path
+ * goes through `updateTrigger`, which validates against the LENIENT stored
+ * `TriggerSchema` — only this strict `NewTriggerSchema` pre-gate refuses the
+ * corrupt `concurrency` #1091 was filed for. Deleting it reopens that hole.
  *
  * The apply is NOT continued past a bad trigger: it is one transaction, so a
  * refusal leaves the target untouched, and a partial import is not a state this
@@ -559,9 +564,11 @@ function labelIssuePaths(error: ZodError, label: string): ZodError {
  * #1110 — run one branch file's repo write, attributing any `ZodError` it throws
  * to that file.
  *
- * `createConnection`/`createDataset`/`createPipeline` and their `update*` twins
- * all `.parse(...)` internally and throw a bare `ZodError` whose issue paths name
- * a schema field and nothing else. Inside an apply of N branch files that is
+ * `createConnection`/`createDataset`/`createPipeline`/`createPipelineVersion` and
+ * their `update*` twins all `.parse(...)` internally and throw a bare `ZodError`
+ * whose issue paths name a schema field and nothing else. (The wrapper is generic
+ * over all of them; the tests pin one CREATE path per resource plus one UPDATE
+ * path, which is what distinguishes the two predicates — see below.) Inside an apply of N branch files that is
  * unactionable: the operator is told `config.baseUrl: Required` with no way to
  * know which of their committed files is wrong. This wraps the CALL rather than
  * pre-gating it, because the UPDATE paths validate a MERGED row through the full
@@ -577,6 +584,17 @@ function labelIssuePaths(error: ZodError, label: string): ZodError {
  * Only `ZodError` is re-thrown re-pathed. Everything else — `WorkspaceApplyError`,
  * `InvalidPipelineDocError` (which carries its own attribution) — passes through
  * untouched.
+ *
+ * LIMIT, stated because the rest of this module is careful about exactly this.
+ * `label` says WHICH BRANCH FILE WAS BEING APPLIED, not that the offending field
+ * came off it. The write objects also carry server-supplied fields the branch
+ * never names (`ownerId`, `secretRef: null`, `pipelineId`, `sourceCommit`,
+ * `sourceBranch`, `sourceFilePath`, `sourceBlobSha`), so an internal bug
+ * producing a malformed one of THOSE would be re-pathed as if the operator's file
+ * were at fault — the very confusion `WorkspaceApplyFault` exists to prevent on
+ * the other channel, which this one has no equivalent of. Not a regression (it is
+ * `gateTriggerWrite`'s pre-existing shape, widened to the sibling resources), and
+ * unreachable without such a bug, but it is a real gap: #1137.
  */
 function attributedTo<T>(label: string, write: () => T): T {
   try {

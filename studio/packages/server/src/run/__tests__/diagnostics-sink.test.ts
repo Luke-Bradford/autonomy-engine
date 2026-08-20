@@ -210,11 +210,18 @@ describe('#497 — the reducer diagnostics sink', () => {
     // was all of them" (the F13a/#473 rule).
     const marker = found.filter((d) => d.phase === 'cap');
     expect(marker).toHaveLength(1);
-    /* #1069 — the WHOLE sentence, from the one shared export both this and the
-       web assertions now read. Asserting a prefix was what let the web copy drop
-       the closing "(see the diagnostics below)" clause unnoticed — and that
-       clause is a claim about LAYOUT (the marker renders ABOVE the list it
-       qualifies), so losing it silently unpins the property it states. */
+    /* #1069 — two assertions pinning two DIFFERENT things, which is why neither
+       replaces the other.
+
+       The first pins the WIRING: the writer emits exactly what the one shared
+       export produces at exactly this cap. It says nothing about the sentence's
+       content (both sides call the same function), and is not meant to — it is
+       what makes "one source, imported by both" a checked property.
+
+       The second pins the CONTENT, against a hardcoded literal, because the
+       clause is a claim about LAYOUT: the marker renders ABOVE the list it
+       qualifies. Dropping it is precisely how the web copy drifted, and only a
+       literal can catch the shared template itself being edited. */
     expect(marker[0]!.message).toBe(capMarkerMessage(RUN_DIAGNOSTIC_CAP));
     expect(marker[0]!.message).toContain('(see the diagnostics below).');
     // It sorts FIRST, so a reader learns the list is incomplete before reading it.

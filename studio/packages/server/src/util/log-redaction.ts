@@ -41,9 +41,16 @@
  * `x-webhook-timestamp`/`x-webhook-signature` HEADERS and `triggerId` is a
  * non-secret id; `/api/workspace/git/token` takes its token in the POST BODY;
  * `/api/triggers/:id/webhook-secret` and `GET /api/runs/:id/external-waits` reveal
- * secrets in a RESPONSE BODY — a channel of its own, closed by #925 with
- * `routes/util.ts`'s `noStore` on exactly those two. THAT LIST AND THIS ONE ARE THE
- * SAME LIST: a new credential-revealing route must be added to both. Headers and bodies are
+ * secrets in a RESPONSE BODY — a channel of its own, closed separately by #925
+ * with `routes/util.ts`'s `noStore` on exactly those two.
+ *
+ * That set and THIS one are DIFFERENT lists, deliberately, and conflating them
+ * would send the next route to the wrong array: this array holds routes whose
+ * secret is in their own URL (one — the callback seam), `noStore`'s holds routes
+ * whose secret is in their response body (two — neither of them this one). What
+ * the two share is the ENUMERATION: "where does a credential travel?" has to be
+ * re-answered for both channels when a route is added, and a route can easily
+ * belong to one, both, or neither. Headers and bodies are
  * not logged by Fastify's serializers, so the URL path is the only leaking channel
  * here — and this is the only path that carries a secret through it.
  *

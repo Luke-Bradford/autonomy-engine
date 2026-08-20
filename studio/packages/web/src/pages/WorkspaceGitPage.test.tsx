@@ -1379,10 +1379,15 @@ describe('WorkspaceGitPage', () => {
     });
 
     /**
-     * `WorkspaceApplyError` reaches the client as a bare 500 "An unexpected
-     * error occurred", which leaves the only question that matters unanswered.
-     * The apply and the import-base stamp share one transaction, so the answer
-     * is assertable rather than hoped for.
+     * A thrown import leaves the only question that matters unanswered: did it
+     * change anything? The apply and the import-base stamp share one
+     * transaction, so the answer is assertable rather than hoped for.
+     *
+     * The 500 mocked below is the GENERIC fallback path, not `WorkspaceApplyError`
+     * specifically — since #1110 a `conflict`-fault apply refusal answers 409 with
+     * its message, and only an `internal` fault still lands here. What this pins is
+     * the page's behaviour when the server says nothing useful, whatever produced
+     * that.
      */
     it('states that a thrown import changed nothing and did not move the base', async () => {
       await renderConnected();

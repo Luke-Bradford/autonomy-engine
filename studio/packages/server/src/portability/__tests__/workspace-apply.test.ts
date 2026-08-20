@@ -2147,4 +2147,45 @@ describe('#1110 — a refused apply says what to fix', () => {
     // Atomic: the original row is untouched.
     expect(listConnections(db, 'local')[0]!.name).toBe('My Conn');
   });
+
+  /**
+   * The third resource, so the wrapper is proven per-KIND and not only per-path:
+   * the label is built from `inc.path` inside each applier's own loop, so a kind
+   * whose loop forgot to pass it would attribute to the wrong file — or to
+   * `undefined` — with nothing else failing.
+   */
+  it('attributes a corrupt branch DATASET file to its path', () => {
+    const src = freshDb().db;
+    const store = createConnection(src, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    createDataset(src, {
+      ownerId: 'local',
+      name: 'Src',
+      connectionId: store.id,
+      kind: 'table',
+      config: {},
+      columns: [],
+    });
+    const incoming = snapshot(src);
+    incoming.datasets[0]!.data.name = '';
+
+    const tgt = freshDb().db;
+    let thrown: unknown;
+    try {
+      applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`dataset ${incoming.datasets[0]!.path}.name`);
+    // Atomic: the connection that applies BEFORE datasets is rolled back too.
+    expect(listDatasets(tgt, 'local')).toHaveLength(0);
+    expect(listConnections(tgt, 'local')).toHaveLength(0);
+  });
 });
