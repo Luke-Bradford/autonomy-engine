@@ -110,6 +110,35 @@ describe('activity catalog', () => {
     }
   });
 
+  it('M5 slice 4a (#1130): NO activity declares a dataset binding, so datasetIds stays inert', () => {
+    // The same load-bearing pin as the sink one above, for the same reason: M3's
+    // deliberate NO-BUMP in `schemas/version.ts` rests on nothing here declaring
+    // `datasetKinds`, so a doc carrying `Node.datasetIds` runs identically on a
+    // pre-M3 build. `copy` (slice 4b) is the first entry to declare one and owes
+    // the CATALOG_VERSION bump — this test is what makes that ticket notice.
+    const bound = [...catalog.values()]
+      .filter((entry) => entry.datasetKinds !== undefined)
+      .map((entry) => entry.type);
+    expect(bound).toEqual([]);
+  });
+
+  it('a declared datasetKinds list is non-empty, and a sink one implies a sink connection', () => {
+    // `[]` cannot mean "not dataset-bound" — absence already does — so it would
+    // have to mean "dataset-bound, but no kind is ever valid", an entry every
+    // dispatch refuses with DATASET_KIND_INVALID.
+    //
+    // `sink` is OPTIONAL (M12's `lookup` reads a source only), but a sink DATASET
+    // with no sink CONNECTION names a store that does not exist, so declaring one
+    // implies the other.
+    for (const entry of catalog.values()) {
+      if (entry.datasetKinds === undefined) continue;
+      expect(entry.datasetKinds.source.length).toBeGreaterThan(0);
+      if (entry.datasetKinds.sink === undefined) continue;
+      expect(entry.datasetKinds.sink.length).toBeGreaterThan(0);
+      expect(entry.sinkConnectionKinds?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
   it('llm_call binds the LLM provider kinds plus agent_cli (CLI/subscription, #2 L14b)', () => {
     expect(getActivity('llm_call')!.connectionKinds).toEqual([
       'anthropic_api',

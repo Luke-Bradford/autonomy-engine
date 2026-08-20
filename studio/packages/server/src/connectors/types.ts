@@ -1,5 +1,11 @@
 import type { z } from 'zod';
-import type { ConnectionKind, MeteringStatus, WarningCode } from '@autonomy-studio/shared';
+import type {
+  ConnectionKind,
+  DatasetColumn,
+  DatasetKind,
+  MeteringStatus,
+  WarningCode,
+} from '@autonomy-studio/shared';
 
 /**
  * P3 — the CONNECTOR ADAPTER contract (target-architecture "connector model").
@@ -42,6 +48,36 @@ export type ConnectorErrorKind = 'auth' | 'rate_limit' | 'transient' | 'permanen
  * so `ctx` is safe to log. `input` is the node's already-`${}`-substituted config
  * (`preparedInput`, secrets stripped upstream at `resolveRunParams`).
  */
+/**
+ * M5 slice 4a (#1130) — one end of a dataset-bound dispatch, already resolved:
+ * the row existed, the run owns it, its `kind` is one the activity declares, and
+ * its store is the connection the node bound for that side.
+ *
+ * A PROJECTION of `Dataset`, not the row: `ownerId`/`resourceId`/timestamps are
+ * server bookkeeping an adapter has no business reading, and `connectionId` is
+ * omitted because the executor has already proved it equals the bound
+ * connection — carrying it would invite an adapter to re-derive a store from it
+ * and bypass the resolution that made it safe.
+ *
+ * `columns` is the DECLARED schema and is carried for the authoring-side rules
+ * that need it (slice 4b's `onError:'null'` vs `nullable:false` refusal, which
+ * needs the target's nullability). It is emphatically NOT the sink's write
+ * column list: spec §7 gates the node's MAPPING against the store's ACTUAL
+ * columns and says in as many words that the declared schema is deliberately not
+ * the gate, because a stale declaration must neither block a copy that would
+ * succeed nor bless one that would fail. `writeSqliteDatasetRows` discovers the
+ * real columns itself; feeding it these would conflate schemas (1) and (3).
+ */
+export interface ResolvedDataset {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: DatasetKind;
+  /** The dataset's kind-specific, NON-SECRET options. Re-validated by the adapter. */
+  readonly config: Record<string, unknown>;
+  /** The DECLARED schema (spec §7 schema (1)) — an authoring aid, never the drift gate. */
+  readonly columns: readonly DatasetColumn[];
+}
+
 export interface ActivityContext {
   runId: string;
   nodeId: string;
@@ -82,6 +118,28 @@ export interface ActivityContext {
    * M1. The six existing adapters ignore it.
    */
   sink?: { kind: ConnectionKind; connectionConfig: Record<string, unknown> };
+  /**
+   * M5 slice 4a (#1130, data-movement spec §3) — the resolved DATASETS this
+   * dispatch addresses, for an activity whose catalog entry declares
+   * `datasetKinds`. A connection says WHICH STORE; a dataset says WHERE IN IT.
+   *
+   * OMITTED entirely (not present-undefined) for every activity that is not
+   * dataset-bound, so `'datasets' in ctx` stays an honest test — M1's stated
+   * rule for `sink`, kept rather than restated differently.
+   *
+   * `sink` is optional within it because M12's `lookup` reads a source only; the
+   * catalog's `datasetKinds` is the SSOT for which sides an activity has, and
+   * this shape mirrors it.
+   *
+   * Why the sink's facts arrive across TWO keys — `sink` above (the store's
+   * connection) and `datasets.sink` here (the address in it). They are two
+   * different resolutions with two different lifetimes: the connection is
+   * decrypted and readiness-gated, the dataset is a plain row. Folding the
+   * dataset inside `sink` would also make `'sink' in ctx` mean two things at
+   * once, and would have to grow a second meaning again for a source-only
+   * reader that has no sink connection at all.
+   */
+  datasets?: { source: ResolvedDataset; sink?: ResolvedDataset };
   /** Aborts in-flight work (run cancel / server shutdown). */
   signal: AbortSignal;
 }

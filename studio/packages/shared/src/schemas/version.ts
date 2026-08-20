@@ -250,8 +250,8 @@
 // NO BUMP for M3 (#1117) either, recorded for the same reason and on the same
 // argument. `NodeSchema.datasetIds` (the paired source/sink dataset ADDRESS) is
 // additive and INERT *at dispatch*: no catalog entry declares a dataset, so
-// neither the executor nor the readiness gate reads it, and the reducer does not
-// resolve it — a doc authored here runs identically on a pre-M3 build. As with
+// neither the executor nor the readiness gate reads it — a doc authored here
+// runs identically on a pre-M3 build. As with
 // M1, the save-time validator DOES read it (`engine/params.ts` scans both ends
 // and refuses it on a call node), which is not a counter-example: a save-time
 // refusal cannot make a stored doc run differently, and that is the only
@@ -259,9 +259,20 @@
 // ("does an EXPORT now carry an artifact an older build would MIS-RUN") and the
 // answer is no — a pre-M3 build drops the key and dispatches exactly as it
 // would have without it. Bumping would refuse imports that cannot differ.
-// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5), the first
-// catalog entry to declare a dataset, makes the field load-bearing and owes the
-// bump. One bump covers both fields; they become load-bearing together.
+// AMENDED by M5 slice 4a (#1130), and the amendment is the point: this entry
+// also used to say "and the reducer does not resolve it". Slice 4a falsifies that
+// clause — `prepDispatch` now resolves the pair onto `resolvedDatasetIds`. The
+// VERDICT survives untouched, because the reducer resolving a field is not what
+// makes a doc run differently: the resolved pair is EPHEMERAL (re-derived per
+// reduce, never persisted) and the EXECUTOR still ignores it, since no catalog
+// entry declares `datasetKinds`. A pre-M3 build still drops the key and
+// dispatches identically. The clause is struck rather than left standing because
+// a ledger whose stated reasons have quietly stopped being true cannot be
+// audited, which is the one job it has.
+// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5 slice 4b),
+// the first catalog entry to declare BOTH `sinkConnectionKinds` and
+// `datasetKinds`, makes the fields load-bearing and owes the bump. One bump
+// covers both; they become load-bearing together.
 // CATALOG_VERSION 22 (#1119 M4): the `sqlite` STORE connection kind.
 // A BUMP, and the ledger already settled why a kind is different in kind from a
 // field: bump 8 was taken for `fs` on exactly this argument — a new

@@ -16,6 +16,7 @@ import {
   WARNING_CODES,
   type ActivityCatalog,
   type ConnectionKind,
+  type DatasetKind,
   type EngineEvent,
   type FailureKind,
   type Node,
@@ -24,6 +25,7 @@ import {
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
+import { getDataset } from '../repo/datasets.js';
 import { getConnectionQuotaResetEpoch } from '../repo/connection-quota.js';
 import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
@@ -32,7 +34,12 @@ import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
 import { emptyTruncationWarning } from '../connectors/llm-shared.js';
-import type { ActivityContext, ConnectorAdapter, LlmUsage } from '../connectors/types.js';
+import type {
+  ActivityContext,
+  ConnectorAdapter,
+  LlmUsage,
+  ResolvedDataset,
+} from '../connectors/types.js';
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
 import type { ChildRuns } from './child.js';
 
@@ -540,26 +547,129 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /**
-   * M1 (#1104) — attach the source/sink `side` to a `resolveConnection` failure,
-   * for a PAIRED activity only. The ONE place the label is applied, so a new
-   * error return inside `resolveConnection` cannot ship unlabelled.
+   * M5 slice 4a (#1130, data-movement spec §3.1) — resolve ONE end of a
+   * dataset-bound dispatch: the node's dataset ref becomes a checked address, or
+   * a labelled refusal.
+   *
+   * The ladder mirrors `resolveConnection`'s above step for step, and the shared
+   * shape is the point — a dataset ref follows `connectionId`'s rules by
+   * settlement (§3.1), so a second, differently-ordered set of checks would be a
+   * divergence to maintain rather than a feature. Like connections, this runs at
+   * DISPATCH and not at save: datasets are MUTABLE rows, so a save-time check
+   * would go stale, and the ref may itself be a `${}` expression whose target is
+   * unknowable at save.
+   *
+   * `datasetId` is the value the REDUCER resolved (`command.resolvedDatasetIds`),
+   * never `node.datasetIds` — that raw field may be a template this module has
+   * no run env to resolve. `undefined` ⟺ the node named no dataset at all; a
+   * `${}` that resolved to `''` is bound-but-empty and falls to NOT_FOUND, the
+   * same split `resolveConnection` documents.
+   */
+  function resolveDataset(
+    datasetId: string | undefined,
+    kinds: readonly DatasetKind[],
+    activityType: string,
+    ownerId: string | null,
+    boundConnectionId: string | undefined,
+  ): { error: string; code: string } | { dataset: ResolvedDataset } {
+    if (datasetId === undefined) {
+      return {
+        error: `activity '${activityType}' requires a dataset but the node has none`,
+        code: FAILURE_CODES.DATASET_MISSING,
+      };
+    }
+    const dataset = getDataset(deps.db, datasetId);
+    // Owner authorization (authn is not authz), on `resolveConnection`'s exact
+    // argument: `datasetId` derives from run params via a `${}` ref, which a
+    // trigger's param bindings can influence, so a bare id lookup would let a run
+    // steer a copy onto ANOTHER owner's dataset — and, since the dataset carries
+    // the table name, read or overwrite their data. A cross-owner hit folds into
+    // NOT_FOUND rather than a distinct "forbidden", which would confirm the id
+    // names a real dataset (enumeration-resistant, fail-closed).
+    if (dataset === null || (dataset.ownerId !== null && dataset.ownerId !== ownerId)) {
+      return {
+        error: `dataset '${datasetId}' not found`,
+        code: FAILURE_CODES.DATASET_NOT_FOUND,
+      };
+    }
+    if (!kinds.includes(dataset.kind)) {
+      return {
+        error: `dataset kind '${dataset.kind}' is not valid for activity '${activityType}' (expected: ${kinds.join(', ')})`,
+        code: FAILURE_CODES.DATASET_KIND_INVALID,
+      };
+    }
+    // The agreement check. A node binds a connection pair (M1) AND a dataset pair
+    // (M3), and the dataset independently names the store it lives in — so until
+    // this ran, the two could contradict each other and nothing would say so. The
+    // copy would then read the dataset's table out of the NODE's store: the right
+    // shape, the wrong data, silently. Refused rather than resolved in either
+    // direction, because neither ref is obviously subordinate to the other and
+    // guessing is what produces the silent-wrong run.
+    //
+    // The node's binding stays the one the ADAPTER runs on: it is what the
+    // two-sided readiness gate reads statically (`connection-readiness.ts`) and
+    // what the secret side-channel decrypts. This check makes the dataset agree
+    // with that, rather than replacing it.
+    //
+    // `undefined` REFUSES rather than skipping, and the polarity is the point.
+    // It is unreachable today — both call sites pass an id that already survived
+    // `resolveConnection` — but a guard that silently admits a mismatched store
+    // when it cannot see the bound one is fail-OPEN, which is the one direction
+    // this codebase never leaves available to a later change.
+    if (boundConnectionId === undefined || dataset.connectionId !== boundConnectionId) {
+      return {
+        error:
+          boundConnectionId === undefined
+            ? `dataset '${datasetId}' lives in connection '${dataset.connectionId}', but the node bound no connection for this side`
+            : `dataset '${datasetId}' lives in connection '${dataset.connectionId}', but the node bound connection '${boundConnectionId}' for this side`,
+        code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
+      };
+    }
+    return {
+      dataset: {
+        id: dataset.id,
+        name: dataset.name,
+        kind: dataset.kind,
+        config: dataset.config,
+        columns: dataset.columns,
+      },
+    };
+  }
+
+  /**
+   * M1 (#1104) — attach the source/sink `side` to a pre-flight resolution
+   * failure, for a PAIRED activity only. The ONE place the label is applied, so
+   * a new error return inside `resolveConnection` (or, since slice 4a,
+   * `resolveDataset`) cannot ship unlabelled.
    *
    * Both a structured field AND the human message: the field is the contract
    * (`node.failed.side`, machine-readable beside `code`, never string-matched);
    * the message keeps the existing run-log surface honest before a UI ticket
    * renders the field, since "connection 'x' not found" on a node bound to two
    * connections names neither.
+   *
+   * M5 slice 4a (#1130) — `ref` names WHICH pair, because a node now binds two
+   * of them. Hardcoding "connection" here (as this did) would have prefixed a
+   * dataset refusal with the wrong noun on precisely the support surface the
+   * label exists to fix: "sink connection: dataset 'ds' not found" reads as a
+   * connection fault. It is a parameter rather than a second helper so the
+   * "ONE place the label is applied" property survives the widening.
    */
   function labelSide<T extends { error: string }>(
     failure: T,
     side: 'source' | 'sink',
+    ref: 'connection' | 'dataset',
   ): T & { side: 'source' | 'sink' } {
-    return { ...failure, side, error: `${side} connection: ${failure.error}` };
+    return { ...failure, side, error: `${side} ${ref}: ${failure.error}` };
   }
 
   /**
-   * The ONE constructor for a `node.failed` from a `resolveConnection` refusal,
-   * so the source and sink call sites cannot drift on how a failure is shaped.
+   * The ONE constructor for a `node.failed` from a PRE-FLIGHT resolution refusal
+   * — `resolveConnection`'s and, since slice 4a, `resolveDataset`'s — so the
+   * source and sink call sites cannot drift on how a failure is shaped. It was
+   * named for connections alone; the rename is the point, since a dataset
+   * refusal now flows through it and a name that claimed otherwise would invite
+   * a second near-identical constructor.
    *
    * Most pre-flight failures are PERMANENT (a config typo does not self-heal);
    * the #2 L14c admission gate is the one transient case, carrying its own
@@ -567,14 +677,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * path exactly like an adapter-reported `rate_limit`. `side` is applied here
    * for a PAIRED activity only — an unpaired failure must not claim an end.
    */
-  function connectionFailure(
+  function preflightFailure(
     runId: string,
     nodeId: string,
     attemptId: string,
     failure: { error: string; code: string; kind?: FailureKind; retryAfterSeconds?: number },
     side: 'source' | 'sink' | undefined,
+    ref: 'connection' | 'dataset',
   ): EngineEvent {
-    const labelled = side === undefined ? failure : labelSide(failure, side);
+    const labelled = side === undefined ? failure : labelSide(failure, side, ref);
     return nodeFailed(runId, nodeId, attemptId, {
       error: labelled.error,
       kind: failure.kind ?? 'permanent',
@@ -906,6 +1017,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // paired node would hand the driver `undefined` and its window write would
     // silently no-op — the fail-open shape the reset-epoch split exists to avoid.
     let dispatchedConnectionId: string | undefined;
+    // M5 slice 4a (#1130) — the resolved DATASET pair, for an activity whose
+    // catalog entry declares `datasetKinds`. `undefined` for every activity that
+    // is not dataset-bound (all of them at 4a — `copy` lands at 4b).
+    let datasets: { source: ResolvedDataset; sink?: ResolvedDataset } | undefined;
     if (entry.connectionKinds.length > 0) {
       // M1 — a PAIRED activity is one the CATALOG declares a sink for. Read from
       // the catalog, never inferred from the node: a stray `connectionIds` on a
@@ -929,7 +1044,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         paired ? undefined : command.resolvedConnectionParams,
       );
       if ('error' in resolved) {
-        yield connectionFailure(runId, nodeId, attemptId, resolved, paired ? 'source' : undefined);
+        yield preflightFailure(
+          runId,
+          nodeId,
+          attemptId,
+          resolved,
+          paired ? 'source' : undefined,
+          'connection',
+        );
         return;
       }
       ({ adapter, secret, connectionConfig } = resolved);
@@ -945,7 +1067,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           undefined,
         );
         if ('error' in resolvedSink) {
-          yield connectionFailure(runId, nodeId, attemptId, resolvedSink, 'sink');
+          yield preflightFailure(runId, nodeId, attemptId, resolvedSink, 'sink', 'connection');
           return;
         }
         // The sink's ADAPTER is deliberately discarded: the SOURCE adapter is the
@@ -971,6 +1093,97 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.NO_EXECUTOR,
       });
       return;
+    }
+
+    // M5 slice 4a (#1130) — resolve the DATASET pair, AFTER both connections and
+    // BEFORE `node.dispatched`.
+    //
+    // After, because the agreement check needs the connection ids the node bound;
+    // before, because this module's load-bearing ordering is that every PURE READ
+    // precedes the durable dispatch event, so an address error fails the node
+    // while it is still `ready`, with no spurious `node.dispatched` to reconcile
+    // on boot. Both halves are deliberate, not incidental placement.
+    //
+    // Read from the CATALOG, never inferred from the node — `sinkConnectionKinds`'
+    // rule verbatim: a node's shape is operator input, so a stray `datasetIds` on
+    // an activity that declares none must not change how that activity
+    // dispatches. It stays inert, exactly as it has been since M3.
+    const datasetKinds = entry.datasetKinds;
+    if (datasetKinds !== undefined) {
+      // Source first, and it SHORT-CIRCUITS the sink — `resolveConnection`'s
+      // stated posture: a node with both ends wrong reports the source only,
+      // rather than doing work for a dispatch that cannot happen.
+      //
+      // TWO independent pairings meet here and must not be conflated, which is
+      // why neither is called just `paired`. A node's CONNECTION pairing decides
+      // where the bound store id comes from; its DATASET pairing decides whether
+      // a refusal may claim an end. A source-only `lookup` (M12) is dataset-
+      // UNPAIRED while still being connection-single, and a `copy` is both.
+      const connectionPaired = entry.sinkConnectionKinds !== undefined;
+      const sinkDatasetKinds = datasetKinds.sink;
+      const datasetPaired = sinkDatasetKinds !== undefined;
+      const resolvedSourceDs = resolveDataset(
+        command.resolvedDatasetIds?.source,
+        datasetKinds.source,
+        node.type,
+        ownerId,
+        connectionPaired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
+      );
+      if ('error' in resolvedSourceDs) {
+        // Labelled ONLY when the dataset binding is genuinely a pair — M1's rule
+        // for the connection ladder, followed here rather than diverged from: an
+        // unpaired failure must not claim an end. A source-only activity has no
+        // sink dataset for `side:'source'` to contrast with, so the label would
+        // point an operator at a second ref that does not exist.
+        yield preflightFailure(
+          runId,
+          nodeId,
+          attemptId,
+          resolvedSourceDs,
+          datasetPaired ? 'source' : undefined,
+          'dataset',
+        );
+        return;
+      }
+      datasets = { source: resolvedSourceDs.dataset };
+      // A SOURCE-ONLY activity (M12 `lookup`) declares no sink kinds, so it has
+      // no sink dataset to resolve and its `datasetIds.sink` — which `NodeSchema`
+      // still requires today — is inert, on the same "the catalog decides"
+      // argument as above.
+      if (sinkDatasetKinds !== undefined) {
+        const resolvedSinkDs = resolveDataset(
+          command.resolvedDatasetIds?.sink,
+          sinkDatasetKinds,
+          node.type,
+          ownerId,
+          command.resolvedConnectionIds?.sink,
+        );
+        if ('error' in resolvedSinkDs) {
+          yield preflightFailure(runId, nodeId, attemptId, resolvedSinkDs, 'sink', 'dataset');
+          return;
+        }
+        // The self-copy refusal, checked here because this is the one place both
+        // resolved ends coexist. It is a DATA-LOSS guard: an `overwrite` sink
+        // DELETEs inside the write transaction while the reader is still
+        // streaming the same table, so a self-copy destroys the rows it was asked
+        // to move. Unlabelled by side deliberately — neither end is at fault, the
+        // PAIR is, and labelling one would send an operator to fix the wrong ref.
+        if (resolvedSinkDs.dataset.id === resolvedSourceDs.dataset.id) {
+          yield preflightFailure(
+            runId,
+            nodeId,
+            attemptId,
+            {
+              error: `source and sink name the same dataset '${resolvedSourceDs.dataset.id}' — a copy cannot read and overwrite one address`,
+              code: FAILURE_CODES.DATASET_SELF_COPY,
+            },
+            undefined,
+            'dataset',
+          );
+          return;
+        }
+        datasets = { source: resolvedSourceDs.dataset, sink: resolvedSinkDs.dataset };
+      }
     }
 
     // Resolve config-sink `{$secret}` markers (item 7 / S3) in the PRE-FLIGHT,
@@ -1019,6 +1232,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // M1 (#1104) — omitted (not present-undefined) for a single-connection
       // activity, so `'sink' in ctx` stays an honest test of "is this paired".
       ...(sink !== undefined ? { sink } : {}),
+      // M5 slice 4a (#1130) — OMITTED, not present-undefined, for every activity
+      // that is not dataset-bound, so `'datasets' in ctx` stays an honest test.
+      // M1's rule for `sink` directly above, followed rather than re-invented.
+      ...(datasets !== undefined ? { datasets } : {}),
       signal: controller.signal,
     };
     const events = await limit(() =>
