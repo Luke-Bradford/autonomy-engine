@@ -4,8 +4,11 @@ import { getActivity } from '@autonomy-studio/shared';
 import {
   assembleConfig,
   deriveConfigFields,
+  deriveFieldsWithCarried,
   formatFieldValue,
+  parseConfigText,
   parseFieldInput,
+  readConfigDraft,
   unrepresentableFields,
   type ConfigField,
 } from './configForm';
@@ -345,5 +348,122 @@ describe('assembleConfig', () => {
     const result = assembleConfig({}, withNum, { url: 'u', body: '', n: 'abc' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toMatch(/^n: /);
+  });
+});
+
+describe('parseConfigText (#1088 item 1)', () => {
+  it('reads empty text as an empty config rather than refusing it', () => {
+    expect(parseConfigText('   ')).toEqual({ ok: true, config: {} });
+  });
+
+  it('refuses a JSON value that is not an object', () => {
+    // A bare array parses as JSON and would spread into a config that silently
+    // held numeric keys, so the shape check is separate from the parse.
+    for (const text of ['[1,2]', '"str"', 'null', '7']) {
+      const result = parseConfigText(text);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain('must be a JSON object');
+    }
+  });
+
+  it('carries the parser’s own words through on a syntax error', () => {
+    const result = parseConfigText('{ nope');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/^Invalid config JSON: /);
+  });
+});
+
+describe('deriveFieldsWithCarried', () => {
+  const KINDS = ['a', 'b'] as const;
+  const SCHEMAS = {
+    a: z.object({ shared: z.string(), onlyA: z.string().optional() }),
+    b: z.object({ shared: z.string(), onlyB: z.number() }),
+  };
+  const schemaFor = (kind: (typeof KINDS)[number]) => SCHEMAS[kind];
+
+  it('renders a sibling kind’s key only when the stored config actually holds it', () => {
+    const none = deriveFieldsWithCarried(KINDS, schemaFor, 'a', { shared: 'x' });
+    expect(none.carried).toEqual([]);
+    expect(none.fields.map((f) => f.name)).toEqual(['shared', 'onlyA']);
+
+    const carried = deriveFieldsWithCarried(KINDS, schemaFor, 'a', { shared: 'x', onlyB: 1 });
+    expect(carried.carried).toEqual(['onlyB']);
+    expect(carried.fields.map((f) => f.name)).toEqual(['shared', 'onlyA', 'onlyB']);
+  });
+
+  it('forces a carried field OPTIONAL, so blanking it drops the key', () => {
+    // `onlyB` is REQUIRED on kind `b`. Carried onto `a` it must be optional, or
+    // the clearing gesture `assembleConfig` honours would be unreachable and the
+    // residue of a kind switch could only be removed through the JSON editor.
+    const { fields } = deriveFieldsWithCarried(KINDS, schemaFor, 'a', { onlyB: 1 });
+    expect(fields.find((f) => f.name === 'onlyB')?.optional).toBe(true);
+  });
+
+  it('never lists a key twice, and never carries the current kind’s own keys', () => {
+    const { fields, carried } = deriveFieldsWithCarried(KINDS, schemaFor, 'b', {
+      shared: 'x',
+      onlyA: 'y',
+    });
+    expect(fields.map((f) => f.name)).toEqual(['shared', 'onlyB', 'onlyA']);
+    expect(carried).toEqual(['onlyA']);
+    expect(new Set(fields.map((f) => f.name)).size).toBe(fields.length);
+  });
+
+  it('contributes nothing for a kind whose schema is not object-rooted', () => {
+    const loose = (kind: 'a' | 'weird') =>
+      kind === 'a' ? SCHEMAS.a : (z.string() as unknown as z.ZodObject);
+    const { fields } = deriveFieldsWithCarried(['a', 'weird'] as const, loose, 'a', { x: 1 });
+    expect(fields.map((f) => f.name)).toEqual(['shared', 'onlyA']);
+  });
+});
+
+describe('readConfigDraft', () => {
+  const fields: ConfigField[] = [
+    { name: 'url', kind: 'text', optional: false },
+    { name: 'note', kind: 'text', optional: true },
+  ];
+
+  it('reads the FIELDS draft in field mode, preserving keys no field owns', () => {
+    const result = readConfigDraft(
+      false,
+      { config: { url: 'old', extra: 1 }, jsonText: '{"url":"json"}', inputs: { url: 'typed' } },
+      fields,
+    );
+    expect(result).toEqual({
+      ok: true,
+      // `extra` survives because `assembleConfig` starts from the original.
+      config: { url: 'typed', extra: 1 },
+      // `owned` is the declared subset — what a per-kind `refine` should judge.
+      owned: { url: 'typed' },
+    });
+  });
+
+  it('reads the JSON draft in JSON mode, and never the field inputs', () => {
+    // The two drafts DISAGREE here on purpose: reading the wrong one is the
+    // failure this helper exists to make impossible.
+    const result = readConfigDraft(
+      true,
+      { config: { url: 'old' }, jsonText: '{"url":"json"}', inputs: { url: 'typed' } },
+      fields,
+    );
+    expect(result).toEqual({ ok: true, config: { url: 'json' }, owned: { url: 'json' } });
+  });
+
+  it('reports the JSON parse failure in JSON mode and the field failure in field mode', () => {
+    const bad = readConfigDraft(
+      true,
+      { config: {}, jsonText: '{oops', inputs: {} },
+      [{ name: 'n', kind: 'number', optional: true }],
+    );
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.message).toMatch(/^Invalid config JSON: /);
+
+    const badField = readConfigDraft(
+      false,
+      { config: {}, jsonText: '{}', inputs: { n: 'abc' } },
+      [{ name: 'n', kind: 'number', optional: true }],
+    );
+    expect(badField.ok).toBe(false);
+    if (!badField.ok) expect(badField.message).toMatch(/^n: /);
   });
 });
