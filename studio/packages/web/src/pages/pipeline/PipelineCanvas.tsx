@@ -68,7 +68,7 @@ import {
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
-import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import { saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
   conditionOf,
@@ -512,6 +512,23 @@ export function PipelineCanvas({
   );
 
   /**
+   * #1141 — why a save is refused, computed ONCE and read by BOTH buttons that
+   * save the working graph (the toolbar's Save and the conflict banner's
+   * override). `disabled` and `title` are both derived from it, the idiom
+   * `undoReason`/`redoReason`/`arrangeReason` beside it already use, so the two
+   * buttons cannot gate differently — which is exactly what had happened: the
+   * override omitted `issues` and let an invalid doc reach a client-side
+   * `PipelineVersionWriteSchema.parse`, whose throw printed as a raw ZodError.
+   *
+   * The `ready` arm is live for the toolbar button, which exists while the
+   * pipeline is still loading, and inert for the override BY CONSTRUCTION
+   * rather than by luck: `conflict` is only ever set from a 409, which can only
+   * follow a save, which can only follow a load. `setReady` is called exactly
+   * once and only with `true`, so it never goes back.
+   */
+  const saveReason = saveDisabledReason({ saving, ready, issues, previewing });
+
+  /**
    * Save the working graph as a new version, based on `basedOnVersionId`.
    *
    * #904 — the basis is a PARAMETER rather than read from `loaded` inside,
@@ -922,13 +939,12 @@ export function PipelineCanvas({
           <button
             type="button"
             onClick={() => void onSave()}
-            /* Disabled while previewing: Save writes the WORKING graph, which
-               is not what is on screen, so the button would mint a version of
-               something the operator cannot see. */
-            disabled={!canSave({ saving, ready, issues }) || previewing !== null}
-            title={
-              previewing !== null ? 'Leave the preview to save your working graph.' : undefined
-            }
+            /* The named reason, not a hand-written copy of the terms: every
+               refusal this button carries — including "previewing", where Save
+               would otherwise mint a version of a graph the operator cannot see
+               — is stated once in `saveDisabledReason`. */
+            disabled={saveReason !== null}
+            title={saveReason ?? undefined}
           >
             {saving ? 'Saving…' : 'Save version'}
           </button>
@@ -1008,16 +1024,28 @@ export function PipelineCanvas({
               // with the newer head, which is the correct behaviour and not a
               // loop to be short-circuited.
               onClick={() => void saveWith(conflict.id)}
-              // The same guard the Save button carries, for the same reason:
-              // this writes the WORKING graph, which is not what is on screen
-              // while a version is being previewed. Without it, the one route
-              // this banner offers would mint a version of something the
-              // operator cannot see — the very class of surprise write the
-              // ticket is about.
-              disabled={saving || previewing !== null}
-              title={
-                previewing !== null ? 'Leave the preview to save your working graph.' : undefined
-              }
+              // EXACTLY the Save button's gate, from the same expression — not a
+              // second one written to match. Two of its terms are load-bearing
+              // here. `previewing`, because this writes the WORKING graph, which
+              // is not what is on screen while a version is previewed, so the
+              // one route this banner offers would otherwise mint a version of
+              // something the operator cannot see. And `issues` (#1141), because
+              // this button used to be the ONE save path that escaped the badge
+              // gate: an author who hit the 409, then edited the doc into an
+              // invalid state, found Save dead and this one alive, and clicking
+              // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
+              // before the request was even made. Refusing here is not a new
+              // refusal — the write was always going to be refused; it is the
+              // refusal finally being stated where the author can read it.
+              //
+              // It cannot dead-end them, and that is worth saying because it is
+              // the obvious objection. `conflict` is only ever set from the 409
+              // branch, which does not touch the store, so reaching this banner
+              // required a Save — which required `issues` to be empty. Every
+              // issue on screen is therefore an edit made since, and Undo
+              // (live: nothing is previewing or in flight) walks back out.
+              disabled={saveReason !== null}
+              title={saveReason ?? undefined}
             >
               {saveAnywayLabel(conflict.version)}
             </button>

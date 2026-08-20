@@ -7,7 +7,7 @@ import {
   type Param,
 } from '@autonomy-studio/shared';
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
-import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import { canSave, saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
@@ -155,5 +155,61 @@ describe('canSave (#444)', () => {
   it('still refuses while saving, or before the canvas is ready (unchanged)', () => {
     expect(canSave({ ...OK, saving: true })).toBe(false);
     expect(canSave({ ...OK, ready: false })).toBe(false);
+  });
+});
+
+/**
+ * #1141 — the REASON a save is refused, and the single place the refusal lives.
+ *
+ * `canSave` is derived from this, so the two can no longer disagree: before
+ * #1141 the canvas wrote the four-term predicate out by hand at each of the two
+ * buttons that save, and one of them (the conflict banner's override) had been
+ * written with `issues` left out.
+ *
+ * The order mirrors `undoDisabledReason`/`arrangeDisabledReason` — busy, then
+ * previewing, then not-ready, then the control's own availability — so the three
+ * neighbouring controls answer in one grammar.
+ */
+describe('saveDisabledReason (#1141)', () => {
+  const OK = { saving: false, ready: true, issues: [] as string[], previewing: null };
+
+  it('gives no reason when a save can go ahead', () => {
+    expect(saveDisabledReason(OK)).toBeNull();
+  });
+
+  it('names the ISSUES as the reason, and points at the badge list that lists them', () => {
+    // The whole ticket: this arm is what the conflict banner's override was
+    // missing, so an invalid doc reached `PipelineVersionWriteSchema.parse` and
+    // came back as a raw ZodError.
+    const reason = saveDisabledReason({ ...OK, issues: ["node 'c' needs a call config"] });
+    expect(reason).toBe('Fix the 1 validation issue(s) listed below to save.');
+  });
+
+  it('counts the issues rather than saying "some"', () => {
+    expect(saveDisabledReason({ ...OK, issues: ['a', 'b', 'c'] })).toBe(
+      'Fix the 3 validation issue(s) listed below to save.',
+    );
+  });
+
+  it('names the preview, the load and the save in flight', () => {
+    expect(saveDisabledReason({ ...OK, previewing: 2 })).toBe(
+      'Leave the preview to save your working graph.',
+    );
+    expect(saveDisabledReason({ ...OK, ready: false })).toBe('Wait for the pipeline to load.');
+    expect(saveDisabledReason({ ...OK, saving: true })).toBe(
+      'Wait for the save in flight to finish.',
+    );
+  });
+
+  it('answers the BUSY reason first, so a save in flight is never reported as a stale doc', () => {
+    // Reachable: the doc can badge while a save started before the edit is
+    // still in flight. `previewing` x `saving` is NOT reachable (the banner's
+    // Preview button is locked while saving), so no cell here asserts it.
+    expect(saveDisabledReason({ saving: true, ready: true, issues: ['x'], previewing: null })).toBe(
+      'Wait for the save in flight to finish.',
+    );
+    expect(
+      saveDisabledReason({ saving: false, ready: false, issues: ['x'], previewing: null }),
+    ).toBe('Wait for the pipeline to load.');
   });
 });
