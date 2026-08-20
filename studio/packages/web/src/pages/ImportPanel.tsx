@@ -48,13 +48,20 @@ import { pipelinePath } from './author/pipelinePath';
  * operator renders its name as plain text. Pointing a dataset at any existing
  * page would be worse than saying nothing — the single-file route refuses
  * datasets outright (they name a connection that only resolves against a whole
- * workspace), so every destination on offer would reject the file too. When the
- * Manage → Datasets page lands, this becomes a path like the others.
+ * workspace), so every destination on offer would reject the file too.
+ *
+ * The Manage → Datasets page HAS since landed (#1115), and this deliberately
+ * stayed `null` anyway: that page carries no `<ImportPanel>` because the import
+ * route still refuses the kind, so linking to it would send the operator to a
+ * second surface that also cannot take the file — the plausible-looking link
+ * this comment already argues against. It becomes a path like the others when
+ * single-file dataset import lands (#1143), not before.
  */
 const SECTION: Record<ExportKind, { label: string; path: string | null }> = {
   pipeline: { label: 'Author → Pipelines', path: '/author/pipelines' },
   connection: { label: 'Manage → Connections', path: '/manage/connections' },
   trigger: { label: 'Manage → Triggers', path: '/manage/triggers' },
+  // See the note above: the page exists, the import path does not (#1143).
   dataset: { label: 'a dataset', path: null },
 };
 
