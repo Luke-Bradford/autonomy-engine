@@ -2568,13 +2568,18 @@ export function NodePanel({
    * shape that does not exist. A test for it would assert nothing today, so
    * there is not one.
    */
+  // Depends on the MAPPING CELL, not on `inputs`. Every edit in the panel
+  // replaces the whole `inputs` object (`{...prev, [name]: next}`) while leaving
+  // the other keys' identities intact, so keying on the object would recompute
+  // this — and the `mappedRows`/advisory chain below it — on every keystroke in
+  // an unrelated field.
+  const mappingInput = mappingField ? inputs[mappingField.name] : undefined;
   const draftMapping = useMemo(() => {
     if (!mappingField) return null;
-    const raw = inputs[mappingField.name] ?? emptyControlValue(mappingField);
-    const parsed = parseFieldInput(mappingField, raw);
+    const parsed = parseFieldInput(mappingField, mappingInput ?? emptyControlValue(mappingField));
     if (!parsed.ok || parsed.omit || !Array.isArray(parsed.value)) return null;
     return parsed.value as readonly Record<string, unknown>[];
-  }, [mappingField, inputs]);
+  }, [mappingField, mappingInput]);
 
   /**
    * The draft rows that actually claim a sink column.

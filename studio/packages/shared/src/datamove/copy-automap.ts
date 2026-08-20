@@ -85,7 +85,12 @@ export function autoMapMapping(
   const unmatched: string[] = [];
   const alreadyMapped: string[] = [];
   const duplicateDeclared: string[] = [];
-  /** Folds bound by THIS pass — what separates a declared duplicate from an author's row. */
+  /**
+   * Every fold this pass has SEEN, whatever became of it — which is what makes
+   * "an earlier declared column already folded here" answerable independently of
+   * whether that column matched, and keeps it apart from a fold the author's own
+   * mapping claims.
+   */
   const declaredFolds = new Set<string>();
 
   for (const column of sinkColumns) {
@@ -96,12 +101,21 @@ export function autoMapMapping(
     // which is deterministic for a given dataset but is still arbitrary between
     // two columns whose `type`/`nullable` disagree; the loser is reported rather
     // than dropped, because the real defect is the declared list.
-    if (claimed.has(fold)) {
-      if (declaredFolds.has(fold)) duplicateDeclared.push(column.name);
-      else alreadyMapped.push(column.name);
+    //
+    // TESTED FIRST, AND AHEAD OF `claimed`, so it holds for every outcome of the
+    // earlier column — matched, ambiguous or unmatched alike. Deciding this from
+    // `claimed` instead would only catch the matched case (nothing else adds a
+    // fold to it) and would report the twin of an unmatched column a second time
+    // under its own name, when the one thing to fix is the duplicate.
+    if (declaredFolds.has(fold)) {
+      duplicateDeclared.push(column.name);
       continue;
     }
     declaredFolds.add(fold);
+    if (claimed.has(fold)) {
+      alreadyMapped.push(column.name);
+      continue;
+    }
     const resolved = resolveSourceColumn({ source: column.name, onError: 'fail' }, index);
     if (resolved.kind === 'bound') {
       claimed.add(fold);

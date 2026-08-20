@@ -91,6 +91,32 @@ describe('autoMapMapping (#1170, spec §6.3)', () => {
     expect(result.alreadyMapped).toEqual([]);
   });
 
+  it('names a declared duplicate ONCE even where neither twin matches a source', () => {
+    // Follow-up finding on PR #1179. Deciding "is this a declared duplicate"
+    // from `claimed` alone only ever caught the matched case, because nothing
+    // but a bound row adds a fold to `claimed`. Two unmatched twins were then
+    // each reported under their own name — "id, ID have no source column" — when
+    // the single thing to fix is that the list declares the column twice.
+    const result = autoMapMapping([col('other')], [col('id'), col('ID')], []);
+
+    expect(result.rows).toEqual([]);
+    expect(result.unmatched).toEqual(['id']);
+    expect(result.duplicateDeclared).toEqual(['ID']);
+  });
+
+  it('splits the two reasons apart when BOTH apply to the same fold', () => {
+    // The reviewer's case on PR #1179: an author maps `id` once, and the
+    // declared list carries `ID` *and* `Id`. Only the FIRST of those is
+    // something the author's own row claims; the second is the declared list
+    // duplicating itself. Bucketing both as `alreadyMapped` would tell the
+    // author they mapped a column they have never typed.
+    const result = autoMapMapping([col('id')], [col('ID'), col('Id')], ['id']);
+
+    expect(result.rows).toEqual([]);
+    expect(result.alreadyMapped).toEqual(['ID']);
+    expect(result.duplicateDeclared).toEqual(['Id']);
+  });
+
   it('does NOT trim — a declared name with padding is a different column', () => {
     // §6.3's parenthetical says "case-insensitive, trimmed", and the trimmed half
     // is deliberately not implemented: neither the source resolver nor the
