@@ -262,6 +262,14 @@ export async function* runCopyActivity(
     // got NOWHERE — the counters would die with the throw. Emitting them as
     // `output` events first is what makes a partial legible; the executor keeps
     // every buffered event regardless of which terminal follows.
+    //
+    // On the SUCCESS path they would be redundant with `succeeded.outputs`, so
+    // they are emitted here only. §5 also asks for per-batch ticks during a long
+    // copy; those are NOT emitted, and #1135 records why — `runAdapter` buffers
+    // every event until the terminal (`executor.ts:788` collects, `:1283`
+    // yields), so a tick cannot reach anyone before the copy has already
+    // finished. Building the machinery would produce a record identical to the
+    // one below.
     for (const [name, value] of Object.entries(copyOutputs(counters))) {
       yield { type: 'output', name, value };
     }
