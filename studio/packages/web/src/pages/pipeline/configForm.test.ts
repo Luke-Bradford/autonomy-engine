@@ -484,7 +484,7 @@ describe('objectList (#1169)', () => {
       ]);
     });
 
-    it("keeps a cell the row control cannot type as JSON, rather than refusing the row", () => {
+    it('keeps a cell the row control cannot type as JSON, rather than refusing the row', () => {
       const tools = field(fieldsOf('llm_call'), 'tools');
       expect(tools.kind).toBe('objectList');
       expect(tools.elementFields?.find((f) => f.name === 'parameters')?.kind).toBe('json');
@@ -530,7 +530,12 @@ describe('objectList (#1169)', () => {
     });
 
     it('renders each row through the same controls the top-level form uses', () => {
-      expect(formatFieldValue(rows, [{ a: 'one', b: 'x' }, { a: 'two', b: 'y' }])).toEqual({
+      expect(
+        formatFieldValue(rows, [
+          { a: 'one', b: 'x' },
+          { a: 'two', b: 'y' },
+        ]),
+      ).toEqual({
         ok: true,
         value: [
           { a: 'one', b: 'x' },
@@ -587,7 +592,10 @@ describe('objectList (#1169)', () => {
     });
 
     it('names the row AND the column when a cell cannot be read', () => {
-      const parsed = parseFieldInput(required, [{ a: 'one', b: 'x' }, { a: 'two', b: 'bogus' }]);
+      const parsed = parseFieldInput(required, [
+        { a: 'one', b: 'x' },
+        { a: 'two', b: 'bogus' },
+      ]);
       expect(parsed.ok).toBe(false);
       expect(parsed.ok === false && parsed.message).toMatch(/row 2.*b/);
     });
@@ -652,10 +660,14 @@ describe('objectList (#1169)', () => {
     it('DELETES a list the author actually cleared', () => {
       // The other half of the same rule: clearing every row of an optional field
       // is a real gesture, and must not be defeated by the preservation above.
-      const assembled = assembleConfig({ rows: [{ a: 'one', b: 'x' }], mode: 'append' }, optionalFields, {
-        rows: [],
-        mode: 'append',
-      });
+      const assembled = assembleConfig(
+        { rows: [{ a: 'one', b: 'x' }], mode: 'append' },
+        optionalFields,
+        {
+          rows: [],
+          mode: 'append',
+        },
+      );
       expect(assembled.ok && assembled.config).toEqual({ mode: 'append' });
     });
 

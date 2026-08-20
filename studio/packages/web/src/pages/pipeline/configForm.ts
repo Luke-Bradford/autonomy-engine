@@ -38,13 +38,7 @@ import type { z } from 'zod';
 
 /** The controls this form can render. Anything else authors as JSON. */
 export type ConfigFieldKind =
-  | 'text'
-  | 'number'
-  | 'boolean'
-  | 'enum'
-  | 'stringList'
-  | 'json'
-  | 'objectList';
+  'text' | 'number' | 'boolean' | 'enum' | 'stringList' | 'json' | 'objectList';
 
 /**
  * One row of an `objectList` control: the same cell-input map the top-level
@@ -113,9 +107,7 @@ export function sameControlValue(a: FieldInput | undefined, b: FieldInput | unde
       a.every((row, i) => {
         const other = b[i] as ObjectListRow;
         const keys = Object.keys(row);
-        return (
-          keys.length === Object.keys(other).length && keys.every((k) => row[k] === other[k])
-        );
+        return keys.length === Object.keys(other).length && keys.every((k) => row[k] === other[k]);
       })
     );
   }

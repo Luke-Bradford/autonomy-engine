@@ -256,7 +256,6 @@ export function ObjectListControl({
       <span className="object-list-label">{label}</span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {rows.map((row, index) => (
-        // eslint-disable-next-line react/no-array-index-key -- see the docblock
         <div className="contract-row" key={index}>
           {cells.map((cell) => {
             const held = row[cell.name];

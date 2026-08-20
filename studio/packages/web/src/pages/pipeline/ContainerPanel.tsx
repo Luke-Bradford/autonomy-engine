@@ -73,10 +73,7 @@ import { confirmContainerEdit, containerLabels } from './containerRules';
  * A differing key SET counts as different, which is the conservative answer: it
  * only happens when the kind's field list changed, and a re-seed is right then.
  */
-function sameSeededInputs(
-  a: Record<string, FieldInput>,
-  b: Record<string, FieldInput>,
-): boolean {
+function sameSeededInputs(a: Record<string, FieldInput>, b: Record<string, FieldInput>): boolean {
   const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
   return keys.every((k) => k in b && sameControlValue(a[k], b[k]));
