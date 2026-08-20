@@ -69,7 +69,8 @@ import {
  * to do: `CopyIo` has no coercion channel today (`copy.ts` calls the pump with
  * `{ mapping, counters }` and nothing else).
  *
- * **`config.maxBytes` is NOT applied**, and an operator who set it will
+ * **The `fs` CONNECTION's `maxBytes` is NOT applied** (`catalog/connection-config.ts`;
+ * the dataset config has no such key), and an operator who set it will
  * reasonably expect otherwise, so it is written down. It is `file_read`'s cap
  * on materialising a whole file in memory. This is `file_copy`'s shape — a
  * STREAM, memory-bounded regardless of file size, which is exactly why `doCopy`
@@ -273,18 +274,23 @@ function decodeOrFail(
  * caught, so it is caught in BOTH entry points rather than only in the one that
  * happens to run first.
  *
- * AN EMPTY HEADER CELL IS REFUSED, and the tradeoff is real enough to write
- * down. A trailing delimiter on the header line is a routine spreadsheet-export
- * artifact, and refusing costs that operator a fix (correct the header, or
- * declare `header: false`). The alternative — falling back to `column<N>` for
- * the unnamed one — was rejected because a synthesised name for a column the
- * file DOES have is a name that changes the moment the header is fixed: a
- * mapping authored against `column2` would silently stop matching, which is the
- * failure class this backlog keeps paying for. `header: false` is different in
- * kind, not degree: there NO column is named, so positional naming is total and
- * stable rather than a patch over one hole.
+ * AN INTERIOR EMPTY NAME IS REFUSED — `a,,c` has a column with data and no way
+ * for a mapping to name it. The alternative, falling back to `column<N>` for
+ * just that one, was rejected because a synthesised name for a column the file
+ * DOES have is a name that changes the moment the header is fixed: a mapping
+ * authored against `column2` would silently stop matching, which is the failure
+ * class this backlog keeps paying for. (`header: false` is different in kind,
+ * not degree: there NO column is named, so positional naming is total and
+ * stable rather than a patch over one hole.)
+ *
+ * A TRAILING run of empty cells is NOT refused — it is not a column at all. See
+ * {@link trimTrailingEmpty}.
  */
-function headerNames(cells: readonly string[]): string[] {
+function headerNames(rawCells: readonly string[]): string[] {
+  const cells = trimTrailingEmpty(rawCells);
+  if (cells.length === 0) {
+    throw new DatasetIoError('permanent', 'the header names no columns');
+  }
   const names: string[] = [];
   const seen = new Set<string>();
   for (let index = 0; index < cells.length; index += 1) {
@@ -305,6 +311,24 @@ function headerNames(cells: readonly string[]): string[] {
     names.push(name);
   }
   return names;
+}
+
+/**
+ * Drop a trailing run of EMPTY cells.
+ *
+ * A trailing delimiter (`a,b,`) is a spreadsheet-export artifact, not a third
+ * column: it names nothing and carries nothing. Applied to the HEADER here and,
+ * in the excess-only form {@link bindRow} needs, to every data row — ONE rule,
+ * so a file whose header ends with a delimiter and whose rows do too is not
+ * accepted on one line and refused on the next.
+ *
+ * It is a TRAILING run and never an interior cell: `a,,c` keeps its hole, which
+ * is what lets {@link headerNames} still refuse an unnamed column that has data.
+ */
+function trimTrailingEmpty(cells: readonly string[]): readonly string[] {
+  let end = cells.length;
+  while (end > 0 && cells[end - 1] === '') end -= 1;
+  return end === cells.length ? cells : cells.slice(0, end);
 }
 
 /**
@@ -338,14 +362,22 @@ function positionalNames(width: number): string[] {
  * columns copies without comment, which is correct — nothing was going to read
  * them.
  *
- * A LONG row is refused, and the copy with it. The reader has no per-row error
- * channel — `readBatches` yields rows and the sink's `writeRows` owns the
- * transaction — so the honest options are refuse, or silently discard fields the
- * file contains. Discarding is the one direction a copy must never fail in, and
- * it is unrecoverable data loss that nothing would report. The cost is bounded
- * and worth naming: the sink is ONE transaction reporting
+ * A row with an extra field THAT CARRIES SOMETHING is refused, and the copy with
+ * it. The reader has no per-row error channel — `readBatches` yields rows and
+ * the sink's `writeRows` owns the transaction — so the honest options are
+ * refuse, or silently discard fields the file contains. Discarding is
+ * unrecoverable data loss that nothing would report. The cost is bounded and
+ * worth naming: the sink is ONE transaction reporting
  * `partialWritePossible: false`, so a refusal mid-scan costs a wasted read and a
  * provably clean store, never a partial write.
+ *
+ * An extra EMPTY field is not refused, and the distinction is the whole reason
+ * this is not a length check. `1,2,` against a two-column header is a trailing
+ * delimiter — the most common spreadsheet-export artifact there is, and it
+ * appears on EVERY row of such a file, so refusing it would reject the whole
+ * document rather than cost a one-time authoring fix. The refusal exists to stop
+ * DATA being discarded, and an empty field is not data; dropping it discards
+ * nothing. `1,2,3` is still refused, on the same rule.
  *
  * The message names a DATA ROW ORDINAL, not a line number. The grammar's own
  * line counter never crosses the seam, and it would not be the same number
@@ -358,11 +390,18 @@ function bindRow(
   ordinal: number,
 ): Record<string, unknown> {
   if (cells.length > names.length) {
-    throw new DatasetIoError(
-      'permanent',
-      `data row ${ordinal} carries ${cells.length} fields but the source has ${names.length} columns — ` +
-        'the extra fields have no column to be written to',
-    );
+    // ONLY the excess is examined. Trimming the row's whole trailing run of
+    // empties instead would eat a legitimately empty LAST column — `1,,`
+    // against three columns would bind two of them `undefined` and fail rows
+    // that are perfectly good.
+    const extra = cells.slice(names.length);
+    if (extra.some((cell) => cell !== '')) {
+      throw new DatasetIoError(
+        'permanent',
+        `data row ${ordinal} carries ${cells.length} fields but the source has ${names.length} columns — ` +
+          'the extra fields have no column to be written to',
+      );
+    }
   }
   const row: Record<string, unknown> = {};
   for (let index = 0; index < names.length; index += 1) {
@@ -400,7 +439,7 @@ function parseOptionsFor(
 
 /** The column names for a file's first row, under either header mode. */
 function namesFrom(header: boolean, firstRow: readonly string[]): readonly string[] {
-  return header ? headerNames(firstRow) : positionalNames(firstRow.length);
+  return header ? headerNames(firstRow) : positionalNames(trimTrailingEmpty(firstRow).length);
 }
 
 function chunkBytesFor(read: DelimitedDatasetRead): number {
@@ -437,6 +476,10 @@ export async function* readDelimitedDatasetBatches(
 ): AsyncGenerator<Record<string, unknown>[], void, undefined> {
   const { path, config } = await prepareRead(read);
   const chunkBytes = chunkBytesFor(read);
+  // Before the handle, matching `readSqliteDatasetBatches`, which checks after
+  // confinement and before it opens the store. An already-cancelled read should
+  // not pay for an `open` + `stat` — cheap locally, not cheap on a wedged mount.
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
   let names: readonly string[] | undefined;
   let ordinal = 0;
@@ -496,6 +539,7 @@ export async function describeDelimitedDatasetColumns(
 ): Promise<readonly string[]> {
   const { path, config } = await prepareRead(read);
   const chunkBytes = chunkBytesFor(read);
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset describe aborted');
   try {
     for await (const rawBatch of parseDelimitedRows(
       decodedChunks(path, config.encoding, chunkBytes, read.signal),

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, symlink, writeFile } from 'node:fs/promises';
 
 // Pass every export straight through to the real implementation — only `open`
 // becomes a spy, so a test can prove the handle the reader took was CLOSED. The
@@ -9,11 +9,11 @@ vi.mock('node:fs/promises', async (importActual) => {
   const actual = await importActual<typeof import('node:fs/promises')>();
   return { ...actual, open: vi.fn(actual.open) };
 });
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { newCopyCounters, pumpCopyRows, type CopyPumpMappingEntry } from '@autonomy-studio/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DatasetIoError } from '../dataset-io-error.js';
+import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import {
   describeDelimitedDatasetColumns,
   readDelimitedDatasetBatches,
@@ -26,9 +26,10 @@ import {
  * REAL FILES, not a mocked filesystem: the whole point of this layer is the
  * things a pure parser cannot be asked about — confinement, `O_NOFOLLOW`,
  * decoder boundaries, file handles being closed. Mocking `node:fs` here would
- * test the mock. The temp roots are `realpath`'d because `os.tmpdir()` is itself
- * a symlink on macOS (`/var` → `/private/var`), and the confinement guard
- * compares canonical-against-canonical.
+ * test the mock. The roots come from `temp-roots.ts` rather than a fourth inline
+ * copy of the `realpath(mkdtemp(...))` idiom — the `realpath` is load-bearing
+ * (macOS `os.tmpdir()` is itself a symlink), and it is exactly the drift
+ * `sqlite-fixtures.ts`'s docblock predicted.
  *
  * WHAT IS DELIBERATELY NOT RE-TESTED HERE: the row grammar. Slice 1 already runs
  * its whole corpus a second time at ONE CHARACTER per chunk
@@ -41,14 +42,11 @@ import {
 
 let root: string;
 let outside: string;
-beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), 'delim-root-')));
-  outside = await realpath(await mkdtemp(join(tmpdir(), 'delim-out-')));
+beforeEach(() => {
+  root = tempRoot('delim-root-');
+  outside = tempRoot('delim-out-');
 });
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-  await rm(outside, { recursive: true, force: true });
-});
+afterEach(cleanupTempRoots);
 
 async function seed(name: string, contents: string | Uint8Array): Promise<string> {
   const path = join(root, name);
@@ -108,6 +106,14 @@ describe('naming', () => {
     ]);
   });
 
+  it('does not count a trailing delimiter as a column in a headerless file', async () => {
+    const path = await seed('nt.csv', '1,ada,\n2,grace,\n');
+    expect(await describeDelimitedDatasetColumns(read(path, { header: false }))).toEqual([
+      'column1',
+      'column2',
+    ]);
+  });
+
   it('never names a column from the dataset declaration (§7 — declared columns are not the gate)', async () => {
     const path = await seed('n.csv', '1,ada\n');
     // A `columns` declaration is an authoring aid and reaches the reader
@@ -128,6 +134,18 @@ describe('naming', () => {
     }
   });
 
+  it('accepts a header ending in a trailing delimiter — that is not a column', async () => {
+    const path = await seed('td.csv', 'a,b,\n1,2,\n');
+    expect(await describeDelimitedDatasetColumns(read(path))).toEqual(['a', 'b']);
+    expect(await rowsOf(read(path))).toEqual([{ a: '1', b: '2' }]);
+  });
+
+  it('refuses a header that names no columns at all', async () => {
+    const path = await seed('nn.csv', ',,\n1,2\n');
+    const err = await refusalOf(() => rowsOf(read(path)));
+    expect(err.message).toContain('names no columns');
+  });
+
   it('refuses an unnamed header column, naming its position', async () => {
     const path = await seed('e.csv', 'a,,c\n1,2,3\n');
     const err = await refusalOf(() => rowsOf(read(path)));
@@ -141,6 +159,40 @@ describe('naming', () => {
   });
 });
 
+describe('the grammar options actually reach the grammar', () => {
+  // The grammar's own suite proves the RULES; only this layer can prove the
+  // WIRING. A `quote: config.delimiter` slip, or a dropped `escape` spread,
+  // would leave every rule test green and silently misparse every
+  // operator-configured file.
+  it('honours a non-default delimiter and quote', async () => {
+    const path = await seed('pipe.csv', "a|b\n'x|y'|2\n");
+    expect(await rowsOf(read(path, { delimiter: '|', quote: "'" }))).toEqual([
+      { a: 'x|y', b: '2' },
+    ]);
+  });
+
+  it('honours a declared escape character', async () => {
+    const path = await seed('esc.csv', 'a,b\n"x\\"y",2\n');
+    expect(await rowsOf(read(path, { escape: '\\' }))).toEqual([{ a: 'x"y', b: '2' }]);
+  });
+
+  it('bounds accumulation — an unterminated field cannot swallow the file', async () => {
+    // Proves `DELIMITED_MAX_FIELD_CHARS` reaches `parseDelimitedRows`, which is
+    // the module's central safety claim: without the bound, a binary or a
+    // never-closed quote accumulates the WHOLE file into one field while still
+    // satisfying the streaming signature.
+    //
+    // Stated rather than hidden: `DELIMITED_MAX_ROW_CHARS` (8 MiB) rides the
+    // same object literal and is NOT separately pinned — a fixture large enough
+    // to trip it costs more than the assertion is worth. Deleting BOTH bounds
+    // is caught here; deleting only the row bound is not.
+    const path = await seed('huge.csv', `a\n"${'x'.repeat(1_048_577)}`);
+    const err = await refusalOf(() => rowsOf(read(path)));
+    expect(err.kind).toBe('permanent');
+    expect((err.cause as { code?: string } | undefined)?.code).toBe('field_too_large');
+  });
+});
+
 describe('ragged rows', () => {
   it('binds a SHORT row to the full key set, with the missing columns absent', async () => {
     const path = await seed('s.csv', 'a,b,c\n1,2\n');
@@ -149,6 +201,21 @@ describe('ragged rows', () => {
     // key set, so a row that omitted its missing keys could change the plan.
     expect(Object.keys(rows[0]!)).toEqual(['a', 'b', 'c']);
     expect(rows[0]!['c']).toBeUndefined();
+  });
+
+  it('accepts an extra EMPTY field — a trailing delimiter discards no data', async () => {
+    const path = await seed('te.csv', 'a,b\n1,2,\n3,4,,\n');
+    expect(await rowsOf(read(path))).toEqual([
+      { a: '1', b: '2' },
+      { a: '3', b: '4' },
+    ]);
+  });
+
+  it('still binds a legitimately empty LAST column rather than trimming it away', async () => {
+    // The excess is what gets examined, never the row's whole trailing run —
+    // otherwise `1,,` would lose columns b and c and fail a good row.
+    const path = await seed('lastempty.csv', 'a,b,c\n1,,\n');
+    expect(await rowsOf(read(path))).toEqual([{ a: '1', b: '', c: '' }]);
   });
 
   it('refuses a LONG row, naming the data-row ordinal and both counts', async () => {
@@ -179,6 +246,12 @@ describe('the empty-source boundary', () => {
     const err = await refusalOf(() => describeDelimitedDatasetColumns(read(path)));
     expect(err.kind).toBe('permanent');
     expect(err.message).toContain('contains no rows');
+  });
+
+  it('says the columns cannot be COUNTED when a headerless file has no rows', async () => {
+    const path = await seed('emptynh.csv', '');
+    const err = await refusalOf(() => rowsOf(read(path, { header: false })));
+    expect(err.message).toContain('columns cannot be counted');
   });
 
   it('says "no rows" and not "empty" for a file of blank lines', async () => {
@@ -312,19 +385,49 @@ describe('failure mapping and cancellation', () => {
     expect(err.kind).toBe('cancelled');
   });
 
-  it('stops READING the moment the signal is set, instead of draining the file first', async () => {
-    // This isolates the PER-CHUNK check. Both abort checks report `cancelled`,
-    // so an outcome assertion cannot tell them apart — and the batch-boundary
-    // check alone would read the whole file before noticing, because the grammar
-    // yields no batch until one is full. What only the per-chunk check buys is
-    // that the I/O stops, so that is what is asserted.
-    const path = await seed('drain.csv', `a\n${'x\n'.repeat(2000)}`);
+  it('refuses before it even opens the file when the signal is already set', async () => {
+    const path = await seed('preopen.csv', 'a\n1\n');
     const controller = new AbortController();
     controller.abort();
-    const reads = await countReads(() =>
-      refusalOf(() => rowsOf(read(path, {}, { signal: controller.signal, chunkBytes: 1 }))),
+    const spy = vi.mocked(open);
+    spy.mockClear();
+    const err = await refusalOf(() => rowsOf(read(path, {}, { signal: controller.signal })));
+    expect(err.kind).toBe('cancelled');
+    // On OPEN, not on reads: the per-chunk check already stops the first
+    // `read()`, so a read count cannot tell the two guards apart. `sqlite`'s
+    // reader checks after confinement and before it opens the store, and an
+    // already-cancelled read must not pay for an `open` + `stat` it will throw
+    // away — cheap on a local disk, not on a wedged network mount.
+    expect(spy).not.toHaveBeenCalled();
+
+    // The describe half owes the same guarantee — it is the gate that runs
+    // FIRST, so a cancel it ignores is one the copy pays for before the read
+    // ever gets its say.
+    spy.mockClear();
+    const described = await refusalOf(() =>
+      describeDelimitedDatasetColumns(read(path, {}, { signal: controller.signal })),
     );
-    expect(reads).toBe(0);
+    expect(described.kind).toBe('cancelled');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('stops READING mid-file the moment the signal is set, instead of draining first', async () => {
+    // This isolates the PER-CHUNK check. Both abort checks report `cancelled`,
+    // so an outcome assertion cannot tell them apart, and the pre-open check
+    // cannot see an abort that arrives after the read began. The batch-boundary
+    // check alone would drain the whole file before noticing, because the
+    // grammar yields no batch until one is full. What only the per-chunk check
+    // buys is that the I/O stops, so that is what is asserted.
+    const path = await seed('drain.csv', `a\n${'x\n'.repeat(2000)}`);
+    const controller = new AbortController();
+    const reads = await countReads(
+      () => refusalOf(() => rowsOf(read(path, {}, { signal: controller.signal, chunkBytes: 1 }))),
+      (n) => {
+        if (n === 1) controller.abort();
+      },
+    );
+    // One byte per read over a ~4 KiB file: draining it is ~4000 reads.
+    expect(reads).toBeLessThan(5);
   });
 
   it('stops BETWEEN BATCHES when the abort arrives after the file is already read', async () => {
@@ -389,11 +492,15 @@ describe('the file handle', () => {
     }
   });
 
-  it('is closed when the read refuses mid-file', async () => {
-    const path = await seed('mid.csv', 'a,b\n1,2\n3,4,5\n');
+  it('is closed when the read refuses while the file is STILL STREAMING', async () => {
+    // The refusal must land with chunks left unread, or this only re-tests the
+    // normal-EOF close: a fixture smaller than one chunk is fully drained (and
+    // its `finally` already run) before the first batch is ever bound.
+    const path = await seed('mid.csv', `a,b\n1,2\n3,4,5\n${'7,8\n'.repeat(500)}`);
     const spy = vi.mocked(open);
     spy.mockClear();
-    await refusalOf(() => rowsOf(read(path)));
+    const err = await refusalOf(() => rowsOf(read(path, {}, { batchRows: 2, chunkBytes: 8 })));
+    expect(err.message).toContain('data row 2 carries 3 fields');
     const handles = await Promise.all(spy.mock.results.map((r) => r.value));
     expect(handles.length).toBeGreaterThan(0);
     for (const handle of handles) expect((handle as { fd: number }).fd).toBe(-1);
@@ -436,7 +543,10 @@ describe('the seam the pump actually consumes', () => {
  * Run `body` and report how many `read()` syscalls the reader made, by wrapping
  * the handle the spied `open` hands back.
  */
-async function countReads(body: () => Promise<unknown>): Promise<number> {
+async function countReads(
+  body: () => Promise<unknown>,
+  onRead?: (n: number) => void,
+): Promise<number> {
   const spy = vi.mocked(open);
   const actual = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'))
     .open;
@@ -447,6 +557,7 @@ async function countReads(body: () => Promise<unknown>): Promise<number> {
     Object.assign(handle, {
       read: (...a: unknown[]) => {
         reads += 1;
+        onRead?.(reads);
         return realRead(...a);
       },
     });

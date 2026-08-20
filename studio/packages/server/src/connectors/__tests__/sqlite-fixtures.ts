@@ -1,33 +1,19 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
+// The temp-root helpers moved to `temp-roots.ts` when #1165's reader suite became
+// their fourth consumer and this file's store-specific name stopped fitting.
+// Re-exported so every existing consumer keeps its single import.
+export { cleanupTempRoots, tempRoot } from './temp-roots.js';
 
 /**
  * Temp-database fixtures shared by the `sqlite` connector's READ suite (#1119),
  * its SINK suite (#1125) and the reader→pump→sink composition suite (#1129).
  *
- * Extracted rather than copied. `tempRoot`'s `realpathSync` is load-bearing, and
- * the idiom already existed twice as a same-shaped `tempRoot()` before this file
- * did (`sqlite.test.ts`, `confine.test.ts`) plus once as an inline async variant
- * in `fs.test.ts`'s `beforeEach`; a fourth copy in the sink suite would have been
- * the one that eventually drifted. The remaining copies belong to suites this
- * ticket does not touch.
+ * Extracted rather than copied. The temp-root half has since moved again, to
+ * `temp-roots.ts`, once #1165's `delimited` reader suite made it store-agnostic
+ * in fact as well as in use; what remains here is the genuinely SQLite-specific
+ * seeding.
  */
-
-const dirs: string[] = [];
-
-/** A temp dir whose path is REALPATH'd.
- *
- * On macOS `os.tmpdir()` is itself a symlink (`/var` → `/private/var`), so a
- * root taken straight from `mkdtemp` never canonically contains the paths
- * resolved under it, and a confinement test would pass for the wrong reason —
- * or fail for one. */
-export function tempRoot(prefix = 'sqlite-store-'): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  dirs.push(dir);
-  return dir;
-}
 
 /** A database file under `root`, seeded with `rows` rows in `t(id, name)`. */
 export function seedDb(root: string, rows: number, name = 'app.db'): string {
@@ -48,11 +34,6 @@ export function seedDb(root: string, rows: number, name = 'app.db'): string {
  * REMOVED, not left for the OS: these dirs hold real database files, some tests
  * write a WAL sidecar pair, and `/tmp` is not reaped between runs on every
  * platform — so leaving them just accumulates litter. */
-export function cleanupTempRoots(): void {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  dirs.length = 0;
-}
-
 /** A sink database: `t(id,name)` from `seedDb` plus a wider `sink` table. */
 export function seedSink(root: string, name = 'app.db'): string {
   const path = seedDb(root, 0, name);
