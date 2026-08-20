@@ -483,6 +483,52 @@ describe('DatasetsPage', () => {
     expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
   });
 
+  it('flags a stranded row on the LIST, without anyone opening it (#1158)', async () => {
+    // A connection's `kind` is MUTABLE (`routes/connections.ts` documents the
+    // transition), and nothing re-checks the datasets that named it. Before
+    // this, #1145's advisory rendered on the edit FORM only — so a `table`
+    // dataset whose store had become an `http` connection was disagreeing,
+    // truly, and invisibly, until somebody happened to open it.
+    listMock.mockResolvedValue([dataset()]);
+    listConnectionsMock.mockResolvedValue([store({ kind: 'http' })]);
+    renderWithRouter(<DatasetsPage />);
+
+    const row = within(await screen.findByRole('row', { name: /Orders/ }));
+    // The store still resolves — this is not the dangling case.
+    expect(row.getByText('Warehouse')).toBeInTheDocument();
+    // Compact where it is DRAWN, complete where it is READ: the cell is a fixed
+    // width and five of these sentences stacked in it is a wall.
+    expect(row.getByText(/kind mismatch/i)).toBeInTheDocument();
+    expect(
+      row.getByText(/dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'/),
+    ).toBeInTheDocument();
+  });
+
+  it('leaves an AGREEING row unmarked, so the mark means something (#1158)', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    listConnectionsMock.mockResolvedValue([store()]);
+    renderWithRouter(<DatasetsPage />);
+
+    const row = within(await screen.findByRole('row', { name: /Orders/ }));
+    expect(row.getByText('Warehouse')).toBeInTheDocument();
+    expect(row.queryByText(/kind mismatch/i)).toBeNull();
+  });
+
+  it('says nothing about kind for a DANGLING store, having resolved no kind (#1158)', async () => {
+    // `datasetConnectionKindAdvisory`'s documented contract: a null
+    // connectionKind says NOTHING, because a complaint derived from a
+    // connection nobody resolved is invented on a fact never established. The
+    // row already has its own, truer, message for this state.
+    listMock.mockResolvedValue([dataset({ connectionId: 'conn_gone' })]);
+    listConnectionsMock.mockResolvedValue([store()]);
+    renderWithRouter(<DatasetsPage />);
+
+    const row = within(await screen.findByRole('row', { name: /Orders/ }));
+    expect(row.getByText(/conn_gone/)).toBeInTheDocument();
+    expect(row.getByText(/\(missing\)/)).toBeInTheDocument();
+    expect(row.queryByText(/kind mismatch/i)).toBeNull();
+  });
+
   it('flags a dataset whose kind disagrees with the store it names (#1145)', async () => {
     // The ticket's own example. `routes/datasets.ts` checks that the connection
     // exists and is owned and NOTHING else, so this row saves today and is only
