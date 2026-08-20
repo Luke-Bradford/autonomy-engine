@@ -132,6 +132,55 @@ describe('reader → pump → sink', () => {
     expect(counters.failuresByCode).toEqual({ not_integral: 1 });
   });
 
+  /**
+   * #1155 — the SAME contract as the test above, at the other end of `integer`.
+   *
+   * better-sqlite3 12.11.1 refuses to bind a bigint outside int64 (measured:
+   * `2n**63n-1n` binds, `2n**63n` throws `RangeError: The bound string, buffer,
+   * or bigint is too big`). #1150 made every `integer` coercion produce a
+   * bigint, so before the bound existed that RangeError escaped from
+   * `insert.run` INSIDE the sink's open transaction — rolling the whole copy
+   * back and reporting "the copy into 'sink' failed", naming neither the column
+   * nor the row.
+   *
+   * That is §6.2 inverted: a bad VALUE must fail its ROW, and only a bad
+   * MAPPING may refuse the copy. One unusable value in a million-row copy must
+   * not destroy the other 999,999.
+   */
+  it('a value too large for an integer column fails its ROW, not the whole copy', async () => {
+    const root = tempRoot();
+    // 2^63 exactly — one past the largest integer any INTEGER column can hold.
+    const srcPath = seedText(root, ['1', '9223372036854775808', '3']);
+    const sinkPath = seedSink(root, 'out.db');
+    const counters = newCopyCounters();
+
+    await writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, sinkPath),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id'],
+        mode: 'append',
+        onBatch: (rowsWritten) => (counters.rowsWritten = rowsWritten),
+      },
+      pumpCopyRows(
+        readSqliteDatasetBatches({
+          connectionConfig: { roots: [root], path: srcPath },
+          datasetKind: 'table',
+          datasetConfig: { table: 'src' },
+        }),
+        {
+          mapping: [{ source: 'v', sink: 'id', type: 'integer', onError: 'fail' }],
+          counters,
+        },
+      ),
+    );
+
+    expect(rowsOf(sinkPath, 'SELECT id FROM sink ORDER BY rowid')).toEqual([{ id: 1 }, { id: 3 }]);
+    expect(counters.rowsRead).toBe(counters.rowsWritten + counters.rowsFailed);
+    expect(counters.failuresByCode).toEqual({ integer_out_of_range: 1 });
+  });
+
   it('refuses a broken mapping through the sink as PERMANENT, with nothing written', async () => {
     const root = tempRoot();
     seedDb(root, 3);

@@ -46,6 +46,7 @@ export type CoercionFailureCode =
   | 'not_integral'
   | 'non_finite'
   | 'lossy_integer'
+  | 'integer_out_of_range'
   | 'not_a_boolean'
   | 'no_date_format'
   | 'invalid_date_format'
@@ -128,6 +129,68 @@ const INTEGER_RE = /^[+-]?\d+$/;
  * the same reason the format cache exists: this module runs per value per ROW. */
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * The width of an `integer` column, and the ONLY bound `integer` has.
+ *
+ * WHY THIS LIVES IN THE SHARED MATRIX, given the docblock above refuses to bake
+ * a store's encoding in here (SQLite's 0/1 boolean is the sink's job for exactly
+ * that reason). Three things make this different, and they are worth stating so
+ * the question is closed rather than re-litigated at M7:
+ *
+ *  (i)   §6.2's own overflow row already says an overflowing value FAILS. This
+ *        implements that row; it does not extend it. What §6.2 leaves unstated
+ *        is the WIDTH, and int64 is settled here as an M5 decision — the same
+ *        shape as `FALSE_TOKENS` below.
+ *  (ii)  int64 is the width of SQLite's `INTEGER` storage class — MEASURED,
+ *        and the only store this bound is presently applied to. The wider
+ *        claim, that int64 also suits the other stores the matrix will grow,
+ *        is an ASSUMPTION this makes on M10's behalf, not a settled decision:
+ *        `DataTypeSchema` maps `integer` to no physical column type anywhere
+ *        yet, and Postgres alone offers both `int4` and `int8`. If M10 binds
+ *        `integer` to a NARROWER physical type, this bound becomes too
+ *        permissive for that store and the per-sink escape hatch below is the
+ *        answer — not a quiet widening of what `integer` means. Flagged rather
+ *        than asserted so a future author does not read a decision that was
+ *        never taken.
+ *  (iii) Decisively: the coercion matrix is the ONLY layer that can express
+ *        "this row fails, the copy continues". A guard in the sink's
+ *        `bindValue` could not — `insert.run` sits inside the whole-copy
+ *        transaction, so every throw there rolls the copy back. A sink-side
+ *        guard would PRESERVE the bug #1155 exists to remove.
+ *
+ * Enforced rather than documented because the alternative is a measured crash:
+ * better-sqlite3 12.11.1 throws `RangeError: The bound string, buffer, or bigint
+ * is too big` outside exactly [-2^63, 2^63-1] (`2n**63n - 1n` binds, `2n**63n`
+ * throws, `-(2n**63n)` binds). That throw escapes mid-transaction naming neither
+ * column nor row and takes the WHOLE copy down — §6.2 inverted, since a bad
+ * VALUE must fail its ROW and only a bad MAPPING may refuse the copy.
+ *
+ * REJECTED for v1: carrying a per-sink bound on `CoercionOptions`. With one
+ * store it is over-engineering. Revisit at M7 — a `delimited` sink has no int64
+ * limit, so a CSV→CSV copy of a 20-digit integer fails a row it could have
+ * written. That is the known cost of one bound for the whole matrix.
+ */
+const MIN_INT64 = -(2n ** 63n);
+const MAX_INT64 = 2n ** 63n - 1n;
+
+/**
+ * `ok`, for the `integer` target only. Takes a `bigint` so the guard cannot be
+ * applied to a string or a number by accident, and so EVERY integer this module
+ * produces goes through one place — the three arms that can build one are easy
+ * to extend and easy to miss.
+ */
+function okInteger(value: bigint): CoercionResult {
+  if (value < MIN_INT64 || value > MAX_INT64) {
+    // Deliberately does NOT echo the value: an out-of-range id is still the
+    // operator's data, and this prose reaches logs.
+    return fail(
+      'integer_out_of_range',
+      'the value is outside the range an integer column can hold',
+    );
+  }
+  return ok(value);
+}
 
 /**
  * §6.2's boolean row lists only the TRUTHY tokens (`"true"`, `"yes"`, `"1"`).
@@ -316,7 +379,7 @@ function integerFromString(text: string): CoercionResult {
        every JS number as REAL, so a narrowed 42 lands in a TEXT column as
        "42.0" — a different value than the one that was read. The declared type
        is a choice of STORAGE CLASS, and only a bigint expresses it. */
-    return ok(BigInt(text));
+    return okInteger(BigInt(text));
   }
   if (!DECIMAL_RE.test(text)) {
     return fail('not_a_number', 'the value is not a decimal number');
@@ -327,7 +390,10 @@ function integerFromString(text: string): CoercionResult {
   // accepted: the refusal is about LOSING a fractional part, not about the
   // notation it was written in.
   if (!Number.isInteger(n)) return fail('not_integral', 'the value is not a whole number');
-  return ok(BigInt(n));
+  // The bound comes LAST on purpose: `"1e400"` must stay `non_finite` and
+  // `"1.5"` must stay `not_integral`, rather than both collapsing into a range
+  // verdict that describes them less precisely.
+  return okInteger(BigInt(n));
 }
 
 function numberFromString(text: string): CoercionResult {
@@ -420,13 +486,16 @@ function toStringValue(value: unknown): CoercionResult {
 }
 
 function toInteger(value: unknown): CoercionResult {
-  if (typeof value === 'bigint') return ok(value); // exact; NEVER narrowed here
+  if (typeof value === 'bigint') return okInteger(value); // exact; NEVER narrowed here
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return fail('non_finite', 'the value is not a finite number');
     // A real `1.5` → integer fails for the same reason `"1.5"` does.
     if (!Number.isInteger(value)) return fail('not_integral', 'the value is not a whole number');
     // Widened, not narrowed — see `integerFromString`. A JS number binds REAL.
-    return ok(BigInt(value));
+    // `BigInt` of an integral double is EXACT, so the bound is checked against
+    // the true value — note `2**63 - 1` is not representable as a double and
+    // has already rounded UP to `2**63` by the time it arrives here.
+    return okInteger(BigInt(value));
   }
   if (typeof value === 'string') return integerFromString(value.trim());
   return fail('unsupported_source_type', `a ${describe(value)} is not an integer`);
