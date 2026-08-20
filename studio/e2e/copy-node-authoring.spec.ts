@@ -149,4 +149,85 @@ test.describe('#1139 — copy-node authoring', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /**
+   * #1169 (M8 slice 1) — the column mapping is authored in a ROW CONTROL.
+   *
+   * Until this ticket `mapping` was an array of objects, which
+   * `deriveConfigFields` had no control for, so it degraded to a raw JSON
+   * textarea: to map two columns an operator had to know the shape of
+   * `CopyMappingSchema` by heart and type it as valid JSON. That is the blank
+   * box the data-movement spec's §13 exists to remove, and the reason it lists
+   * a mapping panel as its own M-series row.
+   *
+   * A unit test can prove the derived rules; only this can prove the mapping an
+   * operator TYPED reaches an immutable version and comes back.
+   */
+  test('a column mapping typed into the row control reaches the saved version', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+
+    const srcConn = await seedConnection(page, 'e2e 1169 source store', 'e2e-1169-src.db');
+    const sinkConn = await seedConnection(page, 'e2e 1169 sink store', 'e2e-1169-sink.db');
+    const srcSet = await seedDataset(page, 'e2e 1169 people', srcConn, 'people');
+    const sinkSet = await seedDataset(page, 'e2e 1169 people copy', sinkConn, 'people_copy');
+
+    const pipelineId = await openSeededCanvas(page, 'e2e 1169 mapping', { nodes: [] });
+    await addActivity(page, 'Copy Data');
+    await canvasNodes(page).first().click();
+
+    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
+    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
+    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+
+    // The JSON textarea this control replaces — for the field, and for the whole
+    // node. Their ABSENCE is the ticket.
+    await expect(panel(page).getByLabel('mapping — JSON')).toHaveCount(0);
+    await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
+
+    // Two rows, each authored through named controls rather than as JSON.
+    for (const [row, source, sink, type] of [
+      [1, 'id', 'id', 'integer'],
+      [2, 'label', 'full_name', 'string'],
+    ] as const) {
+      await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
+      await panel(page).getByLabel(`mapping row ${row} source (optional)`).fill(source);
+      await panel(page).getByLabel(`mapping row ${row} sink`).fill(sink);
+      await panel(page).getByLabel(`mapping row ${row} type`).selectOption(type);
+    }
+
+    // Row 2 takes an explicit `onError`; row 1 is left alone. A defaulted enum
+    // cell that nobody touched must OMIT its key rather than write the default
+    // in — the same rule every optional control in this form follows, and the
+    // difference between "the author chose 'fail'" and "the author said
+    // nothing", which is a distinction §6.2 can still act on later.
+    await panel(page).getByLabel('mapping row 2 onError (optional)').selectOption('null');
+
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    // The round trip, read from the PERSISTED version — a control showing the
+    // right value proves the store round-tripped it, not that the server has it.
+    const res = await page.request.get(`/api/pipelines/${pipelineId}/versions`);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { type: string; config?: { mapping?: unknown } }[];
+    }[];
+    const latest = versions.reduce((a, b) => (b.version > a.version ? b : a));
+    expect(latest.nodes.find((n) => n.type === 'copy')?.config?.mapping).toEqual([
+      { source: 'id', sink: 'id', type: 'integer' },
+      { source: 'label', sink: 'full_name', type: 'string', onError: 'null' },
+    ]);
+
+    // And it comes BACK into the same controls, one row per stored mapping.
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await canvasNodes(page).first().click();
+    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('full_name');
+    await expect(panel(page).getByLabel('mapping row 2 type')).toHaveValue('string');
+
+    await expectQuiet(page, problems);
+  });
 });

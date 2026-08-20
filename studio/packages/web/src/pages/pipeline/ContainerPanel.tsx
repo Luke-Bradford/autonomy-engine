@@ -14,9 +14,12 @@ import { ConfigFieldControl } from './ConfigFieldControl';
 import {
   assembleConfig,
   deriveConfigFields,
+  emptyControlValue,
+  sameControlValue,
   seedFieldInputs,
   unrepresentableFields,
   type ConfigField,
+  type FieldInput,
 } from './configForm';
 import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated } from './canvasStore';
@@ -58,18 +61,22 @@ import { confirmContainerEdit, containerLabels } from './containerRules';
 /**
  * Would this form display the same thing for both seeds? (U17)
  *
- * A shallow value compare, which is total for `seedFieldInputs`' return type —
- * every value is a `string` or a `boolean`, so there is no nested case to miss.
+ * A shallow value compare per KEY, delegating the per-value question to
+ * `sameControlValue`. It used to compare with `===` and say so — "total for
+ * `seedFieldInputs`' return type … every value is a `string` or a `boolean`" —
+ * which #1169 made false: an `objectList` seeds an ARRAY, and a fresh one every
+ * render is never `===` the last. That is not a cosmetic staleness here but a
+ * LOOP: this compare drives a set-state-during-render, so an always-different
+ * answer re-seeds forever. `ContainerSchema` has no such field today, which is
+ * exactly why the reasoning had to move rather than the behaviour.
+ *
  * A differing key SET counts as different, which is the conservative answer: it
  * only happens when the kind's field list changed, and a re-seed is right then.
  */
-function sameSeededInputs(
-  a: Record<string, string | boolean>,
-  b: Record<string, string | boolean>,
-): boolean {
+function sameSeededInputs(a: Record<string, FieldInput>, b: Record<string, FieldInput>): boolean {
   const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
-  return keys.every((k) => k in b && a[k] === b[k]);
+  return keys.every((k) => k in b && sameControlValue(a[k], b[k]));
 }
 
 export function ContainerPanel({
@@ -291,7 +298,7 @@ export function ContainerPanel({
             <ConfigFieldControl
               key={field.name}
               field={field}
-              value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+              value={inputs[field.name] ?? emptyControlValue(field)}
               onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
             />
           ))}

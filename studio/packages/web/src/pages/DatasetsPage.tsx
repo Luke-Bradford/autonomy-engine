@@ -28,11 +28,13 @@ import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import {
   assembleConfig,
   deriveFieldsWithCarried,
+  emptyControlValue,
   parseConfigText,
   readConfigDraft,
   seedFieldInputs,
   unrepresentableFields,
   type ConfigField,
+  type FieldInput,
 } from './pipeline/configForm';
 import { ConfigFieldControl } from './pipeline/ConfigFieldControl';
 
@@ -53,7 +55,7 @@ type FormState = {
    */
   config: Record<string, unknown>;
   /** One control value per derived field — the field-mode draft. */
-  inputs: Record<string, string | boolean>;
+  inputs: Record<string, FieldInput>;
   /** The whole-config JSON draft. */
   jsonText: string;
   /** Whether the operator ASKED for JSON. An unrenderable value forces it too. */
@@ -770,7 +772,7 @@ function DatasetForm({
               <ConfigFieldControl
                 key={field.name}
                 field={field}
-                value={form.inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+                value={form.inputs[field.name] ?? emptyControlValue(field)}
                 onChange={(next) =>
                   onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
                 }
