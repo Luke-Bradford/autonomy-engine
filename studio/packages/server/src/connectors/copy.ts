@@ -297,7 +297,10 @@ export async function* runCopyActivity(
     // that refusal existed now fails HERE, and this is the sentence it fails
     // with. First use of the helper in `packages/server` — it was written for
     // the same job on the web side.
-    yield failed('permanent', `invalid copy activity config: ${formatZodIssues(parsed.error.issues)}`);
+    yield failed(
+      'permanent',
+      `invalid copy activity config: ${formatZodIssues(parsed.error.issues)}`,
+    );
     return;
   }
   const { mapping, mode } = parsed.data;

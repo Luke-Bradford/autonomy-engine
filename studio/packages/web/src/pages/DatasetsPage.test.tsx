@@ -500,7 +500,9 @@ describe('DatasetsPage', () => {
     // width and five of these sentences stacked in it is a wall.
     expect(row.getByText(/kind mismatch/i)).toBeInTheDocument();
     expect(
-      row.getByText(/dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'/),
+      row.getByText(
+        /dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'/,
+      ),
     ).toBeInTheDocument();
   });
 

@@ -361,9 +361,7 @@ describe('the refusals a CSV source brings', () => {
 
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    expect(end.type === 'failed' ? end.error : '').toContain(
-      'mapping: a copy maps no columns',
-    );
+    expect(end.type === 'failed' ? end.error : '').toContain('mapping: a copy maps no columns');
     expect(end.type === 'failed' ? end.error : '').not.toContain(
       'invalid delimited dataset config',
     );
