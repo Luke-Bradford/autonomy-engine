@@ -256,8 +256,7 @@ export async function* parseDelimitedRows(
       // Whether this character ENDS the row rather than belonging to it. Inside
       // a quoted field, and immediately after an escape, a `\n` is content —
       // which is why this cannot be a bare test on the character.
-      const terminates =
-        !inQuotes && !pendingEscape && (c === '\n' || c === '\r');
+      const terminates = !inQuotes && !pendingEscape && (c === '\n' || c === '\r');
 
       // Charged before the character is classified, so a delimiter, a quote and
       // an escape all count against the row even though none reaches a field.

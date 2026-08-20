@@ -333,10 +333,14 @@ Four decisions worth keeping:
   The enum's order is address-vocabulary order — `delimited` is first and its
   reader arrives at M7 — so the obvious default would hand the operator a
   dataset that cannot run and whose config this build cannot describe.
-- **A kind with no reader forces the JSON editor and says why.** Its config
-  schema is a `looseObject`, so no controls derive and the empty-fields branch
-  would otherwise print "This kind has no settings" — false, since §2.6 lists
-  seven keys for `delimited`. They are undescribed, not absent.
+- **A kind with no reader forces the JSON editor and says why.** The gate is
+  the reader, not the shape: a typed form would present a dataset as ready to
+  copy while every copy naming it still refuses at dispatch. For `excel` the
+  shape is undescribed as well — its schema is a `looseObject`, so no controls
+  derive and the empty-fields branch would otherwise print "This kind has no
+  settings", which is false since §2.6 lists five keys for it. `delimited` is no
+  longer such a kind (#1163 gave it §2.6's eight keys and it derives controls
+  fine); it is forced to JSON by the reader gate alone.
 - **A dangling store renders as its raw id, in the list and in the picker.** A
   dataset's `connectionId` is checked at write time only and the connection can
   be deleted afterwards. Dropping the unresolved id from the `<select>` would

@@ -704,8 +704,12 @@ function DatasetForm({
       <div className="dataset-config" role="group" aria-label="Config">
         <div className="config-header">
           <span>Config</span>
-          {/* Hidden, not disabled, when the kind has no reader: there is no field
-              form to switch TO, so a control that can only refuse is furniture. */}
+          {/* Hidden, not disabled, when the kind has no reader. The reason is the
+              READER, not an absent field form — since #1163 `delimited` derives
+              a full set of controls and is still hidden here, because a typed
+              form would present a dataset as ready to copy while every copy
+              naming it refuses at dispatch. A control that can only refuse is
+              furniture either way. */}
           {kindHasReader && (
             <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
               {jsonMode ? 'Edit as fields' : 'Edit as JSON'}

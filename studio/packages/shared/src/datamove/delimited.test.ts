@@ -188,11 +188,28 @@ describe('a malformed document is REFUSED, never silently repaired', () => {
     );
   });
 
+  it('bounds each field SEPARATELY — a wide row of small fields is not one big field', async () => {
+    // The field counter must reset at every delimiter. Left running it would
+    // charge the whole row to the field bound, so a perfectly ordinary 40-column
+    // row would be refused as a single oversized field.
+    expect(await codeOf('abcd,'.repeat(20) + '\n', { maxFieldChars: 8 })).toBe(null);
+    // The row bound is what governs the row's total, and it still does.
+    expect(await codeOf('abcd,'.repeat(20) + '\n', { maxFieldChars: 8, maxRowChars: 30 })).toBe(
+      'row_too_large',
+    );
+    // And a genuinely oversized field is still caught among small ones.
+    expect(await codeOf('a,b,' + 'x'.repeat(20) + ',c\n', { maxFieldChars: 8 })).toBe(
+      'field_too_large',
+    );
+  });
+
   it('counts both bounds in CODE POINTS, so an astral character is charged once', async () => {
     // `field.length` would count UTF-16 units and bill '\u{1F600}' twice to the
     // field bound while the loop billed it once to the row bound.
     expect(await codeOf('\u{1F600}'.repeat(4) + '\n', { maxFieldChars: 5 })).toBe(null);
-    expect(await codeOf('\u{1F600}'.repeat(6) + '\n', { maxFieldChars: 5 })).toBe('field_too_large');
+    expect(await codeOf('\u{1F600}'.repeat(6) + '\n', { maxFieldChars: 5 })).toBe(
+      'field_too_large',
+    );
     expect(await codeOf('\u{1F600}'.repeat(4) + '\n', { maxRowChars: 5 })).toBe(null);
     expect(await codeOf('\u{1F600}'.repeat(6) + '\n', { maxRowChars: 5 })).toBe('row_too_large');
   });

@@ -277,6 +277,26 @@ dataset kinds.
 column already has a type and a real `NULL`, so there is nothing to declare. They exist only where
 the format genuinely cannot express the distinction (§6.2, §6.4).
 
+**Three corrections from M7 slice 1, which built the `delimited` row** (#1163), recorded here on the
+M4 precedent above rather than left to disagree with the shipped schema:
+
+- **`quote` and `encoding` are DEFAULTED too**, to `"` and `utf-8`, though this table annotated a
+  default only on `delimiter`. The test applied was not "is a default convenient" but "is a wrong
+  guess VISIBLE": a file that declares neither is overwhelmingly RFC 4180 UTF-8, and getting either
+  wrong produces mangled text an operator sees at once, not a plausible wrong value they never do.
+- **`header` is REQUIRED, with no default**, because it fails that test in both directions. Defaulted
+  true it eats row 1 of a headerless file and then names every column after a data value; defaulted
+  false it turns the header into a data row. Both SUCCEED and write wrong data. It is also the exact
+  shape of the M4 correction directly above: `configForm.ts` treats a defaulted field as optional and
+  an unchecked optional box omits its key, so a defaulted `header` could not be set to `false`
+  distinguishably from "not set" at all — which is how `readonly` became `writable`.
+- **`encoding` is a CLOSED set** — `utf-8`, `utf-16le`, `utf-16be`, `windows-1252` — and the last is
+  named for what it is. Measured on node v25.9.0: `new TextDecoder('latin1').encoding` is
+  `windows-1252`, and so is `ascii`'s. Offering `latin1` would promise ISO-8859-1's C1 controls and
+  deliver `€` for `0x80`; offering `ascii` would promise a 7-bit refusal that never comes. An
+  unrecognised label is refused here rather than reaching `TextDecoder` as a raw `RangeError` that
+  no connector error maps.
+
 ---
 
 ## §3 — a dataset REF is a first-class node field, never config **[SETTLED]**
