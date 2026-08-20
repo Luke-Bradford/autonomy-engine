@@ -1,8 +1,10 @@
 /**
  * #1176 — the copy mapping's three CROSS-ROW rules, at the #444 write gate.
  *
- * Until this, `mappingArray`'s cardinality rule, `refineMapping`'s duplicate-sink
- * refusal and its `source`/`expression` XOR were reached by exactly two things:
+ * Until this, the three cross-row rules — the cardinality rule, the duplicate-sink
+ * refusal and the `source`/`expression` XOR, then an array `.min(1)` beside a
+ * private `refineMapping`, now both folded into `copyMappingShapeIssues` — were
+ * reached by exactly two things:
  * the canvas Apply pre-check (*"a UX PRE-CHECK, never the gate"*) and
  * `connectors/copy.ts`'s dispatch parse. `validateDoc` is what
  * `createPipelineVersion` funnels EVERY mint through — the versions route and

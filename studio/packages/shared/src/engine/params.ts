@@ -2661,7 +2661,10 @@ function validateCopyMappingShape(node: Node, errors: string[]): void {
   for (const issue of copyMappingShapeIssues(rows)) {
     // `path: []` is the cardinality rule — an empty mapping has no row to name —
     // so it renders as the FIELD, matching how the same issue emerges from
-    // `copyInputSchema` as `['mapping']`.
+    // `copyInputSchema` as `['mapping']`. The other arm destructures the tuple
+    // rather than indexing it, so `CopyMappingShapeIssue`'s two-arm union is
+    // what makes this render TOTAL: a third path shape would fail to compile
+    // here rather than print `mapping[0].undefined` at an operator.
     const where =
       issue.path.length === 0 ? 'mapping' : `mapping[${issue.path[0]}].${issue.path[1]}`;
     errors.push(`node.${node.id}.${where}: ${issue.message}`);

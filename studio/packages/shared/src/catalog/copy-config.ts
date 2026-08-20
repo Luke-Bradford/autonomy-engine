@@ -63,6 +63,21 @@ const copyMappingEntryShape = {
 };
 
 /**
+ * One cross-row issue, with a path that is EITHER the whole array or one row's
+ * field — never anything between.
+ *
+ * The tuple union is load-bearing rather than decorative. `params.ts` renders a
+ * non-empty path as `mapping[${path[0]}].${path[1]}`, so a rule added later with
+ * a length-1 path would silently emit `mapping[0].undefined` into an operator's
+ * error string. Typed this way that rule does not compile, which is the only
+ * form of "remember to keep these two files agreeing" that actually holds.
+ */
+export type CopyMappingShapeIssue = {
+  path: readonly [] | readonly [number, 'source' | 'expression' | 'sink'];
+  message: string;
+};
+
+/**
  * The mapping's WHOLE-ARRAY rules, as plain data so two independent gates can
  * share ONE declaration of them (#1176).
  *
@@ -91,11 +106,19 @@ const copyMappingEntryShape = {
  * refusal, and make the gate a second, stricter authority on a shape the
  * adapter already owns. These three are the cross-row rules specifically
  * because those are the ones NOTHING else can see in time.
+ *
+ * The shape this follows is already in the tree, and naming it is the point:
+ * `engine/params.ts`'s `jsonReplaySafetyErrors` is one pure function consumed
+ * BOTH by a raw errors-array validator in that file and by
+ * `schemas/replay-safety.ts`, which loops its messages into `ctx.addIssue` for
+ * two Zod schemas. Same one-declaration/two-readers shape, opposite import
+ * direction. It could not be reused directly — it returns flat strings where a
+ * cross-row rule needs a per-row `path` — but it is the model, not
+ * `fs-activity-config.ts`, which is only the cautionary tale of what happens
+ * without one.
  */
-export function copyMappingShapeIssues(
-  rows: readonly unknown[],
-): { path: (string | number)[]; message: string }[] {
-  const issues: { path: (string | number)[]; message: string }[] = [];
+export function copyMappingShapeIssues(rows: readonly unknown[]): CopyMappingShapeIssue[] {
+  const issues: CopyMappingShapeIssue[] = [];
   // The CARDINALITY rule, on the array itself — `connection-config.ts`'s `roots`
   // ("an fs connection needs at least one allowed root") is the precedent. A
   // copy that maps no columns runs clean and moves nothing, which is the
@@ -187,7 +210,9 @@ const mappingArray = (expression: z.ZodType) =>
     // pins those as silent skips, and its docblock says why.
     .superRefine((rows, ctx) => {
       for (const issue of copyMappingShapeIssues(rows)) {
-        ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+        // Spread: the tuple union is READONLY by design — that is what makes the
+        // render in `params.ts` total — and Zod wants a mutable `PropertyKey[]`.
+        ctx.addIssue({ code: 'custom', path: [...issue.path], message: issue.message });
       }
     });
 

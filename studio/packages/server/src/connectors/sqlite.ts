@@ -182,6 +182,19 @@ function storeFailure(err: unknown, context: string, partialWritePossible = fals
 }
 
 /**
+ * The QUOTING itself, with no policy attached: wrap in `"`, double any embedded
+ * `"`. SQLite's standard identifier escape.
+ *
+ * Extracted so the two callers below differ in exactly ONE thing — whether a
+ * shape refusal runs first — rather than in one thing plus a hand-copied
+ * `replace`. Two byte-identical copies of an escaping rule is how the halves
+ * drift, and an escaping rule is a bad place for that to happen.
+ */
+function doubleQuoted(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+/**
  * Quote a SQL identifier — AFTER refusing anything that is not one.
  *
  * Both halves matter and neither is redundant. The shape check is the policy
@@ -197,7 +210,7 @@ function quoteIdentifier(value: string, label: string): string {
       `${label} '${value}' is not a bare SQL identifier, so it cannot be quoted into a statement`,
     );
   }
-  return `"${value.replace(/"/g, '""')}"`;
+  return doubleQuoted(value);
 }
 
 /**
@@ -228,9 +241,19 @@ function quoteIdentifier(value: string, label: string): string {
  * from a dataset's `config`, which §8 requires be literal and identifier-shaped
  * at save time (`catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE`), so the two
  * cases have genuinely different threat models and the split is the point.
+ *
+ * ONE RESIDUAL, in the spirit of the module docblock's two: a column name
+ * containing a NUL is the one shape doubling cannot make safe, because
+ * `better-sqlite3` hands `prepare()` a C string and SQLite parses only as far as
+ * the NUL — the statement is truncated mid-identifier. That fails CLOSED
+ * (`prepare` throws, `storeFailure` classifies it, the transaction rolls back,
+ * no partial write), so it is a poor error message rather than a hole, and it
+ * needs a column no ordinary DDL through this tooling can create. Recorded so
+ * the "doubling is genuinely sufficient" claim above is read with its one
+ * exception rather than as unqualified.
  */
 function quoteStoreIdentifier(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+  return doubleQuoted(value);
 }
 
 /**

@@ -777,7 +777,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
 
   it("lets the activity's own cross-row rule refuse a mapping the cells each accept", () => {
     // Two rows writing one sink column is silent LAST-WINS into the operator's
-    // store. No single cell can see it; `refineMapping` can, and the panel must
+    // store. No single cell can see it; `copyMappingShapeIssues` can, and the panel must
     // surface that rather than save.
     const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
 
@@ -999,7 +999,7 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
   });
 
   it('says two rows differing only by case write the same sink column', () => {
-    // `refineMapping` dedupes sinks EXACTLY, so it lets this pair through; the
+    // `copyMappingShapeIssues` dedupes sinks EXACTLY, so it lets this pair through; the
     // store refuses it at dispatch, on a version that is already immutable.
     mount(
       {
