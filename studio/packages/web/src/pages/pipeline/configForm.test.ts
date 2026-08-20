@@ -463,3 +463,213 @@ describe('readConfigDraft', () => {
     if (!badField.ok) expect(badField.message).toMatch(/^n: /);
   });
 });
+
+/**
+ * #1169 — M8 slice 1. An array of `.strict()` objects authors as a row list
+ * rather than a JSON textarea (data-movement spec §13).
+ */
+describe('objectList (#1169)', () => {
+  const rowSchema = z.object({ a: z.string(), b: z.enum(['x', 'y']) }).strict();
+
+  describe('deriveConfigFields', () => {
+    it("gives copy's mapping a row control, with one cell per declared column", () => {
+      const mapping = field(fieldsOf('copy'), 'mapping');
+      expect(mapping.kind).toBe('objectList');
+      expect(mapping.elementFields?.map((f) => `${f.name}:${f.kind}`)).toEqual([
+        'source:text',
+        'sink:text',
+        'type:enum',
+        'onError:enum',
+        'expression:text',
+      ]);
+    });
+
+    it("keeps a cell the row control cannot type as JSON, rather than refusing the row", () => {
+      const tools = field(fieldsOf('llm_call'), 'tools');
+      expect(tools.kind).toBe('objectList');
+      expect(tools.elementFields?.find((f) => f.name === 'parameters')?.kind).toBe('json');
+    });
+
+    /**
+     * The gate that decides which fields upgrade. An OPEN element permits keys
+     * the row control does not render, and a control that drops what it cannot
+     * see is the silent loss this module exists to refuse.
+     */
+    it('refuses an element that is not strict, because a row cannot show what it does not declare', () => {
+      const open = deriveConfigFields(z.object({ rows: z.array(z.object({ a: z.string() })) }));
+      expect(field(open, 'rows').kind).toBe('json');
+    });
+
+    it('leaves an array of strings on its one-per-line control', () => {
+      expect(field(fieldsOf('switch'), 'cases').kind).toBe('stringList');
+      expect(field(fieldsOf('llm_call'), 'stop').kind).toBe('stringList');
+    });
+
+    it('is depth-1: a cell that would itself be a row list or a line list degrades the whole field', () => {
+      const nested = deriveConfigFields(
+        z.object({
+          rows: z.array(z.object({ inner: z.array(rowSchema) }).strict()),
+          lines: z.array(z.object({ inner: z.array(z.string()) }).strict()),
+        }),
+      );
+      expect(field(nested, 'rows').kind).toBe('json');
+      expect(field(nested, 'lines').kind).toBe('json');
+    });
+
+    it('degrades an element with no columns at all', () => {
+      const empty = deriveConfigFields(z.object({ rows: z.array(z.object({}).strict()) }));
+      expect(field(empty, 'rows').kind).toBe('json');
+    });
+  });
+
+  describe('formatFieldValue', () => {
+    const rows = field(deriveConfigFields(z.object({ rows: z.array(rowSchema) })), 'rows');
+
+    it('seeds an ABSENT value as no rows, not as empty text', () => {
+      expect(formatFieldValue(rows, undefined)).toEqual({ ok: true, value: [] });
+    });
+
+    it('renders each row through the same controls the top-level form uses', () => {
+      expect(formatFieldValue(rows, [{ a: 'one', b: 'x' }, { a: 'two', b: 'y' }])).toEqual({
+        ok: true,
+        value: [
+          { a: 'one', b: 'x' },
+          { a: 'two', b: 'y' },
+        ],
+      });
+    });
+
+    it('refuses a value that is not a list of rows', () => {
+      expect(formatFieldValue(rows, 'nope').ok).toBe(false);
+      expect(formatFieldValue(rows, [null]).ok).toBe(false);
+      expect(formatFieldValue(rows, [['a', 'b']]).ok).toBe(false);
+    });
+
+    it('refuses a row carrying a column the schema does not declare', () => {
+      // Rendering it would drop the key on the next apply — silently, and on an
+      // apply the author believes touched a different row.
+      expect(formatFieldValue(rows, [{ a: 'one', b: 'x', extra: 1 }]).ok).toBe(false);
+    });
+
+    it("refuses a cell whose stored type disagrees with its column's control", () => {
+      expect(formatFieldValue(rows, [{ a: 5, b: 'x' }]).ok).toBe(false);
+      expect(formatFieldValue(rows, [{ a: 'one', b: 'not-an-option' }]).ok).toBe(false);
+    });
+  });
+
+  describe('parseFieldInput', () => {
+    const required = field(deriveConfigFields(z.object({ rows: z.array(rowSchema) })), 'rows');
+    const optional = field(
+      deriveConfigFields(z.object({ rows: z.array(rowSchema).optional() })),
+      'rows',
+    );
+    const withOptionalCell = field(
+      deriveConfigFields(
+        z.object({ rows: z.array(z.object({ a: z.string().optional() }).strict()) }),
+      ),
+      'rows',
+    );
+
+    it('reads each row back out through its own columns', () => {
+      expect(parseFieldInput(required, [{ a: 'one', b: 'y' }])).toEqual({
+        ok: true,
+        omit: false,
+        value: [{ a: 'one', b: 'y' }],
+      });
+    });
+
+    it('omits a cleared OPTIONAL cell from its row rather than writing an empty value', () => {
+      expect(parseFieldInput(withOptionalCell, [{ a: '' }])).toEqual({
+        ok: true,
+        omit: false,
+        value: [{}],
+      });
+    });
+
+    it('names the row AND the column when a cell cannot be read', () => {
+      const parsed = parseFieldInput(required, [{ a: 'one', b: 'x' }, { a: 'two', b: 'bogus' }]);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.ok === false && parsed.message).toMatch(/row 2.*b/);
+    });
+
+    it('writes an empty list for a REQUIRED field, and omits an OPTIONAL one', () => {
+      // Same rule as `stringList`: a schema that requires the key would refuse
+      // the omission with "expected array, received undefined", on a panel the
+      // author may only have opened to change a different field.
+      expect(parseFieldInput(required, [])).toEqual({ ok: true, omit: false, value: [] });
+      expect(parseFieldInput(optional, [])).toEqual({ ok: true, omit: true });
+    });
+
+    it('refuses a row list handed to a field that is not a row list, rather than throwing', () => {
+      const text = field(deriveConfigFields(z.object({ a: z.string() })), 'a');
+      expect(parseFieldInput(text, [{ a: 'one' }] as never).ok).toBe(false);
+    });
+  });
+
+  describe('the form stays available', () => {
+    /**
+     * The regression this slice's strictness gate exists to prevent. `history`
+     * is typed `z.array(...)` but the save gate refuses any non-string value
+     * (`engine/params.ts` — "history must be a whole-value ${...} expression"),
+     * so in every valid doc it holds a STRING. Classified as a row list it
+     * would be unrenderable, and one unrenderable field puts the WHOLE node in
+     * the JSON editor — the blank box this ticket removes, on the app's
+     * most-used activity.
+     */
+    it('for an llm_call whose history is the expression its own save gate requires', () => {
+      expect(
+        unrepresentableFields(fieldsOf('llm_call'), {
+          model: 'claude-opus-5',
+          prompt: 'hi',
+          history: '${nodes.a.outputs.turns}',
+        }),
+      ).toEqual([]);
+    });
+  });
+
+  describe('assembleConfig', () => {
+    const fields = deriveConfigFields(
+      z.object({ rows: z.array(rowSchema), mode: z.string() }),
+    ) as ConfigField[];
+    // OPTIONAL, deliberately: a required field writes `[]` outright and never
+    // reaches the clearing-gesture branch, so a required one here would pass
+    // whatever that branch did. `llm_call.tools` is the real optional case.
+    const optionalFields = deriveConfigFields(
+      z.object({ rows: z.array(rowSchema).optional(), mode: z.string() }),
+    ) as ConfigField[];
+
+    it('keeps a stored EMPTY list through an apply that touched a different field', () => {
+      // An empty list renders as an empty control, so a plain delete would erase
+      // a value the author meant, on an edit that never touched it — and an
+      // identity compare calls two empty lists different every time.
+      const assembled = assembleConfig({ rows: [], mode: 'append' }, optionalFields, {
+        rows: [],
+        mode: 'overwrite',
+      });
+      expect(assembled.ok && assembled.config).toEqual({ rows: [], mode: 'overwrite' });
+    });
+
+    it('DELETES a list the author actually cleared', () => {
+      // The other half of the same rule: clearing every row of an optional field
+      // is a real gesture, and must not be defeated by the preservation above.
+      const assembled = assembleConfig({ rows: [{ a: 'one', b: 'x' }], mode: 'append' }, optionalFields, {
+        rows: [],
+        mode: 'append',
+      });
+      expect(assembled.ok && assembled.config).toEqual({ mode: 'append' });
+    });
+
+    it('stores an edited row and preserves every key no control owns', () => {
+      const assembled = assembleConfig(
+        { rows: [{ a: 'one', b: 'x' }], mode: 'append', outputs: [{ name: 'rows' }] },
+        fields,
+        { rows: [{ a: 'edited', b: 'y' }], mode: 'append' },
+      );
+      expect(assembled.ok && assembled.config).toEqual({
+        rows: [{ a: 'edited', b: 'y' }],
+        mode: 'append',
+        outputs: [{ name: 'rows' }],
+      });
+    });
+  });
+});

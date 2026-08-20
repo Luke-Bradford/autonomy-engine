@@ -37,7 +37,38 @@ import type { z } from 'zod';
  */
 
 /** The controls this form can render. Anything else authors as JSON. */
-export type ConfigFieldKind = 'text' | 'number' | 'boolean' | 'enum' | 'stringList' | 'json';
+export type ConfigFieldKind =
+  | 'text'
+  | 'number'
+  | 'boolean'
+  | 'enum'
+  | 'stringList'
+  | 'json'
+  | 'objectList';
+
+/**
+ * One row of an `objectList` control: the same cell-input map the top-level
+ * form already holds, keyed by COLUMN name instead of by field name.
+ *
+ * Reusing that shape is what lets every cell run through `formatFieldValue` and
+ * `parseFieldInput` unchanged — a row control is the existing form, repeated,
+ * and none of the per-kind rules below had to be restated for a cell.
+ */
+export type ObjectListRow = Readonly<Record<string, string | boolean>>;
+
+/** What one control holds. `objectList` is the only kind that is not a scalar. */
+export type FieldInput = string | boolean | readonly ObjectListRow[];
+
+/**
+ * Narrow a control value to a row list.
+ *
+ * `Array.isArray` is typed `(arg: any) => arg is any[]`, which does NOT remove a
+ * `readonly T[]` member from the FALSE branch of a union — so the scalar paths
+ * below would still see a possible array. This guard is what makes them total.
+ */
+function isRowList(value: FieldInput | undefined): value is readonly ObjectListRow[] {
+  return Array.isArray(value);
+}
 
 /** One derived control: a config key, and how to author it. */
 export interface ConfigField {
@@ -49,10 +80,50 @@ export interface ConfigField {
   readonly enumOptions?: readonly string[];
   /** A defaulted key's default, offered as a placeholder — never written in. */
   readonly defaultText?: string;
+  /** The per-column controls, for `kind: 'objectList'` only. */
+  readonly elementFields?: readonly ConfigField[];
+}
+
+/**
+ * The value an EMPTY control holds, per kind.
+ *
+ * One exported rule rather than the `field.kind === 'boolean' ? false : ''`
+ * written longhand at every seed, fallback and render site: `objectList` made
+ * that ternary wrong in six places at once, and a single one of them missed
+ * would hand a row control the string `''` and render nothing.
+ */
+export function emptyControlValue(field: ConfigField): FieldInput {
+  if (field.kind === 'objectList') return [];
+  return field.kind === 'boolean' ? false : '';
+}
+
+/**
+ * Whether two control values are the same value.
+ *
+ * `===` was total while every control held a `string` or a `boolean`. A row
+ * list is an ARRAY, so identity comparison says "different" on every render —
+ * which would defeat `assembleConfig`'s clearing-gesture rule (a stored empty
+ * list would be deleted by an apply that touched a different field) and would
+ * spin `ContainerPanel`'s set-state-during-render seed compare.
+ */
+export function sameControlValue(a: FieldInput | undefined, b: FieldInput | undefined): boolean {
+  if (isRowList(a) && isRowList(b)) {
+    return (
+      a.length === b.length &&
+      a.every((row, i) => {
+        const other = b[i] as ObjectListRow;
+        const keys = Object.keys(row);
+        return (
+          keys.length === Object.keys(other).length && keys.every((k) => row[k] === other[k])
+        );
+      })
+    );
+  }
+  return a === b;
 }
 
 /** A stored value rendered into its control, or a refusal to render it at all. */
-export type FieldRender = { ok: true; value: string | boolean } | { ok: false; reason: string };
+export type FieldRender = { ok: true; value: FieldInput } | { ok: false; reason: string };
 
 /** A control's input read back out: a value, an instruction to drop the key, or a refusal. */
 export type FieldParse =
@@ -125,8 +196,64 @@ function unwrap(schema: unknown): Unwrapped {
   return { inner, optional, defaultText };
 }
 
+/**
+ * The per-column controls for an `objectList`'s element, or `null` when the
+ * element is not one this control may render.
+ *
+ * The gate is STRICTNESS, and it is derived rather than listed. A row control
+ * renders exactly the columns the element declares, so an OPEN element permits
+ * keys it would not show — and a control that silently drops what it cannot see
+ * is the loss `formatFieldValue`'s refusals exist to prevent. Reading
+ * `def.catchall` is one more discriminant through the same `defOf` funnel, so
+ * no per-activity list is introduced and U7's rule is untouched.
+ *
+ * It is also what keeps `llm_call` off this control, correctly. `history` is
+ * typed `z.array(...)` but `validateDoc` refuses any non-string value — "history
+ * must be a whole-value ${...} expression" (`engine/params.ts`) — so in every
+ * valid doc it holds a STRING. Classified as a row list it would be
+ * unrenderable, and ONE unrenderable field puts the whole node in the JSON
+ * editor: this ticket's own defect, on the most-used activity in the catalog.
+ * The element is open, so the strictness gate excludes it — and excludes
+ * `messages` with it, whose `content` is prose that has no business in a cell.
+ */
+function deriveElementFields(element: unknown): ConfigField[] | null {
+  const def = defOf(element);
+  if (def?.type !== 'object') return null;
+  // `.strict()` and nothing else: a `z.object` with no catchall carries
+  // `undefined` here, `.catchall(z.string())` a string schema, `.strict()` a
+  // `never` one. Verified against the built catalog (zod 4.4.3).
+  if (defOf((def as { catchall?: unknown }).catchall)?.type !== 'never') return null;
+  const shape = (element as { shape?: unknown }).shape;
+  if (typeof shape !== 'object' || shape === null) return null;
+
+  const cells: ConfigField[] = [];
+  for (const [name, cellSchema] of Object.entries(shape as Record<string, unknown>)) {
+    const { inner, optional, defaultText } = unwrap(cellSchema);
+    // Classified WITHOUT recursion: a cell that is itself a row list or a
+    // one-per-line list degrades the whole field to JSON rather than nesting.
+    // Neither has a designed shape inside a row card, and `stringList`'s
+    // newlines are structural, so a row of them cannot be read back honestly.
+    // Depth-1 also makes the recursion finite by construction, which matters
+    // because `unwrap` sees through `lazy`.
+    const { kind, enumOptions } = classify(inner, false);
+    if (kind === 'objectList' || kind === 'stringList') return null;
+    cells.push({
+      name,
+      kind,
+      optional,
+      ...(enumOptions && { enumOptions }),
+      ...(defaultText !== undefined && { defaultText }),
+    });
+  }
+  // An element declaring no columns has no control to render.
+  return cells.length > 0 ? cells : null;
+}
+
 /** Which control an unwrapped field schema gets. Unknown constructs author as JSON. */
-function classify(schema: unknown): Pick<ConfigField, 'kind' | 'enumOptions'> {
+function classify(
+  schema: unknown,
+  nestable: boolean,
+): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields'> {
   switch (defOf(schema)?.type) {
     case 'string':
       return { kind: 'text' };
@@ -143,10 +270,16 @@ function classify(schema: unknown): Pick<ConfigField, 'kind' | 'enumOptions'> {
         : { kind: 'json' };
     }
     case 'array': {
-      const element = (schema as { element?: unknown }).element;
-      return defOf(unwrap(element).inner)?.type === 'string'
-        ? { kind: 'stringList' }
-        : { kind: 'json' };
+      const element = unwrap((schema as { element?: unknown }).element).inner;
+      if (defOf(element)?.type === 'string') return { kind: 'stringList' };
+      if (!nestable) {
+        // Depth-1: the CALLER only needs to know this would be a row list, so
+        // that it can degrade. Deriving its columns would be the recursion the
+        // one-level rule refuses.
+        return { kind: defOf(element)?.type === 'object' ? 'objectList' : 'json' };
+      }
+      const elementFields = deriveElementFields(element);
+      return elementFields ? { kind: 'objectList', elementFields } : { kind: 'json' };
     }
     default:
       return { kind: 'json' };
@@ -170,22 +303,60 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
     const { inner, optional, defaultText } = unwrap(fieldSchema);
-    const { kind, enumOptions } = classify(inner);
+    const { kind, enumOptions, elementFields } = classify(inner, true);
     return {
       name,
       kind,
       optional,
       ...(enumOptions && { enumOptions }),
       ...(defaultText !== undefined && { defaultText }),
+      ...(elementFields && { elementFields }),
     };
   });
 }
 
 /** Render a stored config value into its control, refusing what it cannot represent. */
 export function formatFieldValue(field: ConfigField, value: unknown): FieldRender {
-  if (value === undefined) return { ok: true, value: field.kind === 'boolean' ? false : '' };
+  if (value === undefined) return { ok: true, value: emptyControlValue(field) };
 
   switch (field.kind) {
+    case 'objectList': {
+      if (!Array.isArray(value)) return { ok: false, reason: 'not a list of rows' };
+      const cells = field.elementFields ?? [];
+      const declared = new Set(cells.map((c) => c.name));
+      const rows: ObjectListRow[] = [];
+      for (const [index, row] of value.entries()) {
+        if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+          return { ok: false, reason: `row ${index + 1} is not a row` };
+        }
+        const stored = row as Record<string, unknown>;
+        for (const key of Object.keys(stored)) {
+          // A column no control renders would be DROPPED by the next apply —
+          // silently, on an edit the author believes touched a different row.
+          // The whole-config JSON editor is where such a doc gets repaired.
+          if (!declared.has(key)) {
+            return { ok: false, reason: `row ${index + 1} holds an unknown column '${key}'` };
+          }
+        }
+        const cellValues: Record<string, string | boolean> = {};
+        for (const cell of cells) {
+          const rendered = formatFieldValue(cell, stored[cell.name]);
+          if (!rendered.ok) {
+            return { ok: false, reason: `row ${index + 1} ${cell.name}: ${rendered.reason}` };
+          }
+          if (typeof rendered.value !== 'string' && typeof rendered.value !== 'boolean') {
+            // Unreachable by construction — `deriveElementFields` refuses a cell
+            // that is itself a list — but asserted rather than cast, so a future
+            // widening of the cell kinds fails here instead of rendering `[object
+            // Object]` into a text box.
+            return { ok: false, reason: `row ${index + 1} ${cell.name}: not a cell value` };
+          }
+          cellValues[cell.name] = rendered.value;
+        }
+        rows.push(cellValues);
+      }
+      return { ok: true, value: rows };
+    }
     case 'text':
       return typeof value === 'string'
         ? { ok: true, value }
@@ -240,11 +411,11 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
 export function seedFieldInputs(
   fields: readonly ConfigField[] | null,
   config: Record<string, unknown>,
-): Record<string, string | boolean> {
-  const seeded: Record<string, string | boolean> = {};
+): Record<string, FieldInput> {
+  const seeded: Record<string, FieldInput> = {};
   for (const field of fields ?? []) {
     const rendered = formatFieldValue(field, config[field.name]);
-    seeded[field.name] = rendered.ok ? rendered.value : '';
+    seeded[field.name] = rendered.ok ? rendered.value : emptyControlValue(field);
   }
   return seeded;
 }
@@ -279,7 +450,37 @@ export function unrepresentableFields(
 const NUMERIC_INPUT = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 /** Read one control's input back out as a config value. */
-export function parseFieldInput(field: ConfigField, raw: string | boolean): FieldParse {
+export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse {
+  // FIRST, before every scalar guard below: a row list is neither a string nor a
+  // boolean, so reaching `raw.trim()` with one is a TypeError rather than a
+  // refusal.
+  if (field.kind === 'objectList') {
+    if (!isRowList(raw)) return { ok: false, message: 'expected a row list' };
+    const cells = field.elementFields ?? [];
+    const rows: Record<string, unknown>[] = [];
+    for (const [index, row] of raw.entries()) {
+      const built: Record<string, unknown> = {};
+      for (const cell of cells) {
+        const parsed = parseFieldInput(cell, row[cell.name] ?? emptyControlValue(cell));
+        if (!parsed.ok) {
+          return { ok: false, message: `row ${index + 1} ${cell.name}: ${parsed.message}` };
+        }
+        // A cleared OPTIONAL cell omits its key from the row, exactly as a
+        // cleared optional field omits its key from the config.
+        if (!parsed.omit) built[cell.name] = parsed.value;
+      }
+      rows.push(built);
+    }
+    // No rows on an OPTIONAL field is "not set". On a REQUIRED one it must be
+    // written as `[]`, following `stringList`'s rule below: omitting it would
+    // fail every apply with "expected array, received undefined" on a panel the
+    // author may only have opened to change a different field.
+    if (rows.length === 0 && field.optional) return { ok: true, omit: true };
+    return { ok: true, omit: false, value: rows };
+  }
+
+  if (isRowList(raw)) return { ok: false, message: 'expected a single value, not a row list' };
+
   if (field.kind === 'boolean') {
     if (typeof raw !== 'boolean') return { ok: false, message: 'expected a checkbox value' };
     // An UNCHECKED optional box omits the key rather than writing `false`: a box
@@ -349,8 +550,8 @@ export function parseFieldInput(field: ConfigField, raw: string | boolean): Fiel
       } catch {
         return { ok: false, message: 'is not valid JSON' };
       }
-    // No `boolean` case: the guard above returns for it, and the compiler proves
-    // this switch is exhaustive without one.
+    // No `boolean` or `objectList` case: the guards above return for both, and
+    // the compiler proves this switch is exhaustive without them.
   }
 }
 
@@ -366,7 +567,7 @@ export function parseFieldInput(field: ConfigField, raw: string | boolean): Fiel
 export function assembleConfig(
   original: Record<string, unknown>,
   fields: readonly ConfigField[],
-  inputs: Readonly<Record<string, string | boolean | undefined>>,
+  inputs: Readonly<Record<string, FieldInput | undefined>>,
 ): AssembleResult {
   // Start from the ORIGINAL so every key no derived field owns survives —
   // `config.outputs` above all, which no `configSchema` declares.
@@ -374,7 +575,7 @@ export function assembleConfig(
   const owned: Record<string, unknown> = {};
 
   for (const field of fields) {
-    const emptyControl: string | boolean = field.kind === 'boolean' ? false : '';
+    const emptyControl = emptyControlValue(field);
     const raw = inputs[field.name] ?? emptyControl;
     const parsed = parseFieldInput(field, raw);
     if (!parsed.ok) return { ok: false, message: `${field.name}: ${parsed.message}` };
@@ -393,9 +594,9 @@ export function assembleConfig(
       // it would silently stop holding for the next optional boolean whose absent
       // and false differ.
       const stored = original[field.name];
-      if (stored !== undefined && raw === emptyControl) {
+      if (stored !== undefined && sameControlValue(raw, emptyControl)) {
         const rendered = formatFieldValue(field, stored);
-        if (rendered.ok && rendered.value === emptyControl) {
+        if (rendered.ok && sameControlValue(rendered.value, emptyControl)) {
           config[field.name] = stored;
           owned[field.name] = stored;
           continue;
@@ -516,7 +717,7 @@ export function readConfigDraft(
   draft: {
     config: Record<string, unknown>;
     jsonText: string;
-    inputs: Readonly<Record<string, string | boolean | undefined>>;
+    inputs: Readonly<Record<string, FieldInput | undefined>>;
   },
   fields: readonly ConfigField[],
 ): AssembleResult {
