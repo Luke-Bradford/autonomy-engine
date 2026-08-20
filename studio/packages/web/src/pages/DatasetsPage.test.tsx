@@ -443,13 +443,23 @@ describe('DatasetsPage', () => {
     // refused when a copy is dispatched — which is what the note exists to say
     // earlier.
     const user = userEvent.setup();
+    // TWO connections, and the agreeing one FIRST, so the selections below are
+    // real state changes rather than no-ops. `blankForm` opens on
+    // `connections[0]` at `DEFAULT_KIND` — with only the mismatched connection
+    // seeded, the form would already be in the state this test means to reach,
+    // and it would prove the advisory renders on mount while proving nothing
+    // about it recomputing when the operator picks a different store.
     listConnectionsMock.mockResolvedValue([
+      store({ id: 'conn_db', name: 'Orders DB', kind: 'sqlite' }),
       store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' }),
     ]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    // Quiet first — `conn_db` is a `sqlite` store and `table` lives there.
+    expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
+
     await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_llm');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
 

@@ -233,6 +233,14 @@ export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKi
  * #1145 — whether this dataset's kind agrees with the kind of store it names,
  * as ONE operator-facing sentence, or `null` when it has nothing to say.
  *
+ * A SEPARATE function rather than a branch inside `datasetConfigAdvisory`, which
+ * is what #1145 literally asked for. That function's whole signature is
+ * `(kind, config)`: it judges a dataset against its OWN config and needs nothing
+ * else. This question needs the store's kind, so folding it in would widen that
+ * signature to carry a parameter half its logic ignores, and would fuse two notes
+ * that must be able to fire independently — the `delimited`-on-`sqlite` case is
+ * BOTH unreadable and mis-stored, and the operator needs to be told both.
+ *
  * ADVISORY, never a gate, for `datasetConfigAdvisory`'s reason above: the server
  * stores these rows today, so refusing one here would make an already-saved
  * dataset unsaveable after an unrelated rename, and the form must never refuse
@@ -256,10 +264,13 @@ export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKi
  *
  * A `null` `connectionKind` — no connection selected, or one that no longer
  * exists — says NOTHING, deliberately. The form already has its own notes for
- * both of those states (`DatasetsPage.tsx:642-647` for a workspace with no
- * connections, `:648-653` for a dataset naming one that is gone), and a second
- * sentence derived from a connection nobody resolved would be a complaint
- * invented on a fact that was never established.
+ * both of those states, and a second sentence derived from a connection nobody
+ * resolved would be a complaint invented on a fact that was never established.
+ * Those notes are cited by their GUARD rather than by line — `DatasetsPage.tsx`
+ * renders one under `connections.length === 0` and one under `boundIsUnresolved`.
+ * The line numbers this docblock first carried were already stale by the time it
+ * was committed, because the block it cites sits BELOW the code the same commit
+ * inserted. A name survives that; a line number re-rots on the next edit.
  */
 export function datasetConnectionKindAdvisory(
   kind: DatasetKind,
