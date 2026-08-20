@@ -757,6 +757,24 @@ describe('NodePanel (the objectList control, #1169)', () => {
     expect(panel.storedConfig()).toMatchObject({ mapping: [threeRows[0], threeRows[2]] });
   });
 
+  it('refuses a mapping whose LAST row was removed, rather than saving a copy that moves nothing', () => {
+    // #1172. `mapping` is required, so `parseFieldInput` writes `[]` rather than
+    // omitting the key (deliberately — omitting it fails every apply with
+    // "expected array, received undefined" on a panel the author may only have
+    // opened to change something else). That made deleting the last row a
+    // two-click route to a version that mints clean and fails hours later when
+    // a schedule fires it. `refineMapping` now refuses it here, where the author
+    // is standing. `Remove` is NOT disabled on the last row: a disabled button
+    // hides its reason, and the refusal names it.
+    const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+    panel.apply();
+
+    expect(screen.getByText(/a copy maps no columns/)).toBeTruthy();
+    expect(panel.storedConfig()).toMatchObject({ mapping: oneRow });
+  });
+
   it("lets the activity's own cross-row rule refuse a mapping the cells each accept", () => {
     // Two rows writing one sink column is silent LAST-WINS into the operator's
     // store. No single cell can see it; `refineMapping` can, and the panel must
