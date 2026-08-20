@@ -878,6 +878,70 @@ special-case `copy` in the panel, which would be the parallel field list U7 refu
 services, triggers)"_ (`2026-07-14-adf-grade-ui-design.md:33`; the hub's own section is `:117`) — a Datasets list + detail beside
 Connections. No new hub, no parallel authoring idiom.
 
+
+### As built — M8 slice 2 (#1170)
+
+**The missing seam turned out not to need a route.** Slice 1 recorded that auto-map and the
+*unmapped* state "both need the SINK's column list, and there is no seam that resolves one at
+authoring time". There is: `PipelineCanvas` already loads every `Dataset` on mount and threads the
+list into the node panel, and `DatasetSchema.columns` is REQUIRED on every kind. So both read the
+two bound datasets' declared columns directly — no introspection route, no fetch, no store access
+at authoring time.
+
+**That makes everything in this slice ADVISORY, and the code says so at every rung.** §7's three
+schemas are the dataset's DECLARED columns (1), the node's MAPPING (2) and the store's ACTUAL
+columns (3). The dispatch gate is (2)-against-(3) and deliberately does not read (1). Everything
+here is (1)-against-(2), so a stale declared list produces a wrong WARNING and never a blocked
+copy. The panel says as much in a hint under the advisory.
+
+**Matching reuses the gate's own primitives, and that is a correctness property rather than
+tidiness.** Auto-map's entire output is a mapping the gate will later resolve, so it matches through
+`indexSourceColumns`/`resolveSourceColumn` — anything else could write a row auto-map believes is
+fine and the gate then refuses. A button that authors a broken copy is worse than no button.
+
+**The sink dedupe folds case, which is the one defect that would have shipped silently.**
+`refineMapping` dedupes sinks by EXACT string, but the store resolves them folded and refuses the
+collision ("each sink column may be written by one mapping row"). An exact-only skip list would add
+a second row for `ID` beside an author's `id`, pass `.min(1)`, pass `refineMapping`, pass the write
+gate, mint an immutable version — and fail `permanent` at dispatch, hours later. The same fold
+covers two DECLARED sink columns that collide, since `columns` has no uniqueness refine.
+
+**§6.3's "trimmed" is DELIBERATELY NOT IMPLEMENTED, and this supersedes that parenthetical.**
+Neither the source resolver nor the store's sink resolver trims. A trimmed match would bind a
+declared `" id "` to source `id` and emit a row whose `sink` is `" id "`, which
+`resolveSinkColumns` then cannot match against the actual column `id`. Trimming would author
+exactly the unrunnable row the reuse above exists to prevent, so matching agrees with the gate
+instead. Case-insensitive stands; trimmed does not.
+
+**Auto-map is ADDITIVE, never a replacement.** It skips sink columns some row already claims and
+appends the rest. Replacing would destroy hand-authored rows — in particular `expression` rows,
+which auto-map cannot regenerate because it only ever binds a source column. Its counterpart is
+that stale rows can outlive a re-bind, so the advisory reports both directions: declared columns
+nothing writes, AND rows naming a column the bound dataset does not declare.
+
+**It writes the DRAFT, not the config.** `ExpressionPicker`'s precedent: the author reviews the rows
+and commits them with Apply, which is what puts them through `schemaIssues`. A press that matches
+nothing leaves the draft ALONE rather than clearing it, and says which of the three reasons applies
+— source declares no columns, sink declares no columns, or nothing lined up. `columns: []` is a
+deliberately authorable state ("this table has none"), so it must not read as "nothing matched".
+
+**The *unmapped* state is an ADVISORY, not a persisted acknowledgment.** §13 asks that a column
+deliberately not copied be "visibly so, never merely absent"; that is satisfied by naming it on
+screen. Persisting a per-column opt-out would need a key on the mapping element, which is
+`.strict()` — a schema change and a `CATALOG_VERSION` bump this slice does not carry. A sink column
+that is `nullable: false` and unwritten is reported APART from one merely not copied, because that
+one is not a deliberate omission at all: it is a copy that cannot succeed.
+
+**The button is gated on the derived ELEMENT SHAPE, not on the activity type.** `formatFieldValue`
+refuses any undeclared column key, so a row list whose cells are not `source`/`sink`/`type`/
+`onError` is one auto-map could only write a refusal into. Reading the gate off the derived fields
+keeps the Zod schema the single source of truth (U7) where a hand-written activity list would drift.
+
+**What remains of §13 is item 3 alone — the per-column expression escape hatch (#1178).** It is
+blocked on a different seam from the two above: `FieldPicker.resolve` keys on a TOP-LEVEL config
+field name, so a cell inside a row would ask it about `sink`. It pairs with #864, which owns the
+rest of that picker gap.
+
 ---
 
 ## Security model
