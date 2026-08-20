@@ -883,7 +883,12 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
   });
 
   it('is ADDITIVE — it never overwrites a hand-authored expression row', () => {
-    const expressionRow = { expression: '${params.batch}', sink: 'name', type: 'string', onError: 'fail' };
+    const expressionRow = {
+      expression: '${params.batch}',
+      sink: 'name',
+      type: 'string',
+      onError: 'fail',
+    };
     const panel = mount({ mapping: [expressionRow], mode: 'append' });
 
     autoMap();

@@ -2627,7 +2627,8 @@ export function NodePanel({
           ? [
               {
                 sink: row.sink,
-                source: typeof row.source === 'string' && row.source.length > 0 ? row.source : undefined,
+                source:
+                  typeof row.source === 'string' && row.source.length > 0 ? row.source : undefined,
                 onError: row.onError === 'null' ? ('null' as const) : ('fail' as const),
               },
             ]
@@ -2921,8 +2922,9 @@ export function NodePanel({
           )}
           {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
             <p className="contract-advisory">
-              {sinkAdvisory.undeclared.join(', ')} {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'}{' '}
-              not declared by the sink dataset.
+              {sinkAdvisory.undeclared.join(', ')}{' '}
+              {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by the sink
+              dataset.
             </p>
           )}
           {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
@@ -2932,8 +2934,9 @@ export function NodePanel({
           )}
           {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
             <p className="contract-advisory">
-              {sourceAdvisory.missing.join(', ')} {sourceAdvisory.missing.length === 1 ? 'is' : 'are'}{' '}
-              not declared by the source dataset.
+              {sourceAdvisory.missing.join(', ')}{' '}
+              {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the source
+              dataset.
             </p>
           )}
           {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
@@ -2947,8 +2950,8 @@ export function NodePanel({
               gate reads the store's ACTUAL columns at dispatch. */}
           {(sinkAdvisory !== null || sourceAdvisory !== null) && (
             <p className="page-hint">
-              Read from each dataset&rsquo;s declared columns, which can be out of date — the copy is
-              checked against the store itself when it runs.
+              Read from each dataset&rsquo;s declared columns, which can be out of date — the copy
+              is checked against the store itself when it runs.
             </p>
           )}
         </div>
