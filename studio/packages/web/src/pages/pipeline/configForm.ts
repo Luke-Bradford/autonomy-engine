@@ -410,3 +410,121 @@ export function assembleConfig(
 
   return { ok: true, config, owned };
 }
+
+/**
+ * Read a whole-config JSON draft back out as a config object. Empty text is `{}`.
+ *
+ * Lifted out of `ConnectionsPage` (#1088 item 1) when the Datasets form (#1115)
+ * would have made it a second copy of the same eight lines. `configForm.ts` is
+ * the page-agnostic home #1088 names for it.
+ *
+ * `PipelineCanvas`'s `applyJson` is deliberately NOT converted to this. It says
+ * the same thing in different words ("Config is not valid JSON." / "Config must
+ * be a JSON object."), those exact strings are asserted by
+ * `e2e/node-config-form.spec.ts`, and rewording them is a user-visible change
+ * that belongs to #1088's own ticket rather than riding along inside a new
+ * page. Two copies, not three.
+ */
+export function parseConfigText(
+  text: string,
+): { ok: true; config: Record<string, unknown> } | { ok: false; message: string } {
+  try {
+    const raw: unknown = JSON.parse(text.trim() === '' ? '{}' : text);
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, message: 'Invalid config JSON: config must be a JSON object' };
+    }
+    return { ok: true, config: raw as Record<string, unknown> };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Invalid config JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * The controls for one KIND's config, plus any CARRIED key.
+ *
+ * A carried key is one the stored config holds that this kind does not declare
+ * but a SIBLING kind does — the residue of a kind switch. Rendering it (rather
+ * than only naming it) makes "blank the control to drop the key" the repair,
+ * instead of a dead end reachable only through the JSON editor. A carried field
+ * is always `optional`, so blanking it OMITS the key — exactly the clearing
+ * gesture `assembleConfig` honours.
+ *
+ * A key NO kind declares is not carried: nothing can describe it, so it stays
+ * untouched in `config` (`assembleConfig` preserves every key no field owns) and
+ * is reachable through the JSON escape hatch.
+ *
+ * Fields are matched across kinds BY NAME, which assumes a name means the same
+ * SHAPE everywhere it appears. A future kind that reused a name with a DIFFERENT
+ * type would carry a stale draft into the wrong control, so give it a new name
+ * rather than a second meaning.
+ *
+ * Generic over the kind because two resources now need it — connections (whose
+ * shared names are `model`/`baseUrl`/`timeoutMs`) and datasets (`parameters`,
+ * which `query` declares and `table` does not). It lives here rather than on
+ * either page so the halves cannot drift.
+ *
+ * `schemaFor` may return a schema this module cannot read as an object root, in
+ * which case `deriveConfigFields` yields `null` and that kind simply contributes
+ * nothing — the caller's own root-level fallback to the JSON editor is what
+ * covers it.
+ */
+export function deriveFieldsWithCarried<K extends string>(
+  kinds: readonly K[],
+  schemaFor: (kind: K) => z.ZodType,
+  kind: K,
+  config: Record<string, unknown>,
+): { fields: ConfigField[]; carried: string[] } {
+  const own = deriveConfigFields(schemaFor(kind)) ?? [];
+  const seen = new Set(own.map((f) => f.name));
+  const carried: ConfigField[] = [];
+  for (const other of kinds) {
+    if (other === kind) continue;
+    for (const field of deriveConfigFields(schemaFor(other)) ?? []) {
+      if (seen.has(field.name) || !(field.name in config)) continue;
+      seen.add(field.name);
+      carried.push({ ...field, optional: true });
+    }
+  }
+  return { fields: [...own, ...carried], carried: carried.map((f) => f.name) };
+}
+
+/**
+ * The config a two-mode editor would SAVE right now — read from whichever draft
+ * is on screen, never the other one.
+ *
+ * This is the correctness core of the fields↔JSON toggle and the reason it is
+ * here rather than repeated per page: there are two drafts and exactly one
+ * answer to "what would Save write", and reading the wrong one silently saves
+ * something the operator is not looking at. Both the submit handler and the
+ * live advisory consult it, which is what keeps the advisory describing the
+ * value that would actually be stored.
+ *
+ * Each MODE TOGGLE is expected to commit its draft into `config` before
+ * switching, so the two never disagree about a key the operator has finished
+ * with. A KIND change ordinarily does NOT commit — it must not rewrite an
+ * operator's JSON under them — which is precisely the seam a live advisory
+ * covers. The exception is a page where the kind itself decides which editor is
+ * on screen (`DatasetsPage`: a kind with no reader forces JSON on, and leaving
+ * that kind takes it away again). There the kind change IS a mode toggle, so it
+ * commits like one; a page whose kind never moves the editor must not.
+ */
+export function readConfigDraft(
+  jsonMode: boolean,
+  draft: {
+    config: Record<string, unknown>;
+    jsonText: string;
+    inputs: Readonly<Record<string, string | boolean | undefined>>;
+  },
+  fields: readonly ConfigField[],
+): AssembleResult {
+  if (!jsonMode) return assembleConfig(draft.config, fields, draft.inputs);
+  const parsed = parseConfigText(draft.jsonText);
+  if (!parsed.ok) return { ok: false, message: parsed.message };
+  // In JSON mode the operator authored the WHOLE object, so it is both the
+  // config to store and the subset to validate — there is no "keys the form does
+  // not own" distinction to preserve, because no form was in the way.
+  return { ok: true, config: parsed.config, owned: parsed.config };
+}

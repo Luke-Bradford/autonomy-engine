@@ -876,6 +876,7 @@ td button + button {
 }
 
 .connection-form,
+.dataset-form,
 .trigger-form {
   margin-top: 1.5rem;
   padding: 1rem 1.25rem;
@@ -889,6 +890,7 @@ td button + button {
 }
 
 .connection-form label,
+.dataset-form label,
 .trigger-form label {
   display: flex;
   flex-direction: column;
@@ -955,6 +957,9 @@ td button + button {
 .connection-form input,
 .connection-form select,
 .connection-form textarea,
+.dataset-form input,
+.dataset-form select,
+.dataset-form textarea,
 .trigger-form input,
 .trigger-form select,
 .trigger-form textarea,
@@ -972,6 +977,7 @@ td button + button {
 }
 
 .connection-form textarea,
+.dataset-form textarea,
 .trigger-form textarea,
 .external-wait-complete textarea {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;

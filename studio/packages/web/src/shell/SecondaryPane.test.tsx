@@ -33,9 +33,16 @@ describe('SecondaryPane', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
 
     const links = within(pane()).getAllByRole('link');
-    expect(links.map((a) => a.textContent)).toEqual(['Connections', 'Secrets', 'Triggers', 'Git']);
+    expect(links.map((a) => a.textContent)).toEqual([
+      'Connections',
+      'Datasets',
+      'Secrets',
+      'Triggers',
+      'Git',
+    ]);
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/manage/connections',
+      '/manage/datasets',
       '/manage/secrets',
       '/manage/triggers',
       '/manage/git',
@@ -64,8 +71,14 @@ describe('SecondaryPane', () => {
   it('marks the current section, and only the current section', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/triggers');
     const links = within(pane()).getAllByRole('link');
-    // Positional: Connections, Secrets, Triggers, Git — only Triggers is lit.
-    expect(links.map((a) => a.getAttribute('aria-current'))).toEqual([null, null, 'page', null]);
+    // Positional, but computed from the SSOT rather than written out: a literal
+    // array here silently means the wrong section every time a section is added
+    // above the one under test (adding Datasets at index 1 was exactly that).
+    // What is asserted is still real — exactly one link is lit, and it is the
+    // one whose path matches the current route.
+    expect(links.map((a) => a.getAttribute('aria-current'))).toEqual(
+      manage.sections.map((section) => (section.path === '/manage/triggers' ? 'page' : null)),
+    );
   });
 
   /** A deeper route inside a section keeps that section lit. */

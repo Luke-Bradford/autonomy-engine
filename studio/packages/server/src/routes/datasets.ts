@@ -127,9 +127,13 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
       'dataset',
       request.params.id,
     );
-    // No dependent re-gate, unlike the connection route: nothing binds a dataset
-    // yet (node dataset refs are M3), and when they do, a node's ref is checked
-    // at DISPATCH like `connectionId` — not by a delete-time scan (§3.1).
+    // No dependent re-gate, unlike the connection route. Nodes DO bind datasets
+    // now — M3 added `Node.datasetIds` and M5's `copy` consumes it — and the
+    // rule is unchanged by that: a node's dataset ref is checked at DISPATCH
+    // like `connectionId`, never by a delete-time scan (§3.1). So deleting a
+    // bound dataset succeeds and the copy fails when it next runs, which the
+    // Manage → Datasets confirm dialog (#1115) now says out loud rather than
+    // leaving the operator to find out.
     deleteDataset(db, existing.id);
     reply.status(204).send();
   });

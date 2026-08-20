@@ -24,7 +24,9 @@ import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { ImportPanel } from './ImportPanel';
 import {
   assembleConfig,
-  deriveConfigFields,
+  deriveFieldsWithCarried,
+  parseConfigText,
+  readConfigDraft,
   seedFieldInputs,
   unrepresentableFields,
   type ConfigField,
@@ -53,60 +55,16 @@ type FormState = {
 };
 
 /**
- * The controls for one kind's config, plus any CARRIED key.
- *
- * A carried key is one the stored config holds that this kind does not declare
- * but another kind does — the residue of a kind switch. Rendering it (rather
- * than only naming it) is what `ContainerPanel` does with a container's illegal
- * fields and for the same reason: it makes "blank the control to drop the key"
- * the repair, instead of a dead end that can only be fixed in the JSON editor.
- * A carried field is always `optional` here, so blanking it OMITS the key —
- * which is exactly the clearing gesture `assembleConfig` honours.
- *
- * A key no kind declares is not carried: nothing can describe it, so it stays
- * untouched in `config` and is reachable through the JSON escape hatch.
- *
- * This matches fields across kinds BY NAME, which assumes a name means the same
- * SHAPE everywhere it appears. That holds today — `model`/`baseUrl`/`timeoutMs`
- * are the only shared names and each has one type across every kind declaring
- * it — and it is what lets a kind switch keep a typed value. A future kind that
- * reused a name with a DIFFERENT type would carry a stale draft into the wrong
- * control, so give it a new name rather than a second meaning.
+ * The controls for this kind's config, plus any key CARRIED over from another
+ * kind. The rule itself lives in `configForm.ts` — datasets need the identical
+ * one (#1115), and a second copy is how the halves drift apart. What is local
+ * here is only which kind list and which schema lookup to ask it about.
  */
 function connectionFields(
   kind: ConnectionKind,
   config: Record<string, unknown>,
 ): { fields: ConfigField[]; carried: string[] } {
-  const own = deriveConfigFields(connectionConfigSchema(kind)) ?? [];
-  const seen = new Set(own.map((f) => f.name));
-  const carried: ConfigField[] = [];
-  for (const other of KINDS) {
-    if (other === kind) continue;
-    for (const field of deriveConfigFields(connectionConfigSchema(other)) ?? []) {
-      if (seen.has(field.name) || !(field.name in config)) continue;
-      seen.add(field.name);
-      carried.push({ ...field, optional: true });
-    }
-  }
-  return { fields: [...own, ...carried], carried: carried.map((f) => f.name) };
-}
-
-/** Read the JSON draft back out as a config object. Empty text means `{}`. */
-function parseConfigText(
-  text: string,
-): { ok: true; config: Record<string, unknown> } | { ok: false; message: string } {
-  try {
-    const raw: unknown = JSON.parse(text.trim() === '' ? '{}' : text);
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      return { ok: false, message: 'Invalid config JSON: config must be a JSON object' };
-    }
-    return { ok: true, config: raw as Record<string, unknown> };
-  } catch (err) {
-    return {
-      ok: false,
-      message: `Invalid config JSON: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
+  return deriveFieldsWithCarried(KINDS, connectionConfigSchema, kind, config);
 }
 
 function formFor(
@@ -349,22 +307,25 @@ function ConnectionForm({
     // showing and the JSON genuinely does not change, so a config shaped for
     // the OLD kind saved with nothing on screen to say so — the exact failure
     // this ticket exists to end, through the one path it did not cover.
-    let candidate: Record<string, unknown>;
-    if (jsonMode) {
-      const draft = parseConfigText(form.jsonText);
-      if (!draft.ok) return null; // submit reports the parse error itself
-      candidate = draft.config;
-    } else {
-      const assembled = assembleConfig(form.config, fields, form.inputs);
-      if (!assembled.ok) return null; // the per-field message already says this
-      candidate = assembled.owned;
-    }
+    // `owned` — the schema-declared subset — so the kind's own `refine` rules see
+    // precisely what their author intended. In JSON mode that IS the whole
+    // object, because no form was in the way of it.
+    const draft = readConfigDraft(jsonMode, form, fields);
+    // An unreadable draft says nothing: submit reports the parse error, and a
+    // per-field message already names a control that will not read back.
+    if (!draft.ok) return null;
+    const candidate = draft.owned;
     // The kind's own rules, INCLUDING the ones its shared schema cannot carry:
     // `fs`'s absolute-root check lives in the server adapter (`node:path`), so
     // a schema-only advisory would say nothing about the one path-safety key in
     // the catalog — the exact silent-until-dispatch failure this ticket ends.
     return connectionConfigAdvisory(form.kind, candidate);
-  }, [jsonMode, form.config, form.jsonText, form.kind, form.inputs, fields]);
+    // The three draft fields plus `kind`, not `form` whole: `form` is a new
+    // object on every keystroke, so depending on it would re-parse and
+    // re-validate the config while the operator types a NAME or a SECRET.
+    // Listing exactly what `readConfigDraft` reads keeps that honest — a fourth
+    // field added to it must be added here.
+  }, [jsonMode, form.config, form.jsonText, form.inputs, form.kind, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
@@ -427,22 +388,12 @@ function ConnectionForm({
     // why each MODE toggle above commits to `config` before switching. A kind
     // change deliberately does not: it rewrites neither draft, so an operator's
     // JSON is never edited under them. The advisory is what covers that seam.
-    let config: Record<string, unknown>;
-    if (jsonMode) {
-      const parsed = parseConfigText(form.jsonText);
-      if (!parsed.ok) {
-        setError(parsed.message);
-        return;
-      }
-      config = parsed.config;
-    } else {
-      const assembled = assembleConfig(form.config, fields, form.inputs);
-      if (!assembled.ok) {
-        setError(assembled.message);
-        return;
-      }
-      config = assembled.config;
+    const draft = readConfigDraft(jsonMode, form, fields);
+    if (!draft.ok) {
+      setError(draft.message);
+      return;
     }
+    const config = draft.config;
 
     // Build the write body; only include `secret` when the user typed one
     // (blank = keep the existing secret on edit, or none on create).
@@ -504,7 +455,7 @@ function ConnectionForm({
       </label>
 
       <div className="connection-config" role="group" aria-label="Config">
-        <div className="connection-config-header">
+        <div className="config-header">
           <span>Config</span>
           <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
             {jsonMode ? 'Edit as fields' : 'Edit as JSON'}

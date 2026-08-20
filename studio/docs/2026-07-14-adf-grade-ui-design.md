@@ -270,6 +270,7 @@ P7 single-container Fastify static route still needs no history-API fallback.
 | `#/monitor/runs/:runId` | Run detail (live monitor) |
 | `#/manage` | index redirect (`replace`) → `#/manage/connections` |
 | `#/manage/connections` | Connections |
+| `#/manage/datasets` | Datasets (#1115) |
 | `#/manage/secrets` | Secrets (#1060) |
 | `#/manage/triggers` | Triggers |
 | `#/manage/git` | Git (workspace git) |
@@ -296,6 +297,59 @@ Still open, deliberately: a `{$secret}` PICKER in the node config form. `secretH
 `z.record`, which `classify()` has no case for, so it falls through to the generic JSON textarea
 (`packages/web/src/pages/pipeline/configForm.ts`) and the marker must be hand-typed. That is an
 authoring affordance on a control that works, and belongs with the U8a expression-picker work.
+
+### Manage › Datasets (AS BUILT, 2026-08-20, #1115 + #1120)
+
+Same shape of gap as Secrets above, one layer along. The data-movement series
+(#996) had landed `dataset` as the fourth first-class resource (M2), its
+`table`/`query` readers (M4), and the `copy` activity whose four pickers bind
+one at each end (M5) — and `packages/web/src/api/datasets.ts` exported exactly
+one function, `listDatasets`, for those pickers to read. **There was no way to
+author a dataset anywhere in the product**, so every picker could only offer
+rows created through the REST API and the whole M1–M5 path was unreachable by
+clicking. That is why this was taken ahead of M6/M7 under the breadth-before-
+polish steer: another dataset KIND adds nothing while no kind can be created.
+
+Shipped as list + create/edit + delete at `#/manage/datasets`, beside
+Connections, which is where §13 of the data-movement spec scopes it ("a Datasets
+list + detail beside Connections. No new hub, no parallel authoring idiom"). The
+**detail** half — referencing pipelines, flagged where mappings no longer agree —
+is M9 and is not here.
+
+Four decisions worth keeping:
+
+- **`columns` is a JSON textarea, and an EMPTY one is refused.** An
+  array-of-object has no typed control in studio (`configForm.ts`'s `classify`
+  sends one to the JSON editor) and §13 settles that the general `objectList`
+  primitive is M8's to build as a primitive, since `switch.cases` and
+  `llm_call.tools` wait on the same control; M5 took the identical decision for
+  the mapping grid. The refusal matters more than the control: `columns` is
+  required with no `.default([])` precisely so an absent list cannot be
+  manufactured as "this table has no columns" (#473's lesson, §2.2), which
+  auto-map would read as an empty mapping. So blank is an error naming the
+  choice, `[]` is accepted as a stated fact, and an edit seeds from the stored
+  row so a rename can never wipe a declaration.
+- **A new dataset opens on the first kind with a READER, not on `KINDS[0]`.**
+  The enum's order is address-vocabulary order — `delimited` is first and its
+  reader arrives at M7 — so the obvious default would hand the operator a
+  dataset that cannot run and whose config this build cannot describe.
+- **A kind with no reader forces the JSON editor and says why.** Its config
+  schema is a `looseObject`, so no controls derive and the empty-fields branch
+  would otherwise print "This kind has no settings" — false, since §2.6 lists
+  seven keys for `delimited`. They are undescribed, not absent.
+- **A dangling store renders as its raw id, in the list and in the picker.** A
+  dataset's `connectionId` is checked at write time only and the connection can
+  be deleted afterwards. Dropping the unresolved id from the `<select>` would
+  make it fall back to the first connection — reading as the binding while the
+  row says otherwise, and the next Save would write that lie
+  (`bindingPickers.ts` states the same rule for the canvas).
+
+`datasetConfigAdvisory` (#1120) landed with it: the `connectionConfigAdvisory`
+shape one layer down, advisory and never a gate, because every shape it reports
+is one the server stores today. Single-file dataset export/import and the
+`ImportPanel` link that needs it are **deferred to #1143**; the panel's
+`SECTION.dataset.path` stays `null` deliberately, because the new page carries
+no import panel either and a link would be a second dead end.
 
 ### U3r — legacy MVP-path compatibility (AS BUILT, 2026-07-24)
 

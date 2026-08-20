@@ -4,6 +4,7 @@ import {
   DATASET_CONFIG_SCHEMAS,
   DATASET_KINDS,
   IMPLEMENTED_DATASET_KINDS,
+  datasetConfigAdvisory,
   datasetConfigSchema,
   datasetKindIsImplemented,
   isSqlIdentifier,
@@ -96,5 +97,50 @@ describe('query dataset config', () => {
       queryDatasetConfigSchema.safeParse({ sql: 'select 1', parameters: { a: { nested: 1 } } })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('datasetConfigAdvisory (#1120)', () => {
+  it('says nothing about a well-formed config for a kind with a reader', () => {
+    expect(datasetConfigAdvisory('table', { table: 'orders' })).toBeNull();
+    expect(datasetConfigAdvisory('query', { sql: 'select 1' })).toBeNull();
+  });
+
+  it('names the offending key when the kind’s own schema refuses the config', () => {
+    const note = datasetConfigAdvisory('table', {});
+    expect(note).not.toBeNull();
+    expect(note).toContain('table');
+
+    // The identifier rule is the security-relevant one (§8): a table name cannot
+    // be bound as a parameter, so a name needing quoting is refused rather than
+    // accommodated. An operator learns that here instead of at dispatch.
+    const spaced = datasetConfigAdvisory('table', { table: 'order lines' });
+    expect(spaced).toContain('bare SQL identifier');
+  });
+
+  it('reports a kind with no reader even though its config parses', () => {
+    // `unimplementedDatasetConfigSchema` is a `looseObject`, so this config is
+    // VALID — which is exactly why the note has to come from the positive
+    // `IMPLEMENTED_DATASET_KINDS` fact rather than from the parse result.
+    expect(unimplementedDatasetConfigSchema.safeParse({ path: '/tmp/x.csv' }).success).toBe(true);
+    for (const kind of DATASET_KINDS.filter((k) => !IMPLEMENTED_DATASET_KINDS.has(k))) {
+      expect(datasetConfigAdvisory(kind, { path: '/tmp/x.csv' })).toContain('no reader exists');
+    }
+  });
+
+  it('reports BOTH a schema complaint and a missing reader in one sentence', () => {
+    // `query` has a reader, so this proves the two notes are independent: swap in
+    // a kind that has neither a reader nor a satisfied schema and both appear.
+    const note = datasetConfigAdvisory('query', { sql: '' });
+    expect(note).not.toBeNull();
+    expect(note).not.toContain('no reader exists');
+  });
+
+  it('is total over every kind, for any config', () => {
+    // A kind added without a `DATASET_CONFIG_SCHEMAS` entry is already a type
+    // error; this pins that the advisory itself never throws on one.
+    for (const kind of DATASET_KINDS) {
+      expect(() => datasetConfigAdvisory(kind, {})).not.toThrow();
+    }
   });
 });
