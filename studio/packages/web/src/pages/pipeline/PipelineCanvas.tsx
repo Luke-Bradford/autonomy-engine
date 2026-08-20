@@ -520,9 +520,11 @@ export function PipelineCanvas({
    * override omitted `issues` and let an invalid doc reach a client-side
    * `PipelineVersionWriteSchema.parse`, whose throw printed as a raw ZodError.
    *
-   * `ready` is inert here BY CONSTRUCTION rather than by luck — `setReady` is
-   * only ever called with `true` — and is kept for parity with the reasons its
-   * neighbours give.
+   * The `ready` arm is live for the toolbar button, which exists while the
+   * pipeline is still loading, and inert for the override BY CONSTRUCTION
+   * rather than by luck: `conflict` is only ever set from a 409, which can only
+   * follow a save, which can only follow a load. `setReady` is called exactly
+   * once and only with `true`, so it never goes back.
    */
   const saveReason = saveDisabledReason({ saving, ready, issues, previewing });
 
