@@ -504,9 +504,12 @@ export function deriveFieldsWithCarried<K extends string>(
  *
  * Each MODE TOGGLE is expected to commit its draft into `config` before
  * switching, so the two never disagree about a key the operator has finished
- * with. A KIND change deliberately does not commit — it must not rewrite an
+ * with. A KIND change ordinarily does NOT commit — it must not rewrite an
  * operator's JSON under them — which is precisely the seam a live advisory
- * covers.
+ * covers. The exception is a page where the kind itself decides which editor is
+ * on screen (`DatasetsPage`: a kind with no reader forces JSON on, and leaving
+ * that kind takes it away again). There the kind change IS a mode toggle, so it
+ * commits like one; a page whose kind never moves the editor must not.
  */
 export function readConfigDraft(
   jsonMode: boolean,

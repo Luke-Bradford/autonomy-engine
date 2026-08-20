@@ -456,16 +456,16 @@ function DatasetForm({
         });
         return;
       }
-      // A draft that does not parse has no committed form to carry. The kind
-      // still changes — the operator is not trapped in it — but the message
-      // names the parse failure rather than letting a field form open on a
-      // config the editor's contents have already moved past.
+      // A draft that does not parse has no committed form to carry, so the kind
+      // change must not CLOSE the editor: `jsonMode` is derived, and a new kind
+      // that happens to render the stale `form.config` would otherwise reopen the
+      // field form on the operator's pre-edit value while their unparseable text
+      // vanished behind it. Pin the editor open instead — the same rule
+      // `toFieldMode` already applies, which refuses to leave JSON mode on a
+      // parse failure. The kind still changes, so the operator is not trapped in
+      // it, and the message names the parse failure they have to fix first.
       setError(parsed.message);
-      onChange({
-        ...form,
-        kind,
-        inputs: seedFieldInputs(datasetFields(kind, form.config).fields, form.config),
-      });
+      onChange({ ...form, kind, jsonMode: true });
       return;
     }
 

@@ -364,6 +364,34 @@ describe('DatasetsPage', () => {
     );
   });
 
+  it('keeps the JSON editor open when the kind changes on a draft that will not parse', async () => {
+    // The parse-failure half of the case above. `jsonMode` is DERIVED, so a new
+    // kind that happens to render the stale `config` would reopen the field
+    // form on the pre-edit value while the operator's unparseable text vanished
+    // behind it. `toFieldMode` already refuses to leave JSON mode on a parse
+    // failure; a kind change has to refuse for the same reason.
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+
+    const editor = within(form()).getByLabelText('Config (JSON)');
+    await user.clear(editor);
+    await pasteInto(user, editor, '{oops');
+
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+
+    // The kind changed — the operator is not trapped in it — but the editor is
+    // still open on exactly what they typed, and the message says why.
+    expect(within(form()).getByLabelText('Kind')).toHaveValue('table');
+    expect(within(form()).getByLabelText('Config (JSON)')).toHaveValue('{oops');
+    expect(within(form()).getByRole('alert')).toBeInTheDocument();
+    expect(within(form()).queryByLabelText('table')).not.toBeInTheDocument();
+  });
+
   it('names the unreadable control instead of opening JSON on a draft that omits it', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([
