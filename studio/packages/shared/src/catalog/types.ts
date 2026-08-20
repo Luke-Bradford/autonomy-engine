@@ -233,6 +233,26 @@ export const FILE_DELETE_ACTIVITY_TYPE = 'file_delete';
 export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
 
 /**
+ * #996 M5 — the `copy` activity's `Node.type` (#1134 slice 4b).
+ *
+ * The identifier lands here, beside the `fs` ones and for the same reason: it is
+ * read in two agreeing places (the catalog entry and the adapter branch that
+ * dispatches on `ctx.activityType`), so it lives once.
+ *
+ * It is deliberately AHEAD of its catalog entry. Slice 4b builds the run path;
+ * the entry ships in 4c together with the canvas pickers for `connectionIds` and
+ * `datasetIds`, because the toolbox makes every catalog entry draggable
+ * (`web/.../activityGroups.ts`) and no picker for either pair exists yet — an
+ * entry landing alone would put a `copy` node on the canvas that an operator can
+ * drop and cannot bind. That is the same hazard slice 4a refused when it kept
+ * the entry out ("a user-visible activity that always fails at dispatch"), and
+ * it is why a constant with no entry is the honest intermediate state rather
+ * than an oversight. Until the entry exists the executor refuses a `copy` node
+ * before dispatch, so nothing here is reachable.
+ */
+export const COPY_ACTIVITY_TYPE = 'copy';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

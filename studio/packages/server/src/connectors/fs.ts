@@ -17,16 +17,12 @@ import {
   fileReadConfigSchema,
   fileWriteConfigSchema,
 } from '@autonomy-studio/shared';
-import type {
-  ActivityContext,
-  ActivityEvent,
-  ConnectorAdapter,
-  ConnectorErrorKind,
-} from './types.js';
+import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
 // connector shares the one hardened implementation rather than mirroring it
 // (data-movement spec §8). `fs` is still its primary caller and still layers
 // `O_NOFOLLOW` on top at open time.
+import { failed } from './activity-events.js';
 import { resolveWithinRoots } from './confine.js';
 
 /**
@@ -157,11 +153,6 @@ const fsConnectionConfigSchema = sharedFsConnectionConfigSchema.extend({
 // SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-
 // config.ts`), imported here so the palette metadata and this live-request guard
 // can never drift. `input` here is the node's prepared (substituted) value.
-
-/** Build a terminal `failed` event. */
-function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
-  return { type: 'failed', kind, error };
-}
 
 /** Whether a thrown error is an abort (run cancel / shutdown). */
 function isAbort(err: unknown, signal: AbortSignal): boolean {

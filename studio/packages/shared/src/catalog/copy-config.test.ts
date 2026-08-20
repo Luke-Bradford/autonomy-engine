@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CopyMappingSchema } from './copy-config.js';
+import { CopyMappingSchema, copyDispatchInputSchema } from './copy-config.js';
 
 /**
  * #996 M5 slice 1 (#1122) — the `copy` mapping declaration (§6.1).
@@ -88,5 +88,61 @@ describe('CopyMappingSchema — the declared shape', () => {
 
   it('an empty mapping parses — it is the pump that decides what to do with one', () => {
     expect(CopyMappingSchema.parse([])).toEqual([]);
+  });
+});
+
+describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)', () => {
+  const row = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('accepts a NON-STRING expression, which is what reaches an adapter', () => {
+    // The regression `CopyMappingSchema`'s own docblock predicts: substitution
+    // happens in the REDUCER, and a whole-value `${}` reference preserves its
+    // native type — so `expression: '${params.limit}'` arrives here as a NUMBER.
+    // Re-parsing `preparedInput` through the AUTHORED schema would refuse a
+    // working pipeline at dispatch.
+    const parsed = copyDispatchInputSchema.parse({
+      mapping: [{ expression: 42, sink: 'id', type: 'integer' }],
+    });
+    expect(parsed.mapping[0]?.expression).toBe(42);
+  });
+
+  it('the AUTHORED schema refuses that same value — the two variants differ ONLY there', () => {
+    expect(
+      CopyMappingSchema.safeParse([{ expression: 42, sink: 'id', type: 'integer' }]).success,
+    ).toBe(false);
+  });
+
+  it('keeps the XOR, so a dispatch payload cannot carry both arms', () => {
+    const result = copyDispatchInputSchema.safeParse({
+      mapping: [{ source: 'a', expression: 1, sink: 'id', type: 'integer' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('keeps one-sink-one-writer, so a dispatch payload cannot silently last-wins', () => {
+    const result = copyDispatchInputSchema.safeParse({
+      mapping: [
+        { source: 'a', sink: 'id', type: 'integer' },
+        { source: 'b', sink: 'id', type: 'integer' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('defaults the write mode to append — the non-destructive arm', () => {
+    expect(copyDispatchInputSchema.parse({ mapping: [row] }).mode).toBe('append');
+  });
+
+  it('takes overwrite, and refuses any other mode', () => {
+    expect(copyDispatchInputSchema.parse({ mapping: [row], mode: 'overwrite' }).mode).toBe(
+      'overwrite',
+    );
+    expect(copyDispatchInputSchema.safeParse({ mapping: [row], mode: 'truncate' }).success).toBe(
+      false,
+    );
+  });
+
+  it('still defaults onError to fail — the shared element shape is ONE declaration', () => {
+    expect(copyDispatchInputSchema.parse({ mapping: [row] }).mapping[0]?.onError).toBe('fail');
   });
 });

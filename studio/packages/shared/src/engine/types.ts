@@ -738,6 +738,24 @@ export const WARNING_CODES = {
    * is why the event's own doc below no longer ties a warning to a success.
    */
   OUTPUT_TRUNCATED: 'output_truncated',
+  /**
+   * #996 M5 (#1134) — a `copy` dropped rows: one or more values failed to coerce
+   * under `onError: 'fail'`, so those rows were not written.
+   *
+   * Emitted on BOTH terminals, not just success. Dropped rows are a fact about
+   * the copy, and a copy that dropped 400 rows and THEN hit a store failure has
+   * two things worth saying, not one — suppressing the tally on the failure path
+   * would lose it exactly where the outputs cannot carry it either.
+   *
+   * Advisory rather than a failure, and deliberately: §5 declares `rowsFailed`
+   * as an OUTPUT a pipeline may branch on, which settles that a partial copy is
+   * a real result rather than an error. The warning carries what the output
+   * cannot — slice 1's bounded `CoercionFailureCode` tally ("410 not_integral, 2
+   * unparseable_date") and the first offending row. Without it `rowsFailed: 412`
+   * reaches an operator with no way to learn why, and the dropped rows are
+   * exactly the ones nothing else records.
+   */
+  COPY_ROWS_FAILED: 'copy_rows_failed',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */
