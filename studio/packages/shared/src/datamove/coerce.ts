@@ -78,10 +78,16 @@ export type CoercionResult =
  * §2.6 states why they are absent from the SQL kinds: *"a database column
  * already has a type and a real `NULL`, so there is nothing to declare."*
  *
- * `delimited`'s config now DECLARES both (#1163); `excel`'s waits for M11. What
- * is still owed is the wiring — `connectors/copy.ts` does not yet read them off
- * the source dataset and pass them here, which is the TODO on
- * `CopyPumpOptions.coercion` and lands with M7's reader slices.
+ * `delimited`'s config DECLARES both (#1163) and M7 slice 3 (#1167) wired them:
+ * `CopyIo.sourceCoercion` reads them off the source dataset and `copy.ts` passes
+ * them to `pumpCopyRows`. `excel`'s config waits for M11.
+ *
+ * They are applied by the PUMP and never by the reader, which is a decision
+ * rather than a layering accident. `nullValue` in the reader would look
+ * equivalent and is not: `dateFormat` cannot be done there at all (the reader
+ * has no target type), and `bytesRead` would under-count, because a field
+ * replaced by `null` before it is charged is charged 0 where the string it
+ * replaced was charged its UTF-8 length.
  */
 export interface CoercionOptions {
   /**

@@ -3,7 +3,6 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import {
   datasetConfigSchema,
-  datasetKindIsImplemented,
   isSqlIdentifier,
   nocaseFold,
   queryDatasetConfigSchema,
@@ -99,8 +98,18 @@ import type {
  * platform-aware, so the shared schema carries `roots`' shape and the server
  * refines it. It REFINES rather than re-declares, so the form and the adapter
  * can never describe different objects.
+ *
+ * EXPORTED as of #1167, because a sqlite SINK is no longer only reached from
+ * this file. `fs.ts`'s copy arm gates the sink connection before handing it to
+ * `writeSqliteDatasetRows`, and gating it with the SHARED schema would make that
+ * rung strictly weaker than the identical rung on this adapter — a relative
+ * root would pass `fs.ts`'s check and be refused one layer down, with a
+ * different message for the same fault. The inner re-parse in
+ * `writeSqliteDatasetRows` still catches it either way, but "the callee happens
+ * to re-check" is defence in depth that this gate should not be leaning on
+ * silently. One schema, both arms.
  */
-const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
+export const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
   roots: sharedSqliteConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
     roots.forEach((root, index) => {
       if (isAbsolute(root)) return;
@@ -202,6 +211,37 @@ async function confineStorePath(roots: readonly string[], requested: string): Pr
   return confined.path;
 }
 
+/**
+ * The dataset kinds THIS STORE reads, named literally.
+ *
+ * Not `datasetKindIsImplemented`, which is what both guards below used to ask
+ * and which stopped being the right question at M7 slice 3 (#1167).
+ * `IMPLEMENTED_DATASET_KINDS` answers "does a reader exist ANYWHERE", and from
+ * that slice on it spans two stores — so a `delimited` dataset would have passed
+ * here and then been handed to `parseTableTarget`, which reports "invalid table
+ * dataset config": a true statement about the wrong thing, sending an operator
+ * to fix a config that is correct for the store it actually lives in.
+ *
+ * ONE guard and ONE message, deliberately, rather than a not-implemented arm
+ * stacked on a not-mine arm. Layered, one of the two is unreachable for every
+ * kind (`excel` is neither implemented nor a sqlite kind), and the pair would
+ * only ever say which of two true things a given ordering happened to reach
+ * first. `delimited-io.ts`'s `prepareRead` is the same shape from the other
+ * store, which is what keeps the two symmetric.
+ *
+ * The MISMATCH this refuses is a dispatch the executor should already have
+ * refused — `DATASET_CONNECTION_MISMATCH` fires when the dataset's store is not
+ * the one the node bound — so this is defence in depth on a diagnostics path,
+ * not the gate. It stays because a guard that reports the wrong fault is worse
+ * than one that never runs.
+ */
+const SQLITE_DATASET_KINDS: readonly DatasetKind[] = ['table', 'query'];
+
+/** The refusal for a dataset kind that does not live in a sqlite store. */
+function notASqliteKind(kind: DatasetKind): string {
+  return `the sqlite store reads ${SQLITE_DATASET_KINDS.map((k) => `'${k}'`).join(' and ')} datasets; this one is '${kind}'`;
+}
+
 /** What one dataset read needs to know. */
 export interface SqliteDatasetRead {
   /** The `sqlite` connection's stored config — RE-PARSED here, never trusted. */
@@ -219,11 +259,8 @@ function statementFor(
   datasetKind: DatasetKind,
   datasetConfig: Record<string, unknown>,
 ): { sql: string; parameters: Record<string, unknown> | null } {
-  if (!datasetKindIsImplemented(datasetKind)) {
-    throw new DatasetIoError(
-      'permanent',
-      `no reader exists for the '${datasetKind}' dataset kind yet`,
-    );
+  if (!SQLITE_DATASET_KINDS.includes(datasetKind)) {
+    throw new DatasetIoError('permanent', notASqliteKind(datasetKind));
   }
 
   const parsed = datasetConfigSchema(datasetKind).safeParse(datasetConfig);
@@ -500,11 +537,8 @@ async function resolveSqliteDatasetAddress(args: {
   if (!cfg.success) {
     throw new DatasetIoError('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
   }
-  if (!datasetKindIsImplemented(args.dataset.kind)) {
-    throw new DatasetIoError(
-      'permanent',
-      `no reader exists for the '${args.dataset.kind}' dataset kind yet`,
-    );
+  if (!SQLITE_DATASET_KINDS.includes(args.dataset.kind)) {
+    throw new DatasetIoError('permanent', notASqliteKind(args.dataset.kind));
   }
   const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
 
@@ -1032,6 +1066,12 @@ export const sqliteAdapter: ConnectorAdapter = {
           connection.kind === 'sqlite'
             ? null
             : `a sqlite copy writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+        // §2.6 gives the SQL kinds no format facts to declare — "a database
+        // column already has a type and a real `NULL`, so there is nothing to
+        // declare" — so `{}` here is a true statement about `table`/`query`,
+        // not an unimplemented stub. The channel is REQUIRED precisely so a
+        // store has to say which of the two it means.
+        sourceCoercion: () => ({}),
         describeSource: ({ dataset, signal }) =>
           describeSqliteDatasetColumns({
             connectionConfig: cfg.data,

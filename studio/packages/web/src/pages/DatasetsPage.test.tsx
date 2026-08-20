@@ -282,18 +282,18 @@ describe('DatasetsPage', () => {
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
-    await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
-    // #1163 gave `delimited` a real schema, so this is no longer "the shape
-    // cannot be derived" — `deriveConfigFields` now yields §2.6's eight
-    // controls. The JSON editor is forced by the OTHER fact: no reader exists,
-    // so a typed form would present the dataset as ready to copy while every
-    // copy naming it still refuses at dispatch. `DatasetsPage` keys this branch
+    // `excel` rather than `delimited`, and the swap is the point rather than a
+    // relocation. #1163 gave `delimited` a real schema and #1167 gave it a
+    // READER, so it now gets the typed form (the test below asserts that) — and
+    // `excel` is what holds this branch open, on the READER fact alone, exactly
+    // as `delimited` did between the two slices. `DatasetsPage` keys the branch
     // on `datasetKindIsImplemented` and not on `fields.length`, which is what
     // keeps the two apart — break that and this test goes red.
     expect(within(form()).getByLabelText('Config (JSON)')).toBeInTheDocument();
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
-    expect(within(form()).getByText(/no reader exists for a delimited dataset yet/)).toBeVisible();
+    expect(within(form()).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
     // No mode toggle: the reader gate, not an absent field form, is why.
     expect(
       within(form()).queryByRole('button', { name: 'Edit as fields' }),
@@ -408,11 +408,13 @@ describe('DatasetsPage', () => {
     // `parameters` is a record, so it derives a JSON control; typing something
     // unparseable into it makes the field draft unreadable.
     await pasteInto(user, within(form()).getByLabelText(/^parameters \(optional\)/), '{oops');
-    await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
+    // `excel` — the kind-change branch this exercises only fires for a kind with
+    // NO reader, and #1167 gave `delimited` one.
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
     expect(await within(form()).findByRole('alert')).toHaveTextContent(/parameters/);
     // The kind still changed — the operator is not trapped in it.
-    expect(within(form()).getByLabelText('Kind')).toHaveValue('delimited');
+    expect(within(form()).getByLabelText('Kind')).toHaveValue('excel');
   });
 
   it('deletes only on confirmation, and says what breaks', async () => {
@@ -439,6 +441,46 @@ describe('DatasetsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     expect(within(form()).getByText(/needs a connection first/)).toBeInTheDocument();
+  });
+
+  it('gives `delimited` the typed field form now that a reader exists (#1167)', async () => {
+    // The other side of the JSON-forced test above, and the user-visible half of
+    // M7 slice 3: a `delimited` dataset stops being a kind you can only author
+    // as raw JSON. The controls are §2.6's, derived from the schema #1163 gave
+    // it; what changed here is only the READER gate.
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
+
+    expect(within(form()).getByLabelText('path')).toBeInTheDocument();
+    expect(within(form()).getByLabelText('header')).toBeInTheDocument();
+    expect(within(form()).queryByLabelText('Config (JSON)')).not.toBeInTheDocument();
+    // The toggle is back too — it is hidden only for a kind with no reader.
+    expect(within(form()).getByRole('button', { name: 'Edit as JSON' })).toBeInTheDocument();
+    // And no stale advisory: the no-reader note was the reason the form was
+    // locked, so it must go with the lock.
+    expect(
+      within(form()).queryByText(/no reader exists for a delimited dataset yet/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens a NEW dataset on a kind that lives in the store it opens on (#1167)', async () => {
+    // Before #1167 the default was "the first kind with a reader", which was
+    // stable only while one store had one. With `delimited` implemented that
+    // rule returns `delimited` for every new dataset — so a form opening on a
+    // `sqlite` connection would render "Kind and store disagree" on mount,
+    // before the operator had touched anything.
+    const user = userEvent.setup();
+    listConnectionsMock.mockResolvedValue([store({ id: 'conn_files', kind: 'fs' })]);
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    expect(within(form()).getByLabelText('Kind')).toHaveValue('delimited');
+    expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
   });
 
   it('flags a dataset whose kind disagrees with the store it names (#1145)', async () => {

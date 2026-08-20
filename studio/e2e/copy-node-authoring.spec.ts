@@ -140,8 +140,12 @@ test.describe('#1139 — copy-node authoring', () => {
     const stored = latest.nodes.find((n) => n.type === 'copy');
     expect(stored?.connectionIds).toEqual({ source: srcConn, sink: sinkConn });
     expect(stored?.datasetIds).toEqual({ source: srcSet, sink: sinkSet });
-    // The bump this entry owes, stamped on the row the server minted.
-    expect(latest.catalogVersion).toBe(23);
+    // The bump this entry owes, stamped on the row the server minted. A LITERAL
+    // on purpose, and the maintenance it costs is the point: it is the tripwire
+    // that made #1167's 23 -> 24 bump show up here rather than only in the
+    // shared package's own tests. Importing `CATALOG_VERSION` would make this
+    // assert that two copies of one constant agree, which is not the claim.
+    expect(latest.catalogVersion).toBe(24);
 
     await expectQuiet(page, problems);
   });

@@ -625,6 +625,10 @@ describe('copy activity — §7 the source-side drift gate runs before the first
       input: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
     });
     for await (const event of runCopyActivity(ctx, {
+      // `{}` rather than a throw: this test's subject is the DESCRIBE failing,
+      // and a coercion projection that also threw would prove nothing about
+      // which of the two the ladder reported.
+      sourceCoercion: () => ({}),
       describeSource: () => Promise.reject(new DatasetIoError('transient', 'database is locked')),
       readBatches: () => {
         throw new Error('the reader must never be reached');
