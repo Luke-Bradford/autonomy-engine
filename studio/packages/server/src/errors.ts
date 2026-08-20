@@ -10,6 +10,7 @@ import {
 import { GitOperationError, GitPushRejectedError, GitUnavailableError } from './git/provider.js';
 import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { WorkspaceSerializeError } from './portability/workspace-serialize.js';
+import { WorkspaceApplyError } from './portability/workspace-apply.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { DocUnresolvableError } from './run/driver.js';
 import { RerunNotEligibleError } from './run/reseed.js';
@@ -129,11 +130,14 @@ function capIssues<T>(issues: T[]): {
  * already-client-safe error) provides: `NotFoundError`/`PipelineHasRunsError`
  * name a resource kind + an opaque id, nothing else.
  *
- * ONE branch echoes caller input, deliberately: `InvalidPipelineDocError`
- * (#444) quotes ids/key-paths/`${}` text from the doc the caller just POSTed,
- * because a validation diagnostic that names nothing is useless. It is safe
- * only because that doc is owner-scoped and is the caller's own — see that
- * branch's own note. No OTHER branch may echo input without the same argument.
+ * TWO branches echo caller-supplied content, each deliberately and each having
+ * argued for it at the branch itself. `InvalidPipelineDocError` (#444) quotes
+ * ids/key-paths/`${}` text from the doc the caller just POSTed, because a
+ * validation diagnostic that names nothing is useless; it is safe only because
+ * that doc is owner-scoped and is the caller's own. `WorkspaceApplyError`
+ * (#1110) quotes ids and param keys read off the caller's OWN connected git
+ * branch, for the same reason and on the same owner-scoping. No OTHER branch may
+ * echo input without making the argument in the same place.
  *
  * The full error (with stack) is still logged server-side via `request.log`,
  * so nothing is lost for debugging.
@@ -328,6 +332,47 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // classification, not this label.
     if (error instanceof WorkspaceSerializeError) {
       request.log.warn({ err: error }, 'workspace cannot be serialized for commit');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #1110 — the import-side twin of the branch above. `WorkspaceApplyError`
+    // had NO branch here, so all ten of its throw sites answered the generic
+    // message-less `500 internal_error` and the operator was told a git import
+    // failed and nothing else. Only the `conflict` fault is answered here; an
+    // `internal` fault has deliberately NO branch and falls through to that same
+    // 500 (see `WorkspaceApplyFault`) — the classification is made at the throw
+    // site, not guessed at the boundary.
+    //
+    // 409, mirroring `WorkspaceSerializeError`, because these are operator-fixable
+    // CONFLICTS between the committed branch and the workspace, not internal
+    // faults: edit the file, commit, re-import. A 400 would be wrong — the request
+    // itself (a `POST /import` naming a branch) is well-formed; it is the state
+    // the two sides are in that refuses.
+    //
+    // ECHO NOTE (this file's header requires the argument, not an assumption).
+    // These messages quote branch content: resourceIds, version ids, node ids, a
+    // trigger's file label, and the offending `${trigger.windowStart/End}` param
+    // KEYS. That is safe here for reasons that are argued, not inherited:
+    //   - Both sides are the caller's own. The apply runs owner-scoped, over the
+    //     repo THIS workspace is connected to, and answers synchronously to the
+    //     owner who asked for the import — so every quoted id is one they can
+    //     already read in their own branch or their own workspace.
+    //   - No secret can be in the quoted text. Secrets are never committed: the
+    //     connection applier forces `secretRef: null` on every branch-created
+    //     connection, and a trigger's webhook secret is preserved from the DB and
+    //     never read off the branch.
+    //   - No RESOLVED param VALUE exists yet. The apply is static — it validates
+    //     and persists authoring content; substitution happens at dispatch, long
+    //     after. `windowBindingErrors` reports param keys and the binding
+    //     expression, never a runtime value.
+    // This is the same argument `WorkspaceSerializeError` makes for the same class
+    // of ids, one direction reversed.
+    if (error instanceof WorkspaceApplyError && error.fault === 'conflict') {
+      request.log.warn(
+        { err: error },
+        'workspace-git apply refused: branch conflicts with workspace',
+      );
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
