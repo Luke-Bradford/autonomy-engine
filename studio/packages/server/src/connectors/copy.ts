@@ -75,6 +75,19 @@ export interface CopyIo {
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
   }) => Promise<{ readonly rowsWritten: number }>;
+  /**
+   * The store-specific check on the SINK CONNECTION — returns a refusal reason,
+   * or `null` to accept. Optional: a store with nothing to say about a sink
+   * beyond "I can write it" simply omits it.
+   *
+   * It lives here, at a rung of the ladder below, rather than ahead of the
+   * dispatch in the adapter, so that ORDER IS A PROPERTY OF THE LADDER and not
+   * of where each caller happened to put its own guard. Ahead of dispatch it
+   * ran before the two preconditions above it, so a copy that was missing a
+   * dataset end AND pointed at a foreign store was told about the store — a
+   * true statement about the second problem, reported instead of the first.
+   */
+  readonly refuseSink?: (connection: ActivitySink) => string | null;
 }
 
 /**
@@ -217,6 +230,11 @@ export async function* runCopyActivity(
   }
   if (ctx.sink === undefined) {
     yield failed('permanent', 'copy requires a sink connection — the store it writes into');
+    return;
+  }
+  const sinkRefusal = io.refuseSink?.(ctx.sink) ?? null;
+  if (sinkRefusal !== null) {
+    yield failed('permanent', sinkRefusal);
     return;
   }
 

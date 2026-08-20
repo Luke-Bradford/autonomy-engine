@@ -852,22 +852,21 @@ export const sqliteAdapter: ConnectorAdapter = {
         yield failed('permanent', `invalid sqlite connection config: ${cfg.error.message}`);
         return;
       }
-      // The sink is resolved from `ctx.sink`, never from this adapter's own
-      // connection: the running adapter is the SOURCE's and a paired node may
-      // well write into a different store. Its KIND is checked here because
-      // nothing else can — the catalog's `sinkConnectionKinds` allowlist lands
-      // with the entry in 4c, so until then this is the only gate, and an
-      // unchecked non-sqlite config would reach the writer to be refused as
-      // "invalid sqlite connection config", which is a true statement about the
-      // wrong thing.
-      if (ctx.sink !== undefined && ctx.sink.kind !== 'sqlite') {
-        yield failed(
-          'permanent',
-          `a sqlite copy writes into a sqlite store, but the sink connection is '${ctx.sink.kind}'`,
-        );
-        return;
-      }
       yield* runCopyActivity(ctx, {
+        // The sink is resolved from `ctx.sink`, never from this adapter's own
+        // connection: the running adapter is the SOURCE's and a paired node may
+        // well write into a different store. Its KIND is checked because
+        // nothing else can — the catalog's `sinkConnectionKinds` allowlist lands
+        // with the entry in 4c, so until then this is the only gate, and an
+        // unchecked non-sqlite config would reach the writer to be refused as
+        // "invalid sqlite connection config", which is a true statement about
+        // the wrong thing. It is supplied as a LADDER RUNG rather than checked
+        // before dispatch so it takes its declared place behind the two
+        // preconditions, instead of pre-empting them.
+        refuseSink: (connection) =>
+          connection.kind === 'sqlite'
+            ? null
+            : `a sqlite copy writes into a sqlite store, but the sink connection is '${connection.kind}'`,
         readBatches: ({ dataset, signal }) =>
           readSqliteDatasetBatches({
             connectionConfig: cfg.data,

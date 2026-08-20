@@ -208,6 +208,29 @@ describe('copy activity — the refusal ladder', () => {
     });
   });
 
+  it('reports the FIRST failed rung: a missing dataset end outranks a foreign sink kind', async () => {
+    const root = tempRoot();
+    const end = terminal(
+      await run(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 1, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          datasets: null,
+          sink: { kind: 'fs', connectionConfig: { roots: [root] } },
+        }),
+      ),
+    );
+    // Both rungs fail here. The ladder's order is what decides which the
+    // operator is told about, so it has to be the ladder's — a store-specific
+    // guard sitting ahead of the dispatch would answer the second question
+    // while the first went unmentioned.
+    expect(end).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('both a source and a sink dataset'),
+    });
+  });
+
   it('refuses a malformed config rather than dispatching a partial mapping', async () => {
     const root = tempRoot();
     const end = terminal(
