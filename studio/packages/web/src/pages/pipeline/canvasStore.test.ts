@@ -3113,6 +3113,26 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(node(store).connectionIds).toBeUndefined();
   });
 
+  it('UN-picking the only half-picked end leaves no phantom entry behind', () => {
+    // The half-bound advisory reads `pendingBindings[id][kind]` through a `??`,
+    // which an assigned-but-empty `{source: undefined, sink: undefined}`
+    // satisfies. That made the panel claim a half-bound pair was going unsaved
+    // for a node the author had just returned to fully blank.
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    expect(store.getState().pendingBindings).toEqual({ c: { connections: { source: 'conn_a' } } });
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', undefined);
+    expect(store.getState().pendingBindings).toEqual({});
+  });
+
+  it('keeps the OTHER kind pending when one kind is emptied', () => {
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
+    store.getState().setNodeBindingEnd('c', 'datasets', 'source', 'ds_a');
+    store.getState().setNodeBindingEnd('c', 'connections', 'source', undefined);
+    expect(store.getState().pendingBindings).toEqual({ c: { datasets: { source: 'ds_a' } } });
+  });
+
   it('is a no-op for a node id the doc does not hold', () => {
     const store = setup();
     store.getState().setNodeBindingEnd('nope', 'connections', 'source', 'conn_a');

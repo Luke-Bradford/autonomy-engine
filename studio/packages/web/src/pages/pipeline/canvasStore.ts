@@ -1725,7 +1725,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // state: picking one end must not dirty the doc or push an undo step.
         set((s) => {
           const forNode = { ...s.pendingBindings[id] };
-          if (complete) delete forNode[kind];
+          // DELETE, not assign-empty, when nothing is left half-picked. An
+          // assigned `{source: undefined, sink: undefined}` is still a truthy
+          // object, and `NodePanel` reads `thisNode?.connectionIds ?? pending?.connections`
+          // — a `??` that an empty object satisfies. That made `halfBound` true
+          // for a node the author had just returned to fully blank (pick a
+          // source, then reselect "— none —"), so the panel claimed a
+          // half-bound pair was going unsaved when nothing was bound at all.
+          const emptied = source === undefined && sink === undefined;
+          if (complete || emptied) delete forNode[kind];
           else forNode[kind] = { source, sink };
           const rest = { ...s.pendingBindings };
           if (forNode.connections === undefined && forNode.datasets === undefined) delete rest[id];

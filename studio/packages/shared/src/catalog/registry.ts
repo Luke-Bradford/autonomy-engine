@@ -463,8 +463,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * REQUIRED. That is load-bearing rather than incidental: F13b lowering seeds
      * these into a node's `config.outputs` at SAVE, and `validateOutputs` then
      * fails the node for any the adapter omits. The adapter yields all five
-     * unconditionally on success, and emits them as `output` events on the
-     * failure path where `node.failed` would otherwise carry none.
+     * unconditionally on success, and on the WRITE-failure path emits them as
+     * `output` events first, so a copy that dies mid-write still reports what it
+     * had moved. Deliberately NOT claimed of the whole failure ladder: the
+     * earlier `permanent` refusals (an unresolved dataset, a refused sink, an
+     * invalid dispatch config) yield `failed` carrying no outputs, which is
+     * right — nothing had been counted yet.
      */
     type: COPY_ACTIVITY_TYPE,
     title: 'Copy Data',
