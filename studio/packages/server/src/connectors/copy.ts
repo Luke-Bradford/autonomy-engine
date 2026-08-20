@@ -33,15 +33,24 @@ type ActivitySink = NonNullable<ActivityContext['sink']>;
  * beyond passing it on, which is the claim the paragraph originally made and is
  * now measured rather than predicted.
  *
- * WHY THE I/O IS CALLER-SUPPLIED rather than resolved here from `ctx.sink.kind`.
- * A registry keyed by sink kind reads better on paper and is the right shape
- * once a SECOND store exists — it is what stops M10's postgres turning source ×
- * sink into an import mesh. It is not built yet for one concrete reason: this
- * module would then have to import `sqlite.ts`, which imports this module to
- * delegate, and a module-evaluation cycle between an adapter and the activity it
- * dispatches is a fragile thing to introduce for a v1 with exactly one store.
- * When M7 or M10 adds the second, extracting the store I/O into its own module
- * and inverting this is mechanical — and at that point it buys something.
+ * WHY THE I/O IS STILL CALLER-SUPPLIED rather than resolved here from
+ * `ctx.sink.kind`. A registry keyed by sink kind reads better on paper and is
+ * the right shape once the SINK side is heterogeneous — it is what stops M10's
+ * postgres turning source × sink into an import mesh. The paragraph this
+ * replaces named "M7 or M10 adds the second store" as the moment to build it,
+ * and M7 slice 3 (#1167) is that moment arriving — so the deferral is RESTATED
+ * here deliberately rather than left standing on a condition that has now fired.
+ *
+ * It is still not built, and the reason changed rather than expired. There are
+ * two stores now, but only ONE of them can be a SINK: `fs` has a `delimited`
+ * READER and no writer, so `sinkConnectionKinds` is `['sqlite']` and a registry
+ * keyed by sink kind would have exactly one entry. What M7 made heterogeneous is
+ * the SOURCE, and the source half is already dispatched by the executor picking
+ * an adapter — a second dispatch table underneath it would be a mechanism with
+ * nothing to choose between. The cycle argument also still holds: a registry
+ * here would make this module import `sqlite.ts`, which imports this module to
+ * delegate. Build it when a second SINK exists (M10's postgres, or a CSV
+ * writer), which is the condition that actually makes it pay.
  */
 
 /**
@@ -309,9 +318,20 @@ export async function* runCopyActivity(
   // source store for a dispatch that is already doomed — and would report
   // whatever that open happened to fail with instead of the actual fault.
   let sourceColumns: readonly string[] = [];
+  let coercion: CoercionOptions = {};
   try {
     if (mapping.length > 0) {
       sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+      // Derived HERE, under the SAME empty-mapping guard, and not at the point
+      // of use further down. `sourceCoercion` parses the source dataset's config
+      // and may THROW on one it cannot read, and the options object handed to
+      // `pumpCopyRows` is built EAGERLY — so deriving it there would run that
+      // parse for an empty mapping too, and report "invalid delimited dataset
+      // config" in place of the pump's `empty_mapping`. That is precisely the
+      // defect the skip above exists to prevent, reintroduced one rung lower:
+      // a dispatch that is already doomed reporting whatever the second-order
+      // check happened to fail with instead of the actual fault.
+      coercion = io.sourceCoercion(source);
     }
   } catch (err) {
     // Through the SAME mapper the copy body uses, so a store that could not be
@@ -381,12 +401,11 @@ export async function* runCopyActivity(
         mapping: mapping as readonly CopyPumpMappingEntry[],
         counters,
         // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
-        // spells NULL and how it writes a date; the store being written into has
-        // real types and a real NULL and declares neither. Derived here, at the
-        // moment the pump is built, rather than hoisted above the ladder: it is
-        // not a refusal, so it has no rung, and running it early would only move
-        // a store's config parse ahead of the checks that must precede it.
-        coercion: io.sourceCoercion(source),
+        // spells NULL and how it writes a date; the store being written into
+        // has real types and a real NULL and declares neither. Derived at the
+        // describe rung above rather than inline here — see the note there for
+        // why the empty-mapping guard has to cover both.
+        coercion,
       }),
       signal: ctx.signal,
     });

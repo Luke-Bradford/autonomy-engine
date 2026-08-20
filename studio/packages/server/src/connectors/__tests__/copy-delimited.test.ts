@@ -333,6 +333,39 @@ describe('the refusals a CSV source brings', () => {
     expect(end.type === 'failed' ? end.error : '').toBe('dataset copy aborted');
   });
 
+  it('reports an EMPTY mapping on its own terms, not as a source-config parse failure', async () => {
+    // The ladder's order, at the rung the coercion channel joined. An empty
+    // mapping SKIPS the describe on purpose — describing first would open the
+    // source for a dispatch that is already doomed and report whatever that
+    // open failed with. `sourceCoercion` parses the same config, so deriving it
+    // at its point of use (where the pump's options are built EAGERLY) would
+    // reintroduce that defect one rung lower: this config is also invalid, and
+    // an operator would be told to fix a `path` when the actual fault is that
+    // the mapping is empty.
+    //
+    // The refusal that actually fires is the SINK's — measured, not assumed:
+    // `writeSqliteDatasetRows` sees a zero-column write and refuses before the
+    // pump's own `empty_mapping` is reached. Which of those two wins is not this
+    // test's subject; that neither is displaced by a SOURCE-CONFIG parse is.
+    const root = tempRoot('copy-delim-');
+    const events = await run(
+      copyCtx({
+        root,
+        csvPath: seedCsv(root, 'id,name\n1,ada\n'),
+        sinkPath: seedSink(root, 'dst.db'),
+        sourceConfig: { header: true },
+        input: { mapping: [] },
+      }),
+    );
+
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toContain('at least one mapped column');
+    expect(end.type === 'failed' ? end.error : '').not.toContain(
+      'invalid delimited dataset config',
+    );
+  });
+
   it('refuses a CSV outside the connection roots', async () => {
     const root = tempRoot('copy-delim-');
     const outside = tempRoot('copy-delim-out-');

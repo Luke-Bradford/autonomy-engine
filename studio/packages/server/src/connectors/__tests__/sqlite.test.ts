@@ -334,6 +334,11 @@ describe('what the reader refuses before it opens anything', () => {
     // `delimited` config carries `path` and no `table`, so a kind check that had
     // fallen through would still refuse — as "invalid table dataset config",
     // which is a true statement about the wrong thing.
+    //
+    // Asserted as an EXACT message rather than as "not that other message": a
+    // negative-lookahead regex passes for any failure that is not the one named,
+    // including an unrelated one, so it would go on passing while proving less
+    // and less.
     const root = tempRoot();
     seedDb(root, 1);
     await expect(
@@ -344,7 +349,9 @@ describe('what the reader refuses before it opens anything', () => {
           datasetConfig: { path: '/data/in.csv', header: true },
         }),
       ),
-    ).rejects.toThrow(/^(?!.*invalid table dataset config).*$/s);
+    ).rejects.toThrow(
+      "the sqlite store reads 'table' and 'query' datasets; this one is 'delimited'",
+    );
   });
 
   it('refuses an injection-shaped table identifier', async () => {

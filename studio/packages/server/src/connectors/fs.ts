@@ -534,10 +534,13 @@ export const fsAdapter: ConnectorAdapter = {
     // refusal ladder, the counters and the failure mapping) is `copy.ts`'s;
     // this branch supplies only the halves that are the filesystem's.
     //
-    // Placed AFTER the connection-config parse and the abort check, matching
-    // `sqlite.ts`'s store arm exactly. The ladder-order argument in `copy.ts`
-    // is about `refuseSink` — a rung that must not pre-empt the two
-    // preconditions above it — and does not extend to the store's own config:
+    // Placed AFTER the connection-config parse and the abort check. That is
+    // `sqlite.ts`'s store arm in SPIRIT and not to the line — its copy branch is
+    // the first thing `runActivity` tests and it has no pre-dispatch abort check
+    // at all, which is a pre-existing gap on that adapter rather than a shape to
+    // copy. The ladder-order argument in `copy.ts` is about `refuseSink` — a rung
+    // that must not pre-empt the two preconditions above it — and does not
+    // extend to the store's own config:
     // a bad `fs` config is this adapter's to report, and an already-cancelled
     // copy should not pay a `realpath` on a wedged mount before anything says
     // so. `cfg.data` is deliberately NOT threaded into the reader below; §8
