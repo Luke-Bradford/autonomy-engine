@@ -20,8 +20,19 @@ import { DataTypeSchema } from '../schemas/dataset.js';
  * question the same way for run-log attribution; mapping is strictly more
  * dangerous, because the artefact is the user's data.
  */
-const CopyMappingEntrySchema = z
-  .object({
+/**
+ * The fields both variants share, declared ONCE.
+ *
+ * There are two, and #1134 (M5 slice 4b) is where the second arrives: the
+ * AUTHORED shape below and the DISPATCH shape an adapter re-parses. They differ
+ * in exactly one field — `expression` — and in nothing else, which is why they
+ * are built from this object rather than written twice. `fs-activity-config.ts`
+ * states the rule this follows: an activity's config shape is read by "TWO
+ * independent sites that previously each declared an inline `z.object` and could
+ * silently drift (#578)". Two hand-mirrored copies here would be that defect
+ * with an extra step, and 4c's catalog `configSchema` would make it three.
+ */
+const copyMappingEntryShape = {
     /** A source column name — XOR `expression`. */
     source: z.string().min(1).optional(),
     /**
@@ -36,7 +47,6 @@ const CopyMappingEntrySchema = z
      * this reason (`datamove/pump.ts`), and it is a constant per DISPATCH rather
      * than per row, because §8 puts substitution in the reducer.
      */
-    expression: z.string().optional(),
     /** The sink column this row writes. */
     sink: z.string().min(1),
     /**
@@ -58,11 +68,17 @@ const CopyMappingEntrySchema = z
      * (#1130) along with dataset resolution itself. It is named here so the
      * split is legible rather than lost between tickets.
      */
-    onError: z.enum(['fail', 'null']).default('fail'),
-  })
-  .strict();
+  onError: z.enum(['fail', 'null']).default('fail'),
+};
 
-export const CopyMappingSchema = z.array(CopyMappingEntrySchema).superRefine((rows, ctx) => {
+/**
+ * The shape rules that hold whatever `expression` is typed as.
+ *
+ * Shared as a FUNCTION rather than a parsed-then-extended schema because both
+ * rules are `superRefine` checks over the whole array: they cannot be inherited
+ * by extension, only re-run.
+ */
+const refineMapping = (rows: readonly { source?: unknown; expression?: unknown; sink: string }[], ctx: z.RefinementCtx) => {
   const seenSinks = new Set<string>();
   rows.forEach((row, i) => {
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own
@@ -95,6 +111,53 @@ export const CopyMappingSchema = z.array(CopyMappingEntrySchema).superRefine((ro
     }
     seenSinks.add(row.sink);
   });
+};
+
+const mappingArray = (expression: z.ZodType) =>
+  z.array(z.object({ ...copyMappingEntryShape, expression }).strict()).superRefine(refineMapping);
+
+/**
+ * The AUTHORED mapping — what a node's config holds and what an author edits.
+ * `expression` is the `${}` TEMPLATE, so it is a string here.
+ */
+export const CopyMappingSchema = mappingArray(z.string().optional());
+
+/**
+ * The DISPATCH mapping — what an adapter re-parses out of `preparedInput`.
+ *
+ * `expression` is `unknown` because by this point it is the SUBSTITUTED VALUE,
+ * not the template: substitution happens in the reducer (§8), and a whole-value
+ * reference PRESERVES ITS NATIVE TYPE (`engine/params.ts:740`). So
+ * `expression: '${params.limit}'` reaches an adapter as a NUMBER and
+ * `'${params.enabled}'` as a BOOLEAN. Re-parsing dispatch input through the
+ * authored schema would refuse a working pipeline — the exact regression the
+ * `expression` docblock above predicts, and the one this variant exists to stop.
+ * The pump types the substituted constant `unknown` for the same reason.
+ */
+export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
+
+/**
+ * The whole authored `copy` config as an ADAPTER receives it (#1134, §6.1+§4).
+ *
+ * Not `.strict()`, matching `fs-activity-config.ts`'s activity schemas: the
+ * dispatch path re-parses a `preparedInput` the reducer built, and refusing an
+ * unrecognised key there would turn an additive config field into a dispatch-time
+ * failure for pipelines already saved.
+ *
+ * `mode` defaults to the NON-DESTRUCTIVE arm. `'overwrite'` DELETEs inside the
+ * write transaction (§4), so a default that erased the sink on an omitted field
+ * would be the worst possible polarity for a mistyped config.
+ *
+ * §13 also lists a per-copy batch size among the node's flat scalars. It is NOT
+ * declared here: `SqliteDatasetRead.batchRows` already defaults to
+ * `COPY_BATCH_ROWS`, and exposing an author-set scheduling quantum is an
+ * authoring-surface decision that belongs with the mapping panel (M8), not with
+ * the first adapter that runs one.
+ */
+export const copyDispatchInputSchema = z.object({
+  mapping: CopyDispatchMappingSchema,
+  mode: z.enum(['append', 'overwrite']).default('append'),
 });
 
 export type CopyMapping = z.infer<typeof CopyMappingSchema>;
+export type CopyDispatchInput = z.infer<typeof copyDispatchInputSchema>;
