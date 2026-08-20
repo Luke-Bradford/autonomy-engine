@@ -89,9 +89,7 @@ test.describe('#1139 — copy-node authoring', () => {
 
     // Picking ONE end leaves the doc without the pair, and the panel says so
     // rather than letting the pick look saved.
-    await panel(page)
-      .getByRole('combobox', { name: 'Source connection' })
-      .selectOption(srcConn);
+    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
     await expect(panel(page).getByRole('status')).toContainText('not saved');
 
     await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);

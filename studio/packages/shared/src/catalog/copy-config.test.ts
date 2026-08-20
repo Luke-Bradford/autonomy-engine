@@ -165,8 +165,12 @@ describe('the AUTHORED copy config (#1139, catalog configSchema)', () => {
   });
 
   it('takes overwrite and refuses any other mode — one declaration, both variants', () => {
-    expect(copyInputSchema.parse({ mapping: [authored], mode: 'overwrite' }).mode).toBe('overwrite');
-    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'truncate' }).success).toBe(false);
+    expect(copyInputSchema.parse({ mapping: [authored], mode: 'overwrite' }).mode).toBe(
+      'overwrite',
+    );
+    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'truncate' }).success).toBe(
+      false,
+    );
   });
 
   it('REQUIRES a mapping — an empty default would author a copy that moves nothing', () => {

@@ -64,9 +64,7 @@ describe('§8 — a copy mapping column name must be a literal identifier', () =
   });
 
   it('reports BOTH ends of one row independently', () => {
-    const issues = validateDoc(
-      doc([copyNode([{ ...literalRow, source: '${a}', sink: '${b}' }])]),
-    );
+    const issues = validateDoc(doc([copyNode([{ ...literalRow, source: '${a}', sink: '${b}' }])]));
     expect(issues.filter((i) => i.includes('mapping[0]'))).toHaveLength(2);
   });
 

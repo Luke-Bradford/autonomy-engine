@@ -2427,7 +2427,9 @@ export function NodePanel({
   // survive on screen, vanish on reload, and look like the canvas lost it.
   const halfBound =
     (paired && thisNode?.connectionIds === undefined && boundConnections !== undefined) ||
-    (datasetKinds !== undefined && thisNode?.datasetIds === undefined && boundDatasets !== undefined);
+    (datasetKinds !== undefined &&
+      thisNode?.datasetIds === undefined &&
+      boundDatasets !== undefined);
 
   /**
    * Validate a candidate settings blob against the activity's own schema.
@@ -2618,9 +2620,11 @@ export function NodePanel({
           the doc would be unsaveable with no affordance to repair it. */}
       {paired && connectionId !== undefined && (
         <p className="contract-advisory">
-          This node also carries a single-connection binding, which a paired
-          activity may not have.{' '}
-          <button type="button" onClick={() => store.getState().setNodeConnection(nodeId, undefined)}>
+          This node also carries a single-connection binding, which a paired activity may not have.{' '}
+          <button
+            type="button"
+            onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
+          >
             Clear it
           </button>
         </p>
