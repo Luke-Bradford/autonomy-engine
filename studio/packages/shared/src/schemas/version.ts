@@ -312,6 +312,19 @@
 //      outputs instead of one. Benign in THIS build — `connectors/copy.ts`
 //      yields all five unconditionally — and recorded anyway, because the reason
 //      a bump was taken is the only thing that makes the next one auditable.
+// NO BUMP for M7 slice 1 (#1163), recorded because a silent no-bump is the
+// drift this ledger exists to prevent. `delimited` traded
+// `unimplementedDatasetConfigSchema` for §2.6's eight real keys, which sounds
+// like a shape change and is not one that this number governs: a dataset's
+// `config` is stored and applied VERBATIM (`routes/datasets.ts`,
+// `workspace-apply.ts`) with no per-kind parse on the import path, and the
+// catalog entry — `connectionKinds`, `datasetKinds`, the node's declared
+// outputs — is untouched. The decisive fact is that
+// `IMPLEMENTED_DATASET_KINDS` is unchanged too: a pre-#1163 build has no
+// `delimited` reader and neither does this one, so there is no artifact this
+// build can run that an older one would mis-run. The bump belongs to the slice
+// that widens the catalog entry, and it is named there.
+//
 // NOT an upgrader. `portability/envelope.ts` checks `catalogVersion` as a
 // CEILING (refuse an artifact newer than this build) and keys `UPGRADERS` on
 // `schemaVersion` alone, so a catalog bump is purely an import floor and

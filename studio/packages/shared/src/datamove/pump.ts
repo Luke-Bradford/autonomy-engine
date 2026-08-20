@@ -171,7 +171,9 @@ export interface CopyPumpOptions {
   readonly mapping: readonly CopyPumpMappingEntry[];
   /** Mutated in place. The caller holds it, so the callback below needs no argument. */
   readonly counters: CopyCounters;
-  /** `nullValue` / `dateFormat` (§6.4). No dataset field carries them yet — M7. */
+  /** `nullValue` / `dateFormat` (§6.4). `delimited`'s config declares both as of
+   * #1163; what is still missing is the READER that reads them off the source
+   * dataset and passes them here, which lands with M7's later slices. */
   readonly coercion?: CoercionOptions;
   /**
    * Progress, PER BATCH and never per row (§5 — "one event per row would

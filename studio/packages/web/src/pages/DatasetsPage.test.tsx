@@ -284,13 +284,17 @@ describe('DatasetsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
 
-    // `delimited`'s config schema is a `looseObject`, so it derives NO controls.
-    // The empty-fields branch would have said "This kind has no settings",
-    // which is false — spec §2.6 lists seven keys for it.
+    // #1163 gave `delimited` a real schema, so this is no longer "the shape
+    // cannot be derived" — `deriveConfigFields` now yields §2.6's eight
+    // controls. The JSON editor is forced by the OTHER fact: no reader exists,
+    // so a typed form would present the dataset as ready to copy while every
+    // copy naming it still refuses at dispatch. `DatasetsPage` keys this branch
+    // on `datasetKindIsImplemented` and not on `fields.length`, which is what
+    // keeps the two apart — break that and this test goes red.
     expect(within(form()).getByLabelText('Config (JSON)')).toBeInTheDocument();
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
     expect(within(form()).getByText(/no reader exists for a delimited dataset yet/)).toBeVisible();
-    // No mode toggle: there is no field form to switch to.
+    // No mode toggle: the reader gate, not an absent field form, is why.
     expect(
       within(form()).queryByRole('button', { name: 'Edit as fields' }),
     ).not.toBeInTheDocument();
