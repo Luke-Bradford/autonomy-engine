@@ -436,4 +436,38 @@ describe('DatasetsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     expect(within(form()).getByText(/needs a connection first/)).toBeInTheDocument();
   });
+
+  it('flags a dataset whose kind disagrees with the store it names (#1145)', async () => {
+    // The ticket's own example. `routes/datasets.ts` checks that the connection
+    // exists and is owned and NOTHING else, so this row saves today and is only
+    // refused when a copy is dispatched — which is what the note exists to say
+    // earlier.
+    const user = userEvent.setup();
+    listConnectionsMock.mockResolvedValue([store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' })]);
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_llm');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+
+    expect(within(form()).getByText(/Kind and store disagree/)).toHaveTextContent(
+      /a table dataset lives in a sqlite store, but this one names a anthropic_api connection/,
+    );
+    // ADVISORY, never a gate: the server accepts this row, so the form must not
+    // refuse it. This is the assertion that keeps it from being hardened into a
+    // block by a later change.
+    expect(screen.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
+  });
+
+  it('stays quiet when the kind and the store agree (#1145)', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />); // the default `store()` fixture is `sqlite`
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+
+    expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
+  });
 });
