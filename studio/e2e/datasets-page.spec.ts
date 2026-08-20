@@ -172,6 +172,12 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(
       form(page).getByText(/no reader exists for a delimited dataset yet/),
     ).toBeVisible();
+    // #1145 landed a SECOND note on this exact state, so assert it rather than
+    // leave the pile-up to be discovered: a `delimited` dataset lives on `fs`
+    // and this form is bound to a `sqlite` store. Two true, independent things.
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      'a delimited dataset lives in a fs store',
+    );
 
     await expectQuiet(page, problems);
   });
@@ -190,6 +196,33 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(form(page).getByText(/This table config is incomplete/)).toContainText(
       'bare SQL identifier',
     );
+
+    await expectQuiet(page, problems);
+  });
+  test('says the kind and the store disagree, without refusing the save (#1145)', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const stamp = Date.now();
+    // `http` rather than `anthropic_api`: it is a real non-store connection and
+    // is credential-less, so it needs no secret dance to exist.
+    const res = await page.request.post('/api/connections', {
+      data: { name: `e2e-ds-nonstore-${stamp}`, kind: 'http', config: { baseUrl: 'https://example.com' } },
+    });
+    expect(res.status(), `creating http connection: ${await res.text()}`).toBe(201);
+    const nonStoreId = ((await res.json()) as { id: string }).id;
+
+    await gotoDatasets(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    await form(page).getByLabel('Store').selectOption(nonStoreId);
+    await form(page).getByLabel('Kind').selectOption('table');
+
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      'but this one names a http connection',
+    );
+    // ADVISORY, never a gate — the server stores this row today, and a form that
+    // refused what the server accepts would be the worse defect.
+    await expect(page.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
 
     await expectQuiet(page, problems);
   });
