@@ -2,6 +2,7 @@ import {
   copyDispatchInputSchema,
   CopyMappingError,
   newCopyCounters,
+  nocaseFold,
   pumpCopyRows,
   WARNING_CODES,
   type CoercedValue,
@@ -137,10 +138,17 @@ export function refuseNullOnNonNullable(
   mapping: readonly { readonly sink: string; readonly onError: 'fail' | 'null' }[],
   columns: readonly DatasetColumn[],
 ): string | null {
+  // Folded the way SQLite's NOCASE folds, via the SAME helper the pump plans
+  // columns with. A case-sensitive check here would be the odd one out: a sink
+  // declaring 'ID' and a mapping naming 'id' are ONE column to the store, so an
+  // exact-match miss would let the null through to become the mid-transaction
+  // constraint violation this rung exists to move to the boundary.
   const nonNullable = new Set(
-    columns.filter((column) => !column.nullable).map((column) => column.name),
+    columns.filter((column) => !column.nullable).map((column) => nocaseFold(column.name)),
   );
-  const offender = mapping.find((row) => row.onError === 'null' && nonNullable.has(row.sink));
+  const offender = mapping.find(
+    (row) => row.onError === 'null' && nonNullable.has(nocaseFold(row.sink)),
+  );
   if (offender === undefined) return null;
   return (
     `mapping row for sink column '${offender.sink}' sets onError:'null', but the sink dataset ` +
@@ -270,6 +278,21 @@ export async function* runCopyActivity(
     // yields), so a tick cannot reach anyone before the copy has already
     // finished. Building the machinery would produce a record identical to the
     // one below.
+    // `onBatch` ticks the RUNNING TOTAL of rows inserted into the still-OPEN
+    // transaction, and the sink's own docblock is explicit that "a tick is
+    // progress, not committed truth … an operator can legitimately see '500
+    // rows' moments before the copy reports that it wrote none". Reporting that
+    // tick as the final count would do exactly what it warns against, in the
+    // worse direction: claiming rows landed on a run that wrote nothing.
+    //
+    // `partialWritePossible` is the sink's own verdict on that question — false
+    // means it can PROVE the store is in its pre-copy state (a rolled-back
+    // transaction, or a read that never wrote). Where it can prove it, the
+    // honest count is 0. Where it cannot, the running total is the best evidence
+    // there is and `copyFailure` says so in the message.
+    if (err instanceof DatasetIoError && !err.partialWritePossible) {
+      counters.rowsWritten = 0;
+    }
     for (const [name, value] of Object.entries(copyOutputs(counters))) {
       yield { type: 'output', name, value };
     }

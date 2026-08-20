@@ -739,8 +739,13 @@ export const WARNING_CODES = {
    */
   OUTPUT_TRUNCATED: 'output_truncated',
   /**
-   * #996 M5 (#1134) — a `copy` SUCCEEDED but dropped rows: one or more values
-   * failed to coerce under `onError: 'fail'`, so those rows were not written.
+   * #996 M5 (#1134) — a `copy` dropped rows: one or more values failed to coerce
+   * under `onError: 'fail'`, so those rows were not written.
+   *
+   * Emitted on BOTH terminals, not just success. Dropped rows are a fact about
+   * the copy, and a copy that dropped 400 rows and THEN hit a store failure has
+   * two things worth saying, not one — suppressing the tally on the failure path
+   * would lose it exactly where the outputs cannot carry it either.
    *
    * Advisory rather than a failure, and deliberately: §5 declares `rowsFailed`
    * as an OUTPUT a pipeline may branch on, which settles that a partial copy is

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { COPY_ACTIVITY_TYPE, type DatasetColumn } from '@autonomy-studio/shared';
 import { sqliteAdapter } from '../sqlite.js';
@@ -342,5 +344,81 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
       events.indexOf(terminal(events)),
     );
     expect(terminal(events).type).toBe('failed');
+  });
+});
+
+describe('copy activity — a tick is progress, not committed truth', () => {
+  /** A source whose LAST batch violates a NOT NULL on the sink. */
+  function seedLateFailure(root: string): { sourcePath: string; sinkPath: string } {
+    const sourcePath = join(root, 'late-src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
+    const insert = src.prepare('INSERT INTO t (id, name) VALUES (?, ?)');
+    src.transaction(() => {
+      // COPY_BATCH_ROWS is 1000, so this is two batches and the offender is in
+      // the SECOND — the first has already ticked its running total by then.
+      for (let i = 1; i <= 1200; i += 1) insert.run(i, i === 1100 ? null : `row-${i}`);
+    })();
+    src.close();
+
+    const sinkPath = join(root, 'late-dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER, note TEXT NOT NULL)');
+    dst.close();
+    return { sourcePath, sinkPath };
+  }
+
+  it('reports rowsWritten 0 when the transaction demonstrably rolled back', async () => {
+    const root = tempRoot();
+    const { sourcePath, sinkPath } = seedLateFailure(root);
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'note', type: 'string' },
+          ],
+        },
+      }),
+    );
+
+    expect(terminal(events).type).toBe('failed');
+    // The sink ticked 1000 after batch one, into an OPEN transaction. Batch two
+    // violated NOT NULL and the whole transaction rolled back, so NOTHING landed.
+    // Reporting the tick as the final count would tell an operator 1000 rows
+    // moved on a run that moved none.
+    expect(rowsOf(sinkPath, 'SELECT * FROM sink')).toEqual([]);
+    const written = events.find((e) => e.type === 'output' && e.name === 'rowsWritten');
+    expect(written?.type === 'output' ? written.value : null).toBe(0);
+  });
+});
+
+describe('copy activity — identifier matching folds case, as SQLite does', () => {
+  it("refuses onError:'null' against a NOT NULL column declared in another case", async () => {
+    const root = tempRoot();
+    const end = terminal(
+      await run(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 1, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          // Declared 'ID', mapped as 'id'. SQLite treats those as ONE column, so
+          // a case-sensitive check would let the null through to become a
+          // constraint violation mid-transaction — the failure this rung exists
+          // to move to the boundary.
+          sinkColumns: [{ name: 'ID', type: 'string', nullable: false }],
+          input: {
+            mapping: [{ source: 'name', sink: 'id', type: 'string', onError: 'null' }],
+          },
+        }),
+      ),
+    );
+    expect(end).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('NOT NULL'),
+    });
   });
 });

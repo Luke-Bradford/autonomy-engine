@@ -202,7 +202,7 @@ type ColumnPlan =
  * mapping naming one would silently bind to the other. Exotic, and that is
  * precisely why it would never be found later.
  */
-function nocaseFold(value: string): string {
+export function nocaseFold(value: string): string {
   return value.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
