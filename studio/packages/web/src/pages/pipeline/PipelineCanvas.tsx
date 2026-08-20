@@ -5,7 +5,10 @@ import {
   ContainerKindSchema,
   OutputTypeSchema,
   ParamTypeSchema,
+  autoMapMapping,
   availableRefs,
+  checkSinkCoverage,
+  checkSourceDrift,
   formatZodIssues,
   getActivity,
   authorsCallBlob,
@@ -16,6 +19,7 @@ import {
   type Container,
   type ConnectionPublic,
   type ContainerKind,
+  type AutoMapResult,
   type Dataset,
   type Edge,
   type Node,
@@ -64,8 +68,11 @@ import {
   assembleConfig,
   deriveConfigFields,
   emptyControlValue,
+  formatFieldValue,
+  parseFieldInput,
   seedFieldInputs,
   unrepresentableFields,
+  type ConfigField,
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
@@ -2325,6 +2332,55 @@ function useExpressionPicker(
  * The connection dropdown is filtered to the kinds this activity accepts.
  * Container membership (U6d) is `ContainerSection` above.
  */
+/**
+ * #1170 M8 slice 2 — the `copy` mapping's authoring aids: auto-map (§6.3) and
+ * §13's explicit *unmapped* state.
+ *
+ * §13 asks that "a column deliberately not copied must be visibly so, never
+ * merely absent". That is implemented as an ADVISORY read off the two bound
+ * datasets, not as a persisted per-column acknowledgment: the mapping element is
+ * `.strict()` and has no key for one, so persisting it would mean a schema
+ * change and a `CATALOG_VERSION` bump that this slice does not carry.
+ */
+const MAPPING_FIELD = 'mapping';
+
+/** The cells auto-map writes. See {@link autoMappableField}. */
+const AUTOMAP_CELLS = ['source', 'sink', 'type', 'onError'] as const;
+
+/**
+ * The `mapping` field, IF its rows carry the cells auto-map writes.
+ *
+ * Gated on the derived ELEMENT SHAPE rather than on the activity type, because
+ * the shape is the actual precondition: `formatFieldValue`'s objectList arm
+ * refuses any undeclared column key, so a row list without these four cells is
+ * one auto-map could only write a refusal into. Reading it off the DERIVED
+ * fields also keeps the Zod schema the single source of truth (U7) — rename a
+ * cell and this follows, where a hand-written activity list would drift.
+ */
+function autoMappableField(fields: readonly ConfigField[] | null): ConfigField | null {
+  const field = fields?.find((f) => f.name === MAPPING_FIELD);
+  if (!field || field.kind !== 'objectList') return null;
+  const cells = new Set((field.elementFields ?? []).map((c) => c.name));
+  return AUTOMAP_CELLS.every((name) => cells.has(name)) ? field : null;
+}
+
+/** What auto-map did NOT do, so a press that maps nothing still says why. */
+function describeSkips(result: AutoMapResult): string {
+  const parts: string[] = [];
+  if (result.alreadyMapped.length > 0) {
+    parts.push(`${result.alreadyMapped.length} already mapped`);
+  }
+  if (result.ambiguous.length > 0) {
+    // Named, not counted: the author has to pick the source column by hand, and
+    // cannot without knowing which sink column is stuck.
+    parts.push(`${result.ambiguous.join(', ')} matched more than one source column`);
+  }
+  if (result.unmatched.length > 0) {
+    parts.push(`${result.unmatched.join(', ')} had no source column of that name`);
+  }
+  return parts.length > 0 ? ` Skipped: ${parts.join('; ')}.` : '';
+}
+
 export function NodePanel({
   store,
   connections,
@@ -2527,6 +2583,129 @@ export function NodePanel({
   // for that blob. (The hooks above run unconditionally — this early return only
   // skips the editor JSX.)
   //
+  // ---- #1170 M8 slice 2 — the copy mapping's authoring aids ----
+  //
+  // Everything here reads a dataset's DECLARED columns, which §7 calls schema
+  // (1) — a mutable authoring aid. The dispatch gate deliberately reads the
+  // store's ACTUAL columns (3) instead, so none of this may ever refuse
+  // anything: it advises, and a stale declared list is a wrong warning rather
+  // than a blocked copy.
+  const [autoMapNotice, showAutoMapNotice] = useTransientNotice(CANVAS_NOTICE_MS);
+  const mappingField = useMemo(() => autoMappableField(fields), [fields]);
+  const sourceDataset = datasets.find((d) => d.id === boundDatasets?.source);
+  const sinkDataset = datasets.find((d) => d.id === boundDatasets?.sink);
+
+  /**
+   * The draft mapping, projected exactly the way Apply will project it.
+   *
+   * `parseFieldInput` is the ONE draft→config rule (it owns "a cleared optional
+   * cell omits its key" and every per-cell kind), so going through it makes the
+   * advisory describe what Apply would actually write rather than a second
+   * reading of the same cells. `null` when the draft cannot be projected at all
+   * — a cell mid-edit — and the aids then go quiet instead of describing a shape
+   * that does not exist.
+   */
+  const draftMapping = useMemo(() => {
+    if (!mappingField) return null;
+    const raw = inputs[mappingField.name] ?? emptyControlValue(mappingField);
+    const parsed = parseFieldInput(mappingField, raw);
+    if (!parsed.ok || parsed.omit || !Array.isArray(parsed.value)) return null;
+    return parsed.value as readonly Record<string, unknown>[];
+  }, [mappingField, inputs]);
+
+  /**
+   * The draft rows that actually claim a sink column.
+   *
+   * A row whose `sink` is still blank — "Add mapping row" inserts an empty one —
+   * names nothing yet, so counting it would report a column as written before
+   * the author has said which.
+   */
+  const mappedRows = useMemo(
+    () =>
+      (draftMapping ?? []).flatMap((row) =>
+        typeof row.sink === 'string' && row.sink.length > 0
+          ? [
+              {
+                sink: row.sink,
+                source: typeof row.source === 'string' && row.source.length > 0 ? row.source : undefined,
+                onError: row.onError === 'null' ? ('null' as const) : ('fail' as const),
+              },
+            ]
+          : [],
+      ),
+    [draftMapping],
+  );
+
+  const sourceAdvisory =
+    mappingField && sourceDataset && draftMapping !== null
+      ? checkSourceDrift(
+          mappedRows,
+          sourceDataset.columns.map((c) => c.name),
+        )
+      : null;
+  const sinkAdvisory =
+    mappingField && sinkDataset && draftMapping !== null
+      ? checkSinkCoverage(mappedRows, sinkDataset.columns)
+      : null;
+  // The two sides are deliberately asymmetric on an EMPTY mapping.
+  // `checkSourceDrift` reports nothing unmapped for one (listing every source
+  // column would bury `.min(1)`'s refusal under a warning about its
+  // consequence), while the sink side still names its NOT NULL columns —
+  // because those are what makes the copy unrunnable, and they are exactly what
+  // the author needs to see before pressing Auto-map.
+  const requiredUnwritten = (sinkAdvisory?.notWritten ?? []).filter((c) => !c.nullable);
+  const optionalUnwritten = (sinkAdvisory?.notWritten ?? []).filter((c) => c.nullable);
+
+  const autoMapBlocked =
+    sourceDataset === undefined || sinkDataset === undefined
+      ? 'Bind a source and a sink dataset to map their columns.'
+      : draftMapping === null
+        ? 'Finish the mapping row being edited before mapping the rest.'
+        : null;
+
+  function runAutoMap() {
+    if (!mappingField || !sourceDataset || !sinkDataset || draftMapping === null) return;
+    // Three distinct no-op outcomes, named apart. `columns: []` is a
+    // DELIBERATELY authorable state ("this table has none"), so collapsing it
+    // into "nothing matched" would send the author looking at their column
+    // names when the answer is that a dataset declares no columns at all.
+    if (sourceDataset.columns.length === 0 || sinkDataset.columns.length === 0) {
+      showAutoMapNotice(
+        sourceDataset.columns.length === 0
+          ? `${sourceDataset.name} declares no columns, so there is nothing to map from.`
+          : `${sinkDataset.name} declares no columns, so there is nothing to map to.`,
+      );
+      return;
+    }
+    const result = autoMapMapping(
+      sourceDataset.columns,
+      sinkDataset.columns,
+      mappedRows.map((r) => r.sink),
+    );
+    if (result.rows.length === 0) {
+      // The draft is left ALONE, not cleared: a press that matches nothing must
+      // not cost the author the rows they wrote by hand.
+      showAutoMapNotice(`No new columns matched.${describeSkips(result)}`);
+      return;
+    }
+    const rendered = formatFieldValue(mappingField, [...draftMapping, ...result.rows]);
+    if (!rendered.ok) {
+      // Unreachable for rows this module built — but that refusal is the
+      // property that keeps the button honest if the mapping element ever
+      // changes shape, so it is reported rather than swallowed.
+      setError(`Auto-map could not fill the mapping: ${rendered.reason}`);
+      return;
+    }
+    // Into the DRAFT, never `updateNodeConfig`: the author reviews the rows and
+    // commits them with Apply, which is what puts them through `schemaIssues`.
+    // `ExpressionPicker` writes a computed value the same way.
+    setInputs((prev) => ({ ...prev, [mappingField.name]: rendered.value }));
+    showAutoMapNotice(
+      `Mapped ${result.rows.length} column${result.rows.length === 1 ? '' : 's'}.` +
+        `${describeSkips(result)} Apply config to save.`,
+    );
+  }
+
   // #953 — routed on `authorsCallBlob`, not on the type alone. `Node.call` is an
   // optional discriminant valid on a node of any type, so a doc carrying the
   // literal `type: 'call_pipeline'` (reachable by import or an API seed, and used
@@ -2702,6 +2881,76 @@ export function NodePanel({
               picker={picker}
             />
           ))}
+        </div>
+      )}
+
+      {/* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped* state.
+          BELOW the derived section, never inside `fields.map`: that loop is the
+          generic U7 renderer and a field-name branch inside it would be the
+          activity-specific fork U7 exists to keep out. Hidden in JSON mode
+          because it describes the FORM draft, which the author is not editing
+          there. */}
+      {!jsonMode && mappingField && (
+        <div className="contract-section">
+          <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
+            Auto-map columns
+          </button>
+          {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
+          {autoMapNotice !== null && (
+            <p className="contract-advisory" role="status">
+              {autoMapNotice}
+            </p>
+          )}
+          {/* NOT a live region, deliberately, though it sits beside one that is.
+              This is recomputed STATE rather than the outcome of a gesture, and
+              it changes on every keystroke in a mapping cell — announced, it
+              would talk over the author continuously and collide with the
+              notice above (#960's two-live-regions failure). It is plain
+              visible text, always present, read on demand. */}
+          {requiredUnwritten.length > 0 && (
+            <p className="contract-advisory">
+              The sink requires a value for {requiredUnwritten.map((c) => c.name).join(', ')}, and
+              nothing writes {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy cannot
+              succeed until every one is mapped.
+            </p>
+          )}
+          {optionalUnwritten.length > 0 && (
+            <p className="contract-advisory">
+              Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
+            </p>
+          )}
+          {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
+            <p className="contract-advisory">
+              {sinkAdvisory.undeclared.join(', ')} {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'}{' '}
+              not declared by the sink dataset.
+            </p>
+          )}
+          {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
+            <p className="contract-advisory">
+              Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
+            </p>
+          )}
+          {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
+            <p className="contract-advisory">
+              {sourceAdvisory.missing.join(', ')} {sourceAdvisory.missing.length === 1 ? 'is' : 'are'}{' '}
+              not declared by the source dataset.
+            </p>
+          )}
+          {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
+            <p className="contract-advisory">
+              {sourceAdvisory.ambiguous.join(', ')} match more than one source column
+              case-insensitively — name the column exactly.
+            </p>
+          )}
+          {/* A declared column list is an authoring aid and can be stale, so
+              every line above is a warning and none of them is a refusal. The
+              gate reads the store's ACTUAL columns at dispatch. */}
+          {(sinkAdvisory !== null || sourceAdvisory !== null) && (
+            <p className="page-hint">
+              Read from each dataset&rsquo;s declared columns, which can be out of date — the copy is
+              checked against the store itself when it runs.
+            </p>
+          )}
         </div>
       )}
 
