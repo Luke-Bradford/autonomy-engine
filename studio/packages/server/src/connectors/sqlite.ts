@@ -856,9 +856,11 @@ export const sqliteAdapter: ConnectorAdapter = {
         // The sink is resolved from `ctx.sink`, never from this adapter's own
         // connection: the running adapter is the SOURCE's and a paired node may
         // well write into a different store. Its KIND is checked because
-        // nothing else can — the catalog's `sinkConnectionKinds` allowlist lands
-        // with the entry in 4c, so until then this is the only gate, and an
-        // unchecked non-sqlite config would reach the writer to be refused as
+        // nothing else can. AS OF 4c (#1139) the catalog's `sinkConnectionKinds`
+        // allowlist exists and refuses a non-sqlite sink before dispatch, so this
+        // is no longer the ONLY gate — it is defence in depth, and it stays: the
+        // rung is what a caller passing a sink this adapter cannot write hits,
+        // and an unchecked non-sqlite config would reach the writer to be refused as
         // "invalid sqlite connection config", which is a true statement about
         // the wrong thing. It is supplied as a LADDER RUNG rather than checked
         // before dispatch so it takes its declared place behind the two
@@ -908,10 +910,11 @@ export const sqliteAdapter: ConnectorAdapter = {
     // (`connection-config-ssot.test.ts` asserts an adapter for every kind), and
     // refusing loudly is the honest content for it.
     //
-    // Still unreachable today, and worth knowing before someone "fixes" it: no
-    // catalog entry lists `sqlite` in `connectionKinds` — the `copy` entry lands
-    // in 4c with the canvas pickers — so the executor refuses with
-    // `CONNECTION_KIND_INVALID` before dispatch reaches an adapter at all.
+    // Reachable as of 4c (#1139), where it was not before: the `copy` entry now
+    // lists `sqlite` in `connectionKinds`, so a `sqlite` connection is bindable
+    // and the executor no longer refuses every such node with
+    // `CONNECTION_KIND_INVALID` ahead of dispatch. `copy` is the one activity
+    // this adapter runs; anything else still lands here.
     yield failed(
       'permanent',
       `a sqlite connection is a STORE binding and runs no activity of its own (got '${ctx.activityType}')`,

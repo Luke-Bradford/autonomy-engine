@@ -146,12 +146,18 @@ export const CopyMappingSchema = mappingArray(z.string().optional());
 export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 
 /**
- * The whole authored `copy` config as an ADAPTER receives it (#1134, §6.1+§4).
+ * The whole `copy` config, minus the one field the two variants disagree about
+ * (#1134, §6.1+§4). Both variants below are built from this, for the reason the
+ * `expression` docblock above gives about `mapping`: two independent `z.object`s
+ * are how a shared config drifts (#578).
  *
- * Not `.strict()`, matching `fs-activity-config.ts`'s activity schemas: the
- * dispatch path re-parses a `preparedInput` the reducer built, and refusing an
- * unrecognised key there would turn an additive config field into a dispatch-time
- * failure for pipelines already saved.
+ * Neither variant is `.strict()`, matching `fs-activity-config.ts`'s activity
+ * schemas. Two independent reasons, one per variant: the dispatch path re-parses
+ * a `preparedInput` the reducer built, and refusing an unrecognised key there
+ * would turn an additive config field into a dispatch-time failure for pipelines
+ * already saved; and the AUTHORED variant is handed a node's whole `config`
+ * blob by the canvas — `config.outputs` included (#1 F13) — which a strict
+ * schema would reject on every edit.
  *
  * `mode` defaults to the NON-DESTRUCTIVE arm. `'overwrite'` DELETEs inside the
  * write transaction (§4), so a default that erased the sink on an omitted field
@@ -163,10 +169,43 @@ export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
  * authoring-surface decision that belongs with the mapping panel (M8), not with
  * the first adapter that runs one.
  */
-export const copyDispatchInputSchema = z.object({
-  mapping: CopyDispatchMappingSchema,
-  mode: z.enum(['append', 'overwrite']).default('append'),
-});
+const copyInputShape = <T extends z.ZodType>(mapping: T) =>
+  z.object({
+    mapping,
+    mode: z.enum(['append', 'overwrite']).default('append'),
+  });
+
+/**
+ * The AUTHORED `copy` config — what a node's `config` holds, what the catalog
+ * entry declares as its `configSchema` (M5 slice 4c, #1139), and what the
+ * canvas validates an edit against before applying it.
+ *
+ * Differs from the dispatch variant in exactly ONE field, `mapping`, and shares
+ * everything else through `copyInputShape` rather than by re-declaration. That
+ * is not tidiness: `fs-activity-config.ts` states the rule this file's own
+ * docblock cites — a config read by two independent sites that each declare
+ * their own `z.object` is how they silently drift (#578) — and a hand-mirrored
+ * `mode` here would have been the third copy.
+ *
+ * `mapping` is REQUIRED, with no `.default([])`. An empty default would author a
+ * copy that runs clean and moves nothing, which is the silent-wrong direction
+ * every refusal in this file exists to avoid; a missing mapping should be a
+ * refusal an author can see. The cost, stated because it is real and temporary:
+ * `deriveConfigFields` cannot represent an array-of-objects
+ * (`web/.../configForm.ts`), so the whole copy form degrades to the JSON
+ * textarea and `mode` cannot be set without hand-typing a `mapping` beside it.
+ * §13 owns the fix — M8's dedicated mapping panel, built as a general
+ * `objectList` control rather than a copy-specific one.
+ */
+export const copyInputSchema = copyInputShape(CopyMappingSchema);
+
+/**
+ * The DISPATCH variant — what an adapter re-parses out of `preparedInput`
+ * (#1134). See `CopyDispatchMappingSchema` for why `expression` is `unknown` by
+ * the time it gets here.
+ */
+export const copyDispatchInputSchema = copyInputShape(CopyDispatchMappingSchema);
 
 export type CopyMapping = z.infer<typeof CopyMappingSchema>;
+export type CopyInput = z.infer<typeof copyInputSchema>;
 export type CopyDispatchInput = z.infer<typeof copyDispatchInputSchema>;

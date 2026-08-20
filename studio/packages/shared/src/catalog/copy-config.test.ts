@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CopyMappingSchema, copyDispatchInputSchema } from './copy-config.js';
+import { CopyMappingSchema, copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 
 /**
  * #996 M5 slice 1 (#1122) — the `copy` mapping declaration (§6.1).
@@ -144,5 +144,74 @@ describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)',
 
   it('still defaults onError to fail — the shared element shape is ONE declaration', () => {
     expect(copyDispatchInputSchema.parse({ mapping: [row] }).mapping[0]?.onError).toBe('fail');
+  });
+});
+
+/**
+ * M5 slice 4c (#1139) — the AUTHORED variant, which the catalog entry declares
+ * as `copy`'s `configSchema`.
+ *
+ * The point of these is the SHARING: both variants come from one
+ * `copyInputShape`, so a rule added to `mode` cannot land on only one of them.
+ * The one field they are allowed to disagree about is `mapping`, and the last
+ * two tests pin that disagreement in both directions — an authored `expression`
+ * is a TEMPLATE STRING, a dispatch one is the substituted value of any type.
+ */
+describe('the AUTHORED copy config (#1139, catalog configSchema)', () => {
+  const authored = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('defaults the write mode to append, exactly as the dispatch variant does', () => {
+    expect(copyInputSchema.parse({ mapping: [authored] }).mode).toBe('append');
+  });
+
+  it('takes overwrite and refuses any other mode — one declaration, both variants', () => {
+    expect(copyInputSchema.parse({ mapping: [authored], mode: 'overwrite' }).mode).toBe(
+      'overwrite',
+    );
+    expect(copyInputSchema.safeParse({ mapping: [authored], mode: 'truncate' }).success).toBe(
+      false,
+    );
+  });
+
+  it('REQUIRES a mapping — an empty default would author a copy that moves nothing', () => {
+    expect(copyInputSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('inherits the XOR and duplicate-sink refinements from the shared element shape', () => {
+    expect(copyInputSchema.safeParse({ mapping: [{ sink: 'id', type: 'integer' }] }).success).toBe(
+      false,
+    );
+    expect(
+      copyInputSchema.safeParse({
+        mapping: [authored, { source: 'b', sink: 'id', type: 'integer' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('is NOT strict — the canvas hands it a whole config blob, `config.outputs` included', () => {
+    // #1 F13: `Node.config` carries `outputs` beside the activity's own settings,
+    // and `PipelineCanvas`'s JSON editor validates the WHOLE blob against this
+    // schema. A strict variant would refuse every edit of a saved copy node.
+    const parsed = copyInputSchema.safeParse({
+      mapping: [authored],
+      outputs: [{ name: 'rowsRead', type: 'number' }],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('takes a ${} TEMPLATE in expression — the authored variant types it as a string', () => {
+    const parsed = copyInputSchema.parse({
+      mapping: [{ sink: 'at', type: 'string', expression: '${run.startedAt}' }],
+    });
+    expect(parsed.mapping[0]?.expression).toBe('${run.startedAt}');
+  });
+
+  it('REFUSES a non-string expression, where the DISPATCH variant accepts one', () => {
+    // The one field the two variants disagree about, pinned from both sides: a
+    // substituted whole-value ref preserves its native type, so `42` is valid at
+    // dispatch and is not something an author can have typed.
+    const numeric = { mapping: [{ sink: 'n', type: 'integer', expression: 42 }] };
+    expect(copyInputSchema.safeParse(numeric).success).toBe(false);
+    expect(copyDispatchInputSchema.safeParse(numeric).success).toBe(true);
   });
 });

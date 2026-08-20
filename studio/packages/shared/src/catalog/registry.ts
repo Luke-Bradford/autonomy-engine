@@ -4,6 +4,7 @@ import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
   AGENT_TASK_ACTIVITY_TYPE,
+  COPY_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
@@ -20,6 +21,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
 import { agentTaskConfigSchema } from './agent-config.js';
+import { copyInputSchema } from './copy-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -425,6 +427,65 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('entries', 'json'), out('path', 'string')],
     configSchema: fileListConfigSchema,
+  },
+  {
+    /*
+     * #996 M5 (slice 4c, #1139) — `copy`, the data-movement activity, and the
+     * FIRST entry in this registry to declare either of the two paired fields.
+     * Everything under it shipped in slices 1-4b and was unreachable until this
+     * object existed: `executor.ts` refuses an uncatalogued type with
+     * `UNKNOWN_ACTIVITY` before it looks at anything else, so the pump, the sink
+     * discipline and the dispatch seam had no way to run.
+     *
+     * `idempotent:false` — §4 argues this one explicitly, and the argument is
+     * NOT "a copy is destructive so mark it unsafe". It is that the flag governs
+     * the BOOT-RECOVERY path only: the reconciler FREEZES an in-flight
+     * non-idempotent node rather than resume it, which is what a copy needs
+     * because an interrupted `append` may have committed some batches. §4's
+     * atomic-swap discipline is what makes a copy safe WITHIN a run; this flag is
+     * what keeps a crash from re-running one. Both, never one instead of the other.
+     *
+     * `datasetKinds.sink` is `['table']` and not `['table','query']` by
+     * construction, not by policy: `connectors/sqlite.ts` reads a `query` dataset
+     * but refuses any non-`table` for the write, because a query has nothing to
+     * write INTO.
+     *
+     * File dataset kinds (`delimited`, `excel`) are deliberately absent even
+     * though `types.ts` blesses declaring a kind before its reader exists. Here
+     * it would be self-contradictory rather than merely early: a `delimited`
+     * dataset lives on an `fs` connection (`DatasetSchema.connectionId`), which
+     * `connectionKinds: ['sqlite']` refuses, so slice 4a's
+     * `DATASET_CONNECTION_MISMATCH` would refuse every such binding at dispatch.
+     * M7 (CSV -> SQLite) widens `connectionKinds` and these together, which it
+     * must do anyway — so nothing is deferred that M7 would not have touched.
+     *
+     * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly — five, all
+     * REQUIRED. That is load-bearing rather than incidental: F13b lowering seeds
+     * these into a node's `config.outputs` at SAVE, and `validateOutputs` then
+     * fails the node for any the adapter omits. The adapter yields all five
+     * unconditionally on success, and on the WRITE-failure path emits them as
+     * `output` events first, so a copy that dies mid-write still reports what it
+     * had moved. Deliberately NOT claimed of the whole failure ladder: the
+     * earlier `permanent` refusals (an unresolved dataset, a refused sink, an
+     * invalid dispatch config) yield `failed` carrying no outputs, which is
+     * right — nothing had been counted yet.
+     */
+    type: COPY_ACTIVITY_TYPE,
+    title: 'Copy Data',
+    kind: 'execution',
+    category: 'general',
+    idempotent: false,
+    connectionKinds: ['sqlite'],
+    sinkConnectionKinds: ['sqlite'],
+    datasetKinds: { source: ['table', 'query'], sink: ['table'] },
+    outputs: [
+      out('rowsRead', 'number'),
+      out('rowsWritten', 'number'),
+      out('rowsFailed', 'number'),
+      out('bytesRead', 'number'),
+      out('truncated', 'boolean'),
+    ],
+    configSchema: copyInputSchema,
   },
 ];
 

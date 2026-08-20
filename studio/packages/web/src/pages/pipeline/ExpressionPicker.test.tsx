@@ -28,6 +28,7 @@ function mount(nodes: Node[], edges: Edge[], params: Param[], selected: string) 
       <NodePanel
         store={store}
         connections={[]}
+        datasets={[]}
         nodeId={node.id}
         nodeType={node.type}
         config={node.config}

@@ -16,6 +16,7 @@ import {
   type Container,
   type ConnectionPublic,
   type ContainerKind,
+  type Dataset,
   type Edge,
   type Node,
   type Output,
@@ -43,6 +44,8 @@ import {
   TRIGGERS_STAY_DISABLED_NOTE,
 } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
+import { listDatasets } from '../../api/datasets';
+import { eligibleForBinding } from './bindingPickers';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
   assignContainerChild,
@@ -145,6 +148,7 @@ export function PipelineCanvas({
 }: PipelineCanvasProps) {
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -390,11 +394,22 @@ export function PipelineCanvas({
   // in-place pipelineId change to reset for.
   useEffect(() => {
     const ctrl = new AbortController();
-    Promise.all([listPipelineVersions(pipelineId, ctrl.signal), listConnections(ctrl.signal)])
-      .then(([loadedVersions, conns]) => {
+    // #1139 — datasets join the `Promise.all` rather than taking the publish
+    // state's decorate-and-degrade path below, because they are load-bearing for
+    // AUTHORING: they populate a `copy` node's source/sink pickers, and a picker
+    // that renders empty because its fetch failed is indistinguishable from a
+    // workspace with no datasets. An author who read it that way would conclude
+    // there is nothing to bind. Failing the page loudly is the honest outcome.
+    Promise.all([
+      listPipelineVersions(pipelineId, ctrl.signal),
+      listConnections(ctrl.signal),
+      listDatasets(ctrl.signal),
+    ])
+      .then(([loadedVersions, conns, sets]) => {
         store.getState().loadVersion(latestVersion(loadedVersions));
         setVersions(loadedVersions);
         setConnections(conns);
+        setDatasets(sets);
         setReady(true);
       })
       .catch((err: unknown) => {
@@ -1104,6 +1119,7 @@ export function PipelineCanvas({
           <PropertyPanel
             store={store}
             connections={connections}
+            datasets={datasets}
             pipelineId={pipelineId}
             onNotice={showCanvasMsg}
           />
@@ -1121,11 +1137,13 @@ export function PipelineCanvas({
 function PropertyPanel({
   store,
   connections,
+  datasets,
   pipelineId,
   onNotice,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
+  datasets: Dataset[];
   pipelineId: string;
   onNotice: (message: string) => void;
 }) {
@@ -1189,12 +1207,53 @@ function PropertyPanel({
       key={node.id}
       store={store}
       connections={connections}
+      datasets={datasets}
       nodeId={node.id}
       nodeType={node.type}
       config={node.config}
       connectionId={node.connectionId}
       call={node.call}
     />
+  );
+}
+
+/**
+ * #996 M5 slice 4c (#1139) — one end of a paired resource binding.
+ *
+ * Four of these replace what would otherwise be four copies of the singular
+ * connection picker's JSX. It keeps that picker's a11y idiom deliberately: the
+ * label text sits INSIDE the `<label>` that wraps the control, so the accessible
+ * name comes from the association rather than from a hand-written `aria-label`
+ * that could drift from what is drawn.
+ *
+ * `options` are pre-labelled by the caller rather than typed generically over
+ * the resource, because a connection reads `name (kind)` and a dataset reads
+ * `name (kind)` from DIFFERENT fields of different shapes — pushing that into
+ * this component would mean a discriminated union for no gain.
+ */
+function BindingSelect({
+  label,
+  value,
+  options,
+  onPick,
+}: {
+  label: string;
+  value: string | undefined;
+  options: { id: string; label: string }[];
+  onPick: (id: string | undefined) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <select value={value ?? ''} onChange={(e) => onPick(e.target.value || undefined)}>
+        <option value="">— none —</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -2245,9 +2304,11 @@ export function NodePanel({
   config,
   connectionId,
   call,
+  datasets,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
+  datasets: Dataset[];
   nodeId: string;
   nodeType: string;
   config: Record<string, unknown>;
@@ -2340,10 +2401,35 @@ export function NodePanel({
 
   // Kinds this activity accepts, PLUS whatever is currently bound — so a node
   // bound to an off-kind connection (e.g. loaded from an older doc) still shows
-  // its real binding instead of silently reading as "— none —".
+  // its real binding instead of silently reading as "— none —". The rule now
+  // lives in `bindingPickers.ts`, because #1139 needs it four more times.
   const eligible = entry
-    ? connections.filter((c) => entry.connectionKinds.includes(c.kind) || c.id === connectionId)
-    : connections;
+    ? eligibleForBinding(connections, (c) => entry.connectionKinds.includes(c.kind), connectionId)
+    : [...connections];
+
+  // #996 M5 slice 4c (#1139) — a PAIRED activity (`copy`) binds two connections
+  // and two datasets instead of one connection. Read from the CATALOG, never
+  // inferred from the node: that is the executor's own rule
+  // (`executor.ts` — "a node's shape is operator input"), and a panel that
+  // inferred pairing from a stray `connectionIds` would offer a binding the
+  // dispatch would then ignore.
+  const sinkConnectionKinds = entry?.sinkConnectionKinds;
+  const datasetKinds = entry?.datasetKinds;
+  const paired = sinkConnectionKinds !== undefined;
+  const pending = useStore(store, (s) => s.pendingBindings[nodeId]);
+  const thisNode = docNodes.find((n) => n.id === nodeId);
+  // The node's COMMITTED pair wins; `pendingBindings` only ever holds the
+  // half-picked remainder (see `canvasStore.pendingBindings`).
+  const boundConnections = thisNode?.connectionIds ?? pending?.connections;
+  const boundDatasets = thisNode?.datasetIds ?? pending?.datasets;
+  // A pair the author has STARTED but not finished. It is not on the node, so it
+  // is not saved — and saying so is the point: without this the first pick would
+  // survive on screen, vanish on reload, and look like the canvas lost it.
+  const halfBound =
+    (paired && thisNode?.connectionIds === undefined && boundConnections !== undefined) ||
+    (datasetKinds !== undefined &&
+      thisNode?.datasetIds === undefined &&
+      boundDatasets !== undefined);
 
   /**
    * Validate a candidate settings blob against the activity's own schema.
@@ -2436,7 +2522,7 @@ export function NodePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
-      {entry && entry.connectionKinds.length > 0 && (
+      {entry && !paired && entry.connectionKinds.length > 0 && (
         <label>
           Connection
           <select
@@ -2453,6 +2539,95 @@ export function NodePanel({
             ))}
           </select>
         </label>
+      )}
+
+      {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
+          picker above is hidden rather than shown alongside, because
+          `validateDoc` refuses `connectionId` and `connectionIds` together. */}
+      {entry && paired && sinkConnectionKinds !== undefined && (
+        <>
+          <BindingSelect
+            label="Source connection"
+            value={boundConnections?.source}
+            options={eligibleForBinding(
+              connections,
+              (c) => entry.connectionKinds.includes(c.kind),
+              boundConnections?.source,
+            ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)}
+          />
+          <BindingSelect
+            label="Sink connection"
+            value={boundConnections?.sink}
+            options={eligibleForBinding(
+              connections,
+              (c) => sinkConnectionKinds.includes(c.kind),
+              boundConnections?.sink,
+            ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)}
+          />
+        </>
+      )}
+
+      {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
+          connection bound to the SAME end as well as by kind: slice 4a refuses a
+          node/dataset connection disagreement at dispatch
+          (`DATASET_CONNECTION_MISMATCH`), so an unnarrowed list would offer
+          bindings that cannot run. `sink` is optional — M12's `lookup` reads a
+          source only. */}
+      {datasetKinds !== undefined && (
+        <>
+          <BindingSelect
+            label="Source dataset"
+            value={boundDatasets?.source}
+            options={eligibleForBinding(
+              datasets,
+              (d) =>
+                datasetKinds.source.includes(d.kind) &&
+                (boundConnections?.source === undefined ||
+                  d.connectionId === boundConnections.source),
+              boundDatasets?.source,
+            ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
+          />
+          {datasetKinds.sink !== undefined && (
+            <BindingSelect
+              label="Sink dataset"
+              value={boundDatasets?.sink}
+              options={eligibleForBinding(
+                datasets,
+                (d) =>
+                  (datasetKinds.sink ?? []).includes(d.kind) &&
+                  (boundConnections?.sink === undefined ||
+                    d.connectionId === boundConnections.sink),
+                boundDatasets?.sink,
+              ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)}
+            />
+          )}
+        </>
+      )}
+
+      {halfBound && (
+        <p className="contract-advisory" role="status">
+          Both ends of a binding are needed — a half-bound pair is not saved.
+        </p>
+      )}
+
+      {/* A `copy` node that arrived by import or an API seed can carry a stray
+          singular `connectionId`. The paired branch hides the picker that would
+          clear it, and `validateDoc` refuses the two together — so without this
+          the doc would be unsaveable with no affordance to repair it. */}
+      {paired && connectionId !== undefined && (
+        <p className="contract-advisory">
+          This node also carries a single-connection binding, which a paired activity may not have.{' '}
+          <button
+            type="button"
+            onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
+          >
+            Clear it
+          </button>
+        </p>
       )}
       <ContainerSection store={store} nodeId={nodeId} />
 

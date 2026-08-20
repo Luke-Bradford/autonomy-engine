@@ -25,7 +25,11 @@ vi.mock('../../api/pipelines', () => ({
  * when a new `config` object arrives, and a prop that can never change would
  * quietly certify that re-seed without ever exercising it.
  */
-function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['connections'] = []) {
+function mountOver(
+  target: Node,
+  connections: Parameters<typeof NodePanel>[0]['connections'] = [],
+  datasets: Parameters<typeof NodePanel>[0]['datasets'] = [],
+) {
   const store = createCanvasStore();
   store.setState({ nodes: [target] });
 
@@ -36,6 +40,7 @@ function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['c
       <NodePanel
         store={store}
         connections={connections}
+        datasets={datasets}
         nodeId={node.id}
         nodeType={node.type}
         config={node.config}
@@ -79,6 +84,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_ep"
         nodeType="execute_pipeline"
         config={{}}
@@ -103,6 +109,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_legacy"
         nodeType="call_pipeline"
         config={{}}
@@ -124,6 +131,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_if"
         nodeType="if"
         config={{ condition: '${params.go}' }}
@@ -140,6 +148,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_http"
         nodeType="http_request"
         config={{}}
@@ -179,6 +188,7 @@ describe('NodePanel heading (#878)', () => {
       <NodePanel
         store={store}
         connections={[]}
+        datasets={[]}
         nodeId={node.id}
         nodeType={node.type}
         config={node.config}
@@ -465,5 +475,167 @@ describe('NodePanel — duplicate (U21)', () => {
 
     const nodes = panel.store.getState().nodes;
     expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
+  });
+});
+
+/**
+ * #996 M5 slice 4c (#1139) — the paired binding pickers for a `copy` node.
+ *
+ * These assert what the DOC ends up holding, not what the selects display,
+ * because the property the slice exists for is a document one: a `copy` node is
+ * bindable at all, and the doc it produces is `NodeSchema`-valid at every
+ * intermediate step.
+ */
+describe('paired binding pickers (#1139)', () => {
+  const conn = (id: string, name: string, kind: 'sqlite' | 'fs') =>
+    ({
+      id,
+      name,
+      kind,
+      config: {},
+      parameters: [],
+      secretStatus: 'not_required',
+      ownerId: null,
+      resourceId: `r_${id}`,
+      secretRef: null,
+      createdAt: 0,
+      updatedAt: 0,
+    }) as unknown as Parameters<typeof NodePanel>[0]['connections'][number];
+
+  const dset = (id: string, name: string, connectionId: string, kind: 'table' | 'query') =>
+    ({
+      id,
+      name,
+      kind,
+      connectionId,
+      config: {},
+      columns: [],
+      parameters: [],
+      ownerId: null,
+      resourceId: `r_${id}`,
+      createdAt: 0,
+      updatedAt: 0,
+    }) as unknown as Parameters<typeof NodePanel>[0]['datasets'][number];
+
+  const CONNS = [conn('c_src', 'Source store', 'sqlite'), conn('c_fs', 'Files', 'fs')];
+  const SETS = [
+    dset('d_a', 'people', 'c_src', 'table'),
+    dset('d_q', 'recent', 'c_src', 'query'),
+    dset('d_other', 'elsewhere', 'c_fs', 'table'),
+  ];
+  const copyNode = () => node('n_copy', 'copy', {});
+  const pick = (label: string, value: string) =>
+    fireEvent.change(screen.getByRole('combobox', { name: label }), { target: { value } });
+
+  it('offers FOUR pickers for a copy node, and hides the singular one', () => {
+    // The singular picker is hidden rather than shown alongside: `validateDoc`
+    // refuses `connectionId` and `connectionIds` on one node.
+    mountOver(copyNode(), CONNS, SETS);
+    for (const label of [
+      'Source connection',
+      'Sink connection',
+      'Source dataset',
+      'Sink dataset',
+    ]) {
+      expect(screen.getByRole('combobox', { name: label })).toBeTruthy();
+    }
+    expect(screen.queryByRole('combobox', { name: 'Connection' })).toBeNull();
+  });
+
+  it('leaves a SINGLE-connection activity picker exactly as it was', () => {
+    mountOver(httpNode({}), CONNS, SETS);
+    expect(screen.getByRole('combobox', { name: 'Connection' })).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Source connection' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Source dataset' })).toBeNull();
+  });
+
+  it('filters the connection pickers to the kinds the CATALOG accepts', () => {
+    mountOver(copyNode(), CONNS, SETS);
+    const options = [...screen.getByRole('combobox', { name: 'Sink connection' }).children].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(['', 'c_src']); // the `fs` connection is not offered
+  });
+
+  it('narrows the dataset picker to the connection bound to the SAME end', () => {
+    // Slice 4a refuses a node/dataset connection disagreement at dispatch
+    // (`DATASET_CONNECTION_MISMATCH`), so offering `d_other` here would be
+    // offering a binding that cannot run.
+    const { store } = mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    const options = [...screen.getByRole('combobox', { name: 'Source dataset' }).children].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(['', 'd_a', 'd_q']);
+    expect(store.getState().nodes[0]?.datasetIds).toBeUndefined();
+  });
+
+  it('offers only `table` for the SINK dataset — a query has nothing to write into', () => {
+    mountOver(copyNode(), CONNS, SETS);
+    pick('Sink connection', 'c_src');
+    const options = [...screen.getByRole('combobox', { name: 'Sink dataset' }).children].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(['', 'd_a']);
+  });
+
+  it('writes the pair to the doc only once BOTH ends are picked', () => {
+    const { store } = mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    expect(store.getState().nodes[0]?.connectionIds).toBeUndefined();
+    pick('Sink connection', 'c_src');
+    expect(store.getState().nodes[0]?.connectionIds).toEqual({
+      source: 'c_src',
+      sink: 'c_src',
+    });
+  });
+
+  it('says a half-bound pair is not saved, and stops saying it once the pair lands', () => {
+    mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    expect(screen.getByRole('status').textContent).toContain('not saved');
+    pick('Sink connection', 'c_src');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('stops saying it when the ONLY picked end is un-picked back to none', () => {
+    // The symptom of the phantom `{source: undefined, sink: undefined}` entry:
+    // the advisory reads the pending half through a `??`, which an empty object
+    // satisfies, so a node the author had returned to fully blank still claimed
+    // a half-bound pair was going unsaved.
+    mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    expect(screen.getByRole('status').textContent).toContain('not saved');
+    pick('Source connection', '');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('keeps the half-picked end SELECTED — it is store state, not panel state', () => {
+    const { store } = mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    expect(
+      (screen.getByRole('combobox', { name: 'Source connection' }) as HTMLSelectElement).value,
+    ).toBe('c_src');
+    expect(store.getState().pendingBindings['n_copy']?.connections?.source).toBe('c_src');
+  });
+
+  it('still shows a bound resource the allowlist would now reject', () => {
+    // A doc can hold a binding this build would not offer. Dropping it from the
+    // list makes the select read "— none —" while the doc says otherwise.
+    const bound: Node = { ...copyNode(), connectionIds: { source: 'c_fs', sink: 'c_src' } };
+    mountOver(bound, CONNS, SETS);
+    expect(
+      (screen.getByRole('combobox', { name: 'Source connection' }) as HTMLSelectElement).value,
+    ).toBe('c_fs');
+  });
+
+  it('offers to clear a stray singular connectionId that a paired node may not have', () => {
+    // Reachable by import or an API seed. The paired branch hides the picker that
+    // would clear it, and `validateDoc` refuses the two together — so without
+    // this the doc is unsaveable with no affordance to repair it.
+    const stray: Node = { ...copyNode(), connectionId: 'c_src' };
+    const { store } = mountOver(stray, CONNS, SETS);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear it' }));
+    expect(store.getState().nodes[0]?.connectionId).toBeUndefined();
   });
 });

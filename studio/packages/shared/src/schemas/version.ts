@@ -247,6 +247,7 @@
 // WHAT VOIDS THIS: the first catalog entry to declare a sink — `copy` (M5) —
 // makes the field load-bearing, and owes the bump. That is a bump for POPULATING
 // the field, not merely for the new activity type.
+// DISCHARGED at 23 below (M5 slice 4c, #1139), which is where that entry landed.
 // NO BUMP for M3 (#1117) either, recorded for the same reason and on the same
 // argument. `NodeSchema.datasetIds` (the paired source/sink dataset ADDRESS) is
 // additive and INERT *at dispatch*: no catalog entry declares a dataset, so
@@ -269,10 +270,14 @@
 // dispatches identically. The clause is struck rather than left standing because
 // a ledger whose stated reasons have quietly stopped being true cannot be
 // audited, which is the one job it has.
-// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5 slice 4b),
-// the first catalog entry to declare BOTH `sinkConnectionKinds` and
+// WHAT VOIDS THIS: the same event that voids M1's entry — `copy` (M5 slice 4c,
+// #1139), the first catalog entry to declare BOTH `sinkConnectionKinds` and
 // `datasetKinds`, makes the fields load-bearing and owes the bump. One bump
 // covers both; they become load-bearing together.
+// DISCHARGED at 23 below. Written here as "slice 4b" until #1139: the ADAPTER
+// landed at 4b (#1134) and the ENTRY at 4c, and this clause is about the entry.
+// A predicted-void clause naming the wrong event is the drift this ledger exists
+// to catch, so it is corrected rather than left to read as still pending.
 // CATALOG_VERSION 22 (#1119 M4): the `sqlite` STORE connection kind.
 // A BUMP, and the ledger already settled why a kind is different in kind from a
 // field: bump 8 was taken for `fs` on exactly this argument — a new
@@ -286,7 +291,32 @@
 // that names the real cause. That is the "mis-run" this number exists to
 // prevent, and it is why M4 bumps where M1 and M3 (both additive INERT fields)
 // deliberately did not.
-export const CATALOG_VERSION = 22;
+// CATALOG_VERSION 23 (#1139, M5 slice 4c): the `copy` ACTIVITY. A bump, and it
+// discharges the two standing "WHAT VOIDS THIS" clauses above (M1's
+// `connectionIds`, M3's `datasetIds`) in one, exactly as M3's entry said it
+// would: they become load-bearing together and one bump covers both. THREE
+// reasons, not two, and the third is the one easiest to miss:
+//  (i) a new runnable EXECUTION type. A pre-23 build has no `copy` entry, so
+//      `executor.ts` refuses the node with `UNKNOWN_ACTIVITY` — a hard refusal,
+//      not a mis-run, but bump 21 settled that an artifact which is not runnable
+//      AS AUTHORED must be refused at import rather than fail at run time.
+//  (ii) the first POPULATED `sinkConnectionKinds` + `datasetKinds`. This is what
+//      the two clauses were waiting for: a pre-M1/M3 build DROPS `connectionIds`
+//      and `datasetIds` and dispatches as though they were never there, which
+//      was harmless only while nothing read them. It now reads both, so the same
+//      dropped keys become a copy dispatching against the wrong ends.
+//  (iii) F13b lowering flips this node's `config.outputs` from absent to five
+//      DECLARED required outputs at SAVE (`catalog/lower.ts`), and
+//      `validateOutputs` then fails the node for any the adapter omits. That is
+//      bump 21's `agent_task.truncated` argument verbatim, applied to five
+//      outputs instead of one. Benign in THIS build — `connectors/copy.ts`
+//      yields all five unconditionally — and recorded anyway, because the reason
+//      a bump was taken is the only thing that makes the next one auditable.
+// NOT an upgrader. `portability/envelope.ts` checks `catalogVersion` as a
+// CEILING (refuse an artifact newer than this build) and keys `UPGRADERS` on
+// `schemaVersion` alone, so a catalog bump is purely an import floor and
+// migrates nothing.
+export const CATALOG_VERSION = 23;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
