@@ -387,10 +387,20 @@ export function DatasetsPage() {
  * diagnostic, so an operator finds out before a schedule does.
  *
  * Compact where it is DRAWN, complete where it is READ. The cell sits in a
- * fixed-width table and the advisory runs to ~20 words; five of them stacked
- * is a wall nobody reads. The short marker carries the full sentence in
- * `visually-hidden` text rather than a `title`, so it is in the accessible name
- * and in the test, not just in a tooltip a keyboard never opens.
+ * fixed-width table and the advisory runs to ~20 words; five of them stacked is
+ * a wall nobody reads. The short marker carries the full sentence BOTH ways,
+ * which is the pattern `RunTimeline`, `TokenFlowChart` and
+ * `VersionHistoryPanel` already share: `visually-hidden` text so it is in the
+ * accessible name (a `title` alone is a tooltip a keyboard never opens), and
+ * `title` so a sighted mouse user gets the same sentence on hover instead of
+ * being sent to the edit form to find out what "mismatch" meant.
+ *
+ * No glyph. Every other `.contract-advisory` in this file and across
+ * `packages/web/src` is plain text, and the ones that DO pair a decorative mark
+ * with a longer string (`HubRail`, `ActivityToolbox`) put the mark in its own
+ * `aria-hidden` span so it stays out of the accessible name. A bare `⚠` folded
+ * into that name would be read aloud differently by every screen reader, for no
+ * gain the `.contract-advisory` colour does not already carry.
  */
 function StoreCell({
   connections,
@@ -419,8 +429,8 @@ function StoreCell({
       {disagreement !== null && (
         <>
           {' '}
-          <span className="contract-advisory">
-            ⚠ kind mismatch
+          <span className="contract-advisory" title={disagreement}>
+            kind mismatch
             <span className="visually-hidden">: {disagreement}</span>
           </span>
         </>

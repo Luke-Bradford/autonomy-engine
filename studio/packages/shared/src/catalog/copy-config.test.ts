@@ -105,11 +105,11 @@ describe('CopyMappingSchema — the declared shape', () => {
     // is what the property panel renders — the concern `dataset-config.ts`'s
     // own object-level `superRefine` documents (an unprefixed message tells an
     // operator two things clash without telling them which control to touch).
-    const refused = copyInputSchema.safeParse({
-      source: { datasetId: 'ds_a' },
-      sink: { datasetId: 'ds_b' },
-      mapping: [],
-    });
+    // Only `mapping` and `mode` — `copyInputShape` declares nothing else. A
+    // copy's source and sink are dataset/connection BINDINGS on the node, not
+    // config fields, and seeding them here would suggest this schema checks
+    // them.
+    const refused = copyInputSchema.safeParse({ mapping: [] });
     expect(refused.success).toBe(false);
     expect(formatZodIssues(refused.error!.issues)).toContain('mapping: a copy maps no columns');
   });
@@ -129,11 +129,7 @@ describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)',
     // disagree about a rule that never mentions `expression`. Were this on the
     // authored schema alone, a version minted before #1172 would still reach
     // the pump, and `connectors/copy.ts` would report the fault a rung later.
-    const refused = copyDispatchInputSchema.safeParse({
-      source: { datasetId: 'ds_a' },
-      sink: { datasetId: 'ds_b' },
-      mapping: [],
-    });
+    const refused = copyDispatchInputSchema.safeParse({ mapping: [] });
     expect(refused.success).toBe(false);
     expect(formatZodIssues(refused.error!.issues)).toContain('mapping: a copy maps no columns');
   });

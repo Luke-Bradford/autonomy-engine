@@ -324,34 +324,35 @@ export async function* runCopyActivity(
   // described and being read. They share one predicate (`schema-drift.ts`) so
   // they cannot disagree about what "the same column" means.
   //
-  // An EMPTY mapping skips the describe entirely, so as not to open the source
-  // store for a dispatch that is already doomed — which would report whatever
-  // that open happened to fail with instead of the actual fault.
+  // This rung used to be wrapped in `if (mapping.length > 0)`, skipping the
+  // describe so as not to open the source store for a dispatch that was already
+  // doomed — which would have reported whatever that open failed with instead
+  // of the actual fault. #1172 REMOVED that wrapper rather than leaving it: the
+  // parse above now refuses `[]` outright, so it had become provably dead code
+  // in the same function as the check that made it so.
   //
-  // Since #1172 nothing reaches here with one: `copyDispatchInputSchema` above
-  // refuses `[]` outright, so `mapping` is non-empty by construction and this
-  // guard cannot fire. It is kept rather than deleted because it is the
-  // structure of the ladder, not an assertion about the schema — the parse
-  // above is one line, and a future change that moves or loosens it should find
-  // the rungs below still ordered correctly rather than silently opening a
-  // store for nothing. `pump.ts`'s `empty_mapping` is the same call, one layer
-  // further down, and its docblock makes the argument at length.
-  let sourceColumns: readonly string[] = [];
-  let coercion: CoercionOptions = {};
+  // It is NOT the counterpart of `pump.ts`'s surviving `empty_mapping` guard,
+  // and the two should not be read as a pair. That one lives across a module
+  // boundary and is reached by callers — M7's CSV source, M10's postgres sink,
+  // #1130's adapter — that never ran this schema at all, so it still fires. A
+  // guard sitting three lines below the parse that subsumes it protects nothing
+  // and only invites the next reader to wonder what reaches it.
+  //
+  // `sourceCoercion` is still derived HERE rather than at its point of use: it
+  // parses the source dataset's config and may THROW on one it cannot read, and
+  // the options object handed to `pumpCopyRows` is built EAGERLY, so deriving
+  // it there would report "invalid delimited dataset config" in place of the
+  // fault an operator actually needs to see. That reason is independent of the
+  // mapping's length and outlives the wrapper.
+  // Declared without seeds: the `catch` below RETURNS, so reaching past the
+  // block means both were assigned. Seeding them was the wrapper's doing — an
+  // empty mapping used to leave both at their defaults — and outliving it, an
+  // unused initializer is a value nothing can ever read.
+  let sourceColumns: readonly string[];
+  let coercion: CoercionOptions;
   try {
-    if (mapping.length > 0) {
-      sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
-      // Derived HERE, under the SAME empty-mapping guard, and not at the point
-      // of use further down. `sourceCoercion` parses the source dataset's config
-      // and may THROW on one it cannot read, and the options object handed to
-      // `pumpCopyRows` is built EAGERLY — so deriving it there would run that
-      // parse for an empty mapping too, and report "invalid delimited dataset
-      // config" in place of the pump's `empty_mapping`. That is precisely the
-      // defect the skip above exists to prevent, reintroduced one rung lower:
-      // a dispatch that is already doomed reporting whatever the second-order
-      // check happened to fail with instead of the actual fault.
-      coercion = io.sourceCoercion(source);
-    }
+    sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+    coercion = io.sourceCoercion(source);
   } catch (err) {
     // Through the SAME mapper the copy body uses, so a store that could not be
     // REACHED keeps its own `kind`. Reporting a `SQLITE_BUSY` here as a
