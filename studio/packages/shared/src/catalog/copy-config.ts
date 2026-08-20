@@ -73,6 +73,27 @@ const refineMapping = (
   rows: readonly { source?: unknown; expression?: unknown; sink: string }[],
   ctx: z.RefinementCtx,
 ) => {
+  // #1172 — a mapping that maps NOTHING, refused here rather than at dispatch.
+  // `pumpCopyRows` already refuses it, but that fires when the copy RUNS, which
+  // for a scheduled pipeline is hours after the version was minted; every other
+  // cross-row rule in this function is reported to the author on Apply. The
+  // pump's guard STAYS and is not made redundant: this module is `shared`, and
+  // `pump.ts` is reached by callers that never ran this schema.
+  //
+  // `path: []` because an empty array has NO row to name — the per-element
+  // paths below exist so a message names its own row, and there is no row here.
+  // Nested under `copyInputSchema` the empty path emerges as `['mapping']`, so
+  // `formatZodIssues` still prefixes it with the control an author can see.
+  // That prefix is the point: `dataset-config.ts`'s object-level `superRefine`
+  // documents the failure mode of losing it — an operator told two things clash
+  // but not which control to touch.
+  if (rows.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: [],
+      message: 'a copy maps no columns — add at least one mapping row',
+    });
+  }
   const seenSinks = new Set<string>();
   rows.forEach((row, i) => {
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own

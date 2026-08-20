@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CopyMappingSchema, copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 
 /**
  * #996 M5 slice 1 (#1122) — the `copy` mapping declaration (§6.1).
@@ -86,13 +87,56 @@ describe('CopyMappingSchema — the declared shape', () => {
     );
   });
 
-  it('an empty mapping parses — it is the pump that decides what to do with one', () => {
-    expect(CopyMappingSchema.parse([])).toEqual([]);
+  // INVERTED by #1172. This test previously read "an empty mapping parses — it
+  // is the pump that decides what to do with one", recording the decision this
+  // one reverses: the pump's refusal fires at DISPATCH, so a zero-row mapping
+  // could be saved into an immutable version and only fail hours later on a
+  // schedule. The pump's guard STAYS (`datamove/pump.ts`) — `shared` is reached
+  // by callers that never ran this schema — so the two are layers, not rivals.
+  it('refuses an empty mapping, so a copy that moves nothing is refused where it is authored', () => {
+    const refused = CopyMappingSchema.safeParse([]);
+    expect(refused.success).toBe(false);
+    expect(formatZodIssues(refused.error!.issues)).toContain('a copy maps no columns');
+  });
+
+  it('reports the empty-mapping refusal against `mapping`, the control an author can see', () => {
+    // The issue is raised with `path: []` because an empty array has no row to
+    // name. Nested under `copyInputSchema` that emerges as `['mapping']`, which
+    // is what the property panel renders — the concern `dataset-config.ts`'s
+    // own object-level `superRefine` documents (an unprefixed message tells an
+    // operator two things clash without telling them which control to touch).
+    const refused = copyInputSchema.safeParse({
+      source: { datasetId: 'ds_a' },
+      sink: { datasetId: 'ds_b' },
+      mapping: [],
+    });
+    expect(refused.success).toBe(false);
+    expect(formatZodIssues(refused.error!.issues)).toContain('mapping: a copy maps no columns');
+  });
+
+  it('still accepts a one-row mapping — the refusal is of ZERO rows, not of small ones', () => {
+    expect(
+      CopyMappingSchema.safeParse([{ source: 'a', sink: 'id', type: 'integer' }]).success,
+    ).toBe(true);
   });
 });
 
 describe('copyDispatchInputSchema — the DISPATCH variant (#1134 M5 slice 4b)', () => {
   const row = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('refuses an empty mapping too — the rule is about the ARRAY, not about `expression`', () => {
+    // `refineMapping` is shared by both shapes precisely so they cannot
+    // disagree about a rule that never mentions `expression`. Were this on the
+    // authored schema alone, a version minted before #1172 would still reach
+    // the pump, and `connectors/copy.ts` would report the fault a rung later.
+    const refused = copyDispatchInputSchema.safeParse({
+      source: { datasetId: 'ds_a' },
+      sink: { datasetId: 'ds_b' },
+      mapping: [],
+    });
+    expect(refused.success).toBe(false);
+    expect(formatZodIssues(refused.error!.issues)).toContain('mapping: a copy maps no columns');
+  });
 
   it('accepts a NON-STRING expression, which is what reaches an adapter', () => {
     // The regression `CopyMappingSchema`'s own docblock predicts: substitution

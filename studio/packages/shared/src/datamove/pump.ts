@@ -329,9 +329,13 @@ function recordFailure(counters: CopyCounters, failure: CopyRowFailure): void {
  * The mapping is assumed already validated by `CopyMappingSchema` (the XOR
  * between `source` and `expression`, and the duplicate-`sink` refusal, are its
  * to enforce and are not re-checked here). The empty-mapping refusal below is
- * NOT a duplicate of that: the schema permits `[]`, and the only other guard is
- * the sink's own zero-column check — which is the downstream guard this branch
- * has already been bitten by relying on once.
+ * NOT a duplicate of that, though #1172 narrowed the gap: the schema now
+ * refuses `[]` too, so for a copy dispatched through `connectors/copy.ts` this
+ * branch is a second layer rather than the first. It stays because this module
+ * is `shared` and is NOT entitled to assume the schema ran — M7's CSV source,
+ * M10's postgres sink and #1130's adapter all reach it — and because the only
+ * other guard behind it is the sink's own zero-column check, which is the
+ * downstream guard this branch has already been bitten by relying on once.
  */
 export async function* pumpCopyRows(
   batches: AsyncIterable<readonly Record<string, unknown>[]>,
