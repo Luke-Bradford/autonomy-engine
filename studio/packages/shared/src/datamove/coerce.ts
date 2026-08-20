@@ -176,7 +176,10 @@ function okInteger(value: bigint): CoercionResult {
   if (value < MIN_INT64 || value > MAX_INT64) {
     // Deliberately does NOT echo the value: an out-of-range id is still the
     // operator's data, and this prose reaches logs.
-    return fail('integer_out_of_range', 'the value is outside the range an integer column can hold');
+    return fail(
+      'integer_out_of_range',
+      'the value is outside the range an integer column can hold',
+    );
   }
   return ok(value);
 }
