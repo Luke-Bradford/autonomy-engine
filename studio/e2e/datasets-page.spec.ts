@@ -323,4 +323,76 @@ test.describe('#1115 Manage → Datasets', () => {
 
     await expectQuiet(page, problems);
   });
+
+  test('#1158 marks a dataset the LIST has stranded, compactly, with the full reason readable', async ({
+    page,
+  }) => {
+    // The defect, reproduced through the real route that causes it: a
+    // connection's `kind` is MUTABLE, so a `sqlite` store can BECOME an `http`
+    // connection, and nothing re-checks the datasets that named it. #1145's
+    // advisory existed but rendered on the edit FORM only, so the disagreement
+    // was true and invisible until somebody opened that dataset.
+    const problems = collectPageProblems(page);
+    const storeId = await seedStore(page, 'e2e-ds-strand-store');
+    const created = await page.request.post('/api/datasets', {
+      data: {
+        name: 'e2e-ds-strand',
+        connectionId: storeId,
+        kind: 'table',
+        config: { table: 'orders' },
+        columns: [{ name: 'id', type: 'integer', nullable: false }],
+      },
+    });
+    expect(created.status(), `seeding dataset: ${await created.text()}`).toBe(201);
+
+    // The mutation itself, through the API an operator's own edit would use.
+    const stranded = await page.request.patch(`/api/connections/${storeId}`, {
+      data: { kind: 'http', config: { baseUrl: 'https://example.invalid' } },
+    });
+    expect(stranded.status(), `re-kinding the store: ${await stranded.text()}`).toBe(200);
+
+    await gotoDatasets(page);
+    const row = page.getByRole('row', { name: /e2e-ds-strand/ });
+    await expect(row).toBeVisible();
+
+    // ONE evaluate carrying every computed assertion — what a jsdom unit test
+    // cannot reach is precisely this: that `visually-hidden` really does take
+    // the ~20-word sentence OUT of the layout in the shipped bundle, so the
+    // fixed-width cell shows a short marker and not a wall of text, while the
+    // sentence itself stays in the accessibility tree for anyone reading it.
+    const measured = await row.evaluate((el) => {
+      const hidden = el.querySelector('.visually-hidden');
+      const marker = hidden?.parentElement ?? null;
+      const style = hidden === null ? null : getComputedStyle(hidden);
+      const box = hidden?.getBoundingClientRect() ?? null;
+      return {
+        markerText: marker?.textContent ?? '',
+        hiddenText: hidden?.textContent ?? '',
+        clipPath: style?.clipPath ?? '',
+        position: style?.position ?? '',
+        // Still rendered (not `display:none`), which is what keeps it in the
+        // accessibility tree — the reason this class exists rather than
+        // `hidden`.
+        display: style?.display ?? '',
+        width: box === null ? -1 : Math.round(box.width),
+        height: box === null ? -1 : Math.round(box.height),
+      };
+    });
+
+    expect(measured.markerText).toContain('kind mismatch');
+    expect(measured.hiddenText).toContain(
+      "dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'",
+    );
+    expect(measured.clipPath).toBe('inset(50%)');
+    expect(measured.position).toBe('absolute');
+    expect(measured.display).not.toBe('none');
+    expect(measured.width).toBeLessThanOrEqual(1);
+    expect(measured.height).toBeLessThanOrEqual(1);
+
+    // ADVISORY, never a gate — #1158 says so in as many words. The row keeps
+    // every action it had.
+    await expect(row.getByRole('button', { name: 'Edit' })).toBeEnabled();
+
+    await expectQuiet(page, problems);
+  });
 });
