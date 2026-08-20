@@ -25,7 +25,11 @@ vi.mock('../../api/pipelines', () => ({
  * when a new `config` object arrives, and a prop that can never change would
  * quietly certify that re-seed without ever exercising it.
  */
-function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['connections'] = []) {
+function mountOver(
+  target: Node,
+  connections: Parameters<typeof NodePanel>[0]['connections'] = [],
+  datasets: Parameters<typeof NodePanel>[0]['datasets'] = [],
+) {
   const store = createCanvasStore();
   store.setState({ nodes: [target] });
 
@@ -36,6 +40,7 @@ function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['c
       <NodePanel
         store={store}
         connections={connections}
+        datasets={datasets}
         nodeId={node.id}
         nodeType={node.type}
         config={node.config}
@@ -79,6 +84,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_ep"
         nodeType="execute_pipeline"
         config={{}}
@@ -103,6 +109,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_legacy"
         nodeType="call_pipeline"
         config={{}}
@@ -124,6 +131,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_if"
         nodeType="if"
         config={{ condition: '${params.go}' }}
@@ -140,6 +148,7 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
       <NodePanel
         store={createCanvasStore()}
         connections={[]}
+        datasets={[]}
         nodeId="n_http"
         nodeType="http_request"
         config={{}}
@@ -179,6 +188,7 @@ describe('NodePanel heading (#878)', () => {
       <NodePanel
         store={store}
         connections={[]}
+        datasets={[]}
         nodeId={node.id}
         nodeType={node.type}
         config={node.config}

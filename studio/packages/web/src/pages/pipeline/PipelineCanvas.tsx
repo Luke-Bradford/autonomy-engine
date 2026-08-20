@@ -16,6 +16,7 @@ import {
   type Container,
   type ConnectionPublic,
   type ContainerKind,
+  type Dataset,
   type Edge,
   type Node,
   type Output,
@@ -43,6 +44,7 @@ import {
   TRIGGERS_STAY_DISABLED_NOTE,
 } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
+import { listDatasets } from '../../api/datasets';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
   assignContainerChild,
@@ -145,6 +147,7 @@ export function PipelineCanvas({
 }: PipelineCanvasProps) {
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -390,11 +393,22 @@ export function PipelineCanvas({
   // in-place pipelineId change to reset for.
   useEffect(() => {
     const ctrl = new AbortController();
-    Promise.all([listPipelineVersions(pipelineId, ctrl.signal), listConnections(ctrl.signal)])
-      .then(([loadedVersions, conns]) => {
+    // #1139 — datasets join the `Promise.all` rather than taking the publish
+    // state's decorate-and-degrade path below, because they are load-bearing for
+    // AUTHORING: they populate a `copy` node's source/sink pickers, and a picker
+    // that renders empty because its fetch failed is indistinguishable from a
+    // workspace with no datasets. An author who read it that way would conclude
+    // there is nothing to bind. Failing the page loudly is the honest outcome.
+    Promise.all([
+      listPipelineVersions(pipelineId, ctrl.signal),
+      listConnections(ctrl.signal),
+      listDatasets(ctrl.signal),
+    ])
+      .then(([loadedVersions, conns, sets]) => {
         store.getState().loadVersion(latestVersion(loadedVersions));
         setVersions(loadedVersions);
         setConnections(conns);
+        setDatasets(sets);
         setReady(true);
       })
       .catch((err: unknown) => {
@@ -1104,6 +1118,7 @@ export function PipelineCanvas({
           <PropertyPanel
             store={store}
             connections={connections}
+            datasets={datasets}
             pipelineId={pipelineId}
             onNotice={showCanvasMsg}
           />
@@ -1121,11 +1136,13 @@ export function PipelineCanvas({
 function PropertyPanel({
   store,
   connections,
+  datasets,
   pipelineId,
   onNotice,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
+  datasets: Dataset[];
   pipelineId: string;
   onNotice: (message: string) => void;
 }) {
@@ -1189,6 +1206,7 @@ function PropertyPanel({
       key={node.id}
       store={store}
       connections={connections}
+      datasets={datasets}
       nodeId={node.id}
       nodeType={node.type}
       config={node.config}
@@ -2245,9 +2263,11 @@ export function NodePanel({
   config,
   connectionId,
   call,
+  datasets,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
+  datasets: Dataset[];
   nodeId: string;
   nodeType: string;
   config: Record<string, unknown>;

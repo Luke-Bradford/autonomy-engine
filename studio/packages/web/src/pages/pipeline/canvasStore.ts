@@ -597,6 +597,15 @@ function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasSta
   };
 }
 
+/** One node's half-picked pair ends, per binding kind (#1139). */
+export interface PendingBindings {
+  connections?: { source?: string; sink?: string };
+  datasets?: { source?: string; sink?: string };
+}
+
+/** Which of a node's two paired bindings a picker is writing (#1139). */
+export type BindingKind = 'connections' | 'datasets';
+
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
@@ -611,6 +620,35 @@ export interface CanvasState {
   loaded: PipelineVersion | null;
   /** The working graph — the store owns its own copy (never the loaded arrays). */
   nodes: Node[];
+  /**
+   * #996 M5 slice 4c (#1139) — HALF-PICKED paired bindings, held here and
+   * deliberately OUTSIDE the doc.
+   *
+   * `NodeSchema.connectionIds` and `.datasetIds` require BOTH ends
+   * (`schemas/pipeline.ts`, whose docblock forbids `.partial()` by name), but an
+   * author picks source and sink in two separate clicks. Something has to hold
+   * the first pick.
+   *
+   * It cannot be the node. `api/pipelines.ts` runs `PipelineVersionWriteSchema.parse`
+   * on the body before every POST, so a `{source:'x'}` or an empty-string
+   * sentinel on a node would throw a raw ZodError at the call site — and the
+   * "Save anyway" conflict button does not consult the `issues` gate, so that
+   * path is reachable. Keeping the doc always `NodeSchema`-valid is what makes
+   * that unreachable BY CONSTRUCTION rather than by a gate somebody has to
+   * remember.
+   *
+   * It cannot be the panel either: `NodePanel` remounts when the author selects
+   * another node and comes back, so a panel-local draft would silently discard
+   * the first pick.
+   *
+   * NOT part of `CanvasDocSnapshot`, and not written through `edit()`. Undo is
+   * document history, and a half-picked binding is not in the document — it is
+   * selection state. So picking one end does not dirty the doc or push a history
+   * entry; the pair landing on the node does, as one undoable step. Masked by a
+   * complete pair on the node (the read prefers the node), and cleared on node
+   * delete and version load so it cannot outlive what it refers to.
+   */
+  pendingBindings: Record<string, PendingBindings>;
   edges: Edge[];
   /**
    * The doc's containers — WORKING state as of #746, not a view of `loaded`.
@@ -935,6 +973,21 @@ export interface CanvasState {
   updateNodeCall(id: string, call: CallConfig | undefined): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   /**
+   * #1139 — set ONE END of a paired binding (`connectionIds` / `datasetIds`).
+   *
+   * Whole-value at the doc layer, which is this store's stated house rule: the
+   * node's pair key is written only when BOTH ends are known and deleted the
+   * moment either is cleared, so no field-patch signature and no
+   * "JSON-hostile sentinel" is needed to express removal. The partial lives in
+   * `pendingBindings` until it becomes a pair. See that field for why.
+   */
+  setNodeBindingEnd(
+    id: string,
+    kind: BindingKind,
+    side: 'source' | 'sink',
+    value: string | undefined,
+  ): void;
+  /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
    * whole `Container`: `default` is an absent-or-present key (not a nullable
@@ -1040,6 +1093,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     return {
       loaded: null,
       nodes: [],
+      pendingBindings: {},
       edges: [],
       containers: [],
       params: [],
@@ -1082,6 +1136,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // load-bearing after the lowering — `lowerPipelineNodes` is
           // copy-on-write and hands back an unchanged node BY REFERENCE.
           nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
+          // #1139 — a half-picked binding names a node in the doc being REPLACED,
+          // so it cannot outlive it. Cleared here rather than left to be masked,
+          // because "masked" and "gone" look identical right up until a new doc
+          // reuses a node id.
+          pendingBindings: {},
           // #786 — DROP an edge whose endpoint resolves to nothing, for the same
           // reason as the lowering above: the row is immutable, so it can never be
           // repaired in place, and loading it raw makes the canvas disagree with
@@ -1350,6 +1409,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             // `Container[] -> Container[]`, so folding it is the batch form —
             // there is no second rule to write down.
             containers: [...doomedNodes].reduce(pruneContainerChild, s.containers),
+            // #1139 — a half-picked binding on a node that no longer exists is
+            // unreachable state keyed by a stale id. Dropped with the node, so a
+            // later paste that reuses the id cannot inherit it.
+            pendingBindings: Object.fromEntries(
+              Object.entries(s.pendingBindings).filter(([nodeId]) => !doomedNodes.has(nodeId)),
+            ),
             selected,
           };
         });
@@ -1621,6 +1686,52 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             return next;
           }),
         }));
+      },
+
+      setNodeBindingEnd(id, kind, side, value) {
+        const state = get();
+        if (!state.nodes.some((n) => n.id === id)) return;
+        const field = kind === 'connections' ? 'connectionIds' : 'datasetIds';
+
+        // The node's OWN pair wins over anything pending: a complete pair is the
+        // document, and `pendingBindings` is only ever the half-picked remainder.
+        const node = state.nodes.find((n) => n.id === id);
+        const committed = node?.[field];
+        const held = state.pendingBindings[id]?.[kind];
+        const current = committed ?? held ?? {};
+        const nextPair = { ...current, [side]: value };
+        const source = nextPair.source || undefined;
+        const sink = nextPair.sink || undefined;
+
+        // Only a WHOLE pair reaches the doc. Either end missing deletes the key,
+        // so the doc is `NodeSchema`-valid at every intermediate step and the
+        // client-side `PipelineVersionWriteSchema.parse` on save can never see a
+        // half pair — see `pendingBindings` for why that matters.
+        const complete = source !== undefined && sink !== undefined;
+        const wasCommitted = committed !== undefined;
+        if (complete || wasCommitted) {
+          edit((s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (complete) next[field] = { source, sink };
+              else delete next[field];
+              return next;
+            }),
+          }));
+        }
+
+        // The remainder — NOT through `edit()`. Selection state, not document
+        // state: picking one end must not dirty the doc or push an undo step.
+        set((s) => {
+          const forNode = { ...s.pendingBindings[id] };
+          if (complete) delete forNode[kind];
+          else forNode[kind] = { source, sink };
+          const rest = { ...s.pendingBindings };
+          if (forNode.connections === undefined && forNode.datasets === undefined) delete rest[id];
+          else rest[id] = forNode;
+          return { pendingBindings: rest };
+        });
       },
 
       addParam() {
