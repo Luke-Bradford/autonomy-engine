@@ -286,10 +286,10 @@ function decodeOrFail(
  * A TRAILING run of empty cells is NOT refused — it is not a column at all. See
  * {@link trimTrailingEmpty}.
  */
-function headerNames(rawCells: readonly string[]): string[] {
+function headerNames(rawCells: readonly string[], path: string): string[] {
   const cells = trimTrailingEmpty(rawCells);
   if (cells.length === 0) {
-    throw new DatasetIoError('permanent', 'the header names no columns');
+    throw new DatasetIoError('permanent', `'${path}' has a header that names no columns`);
   }
   const names: string[] = [];
   const seen = new Set<string>();
@@ -298,13 +298,13 @@ function headerNames(rawCells: readonly string[]): string[] {
     if (name === '') {
       throw new DatasetIoError(
         'permanent',
-        `the header has no name for column ${index + 1} — every column a mapping can name must be named`,
+        `'${path}' has no name for header column ${index + 1} — every column a mapping can name must be named`,
       );
     }
     if (seen.has(name)) {
       throw new DatasetIoError(
         'permanent',
-        `the header names '${name}' more than once, so a row cannot carry both columns`,
+        `'${path}' names the header column '${name}' more than once, so a row cannot carry both`,
       );
     }
     seen.add(name);
@@ -379,7 +379,7 @@ function positionalNames(width: number): string[] {
  * DATA being discarded, and an empty field is not data; dropping it discards
  * nothing. `1,2,3` is still refused, on the same rule.
  *
- * The message names a DATA ROW ORDINAL, not a line number. The grammar's own
+ * The message names the FILE and a DATA ROW ORDINAL, never a line number. The grammar's own
  * line counter never crosses the seam, and it would not be the same number
  * anyway — blank lines are skipped, so the two diverge on exactly the files
  * where an operator most needs the number to be right.
@@ -388,6 +388,7 @@ function bindRow(
   names: readonly string[],
   cells: readonly string[],
   ordinal: number,
+  path: string,
 ): Record<string, unknown> {
   if (cells.length > names.length) {
     // ONLY the excess is examined. Trimming the row's whole trailing run of
@@ -398,8 +399,8 @@ function bindRow(
     if (extra.some((cell) => cell !== '')) {
       throw new DatasetIoError(
         'permanent',
-        `data row ${ordinal} carries ${cells.length} fields but the source has ${names.length} columns — ` +
-          'the extra fields have no column to be written to',
+        `'${path}' data row ${ordinal} carries ${cells.length} fields but the source has ` +
+          `${names.length} columns — the extra fields have no column to be written to`,
       );
     }
   }
@@ -438,8 +439,8 @@ function parseOptionsFor(
 }
 
 /** The column names for a file's first row, under either header mode. */
-function namesFrom(header: boolean, firstRow: readonly string[]): readonly string[] {
-  return header ? headerNames(firstRow) : positionalNames(trimTrailingEmpty(firstRow).length);
+function namesFrom(header: boolean, firstRow: readonly string[], path: string): readonly string[] {
+  return header ? headerNames(firstRow, path) : positionalNames(trimTrailingEmpty(firstRow).length);
 }
 
 function chunkBytesFor(read: DelimitedDatasetRead): number {
@@ -492,7 +493,7 @@ export async function* readDelimitedDatasetBatches(
       if (rawBatch.length === 0) continue;
       let cellRows: readonly string[][] = rawBatch;
       if (names === undefined) {
-        names = namesFrom(config.header, rawBatch[0]!);
+        names = namesFrom(config.header, rawBatch[0]!, path);
         if (config.header) cellRows = rawBatch.slice(1);
       }
       if (cellRows.length === 0) continue;
@@ -507,7 +508,7 @@ export async function* readDelimitedDatasetBatches(
       const bound = names;
       yield cellRows.map((cells) => {
         ordinal += 1;
-        return bindRow(bound, cells, ordinal);
+        return bindRow(bound, cells, ordinal, path);
       });
     }
   } catch (err) {
@@ -546,7 +547,7 @@ export async function describeDelimitedDatasetColumns(
       parseOptionsFor(config, 1),
     )) {
       if (rawBatch.length === 0) continue;
-      return namesFrom(config.header, rawBatch[0]!);
+      return namesFrom(config.header, rawBatch[0]!, path);
     }
   } catch (err) {
     throw readFailure(err, read.signal, `the delimited source '${path}' could not be described`);

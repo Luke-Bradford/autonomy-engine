@@ -130,7 +130,7 @@ describe('naming', () => {
     ]) {
       const err = await refusalOf(run);
       expect(err.kind).toBe('permanent');
-      expect(err.message).toContain("names 'a' more than once");
+      expect(err.message).toContain("names the header column 'a' more than once");
     }
   });
 
@@ -150,12 +150,30 @@ describe('naming', () => {
     const path = await seed('e.csv', 'a,,c\n1,2,3\n');
     const err = await refusalOf(() => rowsOf(read(path)));
     expect(err.kind).toBe('permanent');
-    expect(err.message).toContain('no name for column 2');
+    expect(err.message).toContain('has no name for header column 2');
   });
 
   it('preserves header whitespace verbatim rather than inventing a trimmed name', async () => {
     const path = await seed('w.csv', 'a, b\n1,2\n');
     expect(await describeDelimitedDatasetColumns(read(path))).toEqual(['a', ' b']);
+  });
+});
+
+describe('every refusal names the file', () => {
+  // A copy pipeline with several delimited sources produces these errors on a
+  // run-detail page with no other context, so "which file?" has to be in the
+  // sentence — `noRowsError` and the I/O wrapper already did it, the naming and
+  // ragged-row refusals did not.
+  it.each([
+    ['a,b,a\n1,2,3\n', {}],
+    ['a,,c\n1,2,3\n', {}],
+    [',,\n1,2\n', {}],
+    ['a,b\n1,2\n3,4,5\n', {}],
+    ['', {}],
+  ])('names the file in the refusal for %j', async (contents, config) => {
+    const path = await seed('named.csv', contents);
+    const err = await refusalOf(() => rowsOf(read(path, config)));
+    expect(err.message).toContain(path);
   });
 });
 
@@ -230,7 +248,10 @@ describe('ragged rows', () => {
     const err = await refusalOf(() => rowsOf(read(path)));
     // Physically line 4; the second DATA row. The message must not claim a line.
     expect(err.message).toContain('data row 2');
-    expect(err.message).not.toContain('line');
+    // Precise rather than a bare `not.toContain('line')`: a random temp-dir
+    // suffix could contain those four letters, and the claim being made is
+    // about a LINE NUMBER, not the word.
+    expect(err.message).not.toMatch(/\bline \d/);
   });
 });
 
