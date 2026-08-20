@@ -164,17 +164,43 @@ import {
  */
 
 /**
+ * #1110 — WHOSE FAULT the refusal is, and therefore what the operator is told.
+ *
+ * - `conflict` — the committed branch and the workspace disagree about something
+ *   the OPERATOR can fix: a ref naming a resource that is on neither side, a
+ *   cyclic `call_pipeline` chain, window bindings on a non-tumbling trigger, a
+ *   version id reused across two pipelines. Edit the file, commit, re-import.
+ *   Answered `409 conflict` WITH the message (`errors.ts`).
+ * - `internal` — an invariant of this module broke. Nothing the caller did can
+ *   fix it, and the message describes our own code, not their branch. Answered
+ *   by the generic `500 internal_error`, message-less, logged at `error`.
+ *
+ * Required and positional-FIRST rather than an optional field defaulting to
+ * `conflict`: a new throw site must state which it is. A default would silently
+ * classify the next internal invariant break as an operator's mistake — the
+ * "an absent fact must never be manufactured as a benign default" rule (#473).
+ */
+export type WorkspaceApplyFault = 'conflict' | 'internal';
+
+/**
  * A branch reference (a node's connection / call ref) that is a non-null LITERAL
  * `resourceId` resolving to no owned row and nothing created in this apply — a
- * broken/incomplete branch. Aborts the atomic apply; surfaced by the route as an
- * internal error (a corrupt commit, not the shape of user HTTP input). Also
- * thrown for a cyclic `call_pipeline` chain among co-created pipelines, which has
- * no valid mint order.
+ * broken/incomplete branch. Aborts the atomic apply. Also thrown for a cyclic
+ * `call_pipeline` chain among co-created pipelines, which has no valid mint
+ * order, and for the version-id collisions the pipeline phase refuses.
+ *
+ * `fault` decides the HTTP surface — see `WorkspaceApplyFault` above. Every
+ * branch-content refusal is a `conflict`; the one `internal` today is
+ * `serializeTrigger` returning a non-trigger envelope, which is unreachable by
+ * construction and would mean our own serializer is wrong.
  */
 export class WorkspaceApplyError extends Error {
-  constructor(message: string) {
+  readonly fault: WorkspaceApplyFault;
+
+  constructor(fault: WorkspaceApplyFault, message: string) {
     super(message);
     this.name = 'WorkspaceApplyError';
+    this.fault = fault;
   }
 }
 
@@ -207,6 +233,7 @@ function resourceRefToDb(ref: string, byResourceId: Map<string, string>, what: s
   const resolved = byResourceId.get(ref);
   if (resolved === undefined) {
     throw new WorkspaceApplyError(
+      'conflict',
       `${what} "${ref}", which is not on the branch or in the workspace`,
     );
   }
@@ -248,6 +275,7 @@ function remapNodeToDb(
     const resolved = byResourceId.get(ref);
     if (resolved === undefined) {
       throw new WorkspaceApplyError(
+        'conflict',
         `node "${node.id}" references ${what} "${ref}", which is not on the branch or in the workspace`,
       );
     }
@@ -293,6 +321,7 @@ function remapNodeToDb(
       const mapped = versionById.get(ref);
       if (mapped === undefined) {
         throw new WorkspaceApplyError(
+          'conflict',
           `node "${node.id}" call references pipeline version "${ref}", which is not on the branch or in the workspace`,
         );
       }
@@ -362,6 +391,7 @@ function mintOrder(minters: Minter[]): number[] {
     }
     if (!progressed) {
       throw new WorkspaceApplyError(
+        'conflict',
         'workspace-git import has a cyclic call_pipeline dependency among co-created pipelines; the version mint cannot be ordered',
       );
     }
@@ -404,7 +434,13 @@ function dbTriggerContentForm(trigger: Trigger, maps: OwnerRefMaps): string {
   const envelope = serializeTrigger(trigger, maps);
   // 'trigger' by construction — narrow to the trigger export-data type.
   if (envelope.kind !== 'trigger') {
-    throw new WorkspaceApplyError('serializeTrigger produced a non-trigger envelope');
+    throw new WorkspaceApplyError(
+      // Unreachable by construction — `serializeTrigger` is called with a trigger.
+      // Our own serializer misbehaving, not anything on the branch, so `internal`:
+      // the operator is told nothing they could act on and the detail goes to the log.
+      'internal',
+      'serializeTrigger produced a non-trigger envelope',
+    );
   }
   return triggerContentForm(envelope.data);
 }
@@ -489,10 +525,15 @@ function buildTriggerWriteInput(
  * `labelRowPaths` — rewrite the path to name what is on screen, rather than
  * inventing a second error channel.
  *
- * That `WorkspaceApplyError` itself answers as a message-less 500 is a real
- * defect, and a wider one than this ticket (it covers ten other throw sites, and
- * `createConnection`/`createPipeline` have the same unattributed-`ZodError` hole
- * this closes for triggers). It is filed rather than widened into here.
+ * The wider defect this once deferred — `WorkspaceApplyError` answering as a
+ * message-less 500, and `createConnection`/`createPipeline` carrying the same
+ * unattributed-`ZodError` hole — was #1110, and is now FIXED (see
+ * `WorkspaceApplyFault` and `attributedTo` below). This gate survives that fix
+ * rather than folding into it, and the reason is not obvious: `attributedTo`
+ * would attribute `createTrigger`'s own parse just as well, but the UPDATE path
+ * goes through `updateTrigger`, which validates against the LENIENT stored
+ * `TriggerSchema` — only this strict `NewTriggerSchema` pre-gate refuses the
+ * corrupt `concurrency` #1091 was filed for. Deleting it reopens that hole.
  *
  * The apply is NOT continued past a bad trigger: it is one transaction, so a
  * refusal leaves the target untouched, and a partial import is not a state this
@@ -502,9 +543,66 @@ function buildTriggerWriteInput(
 function gateTriggerWrite(writeInput: NewTrigger, path: string): void {
   const parsed = NewTriggerSchema.safeParse(writeInput);
   if (parsed.success) return;
-  throw new ZodError(
-    parsed.error.issues.map((issue) => ({ ...issue, path: [`trigger ${path}`, ...issue.path] })),
-  );
+  throw labelIssuePaths(parsed.error, `trigger ${path}`);
+}
+
+/**
+ * #1110 — re-path a `ZodError`'s issues so each one names the branch FILE that
+ * carried the offending resource, not just the schema field.
+ *
+ * Extracted from `gateTriggerWrite` (which keeps its distinct job — see its
+ * docblock — and now delegates the re-pathing here) so the one prefix format is
+ * written once. The idiom is `runWindowsForm.ts`'s `labelRowPaths`: rewrite the
+ * path to name what the operator is looking at, rather than inventing a second
+ * error channel beside the `400 validation_error` the handler already answers.
+ */
+function labelIssuePaths(error: ZodError, label: string): ZodError {
+  return new ZodError(error.issues.map((issue) => ({ ...issue, path: [label, ...issue.path] })));
+}
+
+/**
+ * #1110 — run one branch file's repo write, attributing any `ZodError` it throws
+ * to that file.
+ *
+ * `createConnection`/`createDataset`/`createPipeline`/`createPipelineVersion` and
+ * their `update*` twins all `.parse(...)` internally and throw a bare `ZodError`
+ * whose issue paths name a schema field and nothing else. (The wrapper is generic
+ * over all of them; the tests pin one CREATE path per resource plus one UPDATE
+ * path, which is what distinguishes the two predicates — see below.) Inside an apply of N branch files that is
+ * unactionable: the operator is told `config.baseUrl: Required` with no way to
+ * know which of their committed files is wrong. This wraps the CALL rather than
+ * pre-gating it, because the UPDATE paths validate a MERGED row through the full
+ * stored schema (`ConnectionSchema.parse({ ...existing, ...patch })`) — a
+ * pre-gate on `New*Schema.partial()` would not be the same predicate, so it could
+ * pass while the repo still threw unattributed.
+ *
+ * Deliberately per-call-site and not an ambient "file currently being applied"
+ * variable read by one outer catch: the version mint runs in `mintOrder`
+ * (call-dependency) order, not file order, so an ambient marker would be stale by
+ * the time `createPipelineVersion` throws and would name the wrong file.
+ *
+ * Only `ZodError` is re-thrown re-pathed. Everything else — `WorkspaceApplyError`,
+ * `InvalidPipelineDocError` (which carries its own attribution) — passes through
+ * untouched.
+ *
+ * LIMIT, stated because the rest of this module is careful about exactly this.
+ * `label` says WHICH BRANCH FILE WAS BEING APPLIED, not that the offending field
+ * came off it. The write objects also carry server-supplied fields the branch
+ * never names (`ownerId`, `secretRef: null`, `pipelineId`, `sourceCommit`,
+ * `sourceBranch`, `sourceFilePath`, `sourceBlobSha`), so an internal bug
+ * producing a malformed one of THOSE would be re-pathed as if the operator's file
+ * were at fault — the very confusion `WorkspaceApplyFault` exists to prevent on
+ * the other channel, which this one has no equivalent of. Not a regression (it is
+ * `gateTriggerWrite`'s pre-existing shape, widened to the sibling resources), and
+ * unreachable without such a bug, but it is a real gap: #1137.
+ */
+function attributedTo<T>(label: string, write: () => T): T {
+  try {
+    return write();
+  } catch (err) {
+    if (err instanceof ZodError) throw labelIssuePaths(err, label);
+    throw err;
+  }
 }
 
 function triggerAction(contentChanged: boolean, nameChanged: boolean): WorkspaceGitAppliedAction {
@@ -526,6 +624,7 @@ function assertTriggerWindowBindingsConsistent(data: TriggerExportData, label: s
   const offending = windowBindingErrors(data.params);
   if (offending.length > 0) {
     throw new WorkspaceApplyError(
+      'conflict',
       `trigger "${label}" binds \${trigger.windowStart/End} on a '${data.mode}' trigger — ` +
         `window-field bindings are only valid on 'tumbling': ${offending.join('; ')}`,
     );
@@ -650,6 +749,7 @@ export function applyWorkspace(
       if (rid == null) continue;
       if (seenIncomingVersionRids.has(rid)) {
         throw new WorkspaceApplyError(
+          'conflict',
           `branch reuses version resourceId "${rid}" across two pipelines — version ids are unique per resource`,
         );
       }
@@ -764,10 +864,12 @@ export function applyWorkspace(
         if (existing === null) {
           // secretRef is NEVER imported (secrets never in git) — a fresh
           // connection starts with none; `requiresSecret` is G8's readiness gate.
-          const created = createConnection(
-            db,
-            { ...patch, ownerId, secretRef: null },
-            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          const created = attributedTo(`connection ${inc.path}`, () =>
+            createConnection(
+              db,
+              { ...patch, ownerId, secretRef: null },
+              inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+            ),
           );
           connById.set(created.resourceId, created.id);
           touchedConnectionIds.add(created.id);
@@ -787,11 +889,13 @@ export function applyWorkspace(
         const nameChanged = data.name !== existing.name;
         let action: WorkspaceGitAppliedAction = 'unchanged';
         if (contentChanged) {
-          updateConnection(db, existing.id, patch);
+          attributedTo(`connection ${inc.path}`, () => updateConnection(db, existing.id, patch));
           touchedConnectionIds.add(existing.id);
           action = 'updated';
         } else if (nameChanged) {
-          updateConnection(db, existing.id, { name: data.name });
+          attributedTo(`connection ${inc.path}`, () =>
+            updateConnection(db, existing.id, { name: data.name }),
+          );
           action = 'renamed';
         }
         connById.set(existing.resourceId, existing.id);
@@ -846,10 +950,12 @@ export function applyWorkspace(
         };
 
         if (existing === null) {
-          const created = createDataset(
-            db,
-            { ...patch, ownerId },
-            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          const created = attributedTo(`dataset ${inc.path}`, () =>
+            createDataset(
+              db,
+              { ...patch, ownerId },
+              inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+            ),
           );
           // M3 (#1117) — a pipeline node in the SAME apply may address this
           // dataset, and the pipeline phase runs after this one (`APPLY_RANK`).
@@ -871,10 +977,12 @@ export function applyWorkspace(
         const nameChanged = data.name !== existing.name;
         let action: WorkspaceGitAppliedAction = 'unchanged';
         if (contentChanged) {
-          updateDataset(db, existing.id, patch);
+          attributedTo(`dataset ${inc.path}`, () => updateDataset(db, existing.id, patch));
           action = 'updated';
         } else if (nameChanged) {
-          updateDataset(db, existing.id, { name: data.name });
+          attributedTo(`dataset ${inc.path}`, () =>
+            updateDataset(db, existing.id, { name: data.name }),
+          );
           action = 'renamed';
         }
         applied.push({
@@ -923,13 +1031,16 @@ export function applyWorkspace(
           // `created` while silently dropping the version.
           if (version !== undefined && alreadyMaterialised) {
             throw new WorkspaceApplyError(
+              'conflict',
               `new pipeline "${inc.resourceId ?? '(pre-G1)'}" branch version "${versionRid}" reuses an existing immutable version id — version ids are unique per resource`,
             );
           }
-          const created = createPipeline(
-            db,
-            { ownerId, name: row.name, concurrency: row.concurrency },
-            inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+          const created = attributedTo(`pipeline ${inc.path}`, () =>
+            createPipeline(
+              db,
+              { ownerId, name: row.name, concurrency: row.concurrency },
+              inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+            ),
           );
           pipelineId = created.id;
           resourceId = created.resourceId;
@@ -941,7 +1052,9 @@ export function applyWorkspace(
           const rowPatch: { name?: string; concurrency?: number | null } = {};
           if (row.name !== existing.name) rowPatch.name = row.name;
           if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
-          if (Object.keys(rowPatch).length > 0) updatePipeline(db, existing.id, rowPatch);
+          if (Object.keys(rowPatch).length > 0) {
+            attributedTo(`pipeline ${inc.path}`, () => updatePipeline(db, existing.id, rowPatch));
+          }
 
           // Whether the branch's latest version doc differs from the pipeline's
           // ACTUAL latest DB version — which survives archive — compared in
@@ -984,6 +1097,7 @@ export function applyWorkspace(
             const owner = versionRowByRid.get(versionRid);
             if (owner === undefined || owner.pipelineId !== existing.id) {
               throw new WorkspaceApplyError(
+                'conflict',
                 `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses a version id owned by a different pipeline — version ids are unique per resource`,
               );
             }
@@ -999,6 +1113,7 @@ export function applyWorkspace(
             const comparison = compareStoredVersion(owner, version, dbRefMaps);
             if (!comparison.identical) {
               throw new WorkspaceApplyError(
+                'conflict',
                 `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
               );
             }
@@ -1055,24 +1170,28 @@ export function applyWorkspace(
       // its caller's doc is validated.
       for (const idx of mintOrder(minters)) {
         const m = minters[idx]!;
-        const created = createPipelineVersion(
-          db,
-          {
-            ...m.version,
-            pipelineId: m.pipelineId,
-            nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, datasetById, versionById)),
-          },
-          {
-            // Preserve the file's version resourceId (G5c) when present; else the
-            // repo mints a fresh one.
-            ...(m.versionRid !== null ? { resourceId: m.versionRid } : {}),
-            // #3 G6b — stamp git provenance on the mint: source commit (`head`) +
-            // branch, plus THIS file's path + blob sha (captured on the minter).
-            sourceCommit: head,
-            sourceBranch: branch,
-            sourceFilePath: m.sourceFilePath,
-            sourceBlobSha: m.sourceBlobSha,
-          },
+        const created = attributedTo(`pipeline ${m.sourceFilePath}`, () =>
+          createPipelineVersion(
+            db,
+            {
+              ...m.version,
+              pipelineId: m.pipelineId,
+              nodes: m.version.nodes.map((n) =>
+                remapNodeToDb(n, connById, datasetById, versionById),
+              ),
+            },
+            {
+              // Preserve the file's version resourceId (G5c) when present; else the
+              // repo mints a fresh one.
+              ...(m.versionRid !== null ? { resourceId: m.versionRid } : {}),
+              // #3 G6b — stamp git provenance on the mint: source commit (`head`) +
+              // branch, plus THIS file's path + blob sha (captured on the minter).
+              sourceCommit: head,
+              sourceBranch: branch,
+              sourceFilePath: m.sourceFilePath,
+              sourceBlobSha: m.sourceBlobSha,
+            },
+          ),
         );
         if (m.versionRid !== null) versionById.set(m.versionRid, created.id);
       }

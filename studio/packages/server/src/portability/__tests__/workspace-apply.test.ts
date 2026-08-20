@@ -1072,9 +1072,11 @@ describe('applyWorkspace (#3 G5c-1)', () => {
    * is exactly how one arrives.
    *
    * The thrown error stays a `ZodError` on purpose: `registerErrorHandler`
-   * answers it `400 validation_error` WITH the failing paths, whereas
-   * `WorkspaceApplyError` has no branch there and falls to a message-less
-   * `500 internal_error`. See `gateTriggerWrite`'s docblock.
+   * answers it `400 validation_error` WITH the failing PATHS — one per offending
+   * field — whereas `WorkspaceApplyError` answers a 409 carrying one prose
+   * message (#1110 gave it that branch; it was a message-less 500 when this test
+   * was written). A per-field path list is strictly more actionable for a schema
+   * refusal, so the choice survives the fix. See `gateTriggerWrite`'s docblock.
    */
   it('#1091 REFUSES a corrupt branch trigger on the CREATE path, naming the file', () => {
     const src = freshDb().db;
@@ -1994,5 +1996,196 @@ describe('applyWorkspace — datasets (#1114)', () => {
     expect(describeUnserializable(unserializable[0]!)).toBe(
       `binds connection "${conn.id}", which no longer exists`,
     );
+  });
+});
+
+/**
+ * #1110 — the apply's two refusal CHANNELS, and what each one tells the operator.
+ *
+ * Both halves of the ticket are one property seen twice: a refused git import
+ * must name the branch file (or the resource) the operator has to go and edit.
+ * Before this, an apply could refuse in two ways and say nothing useful either
+ * time — a `WorkspaceApplyError` fell through to a message-less `500`, and a
+ * repo-layer `ZodError` named a schema field with no clue WHICH of N branch files
+ * carried it.
+ */
+describe('#1110 — a refused apply says what to fix', () => {
+  /**
+   * The fault is what selects the handler branch (`errors.ts`), so it is asserted
+   * on a REAL throw from a real fixture rather than on a hand-built error — a test
+   * that constructs the error it then inspects would pass with every throw site
+   * misclassified.
+   */
+  it('classifies a branch-content refusal as `conflict`, not an internal fault', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'orig', type: 'string' }],
+    });
+    const incoming = snapshot(db);
+    // Same immutable version id, different content — an operator-fixable
+    // disagreement between the branch and the workspace.
+    incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
+
+    let thrown: unknown;
+    try {
+      applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WorkspaceApplyError);
+    expect((thrown as WorkspaceApplyError).fault).toBe('conflict');
+    // And the message is the part the 409 now carries — it must name the version.
+    expect((thrown as WorkspaceApplyError).message).toContain('reuses an existing immutable');
+  });
+
+  /**
+   * A REFERENCE refusal, the other shape of `conflict`: the branch names a
+   * connection that is on neither side. Distinct fixture from the one above
+   * because it comes from a different throw site (`remapNodeToDb`), and the
+   * classification is per-site.
+   */
+  it('classifies an unresolvable branch ref as `conflict` and names the node', () => {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'My Conn',
+      kind: 'http',
+      config: { baseUrl: 'https://x' },
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [
+        {
+          id: 'send',
+          type: 'llm_call',
+          config: {},
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const incoming = snapshot(src);
+    // The branch is INCOMPLETE: the connection file never made it into the commit.
+    incoming.connections = [];
+
+    let thrown: unknown;
+    try {
+      applyWorkspace(freshDb().db, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WorkspaceApplyError);
+    expect((thrown as WorkspaceApplyError).fault).toBe('conflict');
+    expect((thrown as WorkspaceApplyError).message).toContain('node "send"');
+  });
+
+  /**
+   * The second half of #1110: `createPipeline` parses `NewPipelineSchema`
+   * internally and throws a bare `ZodError` naming `concurrency` and nothing else.
+   * `attributedTo` puts the branch FILE in front of it.
+   *
+   * `concurrency: 0` specifically, because it is the pipeline twin of #1091's
+   * trigger case: the STORED `PipelineSchema` accepts any number, and only the
+   * strict `NewPipelineSchema` (`.int().positive()`) refuses it — so a hand-edited
+   * branch is exactly how one arrives, and only the CREATE path catches it.
+   */
+  it('attributes a corrupt branch PIPELINE file to its path on the create path', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+    const incoming = snapshot(src);
+    incoming.pipelines[0]!.data.pipeline.concurrency = 0;
+
+    const tgt = freshDb().db;
+    let thrown: unknown;
+    try {
+      applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`pipeline ${incoming.pipelines[0]!.path}.concurrency`);
+    // Atomic: nothing from this branch was written.
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
+  /**
+   * The UPDATE path, which is why this is a wrapper around the CALL and not a
+   * pre-gate: `updateConnection` validates a MERGED row through the full stored
+   * `ConnectionSchema`, so a pre-gate on `NewConnectionSchema.partial()` would be
+   * a different predicate and could pass while the repo still threw unattributed.
+   */
+  it('attributes a corrupt branch CONNECTION file to its path on the update path', () => {
+    const db = freshDb().db;
+    createConnection(db, {
+      ownerId: 'local',
+      name: 'My Conn',
+      kind: 'http',
+      config: { baseUrl: 'https://x' },
+      secretRef: null,
+    });
+    const incoming = snapshot(db);
+    // An empty name is refused by BOTH schemas; the row already exists, so this
+    // takes the `updated` arm.
+    incoming.connections[0]!.data.name = '';
+    incoming.connections[0]!.data.config = { baseUrl: 'https://changed' };
+
+    let thrown: unknown;
+    try {
+      applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`connection ${incoming.connections[0]!.path}.name`);
+    // Atomic: the original row is untouched.
+    expect(listConnections(db, 'local')[0]!.name).toBe('My Conn');
+  });
+
+  /**
+   * The third resource, so the wrapper is proven per-KIND and not only per-path:
+   * the label is built from `inc.path` inside each applier's own loop, so a kind
+   * whose loop forgot to pass it would attribute to the wrong file — or to
+   * `undefined` — with nothing else failing.
+   */
+  it('attributes a corrupt branch DATASET file to its path', () => {
+    const src = freshDb().db;
+    const store = createConnection(src, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    createDataset(src, {
+      ownerId: 'local',
+      name: 'Src',
+      connectionId: store.id,
+      kind: 'table',
+      config: {},
+      columns: [],
+    });
+    const incoming = snapshot(src);
+    incoming.datasets[0]!.data.name = '';
+
+    const tgt = freshDb().db;
+    let thrown: unknown;
+    try {
+      applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`dataset ${incoming.datasets[0]!.path}.name`);
+    // Atomic: the connection that applies BEFORE datasets is rolled back too.
+    expect(listDatasets(tgt, 'local')).toHaveLength(0);
+    expect(listConnections(tgt, 'local')).toHaveLength(0);
   });
 });

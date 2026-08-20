@@ -133,6 +133,34 @@ describe('external-wait routes', () => {
     expect(Object.keys(raw).sort()).toEqual(['attemptId', 'callbackPath', 'expiresAt', 'nodeId']);
   });
 
+  /**
+   * #925 — this response's BODY IS A CREDENTIAL. Each `callbackPath` embeds a
+   * live capability token re-derived server-side, and holding it IS the
+   * authorization to settle that wait — so a 200 with no cache directive lets a
+   * browser (or any interposed cache) apply HEURISTIC caching and land a bearer
+   * credential on disk. `no-store` rather than `no-cache`: the requirement is
+   * that it is never STORED, not merely that it is revalidated.
+   *
+   * The CONTROL half is the point of the test, not padding. The tempting fix was
+   * a blanket `onSend` hook, which would also stop the SPA bundle and every
+   * read-model list being cached — a performance regression to protect responses
+   * carrying nothing. Asserting an ordinary read route is UNAFFECTED is what
+   * makes "per-route, never blanket" a property rather than a comment.
+   */
+  it('#925 marks the token-bearing response no-store, and leaves ordinary reads cacheable', async () => {
+    const { runId } = await parkRun();
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    // The header only earns its place while a token is genuinely in the body.
+    const waits = res.json() as Array<{ callbackPath: string }>;
+    expect(waits[0]!.callbackPath).toContain('/api/external-wait/');
+
+    const ordinary = await app.inject({ method: 'GET', url: `/api/runs/${runId}` });
+    expect(ordinary.statusCode).toBe(200);
+    expect(ordinary.headers['cache-control']).toBeUndefined();
+  });
+
   it('a run with no parked webhook returns an empty list, not a 404', async () => {
     // The client renders the callback section only when the run is parked on a
     // CALLBACK, but a run parked on a timer is also `waiting` — this is the shape

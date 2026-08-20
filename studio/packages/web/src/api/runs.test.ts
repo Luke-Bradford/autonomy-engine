@@ -1,4 +1,4 @@
-import { computeRunCost } from '@autonomy-studio/shared';
+import { RUN_DIAGNOSTIC_CAP, capMarkerMessage, computeRunCost } from '@autonomy-studio/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getRun,
@@ -62,13 +62,19 @@ const sampleDiagnostic = {
   ts: 140,
 };
 
-/** The truncation marker: `seq: -1`, `phase: 'cap'` (`RUN_DIAGNOSTIC_CAP`). */
+/**
+ * The truncation marker: `seq: -1`, `phase: 'cap'` (`RUN_DIAGNOSTIC_CAP`).
+ *
+ * #1069 — the message is the server's own shared export, not a paraphrase. This
+ * fixture held a TRUNCATED copy (the first sentence only), which is the same
+ * drift class `RunDiagnostics.test.tsx` had and the reason the string was hoisted.
+ */
 const capMarker = {
   ...sampleDiagnostic,
   id: 'rdg_cap',
   seq: -1,
   phase: 'cap' as const,
-  message: 'diagnostics for this run reached the cap of 500 and later ones were NOT recorded.',
+  message: capMarkerMessage(RUN_DIAGNOSTIC_CAP),
 };
 
 function stubFetch(status: number, jsonBody: unknown) {

@@ -106,6 +106,10 @@ describe('webhook routes', () => {
     expect(typeof res.json().secret).toBe('string');
     expect(res.json().secret.length).toBeGreaterThan(20);
     expect(res.json().deliveryUrl).toBe(`/api/webhooks/${created.id}`);
+    /* #925 — this body IS the credential: the plaintext signing secret, returned
+       exactly once and never readable again. It must not be storable by any
+       cache. Same rule, same helper, as `GET /api/runs/:id/external-waits`. */
+    expect(res.headers['cache-control']).toBe('no-store');
     // The trigger projection NEVER reveals the secretRef.
     const view = (await app.inject({ method: 'GET', url: `/api/triggers/${created.id}` })).json();
     expect(view.webhook).not.toHaveProperty('secretRef');

@@ -33,7 +33,7 @@ import {
 import { newId } from '../repo/ids.js';
 import { encrypt } from '../secrets/secrets.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
-import { requireOwned } from './util.js';
+import { noStore, requireOwned } from './util.js';
 import { UnboundTriggerError } from '../run/launcher.js';
 import { unreadyConnectionsForVersion } from '../run/connection-readiness.js';
 import { exportTrigger } from '../portability/index.js';
@@ -520,6 +520,8 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
 
       // The plaintext `secret` is returned ONCE and never again — the operator
       // must copy it now. `deliveryUrl` is where signed deliveries are POSTed.
+      // #925 — the body IS the credential, so no cache may store this response.
+      noStore(reply);
       reply.status(200).send({ secret, deliveryUrl: `/api/webhooks/${trigger.id}` });
     },
   );

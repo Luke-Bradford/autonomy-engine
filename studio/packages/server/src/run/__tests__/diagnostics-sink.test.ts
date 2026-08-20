@@ -9,11 +9,8 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
-import {
-  listRunDiagnostics,
-  recordRunDiagnostics,
-  RUN_DIAGNOSTIC_CAP,
-} from '../../repo/run-diagnostics.js';
+import { RUN_DIAGNOSTIC_CAP, capMarkerMessage } from '@autonomy-studio/shared';
+import { listRunDiagnostics, recordRunDiagnostics } from '../../repo/run-diagnostics.js';
 import { runDiagnostics } from '../../db/schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
@@ -213,7 +210,20 @@ describe('#497 — the reducer diagnostics sink', () => {
     // was all of them" (the F13a/#473 rule).
     const marker = found.filter((d) => d.phase === 'cap');
     expect(marker).toHaveLength(1);
-    expect(marker[0]!.message).toContain(`reached the cap of ${RUN_DIAGNOSTIC_CAP}`);
+    /* #1069 — two assertions pinning two DIFFERENT things, which is why neither
+       replaces the other.
+
+       The first pins the WIRING: the writer emits exactly what the one shared
+       export produces at exactly this cap. It says nothing about the sentence's
+       content (both sides call the same function), and is not meant to — it is
+       what makes "one source, imported by both" a checked property.
+
+       The second pins the CONTENT, against a hardcoded literal, because the
+       clause is a claim about LAYOUT: the marker renders ABOVE the list it
+       qualifies. Dropping it is precisely how the web copy drifted, and only a
+       literal can catch the shared template itself being edited. */
+    expect(marker[0]!.message).toBe(capMarkerMessage(RUN_DIAGNOSTIC_CAP));
+    expect(marker[0]!.message).toContain('(see the diagnostics below).');
     // It sorts FIRST, so a reader learns the list is incomplete before reading it.
     expect(found[0]!.phase).toBe('cap');
   });
