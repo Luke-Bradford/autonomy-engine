@@ -549,8 +549,9 @@ describe('copy activity — §7 the source-side drift gate runs before the first
         input: { mapping: [{ source: 'id', sink: 'nosuch', type: 'integer' }] },
       }),
     );
-    expect(events.filter((e) => e.type === 'warned' && e.code === 'copy_source_columns_unmapped')).
-      toHaveLength(1);
+    expect(
+      events.filter((e) => e.type === 'warned' && e.code === 'copy_source_columns_unmapped'),
+    ).toHaveLength(1);
     expect(terminal(events).type).toBe('failed');
   });
 
@@ -567,7 +568,7 @@ describe('copy activity — §7 the source-side drift gate runs before the first
     expect(terminal(events).type).toBe('succeeded');
   });
 
-  it('reports a store it could not REACH with the store\'s own kind, never as drift', async () => {
+  it("reports a store it could not REACH with the store's own kind, never as drift", async () => {
     // #1148: "a failure to reach the store to describe it is `transient` and
     // must not be reported as drift". Driven through a stub `CopyIo` rather than
     // a real lock, because the fact under test is the CLASSIFICATION, and a
@@ -580,8 +581,7 @@ describe('copy activity — §7 the source-side drift gate runs before the first
       input: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] },
     });
     for await (const event of runCopyActivity(ctx, {
-      describeSource: () =>
-        Promise.reject(new DatasetIoError('transient', 'database is locked')),
+      describeSource: () => Promise.reject(new DatasetIoError('transient', 'database is locked')),
       readBatches: () => {
         throw new Error('the reader must never be reached');
       },

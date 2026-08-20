@@ -194,7 +194,6 @@ type ColumnPlan =
     }
   | { readonly kind: 'constant'; readonly sink: string; readonly value: CoercedValue };
 
-
 function byteSizeOf(value: unknown): number {
   if (value === null || value === undefined) return 0;
   if (typeof value === 'string') return utf8ByteLength(value);

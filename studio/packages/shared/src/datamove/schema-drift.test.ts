@@ -61,7 +61,11 @@ describe('resolveSourceColumn', () => {
 describe('checkSourceDrift', () => {
   it('names every missing column at once, rather than the first', () => {
     const drift = checkSourceDrift(
-      [entry({ source: 'a' }), entry({ source: 'b', sink: 'o2' }), entry({ source: 'c', sink: 'o3' })],
+      [
+        entry({ source: 'a' }),
+        entry({ source: 'b', sink: 'o2' }),
+        entry({ source: 'c', sink: 'o3' }),
+      ],
       ['a'],
     );
     expect(drift.missing).toEqual(['b', 'c']);

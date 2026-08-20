@@ -533,10 +533,10 @@ describe('the adapter', () => {
   });
 });
 
-describe('describeSqliteDatasetColumns (#1148 M6 — §7\'s source describe seam)', () => {
+describe("describeSqliteDatasetColumns (#1148 M6 — §7's source describe seam)", () => {
   const config = (root: string, path: string) => ({ roots: [root], path });
 
-  it('reports a table dataset\'s columns without reading a row', async () => {
+  it("reports a table dataset's columns without reading a row", async () => {
     const root = tempRoot();
     const path = seedDb(root, 3, 'src.db');
     expect(
@@ -560,7 +560,7 @@ describe('describeSqliteDatasetColumns (#1148 M6 — §7\'s source describe seam
     ).toEqual(['id', 'name']);
   });
 
-  it('reports a query dataset\'s result columns with NOTHING bound', async () => {
+  it("reports a query dataset's result columns with NOTHING bound", async () => {
     const root = tempRoot();
     const path = seedDb(root, 1, 'src.db');
     // Named parameters are NOT supplied: `columns()` does not execute, so it
