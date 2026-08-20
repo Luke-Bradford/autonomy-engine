@@ -138,11 +138,23 @@ function formFor(
   };
 }
 
+/**
+ * The kind a NEW dataset opens on: the first one that has a READER.
+ *
+ * Not `KINDS[0]`, which is `delimited` — a kind whose reader arrives at M7, so
+ * every new dataset would start on a kind that cannot run and whose config this
+ * build cannot even describe. The enum's order is an address-vocabulary order,
+ * not a usefulness order, and defaulting to it would hand the operator a broken
+ * dataset unless they knew to change the picker. Falls back to `KINDS[0]` so
+ * this stays total if the implemented set is ever empty.
+ */
+const DEFAULT_KIND: DatasetKind = KINDS.find(datasetKindIsImplemented) ?? KINDS[0]!;
+
 function blankForm(connections: readonly ConnectionPublic[]): FormState {
-  // KINDS is the dataset-kind enum's option list — statically non-empty. The
-  // store is left UNSET when there are no connections rather than defaulting to
-  // a store that does not exist; the form's own hint says what to do about it.
-  return formFor(null, '', connections[0]?.id ?? '', KINDS[0]!, {}, '');
+  // The store is left UNSET when there are no connections rather than
+  // defaulting to a store that does not exist; the form's own hint says what to
+  // do about it.
+  return formFor(null, '', connections[0]?.id ?? '', DEFAULT_KIND, {}, '');
 }
 
 function formForEdit(dataset: Dataset): FormState {
