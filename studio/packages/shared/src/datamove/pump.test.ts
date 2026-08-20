@@ -139,6 +139,34 @@ describe('a per-row failure', () => {
     expect(counters.failuresByCode).toEqual({});
   });
 
+  /**
+   * #1155 A3 — an out-of-range value is an ordinary row failure, so the
+   * existing opt-out applies to it unchanged. Before the bound this row could
+   * not opt out of anything: the value reached the binder and took the copy
+   * down.
+   */
+  it('writes null for an OUT-OF-RANGE integer when the column opts out', async () => {
+    const { counters, batches } = run(batchesOf([{ n: '9223372036854775808' }, { n: '7' }]), [
+      map({ source: 'n', sink: 'n', type: 'integer', onError: 'null' }),
+    ]);
+
+    expect(await batches).toEqual([[{ n: null }, { n: 7n }]]);
+    expect(counters.rowsFailed).toBe(0);
+    expect(counters.failuresByCode).toEqual({});
+  });
+
+  it('counts an out-of-range row under its own code, distinct from a rounding refusal', async () => {
+    const { counters, batches } = run(batchesOf([{ n: '9223372036854775808' }, { n: '1.5' }]), [
+      map({ source: 'n', sink: 'n', type: 'integer', onError: 'fail' }),
+    ]);
+
+    // A batch whose rows ALL failed yields nothing at all, not an empty batch.
+    expect(await batches).toEqual([]);
+    expect(counters.rowsFailed).toBe(2);
+    // The whole point of a bounded code: two unrelated defects tally apart.
+    expect(counters.failuresByCode).toEqual({ integer_out_of_range: 1, not_integral: 1 });
+  });
+
   it('fails the row ONCE even when several of its columns fail', async () => {
     const { counters, batches } = run(batchesOf([{ a: 'x', b: 'y' }]), [
       map({ source: 'a', sink: 'a', type: 'integer' }),
@@ -307,6 +335,30 @@ describe('the `expression` arm — a constant per DISPATCH, not per row (§8)', 
       map({ expression: true, sink: 'b', type: 'boolean' }),
     ]);
     expect(await batches).toEqual([[{ n: 42n, b: true }]]);
+  });
+
+  /**
+   * #1155 A2 — the constant arm of the int64 bound, DECIDED rather than
+   * discovered. An out-of-range constant is a MAPPING fault, not a row fault:
+   * it is invariant across rows, so failing every row identically would be the
+   * copy-wide refusal written out one row at a time. This is the same split
+   * §6.2 draws, and it is a strict improvement on the pre-#1155 behaviour,
+   * where the value reached the binder and killed the copy with a RangeError
+   * naming neither column nor row.
+   */
+  it('refuses an OUT-OF-RANGE constant copy-wide, naming the column', async () => {
+    const err = await run(batchesOf([{ a: '1' }]), [
+      map({ expression: 1e20, sink: 'big', type: 'integer' }),
+    ])
+      .batches.then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      .then((e) => e as CopyMappingError);
+
+    expect(err).toBeInstanceOf(CopyMappingError);
+    expect(err.code).toBe('uncoercible_constant');
+    expect(err.message).toContain('big');
   });
 
   it('refuses an uncoercible constant copy-wide rather than failing every row identically', async () => {

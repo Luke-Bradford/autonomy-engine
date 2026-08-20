@@ -181,6 +181,57 @@ describe('coerceValue — SQL NULL and an ABSENT value are different facts', () 
   });
 });
 
+describe('coerceValue — the int64 bound on integer (#1155)', () => {
+  /**
+   * The bound is [-2^63, 2^63-1] — measured against better-sqlite3 12.11.1,
+   * which throws `RangeError: The bound string, buffer, or bigint is too big`
+   * outside it. Before the bound, that RangeError escaped from inside the
+   * sink's open transaction and killed the WHOLE copy.
+   *
+   * The matrix is ASYMMETRIC BY ARM and must be written that way, because the
+   * `number` arm cannot express the top of the range: `2**63 - 1` is not a
+   * representable double and has already rounded UP to `2**63` before
+   * `coerceValue` is called. Asserting `coerceValue(2**63 - 1, 'integer')`
+   * succeeds would be asserting a falsehood.
+   */
+  it('a bigint at either end of int64 is accepted, and one step past is refused', () => {
+    expectOk(coerceValue(2n ** 63n - 1n, 'integer'), 2n ** 63n - 1n);
+    expectOk(coerceValue(-(2n ** 63n), 'integer'), -(2n ** 63n));
+    expectFail(coerceValue(2n ** 63n, 'integer'), 'integer_out_of_range');
+    expectFail(coerceValue(-(2n ** 63n) - 1n, 'integer'), 'integer_out_of_range');
+  });
+
+  it('a string at either end of int64 is exact, and one step past is refused', () => {
+    expectOk(coerceValue('9223372036854775807', 'integer'), 2n ** 63n - 1n);
+    expectOk(coerceValue('-9223372036854775808', 'integer'), -(2n ** 63n));
+    expectFail(coerceValue('9223372036854775808', 'integer'), 'integer_out_of_range');
+    expectFail(coerceValue('-9223372036854775809', 'integer'), 'integer_out_of_range');
+  });
+
+  it('a number is bounded at the largest DOUBLE inside int64, not at int64 itself', () => {
+    // 2**63 - 1024 is the largest integral double <= MAX_INT64.
+    expectOk(coerceValue(2 ** 63 - 1024, 'integer'), 9223372036854774784n);
+    expectOk(coerceValue(-(2 ** 63), 'integer'), -(2n ** 63n)); // exactly representable
+    expectFail(coerceValue(2 ** 63, 'integer'), 'integer_out_of_range');
+    expectFail(coerceValue(-(2 ** 63) - 2048, 'integer'), 'integer_out_of_range');
+    expectFail(coerceValue(1e20, 'integer'), 'integer_out_of_range');
+  });
+
+  it('the range verdict never displaces a more precise one', () => {
+    // #1155 A5: the bound comes LAST, so these keep the verdict that describes
+    // them better rather than collapsing into a range answer.
+    expectFail(coerceValue('1e400', 'integer'), 'non_finite');
+    expectFail(coerceValue(Infinity, 'integer'), 'non_finite');
+    expectFail(coerceValue('1.5', 'integer'), 'not_integral');
+    expectFail(coerceValue(1.5, 'integer'), 'not_integral');
+  });
+
+  it('an out-of-range value is still a NUMBER, so the number target still takes it', () => {
+    // The bound is on the `integer` DOMAIN, not on the value being unusable.
+    expectOk(coerceValue(1e20, 'number'), 1e20);
+  });
+});
+
 describe('coerceValue — the input domain a SQLite source actually produces', () => {
   it('a bigint is exact into integer, and refused where it would round', () => {
     expectOk(coerceValue(9007199254740993n, 'integer'), 9007199254740993n);
@@ -344,7 +395,15 @@ describe('coerceValue — every (input kind x target) pair has an outcome', () =
   it('a refusal reason quotes no source text at all, only the declared format', () => {
     // Stronger than the secret probe above and not satisfiable by redaction: a
     // reason may name the AUTHORED dateFormat (config, not data) and nothing else.
-    const probes: readonly unknown[] = ['ZZmarkerZZ', 12345.678, 98765n, new Uint8Array([7])];
+    const probes: readonly unknown[] = [
+      'ZZmarkerZZ',
+      12345.678,
+      98765n,
+      // #1155: in-range values never reach the range arm, so without this the
+      // probe could not catch an `integer_out_of_range` reason that echoed.
+      2n ** 64n,
+      new Uint8Array([7]),
+    ];
     for (const value of probes) {
       for (const target of TARGETS) {
         const r = coerceValue(value, target, { dateFormat: 'yyyy-MM-dd' });
@@ -352,6 +411,7 @@ describe('coerceValue — every (input kind x target) pair has an outcome', () =
           expect(r.reason).not.toContain('ZZmarker');
           expect(r.reason).not.toContain('12345');
           expect(r.reason).not.toContain('98765');
+          expect(r.reason).not.toContain('18446744073709551616');
         }
       }
     }
