@@ -52,11 +52,6 @@ type ActivitySink = NonNullable<ActivityContext['sink']>;
  */
 export interface CopyIo {
   /**
-   * The source, already bound to its connection + dataset config. Yields batches
-   * of rows as the store reports them, yielding to the event loop between
-   * batches (§9) — a bounded read is a SCHEDULING quantum, not just a read unit.
-   */
-  /**
    * #1148 M6 (§7) — the source's ACTUAL column names, discovered WITHOUT reading
    * a row, so the gate below can run "before the first row moves".
    *
@@ -73,6 +68,11 @@ export interface CopyIo {
     readonly dataset: ResolvedDataset;
     readonly signal: AbortSignal | undefined;
   }) => Promise<readonly string[]>;
+  /**
+   * The source, already bound to its connection + dataset config. Yields batches
+   * of rows as the store reports them, yielding to the event loop between
+   * batches (§9) — a bounded read is a SCHEDULING quantum, not just a read unit.
+   */
   readonly readBatches: (args: {
     readonly dataset: ResolvedDataset;
     readonly signal: AbortSignal | undefined;
