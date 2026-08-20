@@ -48,7 +48,7 @@ describe('coerceValue — §6.2, the two rows that carry the risk', () => {
 
 describe('coerceValue — §6.2 string sources', () => {
   it('"42" reaches integer, number and string, but not boolean or date', () => {
-    expectOk(coerceValue('42', 'integer'), 42);
+    expectOk(coerceValue('42', 'integer'), 42n);
     expectOk(coerceValue('42', 'number'), 42);
     expectOk(coerceValue('42', 'string'), '42');
     expectFail(coerceValue('42', 'boolean'), 'not_a_boolean');
@@ -62,7 +62,7 @@ describe('coerceValue — §6.2 string sources', () => {
   });
 
   it('only "1" reaches integer/number from the boolean-ish tokens', () => {
-    expectOk(coerceValue('1', 'integer'), 1);
+    expectOk(coerceValue('1', 'integer'), 1n);
     expectOk(coerceValue('1', 'number'), 1);
     expectFail(coerceValue('true', 'integer'), 'not_a_number');
     expectFail(coerceValue('yes', 'number'), 'not_a_number');
@@ -85,7 +85,7 @@ describe('coerceValue — §6.2 string sources', () => {
     expectFail(coerceValue('Infinity', 'number'), 'not_a_number');
     expectFail(coerceValue('NaN', 'number'), 'not_a_number');
     // an integral exponent form IS a whole number, and is accepted
-    expectOk(coerceValue('1e2', 'integer'), 100);
+    expectOk(coerceValue('1e2', 'integer'), 100n);
   });
 
   it('signed and zero-padded integer literals are read exactly, and never throw', () => {
@@ -93,11 +93,11 @@ describe('coerceValue — §6.2 string sources', () => {
     // than return, which would take down a whole pump on one bad row. `BigInt`'s
     // string grammar is NOT `Number`'s — so what `INTEGER_RE` admits is pinned
     // against what `BigInt` accepts, rather than assumed to agree.
-    expectOk(coerceValue('+42', 'integer'), 42);
-    expectOk(coerceValue('-42', 'integer'), -42);
-    expectOk(coerceValue('007', 'integer'), 7);
-    expectOk(coerceValue('+007', 'integer'), 7);
-    expectOk(coerceValue('-0', 'integer'), 0);
+    expectOk(coerceValue('+42', 'integer'), 42n);
+    expectOk(coerceValue('-42', 'integer'), -42n);
+    expectOk(coerceValue('007', 'integer'), 7n);
+    expectOk(coerceValue('+007', 'integer'), 7n);
+    expectOk(coerceValue('-0', 'integer'), 0n);
     expectOk(coerceValue('+9007199254740993', 'integer'), 9007199254740993n);
     // The sign survives into the other targets too.
     expectOk(coerceValue('+1.5', 'number'), 1.5);
@@ -134,7 +134,7 @@ describe('coerceValue — §6.2 string sources', () => {
   it('a 17-digit id survives as an exact bigint rather than losing its last digit', () => {
     expectOk(coerceValue('9007199254740993', 'integer'), 9007199254740993n);
     expect(Number('9007199254740993')).toBe(9007199254740992); // the loss, demonstrated
-    expectOk(coerceValue('9007199254740991', 'integer'), 9007199254740991);
+    expectOk(coerceValue('9007199254740991', 'integer'), 9007199254740991n);
   });
 });
 
@@ -158,7 +158,7 @@ describe('coerceValue — §6.4 nullValue, and the "" cell it governs', () => {
     expectOk(coerceValue('hello', 'string', opts), 'hello');
     expectOk(coerceValue('\\n', 'string', opts), '\\n');
     expectOk(coerceValue(' \\N ', 'string', opts), ' \\N ');
-    expectOk(coerceValue('7', 'integer', opts), 7);
+    expectOk(coerceValue('7', 'integer', opts), 7n);
   });
 
   it('an empty sentinel is what makes "" null — and only then', () => {
@@ -392,5 +392,57 @@ describe('coerceValue — every (input kind x target) pair has an outcome', () =
     for (const target of targets) {
       expect(coerceValue('x', target, { dateFormat: 'yyyy-MM-dd' })).toHaveProperty('ok');
     }
+  });
+});
+
+/**
+ * #1150 — an `integer` target must produce a value SQLite stores as INTEGER.
+ *
+ * The declared type exists to choose a STORAGE CLASS, and better-sqlite3 binds
+ * every JS `number` as REAL regardless of integrality — measured on 12.11.1:
+ * binding `42` and asking `typeof()` back gives `real`, and into a TEXT column
+ * it lands as the string `"42.0"`. Only a `bigint` binds as INTEGER.
+ *
+ * So narrowing a whole number to `number` here is not an optimisation, it is the
+ * corruption: a copy declared `integer` silently writes a different value than
+ * the one it read. `CoercedValue` already admits `bigint` and `SinkValue`
+ * extends it, so nothing downstream needs a new shape to carry this.
+ *
+ * Asserted with `typeof`, not against a literal: `toEqual` treats `42n` and `42`
+ * as different, but a test that only compared values would still pass if a later
+ * change reintroduced the narrowing for some inputs and not others.
+ */
+describe('#1150 — an integer target binds as SQLite INTEGER', () => {
+  const integral = ['42', '0', '-7', '9007199254740993', '1e2'];
+
+  it('yields a bigint for every integral source, whatever its notation', () => {
+    for (const source of integral) {
+      const result = coerceValue(source, 'integer');
+      expect(result.ok, `'${source}' should coerce`).toBe(true);
+      expect(
+        result.ok === true && typeof result.value,
+        `'${source}' must bind as INTEGER, so it must be a bigint`,
+      ).toBe('bigint');
+    }
+  });
+
+  it('yields a bigint for a real JS number source too', () => {
+    /* The source side of a SQLite→SQLite copy hands over JS numbers, so this is
+       the path an operator actually hits, not a synthetic one. */
+    const result = coerceValue(42, 'integer');
+    expect(result.ok === true && typeof result.value).toBe('bigint');
+    expect(result.ok === true && result.value).toBe(42n);
+  });
+
+  it('still refuses a fractional value rather than truncating', () => {
+    /* The fix must not widen what `integer` ACCEPTS — only what it produces. */
+    expectFail(coerceValue('1.5', 'integer'), 'not_integral');
+    expectFail(coerceValue(1.5, 'integer'), 'not_integral');
+  });
+
+  it('leaves `number` targets as JS numbers', () => {
+    /* `number` means REAL; only `integer` changes. A blanket bigint would break
+       the other half of the matrix. */
+    expect(coerceValue('42', 'number')).toEqual({ ok: true, value: 42 });
   });
 });

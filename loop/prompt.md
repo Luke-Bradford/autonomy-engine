@@ -323,6 +323,35 @@ You file good tickets for defects you find mid-ticket, and then they were never 
   between two equally-ready items, take the one that alters the app's behaviour or appearance over
   the one that alters how the loop works. If a fire produces nothing user-visible, that is a
   legitimate outcome, but two in a row is a signal to re-read the work order rather than keep going.
+- **A defect YOUR OWN SLICE CREATES IS NOT A "FOUND DEFECT" — it is unfinished work (operator, 2026-08-20).**
+  The rule above is for defects you *discover* in code you did not just write. It does not license
+  shipping a slice that introduces one. If the work in flight creates, or newly exposes, a defect in
+  the SEVERE class — data loss · silent corruption · security · a fail-open gate — you fix it in the
+  SAME PR or you do not land the slice. The safe-boundary clause does not apply: there is no boundary
+  between a slice and the defect that slice just wrote.
+  Measured, and this rule exists because of it: **#1150** — *"this writes a WRONG VALUE into the
+  operator's store, silently … filed rather than fixed there because the fix is entangled with a
+  signature change that ticket deliberately cut."* An `integer` copy wrote `"42.0"` into a TEXT
+  column. The entanglement was not real — `CoercedValue` already admitted `bigint` and `SinkValue`
+  extended it, so the fix needed no signature change at all. **"Entangled with something we cut" is
+  evidence the slice was cut in the wrong place, not a reason to ship the corruption.** Re-cut the
+  slice or fix the defect; do not file it and continue.
+- **THE THIRD COPY IS A DECISION, NOT A NOTE (operator, 2026-08-20).**
+  Two implementations of one idea is a ticket. A change that would make it **three** must FOLD them
+  instead — in that PR — or not add the third. Measured: **#1088** recorded the fields/JSON config
+  editor solved twice; a later form landed a third (**#1146**) and filed the note again. A duplication
+  ticket that is re-filed each time the duplication grows is not a backlog item, it is a record of
+  nobody stopping.
+- **THE BACKLOG MUST TREND DOWN, and you measure it (operator, 2026-08-20).**
+  The cap above counts only loop-filed `[studio]` found-defect tickets, which is a narrow slice of a
+  much larger heap — on 2026-08-20 that heap was **106 open**, growing every active day (opened
+  exceeded closed on 08-12, 08-13, 08-14, 08-19 and 08-20). A cap that cannot see most of the pile
+  cannot bound it.
+  So at STATE TRIAGE, read the TOTAL open issue count (`gh issue list --state open --limit 300 --json
+  number -q 'length'`) and record it in the fire's report. **If it is higher than it was three fires
+  ago, this fire is a SWEEP** — no new work-order item, drain defects only, and say in the PR which
+  you fixed and which you deliberately left with the reason. A feature fire that raises the count is
+  fine; three in a row that do is the loop outrunning its own cleanup.
 - **Judge severity by the FAILURE, not the fix size.** "A one-line default masks destroyed user data" is SEVERE. "A missing tie-breaker makes ordering non-deterministic" is not.
 - If severity is genuinely ambiguous, DON'T open an `[operator-decision]` for it — file it as normal, and say in the ticket why you nearly escalated. Escalation is for irreducible DESIGN forks, not for prioritisation you can reason about.
 

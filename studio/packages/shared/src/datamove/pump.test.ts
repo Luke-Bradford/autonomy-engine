@@ -117,7 +117,7 @@ describe('a per-row failure', () => {
       map({ source: 'n', sink: 'n', type: 'integer' }),
     ]);
 
-    expect(await batches).toEqual([[{ n: 1 }, { n: 3 }]]);
+    expect(await batches).toEqual([[{ n: 1n }, { n: 3n }]]);
     expect(counters.rowsRead).toBe(3);
     expect(counters.rowsFailed).toBe(1);
     expect(counters.failuresByCode).toEqual({ not_integral: 1 });
@@ -294,8 +294,8 @@ describe('the `expression` arm — a constant per DISPATCH, not per row (§8)', 
 
     expect(await batches).toEqual([
       [
-        { a: '1', tag: 7 },
-        { a: '2', tag: 7 },
+        { a: '1', tag: 7n },
+        { a: '2', tag: 7n },
       ],
     ]);
     expect(counters.rowsFailed).toBe(0);
@@ -306,7 +306,7 @@ describe('the `expression` arm — a constant per DISPATCH, not per row (§8)', 
       map({ expression: 42, sink: 'n', type: 'integer' }),
       map({ expression: true, sink: 'b', type: 'boolean' }),
     ]);
-    expect(await batches).toEqual([[{ n: 42, b: true }]]);
+    expect(await batches).toEqual([[{ n: 42n, b: true }]]);
   });
 
   it('refuses an uncoercible constant copy-wide rather than failing every row identically', async () => {
@@ -398,7 +398,7 @@ describe('progress and partials', () => {
       { onBatch: () => (ticks += 1) },
     );
 
-    expect(await batches).toEqual([[{ n: 3 }]]);
+    expect(await batches).toEqual([[{ n: 3n }]]);
     expect(ticks).toBe(2);
     expect(counters.rowsFailed).toBe(2);
   });

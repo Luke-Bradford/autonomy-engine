@@ -717,15 +717,21 @@ interface SinkColumn {
 }
 
 function resolveSinkColumns(mapped: readonly string[], actual: readonly string[]): SinkColumn[] {
-  const byLowerCase = new Map<string, string>();
-  for (const name of actual) byLowerCase.set(name.toLowerCase(), name);
+  /* `nocaseFold`, NOT `toLowerCase()` — #1151. SQLite's NOCASE collation folds
+     ASCII `A-Z` only, so `\u212A` (KELVIN SIGN) and `k` are different identifiers
+     to the store, while `toLowerCase()` folds one onto the other. Using the JS
+     fold here made this resolver claim a column SQLite would never have matched,
+     and left the sink and the source-side drift gate — which already shares this
+     function — able to disagree about whether two names are the same column. */
+  const byFold = new Map<string, string>();
+  for (const name of actual) byFold.set(nocaseFold(name), name);
 
   const resolved: SinkColumn[] = [];
   const claimed = new Map<string, string>();
   const missing: string[] = [];
   const collisions: string[] = [];
   for (const name of mapped) {
-    const match = byLowerCase.get(name.toLowerCase());
+    const match = byFold.get(nocaseFold(name));
     if (match === undefined) {
       missing.push(name);
       continue;
