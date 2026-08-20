@@ -47,9 +47,11 @@ import type {
  *    admin-authored allowlist model `fs` uses, because a SQLite database is a
  *    file and an unconfined path is the same traversal risk. Neither key may be
  *    overridden per dispatch — see `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`.
- *  - **Identifiers are validated, then quoted.** A table or schema name cannot
- *    be bound as a parameter, so a `table` dataset's identifiers must match
- *    `SQL_IDENTIFIER_RE` before they are `"`-quoted into the statement.
+ *  - **CONFIG identifiers are validated, then quoted.** A table or schema name
+ *    cannot be bound as a parameter, so a `table` dataset's identifiers must
+ *    match `SQL_IDENTIFIER_RE` before they are `"`-quoted into the statement.
+ *    A name the STORE supplied is a different case and is quoted without that
+ *    refusal — see `quoteStoreIdentifier` (#1127).
  *  - **Values BIND, never concatenate.** A `query` dataset's `sql` is literal
  *    and its `parameters` are bound by name, which is what makes `${}` safe by
  *    construction instead of by escaping.
@@ -75,6 +77,16 @@ import type {
  * `SQL_IDENTIFIER_RE`, and every value BINDS. A `query` dataset — the only place
  * operator SQL exists — is refused as a sink outright. So the two halves reach
  * the same guarantee by different routes, and neither weakens the other.
+ *
+ * **#1127 narrowed the "already refused unless it matches `SQL_IDENTIFIER_RE`"
+ * clause above, and the narrowing is by PROVENANCE.** A table or schema name
+ * still is: those come from a dataset's `config`, which §8 requires be literal
+ * and identifier-shaped at save time. A COLUMN name in the sink's INSERT list is
+ * not, and never was operator text — it is read back out of `pragma_table_info`
+ * on the confined file, so it is quoted (`quoteStoreIdentifier`) rather than
+ * refused. The security property is unchanged, because a mapping's authored
+ * `sink` name cannot introduce a name: `resolveSinkColumns` either resolves it
+ * onto one the store already has or refuses the mapping.
  *
  * TWO RESIDUALS, stated so "it reuses the hardened `fs` guard" is not read as
  * "it has the same guarantees":
@@ -185,6 +197,39 @@ function quoteIdentifier(value: string, label: string): string {
       `${label} '${value}' is not a bare SQL identifier, so it cannot be quoted into a statement`,
     );
   }
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Quote an identifier the STORE told us about — no shape refusal (#1127).
+ *
+ * The difference from `quoteIdentifier` above is a difference in PROVENANCE, not
+ * in strictness for its own sake. §8's rule — "a name that only a quoting rule
+ * makes safe is refused, not accommodated" — is about a name that reaches SQL
+ * from operator-authored text, which cannot be bound as a parameter and so has
+ * to be constrained rather than escaped. A column name read back out of
+ * `pragma_table_info` is not that: it is the schema's own content, from a
+ * database file `confineStorePath` has already confined, and the operator
+ * created it by executing DDL against their own store. Doubling an embedded `"`
+ * is genuinely sufficient there, and refusing it instead made an ordinary table
+ * with a column called `first name` — or any CSV header with a space in it —
+ * impossible to copy into, against the any-to-any intent of #993.
+ *
+ * WHAT KEEPS THIS SAFE, stated because "we relaxed the identifier check" is the
+ * kind of sentence that deserves an argument under it. A mapping's `sink` name
+ * is operator-authored, and it never reaches SQL as written: `resolveSinkColumns`
+ * looks it up against the store's own columns and emits `actual`, the store's
+ * spelling, or refuses the mapping. So an authored name can only ever select
+ * from the set of names the store already has — it cannot introduce one. That
+ * holds even for a mapping supplied dynamically through a whole-value `${}`,
+ * which is why the save-time gate can leave that shape alone.
+ *
+ * TABLE and SCHEMA names keep `quoteIdentifier` and its refusal. Those DO come
+ * from a dataset's `config`, which §8 requires be literal and identifier-shaped
+ * at save time (`catalog/dataset-config.ts`'s `SQL_IDENTIFIER_RE`), so the two
+ * cases have genuinely different threat models and the split is the point.
+ */
+function quoteStoreIdentifier(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
@@ -931,7 +976,7 @@ export async function writeSqliteDatasetRows(
       }
 
       const insert = db.prepare(
-        `INSERT INTO ${qualified} (${columns.map((c) => quoteIdentifier(c.actual, 'column')).join(', ')})` +
+        `INSERT INTO ${qualified} (${columns.map((c) => quoteStoreIdentifier(c.actual)).join(', ')})` +
           ` VALUES (${columns.map(() => '?').join(', ')})`,
       );
 

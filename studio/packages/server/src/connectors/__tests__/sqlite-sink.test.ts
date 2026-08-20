@@ -387,36 +387,118 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     expect(err.message).toMatch(/id/i);
   });
 
-  it('REFUSES a STORE column that is not a bare identifier — the one live `quoteIdentifier` arm', async () => {
+  it('COPIES INTO a store column that is not a bare identifier — #1127', async () => {
+    // The relaxation, and its argument. §8 refuses a name that only a quoting
+    // rule makes safe BECAUSE such a name reaches SQL from operator-authored
+    // config and cannot be bound as a parameter. A column name does not: it is
+    // read back out of `pragma_table_info` on the already-confined file, so it
+    // is the schema's own content. Refusing it made an ordinary table with a
+    // column called `first name` — or any CSV header with a space in it —
+    // impossible to copy into, against the any-to-any intent of #993.
     const root = tempRoot();
     const path = seedSink(root);
     const db = new Database(path);
-    db.exec('CREATE TABLE spaced (id INTEGER, "my col" TEXT)');
+    db.exec('CREATE TABLE spaced (id INTEGER, "my col" TEXT, "total (£)" TEXT)');
     db.close();
 
+    const result = await writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'spaced' },
+        columns: ['id', 'my col', 'total (£)'],
+        mode: 'append',
+      },
+      one([{ id: 1, 'my col': 'x', 'total (£)': '9.99' }]),
+    );
+
+    expect(result.rowsWritten).toBe(1);
+    expect(rowsOf(path, 'SELECT * FROM spaced')).toEqual([
+      { id: 1, 'my col': 'x', 'total (£)': '9.99' },
+    ]);
+  });
+
+  it('QUOTES a store column containing a double quote, rather than breaking out of it', async () => {
+    // The one arm doubling exists for, and it was unreachable while the shape
+    // check ran first (`quoteIdentifier`'s own docstring said so). A column
+    // named `a"b` must land in `a"b`, not split the identifier — the property
+    // that makes quoting sufficient where refusing was the alternative.
+    const root = tempRoot();
+    const path = seedSink(root);
+    const db = new Database(path);
+    db.exec('CREATE TABLE quoted (id INTEGER, "a""b" TEXT)');
+    db.close();
+
+    const result = await writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'quoted' },
+        columns: ['id', 'a"b'],
+        mode: 'append',
+      },
+      one([{ id: 1, 'a"b': 'landed' }]),
+    );
+
+    expect(result.rowsWritten).toBe(1);
+    expect(rowsOf(path, 'SELECT * FROM quoted')).toEqual([{ id: 1, 'a"b': 'landed' }]);
+  });
+
+  it('still REFUSES a mapped column the store does not have — the relaxation adds no name', async () => {
+    // What keeps #1127 safe: an authored `sink` name never reaches SQL as
+    // written. `resolveSinkColumns` resolves it onto the store's own spelling or
+    // refuses the mapping, so the set of names that can reach the statement is
+    // exactly the set the store already has. A relaxed QUOTING rule cannot widen
+    // that set.
+    const root = tempRoot();
+    const path = seedSink(root);
     const err = await failure(
       writeSqliteDatasetRows(
         {
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
-          datasetConfig: { table: 'spaced' },
-          columns: ['id', 'my col'],
+          datasetConfig: { table: 'sink' },
+          columns: ['id', 'nope"); drop table sink; --'],
           mode: 'append',
         },
-        one([{ id: 1, 'my col': 'x' }]),
+        one([{ id: 1 }]),
       ),
     );
-    // Column names reach the statement from `pragma_table_info`, NOT from a
-    // schema-validated field, so this is the only path where `quoteIdentifier`
-    // is what decides. §8's rule is that a name only a quoting rule makes safe
-    // is refused rather than accommodated, and the sink follows the reader in
-    // applying it. The consequence is a real limitation — an ordinary column
-    // called `first name` cannot be a copy target — and it is filed rather than
-    // hidden (#1127), because the refusal is at least loud and rolls back
-    // cleanly.
     expect(err.kind).toBe('permanent');
-    expect(err.message).toMatch(/not a bare SQL identifier/);
-    expect(rowsOf(path, 'SELECT id FROM spaced')).toHaveLength(0);
+    expect(err.message).toMatch(/the sink has no column named/);
+    // The table is still there, which is the point of the assertion above.
+    expect(rowsOf(path)).toHaveLength(0);
+  });
+
+  it('still REFUSES a TABLE/SCHEMA name that is not a bare identifier — config text, not store content', async () => {
+    // The half of §8 that does NOT relax, and the hazard #1127 had to avoid:
+    // carrying the column relaxation across to the names that DO come from a
+    // dataset's operator-authored `config`.
+    //
+    // Which layer refuses it is worth naming rather than assuming. It is
+    // `parseTableTarget`'s config parse, one step before `quoteIdentifier` —
+    // measured, by the message this asserts. So `quoteIdentifier` at the
+    // qualified-name site is defence in depth rather than the live arm, exactly
+    // as the comment on the confinement test above says of its own. The
+    // property under test is the REFUSAL, which is what a reader of #1127 needs
+    // to know still holds.
+    const root = tempRoot();
+    const path = seedSink(root);
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { schema: 'not an identifier', table: 'sink' },
+          columns: ['id'],
+          mode: 'append',
+        },
+        one([{ id: 1 }]),
+      ),
+    );
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(/invalid table dataset config/);
+    expect(err.message).toMatch(/schema/);
   });
 
   it('REFUSES an empty column list rather than building a valueless INSERT', async () => {
