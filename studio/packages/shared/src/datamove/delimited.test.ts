@@ -208,6 +208,25 @@ describe('batching is the scheduling quantum, so its edges are exact', () => {
     await expect(batches(doc(6), 3)).resolves.toEqual([3, 3]);
   });
 
+  it('flushes a batch on a QUOTED row’s terminator too', async () => {
+    // The gap a surviving mutation found: the quoted path used to carry its own
+    // copy of "end the row, push it, maybe flush", and every batching test here
+    // used unquoted rows — so breaking the duplicate changed nothing that was
+    // measured. The two paths are now one; this is what holds them together.
+    const quoted = '"a"\n"b"\n"c"\n"d"\n"e"\n';
+    const sizes: number[] = [];
+    for await (const batch of parseDelimitedRows(one(quoted), { ...BASE, batchRows: 2 })) {
+      sizes.push(batch.length);
+    }
+    expect(sizes).toEqual([2, 2, 1]);
+    // And a document that MIXES the two still batches by row, not by shape.
+    await expect(collect('"a"\nb\n"c"\n', { batchRows: 2 })).resolves.toEqual([
+      ['a'],
+      ['b'],
+      ['c'],
+    ]);
+  });
+
   it('yields nothing at all for a document with no rows', async () => {
     await expect(batches('', 3)).resolves.toEqual([]);
     await expect(batches('\n\n', 3)).resolves.toEqual([]);

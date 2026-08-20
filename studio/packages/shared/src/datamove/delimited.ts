@@ -64,6 +64,14 @@
  * trailing terminator yields no phantom row and a blank line is not a row of one
  * empty field. A final line with no terminator is still a row.
  *
+ * **CRLF needs no special case, and that is a consequence rather than a
+ * coincidence**: `\r` ends the row and the `\n` that follows then ends a
+ * zero-length line, which is already skipped. This was not obvious — the
+ * machine carried a `sawCr` flag to swallow the `\n`, and a mutation that
+ * deleted the flag passed the entire suite. It was dead state, and the honest
+ * response was to delete it rather than to pin it with a test that could not
+ * fail. It also means no CRLF state crosses a chunk boundary at all.
+ *
  * The three cases where mature parsers genuinely disagree, decided here rather
  * than left to whoever hits them first — each one is otherwise a silently-wrong
  * value:
@@ -146,9 +154,10 @@ export interface DelimitedParseOptions {
  *
  * A single pass with no lookahead beyond one character, so a chunk boundary can
  * fall anywhere — mid-CRLF, mid-quoted-field, between a quote and the character
- * that decides whether it closed the field — without changing the result. The
- * `pendingQuote` and `sawCr` flags are exactly the two pieces of state that
- * cross a boundary; everything else is per-character.
+ * that decides whether it closed the field — without changing the result.
+ * `pendingQuote` and `pendingEscape` are the only state that crosses a boundary
+ * in a way a reader could get wrong; everything else is per-character. Both are
+ * covered by running the whole corpus a second time at one character per chunk.
  */
 export async function* parseDelimitedRows(
   chunks: AsyncIterable<string>,
@@ -182,10 +191,6 @@ export async function* parseDelimitedRows(
   let pendingQuote = false;
   /** The previous character was an escape, inside a quoted field. */
   let pendingEscape = false;
-  /** The previous character was a `\r` outside quotes: the row has already been
-   * terminated, and a following `\n` is the other half of a CRLF, not a second
-   * terminator. Crosses a chunk boundary, which is why it is state. */
-  let sawCr = false;
 
   const fail = (code: DelimitedParseFailureCode, what: string): never => {
     throw new DelimitedParseError(code, `${what} (row ${rowNumber})`);
@@ -223,13 +228,6 @@ export async function* parseDelimitedRows(
 
   for await (const chunk of chunks) {
     for (const c of chunk) {
-      // A `\n` immediately after a `\r` outside quotes completes a CRLF that has
-      // already terminated its row. Consume it and move on.
-      if (sawCr) {
-        sawCr = false;
-        if (c === '\n') continue;
-      }
-
       if (pendingEscape) {
         pendingEscape = false;
         pushChar(c);
@@ -248,23 +246,19 @@ export async function* parseDelimitedRows(
           endField();
           continue;
         }
-        if (c === '\n' || c === '\r') {
-          const done = endRow();
-          if (done) {
-            batch.push(done);
-            if (batch.length >= batchRows) {
-              yield batch;
-              batch = [];
-            }
-          }
-          sawCr = c === '\r';
-          continue;
+        if (c !== '\n' && c !== '\r') {
+          return fail(
+            'unexpected_character_after_quote',
+            `a closing quote is followed by ${JSON.stringify(c)} instead of a delimiter ` +
+              'or the end of the row',
+          );
         }
-        return fail(
-          'unexpected_character_after_quote',
-          `a closing quote is followed by ${JSON.stringify(c)} instead of a delimiter ` +
-            'or the end of the row',
-        );
+        // A terminator. Deliberately FALLS THROUGH to the one row-terminator
+        // arm below rather than repeating it — a second copy of "end the row,
+        // push it, maybe flush the batch" is a batch-boundary bug waiting for
+        // the first quoted row that lands on one, and it was exactly that:
+        // a mutation of the duplicate survived the whole suite, because every
+        // batching test used unquoted rows.
       }
 
       if (inQuotes) {
@@ -304,7 +298,6 @@ export async function* parseDelimitedRows(
             batch = [];
           }
         }
-        sawCr = c === '\r';
         continue;
       }
 
