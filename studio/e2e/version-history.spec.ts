@@ -472,7 +472,7 @@ test.describe('pipeline version history', () => {
     // And it is not a dead end. Undo — not a node click plus Delete, which
     // `onlyRenderVisibleElements` can cull out from under — walks the invalid
     // edit back out and the override is live again.
-    await page.getByRole('button', { name: 'Undo' }).click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(page.locator('.badge-list li')).toHaveCount(0);
     await expect(override).toBeEnabled();
 
