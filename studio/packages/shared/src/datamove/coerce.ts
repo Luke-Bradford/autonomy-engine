@@ -142,9 +142,17 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
  *        implements that row; it does not extend it. What §6.2 leaves unstated
  *        is the WIDTH, and int64 is settled here as an M5 decision — the same
  *        shape as `FALSE_TOKENS` below.
- *  (ii)  int64 is the declared width of `INTEGER` in SQLite, `bigint` in
- *        Postgres and `BIGINT` in MySQL alike. It is a fact about the DECLARED
- *        TYPE across the matrix, not one store's quirk.
+ *  (ii)  int64 is the width of SQLite's `INTEGER` storage class — MEASURED,
+ *        and the only store this bound is presently applied to. The wider
+ *        claim, that int64 also suits the other stores the matrix will grow,
+ *        is an ASSUMPTION this makes on M10's behalf, not a settled decision:
+ *        `DataTypeSchema` maps `integer` to no physical column type anywhere
+ *        yet, and Postgres alone offers both `int4` and `int8`. If M10 binds
+ *        `integer` to a NARROWER physical type, this bound becomes too
+ *        permissive for that store and the per-sink escape hatch below is the
+ *        answer — not a quiet widening of what `integer` means. Flagged rather
+ *        than asserted so a future author does not read a decision that was
+ *        never taken.
  *  (iii) Decisively: the coercion matrix is the ONLY layer that can express
  *        "this row fails, the copy continues". A guard in the sink's
  *        `bindValue` could not — `insert.run` sits inside the whole-copy
