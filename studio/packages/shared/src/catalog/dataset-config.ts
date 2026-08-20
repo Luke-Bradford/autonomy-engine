@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { isValidDateFormat } from '../datamove/coerce.js';
+import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import type { ConnectionKind } from '../schemas/connection.js';
 import { DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
@@ -93,6 +95,125 @@ export const queryDatasetConfigSchema = z.object({
 });
 
 /**
+ * The text encodings a `delimited` file may declare (#1163, M7 slice 1).
+ *
+ * A CLOSED set, and each member is named for what Node's `TextDecoder` ACTUALLY
+ * decodes rather than for what an operator might hope. Measured on node v25.9.0:
+ * `new TextDecoder('latin1').encoding` is `windows-1252`, and so is `ascii`'s —
+ * both labels are aliases for cp1252, which maps every byte and therefore never
+ * refuses one. Offering `latin1` would promise ISO-8859-1's C1 controls and
+ * silently deliver `€` for `0x80`; offering `ascii` would promise a 7-bit
+ * refusal that never comes. So the member is `windows-1252`, which is true.
+ *
+ * Closed because an unrecognised label reaching `new TextDecoder(label)` throws
+ * a raw `RangeError` that nothing in the connector error model maps — a refusal
+ * at the config boundary is the same fact, said where it can be understood.
+ */
+export const DELIMITED_ENCODINGS = ['utf-8', 'utf-16le', 'utf-16be', 'windows-1252'] as const;
+export const DelimitedEncodingSchema = z.enum(DELIMITED_ENCODINGS);
+export type DelimitedEncoding = z.infer<typeof DelimitedEncodingSchema>;
+
+/** The three roles a single character can play in a delimited file. Sharing one
+ * character between any two of them makes the grammar ambiguous with itself. */
+const DELIMITED_ROLES = ['delimiter', 'quote', 'escape'] as const;
+
+/**
+ * A single character that is not a row terminator.
+ *
+ * ONE character, deliberately: a multi-character delimiter is a different
+ * parser, and admitting it here would leave a config that saves cleanly and then
+ * splits nothing. A terminator (`\n`, `\r`) in any of the three roles would make
+ * the end of a field indistinguishable from the end of a row.
+ */
+const delimitedChar = (role: string) =>
+  z
+    .string()
+    .length(1, { message: `${role} must be exactly one character` })
+    .refine((c) => c !== '\n' && c !== '\r', {
+      message: `${role} cannot be a line terminator`,
+    });
+
+/**
+ * `delimited` — a separated-values FILE in an `fs` store (§2.6). #1163, M7 slice 1.
+ *
+ * §2.6's eight keys, in full. (Four places in the tree list seven and omit
+ * `escape`; #1163 corrects them.)
+ *
+ * **WHAT IS DEFAULTED, AND WHY `header` IS NOT.** §2.6 authorises a default for
+ * `delimiter` alone. `quote` and `encoding` are defaulted here as well, because a
+ * separated-values file that declares neither is overwhelmingly RFC 4180 UTF-8
+ * and because guessing either WRONG produces visibly mangled text — a failure an
+ * operator sees immediately rather than a plausible wrong value they never do.
+ *
+ * `header` fails that test in both directions and therefore carries NO default:
+ * defaulted true it EATS ROW 1 of a headerless file and names every column after
+ * a data value; defaulted false it turns the header into a data row. Either way
+ * the copy succeeds and the data is wrong, which is the one outcome this spec
+ * exists to prevent. §2.6's own M4 correction is the precedent, and it goes
+ * further — `configForm.ts`'s `ABSENTABLE_WRAPPERS` treats a `.default()`ed field
+ * as optional, and an unchecked optional box OMITS its key, so a defaulted
+ * `header` could not be set to `false` distinguishably from "not set" at all.
+ * That is exactly how `readonly` became `writable`.
+ *
+ * `header: false` stays expressible, because it is a real property of real
+ * files. Naming its columns is the READER's problem and is settled in the
+ * parser's docblock, not here.
+ *
+ * `nullValue` has NO `.min(1)` and that is load-bearing: `coerceValue` tests
+ * `opts.nullValue !== undefined`, so `''` is a meaningful declaration ("an empty
+ * field means NULL") for a file that uses one. A minimum length would read as
+ * tidying and would silently delete that capability.
+ *
+ * `dateFormat` is validated against the coercion matrix's OWN compiler
+ * (`isValidDateFormat`), so a format every row would reject is refused at save
+ * rather than discovered once per row at run time.
+ */
+export const delimitedDatasetConfigSchema = z
+  .object({
+    /** Confined against the `fs` connection's `roots` at DISPATCH, never here
+     * (§8) — this schema is shared with the browser and knows no filesystem. */
+    path: z.string().min(1),
+    delimiter: delimitedChar('delimiter').default(','),
+    quote: delimitedChar('quote').default('"'),
+    /** Absent means RFC 4180: a doubled quote is the only escape. Declaring one
+     * ADDS "the next character is literal" inside a quoted field. */
+    escape: delimitedChar('escape').optional(),
+    header: z.boolean(),
+    encoding: DelimitedEncodingSchema.default('utf-8'),
+    /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
+     * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */
+    nullValue: z.string().optional(),
+    /** §6.2 — the ONLY way a textual date is read. Absent plus a `date`/
+     * `timestamp` target is a refusal (`no_date_format`), never a guess. */
+    dateFormat: z
+      .string()
+      .refine(isValidDateFormat, {
+        message:
+          `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+          'each at most once',
+      })
+      .optional(),
+  })
+  .superRefine((config, ctx) => {
+    // Reported on the SECOND role of each colliding pair, so the message names a
+    // field. An object-level issue carries `path: []`, and `formatZodIssues`
+    // then prints it with no prefix at all — the operator would be told two
+    // things clash without being told which control to touch.
+    for (let i = 0; i < DELIMITED_ROLES.length; i += 1) {
+      for (let j = i + 1; j < DELIMITED_ROLES.length; j += 1) {
+        const a = DELIMITED_ROLES[i] as (typeof DELIMITED_ROLES)[number];
+        const b = DELIMITED_ROLES[j] as (typeof DELIMITED_ROLES)[number];
+        if (config[a] === undefined || config[a] !== config[b]) continue;
+        ctx.addIssue({
+          code: 'custom',
+          path: [b],
+          message: `${b} cannot be the same character as ${a} ('${String(config[a])}')`,
+        });
+      }
+    }
+  });
+
+/**
  * The config shape for a kind whose READER has not been built yet.
  *
  * Explicitly permissive — `z.looseObject` KEEPS unknown keys, where a bare
@@ -117,7 +238,7 @@ export const unimplementedDatasetConfigSchema = z.looseObject({});
  * "the pin precedes the kind, deliberately" — applied one layer down.
  */
 export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
-  delimited: unimplementedDatasetConfigSchema,
+  delimited: delimitedDatasetConfigSchema,
   excel: unimplementedDatasetConfigSchema,
   table: tableDatasetConfigSchema,
   query: queryDatasetConfigSchema,

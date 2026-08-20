@@ -11,6 +11,8 @@ import {
   datasetConfigAdvisory,
   datasetConfigSchema,
   datasetKindIsImplemented,
+  DELIMITED_ENCODINGS,
+  delimitedDatasetConfigSchema,
   isSqlIdentifier,
   queryDatasetConfigSchema,
   tableDatasetConfigSchema,
@@ -45,9 +47,133 @@ describe('dataset config catalog', () => {
     // M2 already ships `delimited`/`excel` in the address vocabulary, so a
     // config authored today must survive a parse unchanged. A bare
     // `z.object({})` would silently return `{}` and wipe it.
-    const authored = { path: '/data/in.csv', delimiter: ';', header: true };
+    //
+    // Re-pointed from `delimited` to `excel` by #1163: `delimited` now has a
+    // REAL schema, so it is no longer an example of this property. `excel`
+    // still is, until M11 — which is why the test moved rather than went.
+    const authored = { path: '/data/in.xlsx', sheet: 'Sheet1', headerRow: 1 };
     expect(unimplementedDatasetConfigSchema.parse(authored)).toEqual(authored);
-    expect(datasetConfigSchema('delimited').parse(authored)).toEqual(authored);
+    expect(datasetConfigSchema('excel').parse(authored)).toEqual(authored);
+  });
+});
+
+describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
+  const minimal = { path: '/data/in.csv', header: true };
+
+  it('applies §2.6’s defaults, and only where a default is a FACT rather than a guess', () => {
+    // §2.6 defaults `delimiter` explicitly. `quote` and `encoding` are defaulted
+    // here too because a separated-values file that declares neither is
+    // overwhelmingly RFC 4180 UTF-8, and getting either wrong produces visibly
+    // mangled text rather than a plausible wrong value.
+    expect(delimitedDatasetConfigSchema.parse(minimal)).toEqual({
+      path: '/data/in.csv',
+      delimiter: ',',
+      quote: '"',
+      header: true,
+      encoding: 'utf-8',
+    });
+  });
+
+  it('requires `header`, because neither answer is safe to invent', () => {
+    // The one key §2.6's own M4 correction forbids defaulting. An absent
+    // `header` defaulted true EATS ROW 1 of a headerless file and then names
+    // every column after a data value; defaulted false turns the header into a
+    // data row. And `configForm.ts`'s `ABSENTABLE_WRAPPERS` makes any
+    // `.default()`ed boolean render as an UNCHECKED box, so the operator could
+    // not tell "false" from "not set" — the exact defect that turned `readonly`
+    // into `writable` at M4.
+    const parsed = delimitedDatasetConfigSchema.safeParse({ path: '/data/in.csv' });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((i) => i.path.join('.'))).toContain('header');
+  });
+
+  it('keeps `header: false` expressible — it is a real property of a real file', () => {
+    expect(delimitedDatasetConfigSchema.parse({ path: '/f.csv', header: false }).header).toBe(false);
+  });
+
+  it('refuses a multi-character delimiter rather than half-supporting it', () => {
+    for (const delimiter of ['', ';;', '||']) {
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter }).success).toBe(false);
+    }
+    expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter: '\t' }).success).toBe(true);
+  });
+
+  it('refuses a delimiter, quote or escape that is a row terminator', () => {
+    // A terminator in either role makes the grammar ambiguous with itself:
+    // there would be no way to tell the end of a field from the end of a row.
+    for (const ch of ['\n', '\r']) {
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, delimiter: ch }).success).toBe(
+        false,
+      );
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, quote: ch }).success).toBe(false);
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, escape: ch }).success).toBe(false);
+    }
+  });
+
+  it('refuses two roles sharing one character, and names the offending FIELD', () => {
+    // Each pair is ambiguous by construction. `escape === quote` is the subtle
+    // one: "a doubled quote is a literal quote" and "escape makes the next
+    // character literal" would then be two rules competing for one byte.
+    const cases: [Record<string, unknown>, string][] = [
+      [{ delimiter: '"' }, 'quote'],
+      [{ escape: '"' }, 'escape'],
+      [{ escape: ',' }, 'escape'],
+    ];
+    for (const [patch, path] of cases) {
+      const parsed = delimitedDatasetConfigSchema.safeParse({ ...minimal, ...patch });
+      expect(parsed.success).toBe(false);
+      // An object-level refine reports `path: []`, which `formatZodIssues` then
+      // prints with no field prefix — so the issue must name the field.
+      expect(parsed.error?.issues.map((i) => i.path.join('.'))).toContain(path);
+    }
+  });
+
+  it('offers only encodings whose NAME matches what Node actually decodes', () => {
+    // Measured on node v25.9.0: `new TextDecoder('latin1').encoding` is
+    // `windows-1252`, identical to `ascii`. Offering either under its own name
+    // would promise ISO-8859-1 or 7-bit ASCII and deliver cp1252 — so the
+    // member is named for the decoder that actually runs.
+    expect(DELIMITED_ENCODINGS).toEqual(['utf-8', 'utf-16le', 'utf-16be', 'windows-1252']);
+    for (const bad of ['latin1', 'ascii', 'iso-8859-1', 'utf8']) {
+      expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, encoding: bad }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('accepts `nullValue: ""` as a MEANINGFUL declaration, not an empty one', () => {
+    // `coerceValue` tests `opts.nullValue !== undefined`, so a dataset whose
+    // file genuinely means "an empty field is NULL" declares exactly this. A
+    // `.min(1)` here would look like tidying and would silently delete that.
+    const parsed = delimitedDatasetConfigSchema.parse({ ...minimal, nullValue: '' });
+    expect(parsed.nullValue).toBe('');
+  });
+
+  it('refuses a `dateFormat` the coercion matrix could never compile', () => {
+    // Reuses the matrix's own compiler rather than restating the token rules:
+    // otherwise a format every row will reject saves clean, and the operator
+    // learns about it once per row at run time.
+    expect(delimitedDatasetConfigSchema.safeParse({ ...minimal, dateFormat: 'yyyy-MM-dd' }).success)
+      .toBe(true);
+    for (const bad of ['nonsense', 'yyyy-yyyy', 'YYYY']) {
+      const parsed = delimitedDatasetConfigSchema.safeParse({ ...minimal, dateFormat: bad });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues.map((i) => i.path.join('.'))).toContain('dateFormat');
+    }
+  });
+
+  it('is wired into the catalog, and reports a real shape error through the advisory', () => {
+    expect(datasetConfigSchema('delimited')).toBe(delimitedDatasetConfigSchema);
+    const note = datasetConfigAdvisory('delimited', { path: '/f.csv', header: 'yes' });
+    expect(note).toBeTruthy();
+    expect(note).toMatch(/header/);
+  });
+
+  it('still says a reader does not exist, because that gate is a separate fact', () => {
+    // A well-formed config must NOT read as "ready". `IMPLEMENTED_DATASET_KINDS`
+    // is untouched by this slice — the reader lands in M7's next one.
+    expect(datasetKindIsImplemented('delimited')).toBe(false);
+    expect(datasetConfigAdvisory('delimited', { path: '/f.csv', header: true })).toMatch(/reader/i);
   });
 });
 

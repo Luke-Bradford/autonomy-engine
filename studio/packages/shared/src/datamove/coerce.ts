@@ -273,6 +273,23 @@ function compileFormat(format: string): CompiledFormat | CoercionFailureCode {
   return compiled;
 }
 
+/**
+ * Whether `format` is a `dateFormat` this matrix can actually compile (#1163).
+ *
+ * Exported so the `delimited` dataset config schema can refuse a nonsense format
+ * at SAVE, through `datasetConfigAdvisory`, instead of letting every row reject
+ * it one at a time at run time — which is precisely the "saved" vs "learned
+ * about when a run failed" gap that advisory exists to close.
+ *
+ * It wraps the compiler rather than restating its rules, and that is the point:
+ * a second token check in `catalog/` would drift from `compileFormatUncached`
+ * the first time either side moved, and the repeated-token refusal
+ * (`'yyyy-yyyy'`) is exactly the sort of rule a reimplementation forgets.
+ */
+export function isValidDateFormat(format: string): boolean {
+  return typeof compileFormat(format) !== 'string';
+}
+
 function compileFormatUncached(format: string): CompiledFormat | CoercionFailureCode {
   const fields: ParseToken['field'][] = [];
   const seen = new Set<string>();
