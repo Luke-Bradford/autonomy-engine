@@ -26,6 +26,7 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
+import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor } from '../executor.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
@@ -1448,7 +1449,33 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
   // -------------------------------------------------------------------------
 
   /** A registry with the real adapters plus a spy `http`, so both ends resolve. */
-  function pairedRegistry(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
+  /**
+   * M6 slice B (#1149) — a fake store's address.
+   *
+   * Derived from the CONNECTION's `store` config key and the DATASET's `table`
+   * config key, so a test expresses "same store, same table" by seeding those
+   * two values rather than by standing up a real database. The kinds are the
+   * fixture's own (`http`/`anthropic_api`), which is what makes the default pair
+   * non-matching: `sameDatasetAddress` refuses across kinds, so the tests that
+   * are not about self-copy are unaffected by this seam existing.
+   */
+  function stubAddress(kind: ConnectionKind): NonNullable<ConnectorAdapter['resolveDatasetAddress']> {
+    return ({ connectionConfig, dataset }) =>
+      Promise.resolve({
+        kind,
+        store: typeof connectionConfig.store === 'string' ? connectionConfig.store : `${kind}-store`,
+        storeIdentity: null,
+        object: typeof dataset.config.table === 'string' ? dataset.config.table : null,
+      });
+  }
+
+  function pairedRegistry(
+    run: ConnectorAdapter['runActivity'],
+    // M6 slice B — `undefined` installs the stub above on every adapter;
+    // `null` installs NONE, which is how the "a store that cannot say where it
+    // writes must not write" refusal is reached; a function installs itself.
+    address: ConnectorAdapter['resolveDatasetAddress'] | null = undefined,
+  ): ConnectorRegistry {
     // A MUTABLE copy: `ConnectorRegistry` is a ReadonlyMap, and the existing
     // `fakeHttpAdapter`/`fakeAgentCliAdapter` helpers build a fresh Map for the
     // same reason. Copied rather than built from scratch because BOTH ends must
@@ -1460,6 +1487,11 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       testConnection: () => Promise.resolve({ ok: true }),
       runActivity: run,
     });
+    if (address !== null) {
+      for (const [kind, adapter] of [...reg]) {
+        reg.set(kind, { ...adapter, resolveDatasetAddress: address ?? stubAddress(kind) });
+      }
+    }
     return reg;
   }
 
@@ -1707,14 +1739,20 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
   function seedDataset(
     db: Db,
     connectionId: string,
-    over: { ownerId?: string | null; kind?: 'table' | 'query' | 'delimited' | 'excel' } = {},
+    over: {
+      ownerId?: string | null;
+      kind?: 'table' | 'query' | 'delimited' | 'excel';
+      // M6 slice B (#1149) — `stubAddress` reads `table` out of this, so a test
+      // says "these two rows name one physical object" by seeding it.
+      config?: Record<string, unknown>;
+    } = {},
   ): string {
     return createDataset(db, {
       ownerId: over.ownerId === undefined ? 'local' : over.ownerId,
       name: `D${(seq += 1)}`,
       connectionId,
       kind: over.kind ?? 'table',
-      config: { table: 'rows' },
+      config: over.config ?? { table: 'rows' },
       columns: [{ name: 'id', type: 'integer', nullable: false }],
       parameters: [],
     }).id;
@@ -2019,6 +2057,249 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       kind: 'permanent',
       error: expect.stringContaining(oneDs),
     });
+    expect(failure).not.toHaveProperty('side');
+  });
+
+  // -------------------------------------------------------------------------
+  // M6 slice B (#1149, spec §2.1) — the RESOLVED-ADDRESS dispatch record, and
+  // the self-copy two dataset rows can hide.
+  //
+  // The node holds a dataset REF and a dataset is a mutable row, so the run log
+  // is the only place that can say where a dispatch actually landed. These sit
+  // with the 4a tests and reuse their fixtures: `stubAddress` gives the fake
+  // adapters an address derived from config, so "one physical table, two rows"
+  // is expressible without a real store.
+  // -------------------------------------------------------------------------
+
+  /** Every `node.dispatched` in a run, as the durable log re-parses them. */
+  function dispatchesOf(db: Db, runId: string) {
+    return loadEngineEvents(db, runId).filter((e) => e.type === 'node.dispatched');
+  }
+
+  it('RECORDS the resolved address of both ends on node.dispatched', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', { store: 'B' }, 'K');
+    const sourceDs = seedDataset(db, sourceConn, { config: { table: 'src' } });
+    const sinkDs = seedDataset(db, sinkConn, { config: { table: 'dst' } });
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        catalog: datasetCatalog(),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    // Read back through `loadEngineEvents`, which re-parses every row: the
+    // record has to SURVIVE the durable round-trip, not merely be yielded.
+    expect(dispatchesOf(db, run.id)).toEqual([
+      expect.objectContaining({
+        datasetAddresses: {
+          source: { kind: 'http', store: 'A', storeIdentity: null, object: 'src' },
+          sink: { kind: 'anthropic_api', store: 'B', storeIdentity: null, object: 'dst' },
+        },
+      }),
+    ]);
+  });
+
+  it('OMITS the record entirely for an activity that is not dataset-bound', async () => {
+    // Omitted, not present-undefined: a non-copy `node.dispatched` stays exactly
+    // the event this build wrote before the field existed.
+    const db = freshDb().db;
+    const conn = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [nodeOfType('test_single', conn)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        catalog: catalogOf({ type: 'test_single', kind: 'execution', connectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    const [dispatched] = dispatchesOf(db, run.id);
+    expect(dispatched).toBeDefined();
+    expect(dispatched).not.toHaveProperty('datasetAddresses');
+  });
+
+  it('refuses two DIFFERENT dataset rows that resolve to ONE physical address', async () => {
+    // THE data-loss case this slice exists for, and the one §3.1 could not
+    // build: the ids differ, so the id-identical guard passes them through, and
+    // the sink then DELETEs inside its write transaction the very rows the
+    // source is streaming.
+    const db = freshDb().db;
+    const readConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const writeConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const sourceDs = seedDataset(db, readConn, { config: { table: 'rows' } });
+    const sinkDs = seedDataset(db, writeConn, { config: { table: 'rows' } });
+    expect(sourceDs).not.toBe(sinkDs);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', readConn, writeConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        // Both ends on ONE kind, so the two stores are comparable at all — a
+        // cross-kind pair is refused as different by construction.
+        catalog: datasetCatalog({ sinkConnectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'dataset_self_copy', kind: 'permanent' });
+    // Unlabelled: the PAIR is at fault, and both refs are named so an operator
+    // can see which two rows collided.
+    expect(failure).not.toHaveProperty('side');
+    expect(failure?.error).toContain(sourceDs);
+    expect(failure?.error).toContain(sinkDs);
+    // Refused BEFORE the durable dispatch, so there is no attempt to reconcile.
+    expect(dispatchesOf(db, run.id)).toEqual([]);
+  });
+
+  it('PERMITS two dataset rows in one store that name different objects', async () => {
+    // §3.1 ①'s mandated shape: one physical file reached through a read-only and
+    // a writable connection needs two dataset rows. Copying between two of its
+    // tables must keep working, or the gate has bought data-loss safety by
+    // refusing the product's own supported topology.
+    const db = freshDb().db;
+    const readConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const writeConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const sourceDs = seedDataset(db, readConn, { config: { table: 'src' } });
+    const sinkDs = seedDataset(db, writeConn, { config: { table: 'dst' } });
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', readConn, writeConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        catalog: datasetCatalog({ sinkConnectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+  });
+
+  it('refuses a store that cannot resolve an address at all, labelling the source', async () => {
+    // The seam is optional on `ConnectorAdapter` and REQUIRED at the point of
+    // use: a store that declines it would copy with the physical self-copy
+    // refusal silently switched off, reading exactly like one that passed.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, null),
+        catalog: datasetCatalog(),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_address_unsupported',
+      kind: 'permanent',
+      side: 'source',
+    });
+    expect(dispatchesOf(db, run.id)).toEqual([]);
+  });
+
+  it('keeps the store’s own verdict when an address fails to resolve', async () => {
+    // A store that is merely UNREACHABLE is `transient`. Flattening it to
+    // `permanent` would report a busy database as a mapping the operator has to
+    // go and fix — #1148's constraint, one layer up.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(
+          async function* () {
+            yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+          },
+          () => Promise.reject(new DatasetIoError('transient', 'the store is busy')),
+        ),
+        catalog: datasetCatalog(),
+        // One attempt only: `transient` is retry-eligible, and this test is
+        // about the CLASSIFICATION, not about the retry ladder.
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_address_unresolvable',
+      kind: 'transient',
+      side: 'source',
+      error: expect.stringContaining('the store is busy'),
+    });
+    expect(dispatchesOf(db, run.id)).toEqual([]);
+  });
+
+  it('does not claim a side when an UNPAIRED dataset activity cannot resolve its address', async () => {
+    // M1's rule, which this seam inherits rather than restates: a source-only
+    // activity has no sink dataset for `side:'source'` to contrast with, so the
+    // label would point at a second ref that does not exist.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: 'ds_ignored' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, null),
+        catalog: datasetCatalog({ datasetKinds: { source: ['table'] } }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'dataset_address_unsupported' });
     expect(failure).not.toHaveProperty('side');
   });
 
