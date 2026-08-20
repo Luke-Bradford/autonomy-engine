@@ -508,12 +508,26 @@ describe('the adapter', () => {
     ).resolves.toMatchObject({ ok: false });
   });
 
-  it('runs no activity of its own', async () => {
-    const ctx = { activityType: 'copy' } as unknown as ActivityContext;
+  // #1134 (M5 slice 4b) REWROTE this, it did not delete it. The pin was written
+  // when `copy` was the hypothetical future activity and used it as the example
+  // of a type this adapter refuses; `copy` is now the ONE activity it runs, so
+  // the old body asserted the opposite of the contract. What it was actually
+  // guarding still holds and is what matters: the registry must be TOTAL over
+  // `ConnectionKind`, and a store connection binds no ORDINARY activity — so the
+  // example moves to a type that really is refused.
+  it('runs no activity of its own besides copy', async () => {
+    const ctx = { activityType: 'http_request' } as unknown as ActivityContext;
     const events = [];
     for await (const event of sqliteAdapter.runActivity(ctx, null)) events.push(event);
     expect(events).toEqual([
       { type: 'failed', kind: 'permanent', error: expect.stringContaining('STORE binding') },
     ]);
+  });
+
+  it('names the type it refused, so a mis-dispatch is diagnosable', async () => {
+    const ctx = { activityType: 'llm_call' } as unknown as ActivityContext;
+    const events = [];
+    for await (const event of sqliteAdapter.runActivity(ctx, null)) events.push(event);
+    expect(events[0]).toMatchObject({ error: expect.stringContaining('llm_call') });
   });
 });
