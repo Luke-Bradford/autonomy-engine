@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import { DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
 
 /**
@@ -137,6 +138,48 @@ export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<Datas
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */
 export function datasetKindIsImplemented(kind: DatasetKind): boolean {
   return IMPLEMENTED_DATASET_KINDS.has(kind);
+}
+
+/**
+ * #1120 — what this kind's own schema says about a dataset's `config`, as ONE
+ * operator-facing sentence, or `null` when it has nothing to say.
+ *
+ * ADVISORY, never a gate, on `connectionConfigAdvisory`'s precedent and for its
+ * stated reason: every shape this reports is one the server stores TODAY
+ * (`routes/datasets.ts` parses the ROW schema and keeps `config` verbatim, and
+ * `workspace-apply.ts` writes it verbatim on git import). Hardening it into a
+ * refusal would make an already-stored row unsaveable after an unrelated rename,
+ * and would need a decision about pre-existing rows and about git import that is
+ * a bigger question than this. The form must never refuse what the server
+ * accepts; saying so BEFORE a run fails is the whole point.
+ *
+ * The gate that does exist is at DISPATCH — the reader parses the same schema
+ * before it touches a store (§8) — so this closes the gap between "saved" and
+ * "learned about when a run failed", nothing more.
+ */
+export function datasetConfigAdvisory(
+  kind: DatasetKind,
+  config: Record<string, unknown>,
+): string | null {
+  const notes: string[] = [];
+
+  const parsed = DATASET_CONFIG_SCHEMAS[kind].safeParse(config);
+  if (!parsed.success) notes.push(formatZodIssues(parsed.error.issues));
+
+  // A kind with no reader yet. Reported from the POSITIVE fact
+  // (`IMPLEMENTED_DATASET_KINDS`), never inferred from the permissive shape of
+  // `unimplementedDatasetConfigSchema` — that schema validates everything, so a
+  // shape-based inference would go quiet the moment a real schema happened to be
+  // permissive too. Worth saying even though the config parses: a dataset that
+  // saves cleanly and then refuses every copy naming it is exactly the
+  // silent-until-dispatch surprise this function exists to end.
+  if (!datasetKindIsImplemented(kind)) {
+    notes.push(
+      `no reader exists for a ${kind} dataset yet, so a copy naming it is refused at dispatch`,
+    );
+  }
+
+  return notes.length === 0 ? null : notes.join('; ');
 }
 
 /** The dataset-config schema for `kind`. Total over the kind enum. */
