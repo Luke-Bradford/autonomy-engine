@@ -179,9 +179,13 @@ export function ConfigFieldControl({
             existing string literal — a distinction only a JSON-aware caret could
             make. The four `llm_call` fields this most affects are getting richer
             editors under #852.
-          - `stringList` is `switch.cases` and nothing else in today's catalog
-            (the only `z.array(z.string())` in the registry), and a switch's case
-            labels are matched LITERALLY: `evalSwitchBranch` compares
+          - `stringList` today is `switch.cases` and `llm_call.stop` — an earlier
+            version of this comment said `cases` "and nothing else in today's
+            catalog (the only `z.array(z.string())` in the registry)", which was
+            simply false (`llm-config.ts`, `stop: z.array(z.string().min(1))`).
+            The argument below is about `cases` and has not been re-run for
+            `stop`, which is one of the picker gaps #864 already owns. A switch's
+            case labels are matched LITERALLY: `evalSwitchBranch` compares
             `rawCases.includes(out)` straight off `node.config` with no
             `substitute` call (`engine/reduce.ts`). So a `${}` inserted there
             saves clean — `validateRefs` scans it like any other string — and

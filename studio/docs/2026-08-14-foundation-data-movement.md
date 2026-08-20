@@ -787,7 +787,7 @@ source and a sink.
 | **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT INTO FOUR, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the pump, the counters incl. `truncated`, and the progress ticks (#1129); slice 4 = the DISPATCH seam, itself split THREE ways once built — 4a (#1130) dataset resolution into `ActivityContext` + the `onError:'null'` vs `nullable:false` refusal, 4b (#1134) the adapter, 4c (#1139) the catalog entry, the first populated `sinkConnectionKinds`/`datasetKinds`, §8's literal-only NODE gate, `CATALOG_VERSION` 23, and the four paired canvas pickers without which the entry would put an unbindable node on the canvas. **Slice 4 is the split's whole point:** nothing resolved `Node.datasetIds` into the executor until 4a, so a catalog entry landed alongside the pump would have been a user-visible activity that always fails at dispatch. **M5 is COMPLETE as of 4c**, with two knowing residuals: the mapping grid is a JSON textarea until §13/M8 builds an `objectList` control, and §9's `COPY_CONCURRENCY` has no consumer to slot into (#1140) |
 | **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1). **SPLIT IN TWO** — slice A (#1148) is the source half of §7: the `describeSource` seam, rows 1/4/5 gated before the first row moves, and the empty-source blind spot closed; row 3 deliberately deferred to M10 (see §7's as-built block). Slice B (#1149) is §2.1's resolved-address record + §3.1's physical-address self-copy refusal, which needs it — SHIPPED, with two knowing residuals: a `query` end has no comparable object (§7's as-built block), and the record is durable but not yet RENDERED on the run-detail page. The ticket's two folded-in sink-side items (the actual-store `NOT NULL` check, a stated behaviour break; lifting the sink describe policy out of `sqlite.ts`) are deferred with it                                                                                                                                                 |                                                                                                                                                                                                                                           |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
-| **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                                                                                                                                                                                                        |
+| **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                                                                                                                                                                                                                   |
 | **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                                                                                                                                                                                                           |
 | **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
@@ -834,6 +834,39 @@ closest thing is `ParamRow`/`OutputRow`, a hand-built row repeater for U16, not 
 are both natural tables that currently fall through to the JSON control for exactly the same reason
 (`configForm.ts:40` — an array-of-object has no typed control). Building M8 as a general
 array-of-object editor pays those two down as well.
+
+### As built — M8 slice 1 (#1169)
+
+**`switch`'s `cases` is not one of the fields this pays down.** It is
+`z.array(z.string())` and has classified `stringList` all along; the claim above
+that it *"falls through to the JSON control"* was wrong when written. `llm_call`'s
+`tools` is real, and is the second field slice 1 upgrades.
+
+**The control admits an array only when its element is `.strict()`, and that gate
+is load-bearing rather than tidy.** A row control renders exactly the columns the
+element declares, so an OPEN element permits keys it would silently drop. It is
+also what keeps `llm_call` off the control correctly: `history` is typed
+`z.array(...)` but `validateDoc` refuses any non-string value — *"history must be
+a whole-value `${...}` expression"* — so in every valid doc it holds a STRING.
+Classified as a row list it would be unrenderable, and ONE unrenderable field
+takes the WHOLE node into the JSON editor; the ticket meant to remove that box
+would have inflicted it on the catalog's most-used activity. The same gate keeps
+`messages`, whose `content` is prose, out of a narrow cell. Read off `def.catchall`
+through the existing `defOf` funnel, so no per-activity list is introduced.
+
+**It is a stack of cards, not a `<table>`.** The property panel is a fixed 320px
+column (`web/src/index.css`, `grid-template-columns: 180px 1fr 320px`) and every
+string control in it is a `<textarea>` — five columns of textarea in that width is
+about 60px each. §13's requirement is the SHAPE of the surface (a row per mapping
+carrying its own target type and `onError`), and `.contract-row`, already carrying
+`ParamRow` and `OutputRow`, is the panel's idiom for it.
+
+**Slice 1 is NOT §13 complete, and the remainder is not polish deferred out of
+laziness.** Auto-map (§6.3) and the explicit *unmapped* state both need the SINK's
+column list, and there is no seam that resolves one at authoring time — M6 built
+`describeSource` for DISPATCH. The per-column expression escape hatch is deferred
+with them: the flyout resolves its options by top-level config field name, so a
+cell would ask it about `sink`.
 
 **It must fit inside U7's settled rule, not beside it** (`adf-grade-ui-design.md:148`): fields are
 derived from each activity's own Zod `configSchema`, never from hand-written metadata on the catalog
