@@ -658,6 +658,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * the operator has to go and fix. Anything else that escapes is `permanent`:
    * an unclassified throw is a defect, and guessing `transient` for it would
    * retry a bug on a timer.
+   *
+   * Only the KIND is taken from that mapping — the `code` stays
+   * `DATASET_ADDRESS_UNRESOLVABLE`, because what an operator acts on here is
+   * "this address did not resolve", and the provider-flavoured cause is in the
+   * message. It costs nothing today (a `sqlite` store classifies only
+   * `permanent`/`transient`) and is written down because M10's networked store
+   * can mint `auth`/`rate_limit`, at which point the choice becomes visible.
    */
   async function resolveDatasetAddressFor(
     adapter: ConnectorAdapter,
