@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DatasetIoError,
+  describeSqliteDatasetColumns,
   isTransientSqliteCode,
   readSqliteDatasetBatches,
   sqliteAdapter,
@@ -529,5 +530,105 @@ describe('the adapter', () => {
     const events = [];
     for await (const event of sqliteAdapter.runActivity(ctx, null)) events.push(event);
     expect(events[0]).toMatchObject({ error: expect.stringContaining('llm_call') });
+  });
+});
+
+describe('describeSqliteDatasetColumns (#1148 M6 — §7\'s source describe seam)', () => {
+  const config = (root: string, path: string) => ({ roots: [root], path });
+
+  it('reports a table dataset\'s columns without reading a row', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 3, 'src.db');
+    expect(
+      await describeSqliteDatasetColumns({
+        connectionConfig: config(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 't' },
+      }),
+    ).toEqual(['id', 'name']);
+  });
+
+  it('reports them for an EMPTY table, which is the blind spot M6 exists to close', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 0, 'src.db');
+    expect(
+      await describeSqliteDatasetColumns({
+        connectionConfig: config(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 't' },
+      }),
+    ).toEqual(['id', 'name']);
+  });
+
+  it('reports a query dataset\'s result columns with NOTHING bound', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1, 'src.db');
+    // Named parameters are NOT supplied: `columns()` does not execute, so it
+    // needs no bind. If that ever stopped being true this would throw.
+    expect(
+      await describeSqliteDatasetColumns({
+        connectionConfig: config(root, path),
+        datasetKind: 'query',
+        datasetConfig: {
+          sql: 'SELECT id AS alpha, name, id + 1 AS computed FROM t WHERE id = $lim',
+          parameters: { lim: 1 },
+        },
+      }),
+    ).toEqual(['alpha', 'name', 'computed']);
+  });
+
+  it('REFUSES a statement that returns no data, which is what confines operator SQL', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1, 'src.db');
+    const other = seedDb(root, 1, 'other.db');
+    // `prepare()` alone SUCCEEDS on an ATTACH even under a read-only open, so
+    // the reader's confinement rests on never handing operator SQL to a method
+    // that executes. `columns()` is that method's opposite and refuses outright.
+    await expect(
+      describeSqliteDatasetColumns({
+        connectionConfig: config(root, path),
+        datasetKind: 'query',
+        datasetConfig: { sql: `attach database '${other}' as o` },
+      }),
+    ).rejects.toThrow(/could not be described/);
+  });
+
+  it('classifies a missing store as permanent — retrying will not create it', async () => {
+    const root = tempRoot();
+    seedDb(root, 1, 'src.db');
+    const error = await describeSqliteDatasetColumns({
+      connectionConfig: config(root, join(root, 'absent.db')),
+      datasetKind: 'table',
+      datasetConfig: { table: 't' },
+    }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(DatasetIoError);
+    expect((error as DatasetIoError).kind).toBe('permanent');
+  });
+
+  it('refuses a path outside the connection roots', async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    const path = seedDb(outside, 1, 'src.db');
+    await expect(
+      describeSqliteDatasetColumns({
+        connectionConfig: config(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 't' },
+      }),
+    ).rejects.toBeInstanceOf(DatasetIoError);
+  });
+
+  it('honours an already-aborted signal before it opens anything', async () => {
+    const root = tempRoot();
+    const path = seedDb(root, 1, 'src.db');
+    const controller = new AbortController();
+    controller.abort();
+    const error = await describeSqliteDatasetColumns({
+      connectionConfig: config(root, path),
+      datasetKind: 'table',
+      datasetConfig: { table: 't' },
+      signal: controller.signal,
+    }).catch((err: unknown) => err);
+    expect((error as DatasetIoError).kind).toBe('cancelled');
   });
 });
