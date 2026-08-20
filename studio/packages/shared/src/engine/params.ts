@@ -2662,7 +2662,8 @@ function validateCopyMappingShape(node: Node, errors: string[]): void {
     // `path: []` is the cardinality rule — an empty mapping has no row to name —
     // so it renders as the FIELD, matching how the same issue emerges from
     // `copyInputSchema` as `['mapping']`.
-    const where = issue.path.length === 0 ? 'mapping' : `mapping[${issue.path[0]}].${issue.path[1]}`;
+    const where =
+      issue.path.length === 0 ? 'mapping' : `mapping[${issue.path[0]}].${issue.path[1]}`;
     errors.push(`node.${node.id}.${where}: ${issue.message}`);
   }
 }

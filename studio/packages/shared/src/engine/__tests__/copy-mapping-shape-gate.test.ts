@@ -45,7 +45,9 @@ const row = (over: Record<string, unknown> = {}) => ({
 
 describe('#1176 — the cross-row mapping rules reach the write gate', () => {
   it('accepts a well-formed mapping', () => {
-    expect(validateDoc(doc([copyNode([row(), row({ source: 'name', sink: 'name' })])]))).toEqual([]);
+    expect(validateDoc(doc([copyNode([row(), row({ source: 'name', sink: 'name' })])]))).toEqual(
+      [],
+    );
   });
 
   it('REFUSES a mapping that maps no columns, naming the FIELD (it has no row)', () => {
