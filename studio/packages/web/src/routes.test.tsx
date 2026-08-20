@@ -69,6 +69,12 @@ vi.mock('./api/connections', async (importActual) => ({
   ...(await importActual<typeof import('./api/connections')>()),
   listConnections: vi.fn().mockResolvedValue([]),
 }));
+// #1115 — the Datasets page loads on mount, and the walk over `HUBS` below
+// mounts it for real, so this is load-bearing rather than decoration.
+vi.mock('./api/datasets', async (importActual) => ({
+  ...(await importActual<typeof import('./api/datasets')>()),
+  listDatasets: vi.fn().mockResolvedValue([]),
+}));
 // This suite MOUNTS every hub section for real (see the walk over `HUBS`
 // below), so a page that loads on mount reaches a real `fetch` in jsdom
 // unless its api module is mocked here.
@@ -196,6 +202,7 @@ describe('route tree', () => {
     ['/author/pipelines', 'Pipelines'],
     ['/monitor/runs', 'Runs'],
     ['/manage/connections', 'Connections'],
+    ['/manage/datasets', 'Datasets'],
     ['/manage/secrets', 'Secrets'],
     ['/manage/triggers', 'Triggers'],
     ['/manage/git', 'Git'],
@@ -563,6 +570,7 @@ describe('shell chrome over the real route tree', () => {
     ['/author/pipelines/pl_42', ['Author', 'Pipelines', 'pl_42']],
     ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
     ['/manage/connections', ['Manage', 'Connections']],
+    ['/manage/datasets', ['Manage', 'Datasets']],
     ['/manage/secrets', ['Manage', 'Secrets']],
     ['/manage/triggers', ['Manage', 'Triggers']],
     ['/manage/git', ['Manage', 'Git']],
@@ -595,7 +603,7 @@ describe('shell chrome over the real route tree', () => {
       within(pane)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Connections', 'Secrets', 'Triggers', 'Git']);
+    ).toEqual(['Connections', 'Datasets', 'Secrets', 'Triggers', 'Git']);
     expect(screen.getByRole('separator')).toHaveAttribute('aria-controls', pane.id);
   });
 

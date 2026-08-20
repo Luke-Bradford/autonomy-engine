@@ -4,6 +4,7 @@ import { sectionLabel } from './shell/hubs';
 import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { DatasetsPage } from './pages/DatasetsPage';
 import { SecretsPage } from './pages/SecretsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 // #698 — loaded on demand (React Flow is reachable only from this route); the
@@ -183,6 +184,11 @@ export const ROUTES: RouteObject[] = [
             path: 'connections',
             element: <ConnectionsPage />,
             handle: { crumb: sectionLabel('/manage/connections') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'datasets',
+            element: <DatasetsPage />,
+            handle: { crumb: sectionLabel('/manage/datasets') } satisfies ShellRouteHandle,
           },
           {
             path: 'secrets',
