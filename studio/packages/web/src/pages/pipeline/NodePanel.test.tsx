@@ -812,3 +812,220 @@ describe('NodePanel (the objectList control, #1169)', () => {
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
 });
+
+describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
+  type Datasets = Parameters<typeof NodePanel>[0]['datasets'];
+  type Column = Datasets[number]['columns'][number];
+
+  const col = (name: string, type = 'string', nullable = true): Column =>
+    ({ name, type, nullable }) as unknown as Column;
+
+  const dset = (id: string, name: string, columns: Column[]): Datasets[number] =>
+    ({
+      id,
+      name,
+      kind: 'table',
+      connectionId: 'c_src',
+      config: {},
+      columns,
+      parameters: [],
+      ownerId: null,
+      resourceId: `r_${id}`,
+      createdAt: 0,
+      updatedAt: 0,
+    }) as unknown as Datasets[number];
+
+  const copyNode = (config: Record<string, unknown>, bound = true): Node =>
+    ({
+      id: 'n_copy',
+      type: 'copy',
+      position: { x: 0, y: 0 },
+      config,
+      ...(bound ? { datasetIds: { source: 'd_src', sink: 'd_sink' } } : {}),
+    }) as unknown as Node;
+
+  const ROW = { source: 'name', sink: 'full_name', type: 'string', onError: 'fail' };
+
+  const mount = (
+    config: Record<string, unknown>,
+    sets: Datasets = [
+      dset('d_src', 'people', [col('id', 'integer'), col('name')]),
+      dset('d_sink', 'staff', [col('id', 'integer'), col('name')]),
+    ],
+    bound = true,
+  ) => mountOver(copyNode(config, bound), [], sets);
+
+  const autoMap = () => fireEvent.click(screen.getByRole('button', { name: 'Auto-map columns' }));
+
+  it('fills the mapping from the two bound datasets’ declared columns', () => {
+    const panel = mount({ mapping: [ROW], mode: 'append' });
+
+    autoMap();
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [
+        ROW,
+        { source: 'id', sink: 'id', type: 'integer', onError: 'fail' },
+        { source: 'name', sink: 'name', type: 'string', onError: 'fail' },
+      ],
+    });
+  });
+
+  it('writes into the DRAFT, so nothing is stored until Apply', () => {
+    // `ExpressionPicker`'s precedent: a computed value goes into the draft and
+    // the author commits it, which is what puts it through `schemaIssues`.
+    const panel = mount({ mapping: [ROW], mode: 'append' });
+
+    autoMap();
+
+    expect(panel.storedConfig()).toMatchObject({ mapping: [ROW] });
+  });
+
+  it('is ADDITIVE — it never overwrites a hand-authored expression row', () => {
+    const expressionRow = {
+      expression: '${params.batch}',
+      sink: 'name',
+      type: 'string',
+      onError: 'fail',
+    };
+    const panel = mount({ mapping: [expressionRow], mode: 'append' });
+
+    autoMap();
+    panel.apply();
+
+    const mapping = (panel.storedConfig() as { mapping: unknown[] }).mapping;
+    expect(mapping[0]).toMatchObject(expressionRow);
+    // `name` was claimed by the expression row, so only `id` is added.
+    expect(mapping).toHaveLength(2);
+    expect(mapping[1]).toMatchObject({ source: 'id', sink: 'id' });
+  });
+
+  it('is disabled until BOTH datasets are bound, and says so', () => {
+    mount({ mapping: [ROW], mode: 'append' }, undefined, false);
+
+    expect(screen.getByRole('button', { name: 'Auto-map columns' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+    expect(screen.getByText(/Bind a source and a sink dataset/)).toBeTruthy();
+  });
+
+  it('names a NOT NULL sink column nothing writes apart from one merely not copied', () => {
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', [col('name')]),
+      dset('d_sink', 'staff', [col('id', 'integer', false), col('note')]),
+    ]);
+
+    expect(screen.getByText(/The sink requires a value for id/)).toBeTruthy();
+    expect(screen.getByText(/Not copied: note\./)).toBeTruthy();
+  });
+
+  it('says a row names a sink column the bound dataset does not declare', () => {
+    // The state the additive rule creates: auto-map, then re-bind the sink.
+    mount({ mapping: [{ ...ROW, sink: 'gone' }], mode: 'append' }, [
+      dset('d_src', 'people', [col('name')]),
+      dset('d_sink', 'staff', [col('name')]),
+    ]);
+
+    expect(screen.getByText(/gone is not declared by the sink dataset/)).toBeTruthy();
+  });
+
+  it('names the source columns the mapping does not read', () => {
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', [col('name'), col('age', 'integer')]),
+      dset('d_sink', 'staff', [col('full_name')]),
+    ]);
+
+    expect(screen.getByText(/Not read from the source: age\./)).toBeTruthy();
+  });
+
+  it('reports a press that matched nothing instead of silently doing nothing', () => {
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', [col('name')]),
+      dset('d_sink', 'staff', [col('other')]),
+    ]);
+
+    autoMap();
+
+    expect(screen.getByText(/No new columns matched\./)).toBeTruthy();
+    expect(screen.getByText(/other had no source column of that name/)).toBeTruthy();
+  });
+
+  it('says which side declares no columns, rather than "nothing matched"', () => {
+    // `columns: []` is a deliberately authorable state, so it gets its own line.
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', []),
+      dset('d_sink', 'staff', [col('name')]),
+    ]);
+
+    autoMap();
+
+    expect(screen.getByText(/people declares no columns/)).toBeTruthy();
+  });
+
+  it('hides the aids in JSON mode, which edits a different draft', () => {
+    mount({ mapping: [ROW], mode: 'append' });
+
+    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+
+    expect(screen.queryByRole('button', { name: 'Auto-map columns' })).toBeNull();
+  });
+
+  it('names the sink column that matched more than one source column', () => {
+    // Counted would be useless: the author has to pick the source column by
+    // hand and cannot without knowing which sink column is stuck.
+    mount({ mapping: [ROW], mode: 'append' }, [
+      dset('d_src', 'people', [col('name'), col('NAME')]),
+      dset('d_sink', 'staff', [col('Name')]),
+    ]);
+
+    autoMap();
+
+    expect(screen.getByText(/Name matched more than one source column/)).toBeTruthy();
+  });
+
+  it('counts the columns an existing row already claims', () => {
+    mount(
+      { mapping: [{ source: 'id', sink: 'id', type: 'integer', onError: 'fail' }], mode: 'append' },
+      [
+        dset('d_src', 'people', [col('id', 'integer')]),
+        dset('d_sink', 'staff', [col('id', 'integer')]),
+      ],
+    );
+
+    autoMap();
+
+    expect(screen.getByText(/1 already mapped/)).toBeTruthy();
+  });
+
+  it('says two rows differing only by case write the same sink column', () => {
+    // `refineMapping` dedupes sinks EXACTLY, so it lets this pair through; the
+    // store refuses it at dispatch, on a version that is already immutable.
+    mount(
+      {
+        mapping: [
+          { source: 'a', sink: 'id', type: 'integer', onError: 'fail' },
+          { source: 'b', sink: 'ID', type: 'integer', onError: 'fail' },
+        ],
+        mode: 'append',
+      },
+      [
+        dset('d_src', 'people', [col('a'), col('b')]),
+        dset('d_sink', 'staff', [col('id', 'integer')]),
+      ],
+    );
+
+    expect(screen.getByText(/id and ID differ only by case/)).toBeTruthy();
+  });
+
+  it('drops the auto-map line once the draft it describes is applied', () => {
+    const panel = mount({ mapping: [ROW], mode: 'append' });
+
+    autoMap();
+    expect(screen.getByText(/Apply config to save/)).toBeTruthy();
+
+    panel.apply();
+
+    expect(screen.queryByText(/Apply config to save/)).toBeNull();
+  });
+});

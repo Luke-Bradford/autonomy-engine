@@ -42,18 +42,18 @@ async function seedConnection(page: Page, name: string, path: string): Promise<s
  * deliberately, per the dataset schema: an empty column list is a fact about the
  * table, never a stand-in for "not described yet".
  */
-async function seedDataset(page: Page, name: string, connectionId: string, table: string) {
+async function seedDataset(
+  page: Page,
+  name: string,
+  connectionId: string,
+  table: string,
+  columns: { name: string; type: string; nullable: boolean }[] = [
+    { name: 'id', type: 'integer', nullable: false },
+    { name: 'label', type: 'string', nullable: true },
+  ],
+) {
   const res = await page.request.post('/api/datasets', {
-    data: {
-      name,
-      kind: 'table',
-      connectionId,
-      config: { table },
-      columns: [
-        { name: 'id', type: 'integer', nullable: false },
-        { name: 'label', type: 'string', nullable: true },
-      ],
-    },
+    data: { name, kind: 'table', connectionId, config: { table }, columns },
   });
   expect(res.status(), `creating dataset '${name}': ${await res.text()}`).toBe(201);
   return ((await res.json()) as { id: string }).id;
@@ -227,6 +227,105 @@ test.describe('#1139 — copy-node authoring', () => {
     await canvasNodes(page).first().click();
     await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('full_name');
     await expect(panel(page).getByLabel('mapping row 2 type')).toHaveValue('string');
+
+    await expectQuiet(page, problems);
+  });
+});
+
+test.describe('#1170 — Auto-map and the unmapped advisory', () => {
+  /**
+   * #996 M8 slice 2 (#1170), spec §6.3 + §13.
+   *
+   * Auto-map is an authoring ACTION and never a run-time behaviour: it writes an
+   * EXPLICIT mapping into the node's config, so that renaming a source column
+   * later cannot silently re-map and leave the pipeline succeeding while it
+   * writes different data to different columns. The only way to prove that is to
+   * press the button and then read the mapping back off the IMMUTABLE version —
+   * a unit test can prove the matching rule, but not that the rows it produced
+   * survived Apply, the client-side write parse, and the round trip.
+   *
+   * The sink deliberately declares a NOT NULL column the source cannot supply,
+   * because §13's *unmapped* state is the other half of the ticket: a column
+   * nothing writes must be visibly so rather than merely absent.
+   */
+  test('auto-mapped columns reach the saved version, and an unmatched NOT NULL column is named', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+
+    const srcConn = await seedConnection(page, 'e2e 1170 source store', 'e2e-1170-src.db');
+    const sinkConn = await seedConnection(page, 'e2e 1170 sink store', 'e2e-1170-sink.db');
+    const srcSet = await seedDataset(page, 'e2e 1170 people', srcConn, 'people');
+    const sinkSet = await seedDataset(page, 'e2e 1170 people copy', sinkConn, 'people_copy', [
+      { name: 'id', type: 'integer', nullable: false },
+      { name: 'label', type: 'string', nullable: true },
+      { name: 'imported_by', type: 'string', nullable: false },
+    ]);
+
+    const pipelineId = await openSeededCanvas(page, 'e2e 1170 auto-map', { nodes: [] });
+    await addActivity(page, 'Copy Data');
+    await canvasNodes(page).first().click();
+
+    // Before either dataset is bound there is nothing to map FROM, and the
+    // button says so rather than sitting there live and doing nothing.
+    await expect(panel(page).getByRole('button', { name: 'Auto-map columns' })).toBeDisabled();
+
+    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
+    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
+    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+
+    // §13 — with NO mapping yet, the sink's NOT NULL columns are already named.
+    // That is the point of the advisory: the author learns the copy cannot
+    // succeed here, rather than at dispatch.
+    await expect(
+      panel(page).getByText(/The sink requires a value for id, imported_by/),
+    ).toBeVisible();
+
+    await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
+
+    // Two matched; the third is reported by name, because the author has to
+    // resolve it themselves and cannot without knowing which column is stuck.
+    await expect(panel(page).getByText(/Mapped 2 columns\./)).toBeVisible();
+    await expect(
+      panel(page).getByText(/imported_by had no source column of that name/),
+    ).toBeVisible();
+
+    // The rows landed in the real row controls, not in a JSON box.
+    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
+    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('label');
+    await expect(panel(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
+    await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
+
+    // The advisory NARROWS as the mapping covers the sink — it must stop naming
+    // a column that is now mapped, or it teaches the author to ignore it.
+    await expect(panel(page).getByText(/The sink requires a value for imported_by/)).toBeVisible();
+    await expect(panel(page).getByText(/requires a value for id,/)).toHaveCount(0);
+
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    // §6.3's whole point, read off the PERSISTED version: an explicit mapping,
+    // with `onError` written in rather than defaulted, because auto-map chose it.
+    const res = await page.request.get(`/api/pipelines/${pipelineId}/versions`);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { type: string; config?: { mapping?: unknown } }[];
+    }[];
+    const latest = versions.reduce((a, b) => (b.version > a.version ? b : a));
+    expect(latest.nodes.find((n) => n.type === 'copy')?.config?.mapping).toEqual([
+      { source: 'id', sink: 'id', type: 'integer', onError: 'fail' },
+      { source: 'label', sink: 'label', type: 'string', onError: 'fail' },
+    ]);
+
+    // And a second press is ADDITIVE, so it cannot destroy what is already there.
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await canvasNodes(page).first().click();
+    await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
+    await expect(panel(page).getByText(/No new columns matched\./)).toBeVisible();
+    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
+    await expect(panel(page).getByLabel('mapping row 3 sink')).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });

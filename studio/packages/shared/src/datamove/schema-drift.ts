@@ -147,8 +147,23 @@ export const SOURCE_DRIFT_MESSAGES = {
     `the source has no column named ${names.map((c) => `\`${c}\``).join(', ')}`,
 } as const;
 
+/**
+ * WIDENED to what this actually reads (#1170), from `CopyPumpMappingEntry[]`.
+ *
+ * The dispatch gate still passes whole entries; the AUTHORING advisory
+ * (`copy-automap.ts`) passes rows projected out of a half-typed panel draft,
+ * where `type` and `sink` may not exist yet. Declaring the two fields the body
+ * touches lets both callers in without a cast that would claim the draft is
+ * something it is not.
+ *
+ * The COLUMNS argument decides which comparison this is: the store's ACTUAL
+ * columns make it §7's gate, a dataset's DECLARED columns make it an advisory
+ * (see `copy-automap.ts`'s docblock). The predicate is deliberately the same
+ * one either way -- two spellings of "the same column" is the defect this
+ * module exists to prevent.
+ */
 export function checkSourceDrift(
-  mapping: readonly CopyPumpMappingEntry[],
+  mapping: readonly Pick<CopyPumpMappingEntry, 'source' | 'onError'>[],
   sourceColumns: readonly string[],
 ): SourceDrift {
   const index = indexSourceColumns(sourceColumns);
