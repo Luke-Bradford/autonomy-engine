@@ -506,3 +506,52 @@ describe('#1150 — an integer target binds as SQLite INTEGER', () => {
     expect(coerceValue('42', 'number')).toEqual({ ok: true, value: 42 });
   });
 });
+
+/**
+ * #1156 — an exponent-form integer must be read EXACTLY, at any width.
+ *
+ * The plain form (`INTEGER_RE`) has always gone through `BigInt(text)` and is
+ * exact. The decimal/exponent fallback went through `Number(text)` first — a
+ * double — so an integral value above 2^53 was ROUNDED before `BigInt` ever saw
+ * it, and the last digit was silently gone.
+ *
+ * The same corruption class as #1150 and invisible for the same reason: the
+ * value is well inside int64, so the range bound (#1155) does not catch it, and
+ * the result is a plausible number that is not the one in the source.
+ *
+ * Asserted against the exact decimal, not against `BigInt(Number(...))`, which
+ * would restate the defect and pass against it.
+ */
+describe('#1156 — exponent form is exact, not routed through a double', () => {
+  it('keeps every digit of an integral value above 2^53', () => {
+    // 9007199254740993 = 2^53 + 1: the smallest integer a double cannot hold.
+    expect(coerceValue('9.007199254740993e15', 'integer')).toEqual({
+      ok: true,
+      value: 9007199254740993n,
+    });
+  });
+
+  it('agrees with the plain form for the same value written both ways', () => {
+    /* The notation is not supposed to change the value. This is the property the
+       two arms exist to share, and the one the double broke. */
+    const plain = coerceValue('9007199254740993', 'integer');
+    const exponent = coerceValue('9.007199254740993e15', 'integer');
+    expect(exponent).toEqual(plain);
+  });
+
+  it('still refuses a fractional exponent form rather than truncating', () => {
+    /* `1.5e0` is 1.5. Reading exactly must not become reading leniently. */
+    expectFail(coerceValue('1.5e0', 'integer'), 'not_integral');
+    expectFail(coerceValue('1.23e1', 'integer'), 'not_integral');
+  });
+
+  it('still accepts an integral exponent form, and a negative one', () => {
+    expect(coerceValue('1e2', 'integer')).toEqual({ ok: true, value: 100n });
+    expect(coerceValue('-1e2', 'integer')).toEqual({ ok: true, value: -100n });
+    expect(coerceValue('1.5e1', 'integer')).toEqual({ ok: true, value: 15n });
+  });
+
+  it('leaves `number` targets on the double path — only `integer` is exact', () => {
+    expect(coerceValue('1e2', 'number')).toEqual({ ok: true, value: 100 });
+  });
+});

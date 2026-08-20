@@ -352,6 +352,24 @@ You file good tickets for defects you find mid-ticket, and then they were never 
   ago, this fire is a SWEEP** — no new work-order item, drain defects only, and say in the PR which
   you fixed and which you deliberately left with the reason. A feature fire that raises the count is
   fine; three in a row that do is the loop outrunning its own cleanup.
+- **THE DRAIN ORDER IS DECIDED — do not escalate it (2026-08-20).**
+  The heap is ours, not the operator's: they gave a spec, and the ~90 extra tickets are ones WE
+  raised while building it. Prioritising our own debt is not a product decision and must never be
+  sent up as one. Measured on 2026-08-20, the 104 open issues fall into four bands, and this is the
+  order they are worked in:
+  1. **SEVERE defects (~10)** — data loss · silent corruption · security · a fail-open gate. These
+     come first regardless of band, under the rule above. A product that writes the wrong value is
+     not progress toward the spec, it is progress away from it.
+  2. **THE SPEC (~12)** — the open U-items, M-slices and the epic. This is the operator's actual
+     ask and the only band that moves it. When a sweep is not owed, the next item comes from here.
+  3. **ORDINARY defects (~68)** — the bulk. Drained in SWEEPS under the cadence and cap above, never
+     by pausing the spec indefinitely. A sweep fixes what is cheap and ready and DEFERS the rest with
+     a reason.
+  4. **`[loop]` infrastructure (~14)** — last, unchanged: only when no user-facing item is available,
+     or when one is SEVERE.
+  A ticket that fits none of these bands, or that no longer describes something true, is CLOSED with
+  the reason rather than carried — a ticket nobody will ever schedule is a silent discard wearing a
+  number, and the honest form of that is a closure.
 - **Judge severity by the FAILURE, not the fix size.** "A one-line default masks destroyed user data" is SEVERE. "A missing tie-breaker makes ordering non-deterministic" is not.
 - If severity is genuinely ambiguous, DON'T open an `[operator-decision]` for it — file it as normal, and say in the ticket why you nearly escalated. Escalation is for irreducible DESIGN forks, not for prioritisation you can reason about.
 
