@@ -649,7 +649,6 @@ describe('NodePanel (the objectList control, #1169)', () => {
   const copyNode = (config: Record<string, unknown>): Node => ({
     id: 'n_copy',
     type: 'copy',
-    name: 'Copy 1',
     position: { x: 0, y: 0 },
     config,
   });
@@ -751,7 +750,6 @@ describe('NodePanel (the objectList control, #1169)', () => {
     mountOver({
       id: 'n_llm',
       type: 'llm_call',
-      name: 'LLM 1',
       position: { x: 0, y: 0 },
       config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
     });
