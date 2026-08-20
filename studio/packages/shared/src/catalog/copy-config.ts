@@ -63,18 +63,51 @@ const copyMappingEntryShape = {
 };
 
 /**
- * The shape rules that hold whatever `expression` is typed as.
+ * The mapping's WHOLE-ARRAY rules, as plain data so two independent gates can
+ * share ONE declaration of them (#1176).
  *
- * Shared as a FUNCTION rather than a parsed-then-extended schema because both
- * rules are `superRefine` checks over the whole array: they cannot be inherited
- * by extension, only re-run.
+ * There are three, and what they have in common is that none of them is a
+ * property of a single field: a copy that maps nothing, two rows writing one
+ * sink column, and the `source`/`expression` XOR. Zod expresses them as a
+ * `superRefine` because they are cross-row; the #444 write gate
+ * (`engine/params.ts`) needs the same three against a `Node.config['mapping']`
+ * it holds as `unknown`. Returning issues as data is what lets both call it
+ * rather than one of them re-deriving it — the drift `fs-activity-config.ts`
+ * names (#578), which is how these rules came to be enforced on the canvas and
+ * at dispatch but NOT at the gate that mints the version.
+ *
+ * `rows` is `readonly unknown[]`, not a typed row array, and that is
+ * load-bearing rather than defensive: the write gate reaches this with whatever
+ * an operator's git repo held, and `params.ts` pins non-object rows and
+ * non-string fields as SILENT SKIPS. Typing the parameter would put a
+ * `TypeError` on the gate's own path — a 500 where a 400 belongs. On the Zod
+ * side the element parse runs BEFORE this, so it never sees a malformed row and
+ * the widened type costs it nothing.
+ *
+ * The rejected alternative, recorded because it is the obvious one: have the
+ * gate `CopyMappingSchema.safeParse(mapping)` instead. It refuses far more than
+ * these three — the schema is `.strict()` with a required `type` and a
+ * `sink.min(1)` — so it would turn every pinned per-field type skip into a
+ * refusal, and make the gate a second, stricter authority on a shape the
+ * adapter already owns. These three are the cross-row rules specifically
+ * because those are the ones NOTHING else can see in time.
  */
-const refineMapping = (
-  rows: readonly { source?: unknown; expression?: unknown; sink: string }[],
-  ctx: z.RefinementCtx,
-) => {
+export function copyMappingShapeIssues(
+  rows: readonly unknown[],
+): { path: (string | number)[]; message: string }[] {
+  const issues: { path: (string | number)[]; message: string }[] = [];
+  // The CARDINALITY rule, on the array itself — `connection-config.ts`'s `roots`
+  // ("an fs connection needs at least one allowed root") is the precedent. A
+  // copy that maps no columns runs clean and moves nothing, which is the
+  // silent-wrong direction every refusal in this file exists to avoid.
+  if (rows.length === 0) {
+    issues.push({ path: [], message: 'a copy maps no columns — add at least one mapping row' });
+    return issues;
+  }
   const seenSinks = new Set<string>();
-  rows.forEach((row, i) => {
+  rows.forEach((raw, i) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+    const row = raw as { source?: unknown; expression?: unknown; sink?: unknown };
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own
     // row rather than the whole array. Two precedents, both in-tree: #1087's
     // `roots.superRefine` (`server/src/connectors/fs.ts`, `path: [index]`),
@@ -85,8 +118,7 @@ const refineMapping = (
     const hasSource = row.source !== undefined;
     const hasExpression = row.expression !== undefined;
     if (hasSource === hasExpression) {
-      ctx.addIssue({
-        code: 'custom',
+      issues.push({
         path: [i, hasSource ? 'expression' : 'source'],
         message: hasSource
           ? "a mapping row takes either 'source' or 'expression', never both"
@@ -96,16 +128,23 @@ const refineMapping = (
     // Two rows writing one sink column is silent LAST-WINS into the operator's
     // store — the same class of defect the duplicate-name rule exists for, and
     // not one a store reports, because the second write is perfectly valid SQL.
+    //
+    // Compared as STRINGS, deliberately: a sink name that differs only in case
+    // is caught downstream by `resolveSinkColumns`, which folds it onto the
+    // store's own spelling and refuses the collision with the store's answer for
+    // what "the same column" means (#1151). Folding here would be a second,
+    // store-blind opinion about that.
+    if (typeof row.sink !== 'string') return;
     if (seenSinks.has(row.sink)) {
-      ctx.addIssue({
-        code: 'custom',
+      issues.push({
         path: [i, 'sink'],
         message: `duplicate sink column '${row.sink}' (each sink column may be written by one mapping row)`,
       });
     }
     seenSinks.add(row.sink);
   });
-};
+  return issues;
+}
 
 /**
  * Splices `expression` — the field that is the whole reason this file exists —
@@ -125,33 +164,32 @@ const refineMapping = (
 const mappingArray = (expression: z.ZodType) =>
   z
     .array(z.object({ ...copyMappingEntryShape, expression }).strict())
-    // #1172 — a mapping that maps NOTHING, refused here rather than only at
-    // dispatch. `pumpCopyRows` already refuses it, but that fires when the copy
-    // RUNS, which for a scheduled pipeline is hours after the version was
-    // minted; the cross-row rules in `refineMapping` are reported to the author
-    // on Apply, and this belongs with them.
+    // All three whole-array rules — cardinality (#1172), the XOR, and the
+    // duplicate sink — replayed from `copyMappingShapeIssues` rather than
+    // declared here, because the #444 write gate enforces the same three
+    // against an untyped `Node.config['mapping']` (#1176) and two hand-mirrored
+    // copies of a cross-row rule are exactly the drift #578 names.
     //
-    // On the ARRAY as `.min(1)` rather than inside `refineMapping`, matching
-    // `connection-config.ts`'s `roots` (*"an fs connection needs at least one
-    // allowed root"*). This is a CARDINALITY rule; `refineMapping`'s job is
-    // cross-row comparison, and every other rule in it compares rows to each
-    // other. The issue lands on `path: []` either way — an empty array has no
-    // row to name — and nested under `copyInputSchema` that emerges as
-    // `['mapping']`, so `formatZodIssues` still prefixes it with the control an
-    // author can see. That prefix is the point: `dataset-config.ts`'s
-    // object-level `superRefine` documents the failure mode of losing it — an
-    // operator told two things clash but not which control to touch.
+    // The emitted issues are UNCHANGED by that move. The cardinality rule still
+    // lands on `path: []` — an empty array has no row to name — which nested
+    // under `copyInputSchema` emerges as `['mapping']`, so `formatZodIssues`
+    // still prefixes it with the control an author can see. That prefix is the
+    // point: `dataset-config.ts`'s object-level `superRefine` documents the
+    // failure mode of losing it — an operator told two things clash but not
+    // which control to touch. The only difference is the issue CODE
+    // (`too_small` became `custom`), which nothing reads: the sole `issue.code`
+    // consumer in the tree is `paramRules.ts`, scoped to params and outputs.
     //
-    // SCOPE, stated so it is not overread: this refuses on the canvas Apply
-    // pre-check and at dispatch. It does NOT reach the #444 server write gate,
-    // which for a `copy` node runs `validateCopyMappingIdentifiers` ONLY — a
-    // deliberate narrowing (`copy-identifier-gate.test.ts`: *"§8 gate is
-    // identifier-only — a malformed SHAPE is the adapter's to refuse"*). So a
-    // version minted by git-import or a direct POST can still carry `[]`, the
-    // same as it can carry a duplicate sink or a broken XOR. That gap is
-    // pre-existing and covers all of these rules, not just this one; #1176.
-    .min(1, 'a copy maps no columns — add at least one mapping row')
-    .superRefine(refineMapping);
+    // SCOPE, stated so it is not overread: these three now hold on all three
+    // paths — the canvas Apply pre-check, the #444 write gate (so git-import
+    // and a direct POST too), and dispatch. What the gate still does NOT read is
+    // per-FIELD types, which stay the schema's and the adapter's: `params.ts`
+    // pins those as silent skips, and its docblock says why.
+    .superRefine((rows, ctx) => {
+      for (const issue of copyMappingShapeIssues(rows)) {
+        ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+      }
+    });
 
 /**
  * The AUTHORED mapping — what a node's config holds and what an author edits.
