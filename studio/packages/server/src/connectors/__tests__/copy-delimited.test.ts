@@ -400,4 +400,34 @@ describe('the refusals a CSV source brings', () => {
     expect(terminal(events).type).toBe('succeeded');
     expect(rowsOf(sinkPath, 'SELECT id, name FROM sink')).toEqual([{ id: 1, name: 'ada' }]);
   });
+
+  it('gates the sink config with the SERVER schema, so a relative root is refused HERE', async () => {
+    // The absolute-root refinement lives on `sqlite.ts`'s schema and not on the
+    // shared one (`node:path` is not browser-safe). This arm imports THAT one,
+    // so its sink gate is the same check `sqlite.ts`'s own copy arm makes.
+    //
+    // `writeSqliteDatasetRows` re-parses and would refuse a relative root too —
+    // which is exactly why this test asserts the MESSAGE and not merely the
+    // failure. Gate the shared schema here instead and the copy still fails,
+    // just one layer down and saying something else, so a test that only
+    // checked `type === 'failed'` would pass with the weaker schema restored.
+    const root = tempRoot('copy-delim-');
+    const events = await run({
+      ...copyCtx({
+        root,
+        csvPath: seedCsv(root, 'id,name\n1,ada\n'),
+        sinkPath: seedSink(root, 'dst.db'),
+      }),
+      sink: {
+        kind: 'sqlite',
+        connectionConfig: { roots: ['relative/root'], path: 'relative/root/dst.db' },
+      },
+    } as unknown as ActivityContext);
+
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.kind : '').toBe('permanent');
+    expect(end.type === 'failed' ? end.error : '').toContain('invalid sqlite sink connection');
+    expect(end.type === 'failed' ? end.error : '').toContain('absolute path');
+  });
 });

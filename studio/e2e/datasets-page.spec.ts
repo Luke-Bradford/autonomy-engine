@@ -23,7 +23,20 @@ async function gotoDatasets(page: Page): Promise<void> {
   await fluentRootReady(page);
 }
 
-/** Any connection, minted through the real route. */
+/**
+ * Any connection, minted through the real route.
+ *
+ * A CONNECTION NAME MUST NOT CONTAIN 'store' OR 'kind', in any case. Every
+ * connection this suite mints shows up as an OPTION in the dataset form's Store
+ * picker, and Playwright's `getByLabel(string)` does a case-insensitive
+ * SUBSTRING match against the wrapping label's text — which, for a `<label>`
+ * around a `<select>`, includes every option. So a store named
+ * `e2e-ds-kinds-…` makes `getByLabel('Kind')` resolve to the Store select AS
+ * WELL as the Kind one, and every `getByLabel('Kind')` in the file dies of a
+ * strict-mode violation. The suite database is SHARED across spec files, so the
+ * blast radius is not the test that seeded it — this cost six failures once
+ * (#1167) and the name is the only thing that prevents it.
+ */
 async function seedConnection(
   page: Page,
   name: string,
@@ -147,6 +160,13 @@ test.describe('#1115 Manage → Datasets', () => {
     await page.getByRole('button', { name: 'New dataset' }).click();
     await form(page).getByLabel('Name').fill(name);
     await form(page).getByLabel('Store').selectOption(storeId);
+    // EXPLICIT since #1167. A new form derives its opening kind from the store
+    // it opens on, and `blankForm` opens on `connections[0]` in a SHARED suite
+    // database — so if that happens to be an `fs` connection the form starts on
+    // `delimited` and there is no `table` field to fill. Picking the store does
+    // not re-derive the kind (that would clobber a choice the operator may have
+    // made deliberately), so the kind is this test's to state.
+    await form(page).getByLabel('Kind').selectOption('table');
     await form(page).getByLabel('table', { exact: true }).fill('orders');
     // Columns left EMPTY on purpose.
     await form(page).getByRole('button', { name: 'Create dataset' }).click();
@@ -162,7 +182,8 @@ test.describe('#1115 Manage → Datasets', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    const storeId = await seedStore(page, `e2e-ds-kinds-${Date.now()}`);
+    // NOT `…-kinds-…`: see `seedConnection`'s naming rule.
+    const storeId = await seedStore(page, `e2e-ds-swap-${Date.now()}`);
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
     // Pinned to a store we control. The suite database is SHARED and
@@ -235,6 +256,10 @@ test.describe('#1115 Manage → Datasets', () => {
     const problems = collectPageProblems(page);
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
+    // EXPLICIT since #1167 — see the note in the blank-columns test above: the
+    // opening kind is derived from `connections[0]`, which a shared suite
+    // database does not let this test fix.
+    await form(page).getByLabel('Kind').selectOption('table');
 
     // #1120 — the advisory. §8's identifier rule is the security-relevant one:
     // a table name cannot be bound as a parameter, so a name that only quoting

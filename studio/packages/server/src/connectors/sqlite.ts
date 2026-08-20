@@ -98,8 +98,18 @@ import type {
  * platform-aware, so the shared schema carries `roots`' shape and the server
  * refines it. It REFINES rather than re-declares, so the form and the adapter
  * can never describe different objects.
+ *
+ * EXPORTED as of #1167, because a sqlite SINK is no longer only reached from
+ * this file. `fs.ts`'s copy arm gates the sink connection before handing it to
+ * `writeSqliteDatasetRows`, and gating it with the SHARED schema would make that
+ * rung strictly weaker than the identical rung on this adapter — a relative
+ * root would pass `fs.ts`'s check and be refused one layer down, with a
+ * different message for the same fault. The inner re-parse in
+ * `writeSqliteDatasetRows` still catches it either way, but "the callee happens
+ * to re-check" is defence in depth that this gate should not be leaning on
+ * silently. One schema, both arms.
  */
-const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
+export const sqliteConnectionConfigSchema = sharedSqliteConnectionConfigSchema.extend({
   roots: sharedSqliteConnectionConfigSchema.shape.roots.superRefine((roots, ctx) => {
     roots.forEach((root, index) => {
       if (isAbsolute(root)) return;

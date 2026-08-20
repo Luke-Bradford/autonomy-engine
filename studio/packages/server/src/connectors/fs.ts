@@ -15,7 +15,6 @@ import {
   fileMoveConfigSchema,
   fileReadConfigSchema,
   fileWriteConfigSchema,
-  sqliteConnectionConfigSchema,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
@@ -40,7 +39,11 @@ import {
   readDelimitedDatasetBatches,
   resolveDelimitedDatasetAddress,
 } from './delimited-io.js';
-import { writeSqliteDatasetRows } from './sqlite.js';
+// The SERVER's sqlite connection schema, not the shared one: it adds the
+// absolute-root refinement that `node:path` cannot express in a browser-safe
+// package, so this arm's sink gate is the SAME check `sqlite.ts`'s own arm makes
+// rather than a weaker one that leans on the writer re-parsing.
+import { sqliteConnectionConfigSchema, writeSqliteDatasetRows } from './sqlite.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
