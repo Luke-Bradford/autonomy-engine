@@ -436,4 +436,50 @@ describe('DatasetsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     expect(within(form()).getByText(/needs a connection first/)).toBeInTheDocument();
   });
+
+  it('flags a dataset whose kind disagrees with the store it names (#1145)', async () => {
+    // The ticket's own example. `routes/datasets.ts` checks that the connection
+    // exists and is owned and NOTHING else, so this row saves today and is only
+    // refused when a copy is dispatched — which is what the note exists to say
+    // earlier.
+    const user = userEvent.setup();
+    // TWO connections, and the agreeing one FIRST, so the selections below are
+    // real state changes rather than no-ops. `blankForm` opens on
+    // `connections[0]` at `DEFAULT_KIND` — with only the mismatched connection
+    // seeded, the form would already be in the state this test means to reach,
+    // and it would prove the advisory renders on mount while proving nothing
+    // about it recomputing when the operator picks a different store.
+    listConnectionsMock.mockResolvedValue([
+      store({ id: 'conn_db', name: 'Orders DB', kind: 'sqlite' }),
+      store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' }),
+    ]);
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    // Quiet first — `conn_db` is a `sqlite` store and `table` lives there.
+    expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
+
+    await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_llm');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+
+    expect(within(form()).getByText(/Kind and store disagree/)).toHaveTextContent(
+      /dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'anthropic_api'/,
+    );
+    // ADVISORY, never a gate: the server accepts this row, so the form must not
+    // refuse it. This is the assertion that keeps it from being hardened into a
+    // block by a later change.
+    expect(screen.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
+  });
+
+  it('stays quiet when the kind and the store agree (#1145)', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />); // the default `store()` fixture is `sqlite`
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+
+    expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
+  });
 });

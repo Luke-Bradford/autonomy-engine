@@ -4,6 +4,7 @@ import {
   DatasetColumnSchema,
   datasetConfigAdvisory,
   datasetConfigSchema,
+  datasetConnectionKindAdvisory,
   datasetKindIsImplemented,
   formatZodIssues,
   type ConnectionPublic,
@@ -607,6 +608,32 @@ function DatasetForm({
   const boundIsUnresolved =
     form.connectionId !== '' && !connections.some((conn) => conn.id === form.connectionId);
 
+  /**
+   * #1145 — whether this dataset's kind agrees with the KIND of store it names.
+   *
+   * A different question from `boundIsUnresolved` above, which is about whether
+   * the store exists at all: `routes/datasets.ts` checks existence and
+   * ownership and nothing else, so a `table` dataset on an `anthropic_api`
+   * connection is stored happily and is only refused when a copy is dispatched.
+   *
+   * ADVISORY, like every other note on this form — it never disables Save,
+   * because the server accepts this row and the form must not refuse what the
+   * server accepts. `null` when no connection resolves, which is exactly the
+   * two states the notes above already own.
+   */
+  const storeKindAdvisory = useMemo(
+    () =>
+      datasetConnectionKindAdvisory(
+        form.kind,
+        connections.find((conn) => conn.id === form.connectionId)?.kind ?? null,
+      ),
+    // The three inputs, not `form` whole — the same rule the config advisory
+    // above states and for the same reason: `form` is a new object on every
+    // keystroke, so depending on it would re-resolve the store while the
+    // operator types a NAME.
+    [form.kind, form.connectionId, connections],
+  );
+
   return (
     <form className="dataset-form" onSubmit={(e) => void onSubmit(e)} aria-label="Dataset form">
       <h3>{editing ? 'Edit dataset' : 'New dataset'}</h3>
@@ -650,6 +677,9 @@ function DatasetForm({
           This dataset names a connection that no longer exists. A copy using it will fail at
           dispatch until it is re-pointed.
         </p>
+      )}
+      {storeKindAdvisory !== null && (
+        <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
       )}
 
       <label>

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { formatZodIssues } from '../schemas/zod-issues.js';
+import type { ConnectionKind } from '../schemas/connection.js';
 import { DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
 
 /**
@@ -189,3 +190,102 @@ export function datasetConfigSchema(kind: DatasetKind): z.ZodObject {
 
 /** Every kind, in the enum's own order — the form's kind picker reads this. */
 export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
+
+/**
+ * #1145 — which store kinds a dataset of each kind can actually live in.
+ *
+ * `Dataset.connectionId` is checked for EXISTENCE and OWNERSHIP on write
+ * (`routes/datasets.ts` → `requireOwnedConnection`) and for nothing else, so a
+ * `table` dataset may name an `anthropic_api` connection and the server stores
+ * it. This is the fact that was missing to say so.
+ *
+ * WHERE EACH ROW COMES FROM, because half of it was called unsettled when the
+ * ticket was filed and only two thirds of that was still true:
+ * - `table`, `query` → a SQL store. §2.6's store-connection table names exactly
+ *   two, `sqlite` and `postgres`, and only `sqlite` is in `ConnectionKindSchema`
+ *   today — so this lists the store kinds that EXIST, not the ones that will.
+ * - `delimited` → `fs`. SETTLED: §12's M7 row is "`delimited` dataset kind over
+ *   the existing `fs` connection", §7 ② says "`fs` becomes a store when
+ *   `delimited` lands", and `registry.ts`'s `copy` entry already says in prose
+ *   that "a `delimited` dataset lives on an `fs` connection".
+ * - `excel` → `fs`. INFERRED, and flagged as inference rather than dressed up as
+ *   a citation: M11's row names no connection. The support is §2.5 — format
+ *   lives on the dataset precisely BECAUSE one folder holds CSV and Excel side
+ *   by side — plus §2.6 giving `excel` a `path`. M11 restates it or corrects it.
+ *
+ * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
+ * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION
+ * kind, which is the direction that would make this lie: when `postgres` joins
+ * the enum, a perfectly good `table` dataset on a postgres store would be told
+ * to expect `sqlite`. A docblock cannot prevent that, so the test file pins
+ * `ConnectionKindSchema.options` against a literal list — adding a connection
+ * kind reds this module, which is M2's "the pin precedes the kind" convention
+ * pointed at the axis that actually needs it.
+ */
+export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKind[]> = {
+  delimited: ['fs'],
+  excel: ['fs'],
+  table: ['sqlite'],
+  query: ['sqlite'],
+};
+
+/**
+ * #1145 — whether this dataset's kind agrees with the kind of store it names,
+ * as ONE operator-facing sentence, or `null` when it has nothing to say.
+ *
+ * A SEPARATE function rather than a branch inside `datasetConfigAdvisory`, which
+ * is what #1145 literally asked for. That function's whole signature is
+ * `(kind, config)`: it judges a dataset against its OWN config and needs nothing
+ * else. This question needs the store's kind, so folding it in would widen that
+ * signature to carry a parameter half its logic ignores, and would fuse two notes
+ * that must be able to fire independently — the `delimited`-on-`sqlite` case is
+ * BOTH unreadable and mis-stored, and the operator needs to be told both.
+ *
+ * ADVISORY, never a gate, for `datasetConfigAdvisory`'s reason above: the server
+ * stores these rows today, so refusing one here would make an already-saved
+ * dataset unsaveable after an unrelated rename, and the form must never refuse
+ * what the server accepts.
+ *
+ * WHAT REFUSES AT DISPATCH, stated precisely because the obvious guess is wrong.
+ * A mismatched pair cannot reach a reader with a poor message — it cannot reach
+ * a reader at all. Two refusals form a pincer, and which one fires depends on
+ * what the copy NODE bound:
+ * - node bound the non-store connection → `CONNECTION_KIND_INVALID`
+ *   (`run/executor.ts:401`), because `copy` declares `connectionKinds:
+ *   ['sqlite']` and the executor resolves the CONNECTION (`:1098`, `:1124`)
+ *   before it resolves any dataset (`:1194`, `:1223`);
+ * - node bound the store, dataset names the non-store →
+ *   `DATASET_CONNECTION_MISMATCH` (`run/executor.ts:629`), the identity check.
+ * Both are `permanent`. So dispatch is fail-SAFE and this closes a diagnostics
+ * gap, not a correctness hole. That property is INHERITED, not owned: it holds
+ * while `copy.connectionKinds` lists store kinds only. An activity that accepted
+ * a non-store connection would drop the first arm, and this advisory would then
+ * be the only thing that had ever mentioned the mismatch.
+ *
+ * A `null` `connectionKind` — no connection selected, or one that no longer
+ * exists — says NOTHING, deliberately. The form already has its own notes for
+ * both of those states, and a second sentence derived from a connection nobody
+ * resolved would be a complaint invented on a fact that was never established.
+ * Those notes are cited by their GUARD rather than by line — `DatasetsPage.tsx`
+ * renders one under `connections.length === 0` and one under `boundIsUnresolved`.
+ * The line numbers this docblock first carried were already stale by the time it
+ * was committed, because the block it cites sits BELOW the code the same commit
+ * inserted. A name survives that; a line number re-rots on the next edit.
+ */
+export function datasetConnectionKindAdvisory(
+  kind: DatasetKind,
+  connectionKind: ConnectionKind | null,
+): string | null {
+  if (connectionKind === null) return null;
+  const expected = DATASET_CONNECTION_KINDS[kind];
+  if (expected.includes(connectionKind)) return null;
+  // Phrased so no kind name ever follows an indefinite article. `excel`,
+  // `anthropic_api`, `agent_cli` and `openai_api` are all vowel-initial, so the
+  // natural "a ${kind} dataset ... a ${connectionKind} connection" reads "a
+  // excel dataset ... a anthropic_api connection" for a third of the matrix.
+  // Restructuring is better than an `an`-aware helper: the article rule is
+  // orthographic rather than phonetic for identifiers nobody says aloud, and a
+  // helper would have to be re-litigated for every kind added.
+  const stores = expected.map((store) => `'${store}'`).join(' or ');
+  return `dataset kind '${kind}' lives in a store of kind ${stores}, but this one names a connection of kind '${connectionKind}'`;
+}

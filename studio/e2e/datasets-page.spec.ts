@@ -23,13 +23,23 @@ async function gotoDatasets(page: Page): Promise<void> {
   await fluentRootReady(page);
 }
 
-/** A `sqlite` store, minted through the real route. */
-async function seedStore(page: Page, name: string): Promise<string> {
+/** Any connection, minted through the real route. */
+async function seedConnection(
+  page: Page,
+  name: string,
+  kind: string,
+  config: Record<string, unknown>,
+): Promise<string> {
   const res = await page.request.post('/api/connections', {
-    data: { name, kind: 'sqlite', config: { path: `/tmp/${name}.db`, writable: true } },
+    data: { name, kind, config },
   });
-  expect(res.status(), `creating connection '${name}': ${await res.text()}`).toBe(201);
+  expect(res.status(), `creating ${kind} connection '${name}': ${await res.text()}`).toBe(201);
   return ((await res.json()) as { id: string }).id;
+}
+
+/** A `sqlite` store — what most of this file needs. */
+async function seedStore(page: Page, name: string): Promise<string> {
+  return seedConnection(page, name, 'sqlite', { path: `/tmp/${name}.db`, writable: true });
 }
 
 function form(page: Page) {
@@ -172,6 +182,11 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(
       form(page).getByText(/no reader exists for a delimited dataset yet/),
     ).toBeVisible();
+    // #1145 can land a SECOND note here, but this test does NOT assert it: the
+    // form opens on `connections[0]` (`DatasetsPage.tsx` `blankForm`) and the
+    // suite database is shared, so whether that first connection is a `sqlite`
+    // store — which `delimited` disagrees with — is not this test's to control.
+    // The pile-up is asserted deterministically in the #1145 test below.
 
     await expectQuiet(page, problems);
   });
@@ -190,6 +205,50 @@ test.describe('#1115 Manage → Datasets', () => {
     await expect(form(page).getByText(/This table config is incomplete/)).toContainText(
       'bare SQL identifier',
     );
+
+    await expectQuiet(page, problems);
+  });
+
+  test('says the kind and the store disagree, without refusing the save (#1145)', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const stamp = Date.now();
+    // `http` rather than `anthropic_api`: it is a real non-store connection and
+    // is credential-less, so it needs no secret dance to exist.
+    const nonStoreId = await seedConnection(page, `e2e-ds-nonstore-${stamp}`, 'http', {
+      baseUrl: 'https://example.com',
+    });
+    // BOTH stores are seeded before the page loads, like every other test here.
+    // The form's Store picker is rendered from the connections the page fetched
+    // on mount, so a connection minted mid-test has no option to select.
+    const storeId = await seedStore(page, `e2e-ds-pileup-${stamp}`);
+
+    await gotoDatasets(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    await form(page).getByLabel('Store').selectOption(nonStoreId);
+    await form(page).getByLabel('Kind').selectOption('table');
+
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      "names a connection of kind 'http'",
+    );
+    // ADVISORY, never a gate — the server stores this row today, and a form that
+    // refused what the server accepts would be the worse defect.
+    await expect(page.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
+
+    // The PILE-UP, asserted where both store kinds are controlled rather than
+    // inherited from whatever the shared database happens to hold first. A
+    // `delimited` dataset on a `sqlite` store is BOTH unreadable (no reader
+    // yet) and mis-stored (`delimited` lives on `fs`) — two true, independent
+    // notes, and #1145 must not have swallowed #1120's.
+    await form(page).getByLabel('Store').selectOption(storeId);
+    await form(page).getByLabel('Kind').selectOption('delimited');
+    await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
+      "dataset kind 'delimited' lives in a store of kind 'fs'",
+    );
+    await expect(
+      form(page).getByText(/no reader exists for a delimited dataset yet/),
+    ).toBeVisible();
 
     await expectQuiet(page, problems);
   });
