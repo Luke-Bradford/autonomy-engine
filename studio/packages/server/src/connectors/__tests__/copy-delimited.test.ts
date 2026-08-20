@@ -334,19 +334,20 @@ describe('the refusals a CSV source brings', () => {
   });
 
   it('reports an EMPTY mapping on its own terms, not as a source-config parse failure', async () => {
-    // The ladder's order, at the rung the coercion channel joined. An empty
-    // mapping SKIPS the describe on purpose — describing first would open the
-    // source for a dispatch that is already doomed and report whatever that
-    // open failed with. `sourceCoercion` parses the same config, so deriving it
-    // at its point of use (where the pump's options are built EAGERLY) would
-    // reintroduce that defect one rung lower: this config is also invalid, and
-    // an operator would be told to fix a `path` when the actual fault is that
-    // the mapping is empty.
+    // The ladder's order, at the rung the coercion channel joined. This test's
+    // subject is unchanged by #1172 and is the NEGATIVE assertion below: an
+    // empty mapping must never be reported as a bad `path`, sending an operator
+    // to fix a source config when the actual fault is that nothing is mapped.
+    // The source config seeded here is deliberately invalid so that a ladder
+    // which described the source first would say so.
     //
-    // The refusal that actually fires is the SINK's — measured, not assumed:
-    // `writeSqliteDatasetRows` sees a zero-column write and refuses before the
-    // pump's own `empty_mapping` is reached. Which of those two wins is not this
-    // test's subject; that neither is displaced by a SOURCE-CONFIG parse is.
+    // What DID change is which rung answers. Before #1172 the schema permitted
+    // `[]`, the describe was skipped by the guard in `copy.ts`, and the refusal
+    // that surfaced was the SINK's zero-column write. Since #1172
+    // `copyDispatchInputSchema` refuses `[]` at the parse, above every rung
+    // here — so the fault is now named at the top of the ladder rather than
+    // inferred from a consequence three rungs down. The negative assertion is
+    // asserted the same way and still holds.
     const root = tempRoot('copy-delim-');
     const events = await run(
       copyCtx({
@@ -360,7 +361,7 @@ describe('the refusals a CSV source brings', () => {
 
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    expect(end.type === 'failed' ? end.error : '').toContain('at least one mapped column');
+    expect(end.type === 'failed' ? end.error : '').toContain('mapping: a copy maps no columns');
     expect(end.type === 'failed' ? end.error : '').not.toContain(
       'invalid delimited dataset config',
     );

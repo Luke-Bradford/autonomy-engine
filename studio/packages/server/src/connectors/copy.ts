@@ -2,6 +2,7 @@ import {
   checkSourceDrift,
   copyDispatchInputSchema,
   CopyMappingError,
+  formatZodIssues,
   newCopyCounters,
   nocaseFold,
   pumpCopyRows,
@@ -289,7 +290,17 @@ export async function* runCopyActivity(
 
   const parsed = copyDispatchInputSchema.safeParse(ctx.input);
   if (!parsed.success) {
-    yield failed('permanent', `invalid copy activity config: ${parsed.error.message}`);
+    // Through `formatZodIssues`, not `error.message` — the raw `.message` on
+    // Zod 4 is a pretty-printed JSON array, so a one-line fault arrived as a
+    // multi-line blob in the run log. #1172 made that reachable for a config an
+    // operator could plausibly hold: a version minted with `mapping: []` before
+    // that refusal existed now fails HERE, and this is the sentence it fails
+    // with. First use of the helper in `packages/server` — it was written for
+    // the same job on the web side.
+    yield failed(
+      'permanent',
+      `invalid copy activity config: ${formatZodIssues(parsed.error.issues)}`,
+    );
     return;
   }
   const { mapping, mode } = parsed.data;
@@ -313,26 +324,37 @@ export async function* runCopyActivity(
   // described and being read. They share one predicate (`schema-drift.ts`) so
   // they cannot disagree about what "the same column" means.
   //
-  // An EMPTY mapping skips the describe entirely. The schema permits `[]` and
-  // the pump refuses it (`empty_mapping`), so describing first would open the
-  // source store for a dispatch that is already doomed — and would report
-  // whatever that open happened to fail with instead of the actual fault.
-  let sourceColumns: readonly string[] = [];
-  let coercion: CoercionOptions = {};
+  // This rung used to be wrapped in `if (mapping.length > 0)`, skipping the
+  // describe so as not to open the source store for a dispatch that was already
+  // doomed — which would have reported whatever that open failed with instead
+  // of the actual fault. #1172 REMOVED that wrapper rather than leaving it: the
+  // parse above now refuses `[]` outright, so it had become provably dead code
+  // in the same function as the check that made it so.
+  //
+  // It is NOT the counterpart of `pump.ts`'s surviving `empty_mapping` guard,
+  // and the two should not be read as a pair. That one lives across a module
+  // boundary, in `shared`, where it cannot see whether a schema ran; this one
+  // sat three lines below the parse that subsumes it, protecting nothing and
+  // inviting the next reader to wonder what reaches it. (Both are in fact
+  // unreachable today — every live caller of the pump arrives through this
+  // function — but only one of them is entitled to assume that. `pump.ts` says
+  // so in its own words.)
+  //
+  // `sourceCoercion` is still derived HERE rather than at its point of use: it
+  // parses the source dataset's config and may THROW on one it cannot read, and
+  // the options object handed to `pumpCopyRows` is built EAGERLY, so deriving
+  // it there would report "invalid delimited dataset config" in place of the
+  // fault an operator actually needs to see. That reason is independent of the
+  // mapping's length and outlives the wrapper.
+  // Declared without seeds: the `catch` below RETURNS, so reaching past the
+  // block means both were assigned. Seeding them was the wrapper's doing — an
+  // empty mapping used to leave both at their defaults — and outliving it, an
+  // unused initializer is a value nothing can ever read.
+  let sourceColumns: readonly string[];
+  let coercion: CoercionOptions;
   try {
-    if (mapping.length > 0) {
-      sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
-      // Derived HERE, under the SAME empty-mapping guard, and not at the point
-      // of use further down. `sourceCoercion` parses the source dataset's config
-      // and may THROW on one it cannot read, and the options object handed to
-      // `pumpCopyRows` is built EAGERLY — so deriving it there would run that
-      // parse for an empty mapping too, and report "invalid delimited dataset
-      // config" in place of the pump's `empty_mapping`. That is precisely the
-      // defect the skip above exists to prevent, reintroduced one rung lower:
-      // a dispatch that is already doomed reporting whatever the second-order
-      // check happened to fail with instead of the actual fault.
-      coercion = io.sourceCoercion(source);
-    }
+    sourceColumns = await io.describeSource({ dataset: source, signal: ctx.signal });
+    coercion = io.sourceCoercion(source);
   } catch (err) {
     // Through the SAME mapper the copy body uses, so a store that could not be
     // REACHED keeps its own `kind`. Reporting a `SQLITE_BUSY` here as a

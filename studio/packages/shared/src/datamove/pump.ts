@@ -329,9 +329,20 @@ function recordFailure(counters: CopyCounters, failure: CopyRowFailure): void {
  * The mapping is assumed already validated by `CopyMappingSchema` (the XOR
  * between `source` and `expression`, and the duplicate-`sink` refusal, are its
  * to enforce and are not re-checked here). The empty-mapping refusal below is
- * NOT a duplicate of that: the schema permits `[]`, and the only other guard is
- * the sink's own zero-column check — which is the downstream guard this branch
- * has already been bitten by relying on once.
+ * NOT a duplicate of that, but #1172 did more than narrow the gap and the
+ * honest statement is worth more than a comfortable one: `mappingArray` now
+ * refuses `[]`, and EVERY live caller reaches this function through
+ * `connectors/copy.ts`'s `runCopyActivity`, which parses that schema first.
+ * `fs.ts` (M7's CSV source) and `sqlite.ts` both call it — so as of today this
+ * branch is unreachable in production and is exercised only by `pump.test.ts`.
+ *
+ * It STAYS anyway, and not as a reflex. This module is `shared` and takes its
+ * mapping from whoever holds one; it is not entitled to assume a schema ran,
+ * and the only guard behind it is the sink's own zero-column check — the
+ * downstream guard this branch has already been bitten by relying on once. A
+ * future direct caller (M10's postgres sink, a non-`runCopyActivity` adapter)
+ * would land on it. Prospective, therefore, not currently load-bearing: a
+ * reader deleting it should know it costs nothing today, and why it is kept.
  */
 export async function* pumpCopyRows(
   batches: AsyncIterable<readonly Record<string, unknown>[]>,
