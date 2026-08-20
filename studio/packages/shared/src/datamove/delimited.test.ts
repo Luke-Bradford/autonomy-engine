@@ -73,6 +73,11 @@ const CORPUS: [name: string, text: string, expected: string[][]][] = [
   ['quoted CRLF is preserved verbatim', '"a\r\nb",c\n', [['a\r\nb', 'c']]],
   ['doubled quote', '"a""b"\n', [['a"b']]],
   ['a quoted empty field', '"",x\n', [['', 'x']]],
+  // A line holding ONE quoted empty field is a row of one empty string. The
+  // structural "one field, empty" blank test could not tell it from a blank
+  // line and silently DROPPED it — a row the file contains, gone without a word.
+  ['a lone quoted empty field is a ROW, not a blank line', '"a"\n""\n"b"\n', [['a'], [''], ['b']]],
+  ['…and at the very end of the document, with no terminator', '"a"\n""', [['a'], ['']]],
   ['a bare quote inside an UNQUOTED field is data', 'a"b,c\n', [['a"b', 'c']]],
   ['whitespace before a quote means the field is not quoted', ' "a",b\n', [[' "a"', 'b']]],
   ['a blank line is skipped', 'a\n\n\nb\n', [['a'], ['b']]],
@@ -169,6 +174,47 @@ describe('a malformed document is REFUSED, never silently repaired', () => {
     expect(await codeOf('a,'.repeat(50), { maxRowChars: 16 })).toBe('row_too_large');
   });
 
+  it('bounds a row of EMPTY fields, which add no character to any field', async () => {
+    // The bound charges every character the row consumed, not just the ones
+    // that reach a field. Charging field content alone left both of these
+    // unbounded: 200k entries accumulate in the row array against a cap of 100,
+    // and neither a delimiter nor a quote ever calls the field accumulator.
+    expect(await codeOf(','.repeat(10_000), { maxRowChars: 100 })).toBe('row_too_large');
+    expect(await codeOf('""' + ',""'.repeat(10_000), { maxRowChars: 100 })).toBe('row_too_large');
+    // And it is the ROW that is bounded, so a generous per-field cap cannot
+    // rescue it — this is the case a field-only bound got wrong.
+    expect(await codeOf(','.repeat(10_000), { maxRowChars: 100, maxFieldChars: 1_000_000 })).toBe(
+      'row_too_large',
+    );
+  });
+
+  it('counts both bounds in CODE POINTS, so an astral character is charged once', async () => {
+    // `field.length` would count UTF-16 units and bill '\u{1F600}' twice to the
+    // field bound while the loop billed it once to the row bound.
+    expect(await codeOf('\u{1F600}'.repeat(4) + '\n', { maxFieldChars: 5 })).toBe(null);
+    expect(await codeOf('\u{1F600}'.repeat(6) + '\n', { maxFieldChars: 5 })).toBe('field_too_large');
+    expect(await codeOf('\u{1F600}'.repeat(4) + '\n', { maxRowChars: 5 })).toBe(null);
+    expect(await codeOf('\u{1F600}'.repeat(6) + '\n', { maxRowChars: 5 })).toBe('row_too_large');
+  });
+
+  it('names the PHYSICAL line, counting the blank ones it skipped as lines', async () => {
+    // An operator finds the fault by counting lines in an editor, and blank
+    // lines are lines there. Counting emitted ROWS instead drifts further from
+    // the truth the further down the file the fault is.
+    try {
+      await collect('\n\n"ab\n');
+      throw new Error('expected a refusal');
+    } catch (err) {
+      expect((err as DelimitedParseError).message).toMatch(/line 3\b/);
+    }
+    try {
+      await collect('a\nb\n"c');
+      throw new Error('expected a refusal');
+    } catch (err) {
+      expect((err as DelimitedParseError).message).toMatch(/line 3\b/);
+    }
+  });
+
   it('refuses a batch size that is not a positive integer', async () => {
     for (const batchRows of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(await codeOf('a\n', { batchRows })).toBe('invalid_batch_rows');
@@ -183,8 +229,8 @@ describe('a malformed document is REFUSED, never silently repaired', () => {
       expect(err).toBeInstanceOf(DelimitedParseError);
       expect((err as DelimitedParseError).code).toBe('unterminated_quote');
       expect((err as DelimitedParseError).message).toMatch(/quote/i);
-      // The row number is what makes it actionable in a million-row file.
-      expect((err as DelimitedParseError).message).toMatch(/row 1\b/);
+      // The line is what makes it actionable in a million-row file.
+      expect((err as DelimitedParseError).message).toMatch(/line 1\b/);
     }
   });
 });

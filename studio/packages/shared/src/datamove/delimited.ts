@@ -93,9 +93,19 @@
  * the whole file" are different properties, and only the second is the one §12
  * wants. A binary, a gzip or a never-closed quote has no terminator, so an
  * unbounded machine would accumulate the entire file into one field before
- * emitting anything — satisfying the signature while violating the point. Both
- * are counted in CHARACTERS rather than bytes: this side of the seam has already
- * decoded, and `bytesRead` is defined at the copy boundary (§5), not here.
+ * emitting anything — satisfying the signature while violating the point.
+ *
+ * **`maxRowChars` charges EVERY character the row consumed**, not only the ones
+ * that reach a field, and that distinction is the whole bound: a first cut
+ * counted field content alone, so `,,,,,…` and `"","","",…` — which add no
+ * character to any field — accumulated 200,000 entries in the row array against
+ * a `maxRowChars` of 100 without a murmur. The row ARRAY is the accumulator that
+ * has to be bounded, and only a per-character charge bounds it.
+ *
+ * Both are counted in CODE POINTS, not bytes and not UTF-16 units: this side of
+ * the seam has already decoded, `bytesRead` is defined at the copy boundary (§5)
+ * rather than here, and the loop iterates code points — so charging `field.length`
+ * would have billed an astral character twice to one bound and once to the other.
  */
 
 /**
@@ -175,15 +185,33 @@ export async function* parseDelimitedRows(
   let batch: string[][] = [];
   let row: string[] = [];
   let field = '';
+  /**
+   * Characters consumed since the last row terminator, and characters in the
+   * field in progress — both counted in CODE POINTS, because the loop below
+   * iterates code points and `field.length` would count UTF-16 units, so an
+   * astral character would be charged twice to one bound and once to the other.
+   *
+   * `rowChars` counts EVERY character the row consumed, not just the ones that
+   * ended up in a field: delimiters, quotes and escapes all count. That is what
+   * makes the bound total — charging only field CONTENT left `,,,,,…` and
+   * `"","","",…` unbounded, since neither adds a character to any field, and a
+   * row of 200,000 empty fields sailed past a `maxRowChars` of 100.
+   *
+   * It doubles as the blank-line test, exactly: a line is blank iff it consumed
+   * NO characters at all. The structural test it replaces — one field, empty
+   * string — could not tell a blank line from a line holding a single quoted
+   * empty field (`""`), and silently DROPPED the second.
+   */
   let rowChars = 0;
-  /** 1-based, counting only rows that were EMITTED plus the one in progress —
-   * so the number in a refusal is the row an operator would count to. */
-  let rowNumber = 1;
+  let fieldChars = 0;
+  /** 1-based PHYSICAL line, so a refusal names the line an operator would find
+   * by counting in an editor. Blank lines count, which is why this is a line
+   * number and not a row number — they are skipped as rows but they are still
+   * lines, and a file with many of them would otherwise report a number that
+   * drifts further from the truth the further down the fault is. */
+  let lineNumber = 1;
 
   let inQuotes = false;
-  /** A field that began with the quote character. Distinguishes `"a"` (quoted,
-   * so a trailing `x` is a refusal) from `a"b` (never quoted, so `"` is data). */
-  let wasQuoted = false;
   /** Started at the current field, i.e. no character has been taken yet. */
   let atFieldStart = true;
   /** The previous character was a closing quote — the next one decides between
@@ -193,41 +221,57 @@ export async function* parseDelimitedRows(
   let pendingEscape = false;
 
   const fail = (code: DelimitedParseFailureCode, what: string): never => {
-    throw new DelimitedParseError(code, `${what} (row ${rowNumber})`);
+    throw new DelimitedParseError(code, `${what} (line ${lineNumber})`);
   };
 
   const pushChar = (c: string): void => {
     field += c;
-    rowChars += 1;
-    if (maxFieldChars !== undefined && field.length > maxFieldChars) {
+    fieldChars += 1;
+    if (maxFieldChars !== undefined && fieldChars > maxFieldChars) {
       fail('field_too_large', `a field exceeded ${maxFieldChars} characters`);
-    }
-    if (maxRowChars !== undefined && rowChars > maxRowChars) {
-      fail('row_too_large', `a row exceeded ${maxRowChars} characters`);
     }
   };
 
   const endField = (): void => {
     row.push(field);
     field = '';
-    wasQuoted = false;
+    fieldChars = 0;
     atFieldStart = true;
   };
 
   /** Close the row in progress. Returns the completed row, or `null` when the
    * line was blank — a blank line is skipped, never a row of one empty field. */
   const endRow = (): string[] | null => {
+    const blank = rowChars === 0;
     endField();
     const done = row;
     row = [];
     rowChars = 0;
-    if (done.length === 1 && done[0] === '') return null;
-    rowNumber += 1;
-    return done;
+    lineNumber += 1;
+    return blank ? null : done;
   };
 
   for await (const chunk of chunks) {
     for (const c of chunk) {
+      // Whether this character ENDS the row rather than belonging to it. Inside
+      // a quoted field, and immediately after an escape, a `\n` is content —
+      // which is why this cannot be a bare test on the character.
+      const terminates =
+        !inQuotes && !pendingEscape && (c === '\n' || c === '\r');
+
+      // Charged before the character is classified, so a delimiter, a quote and
+      // an escape all count against the row even though none reaches a field.
+      // The terminator itself is NOT charged, for two reasons that both matter:
+      // a row of exactly `maxRowChars` characters would otherwise be refused by
+      // its own line ending, and `rowChars === 0` would stop meaning "blank
+      // line" — which is the test `endRow` uses.
+      if (!terminates) {
+        rowChars += 1;
+        if (maxRowChars !== undefined && rowChars > maxRowChars) {
+          fail('row_too_large', `a row exceeded ${maxRowChars} characters`);
+        }
+      }
+
       if (pendingEscape) {
         pendingEscape = false;
         pushChar(c);
@@ -279,7 +323,6 @@ export async function* parseDelimitedRows(
 
       if (atFieldStart && c === quote) {
         inQuotes = true;
-        wasQuoted = true;
         atFieldStart = false;
         continue;
       }
@@ -313,10 +356,11 @@ export async function* parseDelimitedRows(
     );
   }
 
-  // A document that ends exactly on a terminator has nothing in progress. One
-  // that ends mid-row has a final row with no terminator, which is still a row.
-  const trailing = field !== '' || row.length > 0 || wasQuoted || pendingQuote;
-  if (trailing) {
+  // A document that ends exactly on a terminator has consumed nothing since it.
+  // One that ends mid-row has a final row with no terminator, which is still a
+  // row — including `""` with nothing after it, which `rowChars` sees and the
+  // old `field !== '' || row.length > 0` test did not.
+  if (rowChars > 0) {
     const done = endRow();
     if (done) batch.push(done);
   }
