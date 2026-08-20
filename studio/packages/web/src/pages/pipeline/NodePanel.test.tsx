@@ -721,6 +721,42 @@ describe('NodePanel (the objectList control, #1169)', () => {
     });
   });
 
+  /**
+   * The two tests above each exercise a DEGENERATE index — the edit writes row 2
+   * of 2, the removal drops row 1 of 2 — so a control that had hardcoded either
+   * index would pass both. Verified by mutation: `i === index` rewritten to
+   * `i === 1`, and `i !== index` to `i !== 0`, left all of them green. Three
+   * rows, acting on one that is neither first nor last, is what actually pins
+   * the row a gesture lands on to the row the author aimed at.
+   */
+  const threeRows = [
+    { source: 'name', sink: 'full_name', type: 'string', onError: 'fail' },
+    { source: 'age', sink: 'years', type: 'integer', onError: 'fail' },
+    { source: 'city', sink: 'town', type: 'string', onError: 'fail' },
+  ];
+
+  it('edits the row the cell belongs to when it is neither the first nor the second', () => {
+    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    fireEvent.change(screen.getByLabelText('mapping row 3 sink'), {
+      target: { value: 'municipality' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [threeRows[0], threeRows[1], { ...threeRows[2], sink: 'municipality' }],
+    });
+  });
+
+  it('removes the MIDDLE row, leaving the ones on either side of it', () => {
+    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 2' }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({ mapping: [threeRows[0], threeRows[2]] });
+  });
+
   it("lets the activity's own cross-row rule refuse a mapping the cells each accept", () => {
     // Two rows writing one sink column is silent LAST-WINS into the operator's
     // store. No single cell can see it; `refineMapping` can, and the panel must
