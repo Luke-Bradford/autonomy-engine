@@ -598,6 +598,18 @@ describe('paired binding pickers (#1139)', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('stops saying it when the ONLY picked end is un-picked back to none', () => {
+    // The symptom of the phantom `{source: undefined, sink: undefined}` entry:
+    // the advisory reads the pending half through a `??`, which an empty object
+    // satisfies, so a node the author had returned to fully blank still claimed
+    // a half-bound pair was going unsaved.
+    mountOver(copyNode(), CONNS, SETS);
+    pick('Source connection', 'c_src');
+    expect(screen.getByRole('status').textContent).toContain('not saved');
+    pick('Source connection', '');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('keeps the half-picked end SELECTED — it is store state, not panel state', () => {
     const { store } = mountOver(copyNode(), CONNS, SETS);
     pick('Source connection', 'c_src');
