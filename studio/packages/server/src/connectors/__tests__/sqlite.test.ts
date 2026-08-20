@@ -684,7 +684,10 @@ describe('resolveDatasetAddress', () => {
     const alias = join(root, 'alias.db');
     linkSync(path, alias);
 
-    const a = await resolveAddress({ roots: [root], path }, { kind: 'table', config: { table: 't' } });
+    const a = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { table: 't' } },
+    );
     const b = await resolveAddress(
       { roots: [root], path: alias },
       { kind: 'table', config: { table: 't' } },
@@ -700,7 +703,10 @@ describe('resolveDatasetAddress', () => {
   it('resolves an unqualified table to `main` and folds case the way SQLite does', async () => {
     const root = tempRoot();
     const path = seedDb(root, 1);
-    const bare = await resolveAddress({ roots: [root], path }, { kind: 'table', config: { table: 'T' } });
+    const bare = await resolveAddress(
+      { roots: [root], path },
+      { kind: 'table', config: { table: 'T' } },
+    );
     const qualified = await resolveAddress(
       { roots: [root], path },
       { kind: 'table', config: { schema: 'MAIN', table: 't' } },

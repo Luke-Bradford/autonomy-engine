@@ -43,8 +43,9 @@ describe('sameDatasetAddress', () => {
     // The other direction of the same rule: an identity that differs PROVES two
     // stores, so the path is not consulted as a fallback — that would re-admit
     // the alias defect from the opposite side.
-    expect(sameDatasetAddress(address({ storeIdentity: '1:2' }), address({ storeIdentity: '1:3' })))
-      .toBe(false);
+    expect(
+      sameDatasetAddress(address({ storeIdentity: '1:2' }), address({ storeIdentity: '1:3' })),
+    ).toBe(false);
   });
 
   it('falls back to the path when either end could not be identified', () => {
@@ -58,8 +59,9 @@ describe('sameDatasetAddress', () => {
     // The LEGITIMATE shape §3.1 ① mandates: one file reached through a
     // read-only and a writable connection needs two dataset rows, and copying
     // between two of its tables must keep working.
-    expect(sameDatasetAddress(address({ object: 'main.src' }), address({ object: 'main.dst' })))
-      .toBe(false);
+    expect(
+      sameDatasetAddress(address({ object: 'main.src' }), address({ object: 'main.dst' })),
+    ).toBe(false);
   });
 
   it('does not match across store kinds', () => {

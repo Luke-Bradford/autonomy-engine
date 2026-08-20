@@ -140,7 +140,8 @@ effective address resolves live. Two real consequences, both of which need a com
    `pipelineVersionId` (`foundation-rerun-from-failed.md:87`). **Control:** the resolved address is
    recorded on dispatch, so the run log says where it actually wrote — not merely which dataset it
    named. Without this, a run's own log cannot answer "where did this data go", which is the first
-   question anyone asks.
+   question anyone asks. **BUILT — M6 slice B (#1149):** `node.dispatched.datasetAddresses`, minted
+   per end by the store's own adapter (§7's as-built block for the three decisions it forced).
 2. **Editing a dataset can invalidate a pinned mapping.** **Control:** the dispatch-time drift gate
    (§7), which fails `permanent` with the offending columns named, plus **M9**, the dataset detail
    page listing the pipelines whose mappings reference it and flagging those that no longer agree.
@@ -358,8 +359,10 @@ connection names a store that does not exist.
 **Also decided: source and sink may not name the SAME dataset** (`DATASET_SELF_COPY`, unlabelled by
 side — the pair is at fault, not an end). §4's atomic-swap discipline DELETEs inside the write
 transaction while the reader is still streaming, so a self-copy destroys the rows it was asked to
-move. It catches the id-identical case only; two different dataset rows naming one physical table
-need the resolved ADDRESS, which is M6's dispatch record (§2.1).
+move. **M6 slice B (#1149) closed the residual this sentence used to state.** The id check stays — it is
+cheaper, needs no store I/O, and names the ref an operator has to change — and the resolved ADDRESS
+(§2.1, §7's as-built block) now refuses the case it could not see: two DIFFERENT dataset rows that
+resolve to one physical table. One `code` for both, because it is one fault.
 
 ---
 
@@ -601,8 +604,42 @@ seen; it is deferred there rather than approximated here. The harm it would have
 `partialWritePossible: false`, so an ungated type mismatch costs a wasted scan and a provably clean
 store, not the mid-copy partial write §6.2 and this row exist to stop.
 
-The **resolved-address dispatch record** (§2.1) and the physical-address self-copy refusal §3.1 names
-are M6 **slice B**, and remain outstanding.
+**As built (M6 slice B, #1149) — the resolved-address record and the refusal it unlocks.**
+
+`node.dispatched` now carries `datasetAddresses`, minted by the store's own adapter through a new
+`ConnectorAdapter.resolveDatasetAddress` seam and stamped BEFORE the durable dispatch event, so §2.1's
+control is a fact in the log rather than a promise. Three decisions this section could not have
+anticipated:
+
+**① A PATH IS NOT AN IDENTITY, and the gap is a data-loss path rather than a nicety.**
+`resolveWithinRoots` canonicalises the target's PARENT and joins the final component **as spelled**
+(`connectors/confine.ts`), so on a case-insensitive filesystem — APFS, the operator's own Mac —
+`data.db` and `Data.db` are two confined strings for ONE inode. Compared on the path alone, the
+self-copy gate would have waved through precisely the pair it exists to refuse. The address therefore
+carries a `storeIdentity` (`dev:ino` for a file-backed store) that is compared in preference to the
+path; the path stays, because it is what answers "where did this data go" for a human. An
+unobtainable identity is recorded as `null` and the comparison falls back to the path — never to a
+refusal invented on a fact nobody established.
+
+**② The seam is OPTIONAL on the adapter and REQUIRED at the point of use.** Six of the seven
+adapters are not stores and a dataset means nothing to them, so the interface does not make them
+implement it; the executor refuses a dataset-bound dispatch whose adapter omits it
+(`DATASET_ADDRESS_UNSUPPORTED`). That is `describeSource`'s polarity above — a gate a store can
+decline is not a gate — placed where it costs the non-stores nothing. **M7 inherits an obligation
+from this:** `fs` becomes a store when `delimited` lands, and every `delimited` copy will refuse at
+dispatch until it implements the seam.
+
+**③ It is NOT folded into `CopyIo`, which also carries a store-specific describe.** The two run at
+different times for different reasons: `describeSource` is ACTIVITY-time, supplied by the adapter
+that is already running. This is DISPATCH-time and must be answerable for the SINK, whose adapter
+never runs at all. Merging them by analogy would break both.
+
+**The residual, stated so it is not mistaken for coverage.** A `query` dataset names no single
+object, so its address's `object` is `null` and never matches. A query reading the very table its
+sink overwrites, in one store, is therefore NOT refused. Deciding it means parsing the operator's SQL
+to learn which relations it touches, and a `permanent` refusal reached by guessing is the one
+direction ② above says a gate must never fail in. M10's postgres, whose driver can describe a
+statement's source relations, is where it becomes answerable.
 
 ---
 
@@ -728,7 +765,7 @@ source and a sink.
 | **M3**  | Dataset refs as first-class node fields + the four remap sites + the L13a literal/`${}` rule (§3)                                                                                                                           |                                                                                                                                                                                                                                           |
 | **M4**  | `sqlite` connection kind + `table`/`query` dataset kinds + a reader, with §9's batch-yield                                                                                                                                  | **zero new dependencies**                                                                                                                                                                                                                 |
 | **M5**  | The `copy` activity: catalog entry, coercion matrix (§6.2), the streaming pump, atomic-swap sink discipline (§4), `truncated`, batch progress ticks, `CATALOG_VERSION` bump (`schemas/version.ts:218`). SQLite→SQLite first | **SPLIT INTO FOUR, as this row anticipated** — slice 1 = the coercion matrix + the mapping declaration (#1122); slice 2 = the sink discipline (#1125); slice 3 = the pump, the counters incl. `truncated`, and the progress ticks (#1129); slice 4 = the DISPATCH seam, itself split THREE ways once built — 4a (#1130) dataset resolution into `ActivityContext` + the `onError:'null'` vs `nullable:false` refusal, 4b (#1134) the adapter, 4c (#1139) the catalog entry, the first populated `sinkConnectionKinds`/`datasetKinds`, §8's literal-only NODE gate, `CATALOG_VERSION` 23, and the four paired canvas pickers without which the entry would put an unbindable node on the canvas. **Slice 4 is the split's whole point:** nothing resolved `Node.datasetIds` into the executor until 4a, so a catalog entry landed alongside the pump would have been a user-visible activity that always fails at dispatch. **M5 is COMPLETE as of 4c**, with two knowing residuals: the mapping grid is a JSON textarea until §13/M8 builds an `objectList` control, and §9's `COPY_CONCURRENCY` has no consumer to slot into (#1140) |
-| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1). **SPLIT IN TWO** — slice A (#1148) is the source half of §7: the `describeSource` seam, rows 1/4/5 gated before the first row moves, and the empty-source blind spot closed; row 3 deliberately deferred to M10 (see §7's as-built block). Slice B is §2.1's resolved-address record + §3.1's physical-address self-copy refusal, which needs it                                                                                                                                                 |                                                                                                                                                                                                                                           |
+| **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1). **SPLIT IN TWO** — slice A (#1148) is the source half of §7: the `describeSource` seam, rows 1/4/5 gated before the first row moves, and the empty-source blind spot closed; row 3 deliberately deferred to M10 (see §7's as-built block). Slice B (#1149) is §2.1's resolved-address record + §3.1's physical-address self-copy refusal, which needs it — SHIPPED, with two knowing residuals: a `query` end has no comparable object (§7's as-built block), and the record is durable but not yet RENDERED on the run-detail page. The ticket's two folded-in sink-side items (the actual-store `NOT NULL` check, a stated behaviour break; lifting the sink describe policy out of `sqlite.ts`) are deferred with it                                                                                                                                                 |                                                                                                                                                                                                                                           |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13)                                                                                                                                                                                           | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                                                                                                                                                                                                                   |

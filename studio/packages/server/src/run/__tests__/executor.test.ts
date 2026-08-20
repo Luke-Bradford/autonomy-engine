@@ -1459,11 +1459,14 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
    * non-matching: `sameDatasetAddress` refuses across kinds, so the tests that
    * are not about self-copy are unaffected by this seam existing.
    */
-  function stubAddress(kind: ConnectionKind): NonNullable<ConnectorAdapter['resolveDatasetAddress']> {
+  function stubAddress(
+    kind: ConnectionKind,
+  ): NonNullable<ConnectorAdapter['resolveDatasetAddress']> {
     return ({ connectionConfig, dataset }) =>
       Promise.resolve({
         kind,
-        store: typeof connectionConfig.store === 'string' ? connectionConfig.store : `${kind}-store`,
+        store:
+          typeof connectionConfig.store === 'string' ? connectionConfig.store : `${kind}-store`,
         storeIdentity: null,
         object: typeof dataset.config.table === 'string' ? dataset.config.table : null,
       });
