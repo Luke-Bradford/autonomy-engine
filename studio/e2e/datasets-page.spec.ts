@@ -219,6 +219,10 @@ test.describe('#1115 Manage → Datasets', () => {
     const nonStoreId = await seedConnection(page, `e2e-ds-nonstore-${stamp}`, 'http', {
       baseUrl: 'https://example.com',
     });
+    // BOTH stores are seeded before the page loads, like every other test here.
+    // The form's Store picker is rendered from the connections the page fetched
+    // on mount, so a connection minted mid-test has no option to select.
+    const storeId = await seedStore(page, `e2e-ds-pileup-${stamp}`);
 
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
@@ -237,7 +241,6 @@ test.describe('#1115 Manage → Datasets', () => {
     // `delimited` dataset on a `sqlite` store is BOTH unreadable (no reader
     // yet) and mis-stored (`delimited` lives on `fs`) — two true, independent
     // notes, and #1145 must not have swallowed #1120's.
-    const storeId = await seedStore(page, `e2e-ds-pileup-${stamp}`);
     await form(page).getByLabel('Store').selectOption(storeId);
     await form(page).getByLabel('Kind').selectOption('delimited');
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
