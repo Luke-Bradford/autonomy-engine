@@ -432,6 +432,43 @@ function DatasetForm({
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: DatasetKind) {
     setError(null); // a parse/save error from the previous kind is not this one's
+
+    // In JSON mode the textarea is the ONLY draft being typed into: its
+    // `onChange` writes `jsonText` and never `config` or `inputs`. Seeding the
+    // new kind's controls from those would therefore seed them from BEFORE
+    // every keystroke — and because a kind change can CLOSE the editor (the
+    // mirror of the forced-open case below), the operator would land in a field
+    // form holding their pre-edit config, with nothing on screen to say the
+    // edit was dropped. So the parsed JSON is the whole seed here: no
+    // `form.inputs` overlay, because those values predate the editor and would
+    // otherwise win over the very edit being carried.
+    if (jsonMode) {
+      const parsed = parseConfigText(form.jsonText);
+      if (parsed.ok) {
+        onChange({
+          ...form,
+          kind,
+          config: parsed.config,
+          // `jsonText` is left exactly as typed: re-stringifying it would
+          // reformat the operator's text under their cursor when the editor
+          // stays open, and it is re-derived by `toJsonMode` when it reopens.
+          inputs: seedFieldInputs(datasetFields(kind, parsed.config).fields, parsed.config),
+        });
+        return;
+      }
+      // A draft that does not parse has no committed form to carry. The kind
+      // still changes — the operator is not trapped in it — but the message
+      // names the parse failure rather than letting a field form open on a
+      // config the editor's contents have already moved past.
+      setError(parsed.message);
+      onChange({
+        ...form,
+        kind,
+        inputs: seedFieldInputs(datasetFields(kind, form.config).fields, form.config),
+      });
+      return;
+    }
+
     const next = datasetFields(kind, form.config);
     // Seed the new kind's controls from the stored config, then let anything
     // already typed win. A plain re-seed would drop every in-progress edit; no
@@ -448,8 +485,10 @@ function DatasetForm({
     //
     // Deliberately narrow: a kind change still rewrites neither draft in the
     // ordinary case, so an operator's JSON is never edited under them. This
-    // fires only when the switch itself takes the field form away.
-    if (!jsonMode && !datasetKindIsImplemented(kind)) {
+    // fires only when the switch itself takes the field form away. (No
+    // `!jsonMode` guard — the JSON-mode branch above has already returned, so
+    // reaching here IS field mode.)
+    if (!datasetKindIsImplemented(kind)) {
       const assembled = assembleConfig(form.config, fields, form.inputs);
       if (assembled.ok) {
         onChange({

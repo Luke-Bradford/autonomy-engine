@@ -324,6 +324,46 @@ describe('DatasetsPage', () => {
     );
   });
 
+  it('carries a JSON edit back into the fields when the kind change closes the editor', async () => {
+    // The mirror of the case above, and the one the textarea itself creates:
+    // its `onChange` writes `jsonText` and NEVER `config`, so re-seeding the
+    // new kind's controls from `config` seeds them from before those
+    // keystrokes — silently discarding everything typed into the editor.
+    const user = userEvent.setup();
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText(/No datasets yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'New dataset' }));
+    await user.type(within(form()).getByLabelText('Name'), 'Orders');
+    await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_1');
+    await user.type(within(form()).getByLabelText('table'), 'orders');
+    // A kind with no reader forces the editor open (see the case above).
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+
+    const editor = within(form()).getByLabelText('Config (JSON)');
+    await user.clear(editor);
+    await pasteInto(user, editor, JSON.stringify({ table: 'invoices', schema: 'main' }));
+
+    // Back to a kind WITH a reader: the editor closes, and EVERY field must show
+    // what the JSON said rather than the pre-edit draft — including `table`,
+    // where the stale `form.inputs` entry is what used to win.
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+    expect(within(form()).getByLabelText('table')).toHaveValue('invoices');
+    expect(within(form()).getByLabelText(/^schema/)).toHaveValue('main');
+
+    // And what is on screen is what is SAVED.
+    await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), COLUMNS_JSON);
+    await user.click(screen.getByRole('button', { name: 'Create dataset' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'table',
+          config: { table: 'invoices', schema: 'main' },
+        }),
+      ),
+    );
+  });
+
   it('names the unreadable control instead of opening JSON on a draft that omits it', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([
