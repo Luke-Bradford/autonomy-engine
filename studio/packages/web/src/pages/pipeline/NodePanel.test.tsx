@@ -763,9 +763,9 @@ describe('NodePanel (the objectList control, #1169)', () => {
     // "expected array, received undefined" on a panel the author may only have
     // opened to change something else). That made deleting the last row a
     // two-click route to a version that mints clean and fails hours later when
-    // a schedule fires it. `refineMapping` now refuses it here, where the author
-    // is standing. `Remove` is NOT disabled on the last row: a disabled button
-    // hides its reason, and the refusal names it.
+    // a schedule fires it. `mappingArray`'s `.min(1)` now refuses it here, where
+    // the author is standing. `Remove` is NOT disabled on the last row: a
+    // disabled button hides its reason, and the refusal names it.
     const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));

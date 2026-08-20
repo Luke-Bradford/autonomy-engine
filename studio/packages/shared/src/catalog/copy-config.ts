@@ -73,27 +73,6 @@ const refineMapping = (
   rows: readonly { source?: unknown; expression?: unknown; sink: string }[],
   ctx: z.RefinementCtx,
 ) => {
-  // #1172 — a mapping that maps NOTHING, refused here rather than at dispatch.
-  // `pumpCopyRows` already refuses it, but that fires when the copy RUNS, which
-  // for a scheduled pipeline is hours after the version was minted; every other
-  // cross-row rule in this function is reported to the author on Apply. The
-  // pump's guard STAYS and is not made redundant: this module is `shared`, and
-  // `pump.ts` is reached by callers that never ran this schema.
-  //
-  // `path: []` because an empty array has NO row to name — the per-element
-  // paths below exist so a message names its own row, and there is no row here.
-  // Nested under `copyInputSchema` the empty path emerges as `['mapping']`, so
-  // `formatZodIssues` still prefixes it with the control an author can see.
-  // That prefix is the point: `dataset-config.ts`'s object-level `superRefine`
-  // documents the failure mode of losing it — an operator told two things clash
-  // but not which control to touch.
-  if (rows.length === 0) {
-    ctx.addIssue({
-      code: 'custom',
-      path: [],
-      message: 'a copy maps no columns — add at least one mapping row',
-    });
-  }
   const seenSinks = new Set<string>();
   rows.forEach((row, i) => {
     // The XOR. Both issues carry a PER-ELEMENT `path` so a message names its own
@@ -144,7 +123,35 @@ const refineMapping = (
  * row, because §8 puts substitution in the reducer.
  */
 const mappingArray = (expression: z.ZodType) =>
-  z.array(z.object({ ...copyMappingEntryShape, expression }).strict()).superRefine(refineMapping);
+  z
+    .array(z.object({ ...copyMappingEntryShape, expression }).strict())
+    // #1172 — a mapping that maps NOTHING, refused here rather than only at
+    // dispatch. `pumpCopyRows` already refuses it, but that fires when the copy
+    // RUNS, which for a scheduled pipeline is hours after the version was
+    // minted; the cross-row rules in `refineMapping` are reported to the author
+    // on Apply, and this belongs with them.
+    //
+    // On the ARRAY as `.min(1)` rather than inside `refineMapping`, matching
+    // `connection-config.ts`'s `roots` (*"an fs connection needs at least one
+    // allowed root"*). This is a CARDINALITY rule; `refineMapping`'s job is
+    // cross-row comparison, and every other rule in it compares rows to each
+    // other. The issue lands on `path: []` either way — an empty array has no
+    // row to name — and nested under `copyInputSchema` that emerges as
+    // `['mapping']`, so `formatZodIssues` still prefixes it with the control an
+    // author can see. That prefix is the point: `dataset-config.ts`'s
+    // object-level `superRefine` documents the failure mode of losing it — an
+    // operator told two things clash but not which control to touch.
+    //
+    // SCOPE, stated so it is not overread: this refuses on the canvas Apply
+    // pre-check and at dispatch. It does NOT reach the #444 server write gate,
+    // which for a `copy` node runs `validateCopyMappingIdentifiers` ONLY — a
+    // deliberate narrowing (`copy-identifier-gate.test.ts`: *"§8 gate is
+    // identifier-only — a malformed SHAPE is the adapter's to refuse"*). So a
+    // version minted by git-import or a direct POST can still carry `[]`, the
+    // same as it can carry a duplicate sink or a broken XOR. That gap is
+    // pre-existing and covers all of these rules, not just this one; #1176.
+    .min(1, 'a copy maps no columns — add at least one mapping row')
+    .superRefine(refineMapping);
 
 /**
  * The AUTHORED mapping — what a node's config holds and what an author edits.

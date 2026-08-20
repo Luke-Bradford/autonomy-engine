@@ -333,10 +333,12 @@ export async function* runCopyActivity(
   //
   // It is NOT the counterpart of `pump.ts`'s surviving `empty_mapping` guard,
   // and the two should not be read as a pair. That one lives across a module
-  // boundary and is reached by callers — M7's CSV source, M10's postgres sink,
-  // #1130's adapter — that never ran this schema at all, so it still fires. A
-  // guard sitting three lines below the parse that subsumes it protects nothing
-  // and only invites the next reader to wonder what reaches it.
+  // boundary, in `shared`, where it cannot see whether a schema ran; this one
+  // sat three lines below the parse that subsumes it, protecting nothing and
+  // inviting the next reader to wonder what reaches it. (Both are in fact
+  // unreachable today — every live caller of the pump arrives through this
+  // function — but only one of them is entitled to assume that. `pump.ts` says
+  // so in its own words.)
   //
   // `sourceCoercion` is still derived HERE rather than at its point of use: it
   // parses the source dataset's config and may THROW on one it cannot read, and

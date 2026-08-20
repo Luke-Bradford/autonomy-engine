@@ -163,11 +163,12 @@ export function checkSourceDrift(
     else if (resolved.kind === 'ambiguous') ambiguous.push(entry.source);
   }
   // An EMPTY mapping reports nothing unmapped. It is refused outright — by
-  // `CopyMappingSchema` since #1172, and by the pump (`empty_mapping`) for the
-  // callers that never ran the schema — and listing every column of the source
-  // as "not mentioned" would bury that refusal under a warning about its
-  // consequence. Reachable here regardless of the schema: this predicate is
-  // shared, and takes a mapping from whoever holds one.
+  // `mappingArray`'s `.min(1)` since #1172, and behind that by the pump
+  // (`empty_mapping`) — and listing every column of the source as "not
+  // mentioned" would bury that refusal under a warning about its consequence.
+  // Kept for the same reason the pump's guard is: this predicate is `shared`
+  // and takes a mapping from whoever holds one, so it does not get to assume a
+  // schema ran.
   const unmapped = mapping.length === 0 ? [] : index.names.filter((name) => !bound.has(name));
   return { missing, ambiguous, unmapped };
 }
