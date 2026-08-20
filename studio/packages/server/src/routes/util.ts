@@ -1,4 +1,5 @@
 import { PaginationQuerySchema } from '@autonomy-studio/shared';
+import type { FastifyReply } from 'fastify';
 import type { Principal } from '../auth/principal.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
 import { decodeCursor, type PageArgs } from '../repo/pagination.js';
@@ -39,4 +40,33 @@ export function pageArgsFromQuery(query: unknown): PageArgs {
   const key = decodeCursor(cursor);
   if (!key) throw new BadRequestError('invalid cursor');
   return { limit, cursor: key };
+}
+
+/**
+ * #925 — mark a response whose BODY IS A CREDENTIAL as uncacheable.
+ *
+ * Two routes hand a live secret back in a 200 body: `GET /api/runs/:id/
+ * external-waits` (each `callbackPath` embeds a re-derived external-wait
+ * capability token — holding it IS the authorization to settle that wait) and
+ * `POST /api/triggers/:id/webhook-secret` (the plaintext signing secret,
+ * returned exactly once). With no cache directive at all, a browser or any
+ * interposed intermediary is free to apply HEURISTIC caching to those responses
+ * and land a bearer credential on disk, or in a shared cache.
+ *
+ * `no-store` (RFC 9111 §5.2.2.5) is the directive that forbids STORING it
+ * anywhere, which is the actual requirement — `no-cache` would still permit the
+ * store and only force revalidation.
+ *
+ * DELIBERATELY a per-route call and NOT a blanket `onSend` hook. A blanket
+ * `no-store` would also stop the SPA bundle and every read-model list route being
+ * cached — a performance regression nobody asked for, to protect responses that
+ * carry nothing. The rule is "one rule, installed at every site that needs it"
+ * (the shape #913 used for the log channel), so a THIRD credential-revealing
+ * route must call this too. The enumeration of which routes those are is kept in
+ * `util/log-redaction.ts`'s `SECRET_URL_ROUTE_BASES` docblock — the same list,
+ * one place, because the two protections answer the same question about the same
+ * routes ("where does a credential travel?") in two different channels.
+ */
+export function noStore(reply: FastifyReply): void {
+  reply.header('Cache-Control', 'no-store');
 }

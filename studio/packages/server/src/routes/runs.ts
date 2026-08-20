@@ -20,7 +20,7 @@ import {
   ExternalWaitPayloadError,
   ExternalWaitSettledError,
 } from '../run/external-wait-service.js';
-import { pageArgsFromQuery, requireOwned } from './util.js';
+import { noStore, pageArgsFromQuery, requireOwned } from './util.js';
 
 /**
  * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
@@ -270,27 +270,32 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * be fixed as its route is opened; this is that route's turn. Projection only —
    * the row's stored token hash and `status` deliberately do not cross the wire.
    */
-  fastify.get<{ Params: { id: string } }>('/api/runs/:id/external-waits', async (request) => {
-    const run = requireOwned(
-      getRun(db, request.params.id),
-      request.principal,
-      'run',
-      request.params.id,
-    );
-    return listPendingExternalWaitsByRun(db, run.id).map(
-      (wait) =>
-        ({
-          nodeId: wait.nodeId,
-          attemptId: wait.attemptId,
-          expiresAt: wait.expiresAt,
-          callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
-            runId: wait.runId,
+  fastify.get<{ Params: { id: string } }>(
+    '/api/runs/:id/external-waits',
+    async (request, reply) => {
+      const run = requireOwned(
+        getRun(db, request.params.id),
+        request.principal,
+        'run',
+        request.params.id,
+      );
+      // #925 — every `callbackPath` below embeds a live capability token.
+      noStore(reply);
+      return listPendingExternalWaitsByRun(db, run.id).map(
+        (wait) =>
+          ({
             nodeId: wait.nodeId,
             attemptId: wait.attemptId,
-          })}`,
-        }) satisfies PendingExternalWait,
-    );
-  });
+            expiresAt: wait.expiresAt,
+            callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
+              runId: wait.runId,
+              nodeId: wait.nodeId,
+              attemptId: wait.attemptId,
+            })}`,
+          }) satisfies PendingExternalWait,
+      );
+    },
+  );
 
   /**
    * #901 — the OWNER completes one of their own run's parked external waits, from

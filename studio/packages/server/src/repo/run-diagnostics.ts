@@ -1,6 +1,8 @@
 import { and, asc, count, eq, ne, or } from 'drizzle-orm';
 import {
+  RUN_DIAGNOSTIC_CAP,
   RunDiagnosticSchema,
+  capMarkerMessage,
   type RunDiagnostic,
   type RunDiagnosticPhase,
 } from '@autonomy-studio/shared';
@@ -21,41 +23,9 @@ import type { Db } from './types.js';
  * `recordRunDiagnostics`.
  */
 
-/**
- * The per-RUN ceiling on recorded diagnostics.
- *
- * Per-RUN rather than per-fold, which is the whole point: a per-fold cap bounds
- * nothing, because `MAX_DRIVER_STEPS` is 1_000_000 and the attacker-shaped
- * diagnostics repeat PER FOLD — e.g. `container capped at maxRounds` once per
- * container per round — on a doc that (being pre-#444) was never validated. A
- * per-fold cap of 50 would therefore
- * bound a single run at ~5e7 rows, which is not a bound in any sense an operator
- * would recognise.
- *
- * 500 is a judgement, not a derivation: comfortably above what any well-formed
- * run emits (a healthy run emits none at all — a diagnostic means something was
- * neutralized), while small enough that a malicious doc cannot fill a disk.
- *
- * The cap is enforced by a `count()` per diagnostic-bearing fold rather than by
- * cross-fold state on the recorder, which is deliberate: the recorder is
- * stateless (each call stands alone, so a re-boot re-deriving mid-run needs no
- * carried counter to stay correct), and the count is only ever paid on the
- * already-pathological path — a well-formed run emits no diagnostics and returns
- * before the query. A doomed run past the cap keeps paying one count + one no-op
- * marker insert per fold, which is bounded by `MAX_DRIVER_STEPS` and acceptable
- * for a run that is going to fail regardless.
- */
-export const RUN_DIAGNOSTIC_CAP = 500;
-
 /** `seq` of the `cap` marker. BELOW every real seq (which start at 0) so the
  * standard read surfaces the caveat before the list it qualifies. */
 const CAP_MARKER_SEQ = -1;
-
-const capMarkerMessage = (cap: number): string =>
-  `diagnostics for this run reached the cap of ${cap} and later ones were NOT recorded. ` +
-  `The run's decisions are unaffected and remain fully durable in its event log — what is ` +
-  `capped here is the EXPLANATION of them. A run emitting this many diagnostics almost ` +
-  `always means a malformed doc reached the reducer (see the diagnostics below).`;
 
 /**
  * Record one fold's `diagnostics[]` at the log position it was derived at.

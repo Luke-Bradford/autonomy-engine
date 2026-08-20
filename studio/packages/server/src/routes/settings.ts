@@ -52,9 +52,10 @@ export interface SettingsRoutesOptions {
  * the actionable content, and a status that would not name the file cannot ask
  * anyone to back it up.
  *
- * No `Cache-Control: no-store`. #925 is about responses whose BODY is a bearer
- * credential; this one grants nothing, and no route in this server sets that
- * header today.
+ * No `Cache-Control: no-store`, and that is a decision rather than an omission.
+ * #925 installed that header (`routes/util.ts`'s `noStore`) on the two responses
+ * whose BODY is a bearer credential; this one grants nothing, so it stays
+ * cacheable. The header is deliberately per-route, never blanket.
  */
 export function settingsRoutes(fastify: FastifyInstance, opts: SettingsRoutesOptions): void {
   /*

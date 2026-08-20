@@ -9,11 +9,8 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
-import {
-  listRunDiagnostics,
-  recordRunDiagnostics,
-  RUN_DIAGNOSTIC_CAP,
-} from '../../repo/run-diagnostics.js';
+import { RUN_DIAGNOSTIC_CAP } from '@autonomy-studio/shared';
+import { listRunDiagnostics, recordRunDiagnostics } from '../../repo/run-diagnostics.js';
 import { runDiagnostics } from '../../db/schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
