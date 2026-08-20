@@ -450,14 +450,27 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * but refuses any non-`table` for the write, because a query has nothing to
      * write INTO.
      *
-     * File dataset kinds (`delimited`, `excel`) are deliberately absent even
-     * though `types.ts` blesses declaring a kind before its reader exists. Here
-     * it would be self-contradictory rather than merely early: a `delimited`
-     * dataset lives on an `fs` connection (`DatasetSchema.connectionId`), which
-     * `connectionKinds: ['sqlite']` refuses, so slice 4a's
-     * `DATASET_CONNECTION_MISMATCH` would refuse every such binding at dispatch.
-     * M7 (CSV -> SQLite) widens `connectionKinds` and these together, which it
-     * must do anyway — so nothing is deferred that M7 would not have touched.
+     * M7 slice 3 (#1167) WIDENED THE TWO SOURCE LISTS TOGETHER, exactly as the
+     * paragraph they replace said it would have to: a `delimited` dataset lives
+     * on an `fs` connection (`DatasetSchema.connectionId`), so `delimited` in
+     * `datasetKinds.source` without `fs` in `connectionKinds` would be refused
+     * at dispatch by `DATASET_CONNECTION_MISMATCH` on every binding — and `fs`
+     * without `delimited` would be a store nothing can name a dataset in. The
+     * pair is the unit; `CATALOG_VERSION` 23 -> 24 is its discharge.
+     *
+     * THE SINK HALVES DELIBERATELY DID NOT MOVE. `sinkConnectionKinds` is still
+     * `['sqlite']` and `datasetKinds.sink` still `['table']`, because M7 built a
+     * `delimited` READER and no writer — there is nothing to copy INTO a CSV
+     * with. Widening them in sympathy would offer an author a pairing that
+     * every dispatch then refuses, which is the shape this entry has now twice
+     * declined. `excel` stays out of both for the older reason: no reader yet
+     * (`IMPLEMENTED_DATASET_KINDS`), so it arrives at M11.
+     *
+     * `connectionKinds` is a SOURCE allowlist with two store kinds in it, and
+     * the executor dispatches on the SOURCE connection's kind — so which
+     * adapter runs a `copy` is now a real choice rather than a foregone one.
+     * `sqlite.ts` and `fs.ts` each supply the store halves of `CopyIo`; both
+     * refuse a non-`sqlite` sink at the ladder's `refuseSink` rung.
      *
      * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly — five, all
      * REQUIRED. That is load-bearing rather than incidental: F13b lowering seeds
@@ -475,9 +488,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'general',
     idempotent: false,
-    connectionKinds: ['sqlite'],
+    connectionKinds: ['sqlite', 'fs'],
     sinkConnectionKinds: ['sqlite'],
-    datasetKinds: { source: ['table', 'query'], sink: ['table'] },
+    datasetKinds: { source: ['table', 'query', 'delimited'], sink: ['table'] },
     outputs: [
       out('rowsRead', 'number'),
       out('rowsWritten', 'number'),

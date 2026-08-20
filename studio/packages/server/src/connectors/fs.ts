@@ -2,6 +2,7 @@ import { constants as fsConstants, type Dirent } from 'node:fs';
 import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { z } from 'zod';
 import {
+  COPY_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
@@ -14,6 +15,7 @@ import {
   fileMoveConfigSchema,
   fileReadConfigSchema,
   fileWriteConfigSchema,
+  sqliteConnectionConfigSchema,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
@@ -26,6 +28,19 @@ import { resolveWithinRoots } from './confine.js';
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
 import { classifyFsError, fsConnectionConfigSchema } from './fs-connection.js';
+// #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
+// adapter's `delimited` reader with sqlite's writer, so the import direction is
+// `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
+// imports neither store, which is the property its own docblock protects.
+import { runCopyActivity } from './copy.js';
+import { DatasetIoError } from './dataset-io-error.js';
+import {
+  delimitedCoercionFor,
+  describeDelimitedDatasetColumns,
+  readDelimitedDatasetBatches,
+  resolveDelimitedDatasetAddress,
+} from './delimited-io.js';
+import { writeSqliteDatasetRows } from './sqlite.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
@@ -33,7 +48,14 @@ import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
  * and the first to serve MORE THAN ONE activity type through ONE adapter: all six
  * file activities (`file_read`/`file_write` from A11, `file_copy`/`file_move`/
  * `file_delete`/`file_list` from A12) bind an `fs` connection, so `runActivity`
- * selects the operation from `ctx.activityType`. It is CREDENTIAL-LESS — the
+ * selects the operation from `ctx.activityType`.
+ *
+ * As of #996 M7 slice 3 (#1167) it is ALSO A STORE: it serves a seventh
+ * activity, `copy`, as the SOURCE end of a `delimited` -> `sqlite` copy, and it
+ * implements `resolveDatasetAddress` so a dispatch can record where it read
+ * from. Those two roles share nothing but the connection's `roots`, and the
+ * confinement guard below is what makes that sharing safe — a dataset's `path`
+ * is confined by exactly the same rule as a `file_read`'s. It is CREDENTIAL-LESS — the
  * `secret` / `secretFields` arguments are always empty (the catalog declares no
  * `secretSinkFields`, and an `fs` connection carries no `secretRef`). EVERY
  * pipeline-supplied path (`path`/`source`/`dest`) runs through the same
@@ -117,6 +139,18 @@ function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
   const kind = classifyFsError(err, signal);
   if (kind === 'cancelled') return failed('cancelled', 'file activity aborted');
   return failed(kind, err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * What an abort BEFORE any dispatch is called, per activity.
+ *
+ * The six file activities have always said "file activity aborted". A `copy`
+ * dispatched on this connection is not one of them — it is a dataset copy whose
+ * source happens to be a file — and reporting it as a file activity would send
+ * an operator looking for a `file_*` node that does not exist in their pipeline.
+ */
+function abortedReason(activityType: string): string {
+  return activityType === COPY_ACTIVITY_TYPE ? 'dataset copy aborted' : 'file activity aborted';
 }
 
 /** Close a file handle, swallowing a close error so it never masks the result. */
@@ -455,6 +489,12 @@ export const fsAdapter: ConnectorAdapter = {
   kind: 'fs',
   configSchema: fsConnectionConfigSchema,
 
+  // #1167 — an `fs` connection is now a STORE as well as a file-activity
+  // binding, so it owes §2.1's address seam. It is not optional in practice for
+  // this adapter: `run/executor.ts` refuses a `copy` whose store cannot say
+  // where it lands, rather than dispatching without the record.
+  resolveDatasetAddress: resolveDelimitedDatasetAddress,
+
   async testConnection(config) {
     const cfg = fsConnectionConfigSchema.safeParse(config);
     if (!cfg.success) {
@@ -485,7 +525,77 @@ export const fsAdapter: ConnectorAdapter = {
       return;
     }
     if (ctx.signal.aborted) {
-      yield failed('cancelled', 'file activity aborted');
+      yield failed('cancelled', abortedReason(ctx.activityType));
+      return;
+    }
+
+    // #1167 M7 slice 3 — the `copy` arm: `fs` as the SOURCE store of a
+    // heterogeneous copy. Everything store-agnostic (the dispatch schema, the
+    // refusal ladder, the counters and the failure mapping) is `copy.ts`'s;
+    // this branch supplies only the halves that are the filesystem's.
+    //
+    // Placed AFTER the connection-config parse and the abort check, matching
+    // `sqlite.ts`'s store arm exactly. The ladder-order argument in `copy.ts`
+    // is about `refuseSink` — a rung that must not pre-empt the two
+    // preconditions above it — and does not extend to the store's own config:
+    // a bad `fs` config is this adapter's to report, and an already-cancelled
+    // copy should not pay a `realpath` on a wedged mount before anything says
+    // so. `cfg.data` is deliberately NOT threaded into the reader below; §8
+    // requires it to re-validate at dispatch, and handing it a pre-parsed
+    // config would make that re-validation a claim rather than a check.
+    if (ctx.activityType === COPY_ACTIVITY_TYPE) {
+      yield* runCopyActivity(ctx, {
+        // There is no `delimited` WRITER, so an `fs` copy reads a file and
+        // writes into a sqlite store. The catalog says so too
+        // (`sinkConnectionKinds: ['sqlite']`), and this stays as the ladder's
+        // rung for the same reason sqlite's does: it is what a caller bypassing
+        // the catalog hits, and an unchecked sink config would reach the writer
+        // to be refused as "invalid sqlite connection config" — a true
+        // statement about the wrong thing.
+        refuseSink: (connection) =>
+          connection.kind === 'sqlite'
+            ? null
+            : `an fs copy reads a delimited file and writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+        sourceCoercion: (dataset) => delimitedCoercionFor(dataset.config),
+        describeSource: ({ dataset, signal }) =>
+          describeDelimitedDatasetColumns({
+            connectionConfig: ctx.connectionConfig,
+            datasetKind: dataset.kind,
+            datasetConfig: dataset.config,
+            ...(signal === undefined ? {} : { signal }),
+          }),
+        readBatches: ({ dataset, signal }) =>
+          readDelimitedDatasetBatches({
+            connectionConfig: ctx.connectionConfig,
+            datasetKind: dataset.kind,
+            datasetConfig: dataset.config,
+            ...(signal === undefined ? {} : { signal }),
+          }),
+        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
+          // Parsed from `ctx.sink`, never from this adapter's own connection —
+          // and here that is not merely the safer answer, it is the only
+          // coherent one: an `fs` config has no database in it at all.
+          const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
+          if (!parsedSink.success) {
+            throw new DatasetIoError(
+              'permanent',
+              `invalid sqlite sink connection config: ${parsedSink.error.message}`,
+            );
+          }
+          return writeSqliteDatasetRows(
+            {
+              connectionConfig: parsedSink.data,
+              datasetKind: dataset.kind,
+              datasetConfig: dataset.config,
+              columns,
+              mode,
+              onBatch,
+              ...(signal === undefined ? {} : { signal }),
+            },
+            batches,
+          );
+        },
+      });
       return;
     }
 

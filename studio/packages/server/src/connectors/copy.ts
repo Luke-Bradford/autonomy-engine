@@ -8,6 +8,7 @@ import {
   SOURCE_DRIFT_MESSAGES,
   WARNING_CODES,
   type CoercedValue,
+  type CoercionOptions,
   type CopyCounters,
   type CopyPumpMappingEntry,
   type DatasetColumn,
@@ -27,7 +28,10 @@ type ActivitySink = NonNullable<ActivityContext['sink']>;
  * The dispatch schema, the mapping refusals, the counters→outputs contract and
  * the failure mapping are the same for every store; only the reader and the
  * writer differ, and those arrive through {@link CopyIo}. M7's `delimited`
- * source over the `fs` connection reuses this file unchanged.
+ * source over the `fs` connection (#1167) reuses every line of that — it added
+ * ONE member to the seam (`sourceCoercion`) and changed nothing in this body
+ * beyond passing it on, which is the claim the paragraph originally made and is
+ * now measured rather than predicted.
  *
  * WHY THE I/O IS CALLER-SUPPLIED rather than resolved here from `ctx.sink.kind`.
  * A registry keyed by sink kind reads better on paper and is the right shape
@@ -94,6 +98,23 @@ export interface CopyIo {
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
   }) => Promise<{ readonly rowsWritten: number }>;
+  /**
+   * §6.4's per-source-dataset format facts (`nullValue`, `dateFormat`), read off
+   * the SOURCE dataset's own config by the store that knows its shape.
+   *
+   * REQUIRED, on {@link CopyIo.describeSource}'s polarity and for the same
+   * reason: an optional channel is one a store can DECLINE, and a store that
+   * declined it would copy with the operator's declared sentinel silently doing
+   * nothing while reading exactly like one that applied it. The SQL kinds return
+   * `{}` — not a stub, a true statement, because §2.6 gives `table`/`query` no
+   * such keys to declare.
+   *
+   * SYNCHRONOUS and non-throwing in the ordinary case: it reads a config the
+   * store has already validated at `describeSource`, so it is a projection
+   * rather than a second gate. A store whose config cannot be parsed here still
+   * throws rather than defaulting to `{}` — see `delimitedCoercionFor`.
+   */
+  readonly sourceCoercion: (dataset: ResolvedDataset) => CoercionOptions;
   /**
    * The store-specific check on the SINK CONNECTION — returns a refusal reason,
    * or `null` to accept. Optional: a store with nothing to say about a sink
@@ -359,6 +380,13 @@ export async function* runCopyActivity(
       batches: pumpCopyRows(io.readBatches({ dataset: source, signal: ctx.signal }), {
         mapping: mapping as readonly CopyPumpMappingEntry[],
         counters,
+        // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
+        // spells NULL and how it writes a date; the store being written into has
+        // real types and a real NULL and declares neither. Derived here, at the
+        // moment the pump is built, rather than hoisted above the ladder: it is
+        // not a refusal, so it has no rung, and running it early would only move
+        // a store's config parse ahead of the checks that must precede it.
+        coercion: io.sourceCoercion(source),
       }),
       signal: ctx.signal,
     });

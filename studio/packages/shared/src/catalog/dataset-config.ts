@@ -245,16 +245,27 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
 };
 
 /**
- * The dataset kinds a reader exists for — M4's `table` and `query`.
+ * The dataset kinds a reader exists for — M4's `table` and `query`, and M7's
+ * `delimited` (#1167, the slice that wired the `fs` copy arm).
  *
  * A POSITIVE fact, and that is the point: the alternative (infer "unimplemented"
  * from a permissive schema) would make the refusal an accident of shape, so a
  * kind whose real schema happened to be permissive would silently become
- * readable. `delimited` joins at M7, `excel` at M11.
+ * readable. `excel` joins at M11.
+ *
+ * IT IS "A READER EXISTS", NOT "THIS STORE READS IT", and the distinction stopped
+ * being academic the moment this set held kinds from two different stores. A
+ * store adapter that used this as a proxy for its OWN vocabulary would, from
+ * #1167 on, accept a `delimited` dataset and then try to parse its config as a
+ * table target — the right refusal for the wrong reason, or none at all. Both
+ * store readers therefore name their own kinds literally (`sqlite.ts`'s
+ * `statementFor`, `delimited-io.ts`'s `prepareRead`), and this set answers only
+ * the question it is named for.
  */
 export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<DatasetKind>([
   'table',
   'query',
+  'delimited',
 ]);
 
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */

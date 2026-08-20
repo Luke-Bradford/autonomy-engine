@@ -325,11 +325,25 @@
 // build can run that an older one would mis-run. The bump belongs to the slice
 // that widens the catalog entry, and it is named there.
 //
+// CATALOG_VERSION 24 (#996 M7 slice 3, #1167): `copy` widened its SOURCE
+// allowlists — `connectionKinds` ['sqlite'] -> ['sqlite','fs'] and
+// `datasetKinds.source` ['table','query'] -> ['table','query','delimited'].
+// This is the bump the #1163 entry above named in advance ("The bump belongs to
+// the slice that widens the catalog entry, and it is named there"); this is that
+// slice. The reason is bump 21's rule and not a shape change: a pre-24 build's
+// `copy` entry lists neither, so a CSV->SQLite node authored here is refused on
+// it — `CONNECTION_KIND_INVALID` for the `fs` connection (`run/executor.ts`) or
+// `DATASET_KIND_INVALID` for the `delimited` dataset. A hard refusal, never a
+// mis-run, which is precisely the state bump 21 settled must be refused at
+// IMPORT rather than discovered at run time.
+// The SINK halves are unchanged, so nothing about an existing sqlite->sqlite
+// artifact moves; a pre-24 build runs one exactly as this one does.
+//
 // NOT an upgrader. `portability/envelope.ts` checks `catalogVersion` as a
 // CEILING (refuse an artifact newer than this build) and keys `UPGRADERS` on
 // `schemaVersion` alone, so a catalog bump is purely an import floor and
 // migrates nothing.
-export const CATALOG_VERSION = 23;
+export const CATALOG_VERSION = 24;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

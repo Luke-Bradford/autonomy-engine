@@ -171,9 +171,19 @@ export interface CopyPumpOptions {
   readonly mapping: readonly CopyPumpMappingEntry[];
   /** Mutated in place. The caller holds it, so the callback below needs no argument. */
   readonly counters: CopyCounters;
-  /** `nullValue` / `dateFormat` (§6.4). `delimited`'s config declares both as of
-   * #1163; what is still missing is the READER that reads them off the source
-   * dataset and passes them here, which lands with M7's later slices. */
+  /**
+   * `nullValue` / `dateFormat` (§6.4), read off the SOURCE dataset's config by
+   * the store's `CopyIo.sourceCoercion` and threaded here — the wiring M7 slice
+   * 3 (#1167) discharged. `delimited` declares both (#1163); the SQL kinds
+   * declare neither and supply `{}`, which is a true statement about them
+   * rather than a stub (§2.6: "a database column already has a type and a real
+   * `NULL`, so there is nothing to declare").
+   *
+   * Still OPTIONAL here, and only here: this is a pure function's parameter and
+   * `{}` is its honest identity. The channel it arrives through is REQUIRED —
+   * an optional one is a channel a store can decline, and a store that declined
+   * it would copy with the operator's declared sentinel silently doing nothing.
+   */
   readonly coercion?: CoercionOptions;
   /**
    * Progress, PER BATCH and never per row (§5 — "one event per row would

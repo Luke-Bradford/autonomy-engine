@@ -251,7 +251,7 @@ describe('the refusals a CSV source brings', () => {
 
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    expect(end.type === 'failed' ? end.reason : '').toMatch(/sink connection is 'http'/);
+    expect(end.type === 'failed' ? end.error : '').toMatch(/sink connection is 'http'/);
   });
 
   it('refuses a mapping naming a column the header lacks, BEFORE the sink is opened', async () => {
@@ -273,7 +273,7 @@ describe('the refusals a CSV source brings', () => {
 
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    expect(end.type === 'failed' ? end.reason : '').toContain('missing_source_column');
+    expect(end.type === 'failed' ? end.error : '').toContain('missing_source_column');
     // The gate ran BEFORE the write: nothing reached the store.
     expect(rowsOf(sinkPath, 'SELECT count(*) AS n FROM sink')).toEqual([{ n: 0 }]);
   });
@@ -308,7 +308,7 @@ describe('the refusals a CSV source brings', () => {
 
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    expect(end.type === 'failed' ? end.reason : '').toMatch(/NOT NULL/);
+    expect(end.type === 'failed' ? end.error : '').toMatch(/NOT NULL/);
   });
 
   it('refuses a CSV outside the connection roots', async () => {

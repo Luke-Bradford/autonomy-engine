@@ -1,9 +1,11 @@
 import { constants as fsConstants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import {
   DelimitedParseError,
   delimitedDatasetConfigSchema,
   parseDelimitedRows,
+  type CoercionOptions,
+  type DatasetAddress,
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { resolveWithinRoots } from './confine.js';
@@ -65,9 +67,11 @@ import {
  * is 0 where the string it replaced was charged its UTF-8 length — so §5's
  * "every value the reader materialised" would become false for exactly the
  * fields the operator declared. This reader therefore yields RAW STRINGS.
- * Threading `coercion` from `source.config` into `pumpCopyRows` is M7 slice 3's
- * to do: `CopyIo` has no coercion channel today (`copy.ts` calls the pump with
- * `{ mapping, counters }` and nothing else).
+ * Slice 3 (#1167) discharged the threading: {@link delimitedCoercionFor} is the
+ * projection, `CopyIo.sourceCoercion` is the channel it travels through, and
+ * `copy.ts` hands the result to `pumpCopyRows`. The derivation lives HERE, next
+ * to the schema and the refusal message it shares, so `fs.ts` re-parses nothing
+ * and the two cannot word the same failure differently.
  *
  * **The `fs` CONNECTION's `maxBytes` is NOT applied** (`catalog/connection-config.ts`;
  * the dataset config has no such key), and an operator who set it will
@@ -146,12 +150,14 @@ function readFailure(
  * before a byte is read.
  *
  * The kind guard is `datasetKind === 'delimited'` and NOT
- * `datasetKindIsImplemented`, which is the asymmetry with `sqlite.ts` and is
- * deliberate rather than an omission: `delimited` does not join
- * `IMPLEMENTED_DATASET_KINDS` until slice 3 wires the copy arm, so that guard
- * here would refuse the only kind this reader exists to read. What the guard is
- * FOR is unchanged — an `excel` dataset also lives on an `fs` connection, and
- * this refuses it by name rather than by trying to parse its config as a CSV's.
+ * `datasetKindIsImplemented`. Slice 2 needed it that way because `delimited` was
+ * not yet in that set; slice 3 (#1167) put it there, and the guard STAYS —
+ * `sqlite.ts` moved to this literal shape rather than this moving back to that
+ * one. The reason outlives the original: `IMPLEMENTED_DATASET_KINDS` answers
+ * "does a reader exist ANYWHERE", and from #1167 on it spans two stores, so a
+ * store consulting it would accept a kind it cannot read. `excel` also lives on
+ * an `fs` connection, and this refuses it BY NAME rather than by trying to parse
+ * its config as a CSV's.
  */
 async function prepareRead(read: DelimitedDatasetRead): Promise<{
   readonly path: string;
@@ -553,4 +559,110 @@ export async function describeDelimitedDatasetColumns(
     throw readFailure(err, read.signal, `the delimited source '${path}' could not be described`);
   }
   throw noRowsError(path, config.header);
+}
+
+/**
+ * #996 M7 slice 3 (#1167, spec §2.1) — where a `delimited` dataset PHYSICALLY
+ * is, so a dispatch can RECORD it and the self-copy gate can compare it.
+ *
+ * `resolveSqliteDatasetAddress`'s shape with the file as the object, and the
+ * redundancy is deliberate rather than a placeholder: `store` and `object` are
+ * BOTH the confined path, because for a flat file the store and the object are
+ * the same physical thing. `object` must not be `null` — `sameDatasetAddress`
+ * states that "a `null` object never matches, not even another `null`", so a
+ * null here would make a CSV copied onto itself unrefusable the day a writer
+ * exists.
+ *
+ * TWO SHAPES WERE REJECTED, recorded so neither is rediscovered as an
+ * improvement. Directory-as-store (`store` = the containing dir, `object` = the
+ * basename) reintroduces M6 slice B's case-alias hole exactly: on APFS
+ * `/d/Data.csv` and `/d/data.csv` are one inode and two basenames, so the gate
+ * would wave through the pair it exists to refuse. A CONSTANT `object` is a
+ * value nobody established, which §2.1 refuses.
+ *
+ * THE PATH IS NOT FOLDED, unlike sqlite's `schema.table`: SQL identifiers are
+ * case-insensitive and filesystem paths are not, so folding would call two
+ * genuinely different files one address on a case-SENSITIVE volume. The
+ * case-alias defence is `storeIdentity` instead.
+ *
+ * TWO RESIDUALS, stated because everything around them states theirs. (1) The
+ * `object` half carries no case-alias defence of its own: two `fs` addresses
+ * differing only in the spelling of one path component compare `sameStore` via
+ * `dev:ino` and then MISS on `object`, so they are not refused. Unreachable
+ * today — there is no `delimited` writer, so two `fs` ends cannot both exist in
+ * one copy — and it is the first thing M-whatever's CSV writer must close.
+ * (2) `sameDatasetAddress` short-circuits on `kind`, so an `fs` source and a
+ * `sqlite` sink are never compared at all; a sqlite connection whose `path` IS
+ * the CSV is not caught here. That one is harmless in fact rather than in
+ * principle: better-sqlite3 refuses a CSV as a database on its first statement,
+ * so the copy fails with a message about the store.
+ *
+ * A `stat` failure yields `null` UNIFORMLY across errno, on
+ * `resolveSqliteDatasetAddress`'s argument: every way it can fail leaves the
+ * READ unable to proceed anyway (`stat` needs what `open` needs), so the
+ * degraded comparison cannot admit a copy that would otherwise be refused, and
+ * an unidentifiable store must never become a `permanent` refusal.
+ */
+export async function resolveDelimitedDatasetAddress(args: {
+  readonly connectionConfig: Record<string, unknown>;
+  readonly dataset: { readonly kind: DatasetKind; readonly config: Record<string, unknown> };
+}): Promise<DatasetAddress> {
+  // Through `prepareRead`, not beside it: the kind guard, both config parses and
+  // the confinement are the same facts the read needs, and a second copy of them
+  // here is a second place for the address and the read to disagree about which
+  // file they mean. Nothing is opened — §2.1's "a pure read".
+  const { path } = await prepareRead({
+    connectionConfig: args.connectionConfig,
+    datasetKind: args.dataset.kind,
+    datasetConfig: args.dataset.config,
+  });
+
+  let storeIdentity: string | null = null;
+  try {
+    const stats = await stat(path);
+    storeIdentity = `${stats.dev}:${stats.ino}`;
+  } catch {
+    // Unidentifiable — recorded as such, never a refusal and never a FALSE
+    // identity. See the docblock's uniform-across-errno argument.
+  }
+
+  return { kind: 'fs', store: path, storeIdentity, object: path };
+}
+
+/**
+ * §6.4's format facts as the pump wants them, projected off a `delimited`
+ * dataset's own config — the `CopyIo.sourceCoercion` half of the wiring.
+ *
+ * IT LIVES HERE, beside the schema it parses and the refusal it words, rather
+ * than in `fs.ts` where it is called. `fs.ts` would otherwise re-import
+ * `delimitedDatasetConfigSchema` and hand-write the same "invalid delimited
+ * dataset config" sentence, which is two places for one message to drift.
+ *
+ * A PARSE FAILURE THROWS rather than degrading to `{}`, and the polarity is
+ * worth stating even though it is nearly unreachable: by the time this runs,
+ * `describeSource` has already parsed the same config through `prepareRead` and
+ * thrown the same message, so the only path here is a mapping so empty that the
+ * describe was skipped — which `pumpCopyRows` refuses on its own. It throws
+ * anyway because the alternative is the fail-open one: `{}` would run the copy
+ * with the operator's declared sentinel silently doing nothing, which is exactly
+ * what the REQUIRED channel exists to prevent.
+ *
+ * Only the DECLARED keys are returned. `exactOptionalPropertyTypes` is on, so an
+ * absent `nullValue` must be an absent PROPERTY and not `undefined` — and the
+ * distinction is load-bearing downstream: `coerceValue` tests
+ * `opts.nullValue !== undefined`, and `''` is a meaningful declaration.
+ */
+export function delimitedCoercionFor(datasetConfig: Record<string, unknown>): CoercionOptions {
+  const parsed = delimitedDatasetConfigSchema.safeParse(datasetConfig);
+  if (!parsed.success) {
+    throw new DatasetIoError(
+      'permanent',
+      `invalid delimited dataset config: ${parsed.error.message}`,
+    );
+  }
+  const { nullValue, dateFormat } = parsed.data;
+  return {
+    ...(nullValue === undefined ? {} : { nullValue }),
+    ...(dateFormat === undefined ? {} : { dateFormat }),
+  };
 }
