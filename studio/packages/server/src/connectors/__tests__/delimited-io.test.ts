@@ -1,4 +1,4 @@
-import { mkdir, open, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, stat, symlink, writeFile } from 'node:fs/promises';
 
 // Pass every export straight through to the real implementation — only `open`
 // becomes a spy, so a test can prove the handle the reader took was CLOSED. The
@@ -641,19 +641,17 @@ describe('where a delimited dataset physically is', () => {
     const [spelled, alias] = await Promise.all([resolve(path), resolve(aliased)]);
 
     expect(spelled.store).not.toBe(alias.store);
-    let sameFile = true;
-    try {
-      const { stat } = await import('node:fs/promises');
-      const [a, b] = await Promise.all([stat(path), stat(aliased)]);
-      sameFile = a.ino === b.ino;
-    } catch {
-      sameFile = false;
-    }
-    if (sameFile) {
-      expect(alias.storeIdentity).toBe(spelled.storeIdentity);
-    } else {
-      expect(alias.storeIdentity).not.toBe(spelled.storeIdentity);
-    }
+    // The oracle is the FILESYSTEM, asked directly, not a guess about which one
+    // this suite is running on. `stat` throws on a case-sensitive volume, where
+    // `data.csv` genuinely does not exist — and there the two addresses SHOULD
+    // differ, which is the same rule reaching the opposite answer.
+    const sameFile = await stat(aliased)
+      .then(async (b) => (await stat(path)).ino === b.ino)
+      .catch(() => false);
+    expect(alias.storeIdentity === spelled.storeIdentity).toBe(sameFile);
+    // Whichever volume this is, the identity is what decided it — the PATHS
+    // differ either way, so a path-only comparison could not have.
+    expect(spelled.storeIdentity).toMatch(/^\d+:\d+$/);
   });
 
   it('records an unidentifiable store as null rather than refusing', async () => {
@@ -729,6 +727,8 @@ describe('the coercion options a delimited dataset declares', () => {
     // unparseable config would otherwise run the copy with the operator's
     // declared sentinel doing nothing.
     expect(() => delimitedCoercionFor({ header: true })).toThrow(DatasetIoError);
-    expect(() => delimitedCoercionFor({ header: true })).toThrow(/invalid delimited dataset config/);
+    expect(() => delimitedCoercionFor({ header: true })).toThrow(
+      /invalid delimited dataset config/,
+    );
   });
 });

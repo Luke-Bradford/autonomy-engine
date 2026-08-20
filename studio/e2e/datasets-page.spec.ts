@@ -188,9 +188,7 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Kind').selectOption('delimited');
     await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
-    await expect(
-      form(page).getByText(/no reader exists for a delimited dataset yet/),
-    ).toBeHidden();
+    await expect(form(page).getByText(/no reader exists for a delimited dataset yet/)).toBeHidden();
     // The MIS-STORE note survives on its own, which is what keeps #1145's
     // advisory and #1120's two independent facts rather than one: this is a
     // `sqlite` store and `delimited` lives on `fs`.

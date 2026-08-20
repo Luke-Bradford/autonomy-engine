@@ -159,9 +159,7 @@ describe('activity catalog', () => {
     // sink added before a `delimited` writer exists.
     for (const kind of copy?.datasetKinds?.sink ?? []) {
       expect(
-        DATASET_CONNECTION_KINDS[kind].some((store) =>
-          copy?.sinkConnectionKinds?.includes(store),
-        ),
+        DATASET_CONNECTION_KINDS[kind].some((store) => copy?.sinkConnectionKinds?.includes(store)),
       ).toBe(true);
     }
   });

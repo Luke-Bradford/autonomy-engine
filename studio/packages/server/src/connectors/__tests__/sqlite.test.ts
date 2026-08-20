@@ -324,7 +324,9 @@ describe('what the reader refuses before it opens anything', () => {
           datasetConfig: { path: '/data/in.csv' },
         }),
       ),
-    ).rejects.toThrow(/the sqlite store reads 'table' and 'query' datasets; this one is 'delimited'/);
+    ).rejects.toThrow(
+      /the sqlite store reads 'table' and 'query' datasets; this one is 'delimited'/,
+    );
   });
 
   it('refuses a delimited config BY KIND, never by trying to parse it as a table', async () => {

@@ -169,9 +169,10 @@ function formFor(
  */
 function defaultKindFor(connection: ConnectionPublic | undefined): DatasetKind {
   const readable = KINDS.filter(datasetKindIsImplemented);
-  const kind = connection === undefined
-    ? undefined
-    : readable.find((k) => DATASET_CONNECTION_KINDS[k].includes(connection.kind));
+  const kind =
+    connection === undefined
+      ? undefined
+      : readable.find((k) => DATASET_CONNECTION_KINDS[k].includes(connection.kind));
   // Falls back through "first readable" to `KINDS[0]`, so this stays TOTAL —
   // for a store no readable kind lives in (an `http` connection, say) and for
   // the degenerate case of an empty implemented set.
@@ -182,14 +183,7 @@ function blankForm(connections: readonly ConnectionPublic[]): FormState {
   // The store is left UNSET when there are no connections rather than
   // defaulting to a store that does not exist; the form's own hint says what to
   // do about it.
-  return formFor(
-    null,
-    '',
-    connections[0]?.id ?? '',
-    defaultKindFor(connections[0]),
-    {},
-    '',
-  );
+  return formFor(null, '', connections[0]?.id ?? '', defaultKindFor(connections[0]), {}, '');
 }
 
 function formForEdit(dataset: Dataset): FormState {
