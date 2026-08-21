@@ -554,6 +554,91 @@ describe('readXlsxRowBatches — dates', () => {
 });
 
 describe('readXlsxRowBatches — malformed references', () => {
+  it('REFUSES a column reference past the format’s last column, without allocating it', async () => {
+    // The one bound that is not a byte count. `limits.ts` measures what ARRIVES;
+    // a column index is DERIVED, and exponentially so — `r="ZZZZZZ1"` is
+    // fifteen bytes and decodes to ~321 million. The gap fill below
+    // (`while (cells.length < column) cells.push(null)`) would grow the row to
+    // that length synchronously, so a few bytes of XML force a multi-gigabyte
+    // allocation the byte caps cannot see. XFD (16,384) is the format's own last
+    // column, so refusing past it turns an exhaustion path into a fast failure
+    // and refuses nothing Excel can emit.
+    const huge = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [[{ kind: 'raw', xml: '<c r="ZZZZZZ1" t="inlineStr"><is><t>x</t></is></c>' }]],
+        },
+      ],
+    });
+    await expect(readAll(huge)).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(huge)).rejects.toThrowError(/16384-column ceiling/);
+
+    // One past the ceiling is refused by the same rule, not by its size.
+    const justOver = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [[{ kind: 'raw', xml: '<c r="XFE1" t="inlineStr"><is><t>x</t></is></c>' }]],
+        },
+      ],
+    });
+    await expect(readAll(justOver)).rejects.toThrowError(/16384-column ceiling/);
+  });
+
+  it('still reads XFD, the last column the format allows', async () => {
+    // The other half: the ceiling must refuse the malformed, never the legal.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [[{ kind: 'raw', xml: '<c r="XFD1" t="inlineStr"><is><t>last</t></is></c>' }]],
+        },
+      ],
+    });
+    const rows = await readAll(path);
+    expect(rows[0]!.cells).toHaveLength(16_384);
+    expect(rows[0]!.cells[16_383]).toBe('last');
+  });
+
+  it('REFUSES a row whose r attribute is not a row number', async () => {
+    // `Number(tag.attributes['r'])` accepted anything, so `r="abc"` bound NaN
+    // as the row number and travelled with the data — a guess, where every
+    // other malformed reference here fails instead.
+    seq += 1;
+    const path = join(root, `bad-rownum-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        },
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: '<worksheet><sheetData><row r="abc"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>',
+        },
+      ]),
+    );
+
+    await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(path)).rejects.toThrowError(/r="abc"/);
+  });
+
+  it('REFUSES a non-positive batchRows rather than looping forever', async () => {
+    // `while (pending.length >= batchRows) yield pending.splice(0, batchRows)`
+    // never terminates at 0: the predicate always holds and each splice yields
+    // an empty batch. A caller bug should be a fast error, not a hung server.
+    const path = seed({ sheets: [{ name: 'S', rows: [[{ kind: 'inline', text: 'a' }]] }] });
+    await expect(readAll(path, { batchRows: 0 })).rejects.toThrowError(/batchRows/);
+    await expect(readAll(path, { batchRows: -1 })).rejects.toThrowError(/batchRows/);
+    await expect(readAll(path, { batchRows: 1.5 })).rejects.toThrowError(/batchRows/);
+  });
+
   it('REFUSES a shared-string reference the table does not hold', async () => {
     // Silently reading as a blank would turn a truncated workbook into an
     // apparently-successful, quietly-incomplete import.

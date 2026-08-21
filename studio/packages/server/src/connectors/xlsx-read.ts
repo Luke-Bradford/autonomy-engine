@@ -60,6 +60,7 @@ import type { Entry, ZipFile } from 'yauzl';
 import {
   COPY_BATCH_ROWS,
   XLSX_MAX_CELL_CHARS,
+  XLSX_MAX_COLUMNS,
   XLSX_MAX_ENTRY_BYTES,
   XLSX_MAX_SHARED_STRINGS_BYTES,
   XLSX_MAX_SMALL_PART_BYTES,
@@ -569,6 +570,13 @@ export async function* readXlsxRowBatches(
   opts: ReadXlsxOptions,
 ): AsyncGenerator<readonly XlsxRow[]> {
   const batchRows = opts.batchRows ?? COPY_BATCH_ROWS;
+  // `while (pending.length >= batchRows) yield pending.splice(0, batchRows)`
+  // does not terminate at 0 — the predicate always holds and every splice
+  // yields an empty batch — so a caller's bad value would hang the server
+  // rather than fail. Refuse it at the boundary instead.
+  if (!Number.isInteger(batchRows) || batchRows < 1) {
+    throw new XlsxReadError(`batchRows must be a positive integer; got ${batchRows}`);
+  }
   const zip = await openZip(opts.filePath, opts.fd);
 
   try {
@@ -602,12 +610,28 @@ export async function* readXlsxRowBatches(
 
     parser.on('opentag', (tag: SaxesTagPlain) => {
       switch (tag.name) {
-        case 'row':
-          rowNumber = Number(tag.attributes['r'] ?? rowNumber + 1);
+        case 'row': {
+          const declared = tag.attributes['r'];
+          if (declared === undefined) {
+            rowNumber += 1;
+          } else {
+            // `Number()` alone accepted anything, so `r="abc"` bound NaN as the
+            // row number and travelled WITH the data — a guess, where every
+            // other malformed reference in this module refuses (§6.2).
+            const parsed = Number(declared);
+            if (!Number.isInteger(parsed) || parsed < 1) {
+              state.failure ??= new XlsxReadError(
+                `a row declares r="${declared}", which is not a positive row number`,
+              );
+            } else {
+              rowNumber = parsed;
+            }
+          }
           cells = [];
           nextColumn = 0;
           lastColumn = -1;
           break;
+        }
         case 'c':
           cellRef = tag.attributes['r'];
           cellType = tag.attributes['t'] ?? 'n';
@@ -665,6 +689,20 @@ export async function* readXlsxRowBatches(
           // vanish with the copy still reporting success. Real Excel never
           // emits this, so a workbook that does is malformed or hostile, and
           // §6.2's posture is to fail rather than guess.
+          // The bytes are bounded; the index DERIVED from them is not, and
+          // exponentially so — `r="ZZZZZZ1"` is fifteen bytes and decodes to
+          // ~321 million, which the gap fill below would allocate synchronously.
+          // Every `XLSX_MAX_*_BYTES` measures what ARRIVES and is blind to this.
+          // XFD is the format's own last column, so past it is malformed rather
+          // than merely large.
+          if (column >= XLSX_MAX_COLUMNS) {
+            state.failure ??= new XlsxReadError(
+              `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`}, past the ` +
+                `${XLSX_MAX_COLUMNS}-column ceiling the format allows`,
+            );
+            cellRef = undefined;
+            break;
+          }
           if (column <= lastColumn) {
             state.failure ??= new XlsxReadError(
               `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`} after a later ` +

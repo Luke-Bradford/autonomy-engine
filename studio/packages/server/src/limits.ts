@@ -168,3 +168,20 @@ export const XLSX_MAX_CELL_CHARS = 1_048_576;
  * point: the amplification is gone and no legitimate file is refused.
  */
 export const XLSX_MAX_SMALL_PART_BYTES = 16_777_216;
+
+/**
+ * The one bound that is not a byte count, and the reason it cannot be.
+ *
+ * A cell reference carries a COLUMN in letters, and the reader derives an index
+ * from it. That derivation is exponential in the letter run while the bytes are
+ * linear: `r="ZZZZZZ1"` is fifteen bytes of XML and decodes to ~321 million.
+ * The sheet parser fills interior blanks by growing the row's `cells` array to
+ * the declared index, so a few bytes could force a multi-gigabyte synchronous
+ * allocation — an exhaustion path every `XLSX_MAX_*_BYTES` above is blind to,
+ * because they measure what ARRIVES and this is what is DERIVED.
+ *
+ * 16,384 is not a policy choice: it is XFD, the format's own last column, so
+ * nothing Excel can emit is refused and everything past it is malformed by
+ * definition rather than merely large.
+ */
+export const XLSX_MAX_COLUMNS = 16_384;
