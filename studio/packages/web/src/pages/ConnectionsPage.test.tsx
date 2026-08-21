@@ -633,13 +633,13 @@ describe('ConnectionsPage', () => {
       await screen.findByText('Staging');
 
       const rows = screen.getAllByRole('button', { name: 'Edit' });
-      await user.click(rows[0]);
+      await user.click(rows[0]!);
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
 
       // Switch to the OTHER connection without closing the form.
-      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
