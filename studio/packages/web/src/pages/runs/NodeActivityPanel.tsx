@@ -356,7 +356,14 @@ function DataMovementSection({
      object it names, so there is nothing absent to explain and a sentence there
      would invent a gap. If a third store kind ever collapses to one value, the
      question to answer is which of those two it is, not whether to widen this. */
-  const unnamed = source.object === null || (sink !== undefined && sink.object === null);
+  /* Name the ends rather than saying "that end": with two ends rendered and
+     only one of them a query, an unattributed sentence leaves the reader to
+     guess which row it explains — and guessing wrong is exactly the truncated
+     -render misreading the sentence exists to prevent. */
+  const unnamedEnds = [
+    source.object === null ? 'source' : undefined,
+    sink !== undefined && sink.object === null ? 'sink' : undefined,
+  ].filter((end): end is string => end !== undefined);
   return (
     <section className="contract-section">
       <h4>Data movement</h4>
@@ -379,9 +386,10 @@ function DataMovementSection({
           </>
         )}
       </dl>
-      {unnamed && (
+      {unnamedEnds.length > 0 && (
         <p className="page-hint">
-          A query names no single object in its store, so only the store is recorded for that end.
+          A query names no single object in its store, so only the store is recorded for the{' '}
+          {unnamedEnds.join(' and ')}.
         </p>
       )}
     </section>

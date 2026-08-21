@@ -157,6 +157,49 @@ describe('NodeActivityPanel — the resolved dataset address', () => {
     expect(panel.textContent).toMatch(/names no single object/);
   });
 
+  /**
+   * With two ends on screen and only one of them a query, the sentence has to
+   * say WHICH row it explains — "that end" leaves the reader to guess, and the
+   * wrong guess is the truncated-render misreading the sentence exists to kill.
+   */
+  it('names the source when only the source is a query', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'c',
+        status: 'success',
+        datasetAddresses: { source: { ...SOURCE, object: null }, sink: SINK },
+      }),
+    );
+    expect(panel.textContent).toMatch(/recorded for the source\./);
+    expect(panel.textContent).not.toMatch(/sink\./);
+  });
+
+  it('names the sink when only the sink is a query', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'c',
+        status: 'success',
+        datasetAddresses: { source: SOURCE, sink: { ...SINK, object: null } },
+      }),
+    );
+    expect(panel.textContent).toMatch(/recorded for the sink\./);
+    expect(panel.textContent).not.toMatch(/for the source/);
+  });
+
+  it('names both ends when both are queries', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'c',
+        status: 'success',
+        datasetAddresses: {
+          source: { ...SOURCE, object: null },
+          sink: { ...SINK, object: null },
+        },
+      }),
+    );
+    expect(panel.textContent).toMatch(/recorded for the source and sink\./);
+  });
+
   it('does not offer that explanation when both ends name an object', () => {
     const panel = renderPanel(
       row({ nodeId: 'c', status: 'success', datasetAddresses: { source: SOURCE, sink: SINK } }),
