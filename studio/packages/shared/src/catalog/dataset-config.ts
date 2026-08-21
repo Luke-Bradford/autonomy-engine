@@ -334,8 +334,9 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  * WHERE EACH ROW COMES FROM, because half of it was called unsettled when the
  * ticket was filed and only two thirds of that was still true:
  * - `table`, `query` → a SQL store. §2.6's store-connection table names exactly
- *   two, `sqlite` and `postgres`, and only `sqlite` is in `ConnectionKindSchema`
- *   today — so this lists the store kinds that EXIST, not the ones that will.
+ *   two, `sqlite` and `postgres`. Both are now in `ConnectionKindSchema` (#1189,
+ *   M10 slice 1), and `postgres` is STILL NOT LISTED HERE — see the next
+ *   paragraph, because that is a decision, not the lag it used to be.
  * - `delimited` → `fs`. SETTLED: §12's M7 row is "`delimited` dataset kind over
  *   the existing `fs` connection", §7 ② says "`fs` becomes a store when
  *   `delimited` lands", and `registry.ts`'s `copy` entry already says in prose
@@ -344,6 +345,21 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  *   a citation: M11's row names no connection. The support is §2.5 — format
  *   lives on the dataset precisely BECAUSE one folder holds CSV and Excel side
  *   by side — plus §2.6 giving `excel` a `path`. M11 restates it or corrects it.
+ *
+ * WHY `postgres` IS ABSENT FROM `table`/`query` (#1189, M10 slice 1). It is a
+ * store, so the pin's own instruction — "decide whether it is a STORE; if it is,
+ * add it to every dataset kind that can live in it" — points at adding it. The
+ * answer is NOT YET, and the reason is what this map is FOR. Listing a store
+ * here is what lets an operator author a dataset against it: the form stops
+ * warning, `datasetConnectionKindAdvisory` falls silent, and the dataset saves
+ * clean. Slice 1 ships no reader and no writer for postgres, so every one of
+ * those datasets would then fail at dispatch — a shape the spec already names as
+ * the trap M5's slice 4 was split to avoid (§12's M5 row: a catalog entry landed
+ * before the resolution seam "would have been a user-visible activity that always
+ * fails at dispatch"). Holding it back costs nothing, because the existing
+ * `DATASET_CONNECTION_MISMATCH` dispatch gate refuses the binding anyway; what it
+ * buys is that the refusal happens where the dataset is AUTHORED. Slice 2 adds
+ * `'postgres'` to `table` and `query` in the same commit as the reader.
  *
  * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
  * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION

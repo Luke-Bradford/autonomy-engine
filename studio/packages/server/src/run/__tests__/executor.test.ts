@@ -1438,6 +1438,49 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     });
   });
 
+  it('refuses a postgres connection with NO secret before it is dispatched (#1189 M10)', async () => {
+    // §8 of the data-movement spec calls joining `SECRET_REQUIRING_CONNECTION_KINDS`
+    // a BUILD STEP rather than a detail, and this is the consequence it names:
+    // omit the join and `deriveSecretStatus` returns `not_required`, so a
+    // postgres connection carrying no password is `ready`, sails through this
+    // gate, and fails much later at the driver as an opaque auth error.
+    //
+    // The catalog entry is SYNTHETIC on purpose. No shipped activity lists
+    // `postgres` in `connectionKinds` in slice 1 (no reader exists yet), so a
+    // real node would be refused one rung earlier with `CONNECTION_KIND_INVALID`
+    // and this gate would never be reached. Widening a shipped entry to make the
+    // test reachable would ship a user-visible activity that always fails at
+    // dispatch — exactly the trap §12's M5 row was split four ways to avoid.
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'postgres',
+      { host: 'db.example.test', database: 'app', user: 'app_ro', sslmode: 'require' },
+      null,
+    );
+    const pvId = seedVersion(db, [nodeOfType('test_pg_store', connId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        catalog: catalogOf({
+          type: 'test_pg_store',
+          kind: 'execution',
+          connectionKinds: ['postgres'],
+        }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('needs_secret'),
+      kind: 'permanent',
+      code: 'connection_not_ready',
+    });
+  });
+
   // -------------------------------------------------------------------------
   // M1 (#1104) — the PAIRED source/sink contract. Co-owned with D6: being
   // paired is an ActivityDefinition DECLARATION (`sinkConnectionKinds`), not a

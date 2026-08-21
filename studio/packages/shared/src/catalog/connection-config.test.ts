@@ -13,6 +13,7 @@ import {
   isNonOverridableConnectionConfigKey,
   ROOT_CONFINED_CONNECTION_KINDS,
   sqliteConnectionConfigSchema,
+  postgresConnectionConfigSchema,
 } from './connection-config.js';
 
 describe('connection config catalog', () => {
@@ -38,6 +39,12 @@ describe('connection config catalog', () => {
       http: { baseUrl: 'https://example.test', headers: { accept: 'application/json' } },
       fs: { roots: ['/tmp/workspace'], maxBytes: 1024 },
       sqlite: { roots: ['/tmp/workspace'], path: '/tmp/workspace/app.db' },
+      postgres: {
+        host: 'db.example.test',
+        database: 'app',
+        user: 'app_ro',
+        sslmode: 'verify-full',
+      },
     };
     for (const kind of CONNECTION_KINDS) {
       expect(connectionConfigSchema(kind).safeParse(samples[kind]).success).toBe(true);
@@ -53,6 +60,93 @@ describe('connection config catalog', () => {
         quota: { exhaustionPattern: '([', resetWindowSeconds: 60 },
       }).success,
     ).toBe(false); // an un-compilable pattern is still refused at the boundary
+  });
+
+  describe('the postgres config (#1189 M10 slice 1)', () => {
+    const valid = {
+      host: 'db.example.test',
+      port: 5432,
+      database: 'app',
+      user: 'app_ro',
+      sslmode: 'require',
+      connectTimeoutMs: 5_000,
+      statementTimeoutMs: 30_000,
+    };
+
+    it('accepts every §2.6 key', () => {
+      expect(postgresConnectionConfigSchema.safeParse(valid).success).toBe(true);
+    });
+
+    it.each(['host', 'database', 'user'])(
+      'refuses an ABSENT %s, because pg would read the ambient environment for it',
+      (key) => {
+        const { [key]: _dropped, ...rest } = valid as Record<string, unknown>;
+        void _dropped;
+        expect(postgresConnectionConfigSchema.safeParse(rest).success).toBe(false);
+      },
+    );
+
+    it.each(['host', 'database', 'user'])('refuses an EMPTY %s for the same reason', (key) => {
+      // MEASURED on pg@8.23.0: '' is not "the empty host", it is "no host
+      // supplied", and pg falls back to PGHOST/PGDATABASE/PGUSER. An empty
+      // string must be as refused as an absent key or the guard has a hole in
+      // exactly the shape a form submits.
+      expect(postgresConnectionConfigSchema.safeParse({ ...valid, [key]: '' }).success).toBe(false);
+    });
+
+    it('refuses a missing sslmode — there is no safe default to manufacture', () => {
+      const { sslmode: _dropped, ...rest } = valid;
+      void _dropped;
+      expect(postgresConnectionConfigSchema.safeParse(rest).success).toBe(false);
+    });
+
+    it('refuses the libpq modes this vocabulary deliberately omits', () => {
+      // `prefer`/`allow` downgrade to plaintext invisibly; `verify-ca` needs a
+      // CA key §2.6 does not define. Each is refused rather than quietly
+      // treated as something else.
+      for (const mode of ['prefer', 'allow', 'verify-ca', 'yes']) {
+        expect(postgresConnectionConfigSchema.safeParse({ ...valid, sslmode: mode }).success).toBe(
+          false,
+        );
+      }
+    });
+
+    it('refuses a port outside the TCP range, and a non-integer one', () => {
+      expect(postgresConnectionConfigSchema.safeParse({ ...valid, port: 0 }).success).toBe(false);
+      expect(postgresConnectionConfigSchema.safeParse({ ...valid, port: 65_536 }).success).toBe(
+        false,
+      );
+      expect(postgresConnectionConfigSchema.safeParse({ ...valid, port: 5432.5 }).success).toBe(
+        false,
+      );
+    });
+
+    it('refuses a non-positive timeout on either axis', () => {
+      expect(
+        postgresConnectionConfigSchema.safeParse({ ...valid, connectTimeoutMs: 0 }).success,
+      ).toBe(false);
+      expect(
+        postgresConnectionConfigSchema.safeParse({ ...valid, statementTimeoutMs: -1 }).success,
+      ).toBe(false);
+    });
+
+    it('fixes the connection IDENTITY and TRANSPORT against per-dispatch override', () => {
+      // The security boundary this kind is the first to need: an overridable
+      // host sends a DECRYPTED password to a server the connection's owner
+      // never named, and an overridable sslmode strips what protects it.
+      for (const key of ['host', 'port', 'database', 'user', 'sslmode']) {
+        expect(isNonOverridableConnectionConfigKey('postgres', key)).toBe(true);
+      }
+    });
+
+    it('leaves the two timeouts tunable per dispatch', () => {
+      expect(isNonOverridableConnectionConfigKey('postgres', 'connectTimeoutMs')).toBe(false);
+      expect(isNonOverridableConnectionConfigKey('postgres', 'statementTimeoutMs')).toBe(false);
+    });
+
+    it('is not root-confined — it addresses a server, not a file', () => {
+      expect(ROOT_CONFINED_CONNECTION_KINDS.has('postgres')).toBe(false);
+    });
   });
 
   it('leaves the ABSOLUTE-root check to the server, deliberately', () => {
@@ -104,7 +198,14 @@ describe('#1119 M4 — the sqlite store connection', () => {
     // at the front would silently change the default kind of every new
     // connection; this is the cheap assertion that says so.
     expect(CONNECTION_KINDS[0]).toBe('anthropic_api');
-    expect(CONNECTION_KINDS[CONNECTION_KINDS.length - 1]).toBe('sqlite');
+    // #1189 — this used to read "the LAST kind is sqlite", which asserted the
+    // right thing for one release and then failed the moment `postgres`
+    // appended correctly. The invariant is not "sqlite is last", it is "no kind
+    // ever MOVES": an insertion shifts every index after it, so pinning
+    // sqlite's own index catches exactly that and needs no edit when the next
+    // kind is appended after it.
+    expect(CONNECTION_KINDS.indexOf('sqlite')).toBe(6);
+    expect(CONNECTION_KINDS.indexOf('postgres')).toBe(7);
   });
 
   it('needs both an allowlist and a path', () => {

@@ -24,12 +24,12 @@ const validConnection = {
 };
 
 describe('ConnectionKindSchema', () => {
-  it.each(['anthropic_api', 'openai_api', 'ollama', 'agent_cli', 'http', 'fs'])(
-    'accepts %s',
-    (kind) => {
-      expect(ConnectionKindSchema.parse(kind)).toBe(kind);
-    },
-  );
+  // Driven off the enum rather than a literal list, which is why it now covers
+  // `sqlite` and `postgres`: the hand-written list had silently stopped at `fs`
+  // and was certifying six of eight kinds while reading as though it covered all.
+  it.each([...ConnectionKindSchema.options])('accepts %s', (kind) => {
+    expect(ConnectionKindSchema.parse(kind)).toBe(kind);
+  });
 
   it('rejects an unknown kind', () => {
     expect(() => ConnectionKindSchema.parse('carrier_pigeon')).toThrow();
@@ -145,11 +145,19 @@ describe('secret-requiring kinds (G8a SSOT)', () => {
     expect(connectionKindRequiresSecret('openai_api')).toBe(true);
   });
 
+  it('requires a connection secret for postgres (#1189 M10 — §8 names this a build step)', () => {
+    // The whole point of the join: omit it and `deriveSecretStatus` returns
+    // `not_required`, so a postgres connection with NO password is `ready` and
+    // sails through the `CONNECTION_NOT_READY` dispatch gate.
+    expect(connectionKindRequiresSecret('postgres')).toBe(true);
+  });
+
   it('does NOT require a connection secret for credential-less kinds', () => {
     expect(connectionKindRequiresSecret('ollama')).toBe(false);
     expect(connectionKindRequiresSecret('agent_cli')).toBe(false);
     expect(connectionKindRequiresSecret('http')).toBe(false);
     expect(connectionKindRequiresSecret('fs')).toBe(false);
+    expect(connectionKindRequiresSecret('sqlite')).toBe(false);
   });
 
   it('the SSOT set matches the helper for every connection kind', () => {

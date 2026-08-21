@@ -80,6 +80,90 @@ test.describe('U13b per-kind connection config', () => {
     await expectQuiet(page, problems);
   });
 
+  test('creates a postgres connection, typed, with its TLS mode a real choice', async ({
+    page,
+  }) => {
+    // #1189 (M10 slice 1). What only the browser can prove: the `postgres`
+    // schema that reached the SHIPPED bundle derives real controls — in
+    // particular that `sslmode` is a SELECT of the three modes and not a free
+    // text box, and that a required enum did not degrade the whole form to the
+    // JSON textarea. The security decision is only as good as the control that
+    // carries it: a typo in a text field would be a config the server refuses,
+    // and an operator who cannot see the choices cannot make the choice.
+    const problems = collectPageProblems(page);
+    await gotoConnections(page);
+
+    const name = `e2e m10 postgres ${Date.now()}`;
+    await page.getByRole('button', { name: 'New connection' }).click();
+    await form(page).getByLabel('Name').fill(name);
+    await form(page).getByLabel('Kind').selectOption('postgres');
+
+    // A postgres connection cannot dispatch without a password, and the form
+    // must say so — this is the visible face of joining
+    // `SECRET_REQUIRING_CONNECTION_KINDS`.
+    await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
+
+    const sslmode = form(page).getByLabel('sslmode');
+    await expect(sslmode).toHaveRole('combobox');
+    await expect(sslmode.locator('option')).toHaveText([
+      // The empty choice is the form's own placeholder, and it MATTERS here:
+      // `sslmode` is required with no default, so a new postgres connection
+      // starts on "— none —" and the operator has to pick. The schema refuses
+      // the empty one, which is the whole point of having no safe default.
+      '— none —',
+      'disable',
+      'require',
+      'verify-full',
+    ]);
+
+    await form(page).getByLabel('host').fill('db.example.test');
+    await form(page).getByLabel('database').fill('app');
+    await form(page).getByLabel('user').fill('app_ro');
+    await sslmode.selectOption('verify-full');
+    await form(page).getByLabel('port (optional)').fill('6543');
+    await form(page).getByRole('button', { name: 'Create connection' }).click();
+
+    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
+
+    const stored = await page.evaluate(async (wanted: string) => {
+      type Row = {
+        name: string;
+        kind: string;
+        config: Record<string, unknown>;
+        secretStatus: string;
+      };
+      let cursor: string | null = null;
+      for (;;) {
+        const url: string =
+          cursor === null
+            ? '/api/connections'
+            : `/api/connections?cursor=${encodeURIComponent(cursor)}`;
+        const page: { items: Row[]; nextCursor: string | null } = await (await fetch(url)).json();
+        const hit = page.items.find((r) => r.name === wanted);
+        if (hit !== undefined) return hit;
+        if (page.nextCursor === null) return null;
+        cursor = page.nextCursor;
+      }
+    }, name);
+
+    expect(stored).not.toBeNull();
+    expect(stored!.kind).toBe('postgres');
+    // `port` is a NUMBER, not the string the input held.
+    expect(stored!.config).toEqual({
+      host: 'db.example.test',
+      database: 'app',
+      user: 'app_ro',
+      sslmode: 'verify-full',
+      port: 6543,
+    });
+    // The readiness half, end to end: no secret was bound, so the server
+    // DERIVED `needs_secret` — the state the dispatch gate refuses on. Before
+    // the kind joined the secret-requiring set this read `not_required`.
+    expect(stored!.secretStatus).toBe('needs_secret');
+
+    await expectQuiet(page, problems);
+  });
+
   test('swaps the fields when the kind changes, and says what the secret is for', async ({
     page,
   }) => {

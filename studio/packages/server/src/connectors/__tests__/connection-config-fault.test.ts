@@ -37,6 +37,11 @@ const INVALID_CONFIGS: Record<ConnectionKind, unknown> = {
   agent_cli: { command: '' },
   fs: { roots: [] },
   sqlite: { roots: ['/db'], path: '' },
+  // An EMPTY host, not an absent one, deliberately: `''` is the shape a form
+  // submits, and MEASURED on pg@8.23.0 it is also the shape that falls back to
+  // `PGHOST`. This fixture is therefore the refusal AND the ambient-environment
+  // guard, keyed on the field that names it.
+  postgres: { host: '', database: 'app', user: 'app_ro', sslmode: 'require' },
 };
 
 /** The field each fixture above is refused ON — the issue's `path`. */
@@ -48,6 +53,7 @@ const FAULTED_FIELD: Record<ConnectionKind, string> = {
   agent_cli: 'command',
   fs: 'roots',
   sqlite: 'path',
+  postgres: 'host',
 };
 
 /**
@@ -65,6 +71,7 @@ const REFUSAL_PREFIX: Record<ConnectionKind, string> = {
   agent_cli: 'invalid agent_cli connection config: ',
   fs: 'invalid fs connection config: ',
   sqlite: 'invalid sqlite connection config: ',
+  postgres: 'invalid postgres connection config: ',
 };
 
 const KINDS = Object.keys(CONNECTION_CONFIG_SCHEMAS) as ConnectionKind[];

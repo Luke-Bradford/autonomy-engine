@@ -343,7 +343,28 @@
 // CEILING (refuse an artifact newer than this build) and keys `UPGRADERS` on
 // `schemaVersion` alone, so a catalog bump is purely an import floor and
 // migrates nothing.
-export const CATALOG_VERSION = 24;
+// CATALOG_VERSION 25 (#1189, M10 slice 1): the `postgres` STORE connection kind.
+// A BUMP, on the settled precedent this ledger has now applied twice — bump 8
+// for `fs` and bump 22 for `sqlite` — that a new `ConnectionKind` is different
+// in kind from a new field: it "is not even parseable by an older
+// `ConnectionKindSchema`", so an export carrying one is an artifact an older
+// build mis-runs and must refuse to import. Bump 22 recorded the MEASURED
+// consequence of not bumping, and it applies here unchanged: an older build's
+// `workspace-parse` turns the connection file into a generic `unparseable`
+// diagnostic and CONTINUES, so the connection is silently dropped from the apply
+// set instead of refused with a version message naming the real cause.
+//
+// A SECOND reason this time, which `fs` and `sqlite` did not have: `postgres` is
+// the first CREDENTIALLED store kind, so it also widens
+// `SECRET_REQUIRING_CONNECTION_KINDS`. A pre-25 build that somehow parsed the
+// kind would derive `secretStatus: 'not_required'` for it and let a
+// password-less connection through the `CONNECTION_NOT_READY` gate — the import
+// floor is what stops that reading from being reached at all.
+//
+// NOT a bump for any DATASET reason. `DATASET_CONNECTION_KINDS` is deliberately
+// unchanged in this slice (no `table`/`query` dataset may name a postgres
+// connection until slice 2 has a reader), so no artifact's dataset half moves.
+export const CATALOG_VERSION = 25;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

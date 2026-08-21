@@ -26,6 +26,15 @@ export const ConnectionKindSchema = z.enum([
   // `CONNECTION_KINDS[0]`, so a kind added at the front would silently change
   // the default kind of every new connection (and break the e2e that pins it).
   'sqlite',
+  // #1189 M10 slice 1 (data-movement spec §2.6/§12) — the first NETWORKED store
+  // kind, and the first store kind that carries a CREDENTIAL. Unlike `sqlite`
+  // and `fs`, whose guard is a `config.roots` filesystem allowlist, a postgres
+  // connection's guard is the password it holds, so it JOINS
+  // `SECRET_REQUIRING_CONNECTION_KINDS` below — see that set's docblock, and
+  // §8, which calls that join a build step rather than a detail.
+  //
+  // APPENDED, for the reason `sqlite` states above.
+  'postgres',
 ]);
 export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
 
@@ -41,15 +50,26 @@ export const AGENT_CLI_CONNECTION_KIND: ConnectionKind = 'agent_cli';
  * #3 G8a — the connection kinds that REQUIRE a connection-level `secretRef`
  * credential to dispatch. The single source of truth for `deriveSecretStatus`
  * (server) and any UI readiness affordance — never a bare `kind === 'anthropic_api'`
- * string re-spelled at a call site. Only the hosted-API LLM kinds need a
- * connection secret: `ollama` (local) and `agent_cli` (subscription CLI) run
- * credential-less, `fs` is explicitly credential-less (`config.roots` allowlist),
- * and `http` carries auth as a config-sink `{$secret}` marker (item 7 / S4), NOT
- * a connection `secretRef`. A future kind that needs a connection credential adds
- * itself HERE; the 0030 migration's one-time SQL backfill snapshots this set.
+ * string re-spelled at a call site. `ollama` (local) and `agent_cli`
+ * (subscription CLI) run credential-less, `fs` and `sqlite` are explicitly
+ * credential-less (`config.roots` allowlist), and `http` carries auth as a
+ * config-sink `{$secret}` marker (item 7 / S4), NOT a connection `secretRef`. A
+ * future kind that needs a connection credential adds itself HERE; the 0030
+ * migration's one-time SQL backfill snapshots this set.
+ *
+ * #1189 M10: this used to read "Only the hosted-API LLM kinds need a connection
+ * secret", which `postgres` retires — a STORE can need one too. The membership
+ * axis was never "is it an LLM", it is "does dispatch need a credential this
+ * connection holds", and postgres is the first non-LLM kind where it does.
+ *
+ * Omitting a credentialled kind here is NOT a cosmetic miss, which is why §8 of
+ * the data-movement spec names the join a build step: `deriveSecretStatus` would
+ * return `not_required`, so a postgres connection with NO password would sail
+ * straight through the `CONNECTION_NOT_READY` dispatch gate — and the 0030
+ * backfill snapshots this set, so the miss would be baked into stored rows too.
  */
 export const SECRET_REQUIRING_CONNECTION_KINDS: ReadonlySet<ConnectionKind> =
-  new Set<ConnectionKind>(['anthropic_api', 'openai_api']);
+  new Set<ConnectionKind>(['anthropic_api', 'openai_api', 'postgres']);
 
 /** Whether `kind` requires a connection-level `secretRef` to dispatch (the G8a
  * readiness derivation's kind axis). */
