@@ -242,8 +242,18 @@ describe('parseAndUpgradeEnvelope', () => {
     }
     expect(thrown).toBeInstanceOf(ImportError);
     const message = (thrown as ImportError).message;
+    const prefix = 'Envelope failed validation: ';
     expect(message).toMatch(/^Envelope failed validation: [^\n]+$/);
-    expect(message).toMatch(/(^|; )data\.[A-Za-z]+: /);
+    // Assert the keyed-path claim on EVERY issue the formatter emitted, not on
+    // the joined string: an anchored `(^|; )` alternation can only ever match
+    // the second and later issues (the first is preceded by the prefix above),
+    // so it would silently degrade to asserting nothing if the fixture ever
+    // narrowed to a single issue.
+    const issues = message.slice(prefix.length).split('; ');
+    expect(issues.length).toBeGreaterThan(0);
+    for (const issue of issues) {
+      expect(issue).toMatch(/^data\.[A-Za-z]+(?:\.[A-Za-z0-9]+)*: .+$/);
+    }
   });
 
   describe('the upgrade framework (chained-apply)', () => {
