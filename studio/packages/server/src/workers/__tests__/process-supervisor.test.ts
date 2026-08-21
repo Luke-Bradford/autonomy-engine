@@ -452,10 +452,7 @@ describe('spawnSupervised', () => {
     // an ENOENT throw here would fail the test on the wrong error and mask the
     // real one.
     rmSync(sentinelPath, { force: true });
-    await until(
-      () => existsSync(sentinelPath),
-      "B's child to rewrite its sentinel after A's reap",
-    );
+    await until(() => existsSync(sentinelPath), "B's child to rewrite its sentinel after A's reap");
 
     // Cleanup: B's own reap kills B's child (and confirms the reap works).
     await supB.reapAllSupervised();

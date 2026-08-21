@@ -510,9 +510,8 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     ~20, versus 13 and ~11 serial). That is the mechanism behind every "fails in
     the full suite, passes in isolation" report: an isolated re-run is not a
     different test, it is a different machine. It is not a speed tradeoff —
-    concurrent wall-clock is the MAX of the packages (~155.5s) and serial is
-    their SUM (~156.2s), because server and web each run ~2x faster when not
-    fighting each other. A bespoke script rather than
+    timed back-to-back on an idle box, concurrent was 135s and serial 129s,
+    because server and web each roughly halve when not fighting each other. A bespoke script rather than
     `--workspace-concurrency=1` because that flag BAILS after the first failing
     package (measured, pnpm 11.0.6), hiding later packages' results; and not
     `--no-bail`, whose measured exit code (1) contradicts its own documented

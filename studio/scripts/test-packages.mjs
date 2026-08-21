@@ -23,23 +23,33 @@
  *
  * ## Why serial costs nothing
  *
- * The concurrency was buying no wall-clock, because it was thrashing. vitest's
- * own per-package `Duration`, same tree, same machine:
+ * The concurrency was buying no wall-clock, because it was thrashing. Timed
+ * back-to-back on an otherwise idle box, same tree, same commit:
+ *
+ * | run                        | wall-clock |
+ * | -------------------------- | ---------- |
+ * | `pnpm -r run test` (before)| 135s       |
+ * | this script (after)        | 129s       |
+ *
+ * Serial is marginally FASTER, so this is not a speed-for-reliability trade.
+ * vitest's own per-package `Duration` from that same pair shows where it goes —
+ * concurrent wall-clock is the MAX of the four, serial is their SUM, and each
+ * package roughly halves once it is not fighting the others:
  *
  * | package | concurrent | serial |
  * | ------- | ---------- | ------ |
- * | cli     | 0.47s      | 0.20s  |
- * | shared  | 6.82s      | 8.81s  |
- * | server  | 138.83s    | 71.41s |
- * | web     | 155.53s    | 75.79s |
+ * | cli     | 0.30s      | 0.22s  |
+ * | shared  | 5.42s      | 6.32s  |
+ * | server  | 115.84s    | 55.81s |
+ * | web     | 127.96s    | 62.36s |
  *
- * Concurrent wall-clock is the MAX (~155.5s); serial is the SUM (~156.2s).
- * They are the same number, because server and web each run ~2x faster once
- * they are not fighting each other. This is not a speed-for-reliability trade.
- * (Measured on darwin/10 cores only — CI is 4-core ubuntu, where the
- * before-state is 4 packages x 4 forks on 4 cores. The arithmetic does not
- * transport; compare the `studio-ci` `Test` step duration rather than assuming
- * it does.)
+ * Measure both halves of a comparison like this in one sitting: an earlier
+ * pass of these numbers was taken while other work ran on the box and put
+ * serial at ~156s, which understated it by 20%.
+ *
+ * Measured on darwin/10 cores only. CI is 4-core ubuntu, where the before-state
+ * is 4 packages x 4 forks on 4 cores. The arithmetic does not transport;
+ * compare the `studio-ci` `Test` step duration rather than assuming it does.
  *
  * ## Why this is a script and not a pnpm flag
  *
