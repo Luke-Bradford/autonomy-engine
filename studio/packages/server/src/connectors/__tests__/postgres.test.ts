@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import Database from 'better-sqlite3';
 import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -20,6 +25,7 @@ import {
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import type { DatasetKind } from '@autonomy-studio/shared';
 import { liveSuiteMustRun } from './live-postgres.js';
+import { readSqliteDatasetBatches } from '../sqlite.js';
 import type { ResolvedDataset } from '../types.js';
 
 /** A `ResolvedDataset` with only the fields the address seam reads. */
@@ -317,14 +323,24 @@ function readerFactory(script: {
   fetches?: readonly Record<string, unknown>[][];
   failOn?: { match: string; error: unknown };
 }) {
-  const rec = { queries: [] as string[], ended: 0, options: [] as PostgresClientOptions[] };
+  const rec = {
+    queries: [] as string[],
+    // #1194 — recorded ALONGSIDE `queries` rather than by widening it, because
+    // every existing assertion in this file indexes `queries` positionally.
+    // `undefined` is a distinct reading from `[]`: it is what proves a read that
+    // binds nothing still reaches the SIMPLE query protocol.
+    values: [] as (readonly unknown[] | undefined)[],
+    ended: 0,
+    options: [] as PostgresClientOptions[],
+  };
   let fetchIndex = 0;
   const factory: PostgresClientFactory = (options) => {
     rec.options.push(options);
     return {
-      connect: async () => undefined,
-      query: async (sql: string) => {
+      connect: async (): Promise<undefined> => undefined,
+      query: async (sql: string, values?: readonly unknown[]) => {
         rec.queries.push(sql);
+        rec.values.push(values);
         if (script.failOn !== undefined && sql.includes(script.failOn.match)) {
           throw script.failOn.error;
         }
@@ -457,32 +473,80 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
     expect(rec.queries[0]).toBe("SET SESSION DateStyle = 'ISO, YMD'");
   });
 
-  it('refuses a query dataset that declares named parameters', async () => {
-    // Measured: `where a = :id` reaches postgres as SQLSTATE 42601, a syntax
-    // error naming a colon. pg binds positionally and has no named parameters.
-    const { factory } = readerFactory({ fields: [] });
-    await expect(
-      describePostgresDatasetColumns({
+  it("BINDS a query dataset's named parameters, rewritten to $n (#1194)", async () => {
+    // Slice 2 REFUSED this outright, so the same dataset config meant something
+    // on sqlite and nothing on postgres. The rewrite itself is
+    // `postgres-named-parameters.ts`' subject; what this pins is that the
+    // describe seam carries the rewritten text AND its values to the driver.
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    expect(
+      await describePostgresDatasetColumns({
         ...READ_BASE,
         datasetKind: 'query',
         datasetConfig: { sql: 'select a from t where a = :id', parameters: { id: 1 } },
         createClient: factory,
       }),
-    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('parameters') });
+    ).toEqual(['a']);
+    const describe = rec.queries.findIndex((q) => q.includes('__studio_src'));
+    expect(rec.queries[describe]).toContain('where a = $1');
+    expect(rec.queries[describe]).not.toContain(':id');
+    expect(rec.values[describe]).toEqual([1]);
   });
 
-  it('accepts a query dataset whose parameters are absent or empty', async () => {
-    // The refusal above must not be over-broad: an empty record is not a
-    // declaration.
-    const { factory } = readerFactory({ fields: ['a'] });
-    expect(
-      await describePostgresDatasetColumns({
+  it('carries the same values onto the CURSOR, not just the describe', async () => {
+    // The two seams are separate `client.query` calls, so binding one and not
+    // the other would describe fine and then read the wrong rows — or, since a
+    // `$1` with no value is `08P01`, fail at the DECLARE with a driver message.
+    const { rec, factory } = readerFactory({ fields: ['a'], fetches: [[{ a: 5 }]] });
+    const batches = [];
+    for await (const batch of readPostgresDatasetBatches({
+      ...READ_BASE,
+      datasetKind: 'query',
+      datasetConfig: {
+        sql: 'select a from t where a > :lo and a < :hi',
+        parameters: { hi: 9, lo: 1 },
+      },
+      createClient: factory,
+    })) {
+      batches.push(batch);
+      break;
+    }
+    const declare = rec.queries.findIndex((q) => q.startsWith('DECLARE'));
+    expect(rec.queries[declare]).toContain('a > $1 and a < $2');
+    // FIRST-APPEARANCE order, which is the SQL's order and not the record's.
+    expect(rec.values[declare]).toEqual([1, 9]);
+  });
+
+  it('refuses a statement that mixes named parameters with its own $n', async () => {
+    // The rewriter's one refusal, asserted THROUGH the seam rather than only
+    // against the function: it must reach the caller as a `permanent`
+    // DatasetIoError and not as a raw throw escaping the failure contract.
+    const { rec, factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({
         ...READ_BASE,
         datasetKind: 'query',
-        datasetConfig: { sql: 'select a from t', parameters: {} },
+        datasetConfig: { sql: 'select a from t where a > $1 and b = :id', parameters: { id: 3 } },
         createClient: factory,
       }),
-    ).toEqual(['a']);
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringMatching(/positional/i) });
+    // Refused BEFORE a session is opened, so nothing reached the server.
+    expect(rec.options).toHaveLength(0);
+  });
+
+  it('sends NO values at all when the statement binds none', async () => {
+    // `undefined`, never `[]`. MEASURED on pg@8.23.0: a valueless call goes over
+    // the SIMPLE query protocol and a valued one over the EXTENDED protocol, and
+    // they differ on multi-statement text. Every pre-#1194 read must stay on the
+    // protocol the smuggle gate above was measured against.
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    await describePostgresDatasetColumns({
+      ...READ_BASE,
+      datasetKind: 'query',
+      datasetConfig: { sql: 'select a from t', parameters: {} },
+      createClient: factory,
+    });
+    expect(rec.values.every((v) => v === undefined)).toBe(true);
   });
 
   it('refuses a trailing semicolon rather than silently rewriting the operator SQL', async () => {
@@ -991,5 +1055,95 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     // same thing: the connection went to the host the CONFIG named, not the one
     // the environment did.
     expect(result.error).toMatch(/does not resolve|timeout expired/);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1194 — NAMED PARAMETERS, bound for real. The fake proves the rewritten text
+  // and its values reach the driver; only a live server proves postgres accepts
+  // them through BOTH the describe wrap and the cursor, and returns the rows the
+  // operator asked for rather than all of them.
+  // -------------------------------------------------------------------------
+
+  it('describes and READS a query dataset that binds named parameters', async () => {
+    await withLiveTable(async (table) => {
+      const config = {
+        sql: `select id, label from "${table}" where id > :lo and id < :hi order by id`,
+        parameters: { hi: 3, lo: 1 },
+      };
+      expect(await describePostgresDatasetColumns(realRead('query', config))).toEqual([
+        'id',
+        'label',
+      ]);
+      // The FILTERED row, not the fixture's three. A rewrite that dropped the
+      // predicate would still describe cleanly and read every row — which is why
+      // the count is the assertion and the column list is not enough.
+      expect(await drainLive(readPostgresDatasetBatches(realRead('query', config)))).toEqual([
+        { id: 2, label: 'b' },
+      ]);
+    });
+  });
+
+  it('binds a null and a string value, and reuses one name twice', async () => {
+    await withLiveTable(async (table) => {
+      const config = {
+        sql:
+          `select id from "${table}" ` +
+          `where (:missing::text is null) and label = :want and label <= :want order by id`,
+        parameters: { missing: null, want: 'c' },
+      };
+      expect(await drainLive(readPostgresDatasetBatches(realRead('query', config)))).toEqual([
+        { id: 3 },
+      ]);
+    });
+  });
+
+  it('does not touch a colon inside a literal, measured against the server', async () => {
+    await withLiveTable(async (table) => {
+      // The scanner's central claim, asserted where it can actually be wrong: if
+      // `:id` inside the literal were rewritten, this would bind two values to
+      // one placeholder (`08P01`) or return `$1` as the text.
+      const config = {
+        sql: `select ':id' as tag, id from "${table}" where id = :id`,
+        parameters: { id: 2 },
+      };
+      expect(await drainLive(readPostgresDatasetBatches(realRead('query', config)))).toEqual([
+        { tag: ':id', id: 2 },
+      ]);
+    });
+  });
+
+  it('reads the SAME rows as sqlite from ONE dataset config — the point of #1194', async () => {
+    // The portability claim, asserted rather than assumed. One `query` dataset
+    // config, two stores, two parameter styles underneath, one answer.
+    await withLiveTable(async (table) => {
+      const dir = mkdtempSync(join(tmpdir(), 'studio-1194-'));
+      const file = join(dir, 'parity.db');
+      try {
+        const db = new Database(file);
+        db.exec('create table parity (id integer primary key, label text)');
+        db.exec("insert into parity values (1,'a'),(2,'b'),(3,'c')");
+        db.close();
+
+        const where = 'where id > :lo and id < :hi order by id';
+        const parameters = { hi: 3, lo: 1 };
+        const fromPostgres = await drainLive(
+          readPostgresDatasetBatches(
+            realRead('query', { sql: `select id, label from "${table}" ${where}`, parameters }),
+          ),
+        );
+        const fromSqlite: Record<string, unknown>[] = [];
+        for await (const batch of readSqliteDatasetBatches({
+          connectionConfig: { roots: [dir], path: file },
+          datasetKind: 'query',
+          datasetConfig: { sql: `select id, label from parity ${where}`, parameters },
+        })) {
+          fromSqlite.push(...batch);
+        }
+        expect(fromPostgres).toEqual([{ id: 2, label: 'b' }]);
+        expect(fromSqlite).toEqual(fromPostgres);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

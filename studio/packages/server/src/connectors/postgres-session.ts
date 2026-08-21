@@ -74,8 +74,13 @@ export interface PostgresClient {
   connect(): Promise<unknown>;
   /**
    * WIDENED AGAIN BY #1196 with the optional `values`. The reader never bound a
-   * parameter — it refuses a `query` dataset's named ones outright, because `pg`
-   * has none — so a one-argument seam was the whole truth. The SINK binds every
+   * parameter — it refused a `query` dataset's named ones outright, because `pg`
+   * has none — so a one-argument seam was the whole truth. #1194 then made the
+   * READER a binder too, by rewriting `:name` to `$n`
+   * (`postgres-named-parameters.ts`); `values` stays OPTIONAL rather than
+   * becoming required, because a read that binds nothing must keep reaching the
+   * simple query protocol it was measured on (see `runBound` in `postgres.ts`).
+   * The SINK binds every
    * value it writes, which §8 requires ("parameterised binding only, never
    * concatenated"), and resolves its target through `to_regclass($1)` so a
    * relation name cannot be interpolated either.
