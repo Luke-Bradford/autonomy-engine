@@ -63,10 +63,19 @@ export const ISSUE_LIST_CAP = 100;
  * `summarizeIssues` then caps again — so an `invalid_pipeline_doc` message is
  * bounded by roughly CAP renders of CAP issues, not by CAP. A real improvement
  * over unbounded-of-unbounded, and not the same thing as constant.
+ *
+ * `total` lets a caller render only the prefix it needs and still state a
+ * truthful remainder: pass the FULL count alongside an already-sliced
+ * `rendered`, and the "…and N more" tail counts what was never rendered as
+ * well as what was sliced off here. It defaults to `rendered.length`, which is
+ * the whole-list case and the only behaviour that existed before.
  */
-export function summarizeIssueList(rendered: ReadonlyArray<string>): string {
+export function summarizeIssueList(
+  rendered: ReadonlyArray<string>,
+  total: number = rendered.length,
+): string {
   const named = rendered.slice(0, ISSUE_LIST_CAP).join('; ');
-  const rest = rendered.length - ISSUE_LIST_CAP;
+  const rest = total - ISSUE_LIST_CAP;
   return rest > 0 ? `${named}; …and ${rest} more` : named;
 }
 
@@ -104,15 +113,17 @@ export function summarizeIssueList(rendered: ReadonlyArray<string>): string {
  * deliberate. A numeric index is NOT affected: `[0].join('.')` is `'0'`.
  *
  * Bounded at `ISSUE_LIST_CAP` via `summarizeIssueList` (#1183) — see that
- * function for what the bound does and does not cover.
+ * function for what the bound does and does not cover. The slice happens BEFORE
+ * the render, so an issue beyond the cap is never turned into a string at all:
+ * the work is O(CAP), not O(issues), while the tail still counts the full list.
  */
 export function formatZodIssues(
   issues: ReadonlyArray<z.core.$ZodIssue>,
   fallbackPath?: string,
 ): string {
-  const rendered = issues.map((i) => {
+  const rendered = issues.slice(0, ISSUE_LIST_CAP).map((i) => {
     const path = i.path.join('.') || fallbackPath || '';
     return path === '' ? i.message : `${path}: ${i.message}`;
   });
-  return summarizeIssueList(rendered);
+  return summarizeIssueList(rendered, issues.length);
 }

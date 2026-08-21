@@ -122,4 +122,31 @@ describe('formatZodIssues is bounded by the same cap (#1183)', () => {
     expect(out).toContain('…and 7 more');
     expect(out).not.toContain(`f${ISSUE_LIST_CAP + 6}:`);
   });
+
+  /**
+   * The output being bounded does not make the WORK bounded: rendering every
+   * issue and then slicing gives the same string while staying O(issues). This
+   * counts renders rather than reading the result, so it fails if the slice
+   * moves back after the `map`.
+   */
+  it('never renders an issue beyond the cap', () => {
+    let renders = 0;
+    const issues = Array.from({ length: ISSUE_LIST_CAP + 50 }, (_, i) => ({
+      message: `m${i}`,
+      // `formatZodIssues` reaches an issue's text through `path.join` and
+      // `message`; counting the join is counting one render.
+      path: {
+        join: () => {
+          renders += 1;
+          return `f${i}`;
+        },
+      },
+    })) as unknown as z.core.$ZodIssue[];
+
+    const out = formatZodIssues(issues);
+
+    expect(renders).toBe(ISSUE_LIST_CAP);
+    // …and the tail still counts the ones it did not render.
+    expect(out.endsWith('; …and 50 more')).toBe(true);
+  });
 });
