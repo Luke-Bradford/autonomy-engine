@@ -47,16 +47,21 @@ export interface SeedNode {
    */
   call?: { pipelineVersionId: string; params?: Record<string, unknown>; wait?: boolean };
   /**
-   * #996 M1 — the PAIRED binding a data-movement node carries instead of the
-   * single `connectionId` above: a source STORE and a sink STORE, which for a
+   * The PAIRED binding a data-movement node carries instead of the single
+   * `connectionId` above: a source STORE and a sink STORE, which for a
    * heterogeneous copy are different connections of different kinds.
+   *
+   * The node fields themselves shipped with #996 M1/M3 and are enforced by the
+   * write gate already; what is new here is only that a SEED can express them.
+   * Until it could, no spec could put a runnable copy node in front of the
+   * engine, which is why nothing exercised the dispatch path end to end.
    */
   connectionIds?: { source: string; sink: string };
   /**
-   * #996 M3 — the datasets those two ends address. A first-class node FIELD and
-   * deliberately not config (spec §3), so like `connectionId` it is checked at
-   * DISPATCH: a seed can mint a version naming a dataset and only learn at fire
-   * time whether it resolves.
+   * The datasets those two ends address — a first-class node FIELD and
+   * deliberately not config (data-movement spec §3), so like `connectionId` it
+   * is checked at DISPATCH: a seed can mint a version naming a dataset and only
+   * learn at fire time whether it resolves.
    */
   datasetIds?: { source: string; sink: string };
   position: { x: number; y: number };

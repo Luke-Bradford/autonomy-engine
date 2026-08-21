@@ -348,7 +348,14 @@ function DataMovementSection({
      arbitrary set of tables, and `address.ts` refuses to reduce that to one
      name rather than guess. `describeDatasetAddress` then renders the store
      alone, which unexplained reads as a truncated render rather than as the
-     stated absence it is. */
+     stated absence it is.
+
+     GATED ON `null` ONLY, and NOT on the other single-value rendering — a
+     `delimited` end, whose `object` EQUALS its store. The two look alike on
+     screen and are opposite facts: a query names no object, while a file IS the
+     object it names, so there is nothing absent to explain and a sentence there
+     would invent a gap. If a third store kind ever collapses to one value, the
+     question to answer is which of those two it is, not whether to widen this. */
   const unnamed = source.object === null || (sink !== undefined && sink.object === null);
   return (
     <section className="contract-section">

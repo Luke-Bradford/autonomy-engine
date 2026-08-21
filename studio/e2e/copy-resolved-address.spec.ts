@@ -2,9 +2,10 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -35,12 +36,6 @@ import { fluentRootReady } from './support/theme';
  * dispatch would refuse.
  */
 
-async function created(page: Page, url: string, data: unknown): Promise<string> {
-  const res = await page.request.post(url, { data });
-  expect(res.status(), `${url} → ${await res.text()}`).toBe(201);
-  return ((await res.json()) as { id: string }).id;
-}
-
 test('#1162 — a copy run names both addresses it resolved', async ({ page }) => {
   const problems = collectPageProblems(page);
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1162-')));
@@ -52,18 +47,18 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
     db.exec('CREATE TABLE people (id INTEGER, name TEXT)');
     db.close();
 
-    const fsConnection = await created(page, '/api/connections', {
+    const fsConnection = await seedConnection(page, {
       name: '#1162 csv store',
       kind: 'fs',
       config: { roots: [root] },
     });
-    const sqliteConnection = await created(page, '/api/connections', {
+    const sqliteConnection = await seedConnection(page, {
       name: '#1162 warehouse',
       kind: 'sqlite',
       config: { roots: [root], path: dbPath, writable: true },
     });
 
-    const sourceDataset = await created(page, '/api/datasets', {
+    const sourceDataset = await seedDataset(page, {
       name: '#1162 people.csv',
       kind: 'delimited',
       connectionId: fsConnection,
@@ -73,7 +68,7 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
         { name: 'name', type: 'string', nullable: true },
       ],
     });
-    const sinkDataset = await created(page, '/api/datasets', {
+    const sinkDataset = await seedDataset(page, {
       name: '#1162 people table',
       kind: 'table',
       connectionId: sqliteConnection,
