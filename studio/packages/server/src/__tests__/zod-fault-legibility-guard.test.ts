@@ -41,14 +41,28 @@ const studioRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..
 
 const SCANNED_ROOTS = ['packages/server/src', 'packages/shared/src'];
 
-/** Source files only — a test may legitimately assert ON the pattern. */
-function sourceFiles(dir: string): string[] {
+/**
+ * Source files only — a test may legitimately assert ON the pattern.
+ *
+ * `symlinks` is an out-param, not a curiosity. `Dirent.isDirectory()` is FALSE
+ * for a symlink pointing at a directory, so a symlinked subtree would be walked
+ * past in silence and the ratchet would narrow without anyone noticing. Neither
+ * scanned root contains one today. Rather than FOLLOW them — which needs a
+ * realpath cycle guard for a case nothing in the repo has — the walk collects
+ * them and the sanity test below refuses them, so the day one appears the
+ * ratchet fails LOUDLY instead of quietly covering less.
+ */
+function sourceFiles(dir: string, symlinks: string[] = []): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      symlinks.push(path);
+      continue;
+    }
     if (entry.isDirectory()) {
       if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
-      found.push(...sourceFiles(path));
+      found.push(...sourceFiles(path, symlinks));
       continue;
     }
     if (!/\.tsx?$/.test(entry.name)) continue;
@@ -59,10 +73,13 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('#1175 no Zod fault is rendered through error.message', () => {
-  it('scans a non-trivial number of files (the walk itself cannot silently find nothing)', () => {
-    const files = SCANNED_ROOTS.flatMap((root) => sourceFiles(resolve(studioRoot, root)));
+  it('scans a non-trivial number of files, and no subtree is skipped (#1175)', () => {
+    const symlinks: string[] = [];
+    const files = SCANNED_ROOTS.flatMap((root) => sourceFiles(resolve(studioRoot, root), symlinks));
     // A broken path or a bad filter would make the assertion below vacuous.
     expect(files.length).toBeGreaterThan(100);
+    // And a symlinked subtree would make it vacuous for whatever it points at.
+    expect(symlinks.map((path) => path.slice(studioRoot.length + 1))).toEqual([]);
   });
 
   it.each(SCANNED_ROOTS)('%s renders every Zod fault through formatZodIssues', (root) => {

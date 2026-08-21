@@ -213,6 +213,39 @@ describe('parseAndUpgradeEnvelope', () => {
     ).toThrow(ImportError);
   });
 
+  /**
+   * #1175 — the ONE `.error.message` site outside `connectors/`, and the only
+   * one whose text reaches an API body rather than the run log: `errors.ts`
+   * sends this message verbatim as the `import_error` 400. Its shape is pinned
+   * here for the same reason the connector refusals are pinned in
+   * `connection-config-fault.test.ts` — the ratchet in
+   * `zod-fault-legibility-guard.test.ts` proves the pattern is GONE from source,
+   * not that what replaced it reads as a sentence.
+   *
+   * `data.totally` is asserted as a KEYED path prefix: Zod reports the missing
+   * required keys of the pipeline shape under `data`, so a `path: message` pair
+   * is what distinguishes the formatter's output from the JSON blob (which
+   * contains the same key names, but never as `data.…: `, and never on one line).
+   */
+  it('renders that validation failure as ONE line naming the faulted path (#1175)', () => {
+    let thrown: unknown;
+    try {
+      parseAndUpgradeEnvelope({
+        schemaVersion: SCHEMA_VERSION,
+        catalogVersion: CATALOG_VERSION,
+        kind: 'pipeline',
+        exportedAt: 1,
+        data: { totally: 'wrong shape' },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ImportError);
+    const message = (thrown as ImportError).message;
+    expect(message).toMatch(/^Envelope failed validation: [^\n]+$/);
+    expect(message).toMatch(/(^|; )data\.[A-Za-z]+: /);
+  });
+
   describe('the upgrade framework (chained-apply)', () => {
     // Version-stamp-only hops from `from` up to SCHEMA_VERSION, so the fake
     // legacy fixtures below (which reshape into the v1 pipeline shape — still
