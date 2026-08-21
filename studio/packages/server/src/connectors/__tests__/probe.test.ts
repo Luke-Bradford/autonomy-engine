@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionKind, ConnectionProbeResult } from '@autonomy-studio/shared';
 import { z } from 'zod';
-import { PROBE_BACKSTOP_MS, configKeysChangedByOverlay, probeConnection } from '../probe.js';
+import {
+  PROBE_BACKSTOP_MS,
+  PROBE_CONCURRENCY,
+  configKeysChangedByOverlay,
+  probeConnection,
+} from '../probe.js';
 import type { ConnectorAdapter } from '../types.js';
 import type { ConnectorRegistry } from '../registry.js';
 
@@ -76,6 +81,26 @@ describe('probeConnection', () => {
     ).resolves.toEqual({ ok: false, error: 'adapter blew up' });
   });
 
+  it('rebuilds a success from its known fields, so nothing rides out beside them', async () => {
+    // Redaction only ever scrubbed the FAILURE path, because a success is
+    // supposed to carry no adapter string at all. TypeScript does not enforce
+    // that on a value returned through a variable, and no response schema strips
+    // it, so the guarantee is made structural here instead.
+    const registry = registryOf(
+      'http',
+      async () =>
+        // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+        ({
+          ok: true,
+          probed: 'liveness',
+          debug: 'authenticated with sk-live-abc',
+        }) as unknown as ConnectionProbeResult,
+    );
+    await expect(
+      probeConnection({ registry, kind: 'http', config: {}, secret: 'sk-live-abc' }),
+    ).resolves.toEqual({ ok: true, probed: 'liveness' });
+  });
+
   it('redacts the plaintext secret out of an adapter error it forgot to redact', async () => {
     const registry = registryOf('postgres', async (_config, secret) => ({
       ok: false,
@@ -130,6 +155,44 @@ describe('probeConnection', () => {
     expect(result.error).toMatch(/did not answer within 0s and was abandoned/);
   });
 
+  it('caps how many probes are in flight at once, process-wide', async () => {
+    // The cap is what makes the backstop safe to be a RACE rather than a cancel:
+    // an abandoned probe keeps its socket, so without a ceiling N requests mean
+    // N live sockets on a server that sets no `requestTimeout`.
+    let started = 0;
+    const release: Array<() => void> = [];
+    const registry = registryOf(
+      'http',
+      () =>
+        new Promise<ConnectionProbeResult>((resolve) => {
+          started += 1;
+          release.push(() => resolve({ ok: true, probed: 'liveness' }));
+        }),
+    );
+
+    const inFlight = Array.from({ length: PROBE_CONCURRENCY + 3 }, () =>
+      probeConnection({ registry, kind: 'http', config: {}, secret: null }),
+    );
+    // Let every queued task that CAN start, start.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(started).toBe(PROBE_CONCURRENCY);
+
+    // Freeing one admits exactly one more — the queue drains, it does not refuse.
+    release.shift()!();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(started).toBe(PROBE_CONCURRENCY + 1);
+
+    // Drain: releasing frees a slot, which admits the next queued probe, which
+    // registers ITS own release — so this walks the queue rather than iterating
+    // a snapshot of it.
+    for (let guard = 0; guard < 50 && release.length > 0; guard += 1) {
+      release.shift()!();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await Promise.all(inFlight);
+    expect(started).toBe(PROBE_CONCURRENCY + 3);
+  });
+
   it('sits above the default LLM probe budget, so an honest slow probe is never pre-empted', () => {
     // `DEFAULT_LLM_TIMEOUT_MS` is 120_000 and the LLM adapters pass it straight
     // to `llmProbeGet`. A backstop at or below it would report "abandoned" for
@@ -178,6 +241,25 @@ describe('configKeysChangedByOverlay', () => {
     expect(
       configKeysChangedByOverlay({ headers: { a: '1', b: '2' } }, { headers: { b: '2', a: '1' } }),
     ).toEqual([]);
+  });
+
+  it('reports a value it CANNOT canonicalize as changed, never as unchanged', () => {
+    // Reachable from an HTTP body: JSON permits a literal that overflows on
+    // parse, so `{"port": 1e400}` arrives as `Infinity` and `canonicalStringify`
+    // REFUSES it (`Number.isFinite`). Two things must hold, and the second is
+    // the security-relevant one:
+    //   1. it does not throw — the route's promise is a sentence, never a 500;
+    //   2. it fails CLOSED — a value that cannot be represented is a value that
+    //      cannot be PROVED identical to the stored one, so the guard refuses
+    //      and the stored secret is never spent on it.
+    const overflowed = JSON.parse('{"port":1e400}') as { port: number };
+    expect(Number.isFinite(overflowed.port)).toBe(false);
+    expect(configKeysChangedByOverlay({ port: 5432 }, { port: overflowed.port })).toEqual(['port']);
+    // Even against ITSELF: unprovable is unprovable, in both directions.
+    expect(
+      configKeysChangedByOverlay({ port: overflowed.port }, { port: overflowed.port }),
+    ).toEqual(['port']);
+    expect(configKeysChangedByOverlay({ port: overflowed.port }, { port: 5432 })).toEqual(['port']);
   });
 
   it('consults NO per-kind allowlist — it takes no kind at all', () => {

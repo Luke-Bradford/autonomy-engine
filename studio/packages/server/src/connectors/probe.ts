@@ -119,11 +119,36 @@ export function configKeysChangedByOverlay(
   overlay: Record<string, unknown>,
 ): string[] {
   const keys = new Set([...Object.keys(stored), ...Object.keys(overlay)]);
-  return [...keys]
-    .filter(
-      (key) => canonicalStringify(stored[key] ?? null) !== canonicalStringify(overlay[key] ?? null),
-    )
-    .sort();
+  return [...keys].filter((key) => !sameCanonicalValue(stored[key], overlay[key])).sort();
+}
+
+/**
+ * Canonical equality, made TOTAL over anything a JSON body can carry, by failing
+ * CLOSED.
+ *
+ * `canonicalStringify` REFUSES some values rather than corrupting them, and one
+ * refusal is reachable from an HTTP body: JSON permits a literal that overflows
+ * on parse, so `{"port": 1e400}` arrives as `Infinity` and the `Number.isFinite`
+ * check throws `CanonicalizeError` (`portability/canonical.ts`). Every other
+ * caller in the tree feeds it already-validated server-side data; this is the
+ * first to hand it raw request input.
+ *
+ * Letting that throw would break the promise this whole path is built on — a
+ * caller gets a sentence, never a 500 — and it would break it at the one place
+ * whose answer decides whether a stored credential gets spent.
+ *
+ * A value neither side can represent therefore reads as CHANGED, never as
+ * unchanged. That is the only safe polarity: the question here is "can I PROVE
+ * this config is byte-for-byte the stored one", and a value that cannot be
+ * canonicalized is a value that cannot be proved. Same posture as the total
+ * comparison above — an absent fact is never manufactured as the permissive one.
+ */
+function sameCanonicalValue(a: unknown, b: unknown): boolean {
+  try {
+    return canonicalStringify(a ?? null) === canonicalStringify(b ?? null);
+  } catch {
+    return false;
+  }
 }
 
 /** What `probeConnection` needs; `secret` is already decrypted by the caller. */
@@ -207,6 +232,13 @@ export async function probeConnection(args: ProbeConnectionArgs): Promise<Connec
  * that argument ever added, this call would silently under-redact.
  */
 function redactProbeResult(result: ConnectionProbeResult, secret: string | null) {
-  if (result.ok) return result;
+  // A success is REBUILT from its two known fields rather than passed through.
+  // Nothing is redacted on this path — there is no free text on it — so the
+  // property that matters is that there is no free text, and TypeScript alone
+  // does not enforce that: excess-property checks do not apply to a value an
+  // adapter returns through a variable, and no Fastify response schema strips
+  // one on the way out. Reconstructing makes "a success carries no adapter
+  // string" structural instead of conventional.
+  if (result.ok) return { ok: true as const, probed: result.probed };
   return { ok: false as const, error: redactSecrets(result.error, [secret]) };
 }
