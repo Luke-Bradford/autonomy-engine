@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { getEventListeners } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,41 @@ async function collectEvents(events: AsyncIterable<OutputLineEvent>): Promise<Ou
     collected.push(event);
   }
   return collected;
+}
+
+/**
+ * Resolve on a child's FIRST output line — i.e. once it is demonstrably running
+ * its script. Throws if the stream closes first, which is what a child that
+ * died before printing looks like.
+ */
+async function firstLine(events: AsyncIterable<OutputLineEvent>): Promise<OutputLineEvent> {
+  for await (const event of events) return event;
+  throw new Error('process produced no output before exiting');
+}
+
+/**
+ * Poll until `check` holds, bounded by ITERATIONS rather than by a wall clock.
+ *
+ * The distinction is this file's whole #1124 fix. A wall-clock deadline is a
+ * fixed budget that a loaded machine eats into, so it fails exactly when the
+ * machine is busy — the failure mode being removed. An iteration bound stretches
+ * with the load, because each tick's `setTimeout` is itself subject to the same
+ * scheduling pressure, so a slow box gets proportionally longer rather than a
+ * spurious red. Same shape as `until` in `scheduler/__tests__/retry-alarm.test.ts`,
+ * which reasons the same way; deliberately NOT extracted to a shared helper in
+ * this PR (that is #1124's own follow-up, not a change to smuggle in beside it).
+ *
+ * 200 x 10ms is ~2s of ticks on an idle box against this test's 10,000ms budget,
+ * whose other fixed costs are two cold node boots, A's KILL_GRACE_MS (500) and
+ * B's reap grace (500). The per-test override is left at 10_000 on purpose:
+ * raising it would be the timeout bump both tickets rule out.
+ */
+async function until(check: () => boolean, label: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for: ${label}`);
 }
 
 describe('spawnSupervised', () => {
@@ -124,6 +159,7 @@ describe('spawnSupervised', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 3500));
     expect(existsSync(sentinelPath)).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
   }, 15_000);
 
   it('bounds COMBINED stdout+stderr memory on a flooding process and reports truncated', async () => {
@@ -327,6 +363,7 @@ describe('spawnSupervised', () => {
     // never happened, not merely that we hadn't checked yet.
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(existsSync(sentinelPath)).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
   }, 10_000);
 
   it('reapAllSupervised is a safe no-op when nothing is currently supervised', async () => {
@@ -365,39 +402,64 @@ describe('spawnSupervised', () => {
     const supA = createSupervisor();
     const supB = createSupervisor();
 
-    // A's child just idles. B's child proves it's still ALIVE by writing a
-    // sentinel after 300ms, then idles. The sentinel is the real discriminator:
+    // A's child just idles. B's child proves it is still ALIVE by REWRITING a
+    // sentinel on an interval. The sentinel is the real discriminator:
     // `killed`/`markKilled` flips true under EITHER isolation or leakage (it is
-    // set by whichever reap runs), so it cannot distinguish them — only "did B's
-    // child survive A's reap long enough to write" can.
+    // set by whichever reap runs), so it cannot distinguish them — only "is B's
+    // child still doing work after A's reap" can.
+    //
+    // #1124 — an INTERVAL, where this used to be a single write 300ms after B
+    // booted, checked once after a fixed 1500ms sleep. That made the assertion
+    // a bet that a cold node runtime boots inside ~2.1s: 100ms + A's
+    // KILL_GRACE_MS(500) + 1500ms. On a loaded box it does not, and the test
+    // fails having proved nothing about isolation. A liveness signal that
+    // repeats can be waited FOR instead of bet on.
+    const readyLine = 'ready';
     const childA = supA.spawnSupervised({
       command: process.execPath,
-      args: ['-e', `setInterval(() => {}, 1000);`],
+      args: ['-e', `console.log(${JSON.stringify(readyLine)}); setInterval(() => {}, 1000);`],
     });
-    const bScript = `setTimeout(() => require('fs').writeFileSync(process.argv[1], 'alive'), 300); setInterval(() => {}, 1000);`;
+    const bScript =
+      `console.log(${JSON.stringify(readyLine)}); ` +
+      `setInterval(() => require('fs').writeFileSync(process.argv[1], 'alive'), 50);`;
     const childB = supB.spawnSupervised({
       command: process.execPath,
       args: ['-e', bScript, sentinelPath],
     });
 
-    // Let both actually spawn/track, then reap ONLY A — well before B's 300ms
-    // sentinel write. Under leakage, this SIGTERMs B's child too, so B never
-    // writes; under isolation, B is untouched and writes on schedule.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for each child's first stdout line before reaping anything.
+    //
+    // This is NOT the old "let them spawn" sleep in new clothes, and dropping it
+    // would open a vacuous pass rather than merely a race. `killTree` signals
+    // the process GROUP (`process.kill(-pid, …)`), and the group only exists
+    // once the forked child has run `setsid()` — strictly after the parent
+    // already holds `child.pid`. Reaping inside that window signals nothing,
+    // and `killTree` treats the resulting ESRCH as a successful no-op, so under
+    // real registry LEAKAGE the test would still go green. A line on stdout can
+    // only be produced by a child that is already executing JS, so it is proof
+    // the group exists — which a sleep never was.
+    await firstLine(childA.events);
+    await firstLine(childB.events);
+
     await supA.reapAllSupervised();
 
     const resultA = await childA.result;
     expect(resultA.killed).toBe(true);
     expect(resultA.exitCode === 0 && resultA.signal === null).toBe(false);
 
-    // Wait well past B's 300ms write (generous margin for CI scheduling jitter),
-    // WITHOUT reaping B. The sentinel's presence proves B survived A's reap.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    expect(existsSync(sentinelPath)).toBe(true);
+    // Delete whatever B has written SO FAR, then require it to come back. The
+    // question is not "did B ever write" (it wrote before the reap) but "is B
+    // still running now that A has been reaped" — only a reappearance answers
+    // that. `force` because under leakage B is dead and the file may be absent;
+    // an ENOENT throw here would fail the test on the wrong error and mask the
+    // real one.
+    rmSync(sentinelPath, { force: true });
+    await until(() => existsSync(sentinelPath), "B's child to rewrite its sentinel after A's reap");
 
     // Cleanup: B's own reap kills B's child (and confirms the reap works).
     await supB.reapAllSupervised();
     const resultB = await childB.result;
     expect(resultB.killed).toBe(true);
+    rmSync(tmpDir, { recursive: true, force: true });
   }, 10_000);
 });

@@ -11,7 +11,7 @@
     "build": "pnpm --filter @autonomy-studio/shared build && pnpm --filter @autonomy-studio/server build && pnpm --filter @autonomy-studio/web build && pnpm run build:manifest",
     "build:manifest": "node scripts/write-manifest.mjs packages/server 0.0.0-dev $(git rev-parse --short HEAD 2>/dev/null || echo dev) $(node -p process.arch)",
     "typecheck": "pnpm --filter @autonomy-studio/shared build && pnpm -r run typecheck && tsc -p tsconfig.e2e.json --noEmit",
-    "test": "pnpm --filter @autonomy-studio/shared build && pnpm -r run test",
+    "test": "pnpm --filter @autonomy-studio/shared build && node scripts/test-packages.mjs",
     "test:e2e": "pnpm build && playwright test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",

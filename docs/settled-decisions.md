@@ -502,6 +502,30 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     not-in-list `show` fallback can only KEEP or REMOVE a marker, never
     fire. *(#392; specs/2026-07-12-run-now-non-manual-modes.md.)*
 
+48. **The studio test gate runs each package's suite SERIALLY, one package at a
+    time, via `studio/scripts/test-packages.mjs`** — not `pnpm -r run test`.
+    Each package's script is a bare `vitest run`, and vitest sizes `maxWorkers`
+    to the whole machine, so running the four packages concurrently
+    oversubscribed it ~2x (measured on 10 cores: 23 vitest processes, loadavg
+    ~20, versus 13 and ~11 serial). That is the mechanism behind every "fails in
+    the full suite, passes in isolation" report: an isolated re-run is not a
+    different test, it is a different machine. It is not a speed tradeoff —
+    timed back-to-back on an idle box, concurrent was 135s and serial 129s,
+    because server and web each roughly halve when not fighting each other. A bespoke script rather than
+    `--workspace-concurrency=1` because that flag BAILS after the first failing
+    package (measured, pnpm 11.0.6), hiding later packages' results; and not
+    `--no-bail`, whose measured exit code (1) contradicts its own documented
+    behaviour ("will exit with a 0 exit code even if the script fails") — a
+    merge gate must not rest on that, since the release that makes the code
+    match the docs turns it fail-OPEN silently. The script DISCOVERS the
+    packages from `packages/*/package.json` rather than naming them, because
+    `pnpm --filter <no-match> run test` exits 0 (measured) — so a hardcoded
+    list going stale would report an untested package as a passing one. vitest
+    4's native `test.projects` mode is the better long-term shape (one shared
+    worker pool rather than never running two at once) and is tracked
+    separately; this script is meant to be deleted when that lands.
+    *(#1124; PR for #1124/#985/#969.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
