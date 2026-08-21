@@ -1305,6 +1305,61 @@ each must be verified against `2026-07-30-packaging-and-updates.md` and
 | M10    | `pg`                                                    | a **second** native/TLS surface alongside `better-sqlite3` in a single-binary target — verify empirically, do not assume |
 | M11    | an xlsx reader                                          | xlsx is a ZIP container; most readers materialise the sheet, which fights §5 — check before choosing                     |
 
+**M11's dependency row is DISCHARGED, and the answer was not the expected one (#1213,
+slice 1).** The row anticipated materialisation. The measured problem is worse: the streaming
+readers are WRONG. Measured on node v25.9.0 against one logical workbook rewritten into three zip
+entry orders.
+
+`exceljs@4.4.0` (MIT) resolves shared strings and number formats only when
+`xl/sharedStrings.xml` and `xl/styles.xml` PRECEDE the worksheet, because it is a single forward
+pass — and **Excel writes them after**. Identical bytes, order alone changed: strings-first gave
+`"hello"` and a real `Date`; the real-Excel order gave `{sharedString: 9}` and the raw serial
+`46255`. No option changes this. On the layout exceljs's OWN `writeFile` emits it throws outright
+(`this.model.sheets`, unguarded, `workbook-reader.js:303`); upstream has been dormant since 2023.
+Its non-streaming reader is correct on every order and peaked at **1001 MB RSS** on a
+6.8 MB/200k-row workbook, OOM-crashing under a 128 MB heap — §5's stated hazard, confirmed.
+
+`xlsx-stream-reader@1.1.1` (MIT) is order-independent and lighter, and is disqualified by one line —
+`lib/worksheet.js:272`, `workingVal || ''` — which returns `''` for `0`, for `false` AND for `''`.
+A genuine zero becomes indistinguishable from a blank cell, so under §6.2 every `0` in a numeric
+column becomes `null` or fails the row. Its only date support is `ssf.format`, which yields a
+locale-shaped display string — the "corruption engine" §6.2 forbids by name.
+
+**So the reader is BUILT, on M7's precedent** (which discharged its own *"a CSV parser"* row by
+hand-rolling `shared/datamove/delimited.ts`). Only the sheet grammar is hand-rolled: `yauzl` (MIT)
+supplies RANDOM ACCESS and `saxes` (ISC) the XML — 4 packages, 408 KB, both pure JS, both on
+`ALLOWED_LICENSES`, versus exceljs's 78 packages / 34 MB. No native addon, so no new per-arch
+artifact for the updater (`2026-07-30-packaging-and-updates.md:219`) and no `.node`
+direct-require caveat (`2026-07-24-bun-single-binary-spike.md:44`).
+
+**Random access is the whole design, not an implementation detail.** Reading the small parts by
+NAME makes entry order irrelevant BY CONSTRUCTION — the property exceljs structurally cannot have.
+Only the worksheet streams, so memory is proportional to DISTINCT STRINGS plus one batch, never to
+rows; `limits.ts`'s `XLSX_MAX_SHARED_STRINGS_BYTES`, `XLSX_MAX_ENTRY_BYTES` and
+`XLSX_MAX_CELL_CHARS` make that a guarantee, and inflation is counted as it ARRIVES because a zip's
+declared `uncompressedSize` is attacker-controlled.
+
+Four value decisions were forced by measurement and are pinned in `xlsx-read.test.ts`:
+
+- a **blank cell binds `null`**, not `undefined`. Excel omits blanks from the XML, so `undefined`
+  would reach `coerceValue` as `absent_value` and fail a row per blank — on sheets that are sparse
+  by construction.
+- **numFmt 45/46/47 are DURATIONS** and 18-21 are times of day, so they stay NUMERIC. `[h]:mm:ss`
+  over `30.5` means 732 elapsed hours; rendering it as `1900-01-30T12:00Z` is exactly what §6.2
+  forbids. 22 does bear a date. The locale date formats (27-36, 50-58) are a knowing omission with
+  a safe failure: such a cell reads as a number, and a number into a `date` column fails visibly.
+- **serial 60 is REFUSED.** It is Excel's phantom `1900-02-29`, inherited from Lotus; mapping it to
+  `1900-03-01` would make it indistinguishable from serial 61.
+- an **error cell travels as a fault OBJECT** that `coerceValue` rejects for every target, because
+  the reader has no per-row error channel. The string `"#N/A"` would land in a text column looking
+  like data.
+
+**Slice 1 is the substrate only** — the reader, its bounds and its fixtures. `excel` does NOT join
+`IMPLEMENTED_DATASET_KINDS` and the registry is untouched, so nothing user-reachable changes. The
+kind (config schema, `excel-io.ts`, the `fs` fork, the catalog wiring, the form and e2e) is slice 2,
+which lands the binding and the reader's first caller together — M5's four-way split exists for
+exactly that reason.
+
 ---
 
 ## §13 — the authoring surface, and the trap it must avoid
