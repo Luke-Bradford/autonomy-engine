@@ -120,11 +120,72 @@ vi.mock('./api/pipelines', async (importActual) => ({
       updatedAt: 1,
     }),
   ),
+  // Same class as `getWorkspaceGit` above, missed when the canvas route gained
+  // a publish state: mounting `PipelineCanvas` calls `readPublishState`, which
+  // calls this. Unmocked it reached a real `fetch` under jsdom on every canvas
+  // case, and `PipelineCanvas` swallows the rejection by design — so the only
+  // symptom was an unexplained network attempt. `null` is honest rather than
+  // convenient: nothing is published in this workspace.
+  getActivePipelineVersion: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./api/triggers', async (importActual) => ({
   ...(await importActual<typeof import('./api/triggers')>()),
   listTriggers: vi.fn().mockResolvedValue([]),
 }));
+
+/**
+ * #985 / #969 — warm the two `React.lazy` chunks BEFORE any case renders.
+ *
+ * The canvas heading assertion below was racing a cold dynamic `import()`.
+ * `routes.tsx` pulls `PipelineCanvasRoute` from `PipelineCanvasRoute.lazy.ts`,
+ * which is `lazy(() => import('./PipelineCanvasRoute.js'))`, and `AppShell`
+ * renders the outlet under `<Suspense fallback={null}>`. So until that chunk
+ * resolves, `<main class="content">` contains LITERALLY NOTHING.
+ *
+ * That empty `<main class="content" />` is exactly what #985 reported, and it
+ * is what identifies the cause rather than merely being consistent with it: if
+ * the mocked `getPipeline` were still pending, the route renders
+ * `<p class="page-hint">Loading pipeline…</p>` (`PipelineCanvasRoute.tsx`), so
+ * main would NOT be empty. The Suspense fallback is the only state in this
+ * tree that paints an empty main, and the mock resolves on a microtask, so the
+ * chunk is the only thing the 5s `asyncUtilTimeout` can actually be waiting on.
+ *
+ * The chunk is expensive: ~28k lines under `pages/pipeline/` plus
+ * `@xyflow/react` + `@xyflow/system` (~4MB), transformed and evaluated per
+ * fork. And the canvas case does not even pay it alone — the run-detail case
+ * above it mounts `RunDetailPage`, which starts `RunGraph.lazy`'s import and
+ * never awaits it, so the two compete. Both are warmed here for that reason;
+ * they are the only two `React.lazy` modules in the app.
+ *
+ * MODULE SCOPE, deliberately NOT `beforeAll`. `packages/web/vitest.config.ts`
+ * raises `testTimeout` to 20s but sets no `hookTimeout`, so hooks keep
+ * vitest's 10s default — and #969 measured this very work at 10,389ms. Putting
+ * it in a hook would swap one flaky TEST for a flaky FILE, since a hook
+ * timeout fails every case in it. A top-level await runs during collection,
+ * under no hook budget.
+ *
+ * Both specifiers resolve to the same absolute file as the ones the `.lazy`
+ * wrappers use (`src/pages/author/PipelineCanvasRoute.tsx` and
+ * `src/pages/runs/RunGraph.tsx`), and Vite keys its module registry by resolved
+ * id, so this populates the same cache entry rather than a parallel one.
+ *
+ * WHAT THIS DOES NOT DO, stated because the obvious check misleads: it does not
+ * make the test faster. Measured on an idle box, canvas case alone (`-t`), with
+ * `node_modules/.vite` deleted first so the transform cache was genuinely cold:
+ * 429ms with the pre-warm, 396ms without. On an idle machine the chunk load is
+ * a small part of that case and pre-warming costs slightly more than it saves.
+ *
+ * The claim is about the BUDGET, not the speed. On an idle machine this import
+ * is fast; #985's evidence is that under full-suite contention it exceeded 5s,
+ * and the only reachable amplifier of that size is that web's forks share ONE
+ * Vite transform server, which serialises when several forks demand this graph
+ * at once — a condition a single-file run cannot reproduce, and it was not
+ * reproduced here. Moving the wait to collection does not shorten it; it moves
+ * it somewhere no deadline applies, so the assertion can no longer lose the
+ * race however long it takes.
+ */
+await import('./pages/author/PipelineCanvasRoute.js');
+await import('./pages/runs/RunGraph.js');
 
 /** Mount the REAL route tree at a path, exactly as the hash router would. */
 function renderAt(initialPath: string) {
@@ -244,6 +305,15 @@ describe('route tree', () => {
     // The canvas heading is the pipeline's NAME, resolved by the route from
     // the server — proving the param reached a real fetch, not just a match.
     expect(await page().findByRole('heading', { name: 'Pipeline pl_42' })).toBeInTheDocument();
+    // The publish-state mock is load-bearing, not decoration: without this the
+    // mount would reach a real `fetch` under jsdom and nothing would say so,
+    // because the caller swallows the rejection. Assert it was actually used.
+    const getActivePipelineVersion = vi.mocked(
+      (await import('./api/pipelines')).getActivePipelineVersion,
+    );
+    await waitFor(() =>
+      expect(getActivePipelineVersion).toHaveBeenCalledWith('pl_42', expect.any(AbortSignal)),
+    );
   });
 
   it('renders the dataset detail page at /manage/datasets/:datasetId', async () => {
