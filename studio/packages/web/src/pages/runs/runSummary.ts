@@ -143,6 +143,38 @@ export interface NodeActivity {
   /** The optional machine detail beside `failureKind` (`FAILURE_CODES`, open). */
   failureCode: string | undefined;
   /**
+   * #996 M6 (#1162, data-movement spec §2.1) — WHERE this node's most recent
+   * dispatch actually resolved to, for a DATASET-BOUND activity (`copy`).
+   *
+   * §2.1 states the debt in as many words: the node holds a dataset *ref*, and
+   * a dataset row is MUTABLE, so a rerun pinned to the same `pipelineVersionId`
+   * writes wherever that dataset points TODAY. The compensating control it
+   * names is the dispatch record — "the run log says where it actually wrote,
+   * not merely which dataset it named". M6 slice B (#1149) made that record
+   * durable; this is the fold that lets a human read it.
+   *
+   * `undefined` is a real answer, not a gap, and is never manufactured: only a
+   * dataset-bound activity resolves an address at all, and a `node.dispatched`
+   * appended before #1149 carries no such fact to invent. Unlike `failureKind`
+   * no raw-payload check is needed to tell those apart from a default — the
+   * field is `.optional()` with NO `.default()` in `EngineEventSchema`, so the
+   * parsed event is already honest about absence.
+   *
+   * LAST DISPATCH WINS, deliberately. A retry can resolve somewhere the
+   * previous attempt did not, and pairing attempt 1's target with attempt 2's
+   * outcome would answer "where did this data go" wrongly and confidently. The
+   * per-ATTEMPT record stays in the event feed, which glosses each dispatch.
+   *
+   * SHARED BY A PARALLEL FOREACH's item instances, like every other field on
+   * this row: `ensure` folds `w@1` and `w@2` onto one `w`, and the dispatch arm
+   * does not set `instanceId`, so on a foreach of copies this holds whichever
+   * item dispatched last. Today that is never a WRONG address — §8 gates a
+   * mapping's names to literals and a dataset ref is not `${}`-substituted, so
+   * every instance resolves the same pair — but the row cannot prove that, so
+   * the panel says which instance it is looking at when there is one.
+   */
+  datasetAddresses: Extract<EngineEvent, { type: 'node.dispatched' }>['datasetAddresses'];
+  /**
    * The DECLARED outputs recorded by the node's most recent TERMINAL-SUCCESS
    * event — the node's typed result contract, distinct from
    * `outputs`/`lastOutputName` above, which count the streamed `node.output`
@@ -544,6 +576,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         error: undefined,
         failureKind: undefined,
         failureCode: undefined,
+        datasetAddresses: undefined,
         outputValues: undefined,
         copiedFromRunId: undefined,
         instanceId: undefined,
@@ -741,6 +774,13 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'dispatched';
         n.attempts += 1;
         clearResult(n);
+        /* #1162 — assigned UNCONDITIONALLY, absence included. A dataset-bound
+           activity resolves its address per dispatch, so reading the previous
+           attempt's value through a dispatch that recorded none would keep a
+           stale target on screen. Not part of `clearResult`: that runs at the
+           head of every TERMINAL branch too, which would blank the address of
+           precisely the settled copies whose destination anyone reads. */
+        n.datasetAddresses = e.datasetAddresses;
         openSpan(n, e.nodeId, row.ts);
         break;
       }
@@ -799,6 +839,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            permanently if the process dies after the boot reconciler's
            `node.retryRequested` and before the re-dispatch. */
         dropSpan(n);
+        /* #1162 — and the resolved address goes with it, for the SAME argument
+           one line up. These events re-open the node without resolving
+           anything; the dataset row behind the ref is mutable, so leaving the
+           last attempt's target standing would name a destination over a node
+           that is being sent somewhere else. The re-dispatch sets it again. */
+        n.datasetAddresses = undefined;
         break;
       }
       case 'node.retryScheduled': {
@@ -1245,6 +1291,11 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       error: undefined,
       failureKind: undefined,
       failureCode: undefined,
+      /* #1162 — a row reaches here because NO event named this node, so no
+         dispatch resolved a dataset and there is no address. The same refusal
+         the fields below make: an absent fact is rendered absent, never
+         manufactured. */
+      datasetAddresses: undefined,
       outputValues: undefined,
       /* A row reached here because NO event named this node, and a copied
          frontier node is named by `run.reseeded` — so this branch is by
