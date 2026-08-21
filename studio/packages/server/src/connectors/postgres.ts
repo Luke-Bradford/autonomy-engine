@@ -5,7 +5,6 @@ import {
   formatZodIssues,
   postgresConnectionConfigSchema,
   queryDatasetConfigSchema,
-  sqliteConnectionConfigSchema,
   tableDatasetConfigSchema,
   type DatasetAddress,
   type DatasetKind,
@@ -15,6 +14,7 @@ import { failed } from './activity-events.js';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
+import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import { yieldToEventLoop } from './scheduling.js';
 // #1196 — the session leaf. `postgres.ts` is the READER + adapter; everything
 // about reaching a server lives one module down, where the sink writer can also
@@ -43,7 +43,6 @@ export {
   type PostgresClientOptions,
   type PostgresQueryResult,
 } from './postgres-session.js';
-import { writeSqliteDatasetRows } from './sqlite.js';
 
 /**
  * #1189 M10 slice 1 (data-movement spec §2.6/§12) — the `postgres` STORE
@@ -151,7 +150,16 @@ export function createPostgresAdapter(
 
     resolveDatasetAddress: resolvePostgresDatasetAddress,
 
-    async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
+    async *runActivity(
+      ctx: ActivityContext,
+      secret: string | null,
+      _secretFields?: Readonly<Record<string, string>>,
+      // #1196 — the SINK's plaintext credential (M1 #1104's fourth argument),
+      // distinct from `secret` above, which is the SOURCE's. A postgres-to-
+      // postgres copy resolves TWO credentials, and conflating them would send
+      // one server's password to another. Never placed in `ctx` or an event.
+      sinkSecret?: string | null,
+    ): AsyncIterable<ActivityEvent> {
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection
       // runs, and postgres runs it as the SOURCE end: the executor dispatches on
       // the source connection's kind, resolves the sink alongside it, and hands
@@ -169,17 +177,15 @@ export function createPostgresAdapter(
           ...(signal === undefined ? {} : { signal }),
         });
         yield* runCopyActivity(ctx, {
-          // There is no postgres WRITER in slice 2, so a postgres copy reads a
-          // postgres store and writes into a sqlite one. The catalog says so too
-          // (`sinkConnectionKinds: ['sqlite']`), and this stays as the ladder's
+          // #1196 — ONE rung, shared, derived from the CATALOG's
+          // `sinkConnectionKinds`. Slice 3a adds the postgres WRITER, so this
+          // adapter is now both ends of a postgres-to-postgres copy as well as
+          // the source of a postgres-to-sqlite one. It stays as the ladder's
           // rung for the reason `fs.ts` gives: it is what a caller bypassing the
           // catalog hits, and an unchecked sink config would reach the writer to
-          // be refused as "invalid sqlite connection config" — a true statement
+          // be refused as "invalid <store> connection config" — a true statement
           // about the wrong thing.
-          refuseSink: (connection) =>
-            connection.kind === 'sqlite'
-              ? null
-              : `a postgres copy reads a postgres store and writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+          refuseSink: refuseForeignSink,
           // §2.6 gives `table`/`query` no `nullValue`/`dateFormat` to declare, so
           // `{}` is a TRUE statement about the SQL kinds rather than a stub —
           // the polarity `CopyIo.sourceCoercion` requires of every store.
@@ -187,29 +193,26 @@ export function createPostgresAdapter(
           describeSource: ({ dataset, signal }) =>
             describePostgresDatasetColumns(read(dataset, signal)),
           readBatches: ({ dataset, signal }) => readPostgresDatasetBatches(read(dataset, signal)),
-          writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
-            // Parsed from `ctx.sink`, never from this adapter's own connection:
-            // a postgres config has no sqlite database path in it at all.
-            const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
-            if (!parsedSink.success) {
-              throw new DatasetIoError(
-                'permanent',
-                `invalid sqlite sink connection config: ${formatZodIssues(parsedSink.error.issues)}`,
-              );
-            }
-            return writeSqliteDatasetRows(
+          // Dispatched by SINK KIND (#1196), and `createClient` is threaded so
+          // the sink half is assertable through the same injected seam the
+          // reader uses. The sink's config is parsed inside, against the schema
+          // of the kind it claims to be and never this adapter's — including
+          // when both ends are postgres, where the two connections are still two
+          // connections and may name different servers.
+          writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) =>
+            writeRowsToSink(
               {
-                connectionConfig: parsedSink.data,
-                datasetKind: dataset.kind,
-                datasetConfig: dataset.config,
+                dataset,
+                connection,
+                sinkSecret: sinkSecret ?? null,
                 columns,
                 mode,
                 onBatch,
-                ...(signal === undefined ? {} : { signal }),
+                signal,
+                createClient,
               },
               batches,
-            );
-          },
+            ),
         });
         return;
       }

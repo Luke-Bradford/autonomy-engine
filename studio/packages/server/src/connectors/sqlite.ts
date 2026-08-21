@@ -33,7 +33,7 @@ export {
   type SqliteRow,
   type SqliteValue,
 } from './sqlite-store.js';
-import { writeSqliteDatasetRows } from './sqlite-sink.js';
+import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 export {
   writeSqliteDatasetRows,
   type SinkValue,
@@ -494,7 +494,17 @@ export const sqliteAdapter: ConnectorAdapter = {
     }
   },
 
-  async *runActivity(ctx: ActivityContext): AsyncIterable<ActivityEvent> {
+  async *runActivity(
+    ctx: ActivityContext,
+    _secret: string | null,
+    _secretFields?: Readonly<Record<string, string>>,
+    // #1196 — the SINK's plaintext credential, decrypted at dispatch into this
+    // side channel exactly as `secret` is for the source (M1 #1104 built it;
+    // slice 3a is its first consumer). A sqlite sink needs none, but a copy from
+    // a sqlite SOURCE into a postgres SINK does — and this adapter is the one
+    // running. It is never placed in `ctx` or an event.
+    sinkSecret?: string | null,
+  ): AsyncIterable<ActivityEvent> {
     // #1134 (M5 slice 4b) — `copy` is the ONE activity a store connection runs,
     // and it runs as the SOURCE end: the executor dispatches by the source
     // connection's kind, resolves the sink connection alongside it, and hands
@@ -512,22 +522,13 @@ export const sqliteAdapter: ConnectorAdapter = {
         return;
       }
       yield* runCopyActivity(ctx, {
-        // The sink is resolved from `ctx.sink`, never from this adapter's own
-        // connection: the running adapter is the SOURCE's and a paired node may
-        // well write into a different store. Its KIND is checked because
-        // nothing else can. AS OF 4c (#1139) the catalog's `sinkConnectionKinds`
-        // allowlist exists and refuses a non-sqlite sink before dispatch, so this
-        // is no longer the ONLY gate — it is defence in depth, and it stays: the
-        // rung is what a caller passing a sink this adapter cannot write hits,
-        // and an unchecked non-sqlite config would reach the writer to be refused as
-        // "invalid sqlite connection config", which is a true statement about
-        // the wrong thing. It is supplied as a LADDER RUNG rather than checked
-        // before dispatch so it takes its declared place behind the two
-        // preconditions, instead of pre-empting them.
-        refuseSink: (connection) =>
-          connection.kind === 'sqlite'
-            ? null
-            : `a sqlite copy writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+        // #1196 — ONE rung, shared. The sink allowlist is the CATALOG's, so
+        // this refusal and the entry that makes a dispatch reachable cannot
+        // drift apart; before slice 3a each of the three source adapters
+        // hand-wrote its own sentence around a hardcoded `'sqlite'`. It stays a
+        // LADDER RUNG rather than a pre-dispatch check so it takes its declared
+        // place behind the two preconditions instead of pre-empting them.
+        refuseSink: refuseForeignSink,
         // §2.6 gives the SQL kinds no format facts to declare — "a database
         // column already has a type and a real `NULL`, so there is nothing to
         // declare" — so `{}` here is a true statement about `table`/`query`,
@@ -548,31 +549,17 @@ export const sqliteAdapter: ConnectorAdapter = {
             datasetConfig: dataset.config,
             ...(signal === undefined ? {} : { signal }),
           }),
-        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
-          // Parsed HERE, where the sink connection is proved present, rather
-          // than defaulted to this adapter's own config further up. A fallback
-          // to the source store is the one wrong answer available — it would
-          // write the right rows into the wrong database and report success.
-          const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
-          if (!parsedSink.success) {
-            throw new DatasetIoError(
-              'permanent',
-              `invalid sqlite sink connection config: ${formatZodIssues(parsedSink.error.issues)}`,
-            );
-          }
-          return writeSqliteDatasetRows(
-            {
-              connectionConfig: parsedSink.data,
-              datasetKind: dataset.kind,
-              datasetConfig: dataset.config,
-              columns,
-              mode,
-              onBatch,
-              ...(signal === undefined ? {} : { signal }),
-            },
+        // #1196 — dispatched by SINK KIND, so a sqlite source can now write into
+        // a postgres store as readily as its own. The sink connection is
+        // re-validated inside, against the schema of the kind it claims to be
+        // and never this adapter's — a fallback to the source store is the one
+        // wrong answer available, because it would write the right rows into the
+        // wrong database and report success.
+        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) =>
+          writeRowsToSink(
+            { dataset, connection, sinkSecret: sinkSecret ?? null, columns, mode, onBatch, signal },
             batches,
-          );
-        },
+          ),
       });
       return;
     }

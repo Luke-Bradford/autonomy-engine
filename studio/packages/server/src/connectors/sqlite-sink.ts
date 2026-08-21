@@ -1,15 +1,13 @@
 import Database from 'better-sqlite3';
-import {
-  formatZodIssues,
-  nocaseFold,
-  type CoercedValue,
-  type DatasetKind,
-} from '@autonomy-studio/shared';
+import { formatZodIssues, type CoercedValue, type DatasetKind } from '@autonomy-studio/shared';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
+// #1196 — the mapped→actual resolver moved to a leaf when postgres became the
+// second sink; the matching rule is not store-specific.
+import { resolveSinkColumns } from './sink-columns.js';
 import {
   confineStorePath,
   parseTableTarget,
@@ -162,76 +160,6 @@ function describeSinkTable(
     .prepare('SELECT name FROM pragma_table_info(?, ?)')
     .all(found.name, schemaName) as { name: string }[];
   return { ok: true, name: found.name, columns: columns.map((c) => c.name) };
-}
-
-/**
- * Resolve each mapped column onto the store's own spelling of it, CASE-INSENSITIVELY.
- *
- * SQLite matches column names without regard to case — measured: `INSERT INTO
- * "t" ("ID")` succeeds against a column declared `id` — and §6.3's auto-map is
- * itself "case-insensitive, trimmed", so the authoring surface generates exactly
- * this input. §7's refusal is for a column that is ABSENT, and a case variant is
- * not absent; an exact-string match would `permanent`-refuse a mapping SQLite
- * would have executed.
- *
- * BOTH spellings are kept, and that is not tidiness. The store's spelling goes
- * into the statement, so the SQL reads the way the schema does; the MAPPED
- * spelling is what the incoming rows are keyed by, because the pump keys a row
- * by the mapping's `sink` name and has never seen the store. Collapsing the two
- * makes a case-differing mapping bind `undefined` for every row.
- *
- * Two mapped columns collapsing onto one actual column is REFUSED: it is silent
- * last-wins into the operator's table, the same defect `CopyMappingSchema`'s
- * duplicate-sink rule exists for, and one that rule cannot see because the two
- * names differ as strings.
- */
-interface SinkColumn {
-  /** The key the incoming rows use — the mapping's `sink` name. */
-  readonly mapped: string;
-  /** The store's own spelling, which is what the statement names. */
-  readonly actual: string;
-}
-
-function resolveSinkColumns(mapped: readonly string[], actual: readonly string[]): SinkColumn[] {
-  /* `nocaseFold`, NOT `toLowerCase()` — #1151. SQLite's NOCASE collation folds
-     ASCII `A-Z` only, so `\u212A` (KELVIN SIGN) and `k` are different identifiers
-     to the store, while `toLowerCase()` folds one onto the other. Using the JS
-     fold here made this resolver claim a column SQLite would never have matched,
-     and left the sink and the source-side drift gate — which already shares this
-     function — able to disagree about whether two names are the same column. */
-  const byFold = new Map<string, string>();
-  for (const name of actual) byFold.set(nocaseFold(name), name);
-
-  const resolved: SinkColumn[] = [];
-  const claimed = new Map<string, string>();
-  const missing: string[] = [];
-  const collisions: string[] = [];
-  for (const name of mapped) {
-    const match = byFold.get(nocaseFold(name));
-    if (match === undefined) {
-      missing.push(name);
-      continue;
-    }
-    const earlier = claimed.get(match);
-    if (earlier !== undefined) {
-      collisions.push(`'${earlier}' and '${name}' both resolve to the sink column '${match}'`);
-      continue;
-    }
-    claimed.set(match, name);
-    resolved.push({ mapped: name, actual: match });
-  }
-  // BOTH problems, in ONE refusal. Throwing on the first collision mid-pass
-  // reports only whichever defect the array order happened to reach first, so a
-  // mapping with two faults takes two runs to diagnose.
-  const problems: string[] = [];
-  if (missing.length > 0) {
-    problems.push(`the sink has no column named ${missing.map((m) => `'${m}'`).join(', ')}`);
-  }
-  if (collisions.length > 0) {
-    problems.push(`${collisions.join('; ')} (each sink column may be written by one mapping row)`);
-  }
-  if (problems.length > 0) throw new DatasetIoError('permanent', problems.join('. '));
-  return resolved;
 }
 
 /** The `table` dataset config of a SINK, or a refusal. */
