@@ -1,3 +1,4 @@
+import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clientOptionsFor,
@@ -667,7 +668,56 @@ describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
  * SKIPPED IS NOT PASSED. `describe.skipIf` reports these as skipped rather than
  * silently absent, so the count in the run output says which half ran.
  */
+/**
+ * #1190 — WHETHER THE LIVE HALF IS ALLOWED TO SKIP, as a named predicate.
+ *
+ * It is a function rather than an inline `describe.skipIf` condition because a
+ * suite cannot assert its own skipping: "these tests go red when the service is
+ * missing" is not writable as a test of the expression that decides it. Extracted,
+ * it is ordinary code with ordinary tests.
+ *
+ * THE RULE: skipping is a DEVELOPER convenience and never a CI outcome. Slice 2
+ * moves real data, so CI stands up a `postgres:17` service container; if that
+ * container is missing the live half must go RED, because a suite CI quietly
+ * stops running certifies nothing while reading as coverage.
+ *
+ * Keyed on `CI`, which was MEASURED rather than assumed: vitest does NOT set it
+ * (`process.env.CI` is `undefined` under a local `vitest run`) — it passes the
+ * ambient value through, and GitHub Actions exports `CI=true` for every job.
+ */
+export function liveSuiteMustRun(env: Record<string, string | undefined>): boolean {
+  return env.CI !== undefined && env.CI !== '' && env.CI !== 'false';
+}
+
+describe('liveSuiteMustRun (#1190 M10)', () => {
+  it('lets a developer machine skip', () => {
+    expect(liveSuiteMustRun({})).toBe(false);
+  });
+  it('REQUIRES the live half under CI, so a missing service container is red', () => {
+    expect(liveSuiteMustRun({ CI: 'true' })).toBe(true);
+  });
+  it('treats an explicit CI=false as not-CI', () => {
+    expect(liveSuiteMustRun({ CI: 'false' })).toBe(false);
+    expect(liveSuiteMustRun({ CI: '' })).toBe(false);
+  });
+});
+
 const LIVE_HOST = process.env.STUDIO_TEST_POSTGRES_HOST;
+
+describe('the live postgres service (#1190 M10)', () => {
+  it('is present whenever CI claims to provide one', () => {
+    // The guard itself. Under CI this FAILS if `.github/workflows/studio-ci.yml`
+    // has no postgres service (or stops setting the variables), which is the
+    // only thing standing between "the live half ran" and "the live half was
+    // silently absent".
+    if (!liveSuiteMustRun(process.env)) return;
+    expect(
+      LIVE_HOST,
+      'CI must provide a postgres service container and set STUDIO_TEST_POSTGRES_HOST — see .github/workflows/studio-ci.yml',
+    ).toBeDefined();
+  });
+});
+
 describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   const live = {
     host: LIVE_HOST ?? '',
@@ -682,6 +732,168 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   const saved = { ...process.env };
   afterEach(() => {
     process.env = { ...saved };
+  });
+
+
+  /** The real driver, through the same seam the adapter uses. */
+  const realClientFactory: PostgresClientFactory = (options) =>
+    new pg.Client(options) as unknown as PostgresClient;
+
+  /** A direct session for fixture DDL — deliberately NOT the module under test. */
+  async function withAdminClient<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
+    const c = new pg.Client({
+      host: live.host,
+      port: live.port,
+      database: live.database,
+      user: live.user,
+      password,
+      ssl: false as const,
+    });
+    await c.connect();
+    try {
+      return await fn(c);
+    } finally {
+      await c.end();
+    }
+  }
+
+  async function tableExists(table: string): Promise<boolean> {
+    return withAdminClient(async (c) => {
+      const r = await c.query('select to_regclass($1) as reg', [`public.${table}`]);
+      return r.rows[0].reg !== null;
+    });
+  }
+
+  /**
+   * A fixture table, dropped afterwards. Named per test run so two tests cannot
+   * collide, and created through an ADMIN session so a failure here is never
+   * mistaken for a failure of the reader.
+   */
+  let fixtureSeq = 0;
+  async function withLiveTable(fn: (table: string) => Promise<void>): Promise<void> {
+    fixtureSeq += 1;
+    const table = `studio_m10_fixture_${String(fixtureSeq)}`;
+    await withAdminClient(async (c) => {
+      await c.query(`drop table if exists "${table}"`);
+      await c.query(
+        `create table "${table}" (id int4 primary key, label text, big int8, ts timestamp, day date)`,
+      );
+      await c.query(
+        `insert into "${table}" values
+           (1,'a',9223372036854775807,'2026-07-15 13:45:00','2026-07-15'),
+           (2,'b',2,'2026-07-15 13:45:00','2026-07-15'),
+           (3,'c',3,'2026-07-15 13:45:00','2026-07-15')`,
+      );
+    });
+    try {
+      await fn(table);
+    } finally {
+      await withAdminClient(async (c) => {
+        await c.query(`drop table if exists "${table}"`);
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // #1190 M10 slice 2 — the READER, against a real server. These assert the
+  // things a fake cannot: that `pg` and postgres behave as measured.
+  // -------------------------------------------------------------------------
+
+  const liveRead = (datasetKind: DatasetKind, datasetConfig: Record<string, unknown>) => ({
+    connectionConfig: live,
+    secret: password,
+    datasetKind,
+    datasetConfig,
+    createClient: undefined as unknown as PostgresClientFactory,
+  });
+
+  async function drainLive(iterable: AsyncIterable<readonly Record<string, unknown>[]>) {
+    const rows: Record<string, unknown>[] = [];
+    for await (const batch of iterable) rows.push(...batch);
+    return rows;
+  }
+
+  /** The real factory, as the adapter uses it. */
+  const realRead = (datasetKind: DatasetKind, datasetConfig: Record<string, unknown>) => {
+    const { createClient: _drop, ...rest } = liveRead(datasetKind, datasetConfig);
+    return { ...rest, createClient: realClientFactory };
+  };
+
+  it('describes a real table without reading a row', async () => {
+    await withLiveTable(async (table) => {
+      expect(await describePostgresDatasetColumns(realRead('table', { table }))).toEqual([
+        'id',
+        'label',
+        'big',
+        'ts',
+        'day',
+      ]);
+    });
+  });
+
+  it('reads a real table in bounded batches', async () => {
+    await withLiveTable(async (table) => {
+      const rows = await drainLive(
+        readPostgresDatasetBatches({ ...realRead('table', { table }), batchRows: 2 }),
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows.map((r) => r.label)).toEqual(['a', 'b', 'c']);
+    });
+  });
+
+  it('carries an int8 boundary value EXACTLY, as text pg can round-trip', async () => {
+    // Measured: pg returns `int8` and `numeric` as JS strings, and
+    // `coerce.ts` routes a string integer through `BigInt(text)`, which is
+    // exact. A `number` here would silently corrupt at 2^53.
+    await withLiveTable(async (table) => {
+      const rows = await drainLive(readPostgresDatasetBatches(realRead('table', { table })));
+      expect(rows[0]?.big).toBe('9223372036854775807');
+    });
+  });
+
+  it('reads a naive timestamp and date TZ-INVARIANTLY', async () => {
+    // The corruption pin, end to end: pg's own parser would make these a
+    // function of the server process's TZ.
+    await withLiveTable(async (table) => {
+      const rows = await drainLive(readPostgresDatasetBatches(realRead('table', { table })));
+      expect((rows[0]?.ts as Date).toISOString()).toBe('2026-07-15T13:45:00.000Z');
+      expect((rows[0]?.day as Date).toISOString()).toBe('2026-07-15T00:00:00.000Z');
+    });
+  });
+
+  it('REFUSES a smuggled statement at describe, before any cursor exists', async () => {
+    // Measured: the subquery wrap turns `select 1; drop table x` into a syntax
+    // error, and `copy.ts` calls describeSource first.
+    await withLiveTable(async (table) => {
+      await expect(
+        describePostgresDatasetColumns(
+          realRead('query', { sql: `select 1 as a; drop table "${table}"` }),
+        ),
+      ).rejects.toMatchObject({ kind: 'permanent' });
+    });
+  });
+
+  it('cannot WRITE through a smuggled statement — the read-only transaction refuses it', async () => {
+    // The security pin. MEASURED: `DECLARE ... CURSOR FOR select 1; drop table
+    // victim` raises NO error on its own — the `;` terminates the DECLARE and
+    // the second statement EXECUTES. Under `BEGIN READ ONLY` it fails with
+    // SQLSTATE 25006. The table surviving is what proves the defence.
+    await withLiveTable(async (table) => {
+      await expect(
+        drainLive(readPostgresDatasetBatches(realRead('query', { sql: `select 1 as a; drop table "${table}"` }))),
+      ).rejects.toMatchObject({ message: expect.stringContaining('read-only transaction') });
+      expect(await tableExists(table)).toBe(true);
+    });
+  });
+
+  it('describes a query source by its projected names', async () => {
+    await withLiveTable(async (table) => {
+      expect(
+        await describePostgresDatasetColumns(
+          realRead('query', { sql: `select label as name from "${table}" order by id` }),
+        ),
+      ).toEqual(['name']);
+    });
   });
 
   it('connects and answers', async () => {
