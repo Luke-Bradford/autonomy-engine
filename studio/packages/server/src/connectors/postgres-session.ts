@@ -32,7 +32,6 @@ import { quoteIdentifier } from './sql-identifier.js';
  * reads no data rows and has no business carrying the reader's OID overrides.
  */
 
-
 /** What `pg` is actually given for a `Client`, once this module has finished
  * translating. Narrow on purpose: see `clientOptionsFor` on why nothing here may
  * be `undefined`. */
@@ -226,11 +225,7 @@ export function isTransientPostgresCode(code: string): boolean {
  * `llm-shared.ts` already use — a third hand-rolled `split/join` is how the
  * halves drift.
  */
-export function readFailure(
-  err: unknown,
-  context: string,
-  secret: string | null,
-): DatasetIoError {
+export function readFailure(err: unknown, context: string, secret: string | null): DatasetIoError {
   if (err instanceof DatasetIoError) return err;
   const code = (err as { code?: unknown } | null)?.code;
   const kind: ConnectorErrorKind =

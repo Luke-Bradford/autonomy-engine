@@ -9,22 +9,13 @@ import {
   tableDatasetConfigSchema,
   type DatasetAddress,
   type DatasetKind,
-  type PostgresSslMode,
 } from '@autonomy-studio/shared';
-import type {
-  ActivityContext,
-  ActivityEvent,
-  ConnectorAdapter,
-  ConnectorErrorKind,
-  ResolvedDataset,
-} from './types.js';
+import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
 import { failed } from './activity-events.js';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
-import { redactSecrets } from './redact.js';
 import { yieldToEventLoop } from './scheduling.js';
-import { quoteIdentifier } from './sql-identifier.js';
 // #1196 — the session leaf. `postgres.ts` is the READER + adapter; everything
 // about reaching a server lives one module down, where the sink writer can also
 // reach it without importing this file back (see `postgres-session.ts`).
@@ -39,7 +30,6 @@ import {
   readFailure,
   type PostgresClient,
   type PostgresClientFactory,
-  type PostgresClientOptions,
 } from './postgres-session.js';
 export {
   clientOptionsFor,
