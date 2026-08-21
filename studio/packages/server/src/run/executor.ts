@@ -298,7 +298,13 @@ function withTranscript(
  * contend for identically — the same argument probe.ts makes for outbound
  * sockets. Sharing it across instances is the intended reading, not an
  * oversight. Same value as both existing budgets, which is the house default
- * rather than a number tuned for this seam.
+ * rather than a number tuned for this seam. The visible cost is the same one
+ * probe.ts names: concurrent test apps ration each other, which shows up as
+ * slower resolutions and never as a failure. One caveat for whoever writes the
+ * next test here — a `describe.concurrent`/`it.concurrent` in this file would
+ * make two tests contend for THIS budget, so a test asserting a peak would need
+ * its own serial block. Vitest isolates module state per test FILE, so nothing
+ * leaks between files.
  *
  * IT BOUNDS RESOURCES, NOT LATENCY, and the cost is real enough to name. A
  * saturated limiter makes a node WAIT for a slot before `node.dispatched`, with

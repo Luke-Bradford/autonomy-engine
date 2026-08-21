@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { useRowKeys } from './useRowKeys';
 
@@ -98,6 +98,29 @@ describe('useRowKeys', () => {
     // exists to remove. An out-of-band replacement is a different list, not an
     // edit to this one, so there is no identity worth preserving.
     expect(result.current.keys).toEqual([first, second]);
+  });
+
+  it('keys stay unique and stable under StrictMode, whose extra render pass burns the counter', () => {
+    // `main.tsx` wraps the whole app in StrictMode, so this is the environment
+    // the hook actually runs in — and it is the one place the module-level
+    // counter could plausibly bite, because StrictMode invokes the render body
+    // twice and `mintRowKey` is called from it. Burning extra counter values is
+    // harmless by construction (every call returns a fresh one), but "harmless
+    // by construction" is the kind of claim that deserves a test rather than a
+    // paragraph. `useGuardedLoad.test.ts` sets the precedent for covering it.
+    const { result } = renderHook(() => useHost(3), { wrapper: StrictMode });
+    expect(new Set(result.current.keys).size).toBe(3);
+    expect(result.current.keys.every((k) => typeof k === 'string' && k.length > 0)).toBe(true);
+    const [first, , third] = result.current.keys;
+
+    act(() => {
+      result.current.removeAt(1);
+      result.current.setCount(2);
+    });
+
+    // The property that matters is unchanged by the double render: survivors
+    // keep the identity they had.
+    expect(result.current.keys).toEqual([first, third]);
   });
 
   it('the reconciled list is correct on the SAME render, not one frame later', () => {
