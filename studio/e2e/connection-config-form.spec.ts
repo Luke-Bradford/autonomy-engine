@@ -105,7 +105,16 @@ test.describe('U13b per-kind connection config', () => {
 
     const sslmode = form(page).getByLabel('sslmode');
     await expect(sslmode).toHaveRole('combobox');
-    await expect(sslmode.locator('option')).toHaveText(['', 'disable', 'require', 'verify-full']);
+    await expect(sslmode.locator('option')).toHaveText([
+      // The empty choice is the form's own placeholder, and it MATTERS here:
+      // `sslmode` is required with no default, so a new postgres connection
+      // starts on "— none —" and the operator has to pick. The schema refuses
+      // the empty one, which is the whole point of having no safe default.
+      '— none —',
+      'disable',
+      'require',
+      'verify-full',
+    ]);
 
     await form(page).getByLabel('host').fill('db.example.test');
     await form(page).getByLabel('database').fill('app');
