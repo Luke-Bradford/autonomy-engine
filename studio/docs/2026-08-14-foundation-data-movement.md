@@ -423,8 +423,16 @@ option still receives a `Date`, so nothing else in the process is affected. `tim
 deliberately NOT overridden — it names a real instant, and it measured identically under all three
 zones. Values with no `Date` at all (`infinity`, `-infinity`, BC dates) are handed back as
 postgres' own text, where `coerce.ts` already has an outcome: a `string` target copies the store's
-spelling, a `date`/`timestamp` target refuses. The suite runs green under four zones, and removing
-the override reds it.
+spelling, a `date`/`timestamp` target refuses.
+
+**How the property is HELD, not merely measured once.** The four-zone sweep — `UTC`,
+`Europe/London`, `America/New_York`, `Asia/Tokyo`, all green, and the override removed reds it under
+`Asia/Tokyo` — was a MANUAL measurement during the slice, and nothing re-runs it. The obvious guard
+does not suffice either: on a UTC runner `pg`'s local-time parse and ours COINCIDE, so the live
+TZ-invariance test would stay green with the fix removed. Two things keep it honest instead. (a) An
+OFFLINE test pins the WIRING — both naive OIDs resolve to the UTC parser, `timestamptz` does not —
+which reds under any zone and without a server. (b) The CI `Test` step pins `TZ: Asia/Tokyo`, so the
+live half runs somewhere the two parses actually differ.
 
 **(2) A SMUGGLED STATEMENT REALLY EXECUTES, and the wrap plus a read-only transaction are what stop
 it.** Measured: `DECLARE "c" NO SCROLL CURSOR FOR select 1; drop table victim` raises **no error** —
