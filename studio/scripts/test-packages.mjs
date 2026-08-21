@@ -82,25 +82,81 @@
  * deadline-dependence fixes are per-spec and land beside this one.
  */
 import { spawnSync } from 'node:child_process';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const PACKAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'packages');
 
 /**
- * Dependency order, so a `shared` break is reported before the packages that
- * consume it rather than as four confusing failures. Order is presentational
- * only: every entry runs regardless of what came before.
+ * Reporting order only: a `shared` break reads better before the packages that
+ * consume it than as four confusing failures. Every package runs regardless of
+ * what came before, and a package NOT named here still runs — see below.
  */
-const PACKAGES = [
+const REPORTING_ORDER = [
   '@autonomy-studio/shared',
   '@autonomy-studio/cli',
   '@autonomy-studio/server',
   '@autonomy-studio/web',
 ];
 
+/**
+ * DISCOVER the packages, never hardcode them — because both drifts are silent
+ * and both are fail-OPEN.
+ *
+ * Measured: `pnpm --filter @autonomy-studio/nonexistent run test` prints "No
+ * projects matched the filters" and exits **0**. So a hardcoded list that goes
+ * stale — a package renamed, or the scope changed — would report a suite that
+ * never ran as a pass, and the merge gate would go green having tested nothing.
+ * The inverse drift is just as quiet: a fifth package added later would simply
+ * never be tested, with nothing anywhere to say so.
+ *
+ * Reading the workspace off disk closes both. It also makes the "no test
+ * script" case explicit rather than a shrug: that is a package with no
+ * coverage, which is a thing to decide about, not to skip silently.
+ */
+function discoverPackages() {
+  const found = [];
+  for (const entry of readdirSync(PACKAGES_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = join(PACKAGES_DIR, entry.name, 'package.json');
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch (err) {
+      throw new Error(`cannot read ${manifestPath}: ${err.message}`, { cause: err });
+    }
+    if (!manifest.name) throw new Error(`${manifestPath} has no "name"`);
+    if (!manifest.scripts?.test) {
+      throw new Error(
+        `${manifest.name} has no "test" script. Every workspace package must be ` +
+          `testable or explicitly excluded here — silently skipping it is how a ` +
+          `package ends up with no coverage and nothing saying so.`,
+      );
+    }
+    found.push(manifest.name);
+  }
+  if (found.length === 0) throw new Error(`no packages found under ${PACKAGES_DIR}`);
+  return found.sort((a, b) => {
+    const ai = REPORTING_ORDER.indexOf(a);
+    const bi = REPORTING_ORDER.indexOf(b);
+    // Anything not in the declared order sorts last, alphabetically, rather
+    // than being dropped.
+    return (
+      (ai === -1 ? REPORTING_ORDER.length : ai) - (bi === -1 ? REPORTING_ORDER.length : bi) ||
+      a.localeCompare(b)
+    );
+  });
+}
+
+const PACKAGES = discoverPackages();
+
 const failed = [];
 
 for (const name of PACKAGES) {
   // The banner is what replaces pnpm's `packages/<name> test:` line prefix.
   // Without it a bare `src/…/foo.test.ts` failure is ambiguous about which
-  // package produced it, since all four report paths relative to their own root.
+  // package produced it, since every package reports paths from its own root.
   console.log(`\n=== ${name} — vitest ===`);
   const result = spawnSync('pnpm', ['--filter', name, 'run', 'test'], {
     stdio: 'inherit',
