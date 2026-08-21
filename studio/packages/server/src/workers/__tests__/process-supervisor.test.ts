@@ -159,6 +159,7 @@ describe('spawnSupervised', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 3500));
     expect(existsSync(sentinelPath)).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
   }, 15_000);
 
   it('bounds COMBINED stdout+stderr memory on a flooding process and reports truncated', async () => {
@@ -362,6 +363,7 @@ describe('spawnSupervised', () => {
     // never happened, not merely that we hadn't checked yet.
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(existsSync(sentinelPath)).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
   }, 10_000);
 
   it('reapAllSupervised is a safe no-op when nothing is currently supervised', async () => {

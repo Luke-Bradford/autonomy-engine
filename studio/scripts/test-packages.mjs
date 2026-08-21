@@ -72,6 +72,23 @@
  * and `server`/`web` both depend on `shared`, so one red `shared` suite meant
  * neither of them ran at all. Here every package runs regardless.
  *
+ * ## The alternative that is arguably more precise, and why it is not this PR
+ *
+ * vitest 4 has a native multi-project mode (`test.projects`): ONE `vitest run`
+ * covering all four packages against ONE shared worker pool. That fixes the
+ * root cause at its source — a single pool cannot oversubscribe itself —
+ * where this script only ensures two pools never stand at once, and it would
+ * likely be FASTER, since it can interleave a fast package's files with a slow
+ * one's instead of draining them in series.
+ *
+ * It is the better long-term shape and it is not being done here because it is
+ * a different size of change: four `vitest.config.ts` files with different
+ * `environment`s (jsdom vs node), `setupFiles`, plugins and timeouts have to
+ * become projects of one root config, `pnpm --filter <pkg> test` changes
+ * meaning, and the result needs its own verification pass. Landing it inside a
+ * flake fix would make the flake fix unreviewable. Tracked separately; this
+ * script is deliberately small enough to delete when that lands.
+ *
  * ## What this is NOT
  *
  * Not a timeout change. `packages/server/vitest.config.ts` (30s) and

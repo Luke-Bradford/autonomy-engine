@@ -517,7 +517,14 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     `--no-bail`, whose measured exit code (1) contradicts its own documented
     behaviour ("will exit with a 0 exit code even if the script fails") — a
     merge gate must not rest on that, since the release that makes the code
-    match the docs turns it fail-OPEN silently. *(#1124; PR for #1124/#985/#969.)*
+    match the docs turns it fail-OPEN silently. The script DISCOVERS the
+    packages from `packages/*/package.json` rather than naming them, because
+    `pnpm --filter <no-match> run test` exits 0 (measured) — so a hardcoded
+    list going stale would report an untested package as a passing one. vitest
+    4's native `test.projects` mode is the better long-term shape (one shared
+    worker pool rather than never running two at once) and is tracked
+    separately; this script is meant to be deleted when that lands.
+    *(#1124; PR for #1124/#985/#969.)*
 
 ## Adding an entry
 
