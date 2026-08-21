@@ -1,4 +1,5 @@
-import { TERMINAL_NODE } from '@autonomy-studio/shared';
+import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
+import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
@@ -207,6 +208,10 @@ export function NodeActivityPanel({
         </p>
       )}
 
+      {node.datasetAddresses !== undefined && (
+        <DataMovementSection addresses={node.datasetAddresses} />
+      )}
+
       {node.status === 'failure' && (
         <section className="contract-section">
           <h4>Failure</h4>
@@ -300,6 +305,86 @@ export function NodeActivityPanel({
  * beside it (nothing ran · a known covered zero · nothing could be priced · a
  * genuinely free exchange).
  */
+/**
+ * #996 M6 (#1162, data-movement spec §2.1) — WHERE this node's dispatch actually
+ * resolved to.
+ *
+ * §2.1's argument for recording the address at all is the reason it has to be
+ * rendered: the node holds a dataset *ref*, and a dataset row is MUTABLE, so a
+ * rerun pinned to the same `pipelineVersionId` writes wherever that dataset
+ * points TODAY. "A run's own log cannot answer 'where did this data go', which
+ * is the first question anyone asks." M6 slice B (#1149) made the answer
+ * durable on `node.dispatched`; until this, reading it meant querying
+ * `run_events` — which §2.1 names as the unacceptable state, not a workaround.
+ *
+ * PRESENCE-GATED on the fact, never on the activity type. This panel has no doc
+ * and cannot ask what kind a node is (the same constraint the attempts docblock
+ * works under), and it does not need to: every dispatch that resolved a dataset
+ * recorded one, and nothing else did.
+ *
+ * The address is rendered by `describeDatasetAddress`, the shared renderer the
+ * engine's own self-copy refusal already uses — so a refusal message and this
+ * section cannot drift into two spellings of one address. Only `kind` is set in
+ * `<code>`: the description supplies its own quoting, and wrapping it too would
+ * double-decorate it.
+ *
+ * `storeIdentity` is deliberately NOT shown. It is a `dev:ino` comparison token
+ * that exists so the self-copy gate survives a case-aliasing filesystem — it
+ * identifies a store, it does not address one, and on screen it would read as
+ * part of the path.
+ *
+ * NOT restated here: that a parallel foreach folds its items onto one row and
+ * this is the last item's address. The panel already says exactly that, once,
+ * above every section (`node.instanceId`), and a second copy beside this one
+ * would be a second thing to keep true.
+ */
+function DataMovementSection({ addresses }: { addresses: NonNullable<NodeActivity['datasetAddresses']> }) {
+  const { source, sink } = addresses;
+  /* A `query` dataset's `object` is `null` BY DESIGN — it is a SELECT over an
+     arbitrary set of tables, and `address.ts` refuses to reduce that to one
+     name rather than guess. `describeDatasetAddress` then renders the store
+     alone, which unexplained reads as a truncated render rather than as the
+     stated absence it is. */
+  const unnamed = source.object === null || (sink !== undefined && sink.object === null);
+  return (
+    <section className="contract-section">
+      <h4>Data movement</h4>
+      <p className="page-hint">
+        Where this dispatch resolved to. A node names a dataset, and a dataset can be edited after
+        the version was minted — so this is where the data actually went, which a rerun may not
+        repeat.
+      </p>
+      <dl className="run-meta">
+        <dt>Source</dt>
+        <dd>
+          <AddressValue address={source} />
+        </dd>
+        {sink !== undefined && (
+          <>
+            <dt>Sink</dt>
+            <dd>
+              <AddressValue address={sink} />
+            </dd>
+          </>
+        )}
+      </dl>
+      {unnamed && (
+        <p className="page-hint">
+          A query names no single object in its store, so only the store is recorded for that end.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function AddressValue({ address }: { address: DatasetAddress }) {
+  return (
+    <>
+      <code>{address.kind}</code> {describeDatasetAddress(address)}
+    </>
+  );
+}
+
 function CostSection({ node }: { node: NodeActivity }) {
   const reading = readCost(node.cost);
   const { cost } = node;
