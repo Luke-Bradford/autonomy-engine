@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ConnectionPublic } from '@autonomy-studio/shared';
+import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
 import { ConnectionsPage } from './ConnectionsPage';
 import * as api from '../api/connections';
+import * as datasetsApi from '../api/datasets';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithRouter } from '../testing/renderWithRouter';
@@ -22,6 +23,17 @@ vi.mock('../api/connections', async (importActual) => {
     testSavedConnection: vi.fn(),
   };
 });
+
+// #1174 — the page reads the dataset list to say what an edit would strand.
+// Mocked to the EMPTY list rather than left to reject: an unmocked module here
+// reaches the real `fetch` under jsdom, and the page would then correctly render
+// "could not check" in every unrelated test (#1206). An empty list is a page
+// that MADE the check and found nothing, which is the state the rest of this
+// file means to assert against.
+vi.mock('../api/datasets', async (importActual) => ({
+  ...(await importActual<typeof import('../api/datasets')>()),
+  listDatasets: vi.fn(),
+}));
 
 // The real `downloadTextFile` clicks an anchor, which jsdom follows on the NEXT
 // TICK and then reports as an unimplemented-navigation error attributed to
@@ -56,6 +68,7 @@ const updateMock = vi.mocked(api.updateConnection);
 const deleteMock = vi.mocked(api.deleteConnection);
 const testDraftMock = vi.mocked(api.testDraftConnection);
 const testSavedMock = vi.mocked(api.testSavedConnection);
+const listDatasetsMock = vi.mocked(datasetsApi.listDatasets);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportConnection);
 const importMock = vi.mocked(portabilityApi.importEnvelope);
@@ -83,6 +96,7 @@ beforeEach(() => {
   updateMock.mockResolvedValue(conn());
   deleteMock.mockResolvedValue(undefined);
   exportMock.mockResolvedValue('{"kind":"connection"}');
+  listDatasetsMock.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -686,6 +700,126 @@ describe('ConnectionsPage', () => {
       await waitFor(() => expect(testDraftMock).toHaveBeenCalled());
       expect(createMock).not.toHaveBeenCalled();
       expect(updateMock).not.toHaveBeenCalled();
+    });
+  });
+  describe('#1174 an edit says what it would strand', () => {
+    const store = conn({ id: 'conn_store', name: 'Local store', kind: 'sqlite', config: {} });
+
+    function ds(name: string, kind: Dataset['kind'], connectionId: string): Dataset {
+      return {
+        id: `ds_${name}`,
+        ownerId: 'local',
+        name,
+        kind,
+        connectionId,
+        config: {},
+        columns: [],
+        createdAt: 1,
+        updatedAt: 1,
+      } as Dataset;
+    }
+
+    async function openEdit() {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
+    }
+
+    it('names the datasets a kind change would strand, before any save', async () => {
+      listDatasetsMock.mockResolvedValue([
+        ds('orders', 'table', 'conn_store'),
+        ds('customers', 'table', 'conn_store'),
+      ]);
+      const { user, form } = await openEdit();
+      await waitFor(() => expect(listDatasetsMock).toHaveBeenCalled());
+
+      await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+
+      const note = await within(form).findByText(/strands 2 datasets that read it/);
+      expect(note).toHaveTextContent('orders, customers');
+      // ADVISORY, never a gate — #1145/#1158's polarity, restated here so a
+      // future change that disables Save has to delete this line to do it.
+      expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it('stays silent while the kind has not moved', async () => {
+      listDatasetsMock.mockResolvedValue([ds('orders', 'table', 'conn_store')]);
+      const { form } = await openEdit();
+      await waitFor(() => expect(listDatasetsMock).toHaveBeenCalled());
+      expect(within(form).queryByText(/strands/)).not.toBeInTheDocument();
+    });
+
+    it('says nothing about a dataset the change REPAIRS', async () => {
+      // `delimited` lives on `fs`, so it disagrees with this sqlite store today
+      // and AGREES after the change. Warning here would fire on the fix.
+      listDatasetsMock.mockResolvedValue([ds('feed', 'delimited', 'conn_store')]);
+      const { user, form } = await openEdit();
+      await waitFor(() => expect(listDatasetsMock).toHaveBeenCalled());
+
+      await user.selectOptions(within(form).getByLabelText('Kind'), 'fs');
+      expect(within(form).queryByText(/strands/)).not.toBeInTheDocument();
+    });
+
+    it('admits it could not check, rather than claiming nothing is stranded', async () => {
+      // The failure this whole three-state shape exists for: a page that renders
+      // a clean bill of health off a fetch that never answered.
+      listDatasetsMock.mockRejectedValue(new Error('datasets offline'));
+      const { user, form } = await openEdit();
+
+      await user.selectOptions(within(form).getByLabelText('Kind'), 'http');
+
+      expect(await within(form).findByText(/Could not check/)).toHaveTextContent(
+        'datasets offline',
+      );
+      // And the advisory's failure is LOCAL — the connections list is not an
+      // error banner because a diagnostic could not be computed.
+      expect(screen.getByText('Local store')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('names the stranded datasets in the delete confirmation', async () => {
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      listDatasetsMock.mockResolvedValue([
+        ds('orders', 'table', 'conn_store'),
+        // A dataset on ANOTHER connection must not be counted.
+        ds('elsewhere', 'table', 'conn_other'),
+      ]);
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      const said = confirmSpy.mock.calls[0]?.[0] ?? '';
+      expect(said).toContain('1 dataset reads it');
+      expect(said).toContain('orders');
+      expect(said).not.toContain('elsewhere');
+      // Declined — and the row is still there, which is what makes the confirm
+      // a real gate on the operator's decision rather than a notice.
+      expect(deleteMock).not.toHaveBeenCalled();
+    });
+
+    it('warns the delete check failed rather than asking the bare question', async () => {
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listDatasetsMock.mockRejectedValue(new Error('datasets offline'));
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      expect(confirmSpy.mock.calls[0]?.[0] ?? '').toContain('Could not check');
+      // A diagnostic that could not be computed must not BLOCK the delete —
+      // advisory in both directions.
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
     });
   });
 });

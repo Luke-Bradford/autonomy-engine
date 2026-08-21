@@ -130,8 +130,12 @@ export function kindChangeAdvisory(check: StrandCheck, nextKind: ConnectionKind)
     case 'known': {
       if (check.names.length === 0) return null;
       const count = check.names.length;
-      const noun = count === 1 ? 'dataset' : 'datasets';
-      return `Saving this as a ${nextKind} connection strands ${count} ${noun} that read it (${formatNameList(check.names)}) — each keeps pointing here and fails at dispatch until its kind or its store changes.`;
+      // Agreeing in NUMBER, both halves. A count is interpolated into both
+      // clauses, so "1 dataset that read it" and "2 datasets that reads it" are
+      // each one careless template away.
+      const subject = count === 1 ? '1 dataset that reads it' : `${count} datasets that read it`;
+      const tail = count === 1 ? 'it keeps' : 'each keeps';
+      return `Saving this as a ${nextKind} connection strands ${subject} (${formatNameList(check.names)}) — ${tail} pointing here and fails at dispatch until its kind or its store changes.`;
     }
   }
 }
