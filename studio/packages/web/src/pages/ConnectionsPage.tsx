@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
@@ -283,23 +283,48 @@ export function ConnectionsPage() {
    * to strand — the confirm says the check could not be made and lets the
    * operator decide, which is the advisory polarity #1145/#1158 set.
    */
+  /**
+   * Re-entrancy guard for the delete path, which #1174 made necessary.
+   *
+   * `window.confirm` BLOCKS the main thread, so while it was the FIRST statement
+   * of this handler a second click could not even be dispatched — the old code
+   * was accidentally immune to a double-click. Reading the dataset list first
+   * puts a real round trip in front of the dialog and the event loop is free for
+   * the whole of it: a double-click queues two handlers, the second raises a
+   * second confirm for a connection the first has already deleted, and accepting
+   * it 404s into `loadError` — an error banner over an operation that in fact
+   * succeeded.
+   *
+   * A REF rather than state, because it has to be read and written
+   * SYNCHRONOUSLY inside one handler, before any await. A `useState` flag would
+   * not have re-rendered by the time the second click's handler runs, which is
+   * the entire window being closed.
+   */
+  const deleting = useRef(false);
+
   const onDelete = useCallback(
     async (conn: ConnectionPublic) => {
-      let check: StrandCheck;
+      if (deleting.current) return;
+      deleting.current = true;
       try {
-        check = {
-          state: 'known',
-          names: datasetsOnConnection(await listDatasets(), conn.id).map((d) => d.name),
-        };
-      } catch (err) {
-        check = { state: 'unavailable', detail: messageOf(err) };
-      }
-      if (!window.confirm(deleteConfirmMessage(conn.name, check))) return;
-      try {
-        await deleteConnection(conn.id);
-        await refresh();
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : String(err));
+        let check: StrandCheck;
+        try {
+          check = {
+            state: 'known',
+            names: datasetsOnConnection(await listDatasets(), conn.id).map((d) => d.name),
+          };
+        } catch (err) {
+          check = { state: 'unavailable', detail: messageOf(err) };
+        }
+        if (!window.confirm(deleteConfirmMessage(conn.name, check))) return;
+        try {
+          await deleteConnection(conn.id);
+          await refresh();
+        } catch (err) {
+          setLoadError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        deleting.current = false;
       }
     },
     [refresh],

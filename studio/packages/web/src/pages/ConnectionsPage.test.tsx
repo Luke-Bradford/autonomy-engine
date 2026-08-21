@@ -807,6 +807,33 @@ describe('ConnectionsPage', () => {
       expect(deleteMock).not.toHaveBeenCalled();
     });
 
+    it('raises ONE confirm for a double-clicked delete', async () => {
+      // #1174 put a real round trip (the dataset read) in FRONT of the confirm,
+      // and `window.confirm` blocking the main thread was the only thing that
+      // had ever serialized this handler. Without the re-entrancy guard the
+      // second click raises a second dialog for a connection the first has
+      // already deleted, and accepting it 404s into an error banner over an
+      // operation that in fact succeeded.
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const held = deferred<Dataset[]>();
+      listDatasetsMock.mockReturnValue(held.promise);
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      const button = screen.getByRole('button', { name: 'Delete Local store' });
+      // Both clicks land while the dataset read is still in flight — the window
+      // the guard exists to close.
+      await user.click(button);
+      await user.click(button);
+      held.resolve([]);
+
+      await waitFor(() => expect(deleteMock).toHaveBeenCalled());
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(deleteMock).toHaveBeenCalledTimes(1);
+    });
+
     it('warns the delete check failed rather than asking the bare question', async () => {
       const user = userEvent.setup();
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
