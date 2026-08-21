@@ -393,6 +393,29 @@ describe('parseNaiveTimestampAsUtc (#1190 M10) — the TZ-invariance pin', () =>
   );
 });
 
+describe('the reader type-parser wiring (#1190 M10)', () => {
+  it('routes BOTH naive OIDs through the UTC parser, per client', async () => {
+    // Pins the WIRING rather than the parse, and it is deliberately independent
+    // of the runner's `TZ`. The live TZ-invariance test below cannot do this job
+    // on its own: on a UTC runner `pg`'s local-time parse and ours COINCIDE, so
+    // removing the override would leave that test green. This one reds wherever
+    // it runs.
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    await describePostgresDatasetColumns({ ...READ_BASE, createClient: factory });
+    const types = rec.options[0]?.types;
+    expect(types).toBeDefined();
+    // 1114 = timestamp without time zone, 1082 = date.
+    expect(types?.getTypeParser(1114)).toBe(parseNaiveTimestampAsUtc);
+    expect(types?.getTypeParser(1082)).toBe(parseNaiveTimestampAsUtc);
+  });
+
+  it('leaves timestamptz on pg own parser — it names a real instant', async () => {
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    await describePostgresDatasetColumns({ ...READ_BASE, createClient: factory });
+    expect(rec.options[0]?.types?.getTypeParser(1184)).not.toBe(parseNaiveTimestampAsUtc);
+  });
+});
+
 describe('describePostgresDatasetColumns (#1190 M10)', () => {
   it('describes WITHOUT reading a row, and wraps the statement', async () => {
     const { rec, factory } = readerFactory({ fields: ['a', 'b'] });

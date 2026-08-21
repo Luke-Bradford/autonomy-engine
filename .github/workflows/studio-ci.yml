@@ -84,6 +84,13 @@ jobs:
       - name: Test
         run: pnpm test
         env:
+          # DELIBERATELY NOT UTC (#1190). A GitHub runner is UTC, and under UTC a
+          # local-time parse and a UTC parse COINCIDE — which is exactly how the
+          # naive-`timestamp` corruption slice 2 fixed would hide: the live
+          # TZ-invariance test would stay green with the fix removed. Pinning a
+          # non-UTC zone makes that class of bug fail here rather than on an
+          # operator's machine. The whole suite was measured green under it.
+          TZ: Asia/Tokyo
           STUDIO_TEST_POSTGRES_HOST: 127.0.0.1
           STUDIO_TEST_POSTGRES_PORT: 5432
           STUDIO_TEST_POSTGRES_DATABASE: studio_test
