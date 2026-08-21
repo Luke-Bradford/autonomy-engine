@@ -691,6 +691,24 @@ describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
     });
     expect(address.store).toBe(`db.example.test:${String(DEFAULT_POSTGRES_PORT)}/app`);
   });
+
+  it('classifies a malformed table config as permanent, not a raw ZodError', () => {
+    // The address seam is reached with operator-authored config like every other
+    // seam in this module, so it owes the same failure contract: a config that
+    // does not validate is a `permanent` `DatasetIoError` carrying the issues,
+    // never a `ZodError` escaping unclassified.
+    expect(() =>
+      resolvePostgresDatasetAddress({
+        connectionConfig: CONFIG,
+        dataset: dataset('table', { schema: 'public' }),
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        kind: 'permanent',
+        message: expect.stringContaining('invalid table dataset config'),
+      }) as unknown as Error,
+    );
+  });
 });
 
 /**
