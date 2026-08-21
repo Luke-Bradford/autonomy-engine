@@ -48,6 +48,18 @@ describe('projectMappingRows', () => {
     expect(projected.unnamed).toBe(2);
   });
 
+  it('counts a row that is not an object at all as unnamed, rather than throwing', () => {
+    // A stored `Node.config.mapping` is an untyped blob: its elements can be
+    // anything JSON admits. A string, a number or a nested array names no sink
+    // column, so each is a row this function could not read — it must land in
+    // `unnamed` (the caller's only evidence it was there), never be projected
+    // and never throw on the way past.
+    const projected = projectMappingRows(['id', 7, null, ['sink', 'id'], { sink: 'kept' }]);
+
+    expect(projected.rows).toEqual([{ sink: 'kept', source: undefined, onError: 'fail' }]);
+    expect(projected.unnamed).toBe(4);
+  });
+
   it('folds an unrecognised onError to `fail` rather than inventing `null`', () => {
     // `null` is the LOSSY setting (a bad value becomes NULL instead of failing
     // the row), so an unreadable value must never resolve to it.

@@ -44,6 +44,10 @@ export interface ProjectedMapping {
   readonly unnamed: number;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Project a mapping blob's rows down to what an agreement check reads.
  *
@@ -59,7 +63,14 @@ export function projectMappingRows(rows: readonly unknown[]): ProjectedMapping {
   const projected: MappingRow[] = [];
   let unnamed = 0;
   for (const row of rows) {
-    const entry = row as Record<string, unknown> | null;
+    // Narrowed rather than cast. `rows` is `unknown[]`, so an element can be a
+    // string, a number or an array — none of which are `Record<string, unknown>`
+    // — and asserting one unconditionally states something false about every
+    // such element. It happens not to MISBEHAVE (property access on a primitive
+    // yields `undefined`, so the row falls out as unnamed either way), but the
+    // type would stop describing the value, and the next reader of `entry` would
+    // be reasoning from a lie. Non-objects become `null` and take the same path.
+    const entry: Record<string, unknown> | null = isPlainObject(row) ? row : null;
     const sink = entry === null ? undefined : entry.sink;
     if (typeof sink !== 'string' || sink.length === 0) {
       unnamed += 1;
