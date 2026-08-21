@@ -1,4 +1,5 @@
 import type { Db } from './repo/types.js';
+import type { ConnectorRegistry } from './connectors/registry.js';
 import type { Supervisor } from './workers/process-supervisor.js';
 import type { RunLauncher } from './run/launcher.js';
 import type { RunEventBus } from './run/event-bus.js';
@@ -26,6 +27,12 @@ declare module 'fastify' {
      * `onClose`) tree-kills ONLY the subprocesses IT spawned, so two apps in
      * one process never reap each other's `agent_cli` children. */
     supervisor: Supervisor;
+    /** This app instance's connector registry — the ONE map of adapters, shared
+     * by the executor's dispatch path and the #1191 test-connection routes.
+     * Decorated (rather than rebuilt per consumer) because the `agent_cli`
+     * adapter closes over `supervisor`, so a second registry would hold a
+     * second, process-state-carrying instance of it. */
+    connectors: ConnectorRegistry;
     /** This app instance's run launcher: the one place a trigger becomes a
      * run (manual fire + P4 scheduler/webhooks), enforcing "unbound never
      * fires" + concurrency admission. Per-app so its in-flight/queue state

@@ -506,7 +506,7 @@ describe('the adapter', () => {
     seedDb(root, 1);
     await expect(
       sqliteAdapter.testConnection({ roots: [root], path: join(root, 'app.db') }, null),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, probed: 'liveness' });
 
     // Measured: opening a NON-SQLite file read-only SUCCEEDS — it is the first
     // statement that reports "file is not a database". An open-only probe would

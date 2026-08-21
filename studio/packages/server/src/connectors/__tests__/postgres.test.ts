@@ -224,7 +224,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
   it('probes with a statement, not merely an open', async () => {
     const { rec, factory } = recordingFactory();
     const result = await createPostgresAdapter(factory).testConnection(CONFIG, 'pw');
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, probed: 'liveness' });
     expect(rec.queries).toEqual(['select 1']);
     expect(rec.ended).toBe(1);
   });
@@ -287,7 +287,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
         throw new Error('socket already gone');
       },
     });
-    expect(await createPostgresAdapter(factory).testConnection(CONFIG, 'pw')).toEqual({ ok: true });
+    expect(await createPostgresAdapter(factory).testConnection(CONFIG, 'pw')).toEqual({ ok: true, probed: 'liveness' });
   });
 
   it('RESOLVES on a client that cannot even be constructed', async () => {
@@ -1193,7 +1193,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   });
 
   it('connects and answers', async () => {
-    expect(await postgresAdapter.testConnection(live, password)).toEqual({ ok: true });
+    expect(await postgresAdapter.testConnection(live, password)).toEqual({ ok: true, probed: 'liveness' });
   });
 
   it('reports a wrong password as a refused password', async () => {

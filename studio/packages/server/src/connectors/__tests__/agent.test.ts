@@ -553,6 +553,7 @@ describe('createAgentAdapter().testConnection', () => {
       await createAgentAdapter(supervisor).testConnection({ command: 'claude' }, null),
     ).toEqual({
       ok: true,
+      probed: 'config',
     });
     expect(await createAgentAdapter(supervisor).testConnection({}, null)).toMatchObject({
       ok: false,
