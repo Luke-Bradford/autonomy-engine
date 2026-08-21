@@ -321,6 +321,14 @@ describe('DATASET_CONNECTION_KINDS (#1145)', () => {
     //
     // Adding a kind? Decide whether it is a STORE. If it is, add it to every
     // dataset kind that can live in it below, then extend this list.
+    //
+    // #1189 (M10 slice 1) is the first time that decision came out NOT YET:
+    // `postgres` IS a store, and it is deliberately absent from `table`/`query`
+    // until slice 2 ships a reader, because listing it is what would let an
+    // operator author a dataset that can only fail at dispatch. The reasoning
+    // lives in full next to `DATASET_CONNECTION_KINDS` itself. This pin did its
+    // job — it is the reason that decision got made at all, rather than the map
+    // quietly continuing to claim a `table` can only live in SQLite.
     expect([...ConnectionKindSchema.options]).toEqual([
       'anthropic_api',
       'openai_api',
@@ -329,6 +337,7 @@ describe('DATASET_CONNECTION_KINDS (#1145)', () => {
       'http',
       'fs',
       'sqlite',
+      'postgres',
     ]);
   });
 

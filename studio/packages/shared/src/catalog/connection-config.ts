@@ -112,6 +112,73 @@ export const sqliteConnectionConfigSchema = z.object({
   writable: z.boolean().optional(),
 });
 
+/**
+ * #1189 M10 — the TLS vocabulary a `postgres` connection may ask for.
+ *
+ * NARROWER than libpq's six, and every omission is a decision rather than an
+ * oversight, because MEASURED `pg@8.23.0` behaviour makes a faithful passthrough
+ * unsafe here:
+ *
+ * - **`pg` ignores `sslmode` entirely on a Client options object.** Measured:
+ *   `new Client({ ..., sslmode: 'require' })` connects in PLAINTEXT and reports
+ *   success. `sslmode` is only ever interpreted by `pg-connection-string`, from a
+ *   URL. So an operator who asks for TLS and gets none would be told the
+ *   connection is fine — the exact fail-open polarity this codebase refuses. The
+ *   adapter therefore maps this enum to `ssl` by hand and NEVER forwards the
+ *   string.
+ * - **`prefer` is omitted.** It means "TLS if the server offers it, plaintext
+ *   otherwise", i.e. a silent downgrade an attacker can force by answering "no
+ *   SSL here". A setting whose failure mode is invisible plaintext is not a
+ *   setting this schema should be able to express.
+ * - **`verify-ca` is omitted, and that is a SPEC GAP, not a preference.** §2.6's
+ *   key list has no `sslRootCert`, so there is nowhere to put a private CA; a
+ *   system-trust-only `verify-ca` would differ from `verify-full` by dropping
+ *   hostname verification, which is strictly worse for no gain. Wanting a private
+ *   CA means §2.6 owes the key first.
+ *
+ * There is NO DEFAULT, deliberately. #473's lesson is the general rule — an
+ * absent fact must never be manufactured as a benign one — and it bites hardest
+ * on a transport-security setting, where both candidate defaults are wrong:
+ * `pg`'s own default is `ssl: false` (measured, `lib/defaults.js`), so silence
+ * would mean plaintext, and defaulting to `verify-full` would make every local
+ * dev server fail with a TLS error that names nothing the operator set. The
+ * operator states it.
+ */
+export const PostgresSslModeSchema = z.enum(['disable', 'require', 'verify-full']);
+export type PostgresSslMode = z.infer<typeof PostgresSslModeSchema>;
+
+/**
+ * #1189 M10 slice 1 (data-movement spec §2.6) — the Connection-level (non-secret)
+ * config for a `postgres` STORE connection. The password is NOT here: it is
+ * `Connection.secretRef`, decrypted at dispatch into a side-channel argument
+ * (§8), and `postgres` joins `SECRET_REQUIRING_CONNECTION_KINDS` so a connection
+ * without one is refused before it is ever dispatched.
+ *
+ * EVERY IDENTITY FIELD IS REQUIRED, and that is a security property rather than
+ * strictness for its own sake. Measured on `pg@8.23.0`: when a Client option is
+ * `undefined` OR an empty string, `pg` falls back to the AMBIENT ENVIRONMENT —
+ * `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, and `PGPASSWORD`. A connection
+ * missing `host` therefore does not fail; it connects to whatever the server
+ * process happens to have in its environment, which is both nondeterministic
+ * across machines and, for the password, a credential the operator never bound.
+ * Requiring them here is the first of two guards; the adapter re-checks at
+ * dispatch, because `connectionConfigAdvisory` is advisory and
+ * `routes/connections.ts` runs no per-kind validation.
+ */
+export const postgresConnectionConfigSchema = z.object({
+  host: z.string().min(1, 'a postgres connection needs a host'),
+  port: z.number().int().min(1).max(65535).optional(),
+  database: z.string().min(1, 'a postgres connection needs a database'),
+  user: z.string().min(1, 'a postgres connection needs a user'),
+  /** Required — see `PostgresSslModeSchema` on why there is no default. */
+  sslmode: PostgresSslModeSchema,
+  /** How long to wait for the CONNECTION itself (`connectionTimeoutMillis`). */
+  connectTimeoutMs: z.number().int().positive().optional(),
+  /** Server-side `statement_timeout`, in ms — the cap on one statement, and a
+   * different timer from the connect budget above. */
+  statementTimeoutMs: z.number().int().positive().optional(),
+});
+
 /** True iff `pattern` compiles as a `RegExp` (a boundary guard so a malformed
  * `quota.exhaustionPattern` is refused at config-save, never thrown at emit). */
 function isCompilableRegex(pattern: string): boolean {
@@ -383,6 +450,7 @@ export const CONNECTION_CONFIG_SCHEMAS: Record<ConnectionKind, z.ZodObject> = {
   http: httpConnectionConfigSchema,
   fs: fsConnectionConfigSchema,
   sqlite: sqliteConnectionConfigSchema,
+  postgres: postgresConnectionConfigSchema,
 };
 
 /**
@@ -408,6 +476,7 @@ export const CONNECTION_SECRET_USE: Record<ConnectionKind, string> = {
   http: 'Sent as an `Authorization: Bearer` header, under any header the request sets itself.',
   fs: 'Not used by this kind — an fs connection is credential-less; `roots` is its guard.',
   sqlite: 'Not used by this kind — a local SQLite file takes no credential; `roots` is its guard.',
+  postgres: 'The password for `user`, sent when the connection is opened. Required.',
 };
 
 /**
@@ -461,6 +530,28 @@ export const CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS: Record<ConnectionKind, read
   // it now costs one entry and cannot break a consumer that does not exist;
   // closing it after M5 would mean closing it after it was reachable.
   sqlite: ['roots', 'path', 'writable'],
+  // #1189 M10 — everything except the two TIMEOUTS. The rule is one sentence:
+  // a postgres connection's IDENTITY and its TRANSPORT are fixed by whoever
+  // bound the credential; only how long it waits is a per-dispatch tunable.
+  //
+  // This kind is the first where an override could move a DECRYPTED CREDENTIAL,
+  // which is what makes the line stricter than `sqlite`'s:
+  // - `host`/`port` are the destination. An overridable host sends the password
+  //   to a server the connection's owner never named — straight exfiltration,
+  //   authored from inside a pipeline that was only ever granted USE of the
+  //   connection.
+  // - `sslmode` is what protects it in flight; overridable, a node could
+  //   downgrade its own connection to plaintext.
+  // - `database` is the store ADDRESS, and `sqlite`'s `path` — the same thing
+  //   for a file store — is already closed on exactly that reasoning.
+  // - `user` cannot exfiltrate the password (the server is still the owner's),
+  //   so it is the weakest of the five. It is closed anyway, for the asymmetry
+  //   this map's docblock already states: closing a key with no consumer costs
+  //   one entry, and RE-OPENING one later is a change in the permissive
+  //   direction, which is the safe one to make. Per-environment
+  //   `database`/`user` parameterisation is an ADF-legitimate pattern and can
+  //   be re-opened deliberately when something actually asks for it.
+  postgres: ['host', 'port', 'database', 'user', 'sslmode'],
 };
 
 /** Whether `key` is a security-boundary config key that no per-dispatch

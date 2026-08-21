@@ -485,8 +485,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return {
             error:
               `connection parameter '${key}' may never be overridden per dispatch on a ` +
-              `'${connection.kind}' connection — it is a security boundary (the path ` +
-              'confinement allowlist / the store address), not a setting',
+              `'${connection.kind}' connection — it is a security boundary, not a setting`,
             code: FAILURE_CODES.CONNECTION_PARAM_NON_OVERRIDABLE,
           };
         }
