@@ -601,6 +601,46 @@ describe('readXlsxRowBatches — malformed references', () => {
     expect(rows[0]!.cells[16_383]).toBe('last');
   });
 
+  it('REFUSES a cell whose r attribute is not a cell reference', async () => {
+    // `columnIndexOf(cellRef) ?? nextColumn` collapsed two different facts, the
+    // same way the dangling rId did: a cell declaring NO ref (position is the
+    // only answer) and one declaring a ref that will not parse. Real Excel
+    // emits uppercase LETTERS+DIGITS always, so `r="a1"` is malformed — and
+    // placing it at the next sequential column is a guess that lands real data
+    // in the wrong column while succeeding.
+    for (const ref of ['a1', 'A', '1A', 'A1B', '$A$1']) {
+      const path = seed({
+        sheets: [
+          {
+            name: 'S',
+            rows: [[{ kind: 'raw', xml: `<c r="${ref}" t="inlineStr"><is><t>x</t></is></c>` }]],
+          },
+        ],
+      });
+      await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
+      await expect(readAll(path)).rejects.toThrowError(/not a cell reference/);
+    }
+  });
+
+  it('still places a cell that declares NO ref at the next column', async () => {
+    // The other half. Absent is not malformed: Excel may omit `r`, and then
+    // sequential position is the only answer there is.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              { kind: 'raw', xml: '<c t="inlineStr"><is><t>one</t></is></c>' },
+              { kind: 'raw', xml: '<c t="inlineStr"><is><t>two</t></is></c>' },
+            ],
+          ],
+        },
+      ],
+    });
+    expect(cellsOf(await readAll(path))).toEqual([['one', 'two']]);
+  });
+
   it('REFUSES a row whose r attribute is not a row number', async () => {
     // `Number(tag.attributes['r'])` accepted anything, so `r="abc"` bound NaN
     // as the row number and travelled with the data — a guess, where every

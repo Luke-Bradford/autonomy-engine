@@ -544,10 +544,15 @@ function serialToInstant(serial: number, date1904: boolean): Date | XlsxCellFaul
   return new Date(ms);
 }
 
-const COLUMN_RE = /^([A-Z]+)/;
+// Anchored on the WHOLE reference, not just its head. A leading-letters match
+// would accept `A1B` and `A` as readily as `A1`, and each of those is a
+// malformed cell that the caller must be able to tell apart from one carrying
+// no `r` at all. Excel emits uppercase letters followed by a 1-based row,
+// always.
+const CELL_REF_RE = /^([A-Z]+)[1-9][0-9]*$/;
 
 function columnIndexOf(ref: string): number | null {
-  const match = COLUMN_RE.exec(ref);
+  const match = CELL_REF_RE.exec(ref);
   if (!match) return null;
   let index = 0;
   for (const ch of match[1]!) index = index * 26 + (ch.charCodeAt(0) - 64);
@@ -681,8 +686,26 @@ export async function* readXlsxRowBatches(
           inInline = false;
           break;
         case 'c': {
-          const column =
-            cellRef === undefined ? nextColumn : (columnIndexOf(cellRef) ?? nextColumn);
+          // Absent and unparseable are DIFFERENT facts, and `?? nextColumn`
+          // collapsed them. A cell declaring no `r` has only its position to go
+          // on, and sequential placement is correct. A cell declaring an `r`
+          // that will not parse is malformed, and placing it sequentially is a
+          // guess that lands real data in the wrong column while SUCCEEDING —
+          // §6.2's outcome, reached by the same route as the dangling rId.
+          let column: number;
+          if (cellRef === undefined) {
+            column = nextColumn;
+          } else {
+            const parsed = columnIndexOf(cellRef);
+            if (parsed === null) {
+              state.failure ??= new XlsxReadError(
+                `row ${rowNumber} declares cell r="${cellRef}", which is not a cell reference`,
+              );
+              cellRef = undefined;
+              break;
+            }
+            column = parsed;
+          }
           // Cells are declared left to right. A reference that goes BACKWARDS
           // (or repeats one already read) resolves to an index already written
           // and would silently REPLACE it — a value the operator authored would
