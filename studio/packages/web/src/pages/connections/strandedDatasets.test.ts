@@ -22,13 +22,15 @@ function dataset(
 ): Dataset {
   return {
     id: `ds-${over.name}`,
+    resourceId: `res-${over.name}`,
     ownerId: 'own-1',
     config: {},
     columns: [],
-    createdAt: '2026-08-21T00:00:00.000Z',
-    updatedAt: '2026-08-21T00:00:00.000Z',
+    parameters: [],
+    createdAt: 1,
+    updatedAt: 1,
     ...over,
-  } as Dataset;
+  };
 }
 
 // `table` lives on sqlite|postgres; `delimited` lives on fs. That pairing is

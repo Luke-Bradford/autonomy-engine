@@ -708,15 +708,17 @@ describe('ConnectionsPage', () => {
     function ds(name: string, kind: Dataset['kind'], connectionId: string): Dataset {
       return {
         id: `ds_${name}`,
+        resourceId: `res_${name}`,
         ownerId: 'local',
         name,
         kind,
         connectionId,
         config: {},
         columns: [],
+        parameters: [],
         createdAt: 1,
         updatedAt: 1,
-      } as Dataset;
+      };
     }
 
     async function openEdit() {

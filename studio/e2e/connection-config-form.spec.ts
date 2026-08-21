@@ -297,7 +297,12 @@ test.describe('#1174 an edit says what it would strand', () => {
    * match over the whole wrapping label including its options. A name containing
    * another control's label ('Kind', 'Name', 'Columns') breaks
    * `datasets-page.spec.ts` from over here, in a shared single-worker database.
-   * `e2e-1174-*` is clear of all of them — see that file's own note.
+   * `e2e-1174-*` is clear of all of them — see that file's own note. The SUFFIX
+   * is under the same rule for a second reason: the Export and Delete buttons
+   * carry `aria-label`s that embed the connection's name, so a suffix of `edit`
+   * makes all three row buttons match `getByRole('button', { name: 'Edit' })`.
+   * Hence `alpha`/`beta`, and `exact: true` on the one button whose label is a
+   * prefix of nothing.
    */
   async function seedStoreWithDataset(page: Page, suffix: string) {
     const connectionId = await seedConnection(page, {
@@ -315,27 +320,27 @@ test.describe('#1174 an edit says what it would strand', () => {
     return connectionId;
   }
 
-  /** Playwright DISMISSES an unhandled dialog, so a confirm must be caught to be read. */
+  /**
+   * Playwright DISMISSES an unhandled dialog, so a confirm has to be caught to
+   * be read at all.
+   *
+   * `waitForEvent` rather than an `on('dialog')` handler wrapped around the
+   * click, which is the shape `container-authoring.spec.ts` uses: since #1174
+   * the delete path READS THE DATASET LIST FIRST, so the confirm is raised a
+   * round-trip after the click resolves. A handler detached in a `finally` right
+   * after the click is gone before the dialog exists, and the dialog is then
+   * auto-dismissed with nothing captured.
+   */
   async function captureConfirm(
     page: Page,
     act: () => Promise<void>,
     response: 'accept' | 'dismiss' = 'dismiss',
-  ): Promise<string | null> {
-    let seen: string | null = null;
-    const handler = async (dialog: {
-      message: () => string;
-      accept: () => Promise<void>;
-      dismiss: () => Promise<void>;
-    }) => {
-      seen = dialog.message();
-      await (response === 'accept' ? dialog.accept() : dialog.dismiss());
-    };
-    page.on('dialog', handler);
-    try {
-      await act();
-    } finally {
-      page.off('dialog', handler);
-    }
+  ): Promise<string> {
+    const dialog = page.waitForEvent('dialog');
+    await act();
+    const raised = await dialog;
+    const seen = raised.message();
+    await (response === 'accept' ? raised.accept() : raised.dismiss());
     return seen;
   }
 
@@ -343,11 +348,11 @@ test.describe('#1174 an edit says what it would strand', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    await seedStoreWithDataset(page, 'edit');
+    await seedStoreWithDataset(page, 'alpha');
     await gotoConnections(page);
 
-    const row = page.getByRole('row', { name: /e2e-1174-strand-edit/ });
-    await row.getByRole('button', { name: 'Edit' }).click();
+    const row = page.getByRole('row', { name: /e2e-1174-strand-alpha/ });
+    await row.getByRole('button', { name: 'Edit', exact: true }).click();
     // Nothing to say yet — the stored kind has not moved.
     await expect(form(page).getByText(/strands/)).toHaveCount(0);
 
@@ -355,7 +360,7 @@ test.describe('#1174 an edit says what it would strand', () => {
 
     const note = form(page).getByText(/strands 1 dataset that reads it/);
     await expect(note).toBeVisible();
-    await expect(note).toContainText('e2e-1174-orders-edit');
+    await expect(note).toContainText('e2e-1174-orders-alpha');
 
     // ADVISORY, NEVER A GATE — the polarity #1145/#1158 set and this ticket
     // inherits. The save is still offered, and nothing has been sent: the row
@@ -370,16 +375,16 @@ test.describe('#1174 an edit says what it would strand', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    await seedStoreWithDataset(page, 'delete');
+    await seedStoreWithDataset(page, 'beta');
     await gotoConnections(page);
 
-    const row = page.getByRole('row', { name: /e2e-1174-strand-delete/ });
+    const row = page.getByRole('row', { name: /e2e-1174-strand-beta/ });
     const said = await captureConfirm(page, async () => {
       await row.getByRole('button', { name: /^Delete / }).click();
     });
 
     expect(said).toContain('1 dataset reads it');
-    expect(said).toContain('e2e-1174-orders-delete');
+    expect(said).toContain('e2e-1174-orders-beta');
     // Declined, so the connection is still there — which is what makes the
     // sentence a decision the operator got to make rather than a notice.
     await expect(row).toBeVisible();
