@@ -60,6 +60,21 @@ const OK_BODY = {
 };
 
 describe('ollamaAdapter.runActivity', () => {
+  it('names WHY a connection config was refused, in one line (#1175)', async () => {
+    // This site used to yield a bare `invalid ollama connection config` with no
+    // reason at all — the opposite failure to the JSON blob, and in the same
+    // function as one. Refused before any fetch, so this stays egress-free.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 'soon' } }), null),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).toMatch(/^invalid ollama connection config: [^\n]+$/);
+    expect(error).toContain('timeoutMs: ');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('POSTs /api/chat (stream:false) to localhost by default, no auth header', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));

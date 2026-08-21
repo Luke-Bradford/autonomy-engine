@@ -373,7 +373,8 @@ describe('config validation at dispatch (§8)', () => {
       rowsOf(read(path, {}, { connectionConfig: { roots: ['relative/root'] } })),
     );
     expect(err.kind).toBe('permanent');
-    expect(err.message).toContain('invalid fs connection config');
+    // #1175 — the WHOLE message, anchored: a Zod 4 blob would span lines.
+    expect(err.message).toMatch(/^invalid fs connection config: [^\n]+$/);
   });
 
   it('refuses a malformed delimited dataset config', async () => {
@@ -381,7 +382,7 @@ describe('config validation at dispatch (§8)', () => {
     // `header` is REQUIRED with no default, deliberately (#1163).
     const err = await refusalOf(() => rowsOf({ ...read(path), datasetConfig: { path } }));
     expect(err.kind).toBe('permanent');
-    expect(err.message).toContain('invalid delimited dataset config');
+    expect(err.message).toMatch(/^invalid delimited dataset config: [^\n]+$/);
   });
 
   it('refuses a dataset kind this store does not read', async () => {

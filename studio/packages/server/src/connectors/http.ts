@@ -117,7 +117,10 @@ export const httpAdapter: ConnectorAdapter = {
   async testConnection(config, secret) {
     const parsed = httpConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
-      return { ok: false, error: `invalid http connection config: ${formatZodIssues(parsed.error.issues)}` };
+      return {
+        ok: false,
+        error: `invalid http connection config: ${formatZodIssues(parsed.error.issues)}`,
+      };
     }
     const baseUrl = parsed.data.baseUrl;
     // Nothing to probe without a baseUrl — a valid config is all we can assert.
@@ -165,7 +168,11 @@ export const httpAdapter: ConnectorAdapter = {
   ): AsyncIterable<ActivityEvent> {
     const connConfig = httpConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!connConfig.success) {
-      yield { type: 'failed', kind: 'permanent', error: 'invalid http connection config' };
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `invalid http connection config: ${formatZodIssues(connConfig.error.issues)}`,
+      };
       return;
     }
     const req = httpRequestInputSchema.safeParse(ctx.input);

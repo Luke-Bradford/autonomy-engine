@@ -82,10 +82,9 @@ describe('#1175 a refused connection config reads as one line', () => {
   });
 
   it.each(KINDS)('%s refuses an invalid config with a formatted sentence', async (kind) => {
-    const result = await registry.get(kind)!.testConnection(
-      INVALID_CONFIGS[kind] as Record<string, unknown>,
-      null,
-    );
+    const result = await registry
+      .get(kind)!
+      .testConnection(INVALID_CONFIGS[kind] as Record<string, unknown>, null);
 
     expect(result.ok).toBe(false);
     const error = result.error ?? '';

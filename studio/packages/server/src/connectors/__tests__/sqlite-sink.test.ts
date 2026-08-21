@@ -178,7 +178,7 @@ describe('what may be a sink at all', () => {
     // the better place for it; the test simply pins that gate, not the quoting.
     // The genuinely live `quoteIdentifier` call is for COLUMN names, which come
     // from the store rather than from a validated schema — covered below.
-    expect(err.message).toMatch(/invalid table dataset config/);
+    expect(err.message).toMatch(/^invalid table dataset config: [^\n]+$/);
     expect(rowsOf(path)).toHaveLength(0);
   });
 
@@ -497,7 +497,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
       ),
     );
     expect(err.kind).toBe('permanent');
-    expect(err.message).toMatch(/invalid table dataset config/);
+    expect(err.message).toMatch(/^invalid table dataset config: [^\n]+$/);
     expect(err.message).toMatch(/schema/);
   });
 

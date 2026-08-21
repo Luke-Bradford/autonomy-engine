@@ -263,6 +263,10 @@ describe('createAgentAdapter().runActivity', () => {
       createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: {} }), null),
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // #1175 — one line naming the missing field, not Zod 4's JSON blob.
+    const error = (events[0] as { error: string }).error;
+    expect(error).toMatch(/^invalid agent_cli connection config: [^\n]+$/);
+    expect(error).toContain('command: ');
     expect(spawnArgs).toHaveLength(0);
   });
 
@@ -791,6 +795,11 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       createAgentAdapter(supervisor).runActivity(llmCtx({ input: {} }), null),
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // #1175 — a sentence, and it now names the same config its three sibling
+    // adapters name: this site alone said `llm_call config`.
+    expect((events[0] as { error: string }).error).toMatch(
+      /^invalid llm_call activity config: [^\n]+$/,
+    );
     expect(spawnArgs).toHaveLength(0);
   });
 

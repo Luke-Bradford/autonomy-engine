@@ -243,7 +243,11 @@ export const anthropicAdapter: ConnectorAdapter = {
   async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
     const config = anthropicConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!config.success) {
-      yield { type: 'failed', kind: 'permanent', error: 'invalid anthropic_api connection config' };
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `invalid anthropic_api connection config: ${formatZodIssues(config.error.issues)}`,
+      };
       return;
     }
     const input = llmCallConfigSchema.safeParse(ctx.input);

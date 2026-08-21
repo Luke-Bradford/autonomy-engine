@@ -46,7 +46,10 @@ export const ollamaAdapter: ConnectorAdapter = {
   async testConnection(config, secret) {
     const parsed = llmConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
-      return { ok: false, error: `invalid ollama connection config: ${formatZodIssues(parsed.error.issues)}` };
+      return {
+        ok: false,
+        error: `invalid ollama connection config: ${formatZodIssues(parsed.error.issues)}`,
+      };
     }
     const baseUrl = (parsed.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
     return llmProbeGet(
@@ -59,7 +62,11 @@ export const ollamaAdapter: ConnectorAdapter = {
   async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
     const config = llmConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!config.success) {
-      yield { type: 'failed', kind: 'permanent', error: 'invalid ollama connection config' };
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `invalid ollama connection config: ${formatZodIssues(config.error.issues)}`,
+      };
       return;
     }
     const input = llmCallConfigSchema.safeParse(ctx.input);

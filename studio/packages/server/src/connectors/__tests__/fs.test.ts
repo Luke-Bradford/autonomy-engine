@@ -287,7 +287,20 @@ describe('fs connector — failure classification', () => {
       ),
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect((events[0] as { error: string }).error).toMatch(/invalid fs connection config/);
+    expect((events[0] as { error: string }).error).toMatch(
+      /^invalid fs connection config: [^\n]+$/,
+    );
+  });
+
+  it('an invalid file_read ACTIVITY config is one line, not a JSON blob (#1175)', async () => {
+    // The connection-config tests above cannot reach this branch — `fs.ts`
+    // refuses the CONNECTION first — so the six `file_*` activity faults had no
+    // behavioural cover at all.
+    const events = await drain(invoke(ctx('file_read', { path: 42 })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).toMatch(/^invalid file_read activity config: [^\n]+$/);
+    expect(error).toContain('path: ');
   });
 
   it('an empty roots list is a permanent config error', async () => {

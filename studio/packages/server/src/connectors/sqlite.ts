@@ -401,7 +401,10 @@ export async function* readSqliteDatasetBatches(
   // per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
   }
 
   const statement = statementFor(read.datasetKind, read.datasetConfig);
@@ -517,7 +520,10 @@ export async function* readSqliteDatasetBatches(
 export async function describeSqliteDatasetColumns(read: SqliteDatasetRead): Promise<string[]> {
   const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
   }
   const statement = statementFor(read.datasetKind, read.datasetConfig);
   const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
@@ -568,7 +574,10 @@ function parseTableTarget(datasetConfig: Record<string, unknown>): {
 } {
   const parsed = tableDatasetConfigSchema.safeParse(datasetConfig);
   if (!parsed.success) {
-    throw new DatasetIoError('permanent', `invalid table dataset config: ${formatZodIssues(parsed.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid table dataset config: ${formatZodIssues(parsed.error.issues)}`,
+    );
   }
   return { schema: parsed.data.schema ?? 'main', table: parsed.data.table };
 }
@@ -604,7 +613,10 @@ async function resolveSqliteDatasetAddress(args: {
 }): Promise<DatasetAddress> {
   const cfg = sqliteConnectionConfigSchema.safeParse(args.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
   }
   if (!SQLITE_DATASET_KINDS.includes(args.dataset.kind)) {
     throw new DatasetIoError('permanent', notASqliteKind(args.dataset.kind));
@@ -931,7 +943,10 @@ export async function writeSqliteDatasetRows(
   // runs no per-kind validation on write, so any shape is storable.
   const cfg = sqliteConnectionConfigSchema.safeParse(write.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
   }
 
   // THE `writable` GATE. Fail-closed, as the config field's own docstring
@@ -1068,7 +1083,10 @@ export const sqliteAdapter: ConnectorAdapter = {
   async testConnection(config) {
     const cfg = sqliteConnectionConfigSchema.safeParse(config);
     if (!cfg.success) {
-      return { ok: false, error: `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}` };
+      return {
+        ok: false,
+        error: `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+      };
     }
     // `testConnection` is typed to RESOLVE, never reject, so the guard's raw
     // throw is caught here too — otherwise a missing directory reaches a caller
@@ -1115,7 +1133,10 @@ export const sqliteAdapter: ConnectorAdapter = {
     if (ctx.activityType === COPY_ACTIVITY_TYPE) {
       const cfg = sqliteConnectionConfigSchema.safeParse(ctx.connectionConfig);
       if (!cfg.success) {
-        yield failed('permanent', `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`);
+        yield failed(
+          'permanent',
+          `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+        );
         return;
       }
       yield* runCopyActivity(ctx, {

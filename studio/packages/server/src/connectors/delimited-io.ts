@@ -172,7 +172,10 @@ async function prepareRead(read: DelimitedDatasetRead): Promise<{
   }
   const cfg = fsConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`);
+    throw new DatasetIoError(
+      'permanent',
+      `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
   }
   const config = delimitedDatasetConfigSchema.safeParse(read.datasetConfig);
   if (!config.success) {

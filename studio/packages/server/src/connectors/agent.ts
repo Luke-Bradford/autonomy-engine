@@ -1025,7 +1025,7 @@ async function* runLlmCall(
     yield {
       type: 'failed',
       kind: 'permanent',
-      error: `invalid llm_call config: ${formatZodIssues(llm.error.issues)}`,
+      error: `invalid llm_call activity config: ${formatZodIssues(llm.error.issues)}`,
     };
     return;
   }
@@ -1177,7 +1177,10 @@ export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
       // probe would be an unsafe, costly side effect. Assert a valid config only.
       const parsed = agentConnectionConfigSchema.safeParse(config);
       if (!parsed.success) {
-        return { ok: false, error: `invalid agent_cli connection config: ${formatZodIssues(parsed.error.issues)}` };
+        return {
+          ok: false,
+          error: `invalid agent_cli connection config: ${formatZodIssues(parsed.error.issues)}`,
+        };
       }
       return { ok: true };
     },

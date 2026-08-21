@@ -85,7 +85,10 @@ export const openaiAdapter: ConnectorAdapter = {
   async testConnection(config, secret) {
     const parsed = llmConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
-      return { ok: false, error: `invalid openai_api connection config: ${formatZodIssues(parsed.error.issues)}` };
+      return {
+        ok: false,
+        error: `invalid openai_api connection config: ${formatZodIssues(parsed.error.issues)}`,
+      };
     }
     if (secret === null) {
       return { ok: false, error: 'openai_api connection requires a secret (API key)' };
@@ -101,7 +104,11 @@ export const openaiAdapter: ConnectorAdapter = {
   async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
     const config = llmConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!config.success) {
-      yield { type: 'failed', kind: 'permanent', error: 'invalid openai_api connection config' };
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `invalid openai_api connection config: ${formatZodIssues(config.error.issues)}`,
+      };
       return;
     }
     const input = llmCallConfigSchema.safeParse(ctx.input);
