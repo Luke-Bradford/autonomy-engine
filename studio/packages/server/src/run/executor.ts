@@ -174,7 +174,17 @@ function callFailed(
  * `node.output` (both its `name` AND `value` — an adapter could build either from
  * a resolved secret), a `node.succeeded` outputs map, and a `node.failed` message
  * (a string). Every other event type (`node.dispatched`, `call.returned`) carries
- * no adapter value and passes through untouched. Deep for structured values,
+ * no adapter value and passes through untouched.
+ *
+ * `node.dispatched` is the one that needs stating rather than listing, since M6
+ * slice B (#1149) put an adapter-minted value on it after this was written:
+ * `datasetAddresses` carries a store path and an object name. It stays out of
+ * the scrub deliberately, not by omission — `DatasetAddressSchema` is
+ * NON-SECRET BY CONSTRUCTION (data-movement spec §8: an address may carry what
+ * NAMES the data, never what unlocks it), and the same path is already embedded
+ * in the `DATASET_SELF_COPY` refusal message below. A store whose address ever
+ * needed a credential in it would be a schema change, and this is where it
+ * would have to be answered. Deep for structured values,
  * string for the leaf/message; both reuse the connector redaction helpers.
  * (`node.output` is inert in the reducer — pure observability — so scrubbing its
  * `name` cannot change run semantics; it only keeps a plaintext out of the log.)
