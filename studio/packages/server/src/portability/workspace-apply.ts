@@ -20,6 +20,7 @@ import {
   type WorkspaceGitApplyResult,
   type WorkspaceGitArchivedResult,
   type WorkspaceGitDeferredResource,
+  formatZodIssues,
 } from '@autonomy-studio/shared';
 import { ZodError } from 'zod';
 import { archivePipeline } from '../repo/archive.js';
@@ -525,6 +526,12 @@ function buildTriggerWriteInput(
  * `labelRowPaths` — rewrite the path to name what is on screen, rather than
  * inventing a second error channel.
  *
+ * This gate shares `attributedRefusal` with `attributedTo`, so #1137's
+ * server-supplied-field routing applies here too — which matters most here,
+ * because `buildTriggerWriteInput` assembles `ownerId`, the remapped
+ * `pipelineVersionId`, the DB-preserved `webhook` and the forced `enabled`
+ * alongside the branch's authoring content.
+ *
  * The wider defect this once deferred — `WorkspaceApplyError` answering as a
  * message-less 500, and `createConnection`/`createPipeline` carrying the same
  * unattributed-`ZodError` hole — was #1110, and is now FIXED (see
@@ -543,20 +550,170 @@ function buildTriggerWriteInput(
 function gateTriggerWrite(writeInput: NewTrigger, path: string): void {
   const parsed = NewTriggerSchema.safeParse(writeInput);
   if (parsed.success) return;
-  throw labelIssuePaths(parsed.error, `trigger ${path}`);
+  throw attributedRefusal(parsed.error, `trigger ${path}`);
 }
 
 /**
- * #1110 — re-path a `ZodError`'s issues so each one names the branch FILE that
- * carried the offending resource, not just the schema field.
+ * #1137 — the keys on a repo write that THIS MODULE supplies, which the branch
+ * file can never name.
+ *
+ * A `ZodError` rooted at one of these is not an operator mistake, it is our own
+ * shape being wrong, and `attributedRefusal` routes it accordingly. Two halves,
+ * kept in one set because the predicate does not care which half a key came
+ * from, but distinguished here because only one of them is machine-checkable:
+ *
+ * **Schema-derived** — a field the STORED schema declares and the `New*Schema`
+ * write shape omits, so only the repo layer can produce it. Every repo create
+ * ends with a read-back `parse` of the assembled row (`connections.ts`,
+ * `datasets.ts`, `pipelines.ts`, `pipeline-versions.ts`), and every `update*`
+ * re-reads the row through `get*` before merging, so these are genuinely
+ * reachable from inside an `attributedTo` closure — not just from its input
+ * parse. `SERVER_SUPPLIED_WRITE_KEYS covers every New*Schema omission` in
+ * `__tests__/workspace-apply.test.ts` computes this half from the schemas and
+ * fails if a new one appears.
+ *
+ * That test could instead BE the implementation — union the same difference at
+ * module load and the set would be correct by construction, with no hand-typed
+ * half to drift. It deliberately is not, and the `APPLY_RANK` precedent
+ * (hand-typed, pinned by test) is NOT the reason: `APPLY_RANK` encodes an
+ * arbitrary ordering policy with no mechanical source to derive from, so it had
+ * no choice. This does. The reason is the polarity below. A derived set would
+ * silently reclassify a key the day a `New*Schema` stopped declaring it, turning
+ * every `ZodError` rooted there from an actionable 400 into an opaque 500 with
+ * no diff for anyone to review. `New*Schema` omissions happen for reasons that
+ * have nothing to do with this predicate, so "omitted from the write shape" is a
+ * good ALARM and a bad AUTHORITY. Hand-typed makes the reclassification a
+ * reviewed line; the test makes it impossible to forget. Red CI needing a human
+ * is the point here, not a shortcoming.
+ *
+ * **Input-side** — present in the `New*Schema` (so invisible to that test) but
+ * supplied by the apply itself at every call site: `ownerId` (the session's, on
+ * all four creates), `secretRef` (hardcoded `null` — secrets never travel in
+ * git), `pipelineId` (the DB id of the pipeline just created/matched),
+ * `pipelineVersionId` (the remapped binding) and `webhook` (null on create,
+ * preserved-or-cleared from the DB row on update — see `buildTriggerWriteInput`).
+ * A branch file names none of them.
+ *
+ * ## What decides membership — one rule, and the surprising case it settles
+ *
+ * The polarity is: never convert a REACHABLE operator-fixable 400 into an opaque
+ * 500. So a key is in this set only if the branch cannot influence it — which is
+ * not the same question as whether the branch FILE has a field by that name.
+ *
+ * `resourceId` looks branch-supplied (G5c preserves the file's id) and is
+ * nonetheless IN the set, because a malformed one cannot reach here:
+ * `exportResourceId` is `z.string().min(1).nullable()` at the export boundary,
+ * `parseWorkspaceFiles` turns any envelope failure into an `unparseable`
+ * diagnostic, and `applyWorkspace` refuses the whole import while
+ * `diagnostics.length > 0` — before a single write runs. The only way
+ * `resourceId` fails at the repo layer is our own minting being wrong.
+ *
+ * `config`, `params`, `nodes`, `edges`, `name`, `kind`, `schedule` and the rest
+ * of the authoring surface are OUT, obviously — and so is anything mixed. If a
+ * key is partly branch-derived, it stays out and keeps its 400.
+ */
+export const SERVER_SUPPLIED_WRITE_KEYS: ReadonlySet<string> = new Set([
+  // Schema-derived (see the totality test).
+  'id',
+  'resourceId',
+  'version',
+  'createdAt',
+  'updatedAt',
+  'archived',
+  'enabled',
+  'secretStatus',
+  'sourceCommit',
+  'sourceBranch',
+  'sourceFilePath',
+  'sourceBlobSha',
+  // Input-side.
+  'ownerId',
+  'secretRef',
+  'pipelineId',
+  'pipelineVersionId',
+  'webhook',
+]);
+
+/**
+ * #1110 / #1137 — the error to THROW for one refused repo write: either the
+ * `ZodError` re-pathed to name the branch FILE that carried the resource, or —
+ * when the failure is ours and not the operator's — a `WorkspaceApplyError`
+ * whose `internal` fault takes it out of the 400 channel entirely.
+ *
+ * ## The attribution half (#1110)
  *
  * Extracted from `gateTriggerWrite` (which keeps its distinct job — see its
- * docblock — and now delegates the re-pathing here) so the one prefix format is
+ * docblock — and delegates the re-pathing here) so the one prefix format is
  * written once. The idiom is `runWindowsForm.ts`'s `labelRowPaths`: rewrite the
  * path to name what the operator is looking at, rather than inventing a second
  * error channel beside the `400 validation_error` the handler already answers.
+ *
+ * ## The fault half (#1137)
+ *
+ * Re-pathing was applied to EVERY `ZodError`, including one rooted at a field
+ * the branch never names (`SERVER_SUPPLIED_WRITE_KEYS`). The operator was then
+ * told `400 validation_error: connection connections/c.json.ownerId` — go fix a
+ * file that is fine — for a defect that is entirely the server's. That is the
+ * exact confusion `WorkspaceApplyFault` was introduced to prevent on the OTHER
+ * refusal channel; this one simply had no equivalent.
+ *
+ * `internal` is answered by `registerErrorHandler`'s fallthrough as a `500
+ * internal_error` carrying the fixed string `'An unexpected error occurred.'` —
+ * the key and the label reach `request.log.error` and nothing else, which is the
+ * right disclosure for a server bug. Apply semantics are unchanged either way: a
+ * `WorkspaceApplyError` aborts the same enclosing transaction a `ZodError`
+ * aborts, and nothing between here and the route catches either.
+ *
+ * **ANY server-rooted issue makes the WHOLE error internal**, deliberately. A
+ * genuine invariant break should not be dressed as a 400 because some other
+ * issue in the same parse happened to be actionable — and the actionable ones
+ * are still in the logged message. The cost is stated rather than discovered
+ * later: one stray server-rooted issue suppresses a real branch-rooted 400 in
+ * the same error, and the operator sees the opaque 500 until the server bug is
+ * fixed. That is the correct polarity — a wrong 400 sends them editing a
+ * correct file.
+ *
+ * Both callers get this: `attributedTo` (the repo-write wrapper) and
+ * `gateTriggerWrite`. Triggers are where the defect originated (#1091), so
+ * fixing only the wrapper would have left half of it standing.
+ *
+ * ## An issue with NO root segment stays in the 400 channel, on purpose
+ *
+ * Zod reports `path: []` for a whole-object failure — a root `.refine()`, or
+ * `unrecognized_keys` on a root-`.strict()` object. `path[0]` is then
+ * `undefined`, the discriminator does not match, and the issue is re-pathed as
+ * branch-derived. That is the deliberate default, not an oversight, and the
+ * polarity rule is why: a root-level rule on a write schema is a CROSS-FIELD
+ * rule over authoring content (the shape `ConcurrencyWriteSchema`'s
+ * `parallel ⇒ max` would take if it were written at the root), so the operator
+ * is the one who can fix it. Failing closed here would convert exactly the class
+ * of error this module works hardest to make actionable into an opaque 500.
+ *
+ * It is also unreachable today, which is worth stating so the next reader does
+ * not go looking: none of the five write schemas is root-`.strict()` or carries
+ * a root `.refine()`/`.superRefine()`. The refinements that DO exist
+ * (`ConcurrencyWriteSchema`, `RunWindowWriteSchema`, `TriggerParamsWriteSchema`)
+ * sit on nested field schemas and set explicit paths, so within the parent every
+ * issue is rooted at a branch-authored key. A numeric root is unreachable for
+ * the same reason — all five roots are `z.object`, never a top-level array.
  */
-function labelIssuePaths(error: ZodError, label: string): ZodError {
+function attributedRefusal(error: ZodError, label: string): ZodError | WorkspaceApplyError {
+  const serverRooted = [
+    ...new Set(
+      error.issues
+        .map((issue) => issue.path[0])
+        .filter((root): root is string => typeof root === 'string')
+        .filter((root) => SERVER_SUPPLIED_WRITE_KEYS.has(root)),
+    ),
+  ].sort();
+  if (serverRooted.length > 0) {
+    return new WorkspaceApplyError(
+      'internal',
+      `${label}: the repo write was refused on server-supplied field(s) ${serverRooted.join(', ')} — ` +
+        `this is a server defect, not a fault in the committed file. Full issues: ` +
+        formatZodIssues(error.issues),
+    );
+  }
   return new ZodError(error.issues.map((issue) => ({ ...issue, path: [label, ...issue.path] })));
 }
 
@@ -576,6 +733,12 @@ function labelIssuePaths(error: ZodError, label: string): ZodError {
  * pre-gate on `New*Schema.partial()` would not be the same predicate, so it could
  * pass while the repo still threw unattributed.
  *
+ * Exported for test only — the `APPLY_RANK`/`APPLY_ORDER` precedent in this same
+ * module. #1137's routing is unreachable from branch content by construction, so
+ * the seam has to be driven directly; the wrapper rather than the inner
+ * `attributedRefusal` because the `instanceof ZodError` guard is part of what
+ * needs pinning.
+ *
  * Deliberately per-call-site and not an ambient "file currently being applied"
  * variable read by one outer catch: the version mint runs in `mintOrder`
  * (call-dependency) order, not file order, so an ambient marker would be stale by
@@ -585,22 +748,27 @@ function labelIssuePaths(error: ZodError, label: string): ZodError {
  * `InvalidPipelineDocError` (which carries its own attribution) — passes through
  * untouched.
  *
- * LIMIT, stated because the rest of this module is careful about exactly this.
- * `label` says WHICH BRANCH FILE WAS BEING APPLIED, not that the offending field
- * came off it. The write objects also carry server-supplied fields the branch
- * never names (`ownerId`, `secretRef: null`, `pipelineId`, `sourceCommit`,
- * `sourceBranch`, `sourceFilePath`, `sourceBlobSha`), so an internal bug
- * producing a malformed one of THOSE would be re-pathed as if the operator's file
- * were at fault — the very confusion `WorkspaceApplyFault` exists to prevent on
- * the other channel, which this one has no equivalent of. Not a regression (it is
- * `gateTriggerWrite`'s pre-existing shape, widened to the sibling resources), and
- * unreachable without such a bug, but it is a real gap: #1137.
+ * The LIMIT this once carried is now CLOSED (#1137). `label` says which branch
+ * file was being applied, not that the offending field came off it — so a
+ * `ZodError` rooted at a field the branch never names used to be re-pathed as if
+ * the operator's file were at fault. `attributedRefusal` now routes those to an
+ * `internal` fault instead; see `SERVER_SUPPLIED_WRITE_KEYS` for which fields
+ * those are and why two of them are deliberately excluded.
+ *
+ * Worth knowing while reading that set: the reachable surface is WIDER than the
+ * write object passed in here, and for a reason that is easy to miss. It is not
+ * that `{ ...existing, ...patch }` could carry a corrupt DB field — `existing`
+ * came from `getConnection`/`getDataset`/`getPipeline`, which already parsed the
+ * row through the identical schema, so those arms are dead. It is that the repo
+ * calls run INSIDE this closure: every create ends with a read-back
+ * `parse(assembledRow)` and every update re-reads via `get*` first, so the FULL
+ * stored schema is exercised here, not just the `New*Schema` write shape.
  */
-function attributedTo<T>(label: string, write: () => T): T {
+export function attributedTo<T>(label: string, write: () => T): T {
   try {
     return write();
   } catch (err) {
-    if (err instanceof ZodError) throw labelIssuePaths(err, label);
+    if (err instanceof ZodError) throw attributedRefusal(err, label);
     throw err;
   }
 }

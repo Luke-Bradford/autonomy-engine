@@ -1,6 +1,6 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
-import { ImportError } from '@autonomy-studio/shared';
+import { ImportError, ISSUE_LIST_CAP } from '@autonomy-studio/shared';
 import type { ApiErrorBody } from '@autonomy-studio/shared';
 import {
   InvalidPipelineDocError,
@@ -15,7 +15,6 @@ import { ArchivedPipelineError } from './run/launcher.js';
 import { DocUnresolvableError } from './run/driver.js';
 import { RerunNotEligibleError } from './run/reseed.js';
 import { ExternalWaitPayloadError, ExternalWaitSettledError } from './run/external-wait-service.js';
-import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
  * Thrown by a route handler when the requested resource does not exist OR
