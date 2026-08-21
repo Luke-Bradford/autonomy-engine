@@ -2291,6 +2291,21 @@ describe("#1137 — a server-supplied field is OUR fault, not the branch file's"
     expect((thrown as WorkspaceApplyError).fault).toBe('internal');
   });
 
+  it('keeps a ROOT-LEVEL issue (empty path) in the 400 channel', () => {
+    // Zod reports `path: []` for a whole-object failure. The discriminator does
+    // not match, so it re-paths as branch-derived — deliberately. A root-level
+    // rule on a write schema is a CROSS-FIELD rule over authoring content, so
+    // the operator is who can fix it; failing closed would convert the most
+    // actionable class of error into an opaque 500. Unreachable today (no write
+    // schema here is root-`.strict()` or root-refined), pinned so that if one
+    // ever is, the polarity is a decision rather than a discovery.
+    const thrown = refusalFor(repoError([]));
+    expect(thrown).toBeInstanceOf(ZodError);
+    expect((thrown as ZodError).issues.map((i) => i.path.join('.'))).toEqual([
+      'connection connections/c.json',
+    ]);
+  });
+
   it('leaves a non-ZodError untouched', () => {
     const boom = new Error('not a zod error');
     let thrown: unknown;

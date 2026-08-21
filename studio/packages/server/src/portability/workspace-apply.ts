@@ -570,8 +570,21 @@ function gateTriggerWrite(writeInput: NewTrigger, path: string): void {
  * reachable from inside an `attributedTo` closure — not just from its input
  * parse. `SERVER_SUPPLIED_WRITE_KEYS covers every New*Schema omission` in
  * `__tests__/workspace-apply.test.ts` computes this half from the schemas and
- * fails if a new one appears, which is the `APPLY_RANK` precedent: hand-typed,
- * pinned by test.
+ * fails if a new one appears.
+ *
+ * That test could instead BE the implementation — union the same difference at
+ * module load and the set would be correct by construction, with no hand-typed
+ * half to drift. It deliberately is not, and the `APPLY_RANK` precedent
+ * (hand-typed, pinned by test) is NOT the reason: `APPLY_RANK` encodes an
+ * arbitrary ordering policy with no mechanical source to derive from, so it had
+ * no choice. This does. The reason is the polarity below. A derived set would
+ * silently reclassify a key the day a `New*Schema` stopped declaring it, turning
+ * every `ZodError` rooted there from an actionable 400 into an opaque 500 with
+ * no diff for anyone to review. `New*Schema` omissions happen for reasons that
+ * have nothing to do with this predicate, so "omitted from the write shape" is a
+ * good ALARM and a bad AUTHORITY. Hand-typed makes the reclassification a
+ * reviewed line; the test makes it impossible to forget. Red CI needing a human
+ * is the point here, not a shortcoming.
  *
  * **Input-side** — present in the `New*Schema` (so invisible to that test) but
  * supplied by the apply itself at every call site: `ownerId` (the session's, on
@@ -581,10 +594,11 @@ function gateTriggerWrite(writeInput: NewTrigger, path: string): void {
  * preserved-or-cleared from the DB row on update — see `buildTriggerWriteInput`).
  * A branch file names none of them.
  *
- * ## Two deliberate EXCLUSIONS, both the same rule
+ * ## What decides membership — one rule, and the surprising case it settles
  *
  * The polarity is: never convert a REACHABLE operator-fixable 400 into an opaque
- * 500. So a key is only in this set if the branch cannot influence it.
+ * 500. So a key is in this set only if the branch cannot influence it — which is
+ * not the same question as whether the branch FILE has a field by that name.
  *
  * `resourceId` looks branch-supplied (G5c preserves the file's id) and is
  * nonetheless IN the set, because a malformed one cannot reach here:
@@ -662,6 +676,26 @@ export const SERVER_SUPPLIED_WRITE_KEYS: ReadonlySet<string> = new Set([
  * Both callers get this: `attributedTo` (the repo-write wrapper) and
  * `gateTriggerWrite`. Triggers are where the defect originated (#1091), so
  * fixing only the wrapper would have left half of it standing.
+ *
+ * ## An issue with NO root segment stays in the 400 channel, on purpose
+ *
+ * Zod reports `path: []` for a whole-object failure — a root `.refine()`, or
+ * `unrecognized_keys` on a root-`.strict()` object. `path[0]` is then
+ * `undefined`, the discriminator does not match, and the issue is re-pathed as
+ * branch-derived. That is the deliberate default, not an oversight, and the
+ * polarity rule is why: a root-level rule on a write schema is a CROSS-FIELD
+ * rule over authoring content (the shape `ConcurrencyWriteSchema`'s
+ * `parallel ⇒ max` would take if it were written at the root), so the operator
+ * is the one who can fix it. Failing closed here would convert exactly the class
+ * of error this module works hardest to make actionable into an opaque 500.
+ *
+ * It is also unreachable today, which is worth stating so the next reader does
+ * not go looking: none of the five write schemas is root-`.strict()` or carries
+ * a root `.refine()`/`.superRefine()`. The refinements that DO exist
+ * (`ConcurrencyWriteSchema`, `RunWindowWriteSchema`, `TriggerParamsWriteSchema`)
+ * sit on nested field schemas and set explicit paths, so within the parent every
+ * issue is rooted at a branch-authored key. A numeric root is unreachable for
+ * the same reason — all five roots are `z.object`, never a top-level array.
  */
 function attributedRefusal(error: ZodError, label: string): ZodError | WorkspaceApplyError {
   const serverRooted = [

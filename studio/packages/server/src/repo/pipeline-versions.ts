@@ -25,38 +25,33 @@ import type { Db } from './types.js';
  * repo layer, mirroring `PipelineHasRunsError`: the repo owns the rule, and
  * `errors.ts` (which imports FROM repo) owns the HTTP mapping — importing the
  * server-layer `BadRequestError` here would invert that dependency.
+ *
+ * ## Why the `message` is bounded but `issues` is not
+ *
+ * The client renders the MESSAGE for this error, not `issues[]` (`errors.ts`,
+ * `web/src/api/client.ts`), so the message is the representation that must not
+ * be O(doc): `summarizeIssueList` names the first `ISSUE_LIST_CAP` and STATES
+ * the remainder ("…and N more") instead of joining the tail. `this.issues`
+ * deliberately keeps the COMPLETE list — only the rendered summary is capped,
+ * and the count in the prefix above is always the true total. Same cap the
+ * response `issues[]` array uses via `capIssues`: both are representations of
+ * the SAME list and neither may re-emit it whole. Truncation is STATED, never a
+ * silent tail drop (the F13a/#473 rule; #496).
+ *
+ * #1183 moved the slice/join/tail itself to `shared`'s `summarizeIssueList`,
+ * where `formatZodIssues` needed the identical bound, so the "…and N more" tail
+ * has ONE spelling. (`workspace-serialize.ts`'s `MAX_NAMED_OFFENDERS` tail is a
+ * separate, drifted spelling — "; and N more", no ellipsis — deliberately NOT
+ * folded in: it caps offender NAMES, not validation issues.)
  */
 export class InvalidPipelineDocError extends Error {
   constructor(public readonly issues: string[]) {
     super(
       `Pipeline doc is invalid (${issues.length} issue${issues.length === 1 ? '' : 's'}): ` +
-        summarizeIssues(issues),
+        summarizeIssueList(issues),
     );
     this.name = 'InvalidPipelineDocError';
   }
-}
-
-/**
- * Bounds the human `message` (the client renders THIS, not `issues[]`, for this
- * error — see `errors.ts` / `web/src/api/client.ts`): it names the first
- * `ISSUE_LIST_CAP` issues, then states the remainder ("…and N more") instead of
- * joining an O(doc) tail. `this.issues` always carries the COMPLETE list — only
- * the summary string is bounded. Same `ISSUE_LIST_CAP` the response `issues[]`
- * array uses: both are representations of the SAME list and neither may re-emit
- * it whole. Truncation is STATED, never a silent tail drop (the F13a/#473 rule;
- * #496); mirrors the "…and N more" idiom in `shared/src/engine/reduce.ts`'s
- * stall diagnostic.
- *
- * #1183 — the slice/join/tail itself is no longer written here. It moved to
- * `shared`'s `summarizeIssueList` when `formatZodIssues` needed the same bound,
- * so the tail has ONE spelling; this wrapper survives only to keep the local
- * name and this argument at the call site. (`workspace-serialize.ts`'s
- * `MAX_NAMED_OFFENDERS` tail is a fourth, drifted spelling — "; and N more",
- * no ellipsis — deliberately NOT folded in here: it caps offender NAMES, not
- * validation issues, so it would need the cap as a parameter. Noted, not fixed.)
- */
-function summarizeIssues(issues: string[]): string {
-  return summarizeIssueList(issues);
 }
 
 /**
