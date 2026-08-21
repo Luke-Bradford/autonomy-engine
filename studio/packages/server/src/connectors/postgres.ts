@@ -143,7 +143,8 @@ export function createPostgresAdapter(
         // a usable store. It also proves the credential reached a real session
         // rather than only a completed TCP handshake.
         await client.query('select 1');
-        return { ok: true };
+        // A session opened and `select 1` came back: liveness, not just parse.
+        return { ok: true, probed: 'liveness' };
       } catch (err) {
         return { ok: false, error: probeFailureSentence(err, secret) };
       } finally {

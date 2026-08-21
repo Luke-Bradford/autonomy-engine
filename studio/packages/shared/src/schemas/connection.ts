@@ -181,3 +181,44 @@ export type NewConnection = z.input<typeof NewConnectionSchema>;
  */
 export const ConnectionPublicSchema = ConnectionSchema.omit({ secretRef: true });
 export type ConnectionPublic = z.infer<typeof ConnectionPublicSchema>;
+
+/**
+ * #1191 — the result of a "test connection" probe (`ConnectorAdapter.
+ * testConnection`), shared FE/BE so the form renders exactly what the adapter
+ * returned.
+ *
+ * `probed` is REQUIRED on success, and that is the whole point of the type.
+ * Two of the eight adapters cannot answer a liveness question at all:
+ * `agent_cli` deliberately does not spawn (running an arbitrary command as a
+ * probe would be an unsafe, costly side effect — see `connectors/agent.ts`),
+ * and `http` has nothing to reach when no `baseUrl` is configured. Both of them
+ * legitimately return `ok: true` having checked only that the config parses. A
+ * bare `{ok:true}` would render as "this connection works", which for an
+ * `agent_cli` bound to a command that does not exist is simply false — and a
+ * button that lies is worse than no button.
+ *
+ * So the field is required rather than an optional `probed?: 'liveness'` with
+ * liveness as the default: an absent-means-liveness default is the fail-open
+ * shape this codebase refuses everywhere else (an absent fact must never be
+ * manufactured as the reassuring one). A NEW adapter that only validates its
+ * config cannot silently inherit a liveness claim it never made — it will not
+ * compile until it says which it did.
+ *
+ * A failure carries no `probed`: an error sentence already says what was
+ * attempted, and there is no reassuring claim to qualify.
+ */
+export const ConnectionProbeResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    /**
+     * `liveness` — the adapter actually reached the thing: opened the socket,
+     * ran `select 1`, listed the models, stat-ed the root.
+     * `config` — the adapter asserted a VALID CONFIG ONLY and deliberately
+     * reached nothing. Truthful, but it proves the settings parse, not that
+     * anything is there.
+     */
+    probed: z.enum(['liveness', 'config']),
+  }),
+  z.object({ ok: z.literal(false), error: z.string().min(1) }),
+]);
+export type ConnectionProbeResult = z.infer<typeof ConnectionProbeResultSchema>;

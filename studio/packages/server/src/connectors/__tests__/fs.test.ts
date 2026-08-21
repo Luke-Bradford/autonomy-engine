@@ -596,6 +596,7 @@ describe('fs connector — testConnection', () => {
   it('errors when a root is missing', async () => {
     const res = await fsAdapter.testConnection({ roots: [join(root, 'nope')] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/not accessible/);
   });
 
@@ -603,12 +604,14 @@ describe('fs connector — testConnection', () => {
     await writeFile(join(root, 'afile'), 'x', 'utf8');
     const res = await fsAdapter.testConnection({ roots: [join(root, 'afile')] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/not a directory/);
   });
 
   it('errors on an invalid config (relative root)', async () => {
     const res = await fsAdapter.testConnection({ roots: ['rel'] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/invalid fs connection config/);
   });
 });

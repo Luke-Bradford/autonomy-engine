@@ -1182,7 +1182,12 @@ export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
           error: `invalid agent_cli connection config: ${formatZodIssues(parsed.error.issues)}`,
         };
       }
-      return { ok: true };
+      // `probed: 'config'` and NOT `'liveness'`: this branch reached nothing.
+      // The command may not exist, may not be on PATH, may not be executable —
+      // none of which this probe can know, because spawning it to find out is
+      // exactly the unsafe side effect refused above. Saying so is what keeps
+      // the button honest for this kind (#1191).
+      return { ok: true, probed: 'config' };
     },
 
     async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {

@@ -482,7 +482,7 @@ export const sqliteAdapter: ConnectorAdapter = {
       // not a database" — so an open alone would call a text file a working
       // store.
       db.prepare('select 1 as ok').get();
-      return { ok: true };
+      return { ok: true, probed: 'liveness' };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {

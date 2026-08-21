@@ -124,7 +124,9 @@ export const httpAdapter: ConnectorAdapter = {
     }
     const baseUrl = parsed.data.baseUrl;
     // Nothing to probe without a baseUrl — a valid config is all we can assert.
-    if (baseUrl === undefined || baseUrl === '') return { ok: true };
+    // Nothing to reach, so nothing was reached: `probed: 'config'` (#1191).
+    if (baseUrl === undefined || baseUrl === '')
+      return { ok: true, probed: 'config' };
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -150,7 +152,7 @@ export const httpAdapter: ConnectorAdapter = {
       if (res.status === 401) {
         return { ok: false, error: 'authentication failed (HTTP 401)' };
       }
-      return { ok: true };
+      return { ok: true, probed: 'liveness' };
     } catch (err) {
       return {
         ok: false,

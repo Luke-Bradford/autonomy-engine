@@ -515,6 +515,7 @@ describe('the adapter', () => {
     writeFileSync(notADb, 'this is not a database');
     const probe = await sqliteAdapter.testConnection({ roots: [root], path: notADb }, null);
     expect(probe.ok).toBe(false);
+    if (probe.ok) throw new Error('expected a failed probe');
     expect(probe.error).toMatch(/not a database/i);
   });
 

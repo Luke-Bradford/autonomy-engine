@@ -198,6 +198,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
       'pw',
     );
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(/^invalid postgres connection config: /);
     expect(result.error).toContain('host');
     // Refused BEFORE any client is built — a bad config never opens a socket.
@@ -215,6 +216,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
     const { rec, factory } = recordingFactory();
     const result = await createPostgresAdapter(factory).testConnection(CONFIG, secret);
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(/no secret/);
     expect(rec.options).toHaveLength(0);
   });
@@ -237,6 +239,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
     const { factory } = recordingFactory({ connectError: pgError(code, message) });
     const result = await createPostgresAdapter(factory).testConnection(CONFIG, 'pw');
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(expected);
   });
 
@@ -251,6 +254,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
     });
     const result = await createPostgresAdapter(factory).testConnection(CONFIG, 'hunter2');
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).not.toContain('hunter2');
     // Scrubbed, not swallowed: the operator still gets the diagnostic.
     expect(result.error).toContain('internal error while connecting');
@@ -293,6 +297,7 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
       throw new Error('client construction blew up');
     }).testConnection(CONFIG, 'pw');
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toContain('client construction blew up');
   });
 });
@@ -1194,6 +1199,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   it('reports a wrong password as a refused password', async () => {
     const result = await postgresAdapter.testConnection(live, `${password}-wrong`);
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(/refused the password/);
   });
 
@@ -1203,6 +1209,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       password,
     );
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(/no database of that name/);
   });
 
@@ -1213,6 +1220,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       password,
     );
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
@@ -1223,6 +1231,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     process.env.PGPASSWORD = password;
     const result = await postgresAdapter.testConnection(live, '');
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     expect(result.error).toMatch(/no secret/);
   });
 
@@ -1236,6 +1245,7 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     // THE CLAIM IS `ok: false` — a real server is listening on the PGHOST/PGPORT
     // this test exports, so a fallback would have CONNECTED and reported success.
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     // The refusal's WORDING is not the claim, and pinning it to `/does not
     // resolve/` alone made this test environment-dependent: the bogus host has
     // to lose a race between DNS failing and the 3s connect budget expiring, and
