@@ -57,6 +57,23 @@ const OK_BODY = {
 };
 
 describe('openaiAdapter.runActivity', () => {
+  it('names WHY a connection config was refused, in one line (#1175)', async () => {
+    // This site used to yield a bare `invalid openai_api connection config` with no
+    // reason at all — the opposite failure to the JSON blob, and in the same
+    // function as one. Refused BEFORE the request, so this stays egress-free;
+    // and the secret is in hand at the refusal, so assert it is not echoed.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const events = await drain(
+      openaiAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 'soon' } }), 'sk-oai'),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).toMatch(/^invalid openai_api connection config: [^\n]+$/);
+    expect(error).toContain('timeoutMs: ');
+    expect(error).not.toContain('sk-oai');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   // #457 — a missing `finish_reason` is realistic here beyond OpenAI itself:
   // `baseUrl` points this adapter at any OpenAI-COMPATIBLE gateway, which need
   // not populate it. See `coerceStopReason` for the contract rationale.
