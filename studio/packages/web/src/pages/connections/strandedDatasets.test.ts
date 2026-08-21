@@ -17,7 +17,9 @@ import {
  * here rather than only through a render.
  */
 
-function dataset(over: Partial<Dataset> & Pick<Dataset, 'name' | 'kind' | 'connectionId'>): Dataset {
+function dataset(
+  over: Partial<Dataset> & Pick<Dataset, 'name' | 'kind' | 'connectionId'>,
+): Dataset {
   return {
     id: `ds-${over.name}`,
     ownerId: 'own-1',
@@ -38,10 +40,9 @@ const elsewhere = dataset({ name: 'other', kind: 'table', connectionId: 'conn-b'
 
 describe('datasetsOnConnection', () => {
   it('takes every dataset naming the connection, whatever its kind', () => {
-    const hit = datasetsOnConnection(
-      [tableOnStore, delimitedOnStore, elsewhere],
-      'conn-a',
-    ).map((d) => d.name);
+    const hit = datasetsOnConnection([tableOnStore, delimitedOnStore, elsewhere], 'conn-a').map(
+      (d) => d.name,
+    );
     // `delimited` DISAGREES with a sqlite store and is still included: a delete
     // dangles the id regardless of whether the kinds ever agreed.
     expect(hit).toEqual(['orders', 'exports']);
@@ -92,9 +93,9 @@ describe('strandedByKindChange', () => {
     // strands nothing; `delimited` on an fs store moving to sqlite does.
     expect(strandedByKindChange([tableOnStore], 'conn-a', 'sqlite', 'postgres')).toEqual([]);
     const fsDataset = dataset({ name: 'feed', kind: 'delimited', connectionId: 'conn-a' });
-    expect(
-      strandedByKindChange([fsDataset], 'conn-a', 'fs', 'sqlite').map((d) => d.name),
-    ).toEqual(['feed']);
+    expect(strandedByKindChange([fsDataset], 'conn-a', 'fs', 'sqlite').map((d) => d.name)).toEqual([
+      'feed',
+    ]);
   });
 });
 

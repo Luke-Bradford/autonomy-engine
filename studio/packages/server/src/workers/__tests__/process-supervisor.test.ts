@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSupervisor, type Supervisor, type OutputLineEvent } from '../process-supervisor.js';
+import { until } from '../../__tests__/poll-until.js';
 
 /**
  * All fixtures below drive `process.execPath` with an inline `-e` script —
@@ -26,31 +27,6 @@ async function collectEvents(events: AsyncIterable<OutputLineEvent>): Promise<Ou
 async function firstLine(events: AsyncIterable<OutputLineEvent>): Promise<OutputLineEvent> {
   for await (const event of events) return event;
   throw new Error('process produced no output before exiting');
-}
-
-/**
- * Poll until `check` holds, bounded by ITERATIONS rather than by a wall clock.
- *
- * The distinction is this file's whole #1124 fix. A wall-clock deadline is a
- * fixed budget that a loaded machine eats into, so it fails exactly when the
- * machine is busy — the failure mode being removed. An iteration bound stretches
- * with the load, because each tick's `setTimeout` is itself subject to the same
- * scheduling pressure, so a slow box gets proportionally longer rather than a
- * spurious red. Same shape as `until` in `scheduler/__tests__/retry-alarm.test.ts`,
- * which reasons the same way; deliberately NOT extracted to a shared helper in
- * this PR (that is #1124's own follow-up, not a change to smuggle in beside it).
- *
- * 200 x 10ms is ~2s of ticks on an idle box against this test's 10,000ms budget,
- * whose other fixed costs are two cold node boots, A's KILL_GRACE_MS (500) and
- * B's reap grace (500). The per-test override is left at 10_000 on purpose:
- * raising it would be the timeout bump both tickets rule out.
- */
-async function until(check: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (check()) return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error(`timed out waiting for: ${label}`);
 }
 
 describe('spawnSupervised', () => {
