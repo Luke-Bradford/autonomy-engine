@@ -187,6 +187,74 @@ describe('readXlsxRowBatches — sheet selection', () => {
     expect(cellsOf(await readAll(path, { sheetIndex: 1 }))).toEqual([['first']]);
   });
 
+  it('REFUSES a sheet whose rId the workbook never defines', async () => {
+    // `relTarget === undefined` is reachable two ways, and they are NOT the
+    // same fact: a sheet with no rId at all (positional naming is the only
+    // option) versus a sheet carrying an rId the rels part never defines.
+    // The second is a malformed container. Guessing `sheet{n}.xml` there
+    // reads whatever happens to sit at that position and SUCCEEDS — here,
+    // another sheet's data — which is the silent-wrong-data outcome §6.2
+    // exists to prevent. Refuse instead, naming the dangling rId.
+    seq += 1;
+    const path = join(root, `dangling-rid-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data:
+            '<workbook><sheets>' +
+            '<sheet name="First" sheetId="1" r:id="rId1"/>' +
+            '<sheet name="Second" sheetId="2" r:id="rId7"/>' +
+            '</sheets></workbook>',
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        },
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>first</t></is></c></row></sheetData></worksheet>',
+        },
+        {
+          name: 'xl/worksheets/sheet2.xml',
+          data: '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>NOT-Seconds-data</t></is></c></row></sheetData></worksheet>',
+        },
+      ]),
+    );
+
+    await expect(readAll(path, { sheet: 'Second' })).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(path, { sheet: 'Second' })).rejects.toThrowError(/rId7/);
+    // The sheet that IS wired up still reads.
+    expect(cellsOf(await readAll(path, { sheet: 'First' }))).toEqual([['first']]);
+  });
+
+  it('falls back to positional naming for a sheet that declares NO rId', async () => {
+    // The other half of the split above: no rId is not malformed, it is
+    // simply nothing to resolve, so `sheet{n}.xml` is the only answer.
+    seq += 1;
+    const path = join(root, `no-rid-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="Solo" sheetId="1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: '<Relationships></Relationships>',
+        },
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>positional</t></is></c></row></sheetData></worksheet>',
+        },
+      ]),
+    );
+
+    expect(cellsOf(await readAll(path))).toEqual([['positional']]);
+  });
+
   it('lists sheet names without reading a row', async () => {
     expect(await listXlsxSheetNames(seed(twoSheets))).toEqual(['First', 'Second']);
   });

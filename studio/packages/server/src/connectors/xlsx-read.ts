@@ -464,17 +464,23 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
     index = 0;
   }
 
-  const rid = sheets[index]!.rid;
-  const relTarget = rid === undefined ? undefined : parts.rels.get(rid);
-  // Fall back to positional naming only when the workbook carries no rels at
-  // all; a present-but-unmatched rId is a malformed container, not a default.
-  const target =
-    relTarget === undefined
-      ? `xl/worksheets/sheet${index + 1}.xml`
-      : relTarget.startsWith('/')
-        ? relTarget.slice(1)
-        : `xl/${relTarget}`;
-  return { target };
+  const sheet = sheets[index]!;
+  const { rid } = sheet;
+  // Positional naming is a fallback for a sheet that declares NO rId — there
+  // is nothing to resolve, so `sheet{n}.xml` is the only answer. It is NOT a
+  // fallback for an rId the rels part never defines: that is a malformed
+  // container, and guessing the position there reads whatever file happens to
+  // sit at it — another sheet's data — while SUCCEEDING, the silent-wrong-data
+  // outcome §6.2 exists to prevent. Refuse, naming the dangling rId.
+  if (rid === undefined) return { target: `xl/worksheets/sheet${index + 1}.xml` };
+
+  const relTarget = parts.rels.get(rid);
+  if (relTarget === undefined) {
+    throw new XlsxReadError(
+      `sheet "${sheet.name}" points at relationship ${rid}, which this workbook does not define`,
+    );
+  }
+  return { target: relTarget.startsWith('/') ? relTarget.slice(1) : `xl/${relTarget}` };
 }
 
 // ---------------------------------------------------------------------------
