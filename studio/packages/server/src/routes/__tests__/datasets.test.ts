@@ -1,6 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { createConnection, createDataset, getDataset } from '../../repo/index.js';
+import {
+  createConnection,
+  createDataset,
+  createPipeline,
+  createPipelineVersion,
+  getDataset,
+} from '../../repo/index.js';
+import { CATALOG_VERSION, DatasetReferencesResponseSchema } from '@autonomy-studio/shared';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 /** The store every fixture dataset lives in — a REAL owned connection, because
@@ -33,6 +40,76 @@ describe('datasets routes', () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  describe('GET /:id/references (#996 M9)', () => {
+    it('returns the pipelines whose copy nodes bind the dataset, flagged when they no longer agree', async () => {
+      const ds = createDataset(app.db, {
+        ownerId: 'local',
+        name: 'M9 target',
+        kind: 'table',
+        connectionId: store,
+        config: { table: 'target' },
+        columns: [{ name: 'id', type: 'string', nullable: false }],
+      });
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'M9 pipeline' });
+      createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy',
+            // Writes a column the dataset does not declare — the drift M9 exists
+            // to surface, produced by a mapping pinned in an immutable version.
+            config: { mapping: [{ source: 'id', sink: 'gone', type: 'string', onError: 'fail' }], mode: 'append' },
+            connectionIds: { source: store, sink: store },
+            datasetIds: { source: ds.id, sink: ds.id },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/datasets/${ds.id}/references` });
+      expect(res.statusCode).toBe(200);
+      // Parsed through the SHARED schema, so the route and the page cannot
+      // disagree about the shape the page is about to render.
+      const parsed = DatasetReferencesResponseSchema.parse(res.json());
+      expect(parsed.references.map((r) => r.end)).toEqual(['source', 'sink']);
+      expect(parsed.references[1]).toMatchObject({
+        pipelineId: pipeline.id,
+        pipelineName: 'M9 pipeline',
+        status: 'disagrees',
+        boundBy: ['latest'],
+      });
+      expect(parsed.dynamic).toEqual([]);
+    });
+
+    it('404s an unknown dataset rather than returning an empty list', async () => {
+      // An empty list is a real answer ("nothing references this"), so a missing
+      // dataset must not be able to produce one.
+      const res = await app.inject({ method: 'GET', url: '/api/datasets/ds_nope/references' });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404s a dataset owned by someone else, before any walk', async () => {
+      const foreign = createDataset(app.db, {
+        ownerId: 'someone-else',
+        name: 'Theirs',
+        kind: 'table',
+        connectionId: store,
+        config: { table: 't' },
+        columns: [],
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/datasets/${foreign.id}/references`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   it('full CRUD round-trip, owner-scoped', async () => {

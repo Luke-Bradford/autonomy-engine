@@ -10,6 +10,7 @@ import {
   updateDataset,
 } from '../repo/index.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
+import { datasetReferences } from '../datamove/dataset-references.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import type { Db } from '../repo/types.js';
 import type { Principal } from '../auth/principal.js';
@@ -100,6 +101,33 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
       'dataset',
       request.params.id,
     );
+  });
+
+  /**
+   * #996 M9 (#1185) — which of the CALLER's pipelines reference this dataset,
+   * and which of their pinned mappings no longer agree with its declared
+   * columns (§2.1's second compensating control).
+   *
+   * Security model: `requireOwned` first, so an unowned or unknown id is a 404
+   * before any walk happens — authentication is not authorisation, and the
+   * reference list names the caller's own pipelines, which is precisely the
+   * thing another owner must not learn. `requireOwned` demands exact owner
+   * equality, so a null-owner (shared) dataset 404s here too; the walk is then
+   * additionally owner-scoped on its own side, so the two agree rather than one
+   * relying on the other.
+   *
+   * A READ. It gates nothing and it is called from no gate — §7's dispatch gate
+   * remains the only refusal, and it compares against the store's ACTUAL
+   * columns rather than these declared ones.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/datasets/:id/references', async (request) => {
+    const dataset = requireOwned(
+      getDataset(db, request.params.id),
+      request.principal,
+      'dataset',
+      request.params.id,
+    );
+    return datasetReferences(db, request.principal.ownerId, dataset);
   });
 
   fastify.patch<{ Params: { id: string } }>('/api/datasets/:id', async (request) => {
