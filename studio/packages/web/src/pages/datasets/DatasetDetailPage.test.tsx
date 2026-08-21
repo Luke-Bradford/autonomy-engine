@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import type { Dataset, DatasetReference, DatasetReferencesResponse } from '@autonomy-studio/shared';
 import { DatasetDetailPage } from './DatasetDetailPage';
 import * as datasetsApi from '../../api/datasets';
+import * as connectionsApi from '../../api/connections';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 
 vi.mock('../../api/datasets', async (importActual) => ({
@@ -11,7 +12,13 @@ vi.mock('../../api/datasets', async (importActual) => ({
   getDatasetReferences: vi.fn(),
 }));
 
+vi.mock('../../api/connections', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/connections')>()),
+  listConnections: vi.fn(),
+}));
+
 const getMock = vi.mocked(datasetsApi.getDataset);
+const connectionsMock = vi.mocked(connectionsApi.listConnections);
 const refsMock = vi.mocked(datasetsApi.getDatasetReferences);
 
 const dataset: Dataset = {
@@ -47,6 +54,7 @@ function reference(overrides: Partial<DatasetReference> = {}): DatasetReference 
     agreement: { agrees: true, disagreements: [], informational: [] },
     unreadable: null,
     unnamedRows: 0,
+    mappedRows: 2,
     ...overrides,
   };
 }
@@ -54,6 +62,7 @@ function reference(overrides: Partial<DatasetReference> = {}): DatasetReference 
 function resolve(refs: Partial<DatasetReferencesResponse> = {}): void {
   getMock.mockResolvedValue(dataset);
   refsMock.mockResolvedValue({ references: [], dynamic: [], ...refs });
+  connectionsMock.mockResolvedValue([{ id: 'conn_1', name: 'Warehouse', kind: 'sqlite' } as never]);
 }
 
 beforeEach(() => {
@@ -156,9 +165,29 @@ describe('DatasetDetailPage (#996 M9)', () => {
     expect(within(row).getByText('archived')).toBeInTheDocument();
   });
 
+  it('names the store rather than printing its id, as the list row does', async () => {
+    resolve();
+    renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
+
+    expect(await screen.findByText('Warehouse')).toBeInTheDocument();
+    expect(screen.queryByText('conn_1')).not.toBeInTheDocument();
+  });
+
+  it('says a mapping with no rows moves nothing, which the verdict alone cannot', async () => {
+    // An empty mapping disagrees with nothing on the SOURCE side, so it would
+    // otherwise render as a bare "agrees" for a copy that moves no column.
+    resolve({
+      references: [reference({ end: 'source', mappedRows: 0 })],
+    });
+    renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
+
+    expect(await screen.findByText(/this mapping has no rows/)).toBeInTheDocument();
+  });
+
   it('surfaces a load failure instead of rendering an empty page', async () => {
     getMock.mockRejectedValue(new Error('boom'));
     refsMock.mockResolvedValue({ references: [], dynamic: [] });
+    connectionsMock.mockResolvedValue([]);
     renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'));

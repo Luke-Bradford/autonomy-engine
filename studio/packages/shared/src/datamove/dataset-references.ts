@@ -63,6 +63,23 @@ export const DatasetReferenceSchema = z.object({
    * gate admitted; non-zero is itself worth saying rather than dropping.
    */
   unnamedRows: z.number().int().nonnegative(),
+  /**
+   * Rows that DO claim a column — what the agreement was computed over.
+   *
+   * On the wire because ZERO is a state the verdict cannot express. A mapping
+   * that claims no column disagrees with nothing on the SOURCE side, so it
+   * would otherwise render as a bare "agrees" for a copy that in fact moves no
+   * column at all. The SINK end of the same node says so loudly — every NOT
+   * NULL column is unwritten — but a reader on the source dataset's page sees
+   * only the agreement.
+   *
+   * REACHABLE, not merely a legacy shape. A wholly empty `mapping: []` is
+   * refused at save (#1172), but a row whose `sink` is blank is ADMITTED — the
+   * #444 write gate's three cross-row rules are about identifiers and
+   * duplicates, not emptiness — and such a row claims nothing. So a live,
+   * savable doc can produce `mappedRows: 0` beside a non-zero `unnamedRows`.
+   */
+  mappedRows: z.number().int().nonnegative(),
 });
 export type DatasetReference = z.infer<typeof DatasetReferenceSchema>;
 

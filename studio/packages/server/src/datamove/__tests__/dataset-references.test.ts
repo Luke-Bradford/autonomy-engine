@@ -160,6 +160,25 @@ describe('datasetReferences (#996 M9)', () => {
     });
   });
 
+  it('counts the rows the verdict was computed over, so an EMPTY mapping is visible', () => {
+    const { db } = freshDb();
+    const conn = store(db);
+    const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
+    // A row naming no sink column. The #444 write gate admits it (its three
+    // cross-row rules are about identifiers and duplicates, not emptiness),
+    // and it claims nothing — so the mapping is READABLE and disagrees with
+    // nothing on the source side. The counts are the only thing that says the
+    // copy moves no column at all.
+    pipelineWith(db, [
+      copyNode(ds.id, ds.id, [{ source: 'id', sink: '', type: 'string', onError: 'fail' }]),
+    ]);
+
+    const [source] = datasetReferences(db, OWNER, ds).references;
+    expect(source?.status).toBe('agrees');
+    expect(source?.mappedRows).toBe(0);
+    expect(source?.unnamedRows).toBe(1);
+  });
+
   it('reports an unreadable mapping as unreadable, never as agreement', () => {
     const { db } = freshDb();
     const conn = store(db);

@@ -6,8 +6,11 @@ import type {
   DatasetReferencesResponse,
   MappingAgreementNote,
 } from '@autonomy-studio/shared';
+import type { ConnectionPublic } from '@autonomy-studio/shared';
+import { listConnections } from '../../api/connections';
 import { getDataset, getDatasetReferences } from '../../api/datasets';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { StoreCell } from './StoreCell';
 
 /**
  * #996 M9 (#1185) — the dataset detail page: which of this owner's pipelines
@@ -45,6 +48,7 @@ const BINDING_PROSE: Record<string, string> = {
 export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [refs, setRefs] = useState<DatasetReferencesResponse | null>(null);
+  const [connections, setConnections] = useState<readonly ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const guardedLoad = useGuardedLoad();
 
@@ -55,14 +59,23 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
   const refresh = useCallback(
     () =>
       guardedLoad(
-        async (signal) => ({
-          dataset: await getDataset(datasetId, signal),
-          references: await getDatasetReferences(datasetId, signal),
-        }),
+        // `Promise.all`, not three awaits: the three reads are independent, and
+        // the `TriggersPage` precedent for a multi-read guarded load is the
+        // parallel one. Sequential would triple the page's time to first paint
+        // for no ordering the page actually needs.
+        async (signal) => {
+          const [row, references, conns] = await Promise.all([
+            getDataset(datasetId, signal),
+            getDatasetReferences(datasetId, signal),
+            listConnections(signal),
+          ]);
+          return { dataset: row, references, connections: conns };
+        },
         {
-          onData: ({ dataset: row, references }) => {
+          onData: ({ dataset: row, references, connections: conns }) => {
             setDataset(row);
             setRefs(references);
+            setConnections(conns);
             setLoadError(null);
           },
           onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
@@ -99,7 +112,15 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
             </dd>
             <dt>Store</dt>
             <dd>
-              <code>{dataset.connectionId}</code>
+              {/* The SAME cell the list renders, so the detail page cannot say
+                  less about a dataset than the row it was reached from — it
+                  resolves the connection's name and carries #1145's kind
+                  advisory. */}
+              <StoreCell
+                connections={connections}
+                connectionId={dataset.connectionId}
+                datasetKind={dataset.kind}
+              />
             </dd>
             <dt>Declared columns</dt>
             <dd>
@@ -233,6 +254,11 @@ function MappingVerdict({ reference }: { reference: DatasetReference }) {
             </li>
           ))}
         </ul>
+      )}
+      {reference.mappedRows === 0 && (
+        <p className="contract-advisory">
+          this mapping has no rows, so the copy moves no column at all
+        </p>
       )}
       {reference.unnamedRows > 0 && (
         <p className="contract-advisory">

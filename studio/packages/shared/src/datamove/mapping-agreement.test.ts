@@ -76,6 +76,12 @@ describe('classifySourceAgreement', () => {
     expect(verdict.disagreements).toEqual([{ kind: 'source_missing', columns: ['gone'] }]);
   });
 
+  it('disagrees when a mapped source name matches more than one declared column', () => {
+    const verdict = classifySourceAgreement([row('id', 'ID', 'fail')], ['Id', 'iD']);
+    expect(verdict.agrees).toBe(false);
+    expect(verdict.disagreements).toContainEqual({ kind: 'source_ambiguous', columns: ['ID'] });
+  });
+
   it('treats an unread declared column as informational, never a disagreement', () => {
     // §7 row 4 — additive drift is allowed and warned, never refused.
     const verdict = classifySourceAgreement([row('id', 'id', 'fail')], ['id', 'added']);

@@ -209,7 +209,10 @@ function datasetRefsOfNode(
   });
 }
 
-type Verdict = Pick<DatasetReference, 'status' | 'agreement' | 'unreadable' | 'unnamedRows'>;
+type Verdict = Pick<
+  DatasetReference,
+  'status' | 'agreement' | 'unreadable' | 'unnamedRows' | 'mappedRows'
+>;
 
 /**
  * The node's pinned mapping read against the dataset's DECLARED columns.
@@ -233,6 +236,7 @@ function agreementOf(node: Node, end: DatasetReferenceEnd, dataset: Dataset): Ve
           ? 'this node declares no column mapping'
           : 'this node’s column mapping is not a list of rows',
       unnamedRows: 0,
+      mappedRows: 0,
     };
   }
 
@@ -250,5 +254,6 @@ function agreementOf(node: Node, end: DatasetReferenceEnd, dataset: Dataset): Ve
     agreement,
     unreadable: null,
     unnamedRows: projected.unnamed,
+    mappedRows: projected.rows.length,
   };
 }
