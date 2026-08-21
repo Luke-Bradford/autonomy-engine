@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { DatasetColumn } from '../schemas/dataset.js';
 import { checkSinkCoverage } from './copy-automap.js';
 import { checkSourceDrift } from './schema-drift.js';
@@ -98,43 +99,49 @@ export function splitUnwritten(notWritten: readonly DatasetColumn[]): UnwrittenS
   };
 }
 
-export type MappingAgreementKind =
-  | 'source_missing'
-  | 'source_ambiguous'
-  | 'source_unmapped'
-  | 'sink_undeclared'
-  | 'sink_required_unwritten'
-  | 'sink_optional_unwritten'
-  | 'sink_duplicate_write'
-  | 'rows_unnamed';
+/**
+ * Zod rather than a bare interface, and inferred rather than declared twice:
+ * this verdict crosses the wire (M9's `GET /api/datasets/:id/references`), so
+ * the shape the server computes and the shape the page parses are one
+ * declaration by construction.
+ */
+export const MappingAgreementKindSchema = z.enum([
+  'source_missing',
+  'source_ambiguous',
+  'source_unmapped',
+  'sink_undeclared',
+  'sink_required_unwritten',
+  'sink_optional_unwritten',
+  'sink_duplicate_write',
+]);
+export type MappingAgreementKind = z.infer<typeof MappingAgreementKindSchema>;
 
 /** One finding: a kind, and the columns that raised it. */
-export interface MappingAgreementNote {
-  readonly kind: MappingAgreementKind;
-  readonly columns: readonly string[];
-}
+export const MappingAgreementNoteSchema = z.object({
+  kind: MappingAgreementKindSchema,
+  columns: z.array(z.string()),
+});
+export type MappingAgreementNote = z.infer<typeof MappingAgreementNoteSchema>;
 
-export interface MappingAgreement {
-  /** False iff {@link disagreements} is non-empty. */
-  readonly agrees: boolean;
+export const MappingAgreementSchema = z.object({
+  /** False iff `disagreements` is non-empty. */
+  agrees: z.boolean(),
   /** The mapping names, or fails to name, a column such that it no longer fits. */
-  readonly disagreements: readonly MappingAgreementNote[];
+  disagreements: z.array(MappingAgreementNoteSchema),
   /** Allowed drift, said out loud rather than left silent. */
-  readonly informational: readonly MappingAgreementNote[];
-}
+  informational: z.array(MappingAgreementNoteSchema),
+});
+export type MappingAgreement = z.infer<typeof MappingAgreementSchema>;
 
 function verdict(
-  disagreements: readonly MappingAgreementNote[],
-  informational: readonly MappingAgreementNote[],
+  disagreements: MappingAgreementNote[],
+  informational: MappingAgreementNote[],
 ): MappingAgreement {
   return { agrees: disagreements.length === 0, disagreements, informational };
 }
 
-function note(
-  kind: MappingAgreementKind,
-  columns: readonly string[],
-): readonly MappingAgreementNote[] {
-  return columns.length === 0 ? [] : [{ kind, columns }];
+function note(kind: MappingAgreementKind, columns: readonly string[]): MappingAgreementNote[] {
+  return columns.length === 0 ? [] : [{ kind, columns: [...columns] }];
 }
 
 /**
