@@ -2219,7 +2219,7 @@ describe('#1110 — a refused apply says what to fix', () => {
  * set). A test that fed corrupt files through the real apply would be testing
  * the 400 path and calling it the 500 path.
  */
-describe('#1137 — a server-supplied field is OUR fault, not the branch file\'s', () => {
+describe("#1137 — a server-supplied field is OUR fault, not the branch file's", () => {
   /** The shape a repo layer throws: a bare `ZodError` naming schema fields. */
   function repoError(...paths: Array<Array<string | number>>): ZodError {
     return new ZodError(
