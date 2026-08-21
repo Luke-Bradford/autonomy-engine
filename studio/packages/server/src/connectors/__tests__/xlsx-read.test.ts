@@ -446,6 +446,167 @@ describe('readXlsxRowBatches — dates', () => {
     );
     expect(cellsOf(rows)).toEqual([[new Date('2026-08-21T00:00:00.000Z')]]);
   });
+
+  it('keeps a ZONE-LESS ISO date UTC whatever the host timezone is', async () => {
+    // ECMA-376 §18.17.4 writes `t="d"` with no zone, and ECMA-262 parses a
+    // zone-less date-TIME in the host's zone. The TZ is pinned rather than left
+    // to the runner ON PURPOSE: CI runs UTC, where the offset is 0 and a naive
+    // assertion passes even with the bug present. Measured shift under
+    // America/New_York is +4h.
+    const path = seed({
+      sheets: [{ name: 'S', rows: [[{ kind: 'isoDate', iso: '2026-08-21T00:00:00' }]] }],
+    });
+    const before = process.env.TZ;
+    try {
+      process.env.TZ = 'America/New_York';
+      expect(cellsOf(await readAll(path))).toEqual([[new Date('2026-08-21T00:00:00.000Z')]]);
+      process.env.TZ = 'Asia/Tokyo';
+      expect(cellsOf(await readAll(path))).toEqual([[new Date('2026-08-21T00:00:00.000Z')]]);
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+  });
+
+  it('HONOURS an explicit offset on an ISO date cell rather than forcing UTC', async () => {
+    const rows = await readAll(
+      seed({
+        sheets: [{ name: 'S', rows: [[{ kind: 'isoDate', iso: '2026-08-21T00:00:00+02:00' }]] }],
+      }),
+    );
+    expect(cellsOf(rows)).toEqual([[new Date('2026-08-20T22:00:00.000Z')]]);
+  });
+
+  it('yields a date-ONLY ISO cell as midnight UTC', async () => {
+    const rows = await readAll(
+      seed({ sheets: [{ name: 'S', rows: [[{ kind: 'isoDate', iso: '2026-08-21' }]] }] }),
+    );
+    expect(cellsOf(rows)).toEqual([[new Date('2026-08-21T00:00:00.000Z')]]);
+  });
+});
+
+describe('readXlsxRowBatches — malformed references', () => {
+  it('REFUSES a shared-string reference the table does not hold', async () => {
+    // Silently reading as a blank would turn a truncated workbook into an
+    // apparently-successful, quietly-incomplete import.
+    const path = seed({
+      sheets: [{ name: 'S', rows: [[{ kind: 'raw', xml: '<c r="A1" t="s"><v>999</v></c>' }]] }],
+    });
+    await expect(readAll(path)).rejects.toThrowError(/references shared string "999"/);
+  });
+
+  it('REFUSES an empty shared-string reference instead of yielding the FIRST string', async () => {
+    // `Number('')` is 0, so without the guard B1 returns shared[0] — an
+    // unrelated cell's value wearing B1's position, which reads as data.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              { kind: 'shared', text: 'REAL_STRING_ZERO' },
+              { kind: 'raw', xml: '<c r="B1" t="s"><v></v></c>' },
+            ],
+          ],
+        },
+      ],
+    });
+    await expect(readAll(path)).rejects.toThrowError(/references shared string ""/);
+  });
+
+  it('REFUSES a boolean cell that is neither 0 nor 1', async () => {
+    const path = seed({
+      sheets: [{ name: 'S', rows: [[{ kind: 'raw', xml: '<c r="A1" t="b"><v>2</v></c>' }]] }],
+    });
+    await expect(readAll(path)).rejects.toThrowError(/neither 0 nor 1/);
+  });
+
+  it('accepts the true/false spelling of a boolean', async () => {
+    const rows = await readAll(
+      seed({
+        sheets: [
+          {
+            name: 'S',
+            rows: [
+              [
+                { kind: 'raw', xml: '<c r="A1" t="b"><v>true</v></c>' },
+                { kind: 'raw', xml: '<c r="B1" t="b"><v>false</v></c>' },
+              ],
+            ],
+          },
+        ],
+      }),
+    );
+    expect(cellsOf(rows)).toEqual([[true, false]]);
+  });
+
+  it('resolves a MULTI-LETTER column reference to the right index', async () => {
+    const rows = await readAll(
+      seed({
+        sheets: [
+          {
+            name: 'S',
+            rows: [
+              [
+                { kind: 'raw', xml: '<c r="A1"><v>1</v></c>' },
+                { kind: 'raw', xml: '<c r="Z1"><v>26</v></c>' },
+                { kind: 'raw', xml: '<c r="AA1"><v>27</v></c>' },
+                { kind: 'raw', xml: '<c r="AB1"><v>28</v></c>' },
+              ],
+            ],
+          },
+        ],
+      }),
+    );
+    const cells = cellsOf(rows)[0]!;
+    expect(cells).toHaveLength(28);
+    expect([cells[0], cells[25], cells[26], cells[27]]).toEqual([1, 26, 27, 28]);
+  });
+
+  it('treats a SELF-CLOSING cell carrying attributes as blank', async () => {
+    const rows = await readAll(
+      seed({
+        sheets: [
+          {
+            name: 'S',
+            rows: [
+              [
+                { kind: 'raw', xml: '<c r="A1"><v>1</v></c>' },
+                { kind: 'raw', xml: '<c r="B1" s="0"/>' },
+                { kind: 'raw', xml: '<c r="C1"><v>3</v></c>' },
+              ],
+            ],
+          },
+        ],
+      }),
+    );
+    expect(cellsOf(rows)).toEqual([[1, null, 3]]);
+  });
+
+  it('refuses a SMALL PART that inflates past its own tighter cap', async () => {
+    // The small parts are materialised whole, so they carry
+    // XLSX_MAX_SMALL_PART_BYTES (16 MiB) rather than the streamed entry's
+    // 256 MiB — 20 MiB of styles refuses here and would be accepted under the
+    // worksheet's cap.
+    seq += 1;
+    const path = join(root, `small-part-bomb-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="S" sheetId="1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/styles.xml',
+          data: `<?xml version="1.0"?><styleSheet><!--${'a'.repeat(20_971_520)}--></styleSheet>`,
+        },
+        { name: 'xl/worksheets/sheet1.xml', data: '<worksheet><sheetData/></worksheet>' },
+      ]),
+    );
+
+    await expect(readAll(path)).rejects.toThrowError(/inflates past/);
+  });
 });
 
 describe('readXlsxRowBatches — streaming', () => {

@@ -62,6 +62,7 @@ import {
   XLSX_MAX_CELL_CHARS,
   XLSX_MAX_ENTRY_BYTES,
   XLSX_MAX_SHARED_STRINGS_BYTES,
+  XLSX_MAX_SMALL_PART_BYTES,
 } from '../limits.js';
 import { yieldToEventLoop } from './scheduling.js';
 
@@ -347,7 +348,7 @@ async function readWorkbookParts(
 
   const sheets: { name: string; rid: string | undefined }[] = [];
   let date1904 = false;
-  walkXml(await entryText(zip, workbookEntry, XLSX_MAX_ENTRY_BYTES, signal), {
+  walkXml(await entryText(zip, workbookEntry, XLSX_MAX_SMALL_PART_BYTES, signal), {
     open: (tag) => {
       if (tag.name === 'sheet') {
         sheets.push({ name: tag.attributes['name'] ?? '', rid: tag.attributes['r:id'] });
@@ -362,7 +363,7 @@ async function readWorkbookParts(
   const rels = new Map<string, string>();
   const relsEntry = entries.get('xl/_rels/workbook.xml.rels');
   if (relsEntry) {
-    walkXml(await entryText(zip, relsEntry, XLSX_MAX_ENTRY_BYTES, signal), {
+    walkXml(await entryText(zip, relsEntry, XLSX_MAX_SMALL_PART_BYTES, signal), {
       open: (tag) => {
         if (tag.name === 'Relationship') {
           const id = tag.attributes['Id'];
@@ -403,7 +404,7 @@ async function readWorkbookParts(
   if (stylesEntry) {
     const custom = new Map<number, string>();
     let inCellXfs = false;
-    walkXml(await entryText(zip, stylesEntry, XLSX_MAX_ENTRY_BYTES, signal), {
+    walkXml(await entryText(zip, stylesEntry, XLSX_MAX_SMALL_PART_BYTES, signal), {
       open: (tag) => {
         if (tag.name === 'numFmt') {
           const id = Number(tag.attributes['numFmtId']);
@@ -672,7 +673,7 @@ export async function* readXlsxRowBatches(
           // `undefined`: Excel omits blanks from the XML entirely, and
           // `coerceValue` reads `undefined` as `absent_value` and fails the row.
           while (cells.length < column) cells.push(null);
-          cells[column] = materialise(cellType, buffer, cellStyle, sawValue, parts);
+          cells[column] = materialise(cellType, buffer, cellStyle, sawValue, parts, state);
           cellRef = undefined;
           break;
         }
@@ -722,29 +723,69 @@ function throwIfMalformed(failure: Error | null): void {
     : new XlsxReadError(`malformed sheet XML: ${failure.message}`);
 }
 
+/**
+ * `state` is the same failure holder the caller uses for a backwards column
+ * ref: a refusal is RECORDED and raised by `throwIfMalformed` after the current
+ * `parser.write`, because saxes calls this synchronously from inside its own
+ * event dispatch and a throw across that boundary is not the module's contract.
+ * The returned value after a refusal is never read.
+ */
 function materialise(
   type: string,
   raw: string,
   style: string | undefined,
   sawValue: boolean,
   parts: WorkbookParts,
+  state: { failure: Error | null },
 ): XlsxCell {
   if (!sawValue) return null;
 
   switch (type) {
     case 's': {
+      // A shared-string cell is a REFERENCE, so one that does not resolve is a
+      // corrupt container, not a blank cell — and the two failure shapes here
+      // are both silent without this guard. `Number('')` is 0, so an empty
+      // `<v>` would return the table's FIRST string: an unrelated cell's value
+      // wearing this cell's position, which is worse than a blank because it
+      // looks like data. An index past the end would read as an ordinary blank,
+      // turning a truncated workbook into an apparently-successful import.
       const index = Number(raw);
-      return parts.shared[index] ?? null;
+      if (raw === '' || !Number.isInteger(index) || index < 0 || index >= parts.shared.length) {
+        state.failure ??= new XlsxReadError(
+          `a cell references shared string ${JSON.stringify(raw)}, which this workbook's ` +
+            `table of ${parts.shared.length} does not hold`,
+        );
+        return null;
+      }
+      return parts.shared[index]!;
     }
     case 'inlineStr':
     case 'str':
+      // An empty string here is a genuine empty-string VALUE, distinct from the
+      // absent cell `sawValue` already handled above. It survives intact.
       return raw;
     case 'b':
-      return raw === '1' || raw === 'true';
+      // ECMA-376 admits 0/1; `true`/`false` appear in the wild. Anything else is
+      // malformed, and folding it to `false` would be exactly the silent guess
+      // that `workingVal || ''` cost `xlsx-stream-reader` its place in #1213.
+      if (raw === '1' || raw === 'true') return true;
+      if (raw === '0' || raw === 'false') return false;
+      state.failure ??= new XlsxReadError(
+        `a boolean cell holds ${JSON.stringify(raw)}, which is neither 0 nor 1`,
+      );
+      return null;
     case 'e':
       return { xlsxFault: 'error-cell', detail: raw };
     case 'd': {
-      const parsed = new Date(raw);
+      // ECMA-376 §18.17.4's date form carries NO zone, and ECMA-262 parses a
+      // zone-less date-TIME in the HOST's zone: measured under
+      // TZ=America/New_York, "2026-08-21T00:00:00" reads as 04:00Z. That
+      // smuggles the server's offset into the operator's data — the one thing
+      // §6.2 forbids by name, and which `serialToInstant` is scrupulous about.
+      // Absent an explicit designator the value is UTC. An explicit offset is
+      // honoured, so a writer that emits one is not second-guessed.
+      const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+      const parsed = new Date(zoned ? raw : `${raw}Z`);
       return Number.isNaN(parsed.getTime())
         ? { xlsxFault: 'phantom-date', detail: `"${raw}" is not a readable ISO date` }
         : parsed;

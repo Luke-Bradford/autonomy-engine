@@ -149,3 +149,22 @@ export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
 export const XLSX_MAX_SHARED_STRINGS_BYTES = 67_108_864;
 export const XLSX_MAX_ENTRY_BYTES = 268_435_456;
 export const XLSX_MAX_CELL_CHARS = 1_048_576;
+
+/**
+ * The three SMALL parts — `xl/workbook.xml`, its rels, and `xl/styles.xml` —
+ * are read by NAME and fully materialised into one string each, because none of
+ * them can be interpreted incrementally: a sheet cannot be resolved until the
+ * whole `<sheets>` list is in hand.
+ *
+ * They therefore sit OUTSIDE the "proportional to distinct strings plus one row
+ * batch" guarantee above and need their own, much tighter bound. Under
+ * `XLSX_MAX_ENTRY_BYTES` a hostile container could force ~256 MiB of inflation
+ * per part — ~512 MiB resident as UTF-16, three times over — while every real
+ * workbook's three parts together are a few KB.
+ *
+ * 16 MiB is still far above anything Excel emits (its 65,490-cell-format
+ * ceiling puts a pathological `styles.xml` in the low tens of MB only if every
+ * format is also enormous) and 16x below the streamed-entry cap, which is the
+ * point: the amplification is gone and no legitimate file is refused.
+ */
+export const XLSX_MAX_SMALL_PART_BYTES = 16_777_216;
