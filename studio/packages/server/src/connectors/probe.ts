@@ -1,7 +1,6 @@
 import pLimit from 'p-limit';
 import {
   canonicalStringify,
-  isNonOverridableConnectionConfigKey,
   type ConnectionKind,
   type ConnectionProbeResult,
 } from '@autonomy-studio/shared';
@@ -64,39 +63,63 @@ export const PROBE_BACKSTOP_MS = 130_000;
  * sockets (and, for postgres, N server-side sessions) with nothing bounding
  * them, on a server that sets no `requestTimeout`.
  *
- * `pLimit` is the same primitive the executor already bounds its RUNNING phase
- * with (`run/executor.ts`, `pLimit(deps.concurrency ?? 4)`), at the same
- * default, so this is the house pattern rather than a rate-limiter invented for
- * one route. Note what it does and does not buy: it bounds RESOURCES, not
- * request rate. A flood of probes queues rather than being refused, so the
- * observable effect of saturation is slow responses, not exhausted sockets.
- * Rate-limiting proper is a separate concern with no primitive anywhere in this
- * server, and does not belong in one route module.
+ * `pLimit` is the same primitive the executor bounds its RUNNING phase with
+ * (`run/executor.ts`, `pLimit(deps.concurrency ?? 4)`), at the same default —
+ * the house pattern rather than a rate-limiter invented for one route.
+ *
+ * It is MODULE-LEVEL, and deliberately so, which is a real difference from the
+ * executor's (created per `createExecutor` call) and from the connector
+ * registry this ticket takes care to decorate per app. Those two hold per-app
+ * STATE — a supervisor closure, a run's dependencies — and sharing them across
+ * instances would leak. This holds no state; it rations a resource that is
+ * genuinely process-wide, because outbound sockets belong to the process and
+ * not to whichever `buildApp` happened to open them. Two app instances in one
+ * process SHARE this budget, which is the intended reading rather than an
+ * oversight. The visible cost is in tests: concurrent test apps throttle each
+ * other, which shows up as slower probes, never as a failure.
+ *
+ * Note what it does and does not buy: it bounds RESOURCES, not request rate. A
+ * flood of probes queues rather than being refused, so the observable effect of
+ * saturation is slow responses, not exhausted sockets. Rate-limiting proper is a
+ * separate concern with no primitive anywhere in this server (#1203).
  */
 export const PROBE_CONCURRENCY = 4;
 
 const probeLimit = pLimit(PROBE_CONCURRENCY);
 
 /**
- * Config keys whose value the OVERLAY changed, among those a dispatch-time
- * parameter may never override for this kind
- * (`CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`). Empty when the overlay leaves
- * every such key exactly as stored.
+ * Every config key whose value the OVERLAY changed, sorted. Empty when the
+ * overlay is byte-for-byte the stored config.
  *
- * The union of both key sets is walked, not just the overlay's: an overlay that
- * DROPS `host` changes the destination every bit as much as one that rewrites
- * it, and the overlay replaces the config wholesale rather than merging.
- * Values are compared canonically, so key order in an object-valued setting is
- * never mistaken for a change.
+ * TOTAL BY DESIGN — it takes no `kind` and consults no allowlist, and that is
+ * the whole correction. The first version of this asked
+ * `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS` which keys were dangerous, which was
+ * wrong twice over. That table answers a DIFFERENT question (which keys a
+ * pipeline node may override at dispatch, further gated by the connection's own
+ * `parameters` opt-in allowlist), and it is EMPTY for `http`, `anthropic_api`,
+ * `openai_api`, `ollama` and `agent_cli`. Three of those five send the stored
+ * secret straight to `config.baseUrl` as an auth header — so consulting that
+ * table left the exact exfiltration hole it was invoked to close wide open for
+ * them, while looking closed.
+ *
+ * The lesson is the rule: enumerating dangerous keys is a guess about every
+ * adapter's future, and it fails silently and in the permissive direction. A
+ * probe that spends a credential the caller cannot see must run against the
+ * config that credential was bound to — ALL of it. A new kind, or a new config
+ * key on an old kind, is covered the day it is added, with nobody remembering
+ * to add it here.
+ *
+ * The union of both key sets is walked: an overlay that DROPS a key changes the
+ * config every bit as much as one that rewrites it, and the overlay replaces
+ * the config wholesale rather than merging. Values compare canonically, so key
+ * order inside an object-valued setting is never mistaken for a change.
  */
-export function boundaryKeysChangedByOverlay(
-  kind: ConnectionKind,
+export function configKeysChangedByOverlay(
   stored: Record<string, unknown>,
   overlay: Record<string, unknown>,
 ): string[] {
   const keys = new Set([...Object.keys(stored), ...Object.keys(overlay)]);
   return [...keys]
-    .filter((key) => isNonOverridableConnectionConfigKey(kind, key))
     .filter(
       (key) => canonicalStringify(stored[key] ?? null) !== canonicalStringify(overlay[key] ?? null),
     )
@@ -146,6 +169,11 @@ export async function probeConnection(args: ProbeConnectionArgs): Promise<Connec
             }),
           backstopMs,
         );
+        // Never hold the process open. The case this timer exists for is an
+        // adapter that has HUNG, so without `unref` a graceful `app.close()`
+        // could sit waiting out the full backstop for a probe whose answer
+        // nobody is going to read.
+        timer.unref?.();
       });
       const result = await Promise.race([adapter.testConnection(config, secret), backstop]);
       return redactProbeResult(result, secret);

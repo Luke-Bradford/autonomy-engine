@@ -618,6 +618,31 @@ describe('ConnectionsPage', () => {
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
+    it('does not carry a verdict across to a DIFFERENT connection', async () => {
+      // The table stays interactive while the form is open, so "Edit" on
+      // another row swaps the form in place. Two connections with identical
+      // non-secret config (a staging/prod pair, or an export/import clone)
+      // produce an identical draft, so a draft-only signature would happily
+      // show the first one's "Connected." for a second that was never probed.
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([
+        conn({ id: 'conn_a', name: 'Staging', config: { model: 'claude-opus-4-8' } }),
+        conn({ id: 'conn_b', name: 'Prod', config: { model: 'claude-opus-4-8' } }),
+      ]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Staging');
+
+      const rows = screen.getAllByRole('button', { name: 'Edit' });
+      await user.click(rows[0]);
+      testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+
+      // Switch to the OTHER connection without closing the form.
+      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    });
+
     it('never SAVES when testing', async () => {
       const user = userEvent.setup();
       renderWithRouter(<ConnectionsPage />);

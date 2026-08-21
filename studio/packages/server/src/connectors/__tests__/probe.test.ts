@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionKind, ConnectionProbeResult } from '@autonomy-studio/shared';
 import { z } from 'zod';
-import { PROBE_BACKSTOP_MS, boundaryKeysChangedByOverlay, probeConnection } from '../probe.js';
+import { PROBE_BACKSTOP_MS, configKeysChangedByOverlay, probeConnection } from '../probe.js';
 import type { ConnectorAdapter } from '../types.js';
 import type { ConnectorRegistry } from '../registry.js';
 
@@ -138,68 +138,60 @@ describe('probeConnection', () => {
   });
 });
 
-describe('boundaryKeysChangedByOverlay', () => {
-  it('is empty when the overlay changes only a NON-boundary key', () => {
-    // `connectTimeoutMs` is deliberately outside the postgres list — the map's
-    // own rule is "identity and transport are fixed; only how long it waits is
-    // a per-dispatch tunable". Editing it must stay probeable with the stored
-    // secret, or the refusal would swallow the ordinary case.
-    expect(
-      boundaryKeysChangedByOverlay(
-        'postgres',
-        { host: 'db.internal', port: 5432, database: 'app', connectTimeoutMs: 5_000 },
-        { host: 'db.internal', port: 5432, database: 'app', connectTimeoutMs: 9_000 },
-      ),
-    ).toEqual([]);
+describe('configKeysChangedByOverlay', () => {
+  it('is empty when the overlay is exactly the stored config', () => {
+    const stored = { host: 'db.internal', port: 5432, database: 'app', sslmode: 'disable' };
+    expect(configKeysChangedByOverlay(stored, { ...stored })).toEqual([]);
   });
 
-  it('names EVERY changed boundary key, sorted, not just the first', () => {
+  it('names EVERY changed key, sorted, not just the first', () => {
     expect(
-      boundaryKeysChangedByOverlay(
-        'postgres',
+      configKeysChangedByOverlay(
         { host: 'db.internal', port: 5432, database: 'app', sslmode: 'verify-full' },
         { host: 'db.internal', port: 5433, database: 'other', sslmode: 'disable' },
       ),
     ).toEqual(['database', 'port', 'sslmode']);
   });
 
-  it('names a REWRITTEN destination key', () => {
-    expect(
-      boundaryKeysChangedByOverlay(
-        'postgres',
-        { host: 'db.internal', port: 5432 },
-        { host: 'attacker.example', port: 5432 },
-      ),
-    ).toEqual(['host']);
-  });
-
-  it('names a DROPPED destination key — removing it redirects too', () => {
+  it('names a DROPPED key — removing one changes the config too', () => {
     // The overlay replaces the config wholesale rather than merging, so an
-    // absent `host` is not "unchanged"; it is a different destination.
-    expect(boundaryKeysChangedByOverlay('postgres', { host: 'db.internal' }, {})).toEqual(['host']);
+    // absent key is not "unchanged"; it is a different config.
+    expect(configKeysChangedByOverlay({ host: 'db.internal' }, {})).toEqual(['host']);
   });
 
-  it('compares an ARRAY-valued boundary key by value, not by identity', () => {
-    // `fs.roots` is the only array-valued boundary key. An equal-but-distinct
-    // array must read as unchanged, or every edit-form probe of an `fs`
-    // connection would be refused.
+  it('names an ADDED key', () => {
+    expect(configKeysChangedByOverlay({}, { baseUrl: 'https://attacker.example' })).toEqual([
+      'baseUrl',
+    ]);
+  });
+
+  it('compares by VALUE, not identity, for arrays and objects', () => {
+    // Equal-but-distinct values must read as unchanged, or an unedited form
+    // round-trip would be refused on every probe.
+    expect(configKeysChangedByOverlay({ roots: ['/srv/data'] }, { roots: ['/srv/data'] })).toEqual(
+      [],
+    );
+    expect(configKeysChangedByOverlay({ roots: ['/srv/data'] }, { roots: ['/etc'] })).toEqual([
+      'roots',
+    ]);
+    // Key ORDER inside an object-valued setting is not a change.
     expect(
-      boundaryKeysChangedByOverlay('fs', { roots: ['/srv/data'] }, { roots: ['/srv/data'] }),
+      configKeysChangedByOverlay({ headers: { a: '1', b: '2' } }, { headers: { b: '2', a: '1' } }),
     ).toEqual([]);
-    expect(
-      boundaryKeysChangedByOverlay('fs', { roots: ['/srv/data'] }, { roots: ['/etc'] }),
-    ).toEqual(['roots']);
   });
 
-  it('flags nothing for a kind that declares no boundary keys', () => {
-    // `http` has an empty list: its `baseUrl` IS overridable per dispatch, so
-    // this rule is a deliberate no-op there and the refusal never fires.
+  it('consults NO per-kind allowlist — it takes no kind at all', () => {
+    // The regression this function exists for. The first version asked
+    // `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS` which keys were dangerous; that
+    // table is EMPTY for `http`/`anthropic_api`/`openai_api`, three kinds whose
+    // probes send the stored secret to `config.baseUrl` as an auth header. A
+    // rule that consulted it returned "nothing changed" for the single most
+    // dangerous overlay there is. This one cannot: it has no kind to consult.
     expect(
-      boundaryKeysChangedByOverlay(
-        'http',
-        { baseUrl: 'https://api.example' },
+      configKeysChangedByOverlay(
+        { baseUrl: 'https://api.anthropic.com' },
         { baseUrl: 'https://attacker.example' },
       ),
-    ).toEqual([]);
+    ).toEqual(['baseUrl']);
   });
 });

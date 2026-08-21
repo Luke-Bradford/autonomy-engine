@@ -248,6 +248,18 @@ export function ConnectionsPage() {
 
       {form && (
         <ConnectionForm
+          /* Remount when the form switches to a DIFFERENT connection. The table
+             stays interactive while the form is open, so "Edit" on another row
+             swaps `form` in place — and without a key the child keeps its own
+             local state across that swap: connection A's `probing`/`error`, and
+             A's probe verdict, rendered against B. The verdict is the sharp
+             one, because a signature over the DRAFT cannot see the switch: two
+             connections sharing non-secret config (a staging/prod pair, or an
+             export/import clone) produce an identical signature, so A's
+             "Connected." would render for a B that was never probed. Keying on
+             identity is what makes "this verdict is about what is on screen"
+             true across rows as well as within one. */
+          key={form.id ?? 'new'}
           form={form}
           onChange={setForm}
           onClose={() => setForm(null)}
@@ -319,8 +331,19 @@ function ConnectionForm({
    * probe from one carrying a new password.
    */
   const draftSignature = useMemo(
-    () => JSON.stringify([form.kind, form.config, form.jsonText, form.inputs, form.secret !== '']),
-    [form.kind, form.config, form.jsonText, form.inputs, form.secret],
+    () =>
+      JSON.stringify([
+        // `form.id` first, and belt-and-braces with the `key` above: were the
+        // remount ever removed, an identical draft on a different connection
+        // must still not inherit the previous row's verdict.
+        form.id,
+        form.kind,
+        form.config,
+        form.jsonText,
+        form.inputs,
+        form.secret !== '',
+      ]),
+    [form.id, form.kind, form.config, form.jsonText, form.inputs, form.secret],
   );
 
   /**
