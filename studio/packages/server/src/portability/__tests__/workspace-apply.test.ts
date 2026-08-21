@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { ZodError } from 'zod';
+import { ZodError, type z } from 'zod';
 import {
   CATALOG_VERSION,
+  ConnectionSchema,
+  DatasetSchema,
+  NewConnectionSchema,
+  NewDatasetSchema,
+  NewPipelineSchema,
+  NewPipelineVersionSchema,
+  NewTriggerSchema,
+  PipelineSchema,
+  PipelineVersionSchema,
   RESOURCE_KINDS,
+  TriggerSchema,
   type NewPipelineVersion,
   type NewTrigger,
 } from '@autonomy-studio/shared';
@@ -37,6 +47,8 @@ import {
   APPLY_ORDER,
   APPLY_RANK,
   applyWorkspace,
+  attributedTo,
+  SERVER_SUPPLIED_WRITE_KEYS,
   WorkspaceApplyError,
 } from '../workspace-apply.js';
 import { parseWorkspaceFiles, type ParsedWorkspace } from '../workspace-parse.js';
@@ -2187,5 +2199,144 @@ describe('#1110 — a refused apply says what to fix', () => {
     // Atomic: the connection that applies BEFORE datasets is rolled back too.
     expect(listDatasets(tgt, 'local')).toHaveLength(0);
     expect(listConnections(tgt, 'local')).toHaveLength(0);
+  });
+});
+
+/**
+ * #1137 — the refusal channel gets a FAULT, like the other one.
+ *
+ * `attributedRefusal` re-paths a repo `ZodError` to name the branch file, which
+ * is right for a field the operator committed and wrong for one they never
+ * wrote. The write objects carry server-supplied fields (`ownerId`, `pipelineId`,
+ * the read-back row's `id`/`createdAt`/provenance…), so an internal bug that
+ * produced a malformed one of those was answered `400 validation_error` pointing
+ * at a file that is fine — the exact confusion `WorkspaceApplyFault` was added to
+ * prevent on the `WorkspaceApplyError` channel.
+ *
+ * These drive the predicate directly rather than through `applyWorkspace`,
+ * because the case is unreachable from branch content BY CONSTRUCTION: every
+ * key in the set is one the branch cannot name (that is what puts it in the
+ * set). A test that fed corrupt files through the real apply would be testing
+ * the 400 path and calling it the 500 path.
+ */
+describe('#1137 — a server-supplied field is OUR fault, not the branch file\'s', () => {
+  /** The shape a repo layer throws: a bare `ZodError` naming schema fields. */
+  function repoError(...paths: Array<Array<string | number>>): ZodError {
+    return new ZodError(
+      paths.map((path) => ({
+        code: 'invalid_type' as const,
+        expected: 'string' as const,
+        path,
+        message: 'Invalid input: expected string, received undefined',
+        input: undefined,
+      })),
+    );
+  }
+
+  function refusalFor(error: ZodError): unknown {
+    let thrown: unknown;
+    try {
+      attributedTo('connection connections/c.json', () => {
+        throw error;
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    return thrown;
+  }
+
+  it('routes a ZodError rooted at a server-supplied field to an INTERNAL fault', () => {
+    const thrown = refusalFor(repoError(['ownerId']));
+    expect(thrown).toBeInstanceOf(WorkspaceApplyError);
+    expect((thrown as WorkspaceApplyError).fault).toBe('internal');
+    // ...and NOT the 400 channel, which is the whole point.
+    expect(thrown).not.toBeInstanceOf(ZodError);
+    // The diagnosis is in the message, which reaches `request.log.error` only —
+    // `registerErrorHandler` answers an `internal` fault with a fixed string.
+    expect((thrown as Error).message).toContain('ownerId');
+    expect((thrown as Error).message).toContain('server defect');
+  });
+
+  it('still re-paths a BRANCH-derived field to the file, unchanged (#1110 survives)', () => {
+    const thrown = refusalFor(repoError(['config', 'baseUrl']));
+    expect(thrown).toBeInstanceOf(ZodError);
+    expect((thrown as ZodError).issues.map((i) => i.path.join('.'))).toEqual([
+      'connection connections/c.json.config.baseUrl',
+    ]);
+  });
+
+  it('makes the WHOLE error internal when ANY issue is server-rooted', () => {
+    const thrown = refusalFor(repoError(['config', 'baseUrl'], ['createdAt']));
+    expect(thrown).toBeInstanceOf(WorkspaceApplyError);
+    expect((thrown as WorkspaceApplyError).fault).toBe('internal');
+    // The actionable issue is not LOST — it is in the logged message, so the
+    // server-side diagnosis still names both.
+    expect((thrown as Error).message).toContain('config.baseUrl');
+  });
+
+  it('is blind to a server-supplied NAME appearing deeper than the root', () => {
+    // `config.ownerId` is authoring content that happens to share a name. Only
+    // the ROOT segment decides, or an activity config field could silently
+    // suppress a real 400.
+    const thrown = refusalFor(repoError(['config', 'ownerId']));
+    expect(thrown).toBeInstanceOf(ZodError);
+  });
+
+  it('EXCLUDES resourceId from being treated as branch-derived', () => {
+    // G5c lets the file carry a resourceId, but a malformed one is refused as an
+    // `unparseable` diagnostic before any write — so reaching the repo layer with
+    // a bad one means WE minted it. See `SERVER_SUPPLIED_WRITE_KEYS`.
+    const thrown = refusalFor(repoError(['resourceId']));
+    expect(thrown).toBeInstanceOf(WorkspaceApplyError);
+    expect((thrown as WorkspaceApplyError).fault).toBe('internal');
+  });
+
+  it('leaves a non-ZodError untouched', () => {
+    const boom = new Error('not a zod error');
+    let thrown: unknown;
+    try {
+      attributedTo('connection connections/c.json', () => {
+        throw boom;
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBe(boom);
+  });
+
+  /**
+   * The TOTALITY pin, and the reason the hand-written set is allowed to be
+   * hand-written at all — the `APPLY_RANK` precedent in this same module.
+   *
+   * A field the STORED schema declares and the `New*Schema` omits can only be
+   * produced by the repo layer, and every repo create ends with a read-back
+   * `parse` of the assembled row INSIDE an `attributedTo` closure. So the
+   * difference between each pair is exactly the set of keys that must not be
+   * attributed to a branch file. Adding a server-minted column to any of these
+   * five resources fails HERE, on the day it is added, rather than shipping a
+   * misattributed 400 nobody notices.
+   *
+   * The input-side keys (`ownerId`, `secretRef`, `pipelineId`,
+   * `pipelineVersionId`, `webhook`) are invisible to this — they are IN the
+   * `New*Schema` and are supplied by this module's own call sites, which is a
+   * fact about `workspace-apply.ts`, not about the schemas.
+   */
+  it('SERVER_SUPPLIED_WRITE_KEYS covers every New*Schema omission', () => {
+    const pairs: Array<[string, z.ZodObject, z.ZodObject]> = [
+      ['connection', ConnectionSchema, NewConnectionSchema],
+      ['dataset', DatasetSchema, NewDatasetSchema],
+      ['pipeline', PipelineSchema, NewPipelineSchema],
+      ['pipelineVersion', PipelineVersionSchema, NewPipelineVersionSchema],
+      ['trigger', TriggerSchema, NewTriggerSchema],
+    ];
+    const uncovered: string[] = [];
+    for (const [name, stored, write] of pairs) {
+      const writeKeys = new Set(Object.keys(write.shape));
+      for (const key of Object.keys(stored.shape)) {
+        if (writeKeys.has(key)) continue;
+        if (!SERVER_SUPPLIED_WRITE_KEYS.has(key)) uncovered.push(`${name}.${key}`);
+      }
+    }
+    expect(uncovered).toEqual([]);
   });
 });
