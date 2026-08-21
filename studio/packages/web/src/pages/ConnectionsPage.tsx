@@ -9,6 +9,7 @@ import {
   type ConnectionKind,
   type ConnectionProbeResult,
   type ConnectionPublic,
+  type Dataset,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -21,9 +22,17 @@ import {
   updateConnection,
   type ConnectionWrite,
 } from '../api/connections';
+import { listDatasets } from '../api/datasets';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import {
+  datasetsOnConnection,
+  deleteConfirmMessage,
+  kindChangeAdvisory,
+  strandedByKindChange,
+  type StrandCheck,
+} from './connections/strandedDatasets';
 import { ImportPanel } from './ImportPanel';
 import {
   assembleConfig,
@@ -123,11 +132,41 @@ export function ConnectionsPage() {
    * the child clean.
    */
   const [formSeq, setFormSeq] = useState(0);
+  /**
+   * #1174 — the datasets bound to the connection being edited, and whether that
+   * question could be answered at all.
+   *
+   * THREE STATES, NOT TWO. `null` with no error is "not read yet"; a non-null
+   * `datasetsUnavailable` is "could not read"; a list is a list. An empty list
+   * and a failed read must stay distinguishable, because collapsing them would
+   * render "nothing would be stranded" on the strength of a fetch that failed
+   * (prevention-log #18 — the healthy verdict is earned, never the fallback).
+   * `strandedDatasets.ts` is total over the three.
+   */
+  const [datasets, setDatasets] = useState<Dataset[] | null>(null);
+  const [datasetsUnavailable, setDatasetsUnavailable] = useState<string | null>(null);
   const openForm = useCallback((next: FormState) => {
     setForm(next);
     setFormSeq((seq) => seq + 1);
   }, []);
   const guardedLoad = useGuardedLoad();
+  /**
+   * A SECOND instance, deliberately — `useGuardedLoad`'s "one instance per state
+   * target" rule. Two fetchers sharing one instance discard each other's
+   * answers, so the connections load and this one cannot be pointed at the same
+   * runner.
+   *
+   * Note this is the opposite call from `DatasetsPage.tsx`, which loads the very
+   * same PAIR through ONE fetcher and says why: its store picker resolves
+   * dataset rows against connection rows, so a list from a different moment
+   * would mis-render. Here the two are not resolved against each other on the
+   * critical surface — the connections table stands alone, and the datasets list
+   * feeds a DIAGNOSTIC. One fetcher would mean a datasets outage takes the
+   * connections list down with it, so the page whose job is connections would
+   * show an error banner because an advisory failed. The third state below
+   * exists exactly so that failure stays local.
+   */
+  const datasetsLoad = useGuardedLoad();
 
   // The ONE load path: the mount effect below and every post-mutation refetch
   // (delete / save / import) go through it. That is what ORDERS them — #1062:
@@ -161,6 +200,47 @@ export function ConnectionsPage() {
   }, [refresh]);
 
   /**
+   * #1174 — read the datasets, for the strand advisory only.
+   *
+   * ON EDIT-FORM OPEN, NOT ON MOUNT, and that is the whole staleness argument.
+   * A mount load would be read hours later by an operator who left the tab open
+   * and added datasets elsewhere, and would then answer "nothing would be
+   * stranded" from a snapshot that predates them — the manufactured-benign-
+   * default this page's three states exist to refuse, reached by a slower route.
+   * Bound to the gesture instead: the reading is at most as old as the form.
+   * It also costs a read-only visit nothing, which a mount load would not.
+   *
+   * NOT for the New-connection form: a connection that does not exist yet has
+   * no `connectionId` for any dataset to name.
+   */
+  const refreshDatasets = useCallback(
+    () =>
+      datasetsLoad(listDatasets, {
+        onData: (list) => {
+          setDatasets(list);
+          setDatasetsUnavailable(null);
+        },
+        // Local to the advisory. This never reaches `loadError` — a diagnostic
+        // that could not be computed must not present as a failure of the page.
+        onError: (err) => {
+          setDatasets(null);
+          setDatasetsUnavailable(messageOf(err));
+        },
+      }),
+    [datasetsLoad],
+  );
+
+  const openEditForm = useCallback(
+    (conn: ConnectionPublic) => {
+      setDatasets(null);
+      setDatasetsUnavailable(null);
+      openForm(formForEdit(conn));
+      void refreshDatasets();
+    },
+    [openForm, refreshDatasets],
+  );
+
+  /**
    * Save the connection's export envelope to disk (#959). The fetch happens
    * first and its failure is REPORTED — a bare `<a download>` would have
    * written a 404 body to the operator's disk as a `.json` file with nothing
@@ -183,9 +263,38 @@ export function ConnectionsPage() {
     }
   }, []);
 
+  /**
+   * #1174 — the delete confirm names the datasets it would strand.
+   *
+   * A connection DELETE strands every dataset naming it, whatever their kinds:
+   * `routes/connections.ts`'s delete re-gates dependent TRIGGERS and nothing
+   * scans datasets, so the `connectionId` simply dangles.
+   *
+   * THE LIST IS FETCHED HERE, not read from `datasets` state, for two reasons.
+   * Delete is reachable from the table without ever opening a form, so the state
+   * may hold nothing (or another connection's reading). And this is the
+   * irreversible act on the page — the one place worth paying a request to be
+   * sure the count is current rather than as old as the last form open. Awaiting
+   * the page's guarded load would not do it either: that load resolves the same
+   * way whether it wrote, was superseded, or was skipped, and React state is not
+   * readable in this closure afterwards regardless.
+   *
+   * A FAILED READ DOES NOT BLOCK THE DELETE and does not claim there is nothing
+   * to strand — the confirm says the check could not be made and lets the
+   * operator decide, which is the advisory polarity #1145/#1158 set.
+   */
   const onDelete = useCallback(
     async (conn: ConnectionPublic) => {
-      if (!window.confirm(`Delete connection "${conn.name}"?`)) return;
+      let check: StrandCheck;
+      try {
+        check = {
+          state: 'known',
+          names: datasetsOnConnection(await listDatasets(), conn.id).map((d) => d.name),
+        };
+      } catch (err) {
+        check = { state: 'unavailable', detail: messageOf(err) };
+      }
+      if (!window.confirm(deleteConfirmMessage(conn.name, check))) return;
       try {
         await deleteConnection(conn.id);
         await refresh();
@@ -239,7 +348,7 @@ export function ConnectionsPage() {
                   <code>{conn.kind}</code>
                 </td>
                 <td>
-                  <button type="button" onClick={() => openForm(formForEdit(conn))}>
+                  <button type="button" onClick={() => openEditForm(conn)}>
                     Edit
                   </button>
                   <button
@@ -282,6 +391,15 @@ export function ConnectionsPage() {
              would render against a form nothing has tested. */
           key={formSeq}
           form={form}
+          /* #1174 — the three inputs the strand note needs. `storedKind` is
+             read from the LIST rather than snapshotted at form-open, so a
+             refreshed list moves it; `undefined` means the row is gone from
+             under the open form, which the save's own 404 reports and the note
+             deliberately stays silent about (there is no stored kind left for
+             an edit to have changed FROM). */
+          storedKind={connections?.find((conn) => conn.id === form.id)?.kind}
+          datasets={datasets}
+          datasetsUnavailable={datasetsUnavailable}
           onChange={setForm}
           onClose={() => setForm(null)}
           onSaved={async () => {
@@ -303,11 +421,17 @@ export function ConnectionsPage() {
 
 function ConnectionForm({
   form,
+  storedKind,
+  datasets,
+  datasetsUnavailable,
   onChange,
   onClose,
   onSaved,
 }: {
   form: FormState;
+  storedKind: ConnectionKind | undefined;
+  datasets: Dataset[] | null;
+  datasetsUnavailable: string | null;
   onChange: (next: FormState) => void;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
@@ -402,6 +526,30 @@ function ConnectionForm({
     // Listing exactly what `readConfigDraft` reads keeps that honest — a fourth
     // field added to it must be added here.
   }, [jsonMode, form.config, form.jsonText, form.inputs, form.kind, fields]);
+
+  /**
+   * #1174 — what this kind change would strand, and never a claim it strands
+   * nothing when the list was not read.
+   *
+   * `null` on a NEW connection (nothing can name a row that does not exist yet)
+   * and on an unchanged kind, which is what keeps the note off the form for the
+   * whole of a rename or a config edit.
+   */
+  const strandAdvisory = useMemo(() => {
+    if (form.id === null || storedKind === undefined || storedKind === form.kind) return null;
+    const check: StrandCheck =
+      datasetsUnavailable !== null
+        ? { state: 'unavailable', detail: datasetsUnavailable }
+        : datasets === null
+          ? { state: 'loading' }
+          : {
+              state: 'known',
+              names: strandedByKindChange(datasets, form.id, storedKind, form.kind).map(
+                (dataset) => dataset.name,
+              ),
+            };
+    return kindChangeAdvisory(check, form.kind);
+  }, [form.id, form.kind, storedKind, datasets, datasetsUnavailable]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
@@ -616,6 +764,21 @@ function ConnectionForm({
           <p className="contract-advisory">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
         )}
       </div>
+
+      {/* #1174 — outside the Config group, because it is a fact about OTHER
+          resources rather than about this config, and outside the mode branch
+          for the same reason the config advisory above is: the Kind select is
+          reachable in both modes.
+
+          A bare `.contract-advisory` paragraph with NO `role`. Every sibling
+          advisory on this page is one, and the two live-region roles are both
+          already claimed here in the singular — `role="status"` by the probe
+          verdict (which this form's own e2e asserts the COUNT of) and
+          `role="alert"` by the load error. A second of either turns those
+          queries into strict-mode violations, and a strand note is not an
+          interruption: it appears next to the control that caused it, in
+          response to the operator's own gesture. */}
+      {strandAdvisory !== null && <p className="contract-advisory">{strandAdvisory}</p>}
 
       <label>
         Secret
