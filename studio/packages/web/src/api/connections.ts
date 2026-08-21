@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import {
+  ConnectionProbeResultSchema,
   ConnectionPublicSchema,
   NewConnectionSchema,
   paginatedResponseSchema,
+  type ConnectionKind,
+  type ConnectionProbeResult,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
@@ -76,4 +79,43 @@ export function updateConnection(
 
 export function deleteConnection(id: string): Promise<void> {
   return apiFetch<void>(`/api/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
+ * #1191 — "Test connection". TWO endpoints, chosen by whether a row exists yet,
+ * and the split is not incidental.
+ *
+ * A form being EDITED leaves its secret input blank to mean "keep the stored
+ * secret" (see `ConnectionsPage`'s placeholder and its submit path). Probing
+ * such a form through the draft endpoint would send no secret at all and report
+ * a confident credential failure for every connection that has one — a button
+ * that lies. So an edit probes through `:id`, where the server falls back to the
+ * stored ciphertext; only a connection with no row yet uses the draft endpoint.
+ *
+ * The server refuses an `:id` probe whose config overlay would point the STORED
+ * secret at a destination the saved row does not name. That refusal arrives as
+ * an ordinary `{ok: false, error}` result, not an HTTP error, so it renders in
+ * the same place as any other refusal — the form never has to special-case it.
+ */
+export function testDraftConnection(body: {
+  kind: ConnectionKind;
+  config: Record<string, unknown>;
+  secret?: string;
+}): Promise<ConnectionProbeResult> {
+  return apiFetch('/api/connections/test', {
+    method: 'POST',
+    body,
+    schema: ConnectionProbeResultSchema,
+  });
+}
+
+export function testSavedConnection(
+  id: string,
+  body: { config?: Record<string, unknown>; secret?: string } = {},
+): Promise<ConnectionProbeResult> {
+  return apiFetch(`/api/connections/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    body,
+    schema: ConnectionProbeResultSchema,
+  });
 }
