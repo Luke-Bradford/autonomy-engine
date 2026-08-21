@@ -1,4 +1,4 @@
-import { anthropicConnectionConfigSchema } from '@autonomy-studio/shared';
+import { anthropicConnectionConfigSchema, formatZodIssues } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
@@ -223,7 +223,7 @@ export const anthropicAdapter: ConnectorAdapter = {
     if (!parsed.success) {
       return {
         ok: false,
-        error: `invalid anthropic_api connection config: ${parsed.error.message}`,
+        error: `invalid anthropic_api connection config: ${formatZodIssues(parsed.error.issues)}`,
       };
     }
     if (secret === null) {
@@ -251,7 +251,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield {
         type: 'failed',
         kind: 'permanent',
-        error: `invalid llm_call activity config: ${input.error.message}`,
+        error: `invalid llm_call activity config: ${formatZodIssues(input.error.issues)}`,
       };
       return;
     }

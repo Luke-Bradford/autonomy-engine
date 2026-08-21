@@ -3,6 +3,7 @@ import { open, stat } from 'node:fs/promises';
 import {
   DelimitedParseError,
   delimitedDatasetConfigSchema,
+  formatZodIssues,
   parseDelimitedRows,
   type CoercionOptions,
   type DatasetAddress,
@@ -171,13 +172,13 @@ async function prepareRead(read: DelimitedDatasetRead): Promise<{
   }
   const cfg = fsConnectionConfigSchema.safeParse(read.connectionConfig);
   if (!cfg.success) {
-    throw new DatasetIoError('permanent', `invalid fs connection config: ${cfg.error.message}`);
+    throw new DatasetIoError('permanent', `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`);
   }
   const config = delimitedDatasetConfigSchema.safeParse(read.datasetConfig);
   if (!config.success) {
     throw new DatasetIoError(
       'permanent',
-      `invalid delimited dataset config: ${config.error.message}`,
+      `invalid delimited dataset config: ${formatZodIssues(config.error.issues)}`,
     );
   }
 
@@ -657,7 +658,7 @@ export function delimitedCoercionFor(datasetConfig: Record<string, unknown>): Co
   if (!parsed.success) {
     throw new DatasetIoError(
       'permanent',
-      `invalid delimited dataset config: ${parsed.error.message}`,
+      `invalid delimited dataset config: ${formatZodIssues(parsed.error.issues)}`,
     );
   }
   const { nullValue, dateFormat } = parsed.data;

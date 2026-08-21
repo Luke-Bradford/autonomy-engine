@@ -1,3 +1,4 @@
+import { formatZodIssues } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
@@ -84,7 +85,7 @@ export const openaiAdapter: ConnectorAdapter = {
   async testConnection(config, secret) {
     const parsed = llmConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
-      return { ok: false, error: `invalid openai_api connection config: ${parsed.error.message}` };
+      return { ok: false, error: `invalid openai_api connection config: ${formatZodIssues(parsed.error.issues)}` };
     }
     if (secret === null) {
       return { ok: false, error: 'openai_api connection requires a secret (API key)' };
@@ -108,7 +109,7 @@ export const openaiAdapter: ConnectorAdapter = {
       yield {
         type: 'failed',
         kind: 'permanent',
-        error: `invalid llm_call activity config: ${input.error.message}`,
+        error: `invalid llm_call activity config: ${formatZodIssues(input.error.issues)}`,
       };
       return;
     }

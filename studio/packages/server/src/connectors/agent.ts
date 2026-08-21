@@ -7,6 +7,7 @@ import {
   agentTaskConfigSchema,
   agentStructuredInstruction,
   extractStructuredBlock,
+  formatZodIssues,
   parseAndValidateStructured,
   WARNING_CODES,
 } from '@autonomy-studio/shared';
@@ -793,7 +794,7 @@ async function* runAgentTask(
     yield {
       type: 'failed',
       kind: 'permanent',
-      error: `invalid agent_task activity config: ${input.error.message}`,
+      error: `invalid agent_task activity config: ${formatZodIssues(input.error.issues)}`,
     };
     return;
   }
@@ -1024,7 +1025,7 @@ async function* runLlmCall(
     yield {
       type: 'failed',
       kind: 'permanent',
-      error: `invalid llm_call config: ${llm.error.message}`,
+      error: `invalid llm_call config: ${formatZodIssues(llm.error.issues)}`,
     };
     return;
   }
@@ -1176,7 +1177,7 @@ export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
       // probe would be an unsafe, costly side effect. Assert a valid config only.
       const parsed = agentConnectionConfigSchema.safeParse(config);
       if (!parsed.success) {
-        return { ok: false, error: `invalid agent_cli connection config: ${parsed.error.message}` };
+        return { ok: false, error: `invalid agent_cli connection config: ${formatZodIssues(parsed.error.issues)}` };
       }
       return { ok: true };
     },
@@ -1187,7 +1188,7 @@ export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
         yield {
           type: 'failed',
           kind: 'permanent',
-          error: `invalid agent_cli connection config: ${config.error.message}`,
+          error: `invalid agent_cli connection config: ${formatZodIssues(config.error.issues)}`,
         };
         return;
       }

@@ -4,6 +4,7 @@ import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { DatasetSchema } from '../schemas/dataset.js';
 import { NodeSchema, PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import { RESOURCE_KINDS } from './paths.js';
 
 /**
@@ -495,7 +496,7 @@ export function parseAndUpgradeEnvelope(
 
   const result = ExportEnvelopeSchema.safeParse(current);
   if (!result.success) {
-    throw new ImportError(`Envelope failed validation: ${result.error.message}`);
+    throw new ImportError(`Envelope failed validation: ${formatZodIssues(result.error.issues)}`);
   }
   return result.data;
 }

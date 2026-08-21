@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  formatZodIssues,
   HTTP_SECRET_HEADERS_FIELD,
   httpConnectionConfigSchema,
   httpSecretHeadersSchema,
@@ -116,7 +117,7 @@ export const httpAdapter: ConnectorAdapter = {
   async testConnection(config, secret) {
     const parsed = httpConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
-      return { ok: false, error: `invalid http connection config: ${parsed.error.message}` };
+      return { ok: false, error: `invalid http connection config: ${formatZodIssues(parsed.error.issues)}` };
     }
     const baseUrl = parsed.data.baseUrl;
     // Nothing to probe without a baseUrl — a valid config is all we can assert.
@@ -172,7 +173,7 @@ export const httpAdapter: ConnectorAdapter = {
       yield {
         type: 'failed',
         kind: 'permanent',
-        error: `invalid http_request activity config: ${req.error.message}`,
+        error: `invalid http_request activity config: ${formatZodIssues(req.error.issues)}`,
       };
       return;
     }

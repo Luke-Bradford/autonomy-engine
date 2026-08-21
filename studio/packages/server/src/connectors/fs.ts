@@ -15,6 +15,7 @@ import {
   fileMoveConfigSchema,
   fileReadConfigSchema,
   fileWriteConfigSchema,
+  formatZodIssues,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
@@ -501,7 +502,7 @@ export const fsAdapter: ConnectorAdapter = {
   async testConnection(config) {
     const cfg = fsConnectionConfigSchema.safeParse(config);
     if (!cfg.success) {
-      return { ok: false, error: `invalid fs connection config: ${cfg.error.message}` };
+      return { ok: false, error: `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}` };
     }
     // A credential-less connector — "test" = every declared root exists and is a
     // directory. Report ALL problems, not just the first, so an operator fixes
@@ -524,7 +525,7 @@ export const fsAdapter: ConnectorAdapter = {
   async *runActivity(ctx: ActivityContext): AsyncIterable<ActivityEvent> {
     const cfg = fsConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!cfg.success) {
-      yield failed('permanent', `invalid fs connection config: ${cfg.error.message}`);
+      yield failed('permanent', `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`);
       return;
     }
     if (ctx.signal.aborted) {
@@ -585,7 +586,7 @@ export const fsAdapter: ConnectorAdapter = {
           if (!parsedSink.success) {
             throw new DatasetIoError(
               'permanent',
-              `invalid sqlite sink connection config: ${parsedSink.error.message}`,
+              `invalid sqlite sink connection config: ${formatZodIssues(parsedSink.error.issues)}`,
             );
           }
           return writeSqliteDatasetRows(
@@ -608,7 +609,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_READ_ACTIVITY_TYPE) {
       const input = fileReadConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_read activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_read activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       yield await doRead(cfg.data, input.data.path, ctx.signal);
@@ -618,7 +619,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_WRITE_ACTIVITY_TYPE) {
       const input = fileWriteConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_write activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_write activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       yield await doWrite(cfg.data, input.data, ctx.signal, makeTmpSuffix(ctx));
@@ -628,7 +629,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_COPY_ACTIVITY_TYPE) {
       const input = fileCopyConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_copy activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_copy activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       // Same atomic temp+rename as file_write (copy writes to a `dest`-sibling temp).
@@ -639,7 +640,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_MOVE_ACTIVITY_TYPE) {
       const input = fileMoveConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_move activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_move activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       yield await doMove(cfg.data, input.data, ctx.signal);
@@ -649,7 +650,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_DELETE_ACTIVITY_TYPE) {
       const input = fileDeleteConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_delete activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_delete activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       yield await doDelete(cfg.data, input.data.path, ctx.signal);
@@ -659,7 +660,7 @@ export const fsAdapter: ConnectorAdapter = {
     if (ctx.activityType === FILE_LIST_ACTIVITY_TYPE) {
       const input = fileListConfigSchema.safeParse(ctx.input);
       if (!input.success) {
-        yield failed('permanent', `invalid file_list activity config: ${input.error.message}`);
+        yield failed('permanent', `invalid file_list activity config: ${formatZodIssues(input.error.issues)}`);
         return;
       }
       yield await doList(cfg.data, input.data.path, ctx.signal);
