@@ -369,6 +369,15 @@ would authenticate with `PGPASSWORD`, a credential nothing in the product record
 requires them, the adapter refuses a `null` **or empty** secret before building a client, and
 `clientOptionsFor` populates every key rather than letting the driver infer one.
 
+**(2b) `statementTimeoutMs` arms TWO timers, because either alone leaves a way to hang.** Measured
+with `select pg_sleep(5)` against a 600ms budget: `statement_timeout` is a SERVER-side startup
+parameter and cancelled at 623ms (SQLSTATE `57014`) — but only because the server chose to honour
+it, which a tarpit or a proxy need not; `query_timeout` is a CLIENT-side timer and gave up at 617ms
+regardless. `connectTimeoutMs` does not cover the gap: `pg` arms that timer during `_connect` and
+clears it once the session is ready, so a host that completes the handshake quickly and then goes
+silent would leave a probe neither resolving nor rejecting. Both are set from the one operator-facing
+`statementTimeoutMs`, because "how long may one statement take" is one question, not two.
+
 **(3) The non-overridable boundary is wider than `sqlite`'s.** `postgres` is the first kind where a
 per-dispatch `Connection.parameters` override could move a DECRYPTED CREDENTIAL, so `host`, `port`,
 `database`, `user` and `sslmode` all join `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`; only the two

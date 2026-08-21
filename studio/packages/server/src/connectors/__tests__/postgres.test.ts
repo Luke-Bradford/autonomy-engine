@@ -104,6 +104,7 @@ describe('clientOptionsFor (#1189 M10)', () => {
         'host',
         'password',
         'port',
+        'query_timeout',
         'ssl',
         'statement_timeout',
         'user',
@@ -121,6 +122,7 @@ describe('clientOptionsFor (#1189 M10)', () => {
       ssl: { rejectUnauthorized: false },
       connectionTimeoutMillis: 4_000,
       statement_timeout: 9_000,
+      query_timeout: 9_000,
     });
   });
 
@@ -136,6 +138,7 @@ describe('clientOptionsFor (#1189 M10)', () => {
     expect(options.port).toBe(DEFAULT_POSTGRES_PORT);
     expect(options.connectionTimeoutMillis).toBe(DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS);
     expect(options.statement_timeout).toBe(DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS);
+    expect(options.query_timeout).toBe(DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS);
     expect(options.connectionTimeoutMillis).toBeGreaterThan(0);
   });
 
@@ -150,6 +153,18 @@ describe('clientOptionsFor (#1189 M10)', () => {
     );
     expect(options.connectionTimeoutMillis).toBe(1);
     expect(options.statement_timeout).toBe(2);
+  });
+
+  it('arms BOTH statement timers, so a server that ignores its own cap cannot hang the probe', () => {
+    // `connectionTimeoutMillis` covers the handshake and is then CLEARED, so a
+    // host that connects fast and then goes silent would leave `testConnection`
+    // neither resolving nor rejecting. `statement_timeout` is server-side and
+    // binds only a server that honours it; `query_timeout` is the client-side
+    // timer that holds regardless. Measured at ~620ms each for a 600ms budget
+    // against postgres:17, with `select pg_sleep(5)`.
+    const options = clientOptionsFor({ ...CONFIG, statementTimeoutMs: 1_500 }, 'p');
+    expect(options.statement_timeout).toBe(1_500);
+    expect(options.query_timeout).toBe(1_500);
   });
 });
 
@@ -203,22 +218,50 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
     expect(result.error).toMatch(expected);
   });
 
-  it('never echoes the password into a refusal', async () => {
-    // pg's own connect errors do not carry the password today, but the probe is
-    // the first line rather than the executor's redaction backstop, and a driver
-    // that started including it would otherwise leak it into a UI string.
+  it('never echoes the password into a refusal, on the branch that can', async () => {
+    // The code MUST be one `probeFailureSentence` does not name. A mapped code
+    // (28P01, 3D000, …) returns a fixed sentence that never touches
+    // `err.message`, so asserting redaction on one of those proves nothing — it
+    // would pass with the scrubbing deleted. The DEFAULT branch is the one that
+    // hands an upstream string to a caller, so that is the branch to test.
     const { factory } = recordingFactory({
-      connectError: pgError('28P01', 'password authentication failed: hunter2'),
+      connectError: pgError('XX000', 'internal error while connecting as app_ro/hunter2'),
     });
     const result = await createPostgresAdapter(factory).testConnection(CONFIG, 'hunter2');
     expect(result.ok).toBe(false);
     expect(result.error).not.toContain('hunter2');
+    // Scrubbed, not swallowed: the operator still gets the diagnostic.
+    expect(result.error).toContain('internal error while connecting');
+    expect(result.error).toContain('[redacted]');
+  });
+
+  it('still reports an UNMAPPED failure verbatim when there is nothing to scrub', async () => {
+    // The scrubbing must not eat the message. A code the sentence table does not
+    // name falls through to the driver's own words, which for postgres is
+    // usually a sentence already.
+    const { factory } = recordingFactory({ connectError: pgError('53300', 'too many clients') });
+    const result = await createPostgresAdapter(factory).testConnection(CONFIG, 'pw');
+    expect(result).toEqual({ ok: false, error: 'too many clients' });
   });
 
   it('closes the client even when the probe throws', async () => {
     const { rec, factory } = recordingFactory({ queryError: pgError('57014', 'canceled') });
     await createPostgresAdapter(factory).testConnection(CONFIG, 'pw');
     expect(rec.ended).toBe(1);
+  });
+
+  it('still answers when CLOSING the client is what throws', async () => {
+    // The last resolve-path permutation: `end()` runs in a `finally`, so an
+    // unguarded throw there would replace an answer the probe had already
+    // computed with a rejection — including on the SUCCESS path.
+    const factory = (): PostgresProbeClient => ({
+      connect: async () => undefined,
+      query: async () => ({ rows: [] }),
+      end: async () => {
+        throw new Error('socket already gone');
+      },
+    });
+    expect(await createPostgresAdapter(factory).testConnection(CONFIG, 'pw')).toEqual({ ok: true });
   });
 
   it('RESOLVES on a client that cannot even be constructed', async () => {

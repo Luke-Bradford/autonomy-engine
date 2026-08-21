@@ -31,6 +31,7 @@ export interface PostgresClientOptions {
   ssl: false | { rejectUnauthorized: boolean };
   connectionTimeoutMillis: number;
   statement_timeout: number;
+  query_timeout: number;
 }
 
 /** The one-statement surface this module needs from a client, so the mapping
@@ -52,8 +53,9 @@ export const DEFAULT_POSTGRES_PORT = 5432;
 /** Applied when `config.connectTimeoutMs` is absent. `pg`'s own default is 0 =
  * wait forever, which would hang a dispatch on a black-holed host. */
 export const DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
-/** Applied when `config.statementTimeoutMs` is absent. `pg`'s own default is
- * `false` = no server-side cap. */
+/** Applied when `config.statementTimeoutMs` is absent, to BOTH statement timers
+ * (see `clientOptionsFor`). `pg`'s own defaults are `false` for each — no cap at
+ * all on either side. */
 export const DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS = 30_000;
 
 /**
@@ -124,17 +126,46 @@ export function clientOptionsFor(
     password,
     ssl: sslOptionFor(config.sslmode),
     connectionTimeoutMillis: config.connectTimeoutMs ?? DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+    // `statementTimeoutMs` arms BOTH statement timers, because either one alone
+    // leaves a way for a query to run forever. MEASURED on pg@8.23.0 against
+    // postgres:17, with `select pg_sleep(5)` and a 600ms budget:
+    //   - `statement_timeout` is a SERVER-side startup parameter. It cancelled
+    //     at 623ms with SQLSTATE 57014 — but only because the server chose to
+    //     honour it. A tarpit, a proxy, or anything that is not really postgres
+    //     need not.
+    //   - `query_timeout` is a CLIENT-side timer. It gave up at 617ms with
+    //     "Query read timeout", which is the one that holds regardless of what
+    //     the far end does.
+    // `connectionTimeoutMillis` does NOT cover this: pg arms that timer in
+    // `_connect` and clears it once the session is ready, so a host that
+    // completes the handshake quickly and then goes silent would leave the probe
+    // waiting forever — a `testConnection` that neither resolves nor rejects.
     statement_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+    query_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   };
 }
 
-/** SQLSTATEs and socket-level codes worth naming in the operator's own terms.
+/**
+ * SQLSTATEs and socket-level codes worth naming in the operator's own terms.
  * Every one was MEASURED against `postgres:17` rather than read from a table —
  * see the ticket for the probe. Anything not listed falls back to the driver's
- * own message, which for postgres is generally a sentence already. */
-function probeFailureSentence(err: unknown): string {
+ * own message, which for postgres is generally a sentence already.
+ *
+ * THE FALLBACK IS SCRUBBED, and that is the whole reason `secret` is a parameter
+ * here. The named codes return fixed sentences that never touch `err.message`,
+ * so they cannot leak anything; the default branch hands an UPSTREAM string
+ * straight to a caller. `pg@8.23.0` and `pg-protocol@1.16.0` have no error
+ * template that embeds the password today — we pass discrete options and never a
+ * connection string, so `pg-connection-string` never sees the config either —
+ * but that is a property of a dependency we do not control, on a path that is
+ * the FIRST line rather than the executor's redaction backstop. A driver that
+ * started quoting its options into an error would otherwise put the credential
+ * in a UI string, and nothing here would have noticed.
+ */
+function probeFailureSentence(err: unknown, secret: string): string {
   const code = (err as { code?: unknown } | null)?.code;
-  const message = err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  const message = secret === '' ? raw : raw.split(secret).join('[redacted]');
   switch (code) {
     case '28P01':
       return 'the server refused the password for that user';
@@ -197,7 +228,7 @@ export function createPostgresAdapter(
         await client.query('select 1');
         return { ok: true };
       } catch (err) {
-        return { ok: false, error: probeFailureSentence(err) };
+        return { ok: false, error: probeFailureSentence(err, secret) };
       } finally {
         try {
           await client?.end();
