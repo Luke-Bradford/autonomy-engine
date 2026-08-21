@@ -37,9 +37,9 @@ export interface PostgresClientOptions {
  * above can be asserted without a live server (and so the live smoke test can
  * pass the real thing through the same door). */
 export interface PostgresProbeClient {
-  connect(): Promise<void>;
+  connect(): Promise<unknown>;
   query(sql: string): Promise<unknown>;
-  end(): Promise<void>;
+  end(): Promise<unknown>;
 }
 
 export type PostgresClientFactory = (options: PostgresClientOptions) => PostgresProbeClient;
