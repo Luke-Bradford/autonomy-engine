@@ -53,6 +53,72 @@ describe('eventGloss', () => {
     ).toBe('node=a reason=the model returned nothing code=empty_truncated_completion');
   });
 
+  /**
+   * #996 M6 (#1162, data-movement spec §2.1) — the feed is the RUN LOG, and
+   * §2.1's control is that the run log says where the data went. It is also the
+   * only surface that keeps the address PER ATTEMPT: the node drill-in folds to
+   * the last dispatch by design, so a retry that re-resolved a mutable dataset
+   * row somewhere else is legible only here.
+   */
+  it('glosses both ends a dispatch resolved to', () => {
+    expect(
+      eventGloss(
+        evt({
+          type: 'node.dispatched',
+          nodeId: 'c',
+          datasetAddresses: {
+            source: {
+              kind: 'sqlite',
+              store: '/data/app.db',
+              storeIdentity: '1:2',
+              object: 'main.people',
+            },
+            sink: {
+              kind: 'sqlite',
+              store: '/data/warehouse.db',
+              storeIdentity: '1:3',
+              object: 'main.people_copy',
+            },
+          },
+        }),
+      ),
+    ).toBe(
+      "node=c source='/data/app.db' → 'main.people' sink='/data/warehouse.db' → 'main.people_copy'",
+    );
+  });
+
+  it('glosses a source-only dispatch without inventing a sink', () => {
+    expect(
+      eventGloss(
+        evt({
+          type: 'node.dispatched',
+          nodeId: 'c',
+          datasetAddresses: {
+            source: { kind: 'sqlite', store: '/data/app.db', storeIdentity: null, object: null },
+          },
+        }),
+      ),
+    ).toBe("node=c source='/data/app.db'");
+  });
+
+  it('leaves an ordinary dispatch, which resolved no dataset, unglossed', () => {
+    expect(eventGloss(evt({ type: 'node.dispatched', nodeId: 'a' }))).toBe('node=a');
+  });
+
+  /**
+   * The address is an OBJECT, unlike every other field this function reads, so
+   * it is validated through the SAME schema the event carries rather than
+   * duck-typed — an address that is not the shape `DatasetAddressSchema`
+   * describes glosses to nothing, which is this function's stated contract.
+   */
+  it('degrades a malformed address to nothing rather than a half-rendered one', () => {
+    expect(
+      eventGloss(
+        evt({ type: 'node.dispatched', nodeId: 'c', datasetAddresses: { source: { store: 7 } } }),
+      ),
+    ).toBe('node=c');
+  });
+
   it('degrades to an empty gloss on an odd payload rather than throwing', () => {
     expect(eventGloss(evt(null))).toBe('');
     expect(eventGloss(evt({ nodeId: 42, kind: 7 }))).toBe('');
