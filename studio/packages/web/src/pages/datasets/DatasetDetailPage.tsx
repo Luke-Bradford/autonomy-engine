@@ -10,6 +10,7 @@ import type { ConnectionPublic } from '@autonomy-studio/shared';
 import { listConnections } from '../../api/connections';
 import { getDataset, getDatasetReferences } from '../../api/datasets';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
+import { pipelinePath } from '../author/pipelinePath';
 import { StoreCell } from './StoreCell';
 
 /**
@@ -201,7 +202,7 @@ function ReferenceRow({ reference }: { reference: DatasetReference }) {
   return (
     <tr>
       <td>
-        <Link to={`/author/pipelines/${reference.pipelineId}`}>{reference.pipelineName}</Link>
+        <Link to={pipelinePath(reference.pipelineId)}>{reference.pipelineName}</Link>
         {reference.pipelineArchived && (
           <>
             {' '}

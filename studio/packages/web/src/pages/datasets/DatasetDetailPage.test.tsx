@@ -90,6 +90,20 @@ describe('DatasetDetailPage (#996 M9)', () => {
     expect(within(row).getByText('agrees')).toBeInTheDocument();
   });
 
+  /**
+   * The route reads the id back with `useParams`, which decodes exactly once,
+   * so the link must encode exactly once. Today's `pl_`+nanoid alphabet needs
+   * no escaping, which is precisely why a raw template string here would look
+   * correct until the alphabet widened.
+   */
+  it('encodes a pipeline id that needs escaping, rather than splitting it across segments', async () => {
+    resolve({ references: [reference({ pipelineId: 'pl/1' })] });
+    renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
+
+    const link = await screen.findByRole('link', { name: 'Nightly load' });
+    expect(link).toHaveAttribute('href', '/author/pipelines/pl%2F1');
+  });
+
   it('names the columns a mapping no longer agrees on, rather than only flagging it', async () => {
     resolve({
       references: [
