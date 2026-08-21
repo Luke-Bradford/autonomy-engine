@@ -148,6 +148,12 @@ describe('rewriteNamedParametersToPositional', () => {
       ['a plain dollar-quoted string', 'select $$ :id $$ as v, :id'],
       // MEASURED: `select $tag$ :id $tag$` yields ` :id `.
       ['a tagged dollar-quoted string', 'select $tag$ :id $tag$ as v, :id'],
+      // MEASURED: `select $é$ :id $é$` yields ` :id ` — a tag may be non-ASCII,
+      // so an ASCII-only tag scan would read this literal as CODE.
+      ['a dollar-quoted string with a NON-ASCII tag', 'select $é$ :id $é$ as v, :id'],
+      // MEASURED: `select $t1$ :id $t1$` yields ` :id ` — a digit may CONTINUE a
+      // tag even though it cannot start one.
+      ['a dollar-quoted string with a digit in its tag', 'select $t1$ :id $t1$ as v, :id'],
       // MEASURED: `select 1 as ":id"` names the column `:id`.
       ['a double-quoted identifier', 'select 1 as ":id", :id'],
       ['a double-quoted identifier with a doubled quote', 'select 1 as ":id""x", :id'],

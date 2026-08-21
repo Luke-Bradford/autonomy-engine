@@ -150,13 +150,22 @@ function endOfEscapeStringRegion(sql: string, openQuote: number): number {
 /**
  * The `$tag$` delimiter opening at `start`, or `null` if this `$` opens no
  * dollar-quoted string. A tag follows unquoted-identifier rules and cannot
- * itself contain `$`, so `$1` is not a tag (a digit cannot start one).
+ * itself contain `$`, so `$1` is not a tag (a digit cannot start one) — MEASURED,
+ * `$1t$ … $1t$` raises `42601 trailing junk after parameter`, i.e. postgres reads
+ * the `$1` as a parameter too.
+ *
+ * The charset is UNICODE-aware, unlike the `:name` scan above it, and the
+ * asymmetry is deliberate rather than an oversight. MEASURED: `$é$ :id $é$` is a
+ * valid dollar-quoted string. Missing a tag means treating a LITERAL as code and
+ * rewriting inside it, which is the fail-open direction; missing a `:name` only
+ * means leaving text alone, which is this module's documented default. So the
+ * region detector is generous and the rewrite trigger is narrow.
  */
 function dollarQuoteTagAt(sql: string, start: number): string | null {
   let i = start + 1;
-  if (isNameStart(sql[i])) {
+  if (sql[i] !== undefined && /[\p{L}_]/u.test(sql[i] as string)) {
     i += 1;
-    while (i < sql.length && /[A-Za-z0-9_]/.test(sql[i] as string)) i += 1;
+    while (i < sql.length && /[\p{L}\p{N}_]/u.test(sql[i] as string)) i += 1;
   }
   return sql[i] === '$' ? sql.slice(start, i + 1) : null;
 }
