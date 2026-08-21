@@ -52,9 +52,10 @@ describe('rewriteNamedParametersToPositional', () => {
     });
 
     it('binds string, number and null values', () => {
-      expect(
-        rewrite('select :s, :n, :z', { s: 'x', n: 1, z: null }),
-      ).toEqual({ sql: 'select $1, $2, $3', values: ['x', 1, null] });
+      expect(rewrite('select :s, :n, :z', { s: 'x', n: 1, z: null })).toEqual({
+        sql: 'select $1, $2, $3',
+        values: ['x', 1, null],
+      });
     });
 
     it('drops a declared parameter the statement never names', () => {
@@ -88,7 +89,7 @@ describe('rewriteNamedParametersToPositional', () => {
       // to stop at `a`, `:a$b` would become `$1$b` — and `$b` then reads as a
       // dollar-quote opener. That is a MANGLED statement, not a loud refusal,
       // which is why maximal munch is the rule rather than a nicety.
-      expect(rewrite('select :a$b, :a', { a: 1, 'a$b': 2 })).toEqual({
+      expect(rewrite('select :a$b, :a', { a: 1, a$b: 2 })).toEqual({
         sql: 'select $1, $2',
         values: [2, 1],
       });
@@ -103,7 +104,7 @@ describe('rewriteNamedParametersToPositional', () => {
     it('does not read the second colon of a `::` cast as a name', () => {
       // The mutation-killing shape: a parameter is DECLARED under the type's
       // own name, so dropping the `::` skip would rewrite `a::int` to `a:$1`.
-      expect(rewrite("select a::int from t where a > :int", { int: 3 })).toEqual({
+      expect(rewrite('select a::int from t where a > :int', { int: 3 })).toEqual({
         sql: 'select a::int from t where a > $1',
         values: [3],
       });

@@ -90,7 +90,18 @@ export const tableDatasetConfigSchema = z.object({
  */
 export const queryDatasetConfigSchema = z.object({
   sql: z.string().min(1),
-  /** Named bind values, keyed WITHOUT the `:` prefix the SQL carries. */
+  /**
+   * Named bind values, keyed WITHOUT the `:` prefix the SQL carries.
+   *
+   * `:name` is the PORTABLE spelling and each store's reader binds it in its
+   * own (#1194): sqlite binds by name, postgres has no named parameters at all
+   * and binds positionally, so its reader rewrites `:name` to `$n` at dispatch
+   * — see `connectors/postgres-named-parameters.ts` for why that needs a lexer.
+   * MEASURED: better-sqlite3 also honours `@name` and `$name` from this same
+   * record, and both are sqlite-ONLY — `$name` opens a dollar-quoted string on
+   * postgres. Write `:name` if the dataset should survive being re-pointed at
+   * another store, which is the whole point of the dataset layer.
+   */
   parameters: z.record(z.string().min(1), SqlParameterValueSchema).optional(),
 });
 

@@ -473,7 +473,7 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
     expect(rec.queries[0]).toBe("SET SESSION DateStyle = 'ISO, YMD'");
   });
 
-  it('BINDS a query dataset\'s named parameters, rewritten to $n (#1194)', async () => {
+  it("BINDS a query dataset's named parameters, rewritten to $n (#1194)", async () => {
     // Slice 2 REFUSED this outright, so the same dataset config meant something
     // on sqlite and nothing on postgres. The rewrite itself is
     // `postgres-named-parameters.ts`' subject; what this pins is that the
@@ -502,7 +502,10 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
     for await (const batch of readPostgresDatasetBatches({
       ...READ_BASE,
       datasetKind: 'query',
-      datasetConfig: { sql: 'select a from t where a > :lo and a < :hi', parameters: { hi: 9, lo: 1 } },
+      datasetConfig: {
+        sql: 'select a from t where a > :lo and a < :hi',
+        parameters: { hi: 9, lo: 1 },
+      },
       createClient: factory,
     })) {
       batches.push(batch);
@@ -1126,5 +1129,4 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       }
     });
   });
-
 });
