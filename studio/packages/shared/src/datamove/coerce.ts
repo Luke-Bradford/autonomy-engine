@@ -164,6 +164,15 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
  *        answer — not a quiet widening of what `integer` means. Flagged rather
  *        than asserted so a future author does not read a decision that was
  *        never taken.
+ *
+ *        **M10 slice 2 (#1190) reached this and left the bound alone, which is
+ *        the measured answer rather than a deferral.** The bound is a SINK fact,
+ *        and slice 2 makes postgres a SOURCE only (`sinkConnectionKinds` stays
+ *        `['sqlite']`). Measured: `pg` returns `int8` as a JS STRING, which
+ *        routes through `okInteger(BigInt(text))` — exact, so a boundary value
+ *        survives with no precision loss, pinned by a live test. The question
+ *        becomes live at slice 3, where postgres can be a sink and `integer`
+ *        must bind to `int4` or `int8` (#1193).
  *  (iii) Decisively: the coercion matrix is the ONLY layer that can express
  *        "this row fails, the copy continues". A guard in the sink's
  *        `bindValue` could not — `insert.run` sits inside the whole-copy
@@ -478,6 +487,17 @@ function numberFromString(text: string): CoercionResult {
  * `SqliteValue` is `string | number | bigint | Uint8Array | null`, and §12 makes
  * SQLite→SQLite the first copy — so `bigint` and BLOBs are what arrives, and a
  * mapping's `expression` arm (§6.1) can additionally resolve to any JSON value.
+ *
+ * TWO MORE SOURCES HAVE LANDED SINCE, and the union grew rather than moved
+ * (#1190). M7's `delimited` reader produces strings only. M10's postgres
+ * produces, MEASURED on `pg@8.23.0`: `number` (`int4`, float), `boolean`,
+ * `string` (`text`, `uuid`, `time`, and — importantly — `int8` and `numeric`,
+ * which `pg` hands back as text rather than lose precision), `Buffer` (`bytea`),
+ * `Date` (`timestamptz`, and the naive `timestamp`/`date` the postgres connector
+ * re-parses as UTC), and containers: `Array` for a SQL array, and a parsed
+ * object for `json`/`jsonb`/`interval`. Every one already has an outcome here —
+ * the containers reach `toStringValue`'s final `unsupported_source_type`, which
+ * is the refusal the docblock's first bullet describes and NOT a gap.
  * Every one of those has an outcome below, because a matrix that is a PARTIAL
  * function over its own inputs is how the "no third outcome" rule gets broken by
  * accident.

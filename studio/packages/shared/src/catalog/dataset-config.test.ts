@@ -323,12 +323,17 @@ describe('DATASET_CONNECTION_KINDS (#1145)', () => {
     // dataset kind that can live in it below, then extend this list.
     //
     // #1189 (M10 slice 1) is the first time that decision came out NOT YET:
-    // `postgres` IS a store, and it is deliberately absent from `table`/`query`
-    // until slice 2 ships a reader, because listing it is what would let an
-    // operator author a dataset that can only fail at dispatch. The reasoning
-    // lives in full next to `DATASET_CONNECTION_KINDS` itself. This pin did its
-    // job — it is the reason that decision got made at all, rather than the map
-    // quietly continuing to claim a `table` can only live in SQLite.
+    // `postgres` IS a store, and it was deliberately absent from `table`/`query`
+    // until a reader existed, because listing it is what would let an operator
+    // author a dataset that can only fail at dispatch. **#1190 (M10 slice 2)
+    // RESOLVED it** — the reader landed and `postgres` joined both kinds in the
+    // same commit, so the map and the thing that honours it moved together. The
+    // reasoning lives in full next to `DATASET_CONNECTION_KINDS` itself.
+    //
+    // This pin did its job twice over: it is the reason the slice-1 decision got
+    // made at all, rather than the map quietly continuing to claim a `table` can
+    // only live in SQLite, and it is what will force the same question for the
+    // next store.
     expect([...ConnectionKindSchema.options]).toEqual([
       'anthropic_api',
       'openai_api',
