@@ -203,6 +203,38 @@ describe('rewriteNamedParametersToPositional', () => {
     });
   });
 
+  describe('a NON-ASCII identifier is still an identifier', () => {
+    // MEASURED on `postgres:17`: `select 1 as é$1` names the column `é$1` and
+    // `select 1 as é$$b` names `é$$b` — the `$` continues the identifier exactly
+    // as it does in the ASCII `a$1`/`a$$b`. An ASCII-only adjacency test reads
+    // the first as a positional placeholder and refuses valid SQL, and the
+    // second as an opening dollar quote, swallowing the rest of the statement so
+    // a real `:name` after it is never rewritten.
+    it('does not read the `$1` in `é$1` as a positional placeholder', () => {
+      expect(rewrite('select 1 as é$1, a from t where a > :id', { id: 3 })).toEqual({
+        sql: 'select 1 as é$1, a from t where a > $1',
+        values: [3],
+      });
+    });
+
+    it('does not open a dollar quote on `é$$b`', () => {
+      expect(rewrite('select é$$b from t where a > :id', { id: 3 })).toEqual({
+        sql: 'select é$$b from t where a > $1',
+        values: [3],
+      });
+    });
+
+    it('binds a NON-ASCII parameter name, which sqlite already accepts', () => {
+      // MEASURED: better-sqlite3 binds `:aé` and `:é` from this same record. An
+      // ASCII-only name scan would leave a name sqlite takes unbindable on
+      // postgres — the exact divergence #1194 exists to close.
+      expect(rewrite('select a from t where a = :aé', { aé: 3 })).toEqual({
+        sql: 'select a from t where a = $1',
+        values: [3],
+      });
+    });
+  });
+
   describe('a positional placeholder the operator wrote themselves', () => {
     it('is REFUSED when named parameters are also declared', () => {
       // The rewrite appends `$1..$k`, so a pre-existing `$1` would silently take

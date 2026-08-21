@@ -97,13 +97,37 @@ export interface PostgresStatement {
   readonly values: readonly SqlParameterValue[];
 }
 
-/** `[A-Za-z0-9_$]` — what may continue an identifier, per `SQL_IDENTIFIER_RE`. */
-function isWordChar(char: string | undefined): boolean {
-  return char !== undefined && /[A-Za-z0-9_$]/.test(char);
+/**
+ * What postgres's own lexer treats as CONTINUING an identifier, `$` included.
+ *
+ * UNICODE-AWARE, and that is load-bearing rather than thorough. MEASURED on
+ * `postgres:17`: `select 1 as é$1` names the column `é$1` and `select 1 as é$$b`
+ * names `é$$b` — exactly as the ASCII `a$1`/`a$$b` do. An ASCII-only test here
+ * reads the `$` in `é$1` as a positional placeholder and refuses valid SQL, and
+ * reads the `$$` in `é$$b` as opening a dollar-quoted string, swallowing the
+ * rest of the statement so a real `:name` after it is never rewritten.
+ *
+ * NOT `SQL_IDENTIFIER_RE`, though it looks like the same fact. That regex is the
+ * ALLOWLIST for an operator-declared table or schema name — an ASCII-only
+ * validation policy, deliberately narrower than the lexer. This predicate is
+ * asking a different question: what does postgres consider one token, in SQL
+ * TEXT nobody validated. Borrowing the policy for the lexical question is what
+ * produced the two failures above.
+ */
+function isIdentifierChar(char: string | undefined): boolean {
+  return char !== undefined && /[\p{L}\p{N}_$]/u.test(char);
 }
 
+/**
+ * What may START a bind name after `:`.
+ *
+ * Unicode for the same reason, and it costs nothing in portability: MEASURED,
+ * better-sqlite3 binds `:aé` and `:é` from the same record, so an ASCII-only
+ * scan here would leave a name sqlite accepts unbindable on postgres — the exact
+ * divergence #1194 exists to close.
+ */
 function isNameStart(char: string | undefined): boolean {
-  return char !== undefined && /[A-Za-z_]/.test(char);
+  return char !== undefined && /[\p{L}_]/u.test(char);
 }
 
 /**
@@ -154,17 +178,18 @@ function endOfEscapeStringRegion(sql: string, openQuote: number): number {
  * `$1t$ … $1t$` raises `42601 trailing junk after parameter`, i.e. postgres reads
  * the `$1` as a parameter too.
  *
- * The charset is UNICODE-aware, unlike the `:name` scan above it, and the
- * asymmetry is deliberate rather than an oversight. MEASURED: `$é$ :id $é$` is a
- * valid dollar-quoted string. Missing a tag means treating a LITERAL as code and
- * rewriting inside it, which is the fail-open direction; missing a `:name` only
- * means leaving text alone, which is this module's documented default. So the
- * region detector is generous and the rewrite trigger is narrow.
+ * MEASURED: `$é$ :id $é$` is a valid dollar-quoted string, so the tag charset is
+ * unicode like every other identifier rule here. An ASCII-only tag scan reads
+ * that literal as CODE and rewrites the `:id` inside it — the fail-open
+ * direction, and the reason the whole module asks postgres's lexical question
+ * rather than this repo's identifier-validation one.
  */
 function dollarQuoteTagAt(sql: string, start: number): string | null {
   let i = start + 1;
-  if (sql[i] !== undefined && /[\p{L}_]/u.test(sql[i] as string)) {
+  if (isNameStart(sql[i])) {
     i += 1;
+    // `$` is excluded here and only here: a tag may not contain one, because a
+    // `$` is what CLOSES it.
     while (i < sql.length && /[\p{L}\p{N}_]/u.test(sql[i] as string)) i += 1;
   }
   return sql[i] === '$' ? sql.slice(start, i + 1) : null;
@@ -237,7 +262,7 @@ export function rewriteNamedParametersToPositional(
     }
     // `E'…'` only when the `e` begins a word — measured, `ae'x'` is the type
     // `ae` followed by a PLAIN literal, whose backslashes escape nothing.
-    if ((char === 'e' || char === 'E') && sql[i + 1] === "'" && !isWordChar(previous)) {
+    if ((char === 'e' || char === 'E') && sql[i + 1] === "'" && !isIdentifierChar(previous)) {
       i = endOfEscapeStringRegion(sql, i + 1);
       continue;
     }
@@ -245,7 +270,7 @@ export function rewriteNamedParametersToPositional(
       i = endOfDoubledQuoteRegion(sql, i, char);
       continue;
     }
-    if (char === '$' && !isWordChar(previous)) {
+    if (char === '$' && !isIdentifierChar(previous)) {
       const tag = dollarQuoteTagAt(sql, i);
       if (tag !== null) {
         const close = sql.indexOf(tag, i + tag.length);
@@ -271,7 +296,7 @@ export function rewriteNamedParametersToPositional(
       // MAXIMAL MUNCH, because `$` is a name character: stopping at `a` would
       // turn `:a$b` into `$1$b`, whose `$b` then reads as a dollar quote.
       let end = i + 1;
-      while (isWordChar(sql[end])) end += 1;
+      while (isIdentifierChar(sql[end])) end += 1;
       const name = sql.slice(i + 1, end);
       if (Object.prototype.hasOwnProperty.call(parameters, name)) {
         let position = positionOf.get(name);

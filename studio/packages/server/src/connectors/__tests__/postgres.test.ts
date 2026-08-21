@@ -517,6 +517,23 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
     expect(rec.values[declare]).toEqual([1, 9]);
   });
 
+  it('refuses a statement that mixes named parameters with its own $n', async () => {
+    // The rewriter's one refusal, asserted THROUGH the seam rather than only
+    // against the function: it must reach the caller as a `permanent`
+    // DatasetIoError and not as a raw throw escaping the failure contract.
+    const { rec, factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({
+        ...READ_BASE,
+        datasetKind: 'query',
+        datasetConfig: { sql: 'select a from t where a > $1 and b = :id', parameters: { id: 3 } },
+        createClient: factory,
+      }),
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringMatching(/positional/i) });
+    // Refused BEFORE a session is opened, so nothing reached the server.
+    expect(rec.options).toHaveLength(0);
+  });
+
   it('sends NO values at all when the statement binds none', async () => {
     // `undefined`, never `[]`. MEASURED on pg@8.23.0: a valueless call goes over
     // the SIMPLE query protocol and a valued one over the EXTENDED protocol, and
