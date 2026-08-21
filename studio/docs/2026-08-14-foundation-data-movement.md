@@ -542,7 +542,8 @@ is where that constant has to become a per-source measurement.
 
 **`truncated` is REQUIRED and must be honest.** The codebase has receipts both ways:
 
-- the honest pattern — `server/src/limits.ts:11`, `errors.ts:107-121`: a cap whose truncation is
+- the honest pattern — `shared/src/schemas/zod-issues.ts` (`ISSUE_LIST_CAP` +
+  `summarizeIssueList`), `server/src/errors.ts`'s `capIssues`: a cap whose truncation is
   STATED, _"never silently — an absent fact must never be manufactured"_;
 - the dishonest one, **live today** — `ProcessSupervisor` computes `truncated`
   (`workers/process-supervisor.ts:506`) and `connectors/agent.ts` never reads it, so an over-budget
@@ -555,8 +556,11 @@ is where that constant has to become a per-source measurement.
 There is no generic output cap in studio — `appendEngineEvent` (`run/events.ts:49`) parses and
 inserts, and `node.succeeded.outputs` is `z.record(z.string(), z.unknown())` with no byte limit
 (`engine/types.ts:774`); the only cap in the run log is `RUN_DIAGNOSTIC_CAP = 500`
-(`repo/run-diagnostics.ts:48`). So `lookup` declares both, in `server/src/limits.ts` beside
-`ISSUE_LIST_CAP`:
+(`repo/run-diagnostics.ts:48`). So `lookup` declares both, in `server/src/limits.ts` beside the other
+data-movement bounds (`COPY_BATCH_ROWS`, `DELIMITED_MAX_*`). **Amended by #1183:** they no longer
+sit beside `ISSUE_LIST_CAP`, which moved to `shared/src/schemas/zod-issues.ts` when
+`formatZodIssues` — in `shared`, which cannot import from `server` — became its third consumer.
+The lookup caps have no `shared` consumer, so `server/src/limits.ts` stays their home:
 
 - `LOOKUP_ROW_CAP = 1000` **and** `LOOKUP_BYTE_CAP = 1 MiB`, whichever binds first;
 - **behaviour at the cap: truncate and mark**, never fail. A lookup is a read for a decision, and a
@@ -1175,7 +1179,8 @@ content-form/import-result` + the §2.3 exhaustiveness pin.
   `createPipelineVersion`, git import and workspace-apply alike.
 - **Nothing bounds an activity's output today.** `run/events.ts:49`; `engine/types.ts:774`. The only
   run-log cap is `RUN_DIAGNOSTIC_CAP = 500` (`repo/run-diagnostics.ts:48`). The honest-truncation
-  pattern exists only elsewhere (`limits.ts:11`, `errors.ts:107-121`).
+  pattern exists only elsewhere (`shared/src/schemas/zod-issues.ts`, `server/src/errors.ts`'s
+  `capIssues`).
 - **Silent truncation is live in one adapter.** `workers/process-supervisor.ts:506` computes
   `truncated`; `connectors/agent.ts` never reads it — **#1101**.
 - **`fs` confinement + its deliberate schema gap.** `connectors/fs.ts:186` `resolveWithinRoots`;

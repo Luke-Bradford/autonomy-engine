@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { CATALOG_VERSION, SCHEMA_VERSION, canonicalStringify } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  ISSUE_LIST_CAP,
+  SCHEMA_VERSION,
+  canonicalStringify,
+} from '@autonomy-studio/shared';
 import {
   createConnection,
   createPipeline,
@@ -333,6 +338,61 @@ describe('portability routes (export + import)', () => {
       expect(body.error).toBe('import_error');
       expect(typeof body.message).toBe('string');
       expect(JSON.stringify(body)).not.toMatch(/\.ts:\d+/);
+    });
+
+    /**
+     * #1183 — the `import_error` body is the ONE reachable path where a
+     * `formatZodIssues` string leaves the process: `parseAndUpgradeEnvelope`
+     * throws an `ImportError` whose message `errors.ts` sends VERBATIM. Before
+     * the cap, an envelope with one issue per node produced a response of
+     * O(envelope) — the renderer was the only issue list in the codebase that
+     * did not honour `ISSUE_LIST_CAP`.
+     *
+     * Bounded here means the issue COUNT is capped and the remainder is STATED,
+     * not that the body is constant-size: a single issue's path is still
+     * caller-controlled (see `summarizeIssueList`). Asserting more than that
+     * would claim more than the change delivers.
+     */
+    it('#1183 caps the issue list in an import_error body and STATES the remainder', async () => {
+      const versionCount = ISSUE_LIST_CAP + 40;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/import',
+        payload: {
+          schemaVersion: SCHEMA_VERSION,
+          catalogVersion: CATALOG_VERSION,
+          kind: 'pipeline',
+          exportedAt: Date.now(),
+          data: {
+            pipeline: {
+              id: 'p1',
+              resourceId: null,
+              ownerId: 'o',
+              name: 'P',
+              concurrency: null,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
+            // Every version is missing every required field, so the issue count
+            // grows with the envelope — exactly the shape the cap exists for.
+            versions: Array.from({ length: versionCount }, () => ({})),
+          },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.error).toBe('import_error');
+      const message: string = body.message;
+
+      // The rendered list is capped...
+      const rendered = message.slice(message.indexOf(':') + 1).split('; ');
+      expect(rendered.length).toBeLessThanOrEqual(ISSUE_LIST_CAP + 1); // +1 = the tail
+      // ...and the drop is STATED, never silent (#473/#496).
+      expect(message).toMatch(/…and \d+ more$/);
+      // The deepest node index cannot appear: it is past the cap.
+      expect(message).not.toContain(`data.versions.${versionCount - 1}.`);
+      // ...while the first one still does, so the message is still useful.
+      expect(message).toContain('data.versions.0.');
     });
 
     it('a schemaVersion newer than this build supports is a 400', async () => {
