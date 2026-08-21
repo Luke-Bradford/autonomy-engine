@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -272,6 +273,116 @@ test.describe('#1191 test connection', () => {
     const status = form(page).getByRole('status');
     await expect(status).toContainText(/not contacted until it runs/);
     await expect(status).not.toContainText('Connected.');
+
+    await expectQuiet(page, problems);
+  });
+});
+
+test.describe('#1174 an edit says what it would strand', () => {
+  /**
+   * The defect this closes is the OTHER END of #1158's. A connection's `kind` is
+   * mutable and its row is deletable, and nothing re-checks the datasets that
+   * named it — #1158 made that visible on the datasets LIST, which the operator
+   * only reads if they already suspected. The point at which they can still
+   * reconsider is the edit itself.
+   *
+   * What only a real browser + a real server prove here, over the jsdom suite:
+   * that the page really does reach `GET /api/datasets` in the SHIPPED bundle
+   * and that the rule renders against rows the real routes stored — the jsdom
+   * tests mock that module out entirely, so a wrong path or a mis-bundled
+   * `DATASET_CONNECTION_KINDS` would pass there and fail here.
+   *
+   * NAMING: every connection this suite mints becomes an OPTION in the DATASETS
+   * form's Store `<select>`, and `getByLabel` is a case-insensitive SUBSTRING
+   * match over the whole wrapping label including its options. A name containing
+   * another control's label ('Kind', 'Name', 'Columns') breaks
+   * `datasets-page.spec.ts` from over here, in a shared single-worker database.
+   * `e2e-1174-*` is clear of all of them — see that file's own note.
+   */
+  async function seedStoreWithDataset(page: Page, suffix: string) {
+    const connectionId = await seedConnection(page, {
+      name: `e2e-1174-strand-${suffix}`,
+      kind: 'sqlite',
+      config: { file: `/tmp/e2e-1174-${suffix}.db` },
+    });
+    await seedDataset(page, {
+      name: `e2e-1174-orders-${suffix}`,
+      kind: 'table',
+      connectionId,
+      config: { table: 'orders' },
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+    });
+    return connectionId;
+  }
+
+  /** Playwright DISMISSES an unhandled dialog, so a confirm must be caught to be read. */
+  async function captureConfirm(
+    page: Page,
+    act: () => Promise<void>,
+    response: 'accept' | 'dismiss' = 'dismiss',
+  ): Promise<string | null> {
+    let seen: string | null = null;
+    const handler = async (dialog: {
+      message: () => string;
+      accept: () => Promise<void>;
+      dismiss: () => Promise<void>;
+    }) => {
+      seen = dialog.message();
+      await (response === 'accept' ? dialog.accept() : dialog.dismiss());
+    };
+    page.on('dialog', handler);
+    try {
+      await act();
+    } finally {
+      page.off('dialog', handler);
+    }
+    return seen;
+  }
+
+  test('names the datasets a kind change would strand, before the PATCH is sent', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await seedStoreWithDataset(page, 'edit');
+    await gotoConnections(page);
+
+    const row = page.getByRole('row', { name: /e2e-1174-strand-edit/ });
+    await row.getByRole('button', { name: 'Edit' }).click();
+    // Nothing to say yet — the stored kind has not moved.
+    await expect(form(page).getByText(/strands/)).toHaveCount(0);
+
+    await form(page).getByLabel('Kind').selectOption('http');
+
+    const note = form(page).getByText(/strands 1 dataset that reads it/);
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('e2e-1174-orders-edit');
+
+    // ADVISORY, NEVER A GATE — the polarity #1145/#1158 set and this ticket
+    // inherits. The save is still offered, and nothing has been sent: the row
+    // still reads `sqlite` behind the open form.
+    await expect(form(page).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    await expect(row.getByText('sqlite')).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
+  test('names them again in the delete confirmation, and lets the operator decline', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await seedStoreWithDataset(page, 'delete');
+    await gotoConnections(page);
+
+    const row = page.getByRole('row', { name: /e2e-1174-strand-delete/ });
+    const said = await captureConfirm(page, async () => {
+      await row.getByRole('button', { name: /^Delete / }).click();
+    });
+
+    expect(said).toContain('1 dataset reads it');
+    expect(said).toContain('e2e-1174-orders-delete');
+    // Declined, so the connection is still there — which is what makes the
+    // sentence a decision the operator got to make rather than a notice.
+    await expect(row).toBeVisible();
 
     await expectQuiet(page, problems);
   });
