@@ -753,7 +753,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // that needs a credential refuses either identically.
     secret: string | null,
   ): Promise<{ error: string; code: string; kind?: FailureKind } | { address: DatasetAddress }> {
-    if (adapter.resolveDatasetAddress === undefined) {
+    // Captured, rather than asserted past with `!` at the call below: the
+    // field is genuinely optional (six of the seven adapters are not stores),
+    // and TS discards a property narrowing inside a closure — which is exactly
+    // what `storeLimit` needs. A local const narrows once, here, next to the
+    // guard that earns it.
+    const resolveAddress = adapter.resolveDatasetAddress;
+    if (resolveAddress === undefined) {
       return {
         error: `connection kind '${adapter.kind}' cannot resolve a physical address for dataset '${dataset.id}', so this dispatch cannot record where it would land`,
         code: FAILURE_CODES.DATASET_ADDRESS_UNSUPPORTED,
@@ -770,9 +776,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // does) here — `pLimit` releases on what it wrapped, so a slot freed
         // on a backstop while a socket lives on bounds nothing. That is not
         // hypothetical: `connectors/probe.ts` carries the scar.
-        address: await storeLimit(() =>
-          adapter.resolveDatasetAddress!({ connectionConfig, dataset, secret }),
-        ),
+        address: await storeLimit(() => resolveAddress({ connectionConfig, dataset, secret })),
       };
     } catch (err) {
       const kind =
