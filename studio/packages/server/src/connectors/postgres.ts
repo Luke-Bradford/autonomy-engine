@@ -874,9 +874,18 @@ export function resolvePostgresDatasetAddress(args: {
 
   let object: string | null = null;
   if (args.dataset.kind === 'table') {
-    const target = tableDatasetConfigSchema.parse(
-      datasetConfigSchema('table').parse(args.dataset.config),
-    );
+    // Same shape as `sourceStatementFor`: the OUTER parse is the one that can
+    // fail on operator-authored config, so it is a `safeParse` classified
+    // `permanent` rather than a bare `ZodError` escaping the failure contract.
+    // The inner narrowing runs on data the union has already validated.
+    const parsed = datasetConfigSchema('table').safeParse(args.dataset.config);
+    if (!parsed.success) {
+      throw new DatasetIoError(
+        'permanent',
+        `invalid table dataset config: ${formatZodIssues(parsed.error.issues)}`,
+      );
+    }
+    const target = tableDatasetConfigSchema.parse(parsed.data);
     object = target.schema === undefined ? null : `${target.schema}.${target.table}`;
   }
 

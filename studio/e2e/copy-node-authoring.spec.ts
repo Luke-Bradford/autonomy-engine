@@ -145,7 +145,7 @@ test.describe('#1139 — copy-node authoring', () => {
     // that made #1167's 23 -> 24 bump show up here rather than only in the
     // shared package's own tests. Importing `CATALOG_VERSION` would make this
     // assert that two copies of one constant agree, which is not the claim.
-    expect(latest.catalogVersion).toBe(25); // #1189 M10 — the `postgres` connection kind
+    expect(latest.catalogVersion).toBe(26); // #1190 M10 — postgres as a copy SOURCE
 
     await expectQuiet(page, problems);
   });
