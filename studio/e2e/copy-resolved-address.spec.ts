@@ -145,9 +145,12 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
     expect(text).toContain(`'${csvPath}'`);
     expect(text).toContain(`'${dbPath}' → 'main.people'`);
 
-    /* A `delimited` end names a file and no object within it, so the panel must
-       explain the missing arrow rather than leave it looking truncated. */
-    expect(text).toContain('names no single object');
+    /* A `delimited` end's `object` IS its store — `resolveDelimitedDatasetAddress`
+       sets both to the same confined path, deliberately and against two rejected
+       alternatives. So the CSV end must read ONCE. Measured, not assumed: the
+       first run of this spec rendered "'…/people.csv' → '…/people.csv'", which
+       is what put the collapse in `describeDatasetAddress`. */
+    expect(text).not.toContain(`'${csvPath}' → `);
 
     await expectQuiet(page, problems);
   } finally {

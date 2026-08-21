@@ -113,9 +113,24 @@ export function sameDatasetAddress(a: DatasetAddress, b: DatasetAddress): boolea
   return a.object !== null && a.object === b.object;
 }
 
-/** How an address reads in a refusal or a run log — "`/data/app.db` → `main.users`". */
+/**
+ * How an address reads in a refusal or a run log — "`/data/app.db` → `main.users`".
+ *
+ * TWO ways an address names no object BEYOND its store, and both read as one
+ * value rather than as a truncation or a repetition:
+ *  - `object` is `null` — a `query` dataset is a SELECT over an arbitrary set of
+ *    tables, and reducing that to one name would be a guess;
+ *  - `object` EQUALS `store` — `resolveDelimitedDatasetAddress` sets both to the
+ *    same confined path deliberately, having rejected directory-as-store (it
+ *    reopens the case-alias hole `storeIdentity` exists to close) and a constant
+ *    `object` (a fact nobody established). Rendered naively that is
+ *    "'/d/people.csv' → '/d/people.csv'", which reads as a rendering fault.
+ *
+ * DISPLAY ONLY. `sameDatasetAddress` still reads both halves, so collapsing them
+ * here cannot make two addresses compare equal that did not before.
+ */
 export function describeDatasetAddress(address: DatasetAddress): string {
-  return address.object === null
+  return address.object === null || address.object === address.store
     ? `'${address.store}'`
     : `'${address.store}' → '${address.object}'`;
 }
