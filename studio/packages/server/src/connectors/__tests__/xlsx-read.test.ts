@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { closeSync, constants, openSync, readSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -81,6 +81,59 @@ describe('readXlsxRowBatches — the container', () => {
 
     await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
     await expect(readAll(path)).rejects.toThrowError(/not a readable \.xlsx/i);
+  });
+
+  it('classifies a CORRUPT entry as an XlsxReadError, not a raw Error', async () => {
+    // yauzl validates sizes and CRCs on the ENTRY's own stream, not on the
+    // zip-level error channel, so this is the one damage class that could
+    // escape the module's classification contract.
+    seq += 1;
+    const path = join(root, `corrupt-${seq}.xlsx`);
+    const good = buildXlsx({ sheets: [{ name: 'S', rows: [[{ kind: 'inline', text: 'a' }]] }] });
+    // Rebuild with the worksheet's payload truncated.
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        },
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: `<worksheet><sheetData>${'<row r="1"><c r="A1" t="inlineStr"><is><t>padding padding padding</t></is></c></row>'.repeat(200)}</sheetData></worksheet>`,
+          corrupt: true,
+        },
+      ]),
+    );
+    expect(good.length).toBeGreaterThan(0);
+
+    await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(path)).rejects.toThrowError(/truncated or corrupt/);
+  });
+
+  it('reads from an already-open descriptor, and takes ownership of it', async () => {
+    // The route a caller needs for O_NOFOLLOW: yauzl.open would do a plain
+    // fs.open, leaving the lstat->open race that confine.ts warns about.
+    const path = seed({ sheets: [{ name: 'S', rows: [[{ kind: 'inline', text: 'via-fd' }]] }] });
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+
+    const rows: XlsxRow[] = [];
+    for await (const batch of readXlsxRowBatches({ filePath: path, fd })) rows.push(...batch);
+    expect(cellsOf(rows)).toEqual([['via-fd']]);
+
+    // Ownership transferred: the reader closed it, so the caller must not.
+    let closedByReader = false;
+    try {
+      readSync(fd, Buffer.alloc(1), 0, 1, 0);
+      closeSync(fd);
+    } catch (err) {
+      closedByReader = (err as NodeJS.ErrnoException).code === 'EBADF';
+    }
+    expect(closedByReader).toBe(true);
   });
 
   it('refuses a zip that carries no workbook part', async () => {
@@ -182,6 +235,25 @@ describe('readXlsxRowBatches — cell values', () => {
     expect(cellsOf(rows)).toEqual([['a', null, 'c']]);
     expect(rows[0]!.cells[1]).toBeNull();
     expect(coerceValue(rows[0]!.cells[1], 'string').ok).toBe(true);
+  });
+
+  it('REFUSES a row whose cell references go backwards or repeat', async () => {
+    // Such a reference resolves to an index already written, so the earlier
+    // value would vanish while the copy still reported success.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              { kind: 'raw', xml: '<c r="B1" t="inlineStr"><is><t>first-B1</t></is></c>' },
+              { kind: 'raw', xml: '<c r="A1" t="inlineStr"><is><t>later-A1</t></is></c>' },
+            ],
+          ],
+        },
+      ],
+    });
+    await expect(readAll(path)).rejects.toThrowError(/after a later column/);
   });
 
   it('positions cells correctly when the `r` reference is OMITTED', async () => {
@@ -354,6 +426,14 @@ describe('readXlsxRowBatches — dates', () => {
     expect(coerceValue(phantom[0]!.cells[0], 'date').ok).toBe(false);
   });
 
+  it('refuses a serial before the 1900 system begins', async () => {
+    const rows = await readAll(seed(dated(-1, 14)));
+    expect(rows[0]!.cells[0]).toEqual({
+      xlsxFault: 'phantom-date',
+      detail: expect.stringContaining('before the 1900 date system') as unknown as string,
+    });
+  });
+
   it('honours a date1904 workbook', async () => {
     expect(cellsOf(await readAll(seed(dated(0, 14, { date1904: true }))))).toEqual([
       [new Date('1904-01-01T00:00:00.000Z')],
@@ -387,6 +467,37 @@ describe('readXlsxRowBatches — streaming', () => {
       batches.push(batch.length);
     }
     expect(batches).toEqual([10, 10, 5]);
+  });
+
+  it('honours an ALREADY-aborted signal during the SMALL-PARTS phase', async () => {
+    // The shared-string table can be read up to its 64 MiB cap before the first
+    // row exists, so cancellation must bite in that phase too — not merely at
+    // the first batch boundary, which would be reached anyway.
+    //
+    // The workbook DECLARES a sheet the container does not hold, so the two
+    // phases fail differently and the test can tell them apart: reaching
+    // `resolveSheet` at all produces the missing-sheet refusal, while honouring
+    // the signal first produces an abort.
+    seq += 1;
+    const path = join(root, `abort-phase-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          data: '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        },
+      ]),
+    );
+
+    // Without a signal it gets far enough to miss the sheet.
+    await expect(readAll(path)).rejects.toThrowError(/does not hold/);
+    // With one already aborted, it never gets there.
+    await expect(readAll(path, { signal: AbortSignal.abort() })).rejects.toThrowError(/abort/i);
   });
 
   it('stops when the signal aborts', async () => {
@@ -441,5 +552,6 @@ describe('readXlsxRowBatches — streaming', () => {
     });
     const rows = await readAll(path);
     expect(rows.map((r) => r.rowNumber)).toEqual([1, 2, 3]);
+    expect(rows[1]!.cells).toEqual([]);
   });
 });

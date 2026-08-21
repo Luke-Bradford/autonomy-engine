@@ -46,8 +46,11 @@
  * counted as it ARRIVES because a zip's declared `uncompressedSize` is
  * attacker-controlled.
  *
- * Nothing is ever extracted to disk, so zip-slip does not arise; entries are
- * read by exact name and their paths are never joined to anything.
+ * Nothing is ever extracted to disk, so zip-slip does not arise. The four small
+ * parts are fixed literal names; the worksheet's name comes from the workbook's
+ * rels, but it is only ever a key into the in-memory entry Map built from the
+ * container's own directory — never a filesystem path — so a hostile
+ * `Relationship Target` can fail a lookup and nothing else.
  */
 import { createRequire } from 'node:module';
 
@@ -93,8 +96,13 @@ export interface XlsxRow {
 }
 
 export interface ReadXlsxOptions {
-  /** Already confined by the caller — this module opens what it is given. */
+  /** Already confined by the caller — this module opens what it is given. It
+   * is also what every error message names, so it is required even when `fd`
+   * is supplied. */
   readonly filePath: string;
+  /** An ALREADY-OPEN descriptor, for a caller that needs `O_NOFOLLOW` to close
+   * the lstat->open race. Ownership transfers: this module closes it. */
+  readonly fd?: number | undefined;
   /** By NAME. Mutually exclusive with `sheetIndex`; see `resolveSheet`. */
   readonly sheet?: string | undefined;
   /** 1-BASED. */
@@ -105,7 +113,10 @@ export interface ReadXlsxOptions {
 
 export class XlsxReadError extends Error {
   /** `true` when re-running unchanged cannot help — a malformed or unsupported
-   * container, a missing sheet, a value past a bound. */
+   * container, a missing sheet, a value past a bound. Every failure this module
+   * raises today is permanent; the flag exists because the caller's
+   * `DatasetIoError` draws the same distinction, and a transient case (a
+   * vanishing network mount, say) belongs to the layer that owns the path. */
   readonly permanent: boolean;
 
   constructor(message: string, permanent = true) {
@@ -119,12 +130,29 @@ export class XlsxReadError extends Error {
 // zip plumbing
 // ---------------------------------------------------------------------------
 
-function openZip(path: string): Promise<ZipFile> {
+/**
+ * Open the container, by descriptor when one is given.
+ *
+ * `yauzl.open` does a plain `fs.open`, so a caller that must close the
+ * lstat->open race cannot get there through a path. `confine.ts`'s docblock
+ * names this exact hazard: `resolveWithinRoots` "does NOT close the
+ * lstat->open race on its own ... a caller that hands the returned path to a
+ * library which opens the file ITSELF gets the lstat check alone". So `fd` is
+ * the supported route: the caller opens with `O_NOFOLLOW` and hands the
+ * descriptor over.
+ *
+ * **Passing `fd` transfers OWNERSHIP.** Measured on yauzl 3.4.0: `close()`
+ * closes the descriptor even under `autoClose:false`, so this module closes it
+ * and the caller must not. `filePath` is still required, because it is what the
+ * error messages name.
+ */
+function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
     // `lazyEntries` so the entry list is drained deliberately; `autoClose:false`
     // because entries are read by NAME after that drain, and yauzl would
     // otherwise close the handle at the end of it.
-    yauzl.open(path, { lazyEntries: true, autoClose: false }, (err, zip) => {
+    const options = { lazyEntries: true, autoClose: false } as const;
+    const onOpen = (err: Error | null, zip: ZipFile | undefined): void => {
       if (err || !zip) {
         reject(
           new XlsxReadError(
@@ -135,18 +163,32 @@ function openZip(path: string): Promise<ZipFile> {
         return;
       }
       resolve(zip);
-    });
+    };
+    if (fd === undefined) yauzl.open(path, options, onOpen);
+    else yauzl.fromFd(fd, options, onOpen);
   });
 }
 
 function entryIndex(zip: ZipFile): Promise<Map<string, Entry>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, Entry>();
-    zip.on('entry', (entry: Entry) => {
+    const onEntry = (entry: Entry): void => {
       entries.set(entry.fileName, entry);
       zip.readEntry();
-    });
-    zip.on('end', () => resolve(entries));
+    };
+    const onEnd = (): void => {
+      // The drain is over; leaving these attached would be dead state on a
+      // handle that outlives it. The ERROR listener deliberately stays for the
+      // life of the handle: an EventEmitter 'error' with no listener THROWS,
+      // and a late zip-level error would then take the process down. A late
+      // error settles nothing here (the promise is already resolved) — the
+      // read path surfaces its own failures, which is finding #1's fix.
+      zip.removeListener('entry', onEntry);
+      zip.removeListener('end', onEnd);
+      resolve(entries);
+    };
+    zip.on('entry', onEntry);
+    zip.on('end', onEnd);
     zip.on('error', (err: Error) =>
       reject(new XlsxReadError(`not a readable .xlsx: ${err.message}`)),
     );
@@ -154,7 +196,12 @@ function entryIndex(zip: ZipFile): Promise<Map<string, Entry>> {
   });
 }
 
-async function* entryChunks(zip: ZipFile, entry: Entry, maxBytes: number): AsyncGenerator<Buffer> {
+async function* entryChunks(
+  zip: ZipFile,
+  entry: Entry,
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<Buffer> {
   const stream = await new Promise<NodeJS.ReadableStream>((resolve, reject) => {
     zip.openReadStream(entry, (err, s) => {
       if (err || !s) {
@@ -170,6 +217,7 @@ async function* entryChunks(zip: ZipFile, entry: Entry, maxBytes: number): Async
   let seen = 0;
   try {
     for await (const chunk of stream as AsyncIterable<Buffer>) {
+      signal?.throwIfAborted();
       // The DECLARED uncompressedSize is attacker-controlled, so the bound is
       // on what actually arrives.
       seen += chunk.length;
@@ -180,17 +228,51 @@ async function* entryChunks(zip: ZipFile, entry: Entry, maxBytes: number): Async
       }
       yield chunk;
     }
+  } catch (err) {
+    // yauzl validates entry sizes and CRCs on the ENTRY's own stream, not on
+    // the zip-level 'error' channel, so a truncated or corrupt member arrives
+    // here as a bare Error. Every failure this module raises is an
+    // XlsxReadError carrying `permanent`; letting a raw one through would break
+    // that contract for the most ordinary real-world damage there is.
+    if (err instanceof XlsxReadError) throw err;
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    throw new XlsxReadError(
+      `${entry.fileName} could not be inflated: ${err instanceof Error ? err.message : String(err)}. ` +
+        'The workbook is truncated or corrupt.',
+    );
   } finally {
     (stream as unknown as { destroy?: () => void }).destroy?.();
   }
 }
 
-async function entryText(zip: ZipFile, entry: Entry, maxBytes: number): Promise<string> {
+async function entryText(
+  zip: ZipFile,
+  entry: Entry,
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<string> {
   const decoder = new TextDecoder('utf-8');
   let text = '';
-  for await (const chunk of entryChunks(zip, entry, maxBytes))
+  for await (const chunk of entryChunks(zip, entry, maxBytes, signal))
     text += decoder.decode(chunk, { stream: true });
   return text + decoder.decode();
+}
+
+/**
+ * Collect a saxes parser's first error.
+ *
+ * A holder object rather than a `let`, because the only writes happen inside
+ * the callback and TS's control-flow analysis would otherwise narrow the
+ * variable to `null` at every read. Both parsers in this module also use it as
+ * the channel for their OWN refusals, so a failure raised inside a handler is
+ * reported the same way as one saxes raises.
+ */
+function attachErrorHolder(parser: SaxesParser): { failure: Error | null } {
+  const state: { failure: Error | null } = { failure: null };
+  parser.on('error', (err) => {
+    state.failure ??= err;
+  });
+  return state;
 }
 
 /** Walk an XML string with saxes. saxes hands `closetag` a TAG OBJECT, not a
@@ -204,13 +286,7 @@ function walkXml(
   },
 ): void {
   const parser = new SaxesParser();
-  // A holder rather than a `let`: the only writes happen inside the error
-  // callback, and TS's control-flow analysis would otherwise narrow the
-  // variable to `null` at every read.
-  const state: { failure: Error | null } = { failure: null };
-  parser.on('error', (err) => {
-    state.failure ??= err;
-  });
+  const state = attachErrorHolder(parser);
   if (handlers.open) parser.on('opentag', handlers.open);
   if (handlers.text) parser.on('text', handlers.text);
   if (handlers.close) parser.on('closetag', handlers.close);
@@ -260,6 +336,7 @@ function formatCodeIsDate(code: string): boolean {
 async function readWorkbookParts(
   zip: ZipFile,
   entries: ReadonlyMap<string, Entry>,
+  signal: AbortSignal | undefined,
 ): Promise<WorkbookParts> {
   const workbookEntry = entries.get('xl/workbook.xml');
   if (!workbookEntry) {
@@ -270,7 +347,7 @@ async function readWorkbookParts(
 
   const sheets: { name: string; rid: string | undefined }[] = [];
   let date1904 = false;
-  walkXml(await entryText(zip, workbookEntry, XLSX_MAX_ENTRY_BYTES), {
+  walkXml(await entryText(zip, workbookEntry, XLSX_MAX_ENTRY_BYTES, signal), {
     open: (tag) => {
       if (tag.name === 'sheet') {
         sheets.push({ name: tag.attributes['name'] ?? '', rid: tag.attributes['r:id'] });
@@ -285,7 +362,7 @@ async function readWorkbookParts(
   const rels = new Map<string, string>();
   const relsEntry = entries.get('xl/_rels/workbook.xml.rels');
   if (relsEntry) {
-    walkXml(await entryText(zip, relsEntry, XLSX_MAX_ENTRY_BYTES), {
+    walkXml(await entryText(zip, relsEntry, XLSX_MAX_ENTRY_BYTES, signal), {
       open: (tag) => {
         if (tag.name === 'Relationship') {
           const id = tag.attributes['Id'];
@@ -301,7 +378,7 @@ async function readWorkbookParts(
   if (sharedEntry) {
     let current: string | null = null;
     let inText = false;
-    walkXml(await entryText(zip, sharedEntry, XLSX_MAX_SHARED_STRINGS_BYTES), {
+    walkXml(await entryText(zip, sharedEntry, XLSX_MAX_SHARED_STRINGS_BYTES, signal), {
       open: (tag) => {
         if (tag.name === 'si') current = '';
         // Rich text is <si><r><t>..</t></r><r><t>..</t></r></si>; every run's
@@ -326,7 +403,7 @@ async function readWorkbookParts(
   if (stylesEntry) {
     const custom = new Map<number, string>();
     let inCellXfs = false;
-    walkXml(await entryText(zip, stylesEntry, XLSX_MAX_ENTRY_BYTES), {
+    walkXml(await entryText(zip, stylesEntry, XLSX_MAX_ENTRY_BYTES, signal), {
       open: (tag) => {
         if (tag.name === 'numFmt') {
           const id = Number(tag.attributes['numFmtId']);
@@ -426,6 +503,17 @@ function serialToInstant(serial: number, date1904: boolean): Date | XlsxCellFaul
       detail: 'serial 60 is Excel’s 1900-02-29, a date that never existed',
     };
   }
+  // The 1900 system has no serial below 1: Excel renders 0 as the non-date
+  // "1900-01-00" and cannot hold a negative one at all, so anything below 1 is
+  // corrupt input rather than an early date. Letting it through would invent
+  // plausible 1899 instants. The 1904 system genuinely starts at 0, so this is
+  // 1900-only.
+  if (!date1904 && serial < 1) {
+    return {
+      xlsxFault: 'phantom-date',
+      detail: `serial ${serial} is before the 1900 date system begins`,
+    };
+  }
 
   let days: number;
   let base: number;
@@ -474,11 +562,11 @@ export async function* readXlsxRowBatches(
   opts: ReadXlsxOptions,
 ): AsyncGenerator<readonly XlsxRow[]> {
   const batchRows = opts.batchRows ?? COPY_BATCH_ROWS;
-  const zip = await openZip(opts.filePath);
+  const zip = await openZip(opts.filePath, opts.fd);
 
   try {
     const entries = await entryIndex(zip);
-    const parts = await readWorkbookParts(zip, entries);
+    const parts = await readWorkbookParts(zip, entries, opts.signal);
     const { target } = resolveSheet(parts, opts);
 
     const sheetEntry = entries.get(target);
@@ -491,6 +579,7 @@ export async function* readXlsxRowBatches(
     let rowNumber = 0;
     let cells: XlsxCell[] = [];
     let nextColumn = 0;
+    let lastColumn = -1;
 
     let cellRef: string | undefined;
     let cellType = 'n';
@@ -502,10 +591,7 @@ export async function* readXlsxRowBatches(
     let sawValue = false;
 
     const parser = new SaxesParser();
-    const state: { failure: Error | null } = { failure: null };
-    parser.on('error', (err) => {
-      state.failure ??= err;
-    });
+    const state = attachErrorHolder(parser);
 
     parser.on('opentag', (tag: SaxesTagPlain) => {
       switch (tag.name) {
@@ -513,6 +599,7 @@ export async function* readXlsxRowBatches(
           rowNumber = Number(tag.attributes['r'] ?? rowNumber + 1);
           cells = [];
           nextColumn = 0;
+          lastColumn = -1;
           break;
         case 'c':
           cellRef = tag.attributes['r'];
@@ -565,6 +652,21 @@ export async function* readXlsxRowBatches(
         case 'c': {
           const column =
             cellRef === undefined ? nextColumn : (columnIndexOf(cellRef) ?? nextColumn);
+          // Cells are declared left to right. A reference that goes BACKWARDS
+          // (or repeats one already read) resolves to an index already written
+          // and would silently REPLACE it — a value the operator authored would
+          // vanish with the copy still reporting success. Real Excel never
+          // emits this, so a workbook that does is malformed or hostile, and
+          // §6.2's posture is to fail rather than guess.
+          if (column <= lastColumn) {
+            state.failure ??= new XlsxReadError(
+              `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`} after a later ` +
+                'column; refusing rather than overwriting a value already read',
+            );
+            cellRef = undefined;
+            break;
+          }
+          lastColumn = column;
           nextColumn = column + 1;
           // An interior gap is a BLANK cell, and binds null rather than
           // `undefined`: Excel omits blanks from the XML entirely, and
@@ -584,7 +686,7 @@ export async function* readXlsxRowBatches(
     });
 
     const decoder = new TextDecoder('utf-8');
-    for await (const chunk of entryChunks(zip, sheetEntry, XLSX_MAX_ENTRY_BYTES)) {
+    for await (const chunk of entryChunks(zip, sheetEntry, XLSX_MAX_ENTRY_BYTES, opts.signal)) {
       opts.signal?.throwIfAborted();
       // `{ stream: true }` so a multi-byte character split across an inflate
       // chunk boundary is not corrupted.
@@ -660,11 +762,14 @@ function materialise(
 /** The sheet names, without reading a row — §2.1's "nothing is opened" posture
  * for an address is not available here (the container must be opened), but no
  * worksheet is streamed. */
-export async function listXlsxSheetNames(filePath: string): Promise<readonly string[]> {
-  const zip = await openZip(filePath);
+export async function listXlsxSheetNames(
+  filePath: string,
+  opts: { readonly fd?: number | undefined; readonly signal?: AbortSignal | undefined } = {},
+): Promise<readonly string[]> {
+  const zip = await openZip(filePath, opts.fd);
   try {
     const entries = await entryIndex(zip);
-    const parts = await readWorkbookParts(zip, entries);
+    const parts = await readWorkbookParts(zip, entries, opts.signal);
     return parts.sheets.map((s) => s.name);
   } finally {
     zip.close();

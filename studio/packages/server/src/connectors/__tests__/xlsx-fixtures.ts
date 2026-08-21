@@ -47,6 +47,14 @@ export interface ZipEntry {
   /** STORED keeps a fixture readable in a hex dump; DEFLATE is what real
    * writers emit, and is what exercises the inflate path (and the bomb cap). */
   readonly method?: 'store' | 'deflate';
+  /**
+   * Truncate the payload while leaving the CRC and uncompressed size declaring
+   * the WHOLE entry — a partially-written upload or a damaged disk. The zip
+   * STRUCTURE stays valid (the compressed size matches what is actually
+   * written), so the failure surfaces where it should: inflating this one
+   * member, on the entry's own stream rather than the zip-level error channel.
+   */
+  readonly corrupt?: boolean;
 }
 
 /** Assemble a zip in EXACTLY the given entry order. */
@@ -58,7 +66,11 @@ export function buildZip(entries: readonly ZipEntry[]): Buffer {
   for (const entry of entries) {
     const name = Buffer.from(entry.name, 'utf8');
     const raw = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8');
-    const deflated = entry.method === 'store' ? raw : deflateRawSync(raw);
+    const whole = entry.method === 'store' ? raw : deflateRawSync(raw);
+    const deflated =
+      entry.corrupt === true
+        ? whole.subarray(0, Math.max(1, Math.floor(whole.length * 0.4)))
+        : whole;
     const method = entry.method === 'store' ? 0 : 8;
     const crc = crc32(raw);
 
