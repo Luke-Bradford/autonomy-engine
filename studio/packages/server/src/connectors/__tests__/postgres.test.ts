@@ -7,9 +7,23 @@ import {
   DEFAULT_POSTGRES_PORT,
   DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
   DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+  describePostgresDatasetColumns,
+  isTransientPostgresCode,
+  parseNaiveTimestampAsUtc,
+  readPostgresDatasetBatches,
+  resolvePostgresDatasetAddress,
+  type PostgresClientFactory,
   type PostgresClientOptions,
   type PostgresClient,
 } from '../postgres.js';
+import { COPY_BATCH_ROWS } from '../../limits.js';
+import type { DatasetKind } from '@autonomy-studio/shared';
+import type { ResolvedDataset } from '../types.js';
+
+/** A `ResolvedDataset` with only the fields the address seam reads. */
+function dataset(kind: DatasetKind, config: Record<string, unknown>): ResolvedDataset {
+  return { id: 'ds1', name: 'ds', kind, config, columns: [] };
+}
 
 /**
  * #1189 M10 slice 1 — the `postgres` connector's probe.
@@ -287,6 +301,358 @@ describe('postgresAdapter.runActivity (#1189 M10)', () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(JSON.stringify(events[0])).toMatch(/runs no activity of its own/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1190 M10 slice 2 — the READER.
+// ---------------------------------------------------------------------------
+
+/** A recording client whose `query` answers from a scripted table, so the READ
+ * path's statement sequence is assertable without a server. */
+function readerFactory(script: {
+  fields?: readonly string[];
+  fetches?: readonly Record<string, unknown>[][];
+  failOn?: { match: string; error: unknown };
+}) {
+  const rec = { queries: [] as string[], ended: 0, options: [] as PostgresClientOptions[] };
+  let fetchIndex = 0;
+  const factory: PostgresClientFactory = (options) => {
+    rec.options.push(options);
+    return {
+      connect: async () => undefined,
+      query: async (sql: string) => {
+        rec.queries.push(sql);
+        if (script.failOn !== undefined && sql.includes(script.failOn.match)) {
+          throw script.failOn.error;
+        }
+        if (sql.startsWith('FETCH')) {
+          const batch = script.fetches?.[fetchIndex] ?? [];
+          fetchIndex += 1;
+          return { rows: [...batch], fields: (script.fields ?? []).map((name) => ({ name })) };
+        }
+        return { rows: [], fields: (script.fields ?? []).map((name) => ({ name })) };
+      },
+      end: async () => {
+        rec.ended += 1;
+      },
+    };
+  };
+  return { rec, factory };
+}
+
+const READ_BASE = {
+  connectionConfig: CONFIG,
+  secret: 'pw',
+  datasetKind: 'table' as const,
+  datasetConfig: { table: 't' },
+};
+
+describe('parseNaiveTimestampAsUtc (#1190 M10) — the TZ-invariance pin', () => {
+  // The measurement this function exists for: `pg`'s DEFAULT parser reads a
+  // naive `timestamp` as LOCAL time, so one row yields three different instants
+  // under three `TZ`s, and `coerce.ts` then renders it in UTC — a silent,
+  // machine-dependent corruption that reads as success.
+  it('reads a naive timestamp as UTC, so the wall clock survives', () => {
+    const parsed = parseNaiveTimestampAsUtc('2026-07-15 13:45:00');
+    expect(parsed).toBeInstanceOf(Date);
+    expect((parsed as Date).toISOString()).toBe('2026-07-15T13:45:00.000Z');
+  });
+
+  it('reads a naive date without moving the DAY', () => {
+    // Measured: pg's default parse of `2026-07-15` in Europe/London is
+    // `2026-07-14T23:00:00.000Z` — the previous day.
+    expect((parseNaiveTimestampAsUtc('2026-07-15') as Date).toISOString()).toBe(
+      '2026-07-15T00:00:00.000Z',
+    );
+  });
+
+  it('TRUNCATES postgres microseconds to milliseconds, never rounding forward', () => {
+    expect((parseNaiveTimestampAsUtc('2026-07-15 13:45:00.123456') as Date).toISOString()).toBe(
+      '2026-07-15T13:45:00.123Z',
+    );
+    expect((parseNaiveTimestampAsUtc('2026-07-15 13:45:00.999999') as Date).toISOString()).toBe(
+      '2026-07-15T13:45:00.999Z',
+    );
+  });
+
+  it('does not let a two-digit year become 19xx', () => {
+    // `Date.UTC(44, ...)` is 1944. Postgres really does emit `0044-03-15`.
+    expect((parseNaiveTimestampAsUtc('0044-03-15 12:00:00') as Date).getUTCFullYear()).toBe(44);
+  });
+
+  it.each(['infinity', '-infinity', '0044-03-15 12:00:00 BC', 'not a date'])(
+    'hands back postgres own text for %s, rather than inventing a Date',
+    (text) => {
+      // The honest branch: these have no `Date`. As text, `coerce.ts` copies
+      // them to a `string` target verbatim and REFUSES a date/timestamp target,
+      // which is the correct direction for a value this code cannot represent.
+      expect(parseNaiveTimestampAsUtc(text)).toBe(text);
+    },
+  );
+});
+
+describe('describePostgresDatasetColumns (#1190 M10)', () => {
+  it('describes WITHOUT reading a row, and wraps the statement', async () => {
+    const { rec, factory } = readerFactory({ fields: ['a', 'b'] });
+    const columns = await describePostgresDatasetColumns({ ...READ_BASE, createClient: factory });
+    expect(columns).toEqual(['a', 'b']);
+    const describeSql = rec.queries.find((q) => q.startsWith('SELECT * FROM ('));
+    expect(describeSql).toBe('SELECT * FROM (SELECT * FROM "t") "__studio_src" LIMIT 0');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('returns duplicate result columns UNCOLLAPSED, as sqlite does', async () => {
+    // Measured: postgres reports `select a, a` as ['a','a'] while the row object
+    // carries `a` once. The collapse is `indexSourceColumns` in
+    // `datamove/schema-drift.ts`, downstream and shared — a second copy here
+    // would be a divergent rule in one store.
+    const { factory } = readerFactory({ fields: ['a', 'a'] });
+    expect(await describePostgresDatasetColumns({ ...READ_BASE, createClient: factory })).toEqual([
+      'a',
+      'a',
+    ]);
+  });
+
+  it('quotes a schema-qualified table, and quotes ALWAYS so case survives', async () => {
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    await describePostgresDatasetColumns({
+      ...READ_BASE,
+      datasetConfig: { schema: 'Reporting', table: 'Users' },
+      createClient: factory,
+    });
+    // Postgres folds an UNQUOTED identifier to lower case, so quoting is what
+    // makes `Users` address `Users` rather than `users`.
+    expect(rec.queries.some((q) => q.includes('"Reporting"."Users"'))).toBe(true);
+  });
+
+  it('pins DateStyle before reading, so the timestamp text form is not the server choice', async () => {
+    const { rec, factory } = readerFactory({ fields: ['a'] });
+    await describePostgresDatasetColumns({ ...READ_BASE, createClient: factory });
+    expect(rec.queries[0]).toBe("SET SESSION DateStyle = 'ISO, YMD'");
+  });
+
+  it('refuses a query dataset that declares named parameters', async () => {
+    // Measured: `where a = :id` reaches postgres as SQLSTATE 42601, a syntax
+    // error naming a colon. pg binds positionally and has no named parameters.
+    const { factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({
+        ...READ_BASE,
+        datasetKind: 'query',
+        datasetConfig: { sql: 'select a from t where a = :id', parameters: { id: 1 } },
+        createClient: factory,
+      }),
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('parameters') });
+  });
+
+  it('accepts a query dataset whose parameters are absent or empty', async () => {
+    // The refusal above must not be over-broad: an empty record is not a
+    // declaration.
+    const { factory } = readerFactory({ fields: ['a'] });
+    expect(
+      await describePostgresDatasetColumns({
+        ...READ_BASE,
+        datasetKind: 'query',
+        datasetConfig: { sql: 'select a from t', parameters: {} },
+        createClient: factory,
+      }),
+    ).toEqual(['a']);
+  });
+
+  it('refuses a trailing semicolon rather than silently rewriting the operator SQL', async () => {
+    const { factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({
+        ...READ_BASE,
+        datasetKind: 'query',
+        datasetConfig: { sql: 'select a from t;' },
+        createClient: factory,
+      }),
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('semicolon') });
+  });
+
+  it('classifies an unreachable server as transient, never as drift', async () => {
+    // `CopyIo.describeSource`'s stated polarity: a store that cannot be REACHED
+    // is transient and is not a schema fact.
+    const { factory } = readerFactory({ failOn: { match: 'SET SESSION', error: pgError('08006', 'terminating connection') } });
+    await expect(
+      describePostgresDatasetColumns({ ...READ_BASE, createClient: factory }),
+    ).rejects.toMatchObject({ kind: 'transient' });
+  });
+
+  it('classifies an UNRECOGNISED code as permanent — fail-safe, never retry forever', async () => {
+    const { factory } = readerFactory({ failOn: { match: 'LIMIT 0', error: pgError('42P01', 'relation "t" does not exist') } });
+    await expect(
+      describePostgresDatasetColumns({ ...READ_BASE, createClient: factory }),
+    ).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('never echoes the password into a failure message', async () => {
+    const { factory } = readerFactory({
+      failOn: { match: 'LIMIT 0', error: new Error('connection string was host=x password=hunter2') },
+    });
+    await expect(
+      describePostgresDatasetColumns({ ...READ_BASE, secret: 'hunter2', createClient: factory }),
+    ).rejects.toMatchObject({ message: expect.not.stringContaining('hunter2') });
+  });
+
+  it('refuses a missing secret before building a client, as the probe does', async () => {
+    const { rec, factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({ ...READ_BASE, secret: '', createClient: factory }),
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('secret') });
+    expect(rec.options).toHaveLength(0);
+  });
+
+  it('refuses a dataset kind a postgres store cannot hold', async () => {
+    const { factory } = readerFactory({ fields: [] });
+    await expect(
+      describePostgresDatasetColumns({
+        ...READ_BASE,
+        datasetKind: 'delimited',
+        datasetConfig: { path: 'x.csv' },
+        createClient: factory,
+      }),
+    ).rejects.toMatchObject({ kind: 'permanent' });
+  });
+});
+
+describe('readPostgresDatasetBatches (#1190 M10)', () => {
+  async function drain(iterable: AsyncIterable<readonly Record<string, unknown>[]>) {
+    const out: Record<string, unknown>[][] = [];
+    for await (const batch of iterable) out.push([...batch]);
+    return out;
+  }
+
+  it('reads through a READ ONLY transaction and a server-side cursor, then rolls back', async () => {
+    const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }, { a: 2 }], []] });
+    const batches = await drain(
+      readPostgresDatasetBatches({ ...READ_BASE, createClient: factory, batchRows: 2 }),
+    );
+    expect(batches).toEqual([[{ a: 1 }, { a: 2 }]]);
+    expect(rec.queries).toEqual([
+      "SET SESSION DateStyle = 'ISO, YMD'",
+      'BEGIN READ ONLY',
+      'DECLARE "__studio_copy" NO SCROLL CURSOR FOR SELECT * FROM "t"',
+      'FETCH FORWARD 2 FROM "__studio_copy"',
+      'FETCH FORWARD 2 FROM "__studio_copy"',
+      'ROLLBACK',
+    ]);
+    expect(rec.ended).toBe(1);
+  });
+
+  it('stops on a SHORT batch without a further round trip', async () => {
+    const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }]] });
+    expect(
+      await drain(readPostgresDatasetBatches({ ...READ_BASE, createClient: factory, batchRows: 5 })),
+    ).toEqual([[{ a: 1 }]]);
+    expect(rec.queries.filter((q) => q.startsWith('FETCH'))).toHaveLength(1);
+  });
+
+  it('yields nothing for an empty source, and still closes cleanly', async () => {
+    const { rec, factory } = readerFactory({ fetches: [[]] });
+    expect(
+      await drain(readPostgresDatasetBatches({ ...READ_BASE, createClient: factory })),
+    ).toEqual([]);
+    expect(rec.queries).toContain('ROLLBACK');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('honours an abort at the batch boundary, and still rolls back and closes', async () => {
+    const controller = new AbortController();
+    const { rec, factory } = readerFactory({
+      fetches: [[{ a: 1 }], [{ a: 2 }]],
+    });
+    const iterable = readPostgresDatasetBatches({
+      ...READ_BASE,
+      createClient: factory,
+      batchRows: 1,
+      signal: controller.signal,
+    });
+    await expect(
+      (async () => {
+        for await (const _batch of iterable) controller.abort();
+      })(),
+    ).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(rec.queries).toContain('ROLLBACK');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('defaults the batch size to the shared COPY_BATCH_ROWS', async () => {
+    const { rec, factory } = readerFactory({ fetches: [[]] });
+    await drain(readPostgresDatasetBatches({ ...READ_BASE, createClient: factory }));
+    expect(rec.queries).toContain(`FETCH FORWARD ${String(COPY_BATCH_ROWS)} FROM "__studio_copy"`);
+  });
+});
+
+describe('isTransientPostgresCode (#1190 M10)', () => {
+  it.each(['57014', '08006', '40001', '53300', 'ECONNRESET'])('retries %s', (code) => {
+    expect(isTransientPostgresCode(code)).toBe(true);
+  });
+  it.each(['42P01', '42601', '28P01', '3D000', '25006', ''])(
+    'does NOT retry %s — an unrecognised code is permanent',
+    (code) => {
+      expect(isTransientPostgresCode(code)).toBe(false);
+    },
+  );
+});
+
+describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
+  it('records a non-secret store string', async () => {
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: CONFIG,
+      dataset: dataset('table', { schema: 'public', table: 't' }),
+    });
+    expect(address).toEqual({
+      kind: 'postgres',
+      store: 'db.example.test:6543/app',
+      storeIdentity: null,
+      object: 'public.t',
+    });
+  });
+
+  it('never puts the password in the address, which travels to the run log', async () => {
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: CONFIG,
+      dataset: dataset('table', { schema: 'public', table: 't' }),
+    });
+    expect(JSON.stringify(address)).not.toContain('pw');
+  });
+
+  it('does NOT case-fold the object, because postgres quoting is case-sensitive', async () => {
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: CONFIG,
+      dataset: dataset('table', { schema: 'Reporting', table: 'Users' }),
+    });
+    expect(address.object).toBe('Reporting.Users');
+  });
+
+  it('leaves the object null when the schema is not declared', async () => {
+    // Resolving an unqualified name needs `search_path`, which needs a session
+    // this seam cannot open — it receives no secret.
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: CONFIG,
+      dataset: dataset('table', { table: 't' }),
+    });
+    expect(address.object).toBeNull();
+  });
+
+  it('leaves the object null for a query, which names no single relation', async () => {
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: CONFIG,
+      dataset: dataset('query', { sql: 'select 1' }),
+    });
+    expect(address.object).toBeNull();
+  });
+
+  it('defaults the port in the store string when the config omits it', async () => {
+    const { port: _port, ...noPort } = CONFIG;
+    const address = await resolvePostgresDatasetAddress({
+      connectionConfig: noPort,
+      dataset: dataset('query', { sql: 'select 1' }),
+    });
+    expect(address.store).toBe(`db.example.test:${String(DEFAULT_POSTGRES_PORT)}/app`);
   });
 });
 
