@@ -125,8 +125,7 @@ export const httpAdapter: ConnectorAdapter = {
     const baseUrl = parsed.data.baseUrl;
     // Nothing to probe without a baseUrl — a valid config is all we can assert.
     // Nothing to reach, so nothing was reached: `probed: 'config'` (#1191).
-    if (baseUrl === undefined || baseUrl === '')
-      return { ok: true, probed: 'config' };
+    if (baseUrl === undefined || baseUrl === '') return { ok: true, probed: 'config' };
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),

@@ -519,7 +519,10 @@ describe('ConnectionsPage', () => {
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
 
       await waitFor(() =>
-        expect(testDraftMock).toHaveBeenCalledWith({ kind: 'fs', config: { roots: ['/srv/data'] } }),
+        expect(testDraftMock).toHaveBeenCalledWith({
+          kind: 'fs',
+          config: { roots: ['/srv/data'] },
+        }),
       );
       expect(testSavedMock).not.toHaveBeenCalled();
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');

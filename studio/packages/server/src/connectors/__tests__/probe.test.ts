@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionKind, ConnectionProbeResult } from '@autonomy-studio/shared';
 import { z } from 'zod';
-import {
-  PROBE_BACKSTOP_MS,
-  boundaryKeysChangedByOverlay,
-  probeConnection,
-} from '../probe.js';
+import { PROBE_BACKSTOP_MS, boundaryKeysChangedByOverlay, probeConnection } from '../probe.js';
 import type { ConnectorAdapter } from '../types.js';
 import type { ConnectorRegistry } from '../registry.js';
 

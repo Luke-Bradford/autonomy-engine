@@ -346,7 +346,9 @@ describe('connections routes', () => {
 
       // Stored config is fine, so a bare probe passes...
       expect(
-        (await app.inject({ method: 'POST', url: `/api/connections/${id}/test`, payload: {} })).json(),
+        (
+          await app.inject({ method: 'POST', url: `/api/connections/${id}/test`, payload: {} })
+        ).json(),
       ).toEqual({ ok: true, probed: 'liveness' });
 
       // ...and the overlay — what the edit form has on screen — is what a probe

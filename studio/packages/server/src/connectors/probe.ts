@@ -97,7 +97,9 @@ export function boundaryKeysChangedByOverlay(
   const keys = new Set([...Object.keys(stored), ...Object.keys(overlay)]);
   return [...keys]
     .filter((key) => isNonOverridableConnectionConfigKey(kind, key))
-    .filter((key) => canonicalStringify(stored[key] ?? null) !== canonicalStringify(overlay[key] ?? null))
+    .filter(
+      (key) => canonicalStringify(stored[key] ?? null) !== canonicalStringify(overlay[key] ?? null),
+    )
     .sort();
 }
 

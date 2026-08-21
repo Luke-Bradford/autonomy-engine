@@ -287,7 +287,10 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
         throw new Error('socket already gone');
       },
     });
-    expect(await createPostgresAdapter(factory).testConnection(CONFIG, 'pw')).toEqual({ ok: true, probed: 'liveness' });
+    expect(await createPostgresAdapter(factory).testConnection(CONFIG, 'pw')).toEqual({
+      ok: true,
+      probed: 'liveness',
+    });
   });
 
   it('RESOLVES on a client that cannot even be constructed', async () => {
@@ -1193,7 +1196,10 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   });
 
   it('connects and answers', async () => {
-    expect(await postgresAdapter.testConnection(live, password)).toEqual({ ok: true, probed: 'liveness' });
+    expect(await postgresAdapter.testConnection(live, password)).toEqual({
+      ok: true,
+      probed: 'liveness',
+    });
   });
 
   it('reports a wrong password as a refused password', async () => {
