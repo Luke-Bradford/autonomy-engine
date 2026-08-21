@@ -978,7 +978,18 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       { ...live, host: 'no-such-host-1189.invalid', connectTimeoutMs: 3_000 },
       password,
     );
+    // THE CLAIM IS `ok: false` — a real server is listening on the PGHOST/PGPORT
+    // this test exports, so a fallback would have CONNECTED and reported success.
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/does not resolve/);
+    // The refusal's WORDING is not the claim, and pinning it to `/does not
+    // resolve/` alone made this test environment-dependent: the bogus host has
+    // to lose a race between DNS failing and the 3s connect budget expiring, and
+    // under full-suite contention the timeout wins (measured — it passes in
+    // isolation and fails inside a loaded run, #1124's family). #1196 widened
+    // it, because slice 3a's live tests make the live half heavier and would
+    // otherwise have made a latent flake a frequent one. Both outcomes prove the
+    // same thing: the connection went to the host the CONFIG named, not the one
+    // the environment did.
+    expect(result.error).toMatch(/does not resolve|timeout expired/);
   });
 });
