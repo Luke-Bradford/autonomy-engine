@@ -11,6 +11,7 @@ import {
 import { createPipeline, createPipelineVersion, createRun } from '../../repo/index.js';
 import { appendEngineEvent } from '../../run/events.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+import { until } from '../../__tests__/poll-until.js';
 
 /**
  * Integration coverage for the P6 run-events WebSocket: a REAL server on an
@@ -43,14 +44,6 @@ async function connect(port: number, runId: string): Promise<Client> {
     ws.addEventListener('error', () => reject(new Error('ws connect error')));
   });
   return { ws, messages, closeCode: () => code };
-}
-
-async function until(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) throw new Error('until() timed out');
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 
 const started = (runId: string, pvId: string): EngineEvent => ({
@@ -113,7 +106,10 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     appendEngineEvent(app.db, output(runId, 'a'));
 
     const client = await connect(port, runId);
-    await until(() => client.messages.some((m) => m.kind === 'replay_complete'));
+    await until(
+      () => client.messages.some((m) => m.kind === 'replay_complete'),
+      'the replay to complete',
+    );
 
     const events = client.messages.filter((m) => m.kind === 'event');
     expect(events.map((m) => m.event.seq)).toEqual([0, 1]);
@@ -126,7 +122,10 @@ describe('run-events WebSocket (P6 live monitor)', () => {
   it('sends replay_complete with throughSeq -1 for a run with no events yet', async () => {
     const runId = newRun('local');
     const client = await connect(port, runId);
-    await until(() => client.messages.some((m) => m.kind === 'replay_complete'));
+    await until(
+      () => client.messages.some((m) => m.kind === 'replay_complete'),
+      'the replay to complete on a run with no events',
+    );
     expect(client.messages.find((m) => m.kind === 'replay_complete')).toEqual({
       kind: 'replay_complete',
       throughSeq: -1,
@@ -139,13 +138,17 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     appendEngineEvent(app.db, started(runId, pipelineVersionId));
 
     const client = await connect(port, runId);
-    await until(() => client.messages.some((m) => m.kind === 'replay_complete'));
+    await until(
+      () => client.messages.some((m) => m.kind === 'replay_complete'),
+      'the replay to complete before the live append',
+    );
 
     // A live append AFTER the client is subscribed — routed through the bus.
     appendEngineEvent(app.db, output(runId, 'live'), app.runEventBus);
 
-    await until(() =>
-      client.messages.some((m) => m.kind === 'event' && m.event.type === 'node.output'),
+    await until(
+      () => client.messages.some((m) => m.kind === 'event' && m.event.type === 'node.output'),
+      'the live node.output append to arrive after replay',
     );
     const live = client.messages.find(
       (m): m is Extract<RunStreamServerMessage, { kind: 'event' }> =>
@@ -160,7 +163,10 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     const seed = appendEngineEvent(app.db, started(runId, pipelineVersionId)).record; // seq 0
 
     const client = await connect(port, runId);
-    await until(() => client.messages.some((m) => m.kind === 'replay_complete'));
+    await until(
+      () => client.messages.some((m) => m.kind === 'replay_complete'),
+      'the replay to complete before the re-publish',
+    );
 
     // Re-publish the ALREADY-replayed seq-0 envelope directly onto the bus: the
     // client must ignore it (seq <= what replay already delivered).
@@ -168,7 +174,10 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     // And a genuinely new live event, to prove the socket is still tailing.
     appendEngineEvent(app.db, output(runId, 'next'), app.runEventBus); // seq 1
 
-    await until(() => client.messages.some((m) => m.kind === 'event' && m.event.seq === 1));
+    await until(
+      () => client.messages.some((m) => m.kind === 'event' && m.event.seq === 1),
+      'the seq-1 event to arrive after the duplicate seq-0 re-publish',
+    );
     const seqZeros = client.messages.filter((m) => m.kind === 'event' && m.event.seq === 0);
     expect(seqZeros).toHaveLength(1);
     client.ws.close();
@@ -179,11 +188,14 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     appendEngineEvent(app.db, started(runId, pipelineVersionId));
 
     const client = await connect(port, runId);
-    await until(() => client.messages.some((m) => m.kind === 'replay_complete'));
+    await until(
+      () => client.messages.some((m) => m.kind === 'replay_complete'),
+      'the replay to complete before the terminal append',
+    );
 
     appendEngineEvent(app.db, finished(runId), app.runEventBus);
 
-    await until(() => client.closeCode() !== null);
+    await until(() => client.closeCode() !== null, 'the socket to close after the terminal event');
     expect(client.closeCode()).toBe(1000);
     expect(client.messages.some((m) => m.kind === 'event' && m.event.type === 'run.finished')).toBe(
       true,
@@ -196,7 +208,10 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     appendEngineEvent(app.db, finished(runId));
 
     const client = await connect(port, runId);
-    await until(() => client.closeCode() !== null);
+    await until(
+      () => client.closeCode() !== null,
+      'the socket to close after replaying an already-terminal run',
+    );
     expect(client.closeCode()).toBe(1000);
     expect(client.messages.some((m) => m.kind === 'replay_complete')).toBe(true);
   });
@@ -205,14 +220,17 @@ describe('run-events WebSocket (P6 live monitor)', () => {
     const runId = newRun('someone-else');
     appendEngineEvent(app.db, started(runId, pipelineVersionId));
     const client = await connect(port, runId);
-    await until(() => client.closeCode() !== null);
+    await until(
+      () => client.closeCode() !== null,
+      "the socket to close on another principal's run",
+    );
     expect(client.closeCode()).toBe(4404);
     expect(client.messages).toHaveLength(0);
   });
 
   it('refuses (4404) an unknown run id', async () => {
     const client = await connect(port, 'run_does_not_exist');
-    await until(() => client.closeCode() !== null);
+    await until(() => client.closeCode() !== null, 'the socket to close on an unknown run id');
     expect(client.closeCode()).toBe(4404);
   });
 });

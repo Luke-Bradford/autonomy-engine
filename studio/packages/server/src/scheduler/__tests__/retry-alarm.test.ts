@@ -34,6 +34,7 @@ import {
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createRetryAlarmHandler } from '../retry-alarm.js';
 import { silentLog } from './testLog.js';
+import { until as pollUntil } from '../../__tests__/poll-until.js';
 
 /**
  * #1 F2c — the DRIVER + CLOCK half of D4's retry, against a real DB, real
@@ -505,26 +506,16 @@ function getRunState(db: Db, deps: DriverDeps, runId: string) {
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 /**
- * Wait until `check` holds, polling the durable log. Used to reach a precise
- * mid-drive moment WITHOUT betting on wall-clock timing: a fixed sleep that
- * assumed "by now the pump has reached node d" would pass on this machine and
- * flake on a loaded CI box — and a flaky concurrency test is worse than none,
- * because it gets retried until green.
+ * Wait until `check` holds, polling the durable log.
+ *
+ * `tolerateThrow` because before `run.started` folds there are no nodes to look
+ * at, so an early poll legitimately throws rather than returning false — "not
+ * there yet" and "cannot tell yet" are the same answer to this loop. The 2ms
+ * tick is this file's own: it reaches a precise mid-drive moment, so it polls
+ * tighter than the shared default.
  */
-async function until(check: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    // Tolerant by design: before `run.started` folds there are no nodes to look
-    // at, so an early poll legitimately throws rather than returning false.
-    // "Not there yet" and "cannot tell yet" are the same answer to this loop.
-    try {
-      if (check()) return;
-    } catch {
-      // keep waiting
-    }
-    await new Promise((r) => setTimeout(r, 2));
-  }
-  throw new Error(`timed out waiting for: ${label}`);
-}
+const until = (check: () => boolean, label: string) =>
+  pollUntil(check, label, { tickMs: 2, tolerateThrow: true });
 
 // ===========================================================================
 // #1 F2c/B1 — EXACTLY ONE DRIVE PER RUN (the regression this branch stopped for)
