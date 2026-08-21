@@ -17,6 +17,7 @@ import {
 import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import { doubleQuoted, quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
 // #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
 // reader rather than duplicated (the macrotask choice is not the obvious one).
@@ -191,33 +192,11 @@ function storeFailure(err: unknown, context: string, partialWritePossible = fals
  * `replace`. Two byte-identical copies of an escaping rule is how the halves
  * drift, and an escaping rule is a bad place for that to happen.
  */
-function doubleQuoted(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
-/**
- * Quote a SQL identifier — AFTER refusing anything that is not one.
- *
- * Both halves matter and neither is redundant. The shape check is the policy
- * (§8: a name that only a quoting rule makes safe is refused, not accommodated);
- * the quoting is what stops a reserved word being a syntax error. Doubling an
- * embedded `"` cannot fire given the shape check, and is kept so the function is
- * correct on its own terms rather than only in its current caller.
- */
-function quoteIdentifier(value: string, label: string): string {
-  if (!isSqlIdentifier(value)) {
-    throw new DatasetIoError(
-      'permanent',
-      `${label} '${value}' is not a bare SQL identifier, so it cannot be quoted into a statement`,
-    );
-  }
-  return doubleQuoted(value);
-}
-
 /**
  * Quote an identifier the STORE told us about — no shape refusal (#1127).
  *
- * The difference from `quoteIdentifier` above is a difference in PROVENANCE, not
+ * The difference from `quoteIdentifier` (now `sql-identifier.ts`, lifted there
+ * by #1190 when postgres needed it too) is a difference in PROVENANCE, not
  * in strictness for its own sake. §8's rule — "a name that only a quoting rule
  * makes safe is refused, not accommodated" — is about a name that reaches SQL
  * from operator-authored text, which cannot be bound as a parameter and so has

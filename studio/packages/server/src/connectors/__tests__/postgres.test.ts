@@ -8,7 +8,7 @@ import {
   DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
   DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
   type PostgresClientOptions,
-  type PostgresProbeClient,
+  type PostgresClient,
 } from '../postgres.js';
 
 /**
@@ -48,7 +48,7 @@ interface Recorder {
 /** A client that records what it was given and fails (or not) on demand. */
 function recordingFactory(behaviour: { connectError?: unknown; queryError?: unknown } = {}) {
   const rec: Recorder = { options: [], queries: [], ended: 0 };
-  const factory = (options: PostgresClientOptions): PostgresProbeClient => {
+  const factory = (options: PostgresClientOptions): PostgresClient => {
     rec.options.push(options);
     return {
       async connect() {
@@ -57,7 +57,7 @@ function recordingFactory(behaviour: { connectError?: unknown; queryError?: unkn
       async query(sql: string) {
         rec.queries.push(sql);
         if (behaviour.queryError !== undefined) throw behaviour.queryError;
-        return { rows: [{ ok: 1 }] };
+        return { rows: [{ ok: 1 }], fields: [{ name: 'ok' }] };
       },
       async end() {
         rec.ended += 1;
@@ -254,9 +254,9 @@ describe('postgresAdapter.testConnection (#1189 M10)', () => {
     // The last resolve-path permutation: `end()` runs in a `finally`, so an
     // unguarded throw there would replace an answer the probe had already
     // computed with a rejection — including on the SUCCESS path.
-    const factory = (): PostgresProbeClient => ({
+    const factory = (): PostgresClient => ({
       connect: async () => undefined,
-      query: async () => ({ rows: [] }),
+      query: async () => ({ rows: [], fields: [] }),
       end: async () => {
         throw new Error('socket already gone');
       },
