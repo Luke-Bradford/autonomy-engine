@@ -684,11 +684,13 @@ export interface PostgresDatasetRead {
  * the pre-flight, so a postgres-to-postgres copy now opens four sessions across
  * a dispatch (source address, sink address, then the reader and the writer)
  * where it opened two. They are SEQUENTIAL and each is closed in a `finally`, so
- * peak concurrent sessions per node is unchanged at two. The unbounded part is
- * across NODES: pre-flight runs outside `executor.ts`'s `pLimit`, so N
- * concurrently dispatching copy nodes open N sessions with no cap, where the
- * running phase is capped. That is a pre-existing property of pre-flight which
- * this makes matter more, and it is filed as #1200 rather than fixed here.
+ * peak concurrent sessions per node is unchanged at two. Across NODES it was
+ * once unbounded — pre-flight runs outside `executor.ts`'s per-run `pLimit`, so
+ * N concurrently dispatching copy nodes opened N sessions with no cap. #1200
+ * closed that with a second, independent budget
+ * (`PREFLIGHT_STORE_CONCURRENCY`), so the ceiling is now that many concurrent
+ * pre-flight sessions process-wide; the cost moved from unbounded sessions to
+ * bounded queueing before `node.dispatched`.
  */
 export async function resolvePostgresDatasetAddress(args: {
   readonly connectionConfig: Record<string, unknown>;
