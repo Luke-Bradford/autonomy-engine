@@ -2156,6 +2156,94 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     ]);
   });
 
+  it("hands each END its OWN credential, never the other server's (#1193)", async () => {
+    // #1193 gave the address seam a `secret`, because a NETWORKED store's
+    // physical identity needs a session and a session needs a password. The
+    // hazard that arrives with it: a postgres-to-postgres copy resolves two
+    // addresses against two servers, and passing the source's secret to the sink
+    // would send one server's password to another. The executor reads `secret`
+    // for the source end and `sinkSecret` for the sink end; nothing else may.
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', { store: 'A' }, 'SOURCE_PW');
+    const sinkConn = await seedConnection(db, 'anthropic_api', { store: 'B' }, 'SINK_PW');
+    const sourceDs = seedDataset(db, sourceConn, { config: { table: 'src' } });
+    const sinkDs = seedDataset(db, sinkConn, { config: { table: 'dst' } });
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const seen: { store: unknown; secret: string | null }[] = [];
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(
+          async function* () {
+            yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+          },
+          ({ connectionConfig, dataset, secret }) => {
+            seen.push({ store: connectionConfig.store, secret });
+            return Promise.resolve({
+              kind: 'http' as const,
+              store: typeof connectionConfig.store === 'string' ? connectionConfig.store : '?',
+              storeIdentity: null,
+              object: typeof dataset.config.table === 'string' ? dataset.config.table : null,
+            });
+          },
+        ),
+        catalog: datasetCatalog(),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    expect(seen).toEqual([
+      { store: 'A', secret: 'SOURCE_PW' },
+      { store: 'B', secret: 'SINK_PW' },
+    ]);
+  });
+
+  it('passes a NULL secret through for an end whose connection binds none (#1193)', async () => {
+    // `null` must REACH the seam rather than be skipped or smoothed to
+    // `undefined`: a store that needs a credential owes a refusal, and it can
+    // only give one if it is told. (`sinkSecret` is additionally
+    // `string | null | undefined` — an UNPAIRED node never resolves one — and
+    // the call site collapses `undefined` to `null` so both arrive as one fact.)
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', { store: 'A' }, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', { store: 'B' }, 'K');
+    const sourceDs = seedDataset(db, sourceConn, { config: { table: 'src' } });
+    const sinkDs = seedDataset(db, sinkConn, { config: { table: 'dst' } });
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const seen: (string | null)[] = [];
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(
+          async function* () {
+            yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+          },
+          ({ connectionConfig, dataset, secret }) => {
+            seen.push(secret);
+            return Promise.resolve({
+              kind: 'http' as const,
+              store: typeof connectionConfig.store === 'string' ? connectionConfig.store : '?',
+              storeIdentity: null,
+              object: typeof dataset.config.table === 'string' ? dataset.config.table : null,
+            });
+          },
+        ),
+        catalog: datasetCatalog(),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    expect(seen).toEqual([null, 'K']);
+  });
+
   it('OMITS the record entirely for an activity that is not dataset-bound', async () => {
     // Omitted, not present-undefined: a non-copy `node.dispatched` stays exactly
     // the event this build wrote before the field existed.

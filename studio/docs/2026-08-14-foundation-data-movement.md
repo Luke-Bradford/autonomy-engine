@@ -181,8 +181,9 @@ drifting authority on an address.
 
 Both reuse `describeDatasetAddress`, the renderer the engine's own `DATASET_SELF_COPY` refusal
 already uses, so a refusal and a run log cannot drift into two spellings of one address.
-`storeIdentity` is shown nowhere: it is a `dev:ino` comparison token that identifies a store, it
-does not address one, and beside a path it would read as part of it.
+`storeIdentity` is shown nowhere: it is a comparison token that identifies a store (a `dev:ino` for
+a file, a cluster/database/primary-or-standby triple for postgres since #1193), it does not address one, and beside
+a path or a host it would read as part of it.
 
 **Still open on #1162** — items 2 (a `query` end has no comparable describe object), 3 (the
 actual-store `NOT NULL` pre-flight, a stated behaviour break) and 4 (lifting the sink describe
@@ -599,12 +600,13 @@ stays on #1193 as a REACHABLE case rather than an unreachable one, and it is sti
 guess-refused: §7 ② is explicit that a `permanent` refusal reached by parsing an operator's SQL is
 the one direction a gate must never fail in.
 
-**What slice 3a does NOT do.** `storeIdentity` is still `null` for postgres, because
-`ConnectorAdapter.resolveDatasetAddress` receives no SECRET and a cluster's identity needs a
-session — so two connections naming one cluster through different host spellings are comparable
-only by the `store` string. Two dataset rows on ONE connection are still refused, which is the
-common case. `datasetKinds.sink` still excludes `delimited`: there is no CSV writer, so a file
-remains something a copy can read and not something it can write.
+**What slice 3a does NOT do — `storeIdentity`, SINCE CLOSED by slice 3b (#1193).** Slice 3a left
+`storeIdentity` at `null` for postgres on the reasoning that `ConnectorAdapter.resolveDatasetAddress`
+receives no SECRET and a cluster's identity needs a session. The seam's half of that was wrong:
+`executor.ts` resolves the source secret AND `sinkSecret` in the same pre-flight, before either
+address is asked for — the sink's ADAPTER never runs, but its credential is in hand. Slice 3b gives
+the seam a `secret`; see §7's as-built block below. `datasetKinds.sink` still excludes `delimited`:
+there is no CSV writer, so a file remains something a copy can read and not something it can write.
 
 **The structural change this forced, recorded because it is not visible from the ticket.** A second
 sink means every source adapter must reach both writers, and `sqlite.ts` importing `postgres.ts`
@@ -1029,7 +1031,11 @@ parameter is untyped text, so postgres coerces per VALUE just as SQLite does. Me
 source column carries a declared type; a `$n` parameter carries none. So this paragraph's argument
 — that a per-type `permanent` refusal would break exactly the working copies M7's all-text CSV
 columns produce — holds for postgres unchanged, and row 3 stays unbuilt for the same reason rather
-than for a new one. #1193 keeps it, with its premise corrected. The harm it would have prevented under
+than for a new one. Row 3 is therefore DECLINED on measured grounds rather than deferred, and needs no ticket to carry
+it: two independent measurements (slice 2's `42804`, slice 3a's per-value coercion) say the refusal
+it proposed would break working copies. Should it ever be revisited, `CopyIo.describeSource` returns
+names and no types and would need widening first — recorded here so that prerequisite is not
+rediscovered. #1193 closed with the `storeIdentity` hole alone (§7 ④). The harm it would have prevented under
 `sqlite` is already prevented: the sink is one transaction that rolls back reporting
 `partialWritePossible: false`, so an ungated type mismatch costs a wasted scan and a provably clean
 store, not the mid-copy partial write §6.2 and this row exist to stop.
@@ -1086,14 +1092,51 @@ successful copy is still worth refusing, and a different isolation level or a pa
 future shape need not behave the same way. It stays on #1193 as a REACHABLE case, and is still not
 guess-refused, because ② above forbids a `permanent` refusal reached by parsing an operator's SQL.
 
-#1193 also carries a NEW hole slice 2 opened and could not close: `resolvePostgresDatasetAddress` returns
-`storeIdentity: null`, because `ConnectorAdapter.resolveDatasetAddress` receives no SECRET — it must
-be answerable for the sink, whose adapter never runs. A networked store's physical identity needs a
-session, and a session needs a password. Postgres can identify itself precisely (measured: `select
-system_identifier from pg_control_system()` is cluster-unique and readable by an ordinary role, the
-analogue of sqlite's `dev:ino`), so this is a seam limitation, not a store one — and when postgres
-becomes a sink, two connections naming one cluster through different host spellings will be
-comparable only by the `store` string.
+**④ The `storeIdentity` hole — CLOSED by slice 3b (#1193).** Slice 2 opened it and slice 3a made it
+reachable: `resolvePostgresDatasetAddress` returned `storeIdentity: null`, so two connections naming
+one cluster through different host spellings (`localhost` and `127.0.0.1`, a name and its CNAME)
+compared only by the `store` string, disagreed, and a copy reading and overwriting ONE table was not
+refused. The stated cause — "the seam receives no SECRET, because it must be answerable for the
+SINK, whose adapter never runs and whose credential is therefore never resolved" — was FALSE in its
+second clause and was false when written: `executor.ts` resolves both ends' secrets before it asks
+for either address.
+
+`ConnectorAdapter.resolveDatasetAddress` now takes a `secret` (each end its OWN — passing the
+source's to the sink would send one server's password to another), and the postgres implementation
+opens one session per end to answer two questions only a session can:
+
+- `storeIdentity` = `<system_identifier>:<database oid>:<primary|standby>`. All three parts are
+  load-bearing. `system_identifier` is cluster-unique and MEASURED readable by an ordinary
+  unprivileged role. The database OID separates two databases in one cluster, which
+  `nspname.relname` cannot. `pg_is_in_recovery()` separates a PRIMARY from a physical STANDBY,
+  whose control file is a byte copy of its primary's and which therefore reports the same
+  `system_identifier` and the same database OIDs — without it, `standby → primary`, an ordinary ETL
+  shape, would be refused as a self-copy. (That byte-copy claim is REASONED from `pg_basebackup`'s
+  mechanism, not measured; the part is included so the answer does not depend on it.)
+- `object` = the CANONICAL `nspname.relname` from `to_regclass` on the QUOTED name. This half was
+  not optional: `sameDatasetAddress` ends on `a.object !== null && a.object === b.object`, and
+  `object` was `null` for every table dataset that did not declare a `schema` — which the schema
+  makes optional, i.e. the majority spelling. Closing `storeIdentity` alone would have started
+  refusing schema-QUALIFIED pairs and gone on missing unqualified ones. One seam limitation, one
+  cause, one fix.
+
+**Enrichment is BEST-EFFORT; only the CONNECT may refuse.** A connect failure dooms the copy and
+propagates. A failure of either QUERY degrades to `null` and the address still resolves. sqlite's
+opposite choice does not transfer: `resolveSqliteDatasetAddress` lets a `stat` failure propagate
+because every way it can fail leaves the copy unable to proceed anyway. Not so here —
+`pg_control_system()`'s execute privilege is a REVOCABLE ACL (public on a vanilla 17, measured) and
+`to_regclass` raises `42501` for a role without `USAGE` on a schema. Neither code is transient, so
+propagating would classify `permanent` and refuse EVERY copy against such a server, forever, while
+a role that can `SELECT` and `INSERT` would have copied fine — ② 's forbidden direction, reached by
+a different door.
+
+**The cost, stated rather than discovered.** One session per dataset end is added to the pre-flight,
+so a postgres-to-postgres copy opens four sessions across a dispatch where it opened two. They are
+SEQUENTIAL and each closes in a `finally`, so peak concurrent sessions per node is unchanged at two.
+The unbounded part is across NODES: pre-flight runs outside `executor.ts`'s `pLimit`, so N
+concurrently dispatching copy nodes open N store sessions with no cap where the running phase is
+capped. That is a pre-existing property of pre-flight which this makes matter more; it is filed as
+#1200 rather than fixed here.
 
 ---
 
@@ -1246,7 +1289,7 @@ source and a sink.
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
-| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) keeps row 3, the self-copy residual and the `storeIdentity` hole. #1194 is CLOSED out of band: a `query` dataset's named `parameters` now bind on postgres, rewritten `:name` → `$n` by a postgres-aware lexer — see §2.6's amended slice-2 block | slice 1 shipped no operator-reachable caller for the probe — #1191 |
+| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) is **SHIPPED** and was the `storeIdentity` hole ALONE: row 3 and the `query` self-copy residual were both dispatched by slice 3a's re-measurement (row 3's premise was wrong; the residual is a wasteful no-op and stays deliberately un-guess-refused), leaving one item. It gives `ConnectorAdapter.resolveDatasetAddress` a `secret` — the ticket's stated blocker, that the sink's credential is never resolved, was FALSE — and resolves `<system_identifier>:<database oid>:<primary|standby>` plus the canonical `to_regclass` object, both best-effort so a revoked `pg_control_system()` degrades rather than refusing every copy forever. See §7's amended ④. #1194 is CLOSED out of band: a `query` dataset's named `parameters` now bind on postgres, rewritten `:name` → `$n` by a postgres-aware lexer — see §2.6's amended slice-2 block | slice 1 shipped no operator-reachable caller for the probe — #1191 |
 | **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 

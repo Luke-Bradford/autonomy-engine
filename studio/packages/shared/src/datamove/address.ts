@@ -35,8 +35,9 @@ export const DatasetAddressSchema = z.object({
    */
   store: z.string().min(1),
   /**
-   * The PHYSICAL identity the operating system reports for the store, when it
-   * can be obtained — `dev:ino` for a file-backed store.
+   * The PHYSICAL identity the STORE reports for itself, when it can be obtained
+   * — `dev:ino` for a file-backed store, and (since #1193)
+   * `<system_identifier>:<database oid>:<primary|standby>` for postgres.
    *
    * It exists because the path is NOT an identity, which was measured rather
    * than assumed. `resolveWithinRoots` canonicalises the target's PARENT and
@@ -49,10 +50,20 @@ export const DatasetAddressSchema = z.object({
    *
    * `null` when the store could not be identified. That is the FAIL-OPEN
    * direction for the comparison and deliberately so: an unidentifiable store
-   * falls back to path equality rather than minting a refusal on a fact nobody
-   * established. It cannot hide a real self-copy in practice — both ends open
-   * with `fileMustExist: true`, so a copy that would have run has two readable
-   * files and therefore two identities.
+   * falls back to `store` equality rather than minting a refusal on a fact
+   * nobody established.
+   *
+   * HOW MUCH THAT FALLBACK CAN HIDE DIFFERS BY STORE, and the file case's
+   * reassurance does NOT generalise. For a file store it hides nothing: both
+   * ends open with `fileMustExist: true`, so a copy that would have run has two
+   * readable files and therefore two identities. For a NETWORKED store the
+   * fallback is to `host:port/database`, a string one server answers to under
+   * several spellings — which is precisely the hole #1193 closed by giving the
+   * address seam a credential. A postgres end reaches `null` here only when the
+   * cluster REFUSES to identify itself (`pg_control_system()`'s execute
+   * privilege is revocable), and that stays fail-open on purpose: the
+   * alternative is refusing every copy against such a server forever, though
+   * the role can read and write perfectly well.
    */
   storeIdentity: z.string().min(1).nullable(),
   /**
@@ -100,8 +111,16 @@ export type DatasetAddress = z.infer<typeof DatasetAddressSchema>;
  * THE RESIDUAL, stated so it is not mistaken for coverage: a `query` source
  * reading the very table its sink overwrites, in the same store, is NOT caught.
  * Deciding it means reading the SQL to learn which tables it touches, and the
- * gate refuses to guess. M10's postgres, whose driver can describe a statement's
- * source relations, is where that becomes answerable.
+ * gate refuses to guess.
+ *
+ * M10 arrived and did NOT close it, which is a settled answer rather than an
+ * outstanding one. #1196 measured the case against `postgres:17`: it is not a
+ * data-loss path (the reader holds a `BEGIN READ ONLY` cursor snapshot and the
+ * sink's `DELETE`+insert is one transaction), so it is a wasteful no-op. And
+ * §7 ② is explicit that a `permanent` refusal reached by parsing an operator's
+ * SQL badly is the one direction this gate must never fail in. #1193 gave
+ * postgres a real `storeIdentity`, so the STORE half of such a pair now compares
+ * correctly; the object half stays `null` deliberately.
  */
 export function sameDatasetAddress(a: DatasetAddress, b: DatasetAddress): boolean {
   if (a.kind !== b.kind) return false;

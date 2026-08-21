@@ -520,10 +520,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
     //   source reads a snapshot taken before the sink's uncommitted `DELETE` —
     //   so a `query` reading the very table its sink overwrites read all five
     //   rows, wrote them back, and committed with the table intact. A wasteful
-    //   no-op, not destruction. It stays on #1193 as a REACHABLE case rather
-    //   than an unreachable one, and it is still not guess-refused: §7 ② is
-    //   explicit that a `permanent` refusal reached by parsing an operator's
-    //   SQL badly is the one direction a gate must never fail in.
+    //   no-op, not destruction. It stays a REACHABLE case rather than an
+    //   unreachable one, and it is still not guess-refused: §7 ② is explicit
+    //   that a `permanent` refusal reached by parsing an operator's SQL badly is
+    //   the one direction a gate must never fail in.
+    //
+    // #1193 (slice 3b) then closed the ONE item those two re-measurements left:
+    // the `storeIdentity` hole this widening made reachable. The address seam
+    // now takes a credential, so two spellings of one host no longer read as two
+    // stores. See §7 ④.
     sinkConnectionKinds: ['sqlite', 'postgres'],
     datasetKinds: { source: ['table', 'query', 'delimited'], sink: ['table'] },
     outputs: [

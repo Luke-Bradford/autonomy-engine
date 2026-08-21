@@ -679,6 +679,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     adapter: ConnectorAdapter,
     connectionConfig: Record<string, unknown>,
     dataset: ResolvedDataset,
+    // #1193 — THAT END's credential, never the other's. A postgres-to-postgres
+    // copy resolves two addresses against two servers, and passing the source's
+    // secret to the sink would send one server's password to another. The sink
+    // end is `string | null | undefined` at the call site because an UNPAIRED
+    // node never resolves one; `undefined` and `null` collapse here, and a store
+    // that needs a credential refuses either identically.
+    secret: string | null,
   ): Promise<{ error: string; code: string; kind?: FailureKind } | { address: DatasetAddress }> {
     if (adapter.resolveDatasetAddress === undefined) {
       return {
@@ -687,7 +694,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       };
     }
     try {
-      return { address: await adapter.resolveDatasetAddress({ connectionConfig, dataset }) };
+      return {
+        address: await adapter.resolveDatasetAddress({ connectionConfig, dataset, secret }),
+      };
     } catch (err) {
       const kind =
         err instanceof DatasetIoError ? toEngineFailure(err.kind).kind : ('permanent' as const);
@@ -1286,6 +1295,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         adapter,
         connectionConfig,
         datasets.source,
+        secret,
       );
       if ('error' in sourceAddress) {
         yield preflightFailure(
@@ -1326,6 +1336,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           sinkAdapter,
           sink.connectionConfig,
           sinkDataset,
+          sinkSecret ?? null,
         );
         if ('error' in sinkAddress) {
           yield preflightFailure(runId, nodeId, attemptId, sinkAddress, 'sink', 'dataset');

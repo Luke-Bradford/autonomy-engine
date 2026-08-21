@@ -144,7 +144,9 @@ describe('activity catalog', () => {
     // wrong premise (a BOUND parameter coerces per VALUE, so `'123'` into
     // `int4` succeeds), and the `query` self-copy residual measured as a
     // wasteful no-op rather than a data-loss path. The registry entry carries
-    // both measurements; #1193 keeps the work.
+    // both measurements. #1193 then closed with ONE item left of the three —
+    // the `storeIdentity` hole — which slice 3b shipped by giving the address
+    // seam a credential; row 3 is declined on measured grounds, not deferred.
     //
     // `datasetKinds.sink` STILL does not move, and that half of the pin is
     // untouched: there is no `delimited` writer, so a CSV remains something a
