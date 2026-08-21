@@ -6,18 +6,24 @@ import { RunWindowsEditor } from './RunWindowsEditor';
 import { blankRunWindowRow, type RunWindowsFormState } from './runWindowsForm';
 
 /**
- * #1092 — WHERE FOCUS LANDS when a run-window row is removed.
+ * #1092 — ROW IDENTITY and WHERE FOCUS LANDS when a run-window row is removed.
  *
- * This is a CHARACTERIZATION test: it records what the editor does today, so a
- * later fix has a measured baseline to move rather than a description to argue
- * with. The ticket reported that removing a middle row "moves focus to a
- * different logical window", and the honest answer turned out to be narrower —
- * which is the whole reason to pin it before changing anything.
+ * This file began as a CHARACTERIZATION test recording what `key={index}` did,
+ * so a fix would have a measured baseline to move rather than a description to
+ * argue with. The fix has landed and the assertions are inverted here; the
+ * baseline they moved from is preserved in each test's comment, because "the
+ * node is the same one" only means something against "it used to be a
+ * different one".
  *
- * `key={index}` (RunWindowsEditor.tsx) means React matches rows by POSITION, so
- * removing row 0 of three keeps the DOM nodes of positions 0 and 1 and unmounts
- * position 2's — even though the row that logically went away was the first.
- * Every row's data shifts down into a reused DOM node.
+ * WHAT IS FIXED: React now matches rows by identity, so a surviving row keeps
+ * the DOM element the operator was working in, and focus is placed deliberately
+ * after a removal instead of coming to rest on a reused control that has
+ * quietly changed meaning.
+ *
+ * WHAT IS NOT, and is not claimed to be: the visible LABELS are positional
+ * (`Window 2 start` becomes `Window 1 start` when the row above it goes). That
+ * renumbering is a property of numbering windows by position at all, not of the
+ * keys, and it is out of scope for this ticket.
  */
 
 /** The editor is controlled, so a host holds the state a real form would. */
@@ -34,16 +40,39 @@ function Host({ initialRows }: { initialRows: number }) {
 }
 
 const startInput = (n: number) => screen.getByLabelText(`Window ${n} start`);
+const removeButton = (n: number) => screen.getByRole('button', { name: `Remove window ${n}` });
 
-describe('#1092 run-window row removal and focus', () => {
-  it('keyboard removal of the FIRST of three rows leaves focus on a button that now removes a DIFFERENT window', async () => {
+describe('#1092 run-window row removal — identity and focus', () => {
+  it("the DOM node holding a surviving row's data is the SAME node it was before the removal", async () => {
+    const user = userEvent.setup();
+    render(<Host initialRows={3} />);
+
+    // The input the operator is editing, captured as a NODE — this is the
+    // identity claim, and it is the one `key={index}` got wrong.
+    const editing = startInput(3);
+    expect(editing).toHaveValue('03:00');
+
+    await user.click(removeButton(1));
+
+    // That row's data is still on screen, one position up...
+    const nowHolding = startInput(2);
+    expect(nowHolding).toHaveValue('03:00');
+    // ...in the SAME element. Under `key={index}` React reused positions 0 and 1
+    // and unmounted position 2, so this node was destroyed and its value copied
+    // into a node that had held a different window — taking the operator's
+    // selection, caret and any in-flight IME composition with it.
+    expect(nowHolding).toBe(editing);
+    expect(editing.isConnected).toBe(true);
+  });
+
+  it('keyboard removal moves focus to the NEIGHBOUR that inherits the position, not to a reused button', async () => {
     const user = userEvent.setup();
     render(<Host initialRows={3} />);
     expect(startInput(3)).toHaveValue('03:00');
 
     // Keyboard, not mouse: the operator tabs to "Remove window 1" and presses
     // Enter, so focus is on that button when the list re-renders.
-    const remove1 = screen.getByRole('button', { name: 'Remove window 1' });
+    const remove1 = removeButton(1);
     remove1.focus();
     await user.keyboard('{Enter}');
 
@@ -51,48 +80,69 @@ describe('#1092 run-window row removal and focus', () => {
     expect(startInput(1)).toHaveValue('02:00');
     expect(startInput(2)).toHaveValue('03:00');
 
-    // THE WART: position 0's button was reused, so focus is still on it — and it
-    // is still labelled "Remove window 1", which now means the row that used to
-    // be window 2. A second Enter removes a window the operator never chose to
-    // aim at. Stable per-row keys would instead unmount this button (focus would
-    // fall to <body>), which is why the fix is not a one-line key swap.
-    expect(document.activeElement).toBe(remove1);
-    expect(remove1).toHaveAccessibleName('Remove window 1');
-    expect(startInput(1)).toHaveValue('02:00');
+    // The button that was focused is GONE — its whole row unmounted, which is
+    // the point. Under `key={index}` it survived, still labelled "Remove window
+    // 1", still focused, and now aimed at the window that used to be second: a
+    // second Enter would have removed a window the operator never chose.
+    expect(remove1.isConnected).toBe(false);
+    // Focus was placed on the row that inherited the position, so a keyboard
+    // user is neither stranded on <body> nor left holding a changed control.
+    expect(document.activeElement).toBe(removeButton(1));
+    expect(document.activeElement).not.toBe(remove1);
   });
 
-  it("the DOM node holding a row's data is NOT the node that held it before the removal", async () => {
+  it('removing the LAST row moves focus to the row before it', async () => {
     const user = userEvent.setup();
     render(<Host initialRows={3} />);
 
-    // The input the operator is editing, captured as a NODE — this is the
-    // identity claim, and it is the one `key={index}` gets wrong.
-    const editing = startInput(3);
-    expect(editing).toHaveValue('03:00');
+    // There is no row below to inherit the position, so the fallback is the one
+    // above — the nearest control of the same kind.
+    const remove2 = removeButton(2);
+    await user.click(removeButton(3));
 
-    await user.click(screen.getByRole('button', { name: 'Remove window 1' }));
-
-    // That row's data is still on screen, one position up...
-    const nowHolding = startInput(2);
-    expect(nowHolding).toHaveValue('03:00');
-    // ...but in a DIFFERENT element: React reused positions 0 and 1 and
-    // unmounted position 2, so the node the operator had focused/selected/was
-    // mid-IME-composition in is gone, and its data was copied into a node that
-    // used to hold a different window. Per-row keys are what would make these
-    // the same element.
-    expect(nowHolding).not.toBe(editing);
-    expect(editing.isConnected).toBe(false);
+    expect(screen.queryByLabelText('Window 3 start')).toBeNull();
+    expect(document.activeElement).toBe(remove2);
+    expect(remove2.isConnected).toBe(true);
   });
 
-  it('no row data is corrupted by the reuse — every field is controlled', async () => {
+  it('removing the ONLY row moves focus to "Add window" rather than stranding on <body>', async () => {
+    const user = userEvent.setup();
+    render(<Host initialRows={1} />);
+
+    await user.click(removeButton(1));
+
+    expect(screen.queryByLabelText('Window 1 start')).toBeNull();
+    // The pane's one control that always exists — the same fallback
+    // `FactoryResources` uses when the row it wanted to return to has gone.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add window' }));
+  });
+
+  it('no row data is corrupted by the removal — every field is controlled', async () => {
     const user = userEvent.setup();
     render(<Host initialRows={3} />);
-    await user.click(screen.getByRole('button', { name: 'Remove window 2' }));
+    await user.click(removeButton(2));
 
-    // The saved windows are always correct, which is why #1092 is a focus wart
-    // and not a data defect.
+    // Unchanged by the fix, and asserted for exactly that reason: #1092 was a
+    // focus/identity wart and never a data defect, so the saved windows were
+    // correct before and must still be.
     expect(startInput(1)).toHaveValue('01:00');
     expect(startInput(2)).toHaveValue('03:00');
     expect(screen.queryByLabelText('Window 3 start')).toBeNull();
+  });
+
+  it('a row ADDED after a removal is a new row, and does not inherit the removed row’s element', async () => {
+    const user = userEvent.setup();
+    render(<Host initialRows={2} />);
+
+    const survivor = startInput(2);
+    await user.click(removeButton(1));
+    expect(startInput(1)).toBe(survivor);
+
+    await user.click(screen.getByRole('button', { name: 'Add window' }));
+    expect(startInput(1)).toBe(survivor);
+    // The new row is genuinely new: blank, and a different element from either
+    // the survivor or the row that was removed.
+    expect(startInput(2)).toHaveValue('');
+    expect(startInput(2)).not.toBe(survivor);
   });
 });
