@@ -329,6 +329,68 @@ dataset kinds.
 | `sqlite`   | `roots` + `path` (**confined by the same `roots` allowlist model as `fs`** — a SQLite file is a file, and an unconfined path is the same traversal risk), `writable` | none                                                                       |
 | `postgres` | `host`, `port`, `database`, `user`, `sslmode`, `connectTimeoutMs`, `statementTimeoutMs`                                                                              | `secretRef` → password. **Joins `SECRET_REQUIRING_CONNECTION_KINDS`** (§8) |
 
+**As built — M10 slice 1 (#1189): what a `postgres` connection actually accepts.**
+
+The key list above stands. Three things it did not settle were settled by MEASURING `pg@8.23.0`
+against a real `postgres:17`, and each changed the shape of the code rather than merely confirming
+it.
+
+**(1) `sslmode`'s vocabulary is NARROWER than libpq's, and it is not a passthrough.** Measured: a
+`pg` `Client` **silently ignores an `sslmode` key on its options object** — `new Client({ ...,
+sslmode: 'require' })` connects in PLAINTEXT and reports success, because `sslmode` is a
+connection-URL concept only `pg-connection-string` parses. Forwarding the operator's string would
+therefore tell someone who asked for TLS that their unencrypted connection was fine. The adapter
+maps by hand instead (`connectors/postgres.ts`'s `sslOptionFor`), over three values:
+
+| `sslmode`     | `pg`'s `ssl`                    | means                                                 |
+| ------------- | ------------------------------- | ----------------------------------------------------- |
+| `disable`     | `false`                         | plaintext, asked for explicitly                       |
+| `require`     | `{ rejectUnauthorized: false }` | encrypted, peer NOT verified (libpq's meaning)        |
+| `verify-full` | `{ rejectUnauthorized: true }`  | encrypted and verified against the system trust store |
+
+`prefer` and `allow` are omitted: they mean "TLS if offered, plaintext otherwise", a downgrade an
+attacker forces by answering "no SSL here", and a setting whose failure mode is invisible plaintext
+is not one this schema should be able to express. **`verify-ca` is omitted as a SPEC GAP rather than
+a preference** — the key list above has no `sslRootCert`, so there is nowhere to put a private CA,
+and a system-trust-only `verify-ca` would differ from `verify-full` only by dropping hostname
+verification. Wanting a private CA means this table owes the key first.
+
+There is **no default**. #473's rule — an absent fact must never be manufactured as a benign one —
+binds hardest on a transport-security setting, and here both candidate defaults are wrong: `pg`'s
+own default is `ssl: false`, so silence would mean plaintext, while defaulting to `verify-full`
+would fail every local dev server with an error naming nothing the operator set.
+
+**(2) Every identity field is REQUIRED, because `pg` fills the gaps from the environment.**
+Measured: an option that is `undefined` **or an empty string** falls back to `PGHOST`, `PGPORT`,
+`PGUSER`, `PGDATABASE` and `PGPASSWORD`, and an absent `ssl` falls back to `PGSSLMODE`. A connection
+missing its `host` therefore does not fail — it reaches whatever the studio server process happens
+to have in its environment, differently on every machine; and a connection with no bound secret
+would authenticate with `PGPASSWORD`, a credential nothing in the product recorded. So the schema
+requires them, the adapter refuses a `null` **or empty** secret before building a client, and
+`clientOptionsFor` populates every key rather than letting the driver infer one.
+
+**(3) The non-overridable boundary is wider than `sqlite`'s.** `postgres` is the first kind where a
+per-dispatch `Connection.parameters` override could move a DECRYPTED CREDENTIAL, so `host`, `port`,
+`database`, `user` and `sslmode` all join `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`; only the two
+timeouts stay tunable. The rule reads as one sentence — a postgres connection's identity and its
+transport are fixed by whoever bound the credential — and `user` is closed along with the rest on
+that map's own stated asymmetry: closing a key with no consumer costs one entry, and re-opening one
+later is a change in the permissive direction.
+
+**`DATASET_CONNECTION_KINDS` is deliberately UNCHANGED by slice 1.** No `table` or `query` dataset
+may name a postgres connection until slice 2 (#1190) ships the reader, in the same commit. Listing a
+store there is what lets an operator author a dataset against it — the form stops warning and the
+row saves clean — so opening it early would mean a dataset that can only fail at dispatch, the trap
+§12's M5 row was split four ways to avoid. The existing `DATASET_CONNECTION_MISMATCH` dispatch gate
+refuses the binding meanwhile, so holding it shut costs nothing and moves the refusal to where the
+dataset is authored.
+
+**§12's dependency check is DISCHARGED, not deferred.** `pg@8.23.0` is MIT and **pure JavaScript** —
+`pg-native` is an optional peer and is deliberately not installed, so the "second native/TLS surface"
+the dependency table warns about does not materialise. Every transitive dependency is MIT or ISC and
+the `audit:licenses` gate passes. The single-binary concern is moot in any case:
+`2026-07-30-packaging-and-updates.md` already assumes a bundled Node runtime throughout.
+
 **Dataset kinds:**
 
 | Kind        | `config`                                                                                                     |
@@ -916,7 +978,7 @@ source and a sink.
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
-| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                                                                                                                                                                                                           |
+| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader, which opens that binding in the same commit, takes §7's row 3 and the `query` self-copy residual, and owes the CI service container; slice 3 is the sink and the source × sink mesh | slice 1 shipped no operator-reachable caller for the probe — #1191 |
 | **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 
