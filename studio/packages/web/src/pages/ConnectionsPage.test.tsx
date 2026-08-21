@@ -834,6 +834,30 @@ describe('ConnectionsPage', () => {
       expect(deleteMock).toHaveBeenCalledTimes(1);
     });
 
+    it("does not let one row's delete swallow ANOTHER row's click", async () => {
+      // The guard is against a double-click on ONE connection; it must not
+      // serialize the page. A page-wide flag makes a click on a second row
+      // while the first row's dataset read is in flight a SILENT no-op — no
+      // dialog, no error, nothing — which reads as a dead button.
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const other = conn({ id: 'conn_other', name: 'Remote store', kind: 'sqlite', config: {} });
+      const held = deferred<Dataset[]>();
+      // First call hangs (the in-flight read); the second answers at once.
+      listDatasetsMock.mockReturnValueOnce(held.promise).mockResolvedValue([]);
+      listMock.mockResolvedValue([store, other]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Remote store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+      await user.click(screen.getByRole('button', { name: 'Delete Remote store' }));
+
+      // The second row got its own question while the first was still reading.
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+      expect(confirmSpy.mock.calls[0]?.[0] ?? '').toContain('Remote store');
+      held.resolve([]);
+    });
+
     it('warns the delete check failed rather than asking the bare question', async () => {
       const user = userEvent.setup();
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);

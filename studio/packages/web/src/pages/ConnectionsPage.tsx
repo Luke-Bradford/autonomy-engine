@@ -299,13 +299,18 @@ export function ConnectionsPage() {
    * SYNCHRONOUSLY inside one handler, before any await. A `useState` flag would
    * not have re-rendered by the time the second click's handler runs, which is
    * the entire window being closed.
+   *
+   * Keyed BY CONNECTION ID rather than a single page-wide flag: the race is one
+   * row being deleted twice, not the page being used twice. A page-wide flag
+   * would make a click on a second row during the first row's dataset read a
+   * silent no-op — no dialog, no error — which reads as a dead button.
    */
-  const deleting = useRef(false);
+  const deleting = useRef(new Set<string>());
 
   const onDelete = useCallback(
     async (conn: ConnectionPublic) => {
-      if (deleting.current) return;
-      deleting.current = true;
+      if (deleting.current.has(conn.id)) return;
+      deleting.current.add(conn.id);
       try {
         let check: StrandCheck;
         try {
@@ -324,7 +329,7 @@ export function ConnectionsPage() {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        deleting.current = false;
+        deleting.current.delete(conn.id);
       }
     },
     [refresh],
