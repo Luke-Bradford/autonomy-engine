@@ -69,7 +69,27 @@ const REFUSAL_PREFIX: Record<ConnectionKind, string> = {
 
 const KINDS = Object.keys(CONNECTION_CONFIG_SCHEMAS) as ConnectionKind[];
 
-const supervisor = {} as Supervisor;
+/**
+ * A supervisor that REFUSES to be used, rather than an empty `{} as Supervisor`.
+ *
+ * No adapter's `testConnection` touches the supervisor today — `agent_cli`'s
+ * says so in its own comment (spawning a CLI to probe a connection would be an
+ * unsafe, costly side effect, so it asserts a valid config only). But nothing
+ * pinned that, and an empty cast would let a future `testConnection` reach for
+ * it and get `undefined` mid-assertion instead of naming the problem. Throwing
+ * makes the invariant this table depends on fail loudly the day it stops
+ * holding. [NITPICK, review of #1184]
+ */
+const supervisor = new Proxy(
+  {},
+  {
+    get(_target, property) {
+      throw new Error(
+        `testConnection must not touch the supervisor (reached \`${String(property)}\`)`,
+      );
+    },
+  },
+) as Supervisor;
 
 describe('#1175 a refused connection config reads as one line', () => {
   const registry = createConnectorRegistry({ supervisor });
@@ -82,9 +102,16 @@ describe('#1175 a refused connection config reads as one line', () => {
   });
 
   it.each(KINDS)('%s refuses an invalid config with a formatted sentence', async (kind) => {
-    const result = await registry
-      .get(kind)!
-      .testConnection(INVALID_CONFIGS[kind] as Record<string, unknown>, null);
+    // Asserted, not `!`-away: a kind the registry has stopped carrying should
+    // say so here rather than surface as a `TypeError` on `.testConnection`.
+    // [NITPICK, review of #1184]
+    const adapter = registry.get(kind);
+    if (!adapter) throw new Error(`no adapter registered for kind '${kind}'`);
+
+    const result = await adapter.testConnection(
+      INVALID_CONFIGS[kind] as Record<string, unknown>,
+      null,
+    );
 
     expect(result.ok).toBe(false);
     const error = result.error ?? '';
