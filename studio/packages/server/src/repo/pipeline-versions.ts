@@ -9,9 +9,9 @@ import {
   type NewPipelineVersion,
   type PipelineResolver,
   type PipelineVersion,
+  summarizeIssueList,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
-import { ISSUE_LIST_CAP } from '../limits.js';
 import { newId } from './ids.js';
 import { getPipeline, listPipelines, type CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
@@ -42,15 +42,21 @@ export class InvalidPipelineDocError extends Error {
  * `ISSUE_LIST_CAP` issues, then states the remainder ("…and N more") instead of
  * joining an O(doc) tail. `this.issues` always carries the COMPLETE list — only
  * the summary string is bounded. Same `ISSUE_LIST_CAP` the response `issues[]`
- * array uses (`limits.ts`): both are representations of the SAME list and
- * neither may re-emit it whole. Truncation is STATED, never a silent tail drop
- * (the F13a/#473 rule; #496); mirrors the "…and N more" idiom in
- * `shared/src/engine/reduce.ts`'s stall diagnostic.
+ * array uses: both are representations of the SAME list and neither may re-emit
+ * it whole. Truncation is STATED, never a silent tail drop (the F13a/#473 rule;
+ * #496); mirrors the "…and N more" idiom in `shared/src/engine/reduce.ts`'s
+ * stall diagnostic.
+ *
+ * #1183 — the slice/join/tail itself is no longer written here. It moved to
+ * `shared`'s `summarizeIssueList` when `formatZodIssues` needed the same bound,
+ * so the tail has ONE spelling; this wrapper survives only to keep the local
+ * name and this argument at the call site. (`workspace-serialize.ts`'s
+ * `MAX_NAMED_OFFENDERS` tail is a fourth, drifted spelling — "; and N more",
+ * no ellipsis — deliberately NOT folded in here: it caps offender NAMES, not
+ * validation issues, so it would need the cap as a parameter. Noted, not fixed.)
  */
 function summarizeIssues(issues: string[]): string {
-  const named = issues.slice(0, ISSUE_LIST_CAP).join('; ');
-  const rest = issues.length - ISSUE_LIST_CAP;
-  return rest > 0 ? `${named}; …and ${rest} more` : named;
+  return summarizeIssueList(issues);
 }
 
 /**
