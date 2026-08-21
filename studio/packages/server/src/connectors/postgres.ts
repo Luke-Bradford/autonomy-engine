@@ -485,7 +485,8 @@ const CURSOR_NAME = '"__studio_copy"';
  * The SELECT a source dataset resolves to, with every refusal this module owes
  * BEFORE either the describe or the cursor is built.
  *
- * `query` carries ONE refusal here and one rewrite, both measured:
+ * `query` carries one rewrite and one refusal here, both measured (the rewrite
+ * carries a refusal of its own, documented on the module that owns it):
  *
  * - **Named parameters are REWRITTEN, not refused** (#1194). `pg` has no named
  *   parameters — MEASURED, `where a = :id` reaches postgres as SQLSTATE `42601`,
