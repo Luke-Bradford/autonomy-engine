@@ -292,15 +292,35 @@ describe('fs connector — failure classification', () => {
     );
   });
 
-  it('an invalid file_read ACTIVITY config is one line, not a JSON blob (#1175)', async () => {
-    // The connection-config tests above cannot reach this branch — `fs.ts`
-    // refuses the CONNECTION first — so the six `file_*` activity faults had no
-    // behavioural cover at all.
-    const events = await drain(invoke(ctx('file_read', { path: 42 })));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
-    const error = (events[0] as { error: string }).error;
-    expect(error).toMatch(/^invalid file_read activity config: [^\n]+$/);
-    expect(error).toContain('path: ');
+  // The connection-config tests above cannot reach this branch — `fs.ts`
+  // refuses the CONNECTION first — so the six `file_*` activity faults had no
+  // behavioural cover at all. One row per site, so the claim is asserted for
+  // all six rather than generalised from `file_read`; a seventh site added to
+  // `fs.ts` without a row here is caught by the exhaustiveness check below.
+  const ACTIVITY_CONFIG_FAULTS: ReadonlyArray<[string, Record<string, unknown>, string]> = [
+    ['file_read', { path: 42 }, 'path: '],
+    ['file_write', { path: 42, content: 'x' }, 'path: '],
+    ['file_copy', { source: 42, dest: 'd.txt' }, 'source: '],
+    ['file_move', { source: 42, dest: 'd.txt' }, 'source: '],
+    ['file_delete', { path: 42 }, 'path: '],
+    ['file_list', { path: 42 }, 'path: '],
+  ];
+
+  it.each(ACTIVITY_CONFIG_FAULTS)(
+    'an invalid %s ACTIVITY config is one line, not a JSON blob (#1175)',
+    async (activity, input, faultedKey) => {
+      const events = await drain(invoke(ctx(activity, input)));
+      expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+      const error = (events[0] as { error: string }).error;
+      expect(error).toMatch(new RegExp(`^invalid ${activity} activity config: [^\\n]+$`));
+      expect(error).toContain(faultedKey);
+    },
+  );
+
+  it('covers every `<activity> activity config` refusal site in fs.ts (#1175)', async () => {
+    const source = await readFile(new URL('../fs.ts', import.meta.url), 'utf8');
+    const sites = [...source.matchAll(/invalid (\w+) activity config:/g)].map((m) => m[1]).sort();
+    expect(sites).toEqual(ACTIVITY_CONFIG_FAULTS.map(([activity]) => activity).sort());
   });
 
   it('an empty roots list is a permanent config error', async () => {
