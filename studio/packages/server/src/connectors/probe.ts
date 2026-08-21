@@ -25,8 +25,8 @@ import { redactSecrets } from './redact.js';
  */
 
 /**
- * The ceiling on ONE probe, and deliberately not a mirror of any adapter's own
- * budget.
+ * The ceiling on ONE probe REQUEST — queue-wait plus attempt — and deliberately
+ * not a mirror of any adapter's own budget.
  *
  * It sits above `DEFAULT_LLM_TIMEOUT_MS` (120_000) with grace, so a
  * default-configured adapter running its own honest timeout is never pre-empted
@@ -62,6 +62,14 @@ export const PROBE_BACKSTOP_MS = 130_000;
  * and keeps holding its socket. Without a cap, N concurrent requests mean N live
  * sockets (and, for postgres, N server-side sessions) with nothing bounding
  * them, on a server that sets no `requestTimeout`.
+ *
+ * So this counts ATTEMPTS, not answered requests, and `probeConnection` holds a
+ * slot until the underlying `testConnection` settles — past the backstop, if the
+ * adapter hung. That distinction is the whole cap: releasing on the backstop
+ * instead (the first shape here) bounded only how many probes could be WAITED
+ * on at once, while orphaned sockets accumulated behind it without limit. The
+ * price is that a saturated limiter makes later probes queue, which is why the
+ * backstop budget starts at the request rather than at admission.
  *
  * `pLimit` is the same primitive the executor bounds its RUNNING phase with
  * (`run/executor.ts`, `pLimit(deps.concurrency ?? 4)`), at the same default —
@@ -119,7 +127,36 @@ export function configKeysChangedByOverlay(
   overlay: Record<string, unknown>,
 ): string[] {
   const keys = new Set([...Object.keys(stored), ...Object.keys(overlay)]);
-  return [...keys].filter((key) => !sameCanonicalValue(stored[key], overlay[key])).sort();
+  return [...keys].filter((key) => !sameConfigEntry(stored, overlay, key)).sort();
+}
+
+/**
+ * One key, compared as PRESENCE first and value second.
+ *
+ * Presence is checked separately because the value comparison below coalesces
+ * `undefined` to `null` (it has to — `canonicalStringify` will not serialize
+ * `undefined`), and that coalescing on its own would read "this key is absent"
+ * and "this key is explicitly `null`" as the same fact. An overlay ADDING
+ * `{"sslmode": null}` to a config that never carried `sslmode` would then be
+ * reported as unchanged, and the stored secret would be spent against it.
+ *
+ * That is not reachable today — every config field that can route a secret
+ * (`baseUrl` and friends) is `.optional()` and not `.nullable()`, so an explicit
+ * `null` is refused a layer down by the adapter's own `configSchema`. But that
+ * is a second line of defence being load-bearing by accident: the day one
+ * adapter uses `.nullable()` to mean "explicitly disable a default", the hole
+ * this whole guard exists to close reopens silently. A guard documented as
+ * TOTAL should not depend on a coincidence somewhere else.
+ */
+function sameConfigEntry(
+  stored: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+  key: string,
+): boolean {
+  const inStored = Object.prototype.hasOwnProperty.call(stored, key);
+  const inOverlay = Object.prototype.hasOwnProperty.call(overlay, key);
+  if (inStored !== inOverlay) return false;
+  return sameCanonicalValue(stored[key], overlay[key]);
 }
 
 /**
@@ -180,42 +217,81 @@ export async function probeConnection(args: ProbeConnectionArgs): Promise<Connec
     return { ok: false, error: `no adapter for connection kind '${kind}'` };
   }
 
-  return probeLimit(async () => {
-    let timer: NodeJS.Timeout | undefined;
+  // The CALLER's answer, settled independently of the slot. Racing the backstop
+  // INSIDE the limited function was the first shape here and it did not bound
+  // what the cap exists to bound: `pLimit` frees a slot when the function it
+  // wrapped settles, and that function settled on the RACE — so a hung adapter
+  // released its slot after `backstopMs` while its socket (and, for postgres,
+  // its server-side session) kept running, uncounted. A steady stream of probes
+  // at a black-holed host would then accumulate live sockets without limit,
+  // which is precisely the hazard `PROBE_CONCURRENCY` is documented to prevent.
+  //
+  // Splitting the two fixes it: the slot is held until the REAL attempt settles,
+  // so live attempts are never more than `PROBE_CONCURRENCY`; the caller is
+  // answered on its own timer regardless.
+  let settle!: (result: ConnectionProbeResult) => void;
+  let settled = false;
+  let admitted = false;
+  const answer = new Promise<ConnectionProbeResult>((resolve) => {
+    settle = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+  });
+
+  // Started BEFORE admission, so `backstopMs` is a TOTAL budget over queue-wait
+  // plus attempt. It has to be: holding slots through a hang means a saturated
+  // limiter can leave a probe queued indefinitely, and a timer that only starts
+  // on admission would never fire for it — an HTTP request hanging forever on a
+  // server that sets no `requestTimeout`. Every caller now gets a sentence
+  // within the budget whether or not its probe ever ran.
+  const timer = setTimeout(() => {
+    settle({
+      ok: false,
+      error: admitted
+        ? `the connection test did not answer within ${Math.round(
+            backstopMs / 1000,
+          )}s and was abandoned — the attempt may still be running`
+        : // Never started, so it must not claim the store was slow: the honest
+          // reading is that this server is busy, and the operator should retry.
+          `the server is already running its maximum of ${PROBE_CONCURRENCY} connection tests and this one did not start within ${Math.round(
+            backstopMs / 1000,
+          )}s — try again shortly`,
+    });
+  }, backstopMs);
+  // Never hold the process open. The case this timer exists for is an adapter
+  // that has HUNG, so without `unref` a graceful `app.close()` could sit waiting
+  // out the full backstop for a probe whose answer nobody is going to read.
+  timer.unref?.();
+
+  void probeLimit(async () => {
+    // Withdrew while queued: the caller already has its sentence, so opening a
+    // socket now would spend a real connection (and a credential) on an answer
+    // nobody will read. Declining here is what keeps the queue-wait bound from
+    // being merely cosmetic.
+    if (settled) return;
+    admitted = true;
     try {
-      const backstop = new Promise<ConnectionProbeResult>((resolve) => {
-        timer = setTimeout(
-          () =>
-            resolve({
-              ok: false,
-              error: `the connection test did not answer within ${Math.round(
-                backstopMs / 1000,
-              )}s and was abandoned — the attempt may still be running`,
-            }),
-          backstopMs,
-        );
-        // Never hold the process open. The case this timer exists for is an
-        // adapter that has HUNG, so without `unref` a graceful `app.close()`
-        // could sit waiting out the full backstop for a probe whose answer
-        // nobody is going to read.
-        timer.unref?.();
-      });
-      const result = await Promise.race([adapter.testConnection(config, secret), backstop]);
-      return redactProbeResult(result, secret);
+      settle(redactProbeResult(await adapter.testConnection(config, secret), secret));
     } catch (err) {
       // The contract says this cannot happen (`sqlite`/`postgres` both pin
       // "typed to RESOLVE, never reject"). If it does, it is an adapter bug, and
       // the thrown message is the least trustworthy string in the system — it
       // may quote a value we passed in — so it goes through redaction like any
       // other.
-      return redactProbeResult(
-        { ok: false, error: err instanceof Error ? err.message : String(err) },
-        secret,
+      settle(
+        redactProbeResult(
+          { ok: false, error: err instanceof Error ? err.message : String(err) },
+          secret,
+        ),
       );
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      clearTimeout(timer);
     }
   });
+
+  return answer;
 }
 
 /**

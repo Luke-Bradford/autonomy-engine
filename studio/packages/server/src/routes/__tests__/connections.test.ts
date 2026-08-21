@@ -365,8 +365,8 @@ describe('connections routes', () => {
     it('REFUSES to spend the stored secret on a destination the saved row does not name (postgres)', async () => {
       // The exfiltration primitive this rule exists to close: overlay a host,
       // omit the secret, and the server would decrypt the stored password and
-      // send it wherever the body said. `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
-      // names those keys; the refusal must fire BEFORE any socket is opened.
+      // send it wherever the body said. The refusal consults no per-kind
+      // allowlist (see the next test) and must fire BEFORE any socket is opened.
       const id = await seedPostgres('stored-pw');
       const res = await app.inject({
         method: 'POST',

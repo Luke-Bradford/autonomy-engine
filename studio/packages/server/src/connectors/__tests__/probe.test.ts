@@ -89,7 +89,6 @@ describe('probeConnection', () => {
     const registry = registryOf(
       'http',
       async () =>
-        // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
         ({
           ok: true,
           probed: 'liveness',
@@ -156,9 +155,9 @@ describe('probeConnection', () => {
   });
 
   it('caps how many probes are in flight at once, process-wide', async () => {
-    // The cap is what makes the backstop safe to be a RACE rather than a cancel:
-    // an abandoned probe keeps its socket, so without a ceiling N requests mean
-    // N live sockets on a server that sets no `requestTimeout`.
+    // The cap bounds ATTEMPTS, not answered requests: a probe holds its slot
+    // until the adapter settles, so without a ceiling N requests mean N live
+    // sockets on a server that sets no `requestTimeout`.
     let started = 0;
     const release: Array<() => void> = [];
     const registry = registryOf(
@@ -191,6 +190,63 @@ describe('probeConnection', () => {
     }
     await Promise.all(inFlight);
     expect(started).toBe(PROBE_CONCURRENCY + 3);
+  });
+
+  it('keeps a HUNG probe’s slot past the backstop, and says so rather than starting another', async () => {
+    // The bug this pins: `pLimit` frees a slot when the function it wrapped
+    // settles. Racing the backstop INSIDE that function settled it on the race,
+    // so a hung adapter released its slot after `backstopMs` while its socket
+    // kept running — the cap bounded how many probes were being waited on, not
+    // how many were live, which is the opposite of what it is documented to do.
+    let started = 0;
+    const release: Array<() => void> = [];
+    const registry = registryOf(
+      'postgres',
+      () =>
+        new Promise<ConnectionProbeResult>((resolve) => {
+          started += 1;
+          release.push(() => resolve({ ok: true, probed: 'liveness' }));
+        }),
+    );
+
+    try {
+      // Saturate: every slot goes to an adapter that never answers.
+      const hung = Array.from({ length: PROBE_CONCURRENCY }, () =>
+        probeConnection({ registry, kind: 'postgres', config: {}, secret: null, backstopMs: 20 }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(started).toBe(PROBE_CONCURRENCY);
+      for (const result of await Promise.all(hung)) {
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected a failed probe');
+        expect(result.error).toMatch(/was abandoned/);
+      }
+
+      // Every caller has now been answered, and the slots are STILL held —
+      // because the attempts behind them are still open. One more probe must
+      // therefore never start.
+      const queued = await probeConnection({
+        registry,
+        kind: 'postgres',
+        config: {},
+        secret: null,
+        backstopMs: 20,
+      });
+      expect(started).toBe(PROBE_CONCURRENCY);
+      expect(queued.ok).toBe(false);
+      if (queued.ok) throw new Error('expected a failed probe');
+      // And it says the honest thing: the server was busy, NOT that the store
+      // was slow — nothing was ever contacted on its behalf.
+      expect(queued.error).toMatch(/already running its maximum/);
+      expect(queued.error).not.toMatch(/was abandoned/);
+    } finally {
+      // The limiter is module-level, so a test that strands slots would starve
+      // every test after it. Freeing the hung attempts also drains the withdrawn
+      // probe, which declines its slot rather than opening a socket nobody reads.
+      for (const free of release) free();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(started).toBe(PROBE_CONCURRENCY);
   });
 
   it('sits above the default LLM probe budget, so an honest slow probe is never pre-empted', () => {
@@ -260,6 +316,24 @@ describe('configKeysChangedByOverlay', () => {
       configKeysChangedByOverlay({ port: overflowed.port }, { port: overflowed.port }),
     ).toEqual(['port']);
     expect(configKeysChangedByOverlay({ port: overflowed.port }, { port: 5432 })).toEqual(['port']);
+  });
+
+  it('separates an ABSENT key from one explicitly set to null', () => {
+    // The value comparison coalesces `undefined` to `null` (it must —
+    // `canonicalStringify` will not serialize `undefined`), so presence has to
+    // be checked on its own. Otherwise an overlay ADDING `{"sslmode": null}` to
+    // a config that never had `sslmode` reads as unchanged, and the stored
+    // secret is spent against a config the saved row does not have.
+    expect(configKeysChangedByOverlay({ host: 'db' }, { host: 'db', sslmode: null })).toEqual([
+      'sslmode',
+    ]);
+    expect(configKeysChangedByOverlay({ host: 'db', sslmode: null }, { host: 'db' })).toEqual([
+      'sslmode',
+    ]);
+    // Present on both sides and both null is genuinely unchanged.
+    expect(
+      configKeysChangedByOverlay({ host: 'db', sslmode: null }, { host: 'db', sslmode: null }),
+    ).toEqual([]);
   });
 
   it('consults NO per-kind allowlist — it takes no kind at all', () => {
