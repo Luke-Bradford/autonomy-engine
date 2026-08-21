@@ -601,6 +601,38 @@ describe('readXlsxRowBatches — malformed references', () => {
     expect(rows[0]!.cells[16_383]).toBe('last');
   });
 
+  it('REFUSES a numeric cell whose <v> is explicitly empty', async () => {
+    // `sawValue` already returned the ABSENT cell before this branch, so an
+    // empty `raw` here means the cell carried `<v></v>` — present and
+    // unparseable. Excel writes a blank as a cell with NO `<v>` at all, so this
+    // is corruption, and returning null would file it as an innocuous blank:
+    // the same collapse the `s` and `b` branches beside it already refuse.
+    const path = seed({
+      sheets: [{ name: 'S', rows: [[{ kind: 'raw', xml: '<c r="A1"><v></v></c>' }]] }],
+    });
+    await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(path)).rejects.toThrowError(/empty <v>/);
+  });
+
+  it('still reads a cell with no <v> as a blank', async () => {
+    // The other half: absent is not corrupt. An interior gap stays null, which
+    // is what makes it distinguishable from the refusal above.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              { kind: 'raw', xml: '<c r="A1"/>' },
+              { kind: 'raw', xml: '<c r="B1" t="inlineStr"><is><t>b</t></is></c>' },
+            ],
+          ],
+        },
+      ],
+    });
+    expect(cellsOf(await readAll(path))).toEqual([[null, 'b']]);
+  });
+
   it('REFUSES a cell whose r attribute is not a cell reference', async () => {
     // `columnIndexOf(cellRef) ?? nextColumn` collapsed two different facts, the
     // same way the dangling rId did: a cell declaring NO ref (position is the

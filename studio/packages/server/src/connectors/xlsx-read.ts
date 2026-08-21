@@ -858,7 +858,18 @@ function materialise(
         : parsed;
     }
     default: {
-      if (raw === '') return null;
+      // `sawValue` returned the ABSENT cell at the top of this function, so an
+      // empty `raw` HERE is an explicit `<v></v>` — present and unparseable.
+      // Excel writes a blank as a cell carrying no `<v>` at all, so this is
+      // corruption, and returning null would file it as an innocuous blank:
+      // the same present-vs-absent collapse the `s` and `b` branches above
+      // already refuse.
+      if (raw === '') {
+        state.failure ??= new XlsxReadError(
+          'a numeric cell holds an empty <v>; a blank cell carries no <v> at all',
+        );
+        return null;
+      }
       const value = Number(raw);
       if (Number.isNaN(value)) return raw;
       const isDate = style !== undefined && parts.styleIsDate[Number(style)] === true;
