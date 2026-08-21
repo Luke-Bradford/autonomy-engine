@@ -910,3 +910,45 @@ Corollaries:
   decides the outcome. What settled it was instrumenting `elementFromPoint` at
   each step of the drag and then reading `isValidHandle` itself — the comment in
   the vendored source stated the priority outright.
+
+## 35. "Passes in isolation, fails in the suite" is a RESOURCE-BUDGET defect — and the timeout is the wrong knob three times running
+
+**Where it bit.** #1124, #985 and #969 all report the same shape: an assertion
+fails only during a full `pnpm test`, and passes when its file is re-run alone.
+Two earlier fixes for this exact class had already landed and neither held —
+`packages/server/vitest.config.ts` raised `testTimeout`/`hookTimeout` to 30s
+(#723), and `packages/web/vitest.setup.ts` raised Testing Library's
+`asyncUtilTimeout` to 5s (#723). Both are careful, well-argued, and treat the
+symptom.
+
+**The lesson.** An isolated re-run is not a different TEST, it is a different
+MACHINE. Before theorising about a race, MEASURE the machine: `pnpm -r run test`
+ran four packages at once and each `vitest run` sized `maxWorkers` to the whole
+box, so the gate ran at ~2x oversubscription (23 processes, loadavg ~20 on 10
+cores). Every "flake" was that. Raising a timeout buys headroom that the next
+heavy spec spends again; it never removes the dependence on a deadline.
+
+**The rule.**
+- On any "flaky under load" report, take a process count and a load average
+  before proposing a cause. It is one command and it reframes the whole ticket.
+- Fix the budget structurally, then remove deadline-dependence per spec:
+  prefer an event the code already emits (a promise it returns, a line on
+  stdout, a status flip) over any sleep.
+- Where a poll is genuinely needed, bound it by ITERATIONS, not by a wall
+  clock. A wall-clock deadline is a fixed budget that a loaded machine eats
+  into — it fails precisely when the machine is busy, which is the failure mode
+  being removed. An iteration bound stretches with the load.
+- A `sleep(n)` before an assertion is often not just a race but a VACUOUS PASS
+  waiting to happen. The supervisor test's 100ms sleep looked like "let the
+  child spawn"; what it actually guarded was that `setsid()` had run, because
+  `killTree` signals the process GROUP and treats the ESRCH from a
+  not-yet-created group as a successful no-op. Removing the sleep for being
+  "just a timing guess" would have made the test green under the very leakage
+  it exists to catch. Ask what a sleep is standing in for before deleting it.
+
+**And label a fix you cannot demonstrate.** The lazy-chunk pre-warm in
+`routes.test.tsx` was measured on an idle box, cold Vite cache, and made the
+test slightly SLOWER (429ms vs 396ms). It was kept because the claim is about
+which BUDGET the wait falls under, not about speed — but that null result is
+recorded in the code comment rather than quietly omitted, because the obvious
+check for "is this a no-op?" returns the wrong answer here.

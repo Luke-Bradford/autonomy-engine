@@ -502,6 +502,24 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     not-in-list `show` fallback can only KEEP or REMOVE a marker, never
     fire. *(#392; specs/2026-07-12-run-now-non-manual-modes.md.)*
 
+48. **The studio test gate runs each package's suite SERIALLY, one package at a
+    time, via `studio/scripts/test-packages.mjs`** — not `pnpm -r run test`.
+    Each package's script is a bare `vitest run`, and vitest sizes `maxWorkers`
+    to the whole machine, so running the four packages concurrently
+    oversubscribed it ~2x (measured on 10 cores: 23 vitest processes, loadavg
+    ~20, versus 13 and ~11 serial). That is the mechanism behind every "fails in
+    the full suite, passes in isolation" report: an isolated re-run is not a
+    different test, it is a different machine. It is not a speed tradeoff —
+    concurrent wall-clock is the MAX of the packages (~155.5s) and serial is
+    their SUM (~156.2s), because server and web each run ~2x faster when not
+    fighting each other. A bespoke script rather than
+    `--workspace-concurrency=1` because that flag BAILS after the first failing
+    package (measured, pnpm 11.0.6), hiding later packages' results; and not
+    `--no-bail`, whose measured exit code (1) contradicts its own documented
+    behaviour ("will exit with a 0 exit code even if the script fails") — a
+    merge gate must not rest on that, since the release that makes the code
+    match the docs turns it fail-OPEN silently. *(#1124; PR for #1124/#985/#969.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
