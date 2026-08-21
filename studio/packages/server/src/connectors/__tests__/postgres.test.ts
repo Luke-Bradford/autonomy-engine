@@ -144,7 +144,10 @@ describe('clientOptionsFor (#1189 M10)', () => {
     // (`connectionTimeoutMillis`); `statementTimeoutMs` is the server-side cap
     // on one statement (`statement_timeout`). Crossing them would silently make
     // one of the two settings do nothing.
-    const options = clientOptionsFor({ ...CONFIG, connectTimeoutMs: 1, statementTimeoutMs: 2 }, 'p');
+    const options = clientOptionsFor(
+      { ...CONFIG, connectTimeoutMs: 1, statementTimeoutMs: 2 },
+      'p',
+    );
     expect(options.connectionTimeoutMillis).toBe(1);
     expect(options.statement_timeout).toBe(2);
   });

@@ -1463,7 +1463,11 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
 
     const state = await startRun(
       deps(db, {
-        catalog: catalogOf({ type: 'test_pg_store', kind: 'execution', connectionKinds: ['postgres'] }),
+        catalog: catalogOf({
+          type: 'test_pg_store',
+          kind: 'execution',
+          connectionKinds: ['postgres'],
+        }),
       }),
       run,
     );
