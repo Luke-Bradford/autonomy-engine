@@ -154,6 +154,25 @@ describe('rewriteNamedParametersToPositional', () => {
       // MEASURED: `select $t1$ :id $t1$` yields ` :id ` — a digit may CONTINUE a
       // tag even though it cannot start one.
       ['a dollar-quoted string with a digit in its tag', 'select $t1$ :id $t1$ as v, :id'],
+      // MEASURED: `select $😀$ :id $😀$` and `select $¢$ :id $¢$` both yield
+      // ` :id `. Neither tag is `\p{L}`, so a scan that classified tag characters
+      // by Unicode LETTER-ness read these literals as CODE and rewrote the `:id`
+      // inside them — fail-open, and the reason the rule is now "any non-ASCII".
+      ['a dollar-quoted string with an EMOJI tag', 'select $😀$ :id $😀$ as v, :id'],
+      ['a dollar-quoted string with a CURRENCY-SIGN tag', 'select $¢$ :id $¢$ as v, :id'],
+      // MEASURED: `select $\u0301$ :id $\u0301$` yields ` :id `, and
+      // `select 1 as \u0301x` names the column `\u0301x` — a lone COMBINING ACUTE
+      // ACCENT (Mn) both starts an identifier and tags a literal. Mn is outside
+      // `\p{L}` AND `\p{N}`, so the first rule missed this one too.
+      [
+        'a dollar-quoted string with a COMBINING-MARK tag',
+        'select $\u0301$ :id $\u0301$ as v, :id',
+      ],
+      // MEASURED: `select $𝐀$ :id $𝐀$` yields ` :id `. `𝐀` is ASTRAL, so in
+      // UTF-16 it is a surrogate PAIR — a per-code-unit `\p{L}` test sees a lone
+      // surrogate half and matches nothing at all. Testing `>= 0x80` instead
+      // answers correctly for each half without any code-point plumbing.
+      ['a dollar-quoted string with an ASTRAL tag', 'select $𝐀$ :id $𝐀$ as v, :id'],
       // MEASURED: `select 1 as ":id"` names the column `:id`.
       ['a double-quoted identifier', 'select 1 as ":id", :id'],
       ['a double-quoted identifier with a doubled quote', 'select 1 as ":id""x", :id'],
@@ -220,6 +239,38 @@ describe('rewriteNamedParametersToPositional', () => {
     it('does not open a dollar quote on `é$$b`', () => {
       expect(rewrite('select é$$b from t where a > :id', { id: 3 })).toEqual({
         sql: 'select é$$b from t where a > $1',
+        values: [3],
+      });
+    });
+
+    // MEASURED on `postgres:17`: `select 1 as ²$1, 2 as 😀$1` names the columns
+    // `²$1` and `😀$1`, and `select 1 as 𝐀$$b` is valid.
+    //
+    // Which of these the FIRST rule (`\p{L}\p{N}_$`) already got right is worth
+    // stating exactly, because it is the whole argument for classifying by byte
+    // rather than by category: `²` is No, so `\p{N}` covered it BY LUCK. `😀` is
+    // So and a lone surrogate half is Cs, and neither is in any category that
+    // rule named — so it refused `😀$1` as a positional placeholder and let
+    // `𝐀$$b` open a dollar quote. The `²` case below is kept as the guard
+    // against an ASCII-only regression; it is the two after it that the shipped
+    // rule actually failed.
+    it('does not read the `$1` in `²$1` as a positional placeholder', () => {
+      expect(rewrite('select 1 as ²$1, a from t where a > :id', { id: 3 })).toEqual({
+        sql: 'select 1 as ²$1, a from t where a > $1',
+        values: [3],
+      });
+    });
+
+    it('does not read the `$1` in `😀$1` as a positional placeholder', () => {
+      expect(rewrite('select 1 as 😀$1, a from t where a > :id', { id: 3 })).toEqual({
+        sql: 'select 1 as 😀$1, a from t where a > $1',
+        values: [3],
+      });
+    });
+
+    it('does not open a dollar quote on the ASTRAL `𝐀$$b`', () => {
+      expect(rewrite('select 𝐀$$b from t where a > :id', { id: 3 })).toEqual({
+        sql: 'select 𝐀$$b from t where a > $1',
         values: [3],
       });
     });

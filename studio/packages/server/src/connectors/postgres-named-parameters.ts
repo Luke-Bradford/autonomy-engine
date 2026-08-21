@@ -113,9 +113,42 @@ export interface PostgresStatement {
  * asking a different question: what does postgres consider one token, in SQL
  * TEXT nobody validated. Borrowing the policy for the lexical question is what
  * produced the two failures above.
+ *
+ * NOR is it `\p{L}`, which is the SECOND way of asking the wrong question and the
+ * one this module shipped with. Postgres does not classify identifier characters
+ * by Unicode category at all: `scan.l` reads `ident_start [A-Za-z\200-\377_]`,
+ * so in a multibyte encoding EVERY non-ASCII byte continues an identifier.
+ * MEASURED on `postgres:17` (UTF8), every one of these names a column and not
+ * one of them is a LETTER: `select 1 as 😀` (So), `select 1 as ¢` (Sc),
+ * `select 1 as ²` (No), and `select 1 as \u0301x` — a lone COMBINING ACUTE
+ * ACCENT (Mn), which postgres is content to have START an identifier.
+ * `select $😀$ inner :id $😀$` is likewise a real dollar-quoted string.
+ *
+ * Exactly one of those the first rule (`\p{L}\p{N}_$`) survived: `²` is No, so
+ * `\p{N}` caught it by luck. `😀` (So), `¢` (Sc), U+0301 (Mn) and a lone
+ * surrogate half (Cs) fall in no category that rule named — so under it this
+ * scanner did not see the `$😀$` tag, read the literal as CODE, and rewrote the
+ * `:name` INSIDE it. That is the fail-open direction, the same hole a non-ASCII
+ * tag opened before it.
+ *
+ * Testing the CODE UNIT rather than the code point is deliberate and is what
+ * closes the astral-plane case for free: an astral character is a surrogate
+ * pair, and both halves are `>= 0x80`, so each half answers this question the
+ * same way the whole character would. A `\p{L}` test on `sql[i]` sees a lone
+ * surrogate and matches nothing — the corner the category test could not reach
+ * even in principle without code-point plumbing.
  */
 function isIdentifierChar(char: string | undefined): boolean {
-  return char !== undefined && /[\p{L}\p{N}_$]/u.test(char);
+  return char !== undefined && (isNonAscii(char) || /[A-Za-z0-9_$]/.test(char));
+}
+
+/**
+ * Postgres's `\200-\377` class, expressed in UTF-16. Every non-ASCII code unit
+ * — including each half of a surrogate pair — encodes to UTF-8 bytes that are
+ * all `>= 0x80`, so this is an exact restatement rather than an approximation.
+ */
+function isNonAscii(char: string): boolean {
+  return char.charCodeAt(0) >= 0x80;
 }
 
 /**
@@ -127,7 +160,7 @@ function isIdentifierChar(char: string | undefined): boolean {
  * divergence #1194 exists to close.
  */
 function isNameStart(char: string | undefined): boolean {
-  return char !== undefined && /[\p{L}_]/u.test(char);
+  return char !== undefined && (isNonAscii(char) || /[A-Za-z_]/.test(char));
 }
 
 /**
@@ -184,13 +217,22 @@ function endOfEscapeStringRegion(sql: string, openQuote: number): number {
  * direction, and the reason the whole module asks postgres's lexical question
  * rather than this repo's identifier-validation one.
  */
+/**
+ * What CONTINUES a dollar-quote tag: `isIdentifierChar` minus `$`, because a `$`
+ * is what closes the tag rather than extending it. Same non-ASCII rule, for the
+ * same measured reason — `$😀$ … $😀$` and `$é$ … $é$` are both real literals.
+ */
+function isTagChar(char: string): boolean {
+  return isNonAscii(char) || /[A-Za-z0-9_]/.test(char);
+}
+
 function dollarQuoteTagAt(sql: string, start: number): string | null {
   let i = start + 1;
   if (isNameStart(sql[i])) {
     i += 1;
     // `$` is excluded here and only here: a tag may not contain one, because a
     // `$` is what CLOSES it.
-    while (i < sql.length && /[\p{L}\p{N}_]/u.test(sql[i] as string)) i += 1;
+    while (i < sql.length && isTagChar(sql[i] as string)) i += 1;
   }
   return sql[i] === '$' ? sql.slice(start, i + 1) : null;
 }
