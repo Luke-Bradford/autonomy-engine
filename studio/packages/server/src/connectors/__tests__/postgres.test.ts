@@ -19,6 +19,7 @@ import {
 } from '../postgres.js';
 import { COPY_BATCH_ROWS } from '../../limits.js';
 import type { DatasetKind } from '@autonomy-studio/shared';
+import { liveSuiteMustRun } from './live-postgres.js';
 import type { ResolvedDataset } from '../types.js';
 
 /** A `ResolvedDataset` with only the fields the address seam reads. */
@@ -722,27 +723,10 @@ describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
  * SKIPPED IS NOT PASSED. `describe.skipIf` reports these as skipped rather than
  * silently absent, so the count in the run output says which half ran.
  */
-/**
- * #1190 — WHETHER THE LIVE HALF IS ALLOWED TO SKIP, as a named predicate.
- *
- * It is a function rather than an inline `describe.skipIf` condition because a
- * suite cannot assert its own skipping: "these tests go red when the service is
- * missing" is not writable as a test of the expression that decides it. Extracted,
- * it is ordinary code with ordinary tests.
- *
- * THE RULE: skipping is a DEVELOPER convenience and never a CI outcome. Slice 2
- * moves real data, so CI stands up a `postgres:17` service container; if that
- * container is missing the live half must go RED, because a suite CI quietly
- * stops running certifies nothing while reading as coverage.
- *
- * Keyed on `CI`, which was MEASURED rather than assumed: vitest does NOT set it
- * (`process.env.CI` is `undefined` under a local `vitest run`) — it passes the
- * ambient value through, and GitHub Actions exports `CI=true` for every job.
- */
-export function liveSuiteMustRun(env: Record<string, string | undefined>): boolean {
-  return env.CI !== undefined && env.CI !== '' && env.CI !== 'false';
-}
-
+// #1196 — the predicate MOVED to `live-postgres.ts` when the sink suite became
+// its second consumer: importing it from this file re-registered every suite
+// here inside the importer, and one timing-sensitive case then failed there
+// while passing in isolation. Its tests stay put; only its home changed.
 describe('liveSuiteMustRun (#1190 M10)', () => {
   it('lets a developer machine skip', () => {
     expect(liveSuiteMustRun({})).toBe(false);
@@ -994,7 +978,18 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       { ...live, host: 'no-such-host-1189.invalid', connectTimeoutMs: 3_000 },
       password,
     );
+    // THE CLAIM IS `ok: false` — a real server is listening on the PGHOST/PGPORT
+    // this test exports, so a fallback would have CONNECTED and reported success.
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/does not resolve/);
+    // The refusal's WORDING is not the claim, and pinning it to `/does not
+    // resolve/` alone made this test environment-dependent: the bogus host has
+    // to lose a race between DNS failing and the 3s connect budget expiring, and
+    // under full-suite contention the timeout wins (measured — it passes in
+    // isolation and fails inside a loaded run, #1124's family). #1196 widened
+    // it, because slice 3a's live tests make the live half heavier and would
+    // otherwise have made a latent flake a frequent one. Both outcomes prove the
+    // same thing: the connection went to the host the CONFIG named, not the one
+    // the environment did.
+    expect(result.error).toMatch(/does not resolve|timeout expired/);
   });
 });

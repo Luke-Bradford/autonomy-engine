@@ -33,7 +33,7 @@ import { classifyFsError, fsConnectionConfigSchema } from './fs-connection.js';
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
 // imports neither store, which is the property its own docblock protects.
 import { runCopyActivity } from './copy.js';
-import { DatasetIoError } from './dataset-io-error.js';
+import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import {
   delimitedCoercionFor,
   describeDelimitedDatasetColumns,
@@ -44,7 +44,6 @@ import {
 // absolute-root refinement that `node:path` cannot express in a browser-safe
 // package, so this arm's sink gate is the SAME check `sqlite.ts`'s own arm makes
 // rather than a weaker one that leans on the writer re-parsing.
-import { sqliteConnectionConfigSchema, writeSqliteDatasetRows } from './sqlite.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
@@ -525,7 +524,15 @@ export const fsAdapter: ConnectorAdapter = {
     return { ok: true };
   },
 
-  async *runActivity(ctx: ActivityContext): AsyncIterable<ActivityEvent> {
+  async *runActivity(
+    ctx: ActivityContext,
+    _secret: string | null,
+    _secretFields?: Readonly<Record<string, string>>,
+    // #1196 — the SINK's plaintext credential (M1 #1104's fourth argument). An
+    // `fs` source writing into a postgres sink needs it, and this adapter is the
+    // one running. Never placed in `ctx` or an event.
+    sinkSecret?: string | null,
+  ): AsyncIterable<ActivityEvent> {
     const cfg = fsConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!cfg.success) {
       yield failed(
@@ -558,17 +565,13 @@ export const fsAdapter: ConnectorAdapter = {
     // config would make that re-validation a claim rather than a check.
     if (ctx.activityType === COPY_ACTIVITY_TYPE) {
       yield* runCopyActivity(ctx, {
-        // There is no `delimited` WRITER, so an `fs` copy reads a file and
-        // writes into a sqlite store. The catalog says so too
-        // (`sinkConnectionKinds: ['sqlite']`), and this stays as the ladder's
-        // rung for the same reason sqlite's does: it is what a caller bypassing
-        // the catalog hits, and an unchecked sink config would reach the writer
-        // to be refused as "invalid sqlite connection config" — a true
-        // statement about the wrong thing.
-        refuseSink: (connection) =>
-          connection.kind === 'sqlite'
-            ? null
-            : `an fs copy reads a delimited file and writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+        // #1196 — ONE rung, shared, derived from the CATALOG's
+        // `sinkConnectionKinds` rather than a literal. There is still no
+        // `delimited` WRITER, so an `fs` copy reads a file and writes into a
+        // database — but as of slice 3a that database may be sqlite OR postgres,
+        // and the sentence has to follow the catalog rather than restate one
+        // store's name.
+        refuseSink: refuseForeignSink,
         sourceCoercion: (dataset) => delimitedCoercionFor(dataset.config),
         describeSource: ({ dataset, signal }) =>
           describeDelimitedDatasetColumns({
@@ -584,30 +587,15 @@ export const fsAdapter: ConnectorAdapter = {
             datasetConfig: dataset.config,
             ...(signal === undefined ? {} : { signal }),
           }),
-        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
-          // Parsed from `ctx.sink`, never from this adapter's own connection —
-          // and here that is not merely the safer answer, it is the only
-          // coherent one: an `fs` config has no database in it at all.
-          const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
-          if (!parsedSink.success) {
-            throw new DatasetIoError(
-              'permanent',
-              `invalid sqlite sink connection config: ${formatZodIssues(parsedSink.error.issues)}`,
-            );
-          }
-          return writeSqliteDatasetRows(
-            {
-              connectionConfig: parsedSink.data,
-              datasetKind: dataset.kind,
-              datasetConfig: dataset.config,
-              columns,
-              mode,
-              onBatch,
-              ...(signal === undefined ? {} : { signal }),
-            },
+        // Dispatched by SINK KIND (#1196). Parsed from `ctx.sink` inside, never
+        // from this adapter's own connection — and here that is not merely the
+        // safer answer, it is the only coherent one: an `fs` config has no
+        // database in it at all.
+        writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) =>
+          writeRowsToSink(
+            { dataset, connection, sinkSecret: sinkSecret ?? null, columns, mode, onBatch, signal },
             batches,
-          );
-        },
+          ),
       });
       return;
     }

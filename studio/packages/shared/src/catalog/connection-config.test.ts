@@ -77,6 +77,20 @@ describe('connection config catalog', () => {
       expect(postgresConnectionConfigSchema.safeParse(valid).success).toBe(true);
     });
 
+    it('leaves `writable` ABSENT rather than defaulting it (#1196)', () => {
+      // The fail-closed polarity, at the schema. Absent must parse to `undefined`
+      // and NOT to a manufactured `false`/`true`: `writePostgresDatasetRows`
+      // refuses anything that is not exactly `true`, so a default either way
+      // would be a fact nobody stated. `sqlite`'s test above makes the same
+      // claim; this one exists because the two schemas are separate objects and
+      // a default added to one would not show up in the other's test.
+      const parsed = postgresConnectionConfigSchema.parse(valid);
+      expect(parsed.writable).toBeUndefined();
+      expect(postgresConnectionConfigSchema.parse({ ...valid, writable: true }).writable).toBe(
+        true,
+      );
+    });
+
     it.each(['host', 'database', 'user'])(
       'refuses an ABSENT %s, because pg would read the ambient environment for it',
       (key) => {
@@ -270,6 +284,18 @@ describe('#1119 M4 — config keys no per-dispatch override may set', () => {
     // once something reads it, by which point a node could already have granted
     // itself write access to a store its owner marked read-only.
     expect(isNonOverridableConnectionConfigKey('sqlite', 'writable')).toBe(true);
+  });
+
+  it('protects the POSTGRES store write permission too (#1196)', () => {
+    // Slice 3a gives `writable` a consumer on this kind — `writePostgresDatasetRows`
+    // refuses a sink whose connection is not marked writable. That runtime gate is
+    // only worth anything if a per-dispatch `Connection.parameters` override cannot
+    // set the key, so the invariant is pinned HERE as well as at the writer: the
+    // writer's own test proves it READS the flag, and this proves nothing can
+    // forge it. On a networked kind the store being written to is somebody else's
+    // database rather than a local file, which is why it is closed on the same
+    // reasoning as `sqlite`'s and not a weaker one.
+    expect(isNonOverridableConnectionConfigKey('postgres', 'writable')).toBe(true);
   });
 
   it('leaves ordinary settings overridable', () => {

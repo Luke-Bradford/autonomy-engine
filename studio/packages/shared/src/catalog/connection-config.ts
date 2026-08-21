@@ -177,6 +177,22 @@ export const postgresConnectionConfigSchema = z.object({
   /** Server-side `statement_timeout`, in ms — the cap on one statement, and a
    * different timer from the connect budget above. */
   statementTimeoutMs: z.number().int().positive().optional(),
+  /**
+   * #1196 M10 slice 3a — whether this store may be used as a copy SINK.
+   * Absent = read-only, exactly as `sqlite`'s does, and for the same two
+   * reasons its docblock above sets out: it renders truthfully in a form that
+   * omits an unchecked optional boolean, and it fails CLOSED, withholding a
+   * permission rather than manufacturing one.
+   *
+   * Spelled identically to `sqlite`'s on purpose. The connections form carries
+   * same-named fields across a kind change, and "may this store be written to"
+   * is one question whichever store is answering it — a `postgres`-specific
+   * spelling would make retyping a connection silently drop the permission.
+   *
+   * It has NO effect on reading: slice 2's reader opens `BEGIN READ ONLY`
+   * unconditionally, because a source scan has no reason to hold a write lock.
+   */
+  writable: z.boolean().optional(),
 });
 
 /** True iff `pattern` compiles as a `RegExp` (a boundary guard so a malformed
@@ -551,7 +567,12 @@ export const CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS: Record<ConnectionKind, read
   //   direction, which is the safe one to make. Per-environment
   //   `database`/`user` parameterisation is an ADF-legitimate pattern and can
   //   be re-opened deliberately when something actually asks for it.
-  postgres: ['host', 'port', 'database', 'user', 'sslmode'],
+  // `writable` joins them at slice 3a, on the argument the `sqlite` entry above
+  // already makes and which is now live rather than anticipated: it is a
+  // PERMISSION, not a setting. Overridable, a node could grant itself write
+  // access to a store its owner marked read-only — and on THIS kind that store
+  // is a networked database holding someone else's data, not a local file.
+  postgres: ['host', 'port', 'database', 'user', 'sslmode', 'writable'],
 };
 
 /** Whether `key` is a security-boundary config key that no per-dispatch

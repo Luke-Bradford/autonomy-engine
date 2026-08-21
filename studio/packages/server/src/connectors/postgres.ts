@@ -5,27 +5,44 @@ import {
   formatZodIssues,
   postgresConnectionConfigSchema,
   queryDatasetConfigSchema,
-  sqliteConnectionConfigSchema,
   tableDatasetConfigSchema,
   type DatasetAddress,
   type DatasetKind,
-  type PostgresSslMode,
 } from '@autonomy-studio/shared';
-import type {
-  ActivityContext,
-  ActivityEvent,
-  ConnectorAdapter,
-  ConnectorErrorKind,
-  ResolvedDataset,
-} from './types.js';
+import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
 import { failed } from './activity-events.js';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
-import { redactSecrets } from './redact.js';
+import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import { yieldToEventLoop } from './scheduling.js';
-import { quoteIdentifier } from './sql-identifier.js';
-import { writeSqliteDatasetRows } from './sqlite.js';
+// #1196 — the session leaf. `postgres.ts` is the READER + adapter; everything
+// about reaching a server lives one module down, where the sink writer can also
+// reach it without importing this file back (see `postgres-session.ts`).
+import {
+  clientOptionsFor,
+  defaultClientFactory,
+  DEFAULT_POSTGRES_PORT,
+  notAPostgresKind,
+  openSession,
+  POSTGRES_DATASET_KINDS,
+  qualifiedTable,
+  readFailure,
+  type PostgresClient,
+  type PostgresClientFactory,
+} from './postgres-session.js';
+export {
+  clientOptionsFor,
+  DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+  DEFAULT_POSTGRES_PORT,
+  DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
+  isTransientPostgresCode,
+  sslOptionFor,
+  type PostgresClient,
+  type PostgresClientFactory,
+  type PostgresClientOptions,
+  type PostgresQueryResult,
+} from './postgres-session.js';
 
 /**
  * #1189 M10 slice 1 (data-movement spec §2.6/§12) — the `postgres` STORE
@@ -38,154 +55,6 @@ import { writeSqliteDatasetRows } from './sqlite.js';
  * that opens that binding. What lands here is the kind itself, its config, its
  * credential requirement, and a probe that tells the truth about all three.
  */
-
-/** What `pg` is actually given for a `Client`, once this module has finished
- * translating. Narrow on purpose: see `clientOptionsFor` on why nothing here may
- * be `undefined`. */
-export interface PostgresClientOptions {
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  password: string;
-  ssl: false | { rejectUnauthorized: boolean };
-  connectionTimeoutMillis: number;
-  statement_timeout: number;
-  query_timeout: number;
-  /** The per-CLIENT type-parser table (#1190). Absent on the probe, which reads
-   * no data; supplied by the reader, where a default parser is measurably wrong
-   * (see `readerTypes`). */
-  types?: { getTypeParser: (oid: number, format?: unknown) => unknown };
-}
-
-/** What a statement hands back. Narrow on purpose: `fields` is what
- * `describeSource` reads (the source's columns, without reading a row), `rows`
- * is what the cursor yields. */
-export interface PostgresQueryResult {
-  readonly rows: Record<string, unknown>[];
-  readonly fields: readonly { readonly name: string }[];
-}
-
-/**
- * The surface this module needs from a client, so the option mapping, the
- * refusal ladder and the READ path can all be asserted without a live server —
- * and so the live tests pass the real `pg.Client` through the same door.
- *
- * WIDENED BY #1190 from a probe-only `query(sql): Promise<unknown>`. That
- * signature could express "did it throw" and nothing else, so every test of the
- * reader would have had to be a LIVE one, gated behind
- * `STUDIO_TEST_POSTGRES_HOST` and therefore skipped on a developer machine — a
- * suite that certifies nothing exactly where it is most often run.
- */
-export interface PostgresClient {
-  connect(): Promise<unknown>;
-  query(sql: string): Promise<PostgresQueryResult>;
-  end(): Promise<unknown>;
-}
-
-export type PostgresClientFactory = (options: PostgresClientOptions) => PostgresClient;
-
-const defaultClientFactory: PostgresClientFactory = (options) =>
-  new pg.Client(options) as unknown as PostgresClient;
-
-/** libpq's default port, applied when `config.port` is absent. Spelled here
- * rather than left to `pg`, which would read `PGPORT` — see `clientOptionsFor`. */
-export const DEFAULT_POSTGRES_PORT = 5432;
-/** Applied when `config.connectTimeoutMs` is absent. `pg`'s own default is 0 =
- * wait forever, which would hang a dispatch on a black-holed host. */
-export const DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
-/** Applied when `config.statementTimeoutMs` is absent, to BOTH statement timers
- * (see `clientOptionsFor`). `pg`'s own defaults are `false` for each — no cap at
- * all on either side. */
-export const DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS = 30_000;
-
-/**
- * `sslmode` → `pg`'s `ssl` option, BY HAND and never by passthrough.
- *
- * MEASURED on `pg@8.23.0`: a `Client` silently IGNORES an `sslmode` key on its
- * options object — `new Client({ …, sslmode: 'require' })` connects in plaintext
- * and reports success. `sslmode` is a connection-URL concept that only
- * `pg-connection-string` parses. Forwarding the operator's string would
- * therefore give someone who asked for TLS an unencrypted socket and no error,
- * which is the fail-open direction this codebase refuses everywhere else.
- *
- * `require` maps to `rejectUnauthorized: false` deliberately: that is libpq's
- * meaning for it — encrypt, but do not verify who you are talking to — and
- * conflating it with `verify-full` would make a setting mean something stronger
- * than its name promises. An operator who wants the certificate checked asks for
- * `verify-full`, which is why the enum offers it as a separate, nameable choice.
- */
-export function sslOptionFor(sslmode: PostgresSslMode): false | { rejectUnauthorized: boolean } {
-  switch (sslmode) {
-    case 'disable':
-      return false;
-    case 'require':
-      return { rejectUnauthorized: false };
-    case 'verify-full':
-      return { rejectUnauthorized: true };
-  }
-}
-
-/**
- * Build the `pg` client options for a parsed config + password.
- *
- * EVERY FIELD IS SET, and that is the point of the function rather than an
- * incidental tidiness. MEASURED on `pg@8.23.0`: an option that is `undefined`
- * OR an empty string falls back to the AMBIENT ENVIRONMENT — `PGHOST`, `PGPORT`,
- * `PGUSER`, `PGDATABASE`, `PGPASSWORD`, and (via
- * `readSSLConfigFromEnvironment`) `PGSSLMODE`. Two things follow, and both are
- * why the defaults above are spelled out here instead of being left to the
- * driver:
- *
- * - A connection would silently reach a server the operator never named,
- *   differently on every machine, depending on what happens to be in the studio
- *   server process's environment.
- * - `PGPASSWORD` would supply a CREDENTIAL that was never bound to this
- *   connection — the readiness gate would pass, the connection would work, and
- *   nothing in the product would record which secret it actually used.
- *
- * So an empty password is refused by the caller before this is reached, and no
- * key here is ever left absent.
- */
-export function clientOptionsFor(
-  config: {
-    host: string;
-    port?: number;
-    database: string;
-    user: string;
-    sslmode: PostgresSslMode;
-    connectTimeoutMs?: number;
-    statementTimeoutMs?: number;
-  },
-  password: string,
-): PostgresClientOptions {
-  return {
-    host: config.host,
-    port: config.port ?? DEFAULT_POSTGRES_PORT,
-    database: config.database,
-    user: config.user,
-    password,
-    ssl: sslOptionFor(config.sslmode),
-    connectionTimeoutMillis: config.connectTimeoutMs ?? DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
-    // `statementTimeoutMs` arms BOTH statement timers, because either one alone
-    // leaves a way for a query to run forever. MEASURED on pg@8.23.0 against
-    // postgres:17, with `select pg_sleep(5)` and a 600ms budget:
-    //   - `statement_timeout` is a SERVER-side startup parameter. It cancelled
-    //     at 623ms with SQLSTATE 57014 — but only because the server chose to
-    //     honour it. A tarpit, a proxy, or anything that is not really postgres
-    //     need not.
-    //   - `query_timeout` is a CLIENT-side timer. It gave up at 617ms with
-    //     "Query read timeout", which is the one that holds regardless of what
-    //     the far end does.
-    // `connectionTimeoutMillis` does NOT cover this: pg arms that timer in
-    // `_connect` and clears it once the session is ready, so a host that
-    // completes the handshake quickly and then goes silent would leave the probe
-    // waiting forever — a `testConnection` that neither resolves nor rejects.
-    statement_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
-    query_timeout: config.statementTimeoutMs ?? DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS,
-  };
-}
-
 /**
  * SQLSTATEs and socket-level codes worth naming in the operator's own terms.
  * Every one was MEASURED against `postgres:17` rather than read from a table —
@@ -281,7 +150,16 @@ export function createPostgresAdapter(
 
     resolveDatasetAddress: resolvePostgresDatasetAddress,
 
-    async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
+    async *runActivity(
+      ctx: ActivityContext,
+      secret: string | null,
+      _secretFields?: Readonly<Record<string, string>>,
+      // #1196 — the SINK's plaintext credential (M1 #1104's fourth argument),
+      // distinct from `secret` above, which is the SOURCE's. A postgres-to-
+      // postgres copy resolves TWO credentials, and conflating them would send
+      // one server's password to another. Never placed in `ctx` or an event.
+      sinkSecret?: string | null,
+    ): AsyncIterable<ActivityEvent> {
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection
       // runs, and postgres runs it as the SOURCE end: the executor dispatches on
       // the source connection's kind, resolves the sink alongside it, and hands
@@ -299,17 +177,15 @@ export function createPostgresAdapter(
           ...(signal === undefined ? {} : { signal }),
         });
         yield* runCopyActivity(ctx, {
-          // There is no postgres WRITER in slice 2, so a postgres copy reads a
-          // postgres store and writes into a sqlite one. The catalog says so too
-          // (`sinkConnectionKinds: ['sqlite']`), and this stays as the ladder's
+          // #1196 — ONE rung, shared, derived from the CATALOG's
+          // `sinkConnectionKinds`. Slice 3a adds the postgres WRITER, so this
+          // adapter is now both ends of a postgres-to-postgres copy as well as
+          // the source of a postgres-to-sqlite one. It stays as the ladder's
           // rung for the reason `fs.ts` gives: it is what a caller bypassing the
           // catalog hits, and an unchecked sink config would reach the writer to
-          // be refused as "invalid sqlite connection config" — a true statement
+          // be refused as "invalid <store> connection config" — a true statement
           // about the wrong thing.
-          refuseSink: (connection) =>
-            connection.kind === 'sqlite'
-              ? null
-              : `a postgres copy reads a postgres store and writes into a sqlite store, but the sink connection is '${connection.kind}'`,
+          refuseSink: refuseForeignSink,
           // §2.6 gives `table`/`query` no `nullValue`/`dateFormat` to declare, so
           // `{}` is a TRUE statement about the SQL kinds rather than a stub —
           // the polarity `CopyIo.sourceCoercion` requires of every store.
@@ -317,29 +193,26 @@ export function createPostgresAdapter(
           describeSource: ({ dataset, signal }) =>
             describePostgresDatasetColumns(read(dataset, signal)),
           readBatches: ({ dataset, signal }) => readPostgresDatasetBatches(read(dataset, signal)),
-          writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) => {
-            // Parsed from `ctx.sink`, never from this adapter's own connection:
-            // a postgres config has no sqlite database path in it at all.
-            const parsedSink = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
-            if (!parsedSink.success) {
-              throw new DatasetIoError(
-                'permanent',
-                `invalid sqlite sink connection config: ${formatZodIssues(parsedSink.error.issues)}`,
-              );
-            }
-            return writeSqliteDatasetRows(
+          // Dispatched by SINK KIND (#1196), and `createClient` is threaded so
+          // the sink half is assertable through the same injected seam the
+          // reader uses. The sink's config is parsed inside, against the schema
+          // of the kind it claims to be and never this adapter's — including
+          // when both ends are postgres, where the two connections are still two
+          // connections and may name different servers.
+          writeRows: ({ dataset, connection, columns, mode, onBatch, batches, signal }) =>
+            writeRowsToSink(
               {
-                connectionConfig: parsedSink.data,
-                datasetKind: dataset.kind,
-                datasetConfig: dataset.config,
+                dataset,
+                connection,
+                sinkSecret: sinkSecret ?? null,
                 columns,
                 mode,
                 onBatch,
-                ...(signal === undefined ? {} : { signal }),
+                signal,
+                createClient,
               },
               batches,
-            );
-          },
+            ),
         });
         return;
       }
@@ -462,118 +335,6 @@ function readerTypes(): { getTypeParser: (oid: number, format?: unknown) => unkn
 }
 
 /**
- * SQLSTATEs and socket codes that make a READ worth retrying, FAIL-SAFE: only a
- * named code is `transient` and everything unrecognised is `permanent`, which is
- * `isTransientSqliteCode`'s polarity and for its reason — a wrongly-transient
- * classification retries a copy that cannot succeed, burning the store's time on
- * every attempt.
- *
- * A read `partialWritePossible` is always false: a read writes nothing.
- */
-const TRANSIENT_POSTGRES_CODES: ReadonlySet<string> = new Set([
-  '57014', // query_canceled — our own statement/query timeout fired
-  '57P01', // admin_shutdown
-  '57P02', // crash_shutdown
-  '57P03', // cannot_connect_now — the server is starting up
-  '08000', // connection_exception
-  '08003', // connection_does_not_exist
-  '08006', // connection_failure
-  '08001', // sqlclient_unable_to_establish_sqlconnection
-  '08004', // sqlserver_rejected_establishment_of_sqlconnection
-  '40001', // serialization_failure
-  '40P01', // deadlock_detected
-  '53300', // too_many_connections
-  '53200', // out_of_memory
-  '55P03', // lock_not_available
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-]);
-
-/** Whether a postgres error code names a retryable READ failure. Exported so the
- * allowlist is assertable rather than only reachable through a live server. */
-export function isTransientPostgresCode(code: string): boolean {
-  return TRANSIENT_POSTGRES_CODES.has(code);
-}
-
-/**
- * Classify a `pg` throw into the failure model, SCRUBBING the secret.
- *
- * The scrub is not belt-and-braces over `probeFailureSentence`'s: that one
- * guards the PROBE's default branch, and this is a different door. Every message
- * here is upstream text reaching `node.failed.error`, which lands in the run log
- * and the UI. `redactSecrets` is the shared helper `http.ts`, `agent.ts` and
- * `llm-shared.ts` already use — a third hand-rolled `split/join` is how the
- * halves drift.
- */
-function readFailure(err: unknown, context: string, secret: string | null): DatasetIoError {
-  if (err instanceof DatasetIoError) return err;
-  const code = (err as { code?: unknown } | null)?.code;
-  const kind: ConnectorErrorKind =
-    typeof code === 'string' && isTransientPostgresCode(code) ? 'transient' : 'permanent';
-  const raw = err instanceof Error ? err.message : String(err);
-  return new DatasetIoError(kind, `${context}: ${redactSecrets(raw, [secret])}`, { cause: err });
-}
-
-/** The dataset kinds a postgres connection can hold — the store half of
- * `DATASET_CONNECTION_KINDS`, spelled here so a dispatch can refuse a foreign
- * kind with a sentence rather than a cast. */
-const POSTGRES_DATASET_KINDS: readonly DatasetKind[] = ['table', 'query'];
-
-function notAPostgresKind(kind: DatasetKind): string {
-  return `a postgres connection holds ${POSTGRES_DATASET_KINDS.join(' and ')} datasets, not '${kind}'`;
-}
-
-/** One connected, configured session. Every entry point below opens one and
- * closes it in a `finally`; nothing here pools, because a copy is one long read
- * and a pool would only add a way to leak a session into a transaction. */
-async function openSession(
-  createClient: PostgresClientFactory,
-  connectionConfig: Record<string, unknown>,
-  secret: string | null,
-  context: string,
-): Promise<PostgresClient> {
-  const cfg = postgresConnectionConfigSchema.safeParse(connectionConfig);
-  if (!cfg.success) {
-    throw new DatasetIoError(
-      'permanent',
-      `invalid postgres connection config: ${formatZodIssues(cfg.error.issues)}`,
-    );
-  }
-  // The probe's rule, at the second door: `pg` reads `PGPASSWORD` for an absent
-  // or empty password and would authenticate with a credential this connection
-  // never bound. `clientOptionsFor` explains the whole ambient-environment
-  // family; this is the one that carries a secret.
-  if (secret === null || secret === '') {
-    throw new DatasetIoError(
-      'permanent',
-      'this postgres connection has no secret — postgres needs a password, bound as the connection secret',
-    );
-  }
-  const client = createClient({ ...clientOptionsFor(cfg.data, secret), types: readerTypes() });
-  try {
-    await client.connect();
-    // Pin the text form the naive-timestamp parser expects. `DateStyle` is a
-    // SERVER setting (measured default `ISO, MDY`, and `ISO` is what makes the
-    // output `YYYY-MM-DD`), so a server configured `German` or `Postgres` would
-    // otherwise hand back text `PG_CIVIL_DATETIME_RE` cannot match — every
-    // timestamp would fall to the text branch and refuse. Set, never assumed.
-    await client.query(`SET SESSION DateStyle = 'ISO, YMD'`);
-    return client;
-  } catch (err) {
-    try {
-      await client.end();
-    } catch {
-      // The open already failed; its reason is the one worth reporting.
-    }
-    throw readFailure(err, context, secret);
-  }
-}
-
-/**
  * #1148 §7 row 1/4/5 — the source's ACTUAL columns, before the first row moves.
  *
  * Names are returned UNCOLLAPSED, exactly as `describeSqliteDatasetColumns`
@@ -591,6 +352,7 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
     read.connectionConfig,
     read.secret,
     'cannot reach the postgres server to describe the source',
+    readerTypes(),
   );
   try {
     const result = await client.query(describeStatementFor(sql));
@@ -649,6 +411,7 @@ export async function* readPostgresDatasetBatches(
     read.connectionConfig,
     read.secret,
     'cannot reach the postgres server to read the source',
+    readerTypes(),
   );
   let inTransaction = false;
   try {
@@ -763,15 +526,6 @@ function sourceStatementFor(
     );
   }
   return cfg.sql;
-}
-
-/** `schema.table`, or a bare table left for the session's `search_path`. Both
- * halves go through `quoteIdentifier`, whose case-fold note is the one thing a
- * postgres reader must read before trusting this. */
-function qualifiedTable(cfg: { schema?: string; table: string }): string {
-  return cfg.schema === undefined
-    ? quoteIdentifier(cfg.table, 'table')
-    : `${quoteIdentifier(cfg.schema, 'schema')}.${quoteIdentifier(cfg.table, 'table')}`;
 }
 
 /**

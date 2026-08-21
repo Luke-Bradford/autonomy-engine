@@ -488,6 +488,117 @@ the dependency table warns about does not materialise. Every transitive dependen
 the `audit:licenses` gate passes. The single-binary concern is moot in any case:
 `2026-07-30-packaging-and-updates.md` already assumes a bundled Node runtime throughout.
 
+**As built — M10 slice 3a (#1196): what the postgres WRITER actually does.**
+
+`copy`'s `sinkConnectionKinds` is now `['sqlite', 'postgres']`, opened in the same commit as
+`postgres-sink.ts` exactly as slice 2 opened the source half alongside its reader. Postgres is a
+source AND a sink, so `copy` is a real mesh for the first time: three source stores × two sink
+stores. Five things were settled by MEASURING, and each changed the code.
+
+**(1) THE SINK DIRECTION HAD THE SAME TZ CORRUPTION SLICE 2 FOUND IN THE READ DIRECTION, and the
+existing coercion is what already prevents it.** `pg` serializes a JS `Date` CLIENT-side, in the
+process's own zone. Measured, the instant `2026-07-15T13:45:00Z` written into a
+`timestamp without time zone`:
+
+| bound as         | `TZ=Europe/London`    | `TZ=Asia/Tokyo`       |
+| ---------------- | --------------------- | --------------------- |
+| a `Date`         | `2026-07-15 14:45:00` | `2026-07-15 22:45:00` |
+| `.toISOString()` | `2026-07-15 13:45:00` | `2026-07-15 13:45:00` |
+
+For `23:30:00Z` the `Date` bind moves the **day** forward in a `date` column under both zones.
+`timestamptz` is correct under every bind, because it names a real instant — the same asymmetry the
+reader found.
+
+The writer needs no `Date` arm to fix this, and that is the finding rather than an omission:
+`CoercedValue` has no `Date` member and `coerceValue` renders every instant to ISO text before it
+becomes one, so a `Date` cannot reach the bind seam. The shared coercion is what makes this sink
+zone-honest. What the slice added is the PIN — a live test asserting the round trip under
+`TZ=Asia/Tokyo`, which reds when the writer is mutated to hand `pg` the `Date` instead. Without it
+a later "optimisation" that skipped the render would be a silent, machine-dependent corruption
+with no test in its way.
+
+**(2) THE SINK IS DESCRIBED THROUGH `to_regclass`, NOT `information_schema`, so the gate and the
+write cannot mean different tables.** `information_schema.columns` requires an explicit
+`table_schema` and does not consult `search_path`, so it cannot answer for a `table` dataset that
+names a bare table — and assuming `public` would describe one relation while an unqualified INSERT
+wrote to another. Measured with `search_path = 's_b','public'` and a `dup` table in each:
+`to_regclass('"dup"')` resolves to `s_b.dup`, which is exactly where `INSERT INTO "dup"` lands.
+Because both are built from ONE string, agreement is structural rather than hoped for. The name is
+a BOUND parameter: measured, `to_regclass('"public"."plain"; drop table public.plain')` returns
+NULL, so a name that does not parse is simply not a relation and nothing executes.
+
+It also yields facts SQLite hid. A generated column is absent from `pragma_table_info` entirely, so
+the sqlite sink could only report one as "absent from the sink" — "imprecise but never wrong about
+the outcome", in its own words. `pg_attribute` carries `attgenerated` and `attidentity`, so the
+postgres rung names them: *"'gen' is a generated column"*. Same rung, better sentence.
+
+**(3) THE LOCK STRENGTH DEPENDS ON THE MODE, and `ROW EXCLUSIVE` alone would have been a silent
+correctness hole.** Both modes lock before the §7 gate reads, closing the `ALTER TABLE` TOCTOU that
+`begin immediate` closes for sqlite. But `ROW EXCLUSIVE` is the lock an ordinary INSERT already
+holds, so it does not exclude a second copy: two concurrent `overwrite` copies would each DELETE
+and each INSERT, leaving the table holding the UNION of both and reporting success to each — and
+§9's `COPY_CONCURRENCY` makes that reachable. `overwrite` therefore takes `EXCLUSIVE`, which
+serialises writers and is the guarantee sqlite gets for free from its single writer. `append` keeps
+the weaker lock deliberately: two appends interleaving is what append MEANS, and `EXCLUSIVE` there
+would block the operator's own application writes for the length of a long copy for no correctness
+gain.
+
+`DELETE` rather than `TRUNCATE` for `overwrite`, for two reasons beyond matching sqlite: `TRUNCATE`
+needs `ACCESS EXCLUSIVE` (it would block readers too), and it REFUSES outright on a table another
+references by foreign key unless given `CASCADE`, where `DELETE` honours the operator's own
+`ON DELETE` rules. The row-by-row cost is #1126's, already filed against the sqlite sink.
+
+**(4) THE BIND-PARAMETER CEILING IS 65535 AND EXCEEDING IT DOES NOT FAIL CLEANLY.** Measured, 65535
+parameters are accepted; 65538 raises `08P01 bind message has 2 parameter formats but 0 parameters`
+— the count wraps in a 16-bit field, so the wire message is GARBLED rather than refused, and the
+error names neither the limit nor the statement. So the writer chunks each multi-row INSERT at
+`floor(65535 / columnCount)` rows, computed from the mapping width rather than left to the pump's
+row batching, which knows nothing about how wide the mapping is. A 70-column mapping tips over at
+937 rows, well inside `COPY_BATCH_ROWS`.
+
+`undefined` is refused rather than bound, and that rung is not inherited on faith: measured, `pg`
+binds `undefined` as NULL and the insert succeeds — #473's shape exactly. Everything else in
+`SinkValue` binds as it stands, including a `bigint` (2^53+1 round-trips into `int8` exactly) and a
+`Uint8Array` (byte for byte through `bytea`); sqlite needed a boolean arm only because
+`better-sqlite3` throws on one.
+
+**(5) §7's ROW 3 RESTED ON A WRONG PREMISE, and the `query` self-copy residual is not destructive.**
+Both were re-measured rather than expired silently when this slice opened the sink list.
+
+Slice 2 measured `insert into t(n int4) select c` where `c` is `text` raising `42804`, and inferred
+that postgres-as-sink rejects on TYPE. It does not on the path this writer uses. A bound parameter
+is untyped text, so postgres coerces per VALUE: measured, `'123'` into `int4` **succeeds** (→ 123)
+while `'abc'` raises `22P02` and `3000000000` raises `22003`. That is SQLite's behaviour, so §7 ③'s
+argument for not building row 3 — a per-type refusal would break exactly the working copies M7's
+all-text CSV columns produce — applies here unchanged. Row 3 is not merely still deferred; the
+reason it was deferred for sqlite is the reason it stays deferred for postgres.
+
+And the residual is a wasteful no-op rather than a data-loss path. Measured: the sink's `EXCLUSIVE`
+lock does not conflict with the source cursor's `ACCESS SHARE`, and under READ COMMITTED the source
+reads a snapshot taken before the sink's UNCOMMITTED `DELETE` — so a `query` reading the very table
+its sink overwrites read all five rows, wrote them back, and committed with the table intact. It
+stays on #1193 as a REACHABLE case rather than an unreachable one, and it is still not
+guess-refused: §7 ② is explicit that a `permanent` refusal reached by parsing an operator's SQL is
+the one direction a gate must never fail in.
+
+**What slice 3a does NOT do.** `storeIdentity` is still `null` for postgres, because
+`ConnectorAdapter.resolveDatasetAddress` receives no SECRET and a cluster's identity needs a
+session — so two connections naming one cluster through different host spellings are comparable
+only by the `store` string. Two dataset rows on ONE connection are still refused, which is the
+common case. `datasetKinds.sink` still excludes `delimited`: there is no CSV writer, so a file
+remains something a copy can read and not something it can write.
+
+**The structural change this forced, recorded because it is not visible from the ticket.** A second
+sink means every source adapter must reach both writers, and `sqlite.ts` importing `postgres.ts`
+while `postgres.ts` imports `sqlite.ts` is a cycle. Four leaf modules resolve it —
+`postgres-session.ts`, `sqlite-store.ts`, `sqlite-sink.ts` and `sink-columns.ts` — so the writers no
+longer live inside the adapters, and `copy-sink.ts` can dispatch on sink kind without importing an
+adapter back. That is the registry `copy.ts`'s own docblock deferred until "a second SINK exists",
+and it carries ONE shared `refuseSink` derived from the catalog, replacing three hand-written
+sentences around a hardcoded `'sqlite'`.
+
+---
+
 **Dataset kinds:**
 
 | Kind        | `config`                                                                                                     |
@@ -888,9 +999,19 @@ Postgres as a sink really does reject before any value is seen — measured on `
 into tgt(n int4) select c` where `c` is `text` raises SQLSTATE `42804` naming both types. But slice
 2 makes postgres a SOURCE only (`copy`'s `sinkConnectionKinds` stays `['sqlite']`), so the sink is
 still the per-VALUE store this paragraph describes, and a type gate over a postgres source into a
-sqlite sink would refuse exactly the working copies ③ declined to break. It moves to **slice 3**,
+sqlite sink would refuse exactly the working copies ③ declined to break. It moved to **slice 3**,
 with the sink, tracked as #1193 — which also records that `CopyIo.describeSource` returns names and
-no types, so row 3 needs that seam widened first. The harm it would have prevented under
+no types, so row 3 needs that seam widened first.
+
+**M10 slice 3a (#1196) built the sink and found the premise WRONG, which is a stronger outcome than
+another deferral.** Postgres-as-sink does NOT reject on type on the path the writer uses: a bound
+parameter is untyped text, so postgres coerces per VALUE just as SQLite does. Measured on
+`postgres:17` — `'123'` into an `int4` column **succeeds** (→ 123), `'abc'` raises `22P02` and
+`3000000000` raises `22003`. The `42804` slice 2 measured comes from `insert ... select`, where the
+source column carries a declared type; a `$n` parameter carries none. So this paragraph's argument
+— that a per-type `permanent` refusal would break exactly the working copies M7's all-text CSV
+columns produce — holds for postgres unchanged, and row 3 stays unbuilt for the same reason rather
+than for a new one. #1193 keeps it, with its premise corrected. The harm it would have prevented under
 `sqlite` is already prevented: the sink is one transaction that rolls back reporting
 `partialWritePossible: false`, so an ungated type mismatch costs a wasted scan and a provably clean
 store, not the mid-copy partial write §6.2 and this row exist to stop.
@@ -935,8 +1056,19 @@ format json)` does yield `Relation Name` and `Schema` for each relation a statem
 
 **Slice 2 did not take it, and the reason is a property of the CODE rather than of a list.**
 `sameDatasetAddress` short-circuits on `kind`, so a postgres source can never match a sqlite sink on
-any address, and slice 2 admits no other pairing. It moves to slice 3 with the sink (#1193), which
-also carries a NEW hole slice 2 opened and could not close: `resolvePostgresDatasetAddress` returns
+any address, and slice 2 admits no other pairing.
+
+**Slice 3a (#1196) made the pairing reachable, and MEASURED that it is not destructive.** With
+postgres a sink, a `query` source can now read the very table its sink overwrites in one store. It
+was probed rather than reasoned about: the sink's `EXCLUSIVE` lock does not conflict with the source
+cursor's `ACCESS SHARE`, and under READ COMMITTED the source's snapshot predates the sink's
+UNCOMMITTED `DELETE` — so the copy read all five rows, wrote them back, and committed with the table
+intact. A wasteful no-op, not a data-loss path. That does not retire it: a no-op that reads as a
+successful copy is still worth refusing, and a different isolation level or a partially-committing
+future shape need not behave the same way. It stays on #1193 as a REACHABLE case, and is still not
+guess-refused, because ② above forbids a `permanent` refusal reached by parsing an operator's SQL.
+
+#1193 also carries a NEW hole slice 2 opened and could not close: `resolvePostgresDatasetAddress` returns
 `storeIdentity: null`, because `ConnectorAdapter.resolveDatasetAddress` receives no SECRET — it must
 be answerable for the sink, whose adapter never runs. A networked store's physical identity needs a
 session, and a session needs a password. Postgres can identify itself precisely (measured: `select
@@ -1096,7 +1228,7 @@ source and a sink.
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
-| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh | slice 1 shipped no operator-reachable caller for the probe — #1191; slice 2 found that `pg` has no NAMED parameters, so a `query` dataset's `parameters` are refused on postgres — #1194 |
+| **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) keeps row 3, the self-copy residual and the `storeIdentity` hole | slice 1 shipped no operator-reachable caller for the probe — #1191; slice 2 found that `pg` has no NAMED parameters, so a `query` dataset's `parameters` are refused on postgres — #1194 |
 | **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 
