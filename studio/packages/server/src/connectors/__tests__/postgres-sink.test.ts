@@ -268,6 +268,42 @@ describe('the postgres sink refusal ladder (#1196 M10 slice 3a)', () => {
     expect(insert?.values).toEqual([1, 2]);
   });
 
+  it('does NOT refuse a writable column whose case-twin is generated', async () => {
+    // The review finding on PR #1197. The unwritable rung used to build its own
+    // fold index over the unwritable columns ALONE, so a table holding a
+    // writable `id` and a generated `"ID"` refused a mapping naming `id` as
+    // "is a generated column" — postgres would have accepted that INSERT. Both
+    // rungs now read the SAME resolution, so the exact spelling wins and only a
+    // mapping that really lands on the generated column is refused.
+    const { rec, factory } = sinkFactory({
+      columns: [col('id'), col('ID', { generated: true }), col('b')],
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, columns: ['id', 'b'] }),
+        batchesOf([{ id: 1, b: 2 }]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 1 });
+    const insert = rec.queries.find((q) => q.sql.startsWith('INSERT INTO'));
+    expect(insert?.sql).toContain('"id", "b"');
+    expect(insert?.sql).not.toContain('"ID"');
+  });
+
+  it('still refuses the mapping that DOES land on the generated twin', async () => {
+    const { factory } = sinkFactory({
+      columns: [col('id'), col('ID', { generated: true }), col('b')],
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, columns: ['ID', 'b'] }),
+        batchesOf([{ ID: 1, b: 2 }]),
+      ),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      message: expect.stringContaining("'ID' is a generated column"),
+    });
+  });
+
   it('refuses a mapped column the sink does not have', async () => {
     const { factory } = sinkFactory({ columns: [col('a')] });
     await expect(
@@ -556,13 +592,22 @@ describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
 });
 
 describe('resolveSinkColumns’ postgres-only ambiguity rung (#1196)', () => {
-  it('refuses a mapped name that folds onto TWO real columns', () => {
+  it('refuses a mapped name that folds onto TWO real columns and matches NEITHER exactly', () => {
     // MEASURED: `create table cc("id" int, "ID" int)` succeeds on postgres,
     // where sqlite refuses to create `SINK` alongside `sink`. A fold-keyed index
     // over that pair silently keeps whichever came last.
-    expect(() => resolveSinkColumns(['id'], ['id', 'ID'])).toThrow(
+    expect(() => resolveSinkColumns(['Id'], ['id', 'ID'])).toThrow(
       /differ only in case/ as unknown as Error,
     );
+  });
+
+  it('PREFERS an exact spelling over refusing, when the mapping supplies one', () => {
+    // Postgres identifiers are exact once quoted, so a mapping naming `id` where
+    // the store has both `id` and `"ID"` has named one of them unambiguously.
+    // Refusing it anyway would make the rung's own advice — "name the column
+    // exactly as the store spells it" — impossible to follow.
+    expect(resolveSinkColumns(['id'], ['id', 'ID'])).toEqual([{ mapped: 'id', actual: 'id' }]);
+    expect(resolveSinkColumns(['ID'], ['id', 'ID'])).toEqual([{ mapped: 'ID', actual: 'ID' }]);
   });
 
   it('does NOT refuse a copy that never touches the colliding pair', () => {

@@ -1,7 +1,6 @@
 import {
   datasetConfigSchema,
   formatZodIssues,
-  nocaseFold,
   postgresConnectionConfigSchema,
   tableDatasetConfigSchema,
   type DatasetKind,
@@ -10,7 +9,7 @@ import { DatasetIoError } from './dataset-io-error.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
-import { resolveSinkColumns } from './sink-columns.js';
+import { resolveSinkColumns, type SinkColumn } from './sink-columns.js';
 import type { SinkValue } from './sqlite-sink.js';
 import {
   notAPostgresKind,
@@ -178,24 +177,30 @@ async function describeSinkTable(
  * refusal names it. Same rung, better sentence.
  */
 function refuseUnwritableColumns(
-  mapped: readonly string[],
+  resolved: readonly SinkColumn[],
   columns: readonly SinkTableColumn[],
 ): void {
-  // Folded the way the column resolver folds, so a mapping that WOULD have
-  // matched the column is caught by this rung rather than sliding past it into a
-  // `428C9` raised from inside the open transaction.
+  // Keyed by the store's OWN spelling, and read against columns the shared
+  // resolver has ALREADY matched. That ordering is the fix for a real
+  // over-refusal: a rung with its own fold index, given only the unwritable
+  // columns, refused a mapping naming a legitimately writable `id` whenever the
+  // table also held a generated `"ID"` — the fold collided and the name was
+  // reported as generated. Postgres would have accepted that INSERT, so it
+  // refused work that would have succeeded, which is the one direction §7 says
+  // a gate must never fail in. Sharing ONE fold implementation is also what
+  // stops the two rungs disagreeing about what "the same column" means.
   const unwritable = new Map<string, string>();
   for (const column of columns) {
-    if (column.generated) unwritable.set(nocaseFold(column.name), 'a generated column');
+    if (column.generated) unwritable.set(column.name, 'a generated column');
     else if (column.identityAlways) {
-      unwritable.set(nocaseFold(column.name), 'a GENERATED ALWAYS identity column');
+      unwritable.set(column.name, 'a GENERATED ALWAYS identity column');
     }
   }
   if (unwritable.size === 0) return;
   const said: string[] = [];
-  for (const name of mapped) {
-    const what = unwritable.get(nocaseFold(name));
-    if (what !== undefined) said.push(`'${name}' is ${what}`);
+  for (const column of resolved) {
+    const what = unwritable.get(column.actual);
+    if (what !== undefined) said.push(`'${column.mapped}' is ${what}`);
   }
   if (said.length === 0) return;
   throw new DatasetIoError(
@@ -380,11 +385,15 @@ export async function writePostgresDatasetRows(
       }
 
       const described = await describeSinkTable(client, qualified, spelled);
-      refuseUnwritableColumns(write.columns, described.columns);
+      // Resolved against EVERY actual column, not just the writable ones. A
+      // mapping naming a generated column must be told THAT — "the sink has no
+      // column named 'gen'" would send an operator looking for a column that is
+      // right there.
       const columns = resolveSinkColumns(
         write.columns,
-        described.columns.filter((c) => !c.generated && !c.identityAlways).map((c) => c.name),
+        described.columns.map((c) => c.name),
       );
+      refuseUnwritableColumns(columns, described.columns);
 
       // The store's own spelling from here on, so the statement reads like the
       // schema — `describeSinkTable` resolved which relation this is, so the

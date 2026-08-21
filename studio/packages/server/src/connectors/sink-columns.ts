@@ -87,16 +87,23 @@ export function resolveSinkColumns(
   const missing: string[] = [];
   const collisions: string[] = [];
   const ambiguous: string[] = [];
+  const actualExact = new Set(actual);
   for (const name of mapped) {
     const fold = nocaseFold(name);
     const clash = ambiguousFolds.get(fold);
-    if (clash !== undefined) {
+    if (clash !== undefined && !actualExact.has(name)) {
+      // AMBIGUOUS, and no exact spelling to fall back on. An EXACT match is
+      // preferred over refusing (see `actualExact` above): postgres identifiers
+      // are exact once quoted, so a mapping that names `id` where the store has
+      // both `id` and `"ID"` has in fact named one of them unambiguously — and
+      // refusing it would make this rung's own advice ("name the column exactly
+      // as the store spells it") impossible to follow.
       ambiguous.push(
         `'${name}' matches ${clash.map((c) => `'${c}'`).join(' and ')} in the sink, which differ only in case`,
       );
       continue;
     }
-    const match = byFold.get(fold);
+    const match = clash !== undefined ? name : byFold.get(fold);
     if (match === undefined) {
       missing.push(name);
       continue;
