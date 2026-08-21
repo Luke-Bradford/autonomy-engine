@@ -14,6 +14,35 @@ defaults:
 jobs:
   studio:
     runs-on: ubuntu-latest
+
+    # #1190 (M10 slice 2) — a real postgres, because slice 2 MOVES DATA through
+    # one. Slice 1's only pg-touching code was a probe with no route and no UI
+    # caller, so its live tests were opt-in and standing a container up would
+    # have been disproportionate; a reader is not that.
+    #
+    # The live suite REFUSES TO SKIP under CI. `liveSuiteMustRun` (see
+    # packages/server/src/connectors/__tests__/postgres.test.ts) keys on `CI`,
+    # which GitHub Actions sets and which vitest was MEASURED not to set itself,
+    # and a missing `STUDIO_TEST_POSTGRES_HOST` then fails the job rather than
+    # quietly skipping — a suite CI stops running certifies nothing while
+    # reading as coverage.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: studio
+          POSTGRES_PASSWORD: studio_ci
+          POSTGRES_DB: studio_test
+        ports:
+          - 5432:5432
+        # Without this the job races the container's first-boot initdb and the
+        # connection is refused rather than merely slow.
+        options: >-
+          --health-cmd "pg_isready -U studio -d studio_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +83,19 @@ jobs:
 
       - name: Test
         run: pnpm test
+        env:
+          # DELIBERATELY NOT UTC (#1190). A GitHub runner is UTC, and under UTC a
+          # local-time parse and a UTC parse COINCIDE — which is exactly how the
+          # naive-`timestamp` corruption slice 2 fixed would hide: the live
+          # TZ-invariance test would stay green with the fix removed. Pinning a
+          # non-UTC zone makes that class of bug fail here rather than on an
+          # operator's machine. The whole suite was measured green under it.
+          TZ: Asia/Tokyo
+          STUDIO_TEST_POSTGRES_HOST: 127.0.0.1
+          STUDIO_TEST_POSTGRES_PORT: 5432
+          STUDIO_TEST_POSTGRES_DATABASE: studio_test
+          STUDIO_TEST_POSTGRES_USER: studio
+          STUDIO_TEST_POSTGRES_PASSWORD: studio_ci
 
       - name: Lint
         run: pnpm lint

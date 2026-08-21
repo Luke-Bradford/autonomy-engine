@@ -346,20 +346,22 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  *   lives on the dataset precisely BECAUSE one folder holds CSV and Excel side
  *   by side — plus §2.6 giving `excel` a `path`. M11 restates it or corrects it.
  *
- * WHY `postgres` IS ABSENT FROM `table`/`query` (#1189, M10 slice 1). It is a
- * store, so the pin's own instruction — "decide whether it is a STORE; if it is,
- * add it to every dataset kind that can live in it" — points at adding it. The
- * answer is NOT YET, and the reason is what this map is FOR. Listing a store
- * here is what lets an operator author a dataset against it: the form stops
- * warning, `datasetConnectionKindAdvisory` falls silent, and the dataset saves
- * clean. Slice 1 ships no reader and no writer for postgres, so every one of
- * those datasets would then fail at dispatch — a shape the spec already names as
- * the trap M5's slice 4 was split to avoid (§12's M5 row: a catalog entry landed
- * before the resolution seam "would have been a user-visible activity that always
- * fails at dispatch"). Holding it back costs nothing, because the existing
- * `DATASET_CONNECTION_MISMATCH` dispatch gate refuses the binding anyway; what it
- * buys is that the refusal happens where the dataset is AUTHORED. Slice 2 adds
- * `'postgres'` to `table` and `query` in the same commit as the reader.
+ * WHY `postgres` IS PRESENT ON `table`/`query` (#1190, M10 slice 2). Slice 1
+ * deliberately held it out, because listing a store here is what lets an
+ * operator author a dataset against it: the form stops warning,
+ * `datasetConnectionKindAdvisory` falls silent, and the dataset saves clean.
+ * With no reader, every such dataset would then have failed at dispatch — the
+ * trap §12's M5 row was split four ways to avoid. Slice 2 is the commit that
+ * removes that objection: it ships the `CopyIo` READER (`describeSource`,
+ * `readBatches`, `sourceCoercion`) and `resolveDatasetAddress`, so the binding
+ * and the thing that honours it land together, exactly as slice 1 promised.
+ *
+ * STILL SOURCE-ONLY, and that is a property of a different list. `copy`'s
+ * `sinkConnectionKinds` stays `['sqlite']` (`catalog/registry.ts`), so a
+ * postgres dataset can be READ but not written. That is not an oversight: it is
+ * what makes §7 row 3 and the `query` self-copy residual unreachable rather than
+ * merely unbuilt, and both are deferred on that premise — see the remainder
+ * ticket named at that pin. Slice 3 is the sink.
  *
  * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
  * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION
@@ -373,8 +375,8 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
 export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKind[]> = {
   delimited: ['fs'],
   excel: ['fs'],
-  table: ['sqlite'],
-  query: ['sqlite'],
+  table: ['sqlite', 'postgres'],
+  query: ['sqlite', 'postgres'],
 };
 
 /**

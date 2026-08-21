@@ -488,7 +488,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'general',
     idempotent: false,
-    connectionKinds: ['sqlite', 'fs'],
+    // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
+    // executor dispatches a copy on the source connection's adapter and the
+    // postgres adapter now carries the reader. Widening this bumped
+    // `CATALOG_VERSION` 25 -> 26, on bump 24's precedent (widening this same
+    // list `['sqlite'] -> ['sqlite','fs']` was itself that bump).
+    connectionKinds: ['sqlite', 'fs', 'postgres'],
+    // PINNED to `['sqlite']`, and this is load-bearing rather than incidental
+    // (#1190). Two of #1190's items — §7's drift-gate row 3 and the `query`
+    // self-copy residual — are deferred to #1193 on the premise that postgres
+    // cannot be a SINK, which is what makes them unreachable rather than merely
+    // unbuilt. Slice 3 is the sink; adding a kind here without taking #1193
+    // first silently expires that premise.
     sinkConnectionKinds: ['sqlite'],
     datasetKinds: { source: ['table', 'query', 'delimited'], sink: ['table'] },
     outputs: [

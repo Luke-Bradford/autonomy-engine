@@ -131,13 +131,19 @@ describe('activity catalog', () => {
     // writer rather than just the allowlist — which M7 slice 3 (#1167) is the
     // first slice to have done: it widened both SOURCE lists and left both SINK
     // lists exactly where they were, because it built a `delimited` reader and
-    // no writer.
+    // no writer. M10 slice 2 (#1190) is the SECOND, and did the same for the
+    // same reason — `postgres` joins `connectionKinds` because the reader
+    // landed, and `sinkConnectionKinds` does NOT move because there is no
+    // postgres writer. That pin is load-bearing beyond tidiness: #1190 defers
+    // §7's row 3 and the `query` self-copy residual to #1193 on the premise that
+    // postgres cannot be a sink, so adding a kind below without taking #1193
+    // first silently expires both deferrals.
     const copy = catalog.get('copy');
     expect(copy?.datasetKinds).toEqual({
       source: ['table', 'query', 'delimited'],
       sink: ['table'],
     });
-    expect(copy?.connectionKinds).toEqual(['sqlite', 'fs']);
+    expect(copy?.connectionKinds).toEqual(['sqlite', 'fs', 'postgres']);
     expect(copy?.sinkConnectionKinds).toEqual(['sqlite']);
   });
 

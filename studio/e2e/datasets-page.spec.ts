@@ -381,7 +381,7 @@ test.describe('#1115 Manage → Datasets', () => {
 
     expect(measured.markerText).toContain('kind mismatch');
     expect(measured.hiddenText).toContain(
-      "dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'",
+      "dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'http'",
     );
     expect(measured.clipPath).toBe('inset(50%)');
     expect(measured.position).toBe('absolute');

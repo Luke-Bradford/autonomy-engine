@@ -364,7 +364,17 @@
 // NOT a bump for any DATASET reason. `DATASET_CONNECTION_KINDS` is deliberately
 // unchanged in this slice (no `table`/`query` dataset may name a postgres
 // connection until slice 2 has a reader), so no artifact's dataset half moves.
-export const CATALOG_VERSION = 25;
+// CATALOG_VERSION 26 (#1190, M10 slice 2): the DATASET reason bump 25 said it
+// was not. Two validation lists widen together and neither can move alone —
+// `DATASET_CONNECTION_KINDS` gains `postgres` for `table`/`query`, and `copy`'s
+// `connectionKinds` gains it so the executor will dispatch on it. An older build
+// refuses both: a dataset naming a postgres store fails `datasetConfigSchema`'s
+// connection-kind check, and a pipeline whose `copy` binds a postgres source
+// fails the catalog's `connectionKinds` check. That is bump 24's precedent
+// exactly — widening this same `connectionKinds` list `['sqlite'] -> ['sqlite',
+// 'fs']` was itself that bump — resting on bump 21's rule that an artifact which
+// is not runnable AS AUTHORED is refused at IMPORT rather than half-loaded.
+export const CATALOG_VERSION = 26;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
