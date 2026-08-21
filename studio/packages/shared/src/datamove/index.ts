@@ -11,5 +11,6 @@ export * from './address.js';
 export * from './coerce.js';
 export * from './copy-automap.js';
 export * from './delimited.js';
+export * from './mapping-agreement.js';
 export * from './pump.js';
 export * from './schema-drift.js';
