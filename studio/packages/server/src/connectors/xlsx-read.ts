@@ -55,11 +55,11 @@ import { SaxesParser, type SaxesTagPlain } from 'saxes';
 import type { Entry, ZipFile } from 'yauzl';
 
 import {
+  COPY_BATCH_ROWS,
   XLSX_MAX_CELL_CHARS,
   XLSX_MAX_ENTRY_BYTES,
   XLSX_MAX_SHARED_STRINGS_BYTES,
 } from '../limits.js';
-import { COPY_BATCH_ROWS } from '../limits.js';
 import { yieldToEventLoop } from './scheduling.js';
 
 // yauzl is CJS with a callback API. `createRequire` keeps the import shape
@@ -147,7 +147,9 @@ function entryIndex(zip: ZipFile): Promise<Map<string, Entry>> {
       zip.readEntry();
     });
     zip.on('end', () => resolve(entries));
-    zip.on('error', (err: Error) => reject(new XlsxReadError(`not a readable .xlsx: ${err.message}`)));
+    zip.on('error', (err: Error) =>
+      reject(new XlsxReadError(`not a readable .xlsx: ${err.message}`)),
+    );
     zip.readEntry();
   });
 }
@@ -156,7 +158,9 @@ async function* entryChunks(zip: ZipFile, entry: Entry, maxBytes: number): Async
   const stream = await new Promise<NodeJS.ReadableStream>((resolve, reject) => {
     zip.openReadStream(entry, (err, s) => {
       if (err || !s) {
-        reject(new XlsxReadError(`could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`));
+        reject(
+          new XlsxReadError(`could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`),
+        );
         return;
       }
       resolve(s);
@@ -184,7 +188,8 @@ async function* entryChunks(zip: ZipFile, entry: Entry, maxBytes: number): Async
 async function entryText(zip: ZipFile, entry: Entry, maxBytes: number): Promise<string> {
   const decoder = new TextDecoder('utf-8');
   let text = '';
-  for await (const chunk of entryChunks(zip, entry, maxBytes)) text += decoder.decode(chunk, { stream: true });
+  for await (const chunk of entryChunks(zip, entry, maxBytes))
+    text += decoder.decode(chunk, { stream: true });
   return text + decoder.decode();
 }
 
@@ -199,15 +204,18 @@ function walkXml(
   },
 ): void {
   const parser = new SaxesParser();
-  let failure: Error | null = null;
+  // A holder rather than a `let`: the only writes happen inside the error
+  // callback, and TS's control-flow analysis would otherwise narrow the
+  // variable to `null` at every read.
+  const state: { failure: Error | null } = { failure: null };
   parser.on('error', (err) => {
-    failure ??= err;
+    state.failure ??= err;
   });
   if (handlers.open) parser.on('opentag', handlers.open);
   if (handlers.text) parser.on('text', handlers.text);
   if (handlers.close) parser.on('closetag', handlers.close);
   parser.write(xml).close();
-  if (failure) throw new XlsxReadError(`malformed xlsx XML: ${failure.message}`);
+  if (state.failure) throw new XlsxReadError(`malformed xlsx XML: ${state.failure.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +257,10 @@ function formatCodeIsDate(code: string): boolean {
   return /[yd]/i.test(bare);
 }
 
-async function readWorkbookParts(zip: ZipFile, entries: ReadonlyMap<string, Entry>): Promise<WorkbookParts> {
+async function readWorkbookParts(
+  zip: ZipFile,
+  entries: ReadonlyMap<string, Entry>,
+): Promise<WorkbookParts> {
   const workbookEntry = entries.get('xl/workbook.xml');
   if (!workbookEntry) {
     throw new XlsxReadError(
@@ -326,7 +337,9 @@ async function readWorkbookParts(zip: ZipFile, entries: ReadonlyMap<string, Entr
         if (tag.name === 'xf' && inCellXfs) {
           const id = Number(tag.attributes['numFmtId'] ?? '0');
           const code = custom.get(id);
-          styleIsDate.push(BUILTIN_DATE_FORMATS.has(id) || (code !== undefined && formatCodeIsDate(code)));
+          styleIsDate.push(
+            BUILTIN_DATE_FORMATS.has(id) || (code !== undefined && formatCodeIsDate(code)),
+          );
         }
       },
       close: (tag) => {
@@ -359,7 +372,11 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
       throw new XlsxReadError(`no sheet named "${opts.sheet}" in this workbook; it has ${names}`);
     }
   } else if (opts.sheetIndex !== undefined) {
-    if (!Number.isInteger(opts.sheetIndex) || opts.sheetIndex < 1 || opts.sheetIndex > sheets.length) {
+    if (
+      !Number.isInteger(opts.sheetIndex) ||
+      opts.sheetIndex < 1 ||
+      opts.sheetIndex > sheets.length
+    ) {
       throw new XlsxReadError(
         `sheet index ${opts.sheetIndex} is out of range; this workbook has only ${sheets.length} sheet(s)`,
       );
@@ -423,7 +440,10 @@ function serialToInstant(serial: number, date1904: boolean): Date | XlsxCellFaul
 
   const ms = base + Math.round(days * MS_PER_DAY);
   if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) {
-    return { xlsxFault: 'phantom-date', detail: `serial ${serial} is outside the representable range` };
+    return {
+      xlsxFault: 'phantom-date',
+      detail: `serial ${serial} is outside the representable range`,
+    };
   }
   return new Date(ms);
 }
@@ -450,7 +470,9 @@ function columnIndexOf(ref: string): number | null {
  * `yieldToEventLoop` between batches so a long sheet cannot starve the server
  * (§9).
  */
-export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator<readonly XlsxRow[]> {
+export async function* readXlsxRowBatches(
+  opts: ReadXlsxOptions,
+): AsyncGenerator<readonly XlsxRow[]> {
   const batchRows = opts.batchRows ?? COPY_BATCH_ROWS;
   const zip = await openZip(opts.filePath);
 
@@ -460,7 +482,10 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
     const { target } = resolveSheet(parts, opts);
 
     const sheetEntry = entries.get(target);
-    if (!sheetEntry) throw new XlsxReadError(`the workbook names a sheet at ${target}, which the container does not hold`);
+    if (!sheetEntry)
+      throw new XlsxReadError(
+        `the workbook names a sheet at ${target}, which the container does not hold`,
+      );
 
     const pending: XlsxRow[] = [];
     let rowNumber = 0;
@@ -477,9 +502,9 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
     let sawValue = false;
 
     const parser = new SaxesParser();
-    let failure: Error | null = null;
+    const state: { failure: Error | null } = { failure: null };
     parser.on('error', (err) => {
-      failure ??= err;
+      state.failure ??= err;
     });
 
     parser.on('opentag', (tag: SaxesTagPlain) => {
@@ -519,7 +544,7 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
       if (!inValue && !inText) return;
       buffer += text;
       if (buffer.length > XLSX_MAX_CELL_CHARS) {
-        failure ??= new XlsxReadError(
+        state.failure ??= new XlsxReadError(
           `a cell exceeds ${XLSX_MAX_CELL_CHARS} characters; refusing rather than accumulating it`,
         );
         buffer = '';
@@ -538,7 +563,8 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
           inInline = false;
           break;
         case 'c': {
-          const column = cellRef === undefined ? nextColumn : (columnIndexOf(cellRef) ?? nextColumn);
+          const column =
+            cellRef === undefined ? nextColumn : (columnIndexOf(cellRef) ?? nextColumn);
           nextColumn = column + 1;
           // An interior gap is a BLANK cell, and binds null rather than
           // `undefined`: Excel omits blanks from the XML entirely, and
@@ -563,7 +589,7 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
       // `{ stream: true }` so a multi-byte character split across an inflate
       // chunk boundary is not corrupted.
       parser.write(decoder.decode(chunk, { stream: true }));
-      if (failure) throw failure instanceof XlsxReadError ? failure : new XlsxReadError(`malformed sheet XML: ${failure.message}`);
+      throwIfMalformed(state.failure);
 
       while (pending.length >= batchRows) {
         opts.signal?.throwIfAborted();
@@ -572,7 +598,7 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
       }
     }
     parser.write(decoder.decode()).close();
-    if (failure) throw failure instanceof XlsxReadError ? failure : new XlsxReadError(`malformed sheet XML: ${failure.message}`);
+    throwIfMalformed(state.failure);
 
     while (pending.length > 0) {
       opts.signal?.throwIfAborted();
@@ -585,6 +611,13 @@ export async function* readXlsxRowBatches(opts: ReadXlsxOptions): AsyncGenerator
     // leak a descriptor.
     zip.close();
   }
+}
+
+function throwIfMalformed(failure: Error | null): void {
+  if (!failure) return;
+  throw failure instanceof XlsxReadError
+    ? failure
+    : new XlsxReadError(`malformed sheet XML: ${failure.message}`);
 }
 
 function materialise(

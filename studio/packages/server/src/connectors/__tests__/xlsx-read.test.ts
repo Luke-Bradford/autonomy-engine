@@ -63,9 +63,14 @@ describe('readXlsxRowBatches — the container', () => {
       ],
     });
 
-    const results = await Promise.all(ALL_ORDERS.map(async (o) => cellsOf(await readAll(seed(spec(o))))));
+    const results = await Promise.all(
+      ALL_ORDERS.map(async (o) => cellsOf(await readAll(seed(spec(o))))),
+    );
 
-    const expected = [['name', 'when'], ['ada', new Date('2020-01-03T00:00:00.000Z')]];
+    const expected = [
+      ['name', 'when'],
+      ['ada', new Date('2020-01-03T00:00:00.000Z')],
+    ];
     for (const result of results) expect(result).toEqual(expected);
   });
 
@@ -168,11 +173,7 @@ describe('readXlsxRowBatches — cell values', () => {
           {
             name: 'S',
             rows: [
-              [
-                { kind: 'inline', text: 'a' },
-                { kind: 'blank' },
-                { kind: 'inline', text: 'c' },
-              ],
+              [{ kind: 'inline', text: 'a' }, { kind: 'blank' }, { kind: 'inline', text: 'c' }],
             ],
           },
         ],
@@ -254,7 +255,10 @@ describe('readXlsxRowBatches — cell values', () => {
     writeFileSync(
       path,
       buildZip([
-        { name: 'xl/workbook.xml', data: '<workbook><sheets><sheet name="S" sheetId="1"/></sheets></workbook>' },
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="S" sheetId="1"/></sheets></workbook>',
+        },
         { name: 'xl/sharedStrings.xml', data: huge },
         { name: 'xl/worksheets/sheet1.xml', data: '<worksheet><sheetData/></worksheet>' },
       ]),
@@ -272,7 +276,11 @@ describe('readXlsxRowBatches — cell values', () => {
 });
 
 describe('readXlsxRowBatches — dates', () => {
-  const dated = (value: number, numFmtId: number, opts: Partial<WorkbookSpec> = {}): WorkbookSpec => ({
+  const dated = (
+    value: number,
+    numFmtId: number,
+    opts: Partial<WorkbookSpec> = {},
+  ): WorkbookSpec => ({
     ...opts,
     cellXfs: [0, numFmtId],
     sheets: [{ name: 'S', rows: [[{ kind: 'number', value, style: 1 }]] }],
@@ -423,7 +431,11 @@ describe('readXlsxRowBatches — streaming', () => {
       sheets: [
         {
           name: 'S',
-          rows: [[{ kind: 'inline', text: 'one' }], [{ kind: 'blank' }], [{ kind: 'inline', text: 'three' }]],
+          rows: [
+            [{ kind: 'inline', text: 'one' }],
+            [{ kind: 'blank' }],
+            [{ kind: 'inline', text: 'three' }],
+          ],
         },
       ],
     });

@@ -127,7 +127,12 @@ export type CellSpec =
   | { readonly kind: 'number'; readonly value: number; readonly style?: number }
   | { readonly kind: 'boolean'; readonly value: boolean }
   | { readonly kind: 'error'; readonly code: string }
-  | { readonly kind: 'formula'; readonly formula: string; readonly cached: string; readonly type?: 'str' | 'n' }
+  | {
+      readonly kind: 'formula';
+      readonly formula: string;
+      readonly cached: string;
+      readonly type?: 'str' | 'n';
+    }
   | { readonly kind: 'isoDate'; readonly iso: string }
   /** Escape hatch for malformed / unusual cells. */
   | { readonly kind: 'raw'; readonly xml: string };
