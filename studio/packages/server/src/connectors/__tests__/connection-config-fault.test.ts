@@ -121,6 +121,7 @@ describe('#1175 a refused connection config reads as one line', () => {
     );
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a failed probe');
     const error = result.error ?? '';
 
     // Reached the Zod branch at all, and named the config an operator can act on.

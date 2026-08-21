@@ -535,11 +535,17 @@ export async function buildApp(opts?: BuildAppOptions) {
   // fault (terminalize) from a transient one (retry next boot). The contract +
   // its test live with `makeDocResolver` in `driver.ts`.
   const resolveDoc: DocResolver = makeDocResolver(db);
+  // ONE registry per app, shared by the executor and the #1191 test-connection
+  // routes. Not two: `createConnectorRegistry` builds a fresh `agent_cli`
+  // adapter around the supervisor it is handed, so a second registry would mean
+  // a second adapter instance for the one kind that holds process state.
+  const connectors = createConnectorRegistry({ supervisor });
+  fastify.decorate('connectors', connectors);
   const executor = createExecutor({
     db,
     masterKey: masterKeyResolution.key,
     resolveDoc,
-    adapters: createConnectorRegistry({ supervisor }),
+    adapters: connectors,
     // #796 (P3b) — the `call_pipeline` spawn seam, closed LAZILY over `childRuns`
     // below for the same reason `alarms.arm` is closed over `alarmClock`: the
     // wiring is genuinely mutually recursive (the executor spawns a child, which

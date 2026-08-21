@@ -1,4 +1,4 @@
-import type { ConnectionKind } from '@autonomy-studio/shared';
+import type { ConnectionKind, ConnectionProbeResult } from '@autonomy-studio/shared';
 import {
   MAX_RETRY_INTERVAL_SECONDS,
   evalToolExpression,
@@ -1449,7 +1449,7 @@ export async function llmProbeGet(
   url: string,
   headers: Record<string, string>,
   timeoutMs: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<ConnectionProbeResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1460,7 +1460,7 @@ export async function llmProbeGet(
     if (res.status >= 400) {
       return { ok: false, error: `provider probe failed (HTTP ${res.status})` };
     }
-    return { ok: true };
+    return { ok: true, probed: 'liveness' };
   } catch (err) {
     return {
       ok: false,

@@ -590,12 +590,16 @@ describe('fs connector — A12 file_list', () => {
 
 describe('fs connector — testConnection', () => {
   it('ok when every root is an existing directory', async () => {
-    expect(await fsAdapter.testConnection({ roots: [root] }, null)).toEqual({ ok: true });
+    expect(await fsAdapter.testConnection({ roots: [root] }, null)).toEqual({
+      ok: true,
+      probed: 'liveness',
+    });
   });
 
   it('errors when a root is missing', async () => {
     const res = await fsAdapter.testConnection({ roots: [join(root, 'nope')] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/not accessible/);
   });
 
@@ -603,12 +607,14 @@ describe('fs connector — testConnection', () => {
     await writeFile(join(root, 'afile'), 'x', 'utf8');
     const res = await fsAdapter.testConnection({ roots: [join(root, 'afile')] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/not a directory/);
   });
 
   it('errors on an invalid config (relative root)', async () => {
     const res = await fsAdapter.testConnection({ roots: ['rel'] }, null);
     expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected a failed probe');
     expect(res.error).toMatch(/invalid fs connection config/);
   });
 });

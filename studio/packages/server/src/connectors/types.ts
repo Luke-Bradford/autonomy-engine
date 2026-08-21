@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   ConnectionKind,
+  ConnectionProbeResult,
   DatasetAddress,
   DatasetColumn,
   DatasetKind,
@@ -328,11 +329,30 @@ export interface ConnectorAdapter {
   kind: ConnectionKind;
   /** Zod schema for the Connection's non-secret `config`. */
   configSchema: z.ZodType;
-  /** Liveness/credential probe for the "test connection" UI. */
+  /**
+   * Liveness/credential probe for the "test connection" UI (#1191 gave it a
+   * route and a caller; until then this whole method was reachable only from
+   * its own tests).
+   *
+   * TYPED TO RESOLVE, NEVER REJECT — a caller gets a sentence, not an unhandled
+   * rejection. `sqlite` and `postgres` both pin that promise in their own
+   * comments; `connectors/probe.ts` still catches defensively, because a route
+   * must not 500 on an adapter bug.
+   *
+   * A success MUST say which question it answered (`probed`) — see
+   * `ConnectionProbeResultSchema`. An adapter that reaches nothing and only
+   * asserts a parseable config returns `probed: 'config'`, so the UI can stop
+   * claiming a connection works when all that was checked is that its settings
+   * are well-formed.
+   *
+   * An error string is shown to an operator and stored nowhere, but it may
+   * still quote a value we passed IN, so every adapter redacts its own secret
+   * out of it (see `redact.ts`). `probe.ts` redacts again at the boundary.
+   */
   testConnection(
     config: Record<string, unknown>,
     secret: string | null,
-  ): Promise<{ ok: boolean; error?: string }>;
+  ): Promise<ConnectionProbeResult>;
   /**
    * Run one activity, streaming progress then exactly one terminal event.
    * `secretFields` (item 7 / S3) carries dispatch-resolved config-sink secrets

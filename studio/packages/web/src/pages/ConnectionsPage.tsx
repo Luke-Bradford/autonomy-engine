@@ -7,6 +7,7 @@ import {
   connectionKindRequiresSecret,
   formatZodIssues,
   type ConnectionKind,
+  type ConnectionProbeResult,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
@@ -15,6 +16,8 @@ import {
   createConnection,
   deleteConnection,
   listConnections,
+  testDraftConnection,
+  testSavedConnection,
   updateConnection,
   type ConnectionWrite,
 } from '../api/connections';
@@ -107,6 +110,23 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  /**
+   * How many times a form has been OPENED, and the `key` the form is mounted on.
+   *
+   * Keying on `form.id` was not enough. The "New connection" button is not gated
+   * behind the form being closed, so pressing it with a new-connection form
+   * already open leaves `form.id` at `null` — no remount — while `blankForm()`
+   * hands back byte-identical content, so the recomputed draft signature matches
+   * the stale one and the PREVIOUS draft's verdict renders against a form that
+   * was never tested. A counter cannot collide with itself, so every way of
+   * opening a form (New twice, Edit another row, Edit the same row again) starts
+   * the child clean.
+   */
+  const [formSeq, setFormSeq] = useState(0);
+  const openForm = useCallback((next: FormState) => {
+    setForm(next);
+    setFormSeq((seq) => seq + 1);
+  }, []);
   const guardedLoad = useGuardedLoad();
 
   // The ONE load path: the mount effect below and every post-mutation refetch
@@ -180,7 +200,7 @@ export function ConnectionsPage() {
     <section aria-labelledby="connections-heading">
       <div className="page-header">
         <h2 id="connections-heading">Connections</h2>
-        <button type="button" onClick={() => setForm(blankForm())}>
+        <button type="button" onClick={() => openForm(blankForm())}>
           New connection
         </button>
       </div>
@@ -219,7 +239,7 @@ export function ConnectionsPage() {
                   <code>{conn.kind}</code>
                 </td>
                 <td>
-                  <button type="button" onClick={() => setForm(formForEdit(conn))}>
+                  <button type="button" onClick={() => openForm(formForEdit(conn))}>
                     Edit
                   </button>
                   <button
@@ -245,6 +265,22 @@ export function ConnectionsPage() {
 
       {form && (
         <ConnectionForm
+          /* Remount on every OPEN. The table stays interactive while the form
+             is open, so "Edit" on another row swaps `form` in place — and
+             without a key the child keeps its own local state across that swap:
+             connection A's `probing`/`error`, and A's probe verdict, rendered
+             against B. The verdict is the sharp one, because a signature over
+             the DRAFT cannot see the switch: two connections sharing non-secret
+             config (a staging/prod pair, or an export/import clone) produce an
+             identical signature, so A's "Connected." would render for a B that
+             was never probed.
+
+             Keyed on the open COUNTER rather than on `form.id`, because `id` is
+             `null` for every new-connection form: pressing "New connection"
+             twice would not remount, and `blankForm()` is byte-identical each
+             time, so the signature would match and the previous draft's verdict
+             would render against a form nothing has tested. */
+          key={formSeq}
           form={form}
           onChange={setForm}
           onClose={() => setForm(null)}
@@ -278,6 +314,22 @@ function ConnectionForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * #1191 — the last probe's verdict, tagged with a SIGNATURE of the draft it
+   * was taken against.
+   *
+   * A probe is a reading from one moment, and the moment expires: type a
+   * different host after a green test and "Connected." is no longer about
+   * anything on screen. Keeping the signature (rather than clearing on every
+   * keystroke through an effect) means the verdict simply stops rendering when
+   * the draft moves out from under it — the same reason the result is not
+   * persisted and never derived from the stored row.
+   */
+  const [probe, setProbe] = useState<{
+    result: ConnectionProbeResult;
+    signature: string;
+  } | null>(null);
+  const [probing, setProbing] = useState(false);
   const editing = form.id !== null;
 
   const { fields, carried } = useMemo(
@@ -292,6 +344,28 @@ function ConnectionForm({
     [fields, form.config],
   );
   const jsonMode = form.jsonMode || unrenderable.length > 0;
+
+  /**
+   * Everything a probe's verdict depends on. The same inputs the advisory memo
+   * below reads, plus whether a secret was TYPED — because a blank secret box
+   * on an edit means "use the stored one", which is a materially different
+   * probe from one carrying a new password.
+   */
+  const draftSignature = useMemo(
+    () =>
+      JSON.stringify([
+        // `form.id` first, and belt-and-braces with the `key` above: were the
+        // remount ever removed, an identical draft on a different connection
+        // must still not inherit the previous row's verdict.
+        form.id,
+        form.kind,
+        form.config,
+        form.jsonText,
+        form.inputs,
+        form.secret !== '',
+      ]),
+    [form.id, form.kind, form.config, form.jsonText, form.inputs, form.secret],
+  );
 
   /**
    * What this kind's own schema says about the draft — ADVISORY only.
@@ -380,6 +454,40 @@ function ConnectionForm({
       inputs: seedFieldInputs(next.fields, parsed.config),
       jsonMode: false,
     });
+  }
+
+  /**
+   * #1191 — probe what is ON SCREEN, not what is stored: the same
+   * `readConfigDraft` the submit path uses, so "Test" and "Save" can never
+   * disagree about which draft is live (the fields or the JSON textarea).
+   *
+   * An EDIT goes through the saved route so the server can fall back to the
+   * stored secret when the input is blank — the whole reason the blank input
+   * means "keep". A CREATE has no row to fall back to, so it sends the draft.
+   */
+  async function onTest() {
+    setError(null);
+    setProbe(null);
+
+    const draft = readConfigDraft(jsonMode, form, fields);
+    if (!draft.ok) {
+      setError(draft.message);
+      return;
+    }
+
+    setProbing(true);
+    try {
+      const secret = form.secret !== '' ? { secret: form.secret } : {};
+      const result =
+        editing && form.id
+          ? await testSavedConnection(form.id, { config: draft.config, ...secret })
+          : await testDraftConnection({ kind: form.kind, config: draft.config, ...secret });
+      setProbe({ result, signature: draftSignature });
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setProbing(false);
+    }
   }
 
   async function onSubmit(event: React.FormEvent) {
@@ -535,11 +643,34 @@ function ConnectionForm({
         </p>
       )}
 
+      {/* #1191 — the probe verdict. `role="status"` (not `alert`): a passing
+          test is informational, and the page's `alert` is already spoken for by
+          errors. A REFUSAL still lands here rather than in the error slot,
+          because it is the adapter's answer to a question that was asked and
+          answered — not a failure of the form. */}
+      {probe !== null && probe.signature === draftSignature && (
+        <p role="status" className={probe.result.ok ? 'probe-ok' : 'probe-failed'}>
+          {probe.result.ok
+            ? probe.result.probed === 'liveness'
+              ? 'Connected.'
+              : // The honest half of the contract: two kinds cannot reach
+                // anything (`agent_cli` will not spawn a command just to look;
+                // `http` has nowhere to go without a baseUrl), so their `ok`
+                // means the settings parse and nothing more.
+                'These settings are valid — this kind is not contacted until it runs.'
+            : probe.result.error}
+        </p>
+      )}
+
       <div className="form-actions">
-        <button type="submit" disabled={saving}>
+        <button type="submit" disabled={saving || probing}>
           {saving ? 'Saving…' : editing ? 'Save changes' : 'Create connection'}
         </button>
-        <button type="button" onClick={onClose} disabled={saving}>
+        {/* Never a submit: testing must not save. */}
+        <button type="button" onClick={() => void onTest()} disabled={saving || probing}>
+          {probing ? 'Testing…' : 'Test connection'}
+        </button>
+        <button type="button" onClick={onClose} disabled={saving || probing}>
           Cancel
         </button>
       </div>

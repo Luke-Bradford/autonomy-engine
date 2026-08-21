@@ -259,7 +259,7 @@ describe('httpAdapter.testConnection', () => {
       'sk-live-token',
     );
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, probed: 'liveness' });
     const init = fetchSpy.mock.calls[0]![1] as RequestInit;
     expect(init.method).toBe('HEAD');
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-live-token');
@@ -280,13 +280,13 @@ describe('httpAdapter.testConnection', () => {
   it('treats a non-401 4xx (e.g. 403/405 on a bare HEAD) as reachable, not a failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(403, ''));
     const result = await httpAdapter.testConnection({ baseUrl: 'https://api.example.com' }, null);
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, probed: 'liveness' });
   });
 
   it('asserts only a valid config when there is no baseUrl to probe (no fetch)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const result = await httpAdapter.testConnection({}, 'sk-unused');
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, probed: 'config' });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

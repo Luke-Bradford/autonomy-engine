@@ -521,7 +521,8 @@ export const fsAdapter: ConnectorAdapter = {
       }
     }
     if (problems.length > 0) return { ok: false, error: problems.join('; ') };
-    return { ok: true };
+    // Real local I/O ran above (each root was stat-ed), so this is liveness.
+    return { ok: true, probed: 'liveness' };
   },
 
   async *runActivity(

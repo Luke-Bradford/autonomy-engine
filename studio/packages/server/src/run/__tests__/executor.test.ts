@@ -166,7 +166,7 @@ function fakeHttpAdapter(run: ConnectorAdapter['runActivity']): ConnectorRegistr
   const adapter: ConnectorAdapter = {
     kind: 'http',
     configSchema: testRegistry().get('http')!.configSchema,
-    testConnection: () => Promise.resolve({ ok: true }),
+    testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
     runActivity: run,
   };
   return new Map([['http', adapter]]);
@@ -1530,7 +1530,7 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     reg.set('http', {
       kind: 'http',
       configSchema: reg.get('http')!.configSchema,
-      testConnection: () => Promise.resolve({ ok: true }),
+      testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
       runActivity: run,
     });
     if (address !== null) {
@@ -3278,7 +3278,7 @@ function fakeAgentCliAdapter(run: ConnectorAdapter['runActivity']): ConnectorReg
   const adapter: ConnectorAdapter = {
     kind: 'agent_cli',
     configSchema: z.object({}).passthrough(),
-    testConnection: () => Promise.resolve({ ok: true }),
+    testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
     runActivity: run,
   };
   return new Map([['agent_cli', adapter]]);
@@ -3732,7 +3732,7 @@ describe('createExecutor — L12 emitMessages transcript + history threading', (
     const adapter: ConnectorAdapter = {
       kind: 'anthropic_api',
       configSchema: testRegistry().get('anthropic_api')!.configSchema,
-      testConnection: () => Promise.resolve({ ok: true }),
+      testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
       runActivity: async function* (ctx) {
         yield {
           type: 'succeeded',
@@ -3846,7 +3846,7 @@ describe('createExecutor — L12 transcript is connection-kind-agnostic (single 
     const adapter: ConnectorAdapter = {
       kind: 'agent_cli',
       configSchema: testRegistry().get('agent_cli')!.configSchema,
-      testConnection: () => Promise.resolve({ ok: true }),
+      testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
       runActivity: async function* () {
         yield {
           type: 'succeeded',

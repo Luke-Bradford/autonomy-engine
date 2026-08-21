@@ -1291,6 +1291,19 @@ td button + button {
   color: var(--warning);
 }
 
+/* #1191 — the "Test connection" verdict.
+   NOT `.error` even when the probe failed: `.error` is reserved for something
+   that blocked an action, and a refusal here is the adapter ANSWERING a
+   question the operator asked. It reads as a result, in the result's own
+   colour, rather than as the form having gone wrong. */
+.probe-ok {
+  color: var(--success);
+}
+
+.probe-failed {
+  color: var(--error);
+}
+
 .property-panel input,
 .property-panel select,
 .property-panel textarea {

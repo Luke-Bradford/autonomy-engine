@@ -18,6 +18,8 @@ vi.mock('../api/connections', async (importActual) => {
     createConnection: vi.fn(),
     updateConnection: vi.fn(),
     deleteConnection: vi.fn(),
+    testDraftConnection: vi.fn(),
+    testSavedConnection: vi.fn(),
   };
 });
 
@@ -52,6 +54,8 @@ const listMock = vi.mocked(api.listConnections);
 const createMock = vi.mocked(api.createConnection);
 const updateMock = vi.mocked(api.updateConnection);
 const deleteMock = vi.mocked(api.deleteConnection);
+const testDraftMock = vi.mocked(api.testDraftConnection);
+const testSavedMock = vi.mocked(api.testSavedConnection);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportConnection);
 const importMock = vi.mocked(portabilityApi.importEnvelope);
@@ -492,5 +496,196 @@ describe('ConnectionsPage', () => {
       await screen.findByRole('button', { name: 'Export Imported Claude' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/needs its secret/);
+  });
+
+  /**
+   * #1191 — "Test connection". The routing rule is the load-bearing part: an
+   * unsaved form has no stored secret to fall back on, an edited one does, and
+   * sending an edit down the draft path would report a confident credential
+   * failure for every connection that keeps its secret blank.
+   */
+  describe('Test connection', () => {
+    it('probes an UNSAVED form through the draft endpoint', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await user.type(screen.getByLabelText('Name'), 'New fs');
+      await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      await waitFor(() =>
+        expect(testDraftMock).toHaveBeenCalledWith({
+          kind: 'fs',
+          config: { roots: ['/srv/data'] },
+        }),
+      );
+      expect(testSavedMock).not.toHaveBeenCalled();
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+    });
+
+    it('probes an EDITED connection through the saved endpoint, secret omitted', async () => {
+      // The blank secret box means "keep the stored one", so the body must NOT
+      // carry a secret — the server resolving the stored ciphertext is the
+      // whole reason this path exists.
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([conn({ name: 'Claude', kind: 'anthropic_api' })]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Claude');
+
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      await waitFor(() =>
+        expect(testSavedMock).toHaveBeenCalledWith('conn_1', {
+          config: { model: 'claude-opus-4-8' },
+        }),
+      );
+      expect(testDraftMock).not.toHaveBeenCalled();
+    });
+
+    it('sends a TYPED secret with an edit, rather than the stored one', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([conn({ name: 'Claude', kind: 'anthropic_api' })]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Claude');
+
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.type(screen.getByLabelText('Secret'), 'sk-new');
+      testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      await waitFor(() =>
+        expect(testSavedMock).toHaveBeenCalledWith('conn_1', {
+          config: { model: 'claude-opus-4-8' },
+          secret: 'sk-new',
+        }),
+      );
+    });
+
+    it('says a config-only probe reached nothing, rather than claiming it works', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await user.selectOptions(screen.getByLabelText('Kind'), 'agent_cli');
+
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'config' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      const status = await screen.findByRole('status');
+      expect(status).toHaveTextContent(/not contacted until it runs/);
+      expect(status).not.toHaveTextContent('Connected.');
+    });
+
+    it('shows the adapter’s refusal sentence', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+
+      testDraftMock.mockResolvedValue({ ok: false, error: 'root not accessible: /srv/data' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent('root not accessible: /srv/data');
+    });
+
+    it('drops a verdict once the draft it was taken against has changed', async () => {
+      // A green result about a host the operator has since edited is a lie with
+      // a timestamp. It must stop rendering, not linger.
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+
+      await user.type(screen.getByLabelText(/^roots/), '-elsewhere');
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    });
+
+    it('does not carry a verdict across to a DIFFERENT connection', async () => {
+      // The table stays interactive while the form is open, so "Edit" on
+      // another row swaps the form in place. Two connections with identical
+      // non-secret config (a staging/prod pair, or an export/import clone)
+      // produce an identical draft, so a draft-only signature would happily
+      // show the first one's "Connected." for a second that was never probed.
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([
+        conn({ id: 'conn_a', name: 'Staging', config: { model: 'claude-opus-4-8' } }),
+        conn({ id: 'conn_b', name: 'Prod', config: { model: 'claude-opus-4-8' } }),
+      ]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Staging');
+
+      const rows = screen.getAllByRole('button', { name: 'Edit' });
+      await user.click(rows[0]!);
+      testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+
+      // Switch to the OTHER connection without closing the form.
+      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    });
+
+    it('does not carry a verdict into a SECOND new-connection form', async () => {
+      // "New connection" is not gated behind the form being closed, so it can be
+      // pressed with a new-connection form already open. `form.id` is `null`
+      // both times, so keying the form on `id` did not remount it — and
+      // `blankForm()` is byte-identical each time, so the draft SIGNATURE
+      // matched too, and the first draft's "Connected." rendered against a form
+      // nothing had tested.
+      //
+      // The draft is therefore left PRISTINE here, which is the whole point:
+      // the moment a field is touched the signature diverges on its own and the
+      // verdict hides for reasons that have nothing to do with the remount. It
+      // is the untouched blank form — the one case where both guards agree on
+      // the wrong answer — that needs the open COUNTER.
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+
+      // Start over. The new form is blank and untested — it must say nothing.
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    });
+
+    it('never SAVES when testing', async () => {
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await user.type(screen.getByLabelText('Name'), 'Prod');
+      await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+      await waitFor(() => expect(testDraftMock).toHaveBeenCalled());
+      expect(createMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+    });
   });
 });
