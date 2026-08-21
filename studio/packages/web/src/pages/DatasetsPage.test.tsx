@@ -501,7 +501,10 @@ describe('DatasetsPage', () => {
     expect(row.getByText(/kind mismatch/i)).toBeInTheDocument();
     expect(
       row.getByText(
-        /dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'http'/,
+        // 'sqlite' or 'postgres' since #1190 opened `table` to postgres — the
+        // advisory ENUMERATES the map rather than naming one store, so it stays
+        // true as the map grows.
+        /dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'http'/,
       ),
     ).toBeInTheDocument();
   });
@@ -558,7 +561,7 @@ describe('DatasetsPage', () => {
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
 
     expect(within(form()).getByText(/Kind and store disagree/)).toHaveTextContent(
-      /dataset kind 'table' lives in a store of kind 'sqlite', but this one names a connection of kind 'anthropic_api'/,
+      /dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'anthropic_api'/,
     );
     // ADVISORY, never a gate: the server accepts this row, so the form must not
     // refuse it. This is the assertion that keeps it from being hardened into a

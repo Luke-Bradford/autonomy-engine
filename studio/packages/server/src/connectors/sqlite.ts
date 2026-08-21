@@ -4,7 +4,6 @@ import { isAbsolute } from 'node:path';
 import {
   datasetConfigSchema,
   formatZodIssues,
-  isSqlIdentifier,
   nocaseFold,
   queryDatasetConfigSchema,
   sqliteConnectionConfigSchema as sharedSqliteConnectionConfigSchema,

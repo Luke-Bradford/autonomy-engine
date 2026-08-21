@@ -476,14 +476,18 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
   it('classifies an unreachable server as transient, never as drift', async () => {
     // `CopyIo.describeSource`'s stated polarity: a store that cannot be REACHED
     // is transient and is not a schema fact.
-    const { factory } = readerFactory({ failOn: { match: 'SET SESSION', error: pgError('08006', 'terminating connection') } });
+    const { factory } = readerFactory({
+      failOn: { match: 'SET SESSION', error: pgError('08006', 'terminating connection') },
+    });
     await expect(
       describePostgresDatasetColumns({ ...READ_BASE, createClient: factory }),
     ).rejects.toMatchObject({ kind: 'transient' });
   });
 
   it('classifies an UNRECOGNISED code as permanent — fail-safe, never retry forever', async () => {
-    const { factory } = readerFactory({ failOn: { match: 'LIMIT 0', error: pgError('42P01', 'relation "t" does not exist') } });
+    const { factory } = readerFactory({
+      failOn: { match: 'LIMIT 0', error: pgError('42P01', 'relation "t" does not exist') },
+    });
     await expect(
       describePostgresDatasetColumns({ ...READ_BASE, createClient: factory }),
     ).rejects.toMatchObject({ kind: 'permanent' });
@@ -491,7 +495,10 @@ describe('describePostgresDatasetColumns (#1190 M10)', () => {
 
   it('never echoes the password into a failure message', async () => {
     const { factory } = readerFactory({
-      failOn: { match: 'LIMIT 0', error: new Error('connection string was host=x password=hunter2') },
+      failOn: {
+        match: 'LIMIT 0',
+        error: new Error('connection string was host=x password=hunter2'),
+      },
     });
     await expect(
       describePostgresDatasetColumns({ ...READ_BASE, secret: 'hunter2', createClient: factory }),
@@ -546,7 +553,9 @@ describe('readPostgresDatasetBatches (#1190 M10)', () => {
   it('stops on a SHORT batch without a further round trip', async () => {
     const { rec, factory } = readerFactory({ fetches: [[{ a: 1 }]] });
     expect(
-      await drain(readPostgresDatasetBatches({ ...READ_BASE, createClient: factory, batchRows: 5 })),
+      await drain(
+        readPostgresDatasetBatches({ ...READ_BASE, createClient: factory, batchRows: 5 }),
+      ),
     ).toEqual([[{ a: 1 }]]);
     expect(rec.queries.filter((q) => q.startsWith('FETCH'))).toHaveLength(1);
   });
@@ -573,7 +582,10 @@ describe('readPostgresDatasetBatches (#1190 M10)', () => {
     });
     await expect(
       (async () => {
-        for await (const _batch of iterable) controller.abort();
+        for await (const batch of iterable) {
+          expect(batch).toHaveLength(1);
+          controller.abort();
+        }
       })(),
     ).rejects.toMatchObject({ kind: 'cancelled' });
     expect(rec.queries).toContain('ROLLBACK');
@@ -648,7 +660,8 @@ describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
   });
 
   it('defaults the port in the store string when the config omits it', async () => {
-    const { port: _port, ...noPort } = CONFIG;
+    const noPort: Record<string, unknown> = { ...CONFIG };
+    delete noPort.port;
     const address = await resolvePostgresDatasetAddress({
       connectionConfig: noPort,
       dataset: dataset('query', { sql: 'select 1' }),
@@ -734,7 +747,6 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     process.env = { ...saved };
   });
 
-
   /** The real driver, through the same seam the adapter uses. */
   const realClientFactory: PostgresClientFactory = (options) =>
     new pg.Client(options) as unknown as PostgresClient;
@@ -799,25 +811,20 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
   // things a fake cannot: that `pg` and postgres behave as measured.
   // -------------------------------------------------------------------------
 
-  const liveRead = (datasetKind: DatasetKind, datasetConfig: Record<string, unknown>) => ({
-    connectionConfig: live,
-    secret: password,
-    datasetKind,
-    datasetConfig,
-    createClient: undefined as unknown as PostgresClientFactory,
-  });
-
   async function drainLive(iterable: AsyncIterable<readonly Record<string, unknown>[]>) {
     const rows: Record<string, unknown>[] = [];
     for await (const batch of iterable) rows.push(...batch);
     return rows;
   }
 
-  /** The real factory, as the adapter uses it. */
-  const realRead = (datasetKind: DatasetKind, datasetConfig: Record<string, unknown>) => {
-    const { createClient: _drop, ...rest } = liveRead(datasetKind, datasetConfig);
-    return { ...rest, createClient: realClientFactory };
-  };
+  /** A read bound to the live server, through the real driver. */
+  const realRead = (datasetKind: DatasetKind, datasetConfig: Record<string, unknown>) => ({
+    connectionConfig: live,
+    secret: password,
+    datasetKind,
+    datasetConfig,
+    createClient: realClientFactory,
+  });
 
   it('describes a real table without reading a row', async () => {
     await withLiveTable(async (table) => {
@@ -880,7 +887,11 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
     // SQLSTATE 25006. The table surviving is what proves the defence.
     await withLiveTable(async (table) => {
       await expect(
-        drainLive(readPostgresDatasetBatches(realRead('query', { sql: `select 1 as a; drop table "${table}"` }))),
+        drainLive(
+          readPostgresDatasetBatches(
+            realRead('query', { sql: `select 1 as a; drop table "${table}"` }),
+          ),
+        ),
       ).rejects.toMatchObject({ message: expect.stringContaining('read-only transaction') });
       expect(await tableExists(table)).toBe(true);
     });
