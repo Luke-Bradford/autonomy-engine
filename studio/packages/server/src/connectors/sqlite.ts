@@ -183,15 +183,6 @@ function storeFailure(err: unknown, context: string, partialWritePossible = fals
 }
 
 /**
- * The QUOTING itself, with no policy attached: wrap in `"`, double any embedded
- * `"`. SQLite's standard identifier escape.
- *
- * Extracted so the two callers below differ in exactly ONE thing — whether a
- * shape refusal runs first — rather than in one thing plus a hand-copied
- * `replace`. Two byte-identical copies of an escaping rule is how the halves
- * drift, and an escaping rule is a bad place for that to happen.
- */
-/**
  * Quote an identifier the STORE told us about — no shape refusal (#1127).
  *
  * The difference from `quoteIdentifier` (now `sql-identifier.ts`, lifted there
