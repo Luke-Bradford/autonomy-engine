@@ -10,7 +10,7 @@ import type {
 } from '../postgres-session.js';
 import { DEFAULT_POSTGRES_PORT } from '../postgres-session.js';
 import type { SinkValue } from '../sqlite-sink.js';
-import { liveSuiteMustRun } from './postgres.test.js';
+import { liveSuiteMustRun } from './live-postgres.js';
 
 /**
  * #1196 M10 slice 3a — the postgres copy SINK.
@@ -140,7 +140,8 @@ describe('the postgres sink refusal ladder (#1196 M10 slice 3a)', () => {
     // one, and it is in CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS so no dispatch
     // parameter can grant it.
     const { rec, factory } = sinkFactory();
-    const { writable: _dropped, ...notWritable } = SINK_CONFIG;
+    const notWritable: Record<string, unknown> = { ...SINK_CONFIG };
+    delete notWritable.writable;
     await expect(
       writePostgresDatasetRows(
         write({ createClient: factory, connectionConfig: notWritable }),
@@ -258,6 +259,13 @@ describe('the postgres sink refusal ladder (#1196 M10 slice 3a)', () => {
     await expect(
       writePostgresDatasetRows(write({ createClient: factory }), batchesOf([{ a: 1, b: 2 }])),
     ).resolves.toEqual({ rowsWritten: 1 });
+    // And the statement OMITS it. `rowsWritten: 1` alone would pass even if the
+    // exclusion picked the wrong column, so long as the counts still lined up —
+    // the claim is about which columns the INSERT names, so that is what is read.
+    const insert = rec.queries.find((q) => q.sql.startsWith('INSERT INTO'));
+    expect(insert?.sql).toContain('"a", "b"');
+    expect(insert?.sql).not.toContain('gen');
+    expect(insert?.values).toEqual([1, 2]);
   });
 
   it('refuses a mapped column the sink does not have', async () => {
@@ -584,6 +592,17 @@ describe('the live postgres sink service (#1196 M10)', () => {
   });
 });
 
+/** Unpick and drop the ambiguity test's dedicated role, if it is there at all.
+ * `drop owned by` first because a grant referencing the role blocks the drop,
+ * and both statements error on a role that does not exist — hence the guard. */
+const DROP_AMB_ROLE_SQL = `do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'studio_sink_amb') then
+    execute 'drop owned by studio_sink_amb';
+    execute 'drop role studio_sink_amb';
+  end if;
+end $$`;
+
 describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live postgres', () => {
   const live = {
     host: LIVE_HOST ?? '',
@@ -728,23 +747,49 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
   it('resolves an UNQUALIFIED table through search_path, columns and all', async () => {
     // THE REASON THIS FILE USES `to_regclass` AND NOT `information_schema`.
     //
-    // The role's `search_path` puts `sink_alt` ahead of `public`, and the two
-    // schemas hold same-named tables with DIFFERENT columns. An unqualified
-    // dataset must therefore describe — and write — `sink_alt.sink_amb`.
+    // A `search_path` that puts `sink_alt` ahead of `public`, over two schemas
+    // holding same-named tables with DIFFERENT columns. An unqualified dataset
+    // must describe — and write — `sink_alt.sink_amb`.
     // `information_schema.columns` requires an explicit `table_schema`, so the
     // rejected design would have had to assume `public`, described the wrong
     // table, and REFUSED this mapping as "the sink has no column named
     // 'from_alt'" while an unqualified INSERT would have succeeded.
+    //
+    // THE SEARCH PATH IS SET ON A ROLE THIS TEST OWNS, and that is not
+    // fastidiousness. `search_path` has no per-connection channel here —
+    // `clientOptionsFor` deliberately passes discrete options and no `options`
+    // string — so it has to be set on a ROLE, and a role's setting is SERVER
+    // state shared by every session that logs in as it. Setting it on the
+    // suite's own user made a test in `postgres.test.ts` fail with
+    // `relation "studio_m10_fixture_7" does not exist`, because vitest runs
+    // files concurrently and that suite's unqualified fixtures suddenly
+    // resolved somewhere else. A dedicated role keeps the blast radius inside
+    // this test.
+    const ambRole = 'studio_sink_amb';
+    const ambPassword = 'sink_amb_pw';
     await withAdminClient(async (c) => {
       await c.query('drop schema if exists sink_alt cascade; create schema sink_alt');
       await c.query('drop table if exists public.sink_amb');
       await c.query('create table public.sink_amb(a int, from_public int)');
       await c.query('create table sink_alt.sink_amb(a int, from_alt int)');
-      await c.query(`alter role "${live.user}" set search_path = sink_alt, public`);
+      // `drop role` refuses while any grant still references the role, so a
+      // leftover from an earlier run has to be UNPICKED rather than dropped —
+      // `drop owned by` is what removes those grants. Guarded on existence
+      // because it is an error on a role that is not there.
+      await c.query(DROP_AMB_ROLE_SQL);
+      await c.query(`create role ${ambRole} login password '${ambPassword}'`);
+      await c.query(`alter role ${ambRole} set search_path = sink_alt, public`);
+      await c.query(`grant usage on schema sink_alt, public to ${ambRole}`);
+      await c.query(`grant all on sink_alt.sink_amb, public.sink_amb to ${ambRole}`);
     });
     try {
       await writePostgresDatasetRows(
-        liveWrite({ datasetConfig: { table: 'sink_amb' }, columns: ['a', 'from_alt'] }),
+        liveWrite({
+          connectionConfig: { ...live, user: ambRole },
+          secret: ambPassword,
+          datasetConfig: { table: 'sink_amb' },
+          columns: ['a', 'from_alt'],
+        }),
         batchesOf([{ a: 1, from_alt: 2 }]),
       );
       const landed = await withAdminClient(
@@ -758,8 +803,93 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
       expect(untouched).toEqual([{ n: 0 }]);
     } finally {
       await withAdminClient(async (c) => {
-        await c.query(`alter role "${live.user}" reset search_path`);
+        await c.query('drop schema if exists sink_alt cascade');
+        await c.query('drop table if exists public.sink_amb');
+        await c.query(DROP_AMB_ROLE_SQL);
       });
+    }
+  });
+
+  it('EXCLUSIVE really serialises two overwrite copies — not just the SQL string', async () => {
+    // The offline test asserts the lock MODE that is sent. This asserts what
+    // that mode is FOR, which is a property of postgres rather than of our
+    // string: a second `overwrite` must WAIT rather than interleave. With
+    // `ROW EXCLUSIVE` — the lock an ordinary INSERT already holds — it would
+    // not, and two concurrent overwrites would each DELETE then each INSERT,
+    // leaving the table holding the UNION of both and reporting success to
+    // each. §9's COPY_CONCURRENCY makes that reachable.
+    await withAdminClient(async (c) => {
+      await c.query('drop table if exists sink_lock; create table sink_lock(a int)');
+    });
+
+    // A holder that takes the same lock and sits on it, so the copy below has
+    // something real to be excluded by.
+    const holder = new pg.Client({
+      host: live.host,
+      port: live.port,
+      database: live.database,
+      user: live.user,
+      password,
+    });
+    await holder.connect();
+    await holder.query('BEGIN');
+    await holder.query('LOCK TABLE "public"."sink_lock" IN EXCLUSIVE MODE');
+
+    let finished = false;
+    const copy = writePostgresDatasetRows(
+      liveWrite({
+        datasetConfig: { schema: 'public', table: 'sink_lock' },
+        mode: 'overwrite',
+        columns: ['a'],
+      }),
+      batchesOf([{ a: 1 }]),
+    ).then((r) => {
+      finished = true;
+      return r;
+    });
+
+    // It must still be BLOCKED while the holder sits on the lock. A generous
+    // window: the point is that it does not complete, not how fast it would.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(finished, 'the copy must WAIT for the exclusive lock, not interleave').toBe(false);
+
+    await holder.query('ROLLBACK');
+    await holder.end();
+    await expect(copy).resolves.toEqual({ rowsWritten: 1 });
+  });
+
+  it('append does NOT serialise against another append — the weaker lock is deliberate', async () => {
+    // The other half of the asymmetry. Taking EXCLUSIVE for `append` would
+    // block the operator's own application writes for the length of a long
+    // copy, for no correctness gain: two appends interleaving is what append
+    // MEANS. So a concurrent ROW EXCLUSIVE holder must NOT block it.
+    await withAdminClient(async (c) => {
+      await c.query('drop table if exists sink_app; create table sink_app(a int)');
+    });
+    const holder = new pg.Client({
+      host: live.host,
+      port: live.port,
+      database: live.database,
+      user: live.user,
+      password,
+    });
+    await holder.connect();
+    await holder.query('BEGIN');
+    await holder.query('LOCK TABLE "public"."sink_app" IN ROW EXCLUSIVE MODE');
+    try {
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({
+            datasetConfig: { schema: 'public', table: 'sink_app' },
+            mode: 'append',
+            columns: ['a'],
+          }),
+          batchesOf([{ a: 1 }]),
+        ),
+      ).resolves.toEqual({ rowsWritten: 1 });
+    } finally {
+      await holder.query('ROLLBACK');
+      await holder.end();
     }
   });
 

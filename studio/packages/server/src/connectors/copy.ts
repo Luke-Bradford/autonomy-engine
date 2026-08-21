@@ -34,24 +34,31 @@ type ActivitySink = NonNullable<ActivityContext['sink']>;
  * beyond passing it on, which is the claim the paragraph originally made and is
  * now measured rather than predicted.
  *
- * WHY THE I/O IS STILL CALLER-SUPPLIED rather than resolved here from
- * `ctx.sink.kind`. A registry keyed by sink kind reads better on paper and is
- * the right shape once the SINK side is heterogeneous — it is what stops M10's
- * postgres turning source × sink into an import mesh. The paragraph this
- * replaces named "M7 or M10 adds the second store" as the moment to build it,
- * and M7 slice 3 (#1167) is that moment arriving — so the deferral is RESTATED
- * here deliberately rather than left standing on a condition that has now fired.
+ * WHY THE SOURCE I/O IS CALLER-SUPPLIED, AND THE SINK HALF NO LONGER IS.
  *
- * It is still not built, and the reason changed rather than expired. There are
- * two stores now, but only ONE of them can be a SINK: `fs` has a `delimited`
- * READER and no writer, so `sinkConnectionKinds` is `['sqlite']` and a registry
- * keyed by sink kind would have exactly one entry. What M7 made heterogeneous is
- * the SOURCE, and the source half is already dispatched by the executor picking
- * an adapter — a second dispatch table underneath it would be a mechanism with
- * nothing to choose between. The cycle argument also still holds: a registry
- * here would make this module import `sqlite.ts`, which imports this module to
- * delegate. Build it when a second SINK exists (M10's postgres, or a CSV
- * writer), which is the condition that actually makes it pay.
+ * This paragraph used to defer a registry keyed by sink kind, and named its own
+ * trigger: build it "when a second SINK exists (M10's postgres, or a CSV
+ * writer), which is the condition that actually makes it pay". M10 slice 3a
+ * (#1196) is that condition firing, and `copy-sink.ts` is the registry — so the
+ * deferral is DISCHARGED rather than restated a third time.
+ *
+ * The split that survives is between the two halves, and it is not arbitrary.
+ * The SOURCE half stays caller-supplied because the executor has already chosen
+ * the adapter: it dispatches a copy on the source connection's kind, so the
+ * running adapter IS the source's and a second dispatch table underneath would
+ * have nothing to choose between. The SINK half is a genuine choice — any of
+ * three source stores may write into either of two sink stores — and making
+ * each source adapter choose meant the same two-way switch written three times,
+ * beside three hand-written refusal sentences that would drift the moment one
+ * was edited.
+ *
+ * The cycle argument that also held it back is what shaped the fix rather than
+ * what prevented it. A registry HERE would make this module import `sqlite.ts`,
+ * which imports this module to delegate; so the registry is not here. It is a
+ * leaf that imports the two WRITERS — which were themselves lifted out of the
+ * adapters (`sqlite-sink.ts`, `postgres-sink.ts`, over `sqlite-store.ts` and
+ * `postgres-session.ts`) precisely so that it could. `copy.ts` still imports
+ * neither store, which is the property that made the whole extraction worth it.
  */
 
 /**

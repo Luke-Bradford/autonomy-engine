@@ -389,7 +389,7 @@ export async function writePostgresDatasetRows(
       // The store's own spelling from here on, so the statement reads like the
       // schema — `describeSinkTable` resolved which relation this is, so the
       // write names it by resolved schema rather than re-running `search_path`.
-      const writeTarget = `${quoteIdentifier(described.schema, 'schema')}.${quoteIdentifier(described.name, 'table')}`;
+      const writeTarget = qualifiedTable({ schema: described.schema, table: described.name });
 
       if (write.mode === 'overwrite') {
         await client.query(`DELETE FROM ${writeTarget}`);

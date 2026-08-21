@@ -84,6 +84,17 @@ export async function writeRowsToSink(
 ): Promise<{ readonly rowsWritten: number }> {
   const { dataset, connection, columns, mode, onBatch, signal } = request;
   if (connection.kind === 'sqlite') {
+    // THE TWO ARMS PARSE IN DIFFERENT PLACES, and the asymmetry is a decision
+    // rather than leftover history. Here the parse is the arm's, because the
+    // SENTENCE is what it buys: `writeSqliteDatasetRows`' own parse says
+    // "invalid sqlite connection config", which reads as a complaint about the
+    // connection the operator is copying FROM — the running adapter is the
+    // SOURCE's, and on a heterogeneous copy that is a different store entirely.
+    // The inner parse is not thereby dead: the writer is exported and directly
+    // tested, and a validator that trusts its caller is one refactor away from
+    // being wrong. The postgres arm below cannot do the same, because its
+    // `writable` gate has to run before a session is opened — so its writer
+    // holds the only parse, and says "postgres" in its own words.
     const parsed = sqliteConnectionConfigSchema.safeParse(connection.connectionConfig);
     if (!parsed.success) {
       throw new DatasetIoError(
