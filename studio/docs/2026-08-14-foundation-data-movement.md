@@ -189,6 +189,45 @@ actual-store `NOT NULL` pre-flight, a stated behaviour break) and 4 (lifting the
 policy out of `sqlite.ts`). This slice is item 1 only. The dataset-detail direction — which
 pipelines reference this dataset — remains **M9**, and the panel deliberately does not link to it.
 
+### As built — M9 (#1185): which pipelines reference this dataset
+
+§2.1's consequence-2 control is now both halves: the dispatch gate (M6 slice A) and the read-side
+affordance this row always named. `GET /api/datasets/:id/references` walks the owner's pipelines for
+`copy` nodes bound to the dataset, and `Manage › Datasets › <id>` renders them with a per-reference
+verdict. Four decisions the section could not have settled in advance:
+
+**① The candidate-version set is a BOUND, and it is stated on the page.** Not every version is
+walked — `latest ∪ active-published (git mode) ∪ trigger-pinned`, which are the three ways a version
+fires on its own. `latest` is what a DB-only workspace binds to and what an author edits against;
+`active` is what a GIT-mode workspace binds to instead (`routes/triggers.ts`'s `resolveBindToActive`),
+so omitting it would answer "nothing references this" over precisely the version that runs; `trigger`
+is needed because a trigger records `pipelineVersionId` ONCE at creation and can lag both. This is
+where it diverges from `readyVersionResourceIds`, which walks EVERY owned version — that one feeds a
+gate, where missing a dispatchable version is a correctness fault, and this is a read surface where
+two hundred versions of one pipeline buries the answer. The case given up is a rerun-from-failed of an
+older version, and it is not left unprotected: §7's gate refuses it `permanent`, naming the column.
+
+**② One classifier, two surfaces.** The M8 authoring panel and this page both read a mapping against
+a dataset's DECLARED columns, and two hand-written readings of one advisory is the drift
+`copy-automap.ts` names three times. `datamove/mapping-agreement.ts` now owns the row projection and
+the NOT NULL/nullable split of `notWritten`, and the panel was moved onto it in the same change.
+
+**③ The mapping is PROJECTED, not re-parsed.** `CopyMappingSchema.safeParse` on a stored
+`Node.config.mapping` is a recorded rejected alternative (`catalog/copy-config.ts`) — it is
+`.strict()` with a required `type`, so it refuses far more than the cross-row rules the #444 write
+gate admitted, and would report a pinned, runnable mapping as broken. `unreadable` is therefore
+reserved for a mapping that is absent or is not an array, and it is a THIRD state that never folds
+into `agrees` (an unknown printed as agreement manufactures reassurance out of an absent fact).
+
+**④ A `${}` dataset end is NAMED, not dropped.** `Node.datasetIds` may hold an expression whose value
+is only known at dispatch, so such a node may well address this dataset. Reporting it as a caveat is
+what stops an empty reference list reading as "this dataset is unused".
+
+Ends come from the CATALOG (`entry.datasetKinds`), not from the presence of `Node.datasetIds` — a
+stray `datasetIds` on an activity that declares none is accepted by the write gate and has no mapping
+to read, so presence-gating would report an `unreadable` copy that does not exist; and
+`datasetKinds.sink` is already optional for M12's `lookup`.
+
 ### 2.2 Schema delta
 
 `shared/src/schemas/dataset.ts` (new), modelled field-for-field on `connection.ts:65`:
@@ -872,7 +911,7 @@ source and a sink.
 | **M6**  | Dispatch-time drift gate (§7) + the resolved-address dispatch record (§2.1). **SPLIT IN TWO** — slice A (#1148) is the source half of §7: the `describeSource` seam, rows 1/4/5 gated before the first row moves, and the empty-source blind spot closed; row 3 deliberately deferred to M10 (see §7's as-built block). Slice B (#1149) is §2.1's resolved-address record + §3.1's physical-address self-copy refusal, which needs it — SHIPPED, with two knowing residuals: a `query` end has no comparable object (§7's as-built block), and the record is durable but not yet RENDERED on the run-detail page. The ticket's two folded-in sink-side items (the actual-store `NOT NULL` check, a stated behaviour break; lifting the sink describe policy out of `sqlite.ts`) are deferred with it                                                                                                                                                 |                                                                                                                                                                                                                                           |
 | **M7**  | `delimited` dataset kind over the existing `fs` connection — **the first heterogeneous copy** (CSV → SQLite)                                                                                                                | the ticket that proves the spec                                                                                                                                                                                                           |
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
-| **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1)                                                                                                                                        | UI epic                                                                                                                                                                                                                                   |
+| **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
 | **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS                                                                                                                                       |                                                                                                                                                                                                                                           |
 | **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
