@@ -133,18 +133,29 @@ describe('activity catalog', () => {
     // lists exactly where they were, because it built a `delimited` reader and
     // no writer. M10 slice 2 (#1190) is the SECOND, and did the same for the
     // same reason — `postgres` joins `connectionKinds` because the reader
-    // landed, and `sinkConnectionKinds` does NOT move because there is no
-    // postgres writer. That pin is load-bearing beyond tidiness: #1190 defers
-    // §7's row 3 and the `query` self-copy residual to #1193 on the premise that
-    // postgres cannot be a sink, so adding a kind below without taking #1193
-    // first silently expires both deferrals.
+    // landed, and `sinkConnectionKinds` did NOT move because there was no
+    // postgres writer.
+    //
+    // M10 slice 3a (#1196) is the first slice to MOVE the sink list, and it did
+    // confront the writer rather than the allowlist: `postgres-sink.ts` lands in
+    // the same commit. It also confronted what #1190 pinned this against —
+    // that widening here expires #1193's two deferrals — by RE-MEASURING both
+    // rather than expiring them silently. §7's row 3 turned out to rest on a
+    // wrong premise (a BOUND parameter coerces per VALUE, so `'123'` into
+    // `int4` succeeds), and the `query` self-copy residual measured as a
+    // wasteful no-op rather than a data-loss path. The registry entry carries
+    // both measurements; #1193 keeps the work.
+    //
+    // `datasetKinds.sink` STILL does not move, and that half of the pin is
+    // untouched: there is no `delimited` writer, so a CSV remains something a
+    // copy can read and not something it can write.
     const copy = catalog.get('copy');
     expect(copy?.datasetKinds).toEqual({
       source: ['table', 'query', 'delimited'],
       sink: ['table'],
     });
     expect(copy?.connectionKinds).toEqual(['sqlite', 'fs', 'postgres']);
-    expect(copy?.sinkConnectionKinds).toEqual(['sqlite']);
+    expect(copy?.sinkConnectionKinds).toEqual(['sqlite', 'postgres']);
   });
 
   it('every source dataset kind `copy` accepts can live in a source connection it accepts', () => {

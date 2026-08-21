@@ -374,7 +374,7 @@
 // exactly — widening this same `connectionKinds` list `['sqlite'] -> ['sqlite',
 // 'fs']` was itself that bump — resting on bump 21's rule that an artifact which
 // is not runnable AS AUTHORED is refused at IMPORT rather than half-loaded.
-export const CATALOG_VERSION = 26;
+export const CATALOG_VERSION = 27;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

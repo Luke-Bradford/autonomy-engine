@@ -494,13 +494,37 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `CATALOG_VERSION` 25 -> 26, on bump 24's precedent (widening this same
     // list `['sqlite'] -> ['sqlite','fs']` was itself that bump).
     connectionKinds: ['sqlite', 'fs', 'postgres'],
-    // PINNED to `['sqlite']`, and this is load-bearing rather than incidental
-    // (#1190). Two of #1190's items — §7's drift-gate row 3 and the `query`
-    // self-copy residual — are deferred to #1193 on the premise that postgres
-    // cannot be a SINK, which is what makes them unreachable rather than merely
-    // unbuilt. Slice 3 is the sink; adding a kind here without taking #1193
-    // first silently expires that premise.
-    sinkConnectionKinds: ['sqlite'],
+    // #1196 (M10 slice 3a) — `postgres` joins the SINK allowlist, in the same
+    // commit as `postgres-sink.ts`'s writer, exactly as slice 2 opened the
+    // SOURCE half alongside its reader. `copy` is the first activity whose sink
+    // is heterogeneous, so `copy-sink.ts` now dispatches on this kind.
+    // `CATALOG_VERSION` 26 -> 27.
+    //
+    // #1190's pin said adding a kind here "silently expires" the premise that
+    // made #1193's two items unreachable. It is expired DELIBERATELY and out
+    // loud, and both were re-measured rather than waved through:
+    //
+    // - §7's drift-gate row 3. Slice 2 measured that `insert into t(n int4)
+    //   select c` where `c` is `text` raises `42804` naming both types, and
+    //   inferred that postgres-as-sink would reject on TYPE. It does not on the
+    //   path this writer uses: a BOUND parameter is untyped text, and measured,
+    //   `'123'` into `int4` SUCCEEDS while `'abc'` raises `22P02` and
+    //   `3000000000` raises `22003`. So postgres coerces per VALUE exactly as
+    //   SQLite does, and §7 ③'s argument for not building row 3 — that a
+    //   per-type refusal would break working copies — applies here unchanged.
+    //   Row 3 is not merely still deferred; its premise was wrong.
+    //
+    // - The `query` self-copy residual. Measured against `postgres:17`: it is
+    //   not a data-loss path. The sink's `EXCLUSIVE` lock does not conflict
+    //   with the source cursor's `ACCESS SHARE`, and under READ COMMITTED the
+    //   source reads a snapshot taken before the sink's uncommitted `DELETE` —
+    //   so a `query` reading the very table its sink overwrites read all five
+    //   rows, wrote them back, and committed with the table intact. A wasteful
+    //   no-op, not destruction. It stays on #1193 as a REACHABLE case rather
+    //   than an unreachable one, and it is still not guess-refused: §7 ② is
+    //   explicit that a `permanent` refusal reached by parsing an operator's
+    //   SQL badly is the one direction a gate must never fail in.
+    sinkConnectionKinds: ['sqlite', 'postgres'],
     datasetKinds: { source: ['table', 'query', 'delimited'], sink: ['table'] },
     outputs: [
       out('rowsRead', 'number'),
