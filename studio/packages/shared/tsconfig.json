@@ -2,7 +2,23 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    // #1199 — `noEmit` on the TYPECHECK project, `noEmit: false` on the build
+    // project. This is the root-cause half of the fix: `tsc -b packages/shared`
+    // selects THIS config (the one that includes tests) and, in build mode,
+    // EMITS — so it wrote 88 compiled `*.test.js` into a gitignored `dist/`,
+    // which vitest then collected as a second copy of the whole suite. Measured
+    // before the fix: `vitest list` reported 5238 tests, 2619 of them from
+    // `dist/`. With `noEmit` here, `tsc -b` is a harmless no-op and the
+    // artifacts cannot be created in the first place. `packages/web` has set
+    // this for the same structural reason since before the ticket.
+    "noEmit": true
   },
-  "include": ["src"]
+  // #1199, following #726's precedent in `packages/server/tsconfig.json` —
+  // `vitest.config.ts` is covered by the typecheck project so a mistyped option
+  // in it cannot be silently ignored (vitest does not error on unknown keys, so
+  // a misspelt `include` would leave the guard absent and the typecheck green).
+  // `rootDir` moved to `tsconfig.build.json` to make that possible: a file
+  // outside `src` in a project that sets `rootDir: "src"` is a hard TS6059,
+  // which `noEmit` does NOT suppress (measured).
+  "include": ["src", "vitest.config.ts"]
 }

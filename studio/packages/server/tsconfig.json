@@ -2,7 +2,17 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "types": ["node"]
+    "types": ["node"],
+    // #1199 — `noEmit` on the TYPECHECK project, `noEmit: false` on the build
+    // project below. `tsc -b packages/server` selects THIS config (the one
+    // that includes tests, per the note below) and, in build mode, EMITS — so
+    // it plants compiled `*.test.js` into a gitignored `dist/`, which vitest 4
+    // then collects as a second copy of the whole suite (`288 = 2 x 144`
+    // files). `dist/` being gitignored is what made it invisible: `git status`
+    // stayed clean and the next full run just went red across 96 files. With
+    // `noEmit` here that command is a harmless no-op. `vitest.config.ts`'s
+    // `include` is the second, independent defence.
+    "noEmit": true
   },
   // #726 — this is the TYPECHECK project (`tsc -p tsconfig.json --noEmit`), and
   // it deliberately covers the package's config files as well as `src`.

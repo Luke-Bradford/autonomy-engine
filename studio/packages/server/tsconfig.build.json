@@ -7,7 +7,9 @@
   // `include` replaces the parent's, so this is a complete override, not a
   // merge — the build output is unchanged by the #726 restructure.
   "compilerOptions": {
-    "rootDir": "src"
+    "rootDir": "src",
+    // #1199 — re-enable emit for the one project that is supposed to emit.
+    "noEmit": false
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]

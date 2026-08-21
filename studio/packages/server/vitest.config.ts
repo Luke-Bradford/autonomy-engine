@@ -38,6 +38,22 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    /**
+     * #1199 — where this package's tests live, stated as an ALLOWLIST.
+     *
+     * vitest 4 dropped `dist` from its default `exclude` (measured on the
+     * pinned 4.1.10: `defaultExclude` is exactly
+     * `["**\/node_modules\/**", "**\/.git\/**"]`), so a compiled
+     * `*.test.js` under a gitignored `dist/` is collected as a second copy of
+     * the entire suite. That is what produced the `288 (2 x 144) files /
+     * 1395 failed` reading #1199 was filed on — no source change, an artifact
+     * on disk. The full argument for allowlist-over-`exclude` is in
+     * `packages/shared/vitest.config.ts`; the short version is that naming
+     * `dist` fixes one directory, whereas naming `src` is closed under the
+     * next one. Paired with `noEmit` in `tsconfig.json`, which stops the
+     * artifacts existing at all.
+     */
+    include: ['src/**/*.test.ts'],
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },
