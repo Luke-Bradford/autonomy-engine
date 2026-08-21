@@ -142,11 +142,52 @@ effective address resolves live. Two real consequences, both of which need a com
    named. Without this, a run's own log cannot answer "where did this data go", which is the first
    question anyone asks. **BUILT — M6 slice B (#1149):** `node.dispatched.datasetAddresses`, minted
    per end by the store's own adapter (§7's as-built block for the three decisions it forced).
+   **RENDERED — #1162:** durable was only half the control. Until the run monitor read it, the
+   answer was reachable only by querying `run_events`, which is the state this paragraph calls
+   unacceptable rather than a workaround. See the as-built block below.
 2. **Editing a dataset can invalidate a pinned mapping.** **Control:** the dispatch-time drift gate
    (§7), which fails `permanent` with the offending columns named, plus **M9**, the dataset detail
    page listing the pipelines whose mappings reference it and flagging those that no longer agree.
    A dataset cannot cheaply know its consumers at save time, so this is a read-side affordance, not
    a write-side gate.
+
+### As built — the address becomes readable (#1162)
+
+Two surfaces, because they answer two different questions and neither subsumes the other.
+
+**The node drill-in** (`web/src/pages/runs/NodeActivityPanel.tsx`) gains a **Data movement**
+section naming each end the dispatch resolved to. It is fed by `deriveNodeActivity`, which folds
+the address onto `NodeActivity` from `node.dispatched`. Three decisions that fell out of the fold
+rather than being planned:
+
+- **Last dispatch wins.** A retry can resolve somewhere the previous attempt did not — the dataset
+  row is mutable, which is the whole reason §2.1 demands this record — so pairing attempt 1's
+  target with attempt 2's outcome would answer "where did this data go" wrongly and confidently.
+- **A retry re-open CLEARS it, a terminal event KEEPS it.** `node.retryDue`/`node.retryRequested`
+  re-open the node without resolving anything, so the previous target must not stand over a node
+  being sent elsewhere — the same argument `dropSpan` already makes one line above, for the same
+  window. It is deliberately NOT part of `clearResult`, which runs at the head of every TERMINAL
+  branch: putting it there would blank the address of precisely the settled copies whose
+  destination anyone reads. Both directions are pinned, and both were mutation-proven.
+- **Presence-gated on the fact, not on the activity type.** The panel has no doc and cannot ask
+  what kind a node is; it does not need to, because only a dataset-bound dispatch records one.
+
+**The event feed** (`format.ts`'s `eventGloss`) glosses `source=`/`sink=` on a `node.dispatched`.
+This is not redundant with the panel: the feed is the only surface that keeps the address **per
+attempt**, which is exactly what the panel's last-dispatch-wins rule gives up. The gloss reads the
+value through `DatasetAddressSchema.safeParse` rather than duck-typing it — every other field that
+function reads is a string it checks inline, and a hand-rolled shape check here would be a second,
+drifting authority on an address.
+
+Both reuse `describeDatasetAddress`, the renderer the engine's own `DATASET_SELF_COPY` refusal
+already uses, so a refusal and a run log cannot drift into two spellings of one address.
+`storeIdentity` is shown nowhere: it is a `dev:ino` comparison token that identifies a store, it
+does not address one, and beside a path it would read as part of it.
+
+**Still open on #1162** — items 2 (a `query` end has no comparable describe object), 3 (the
+actual-store `NOT NULL` pre-flight, a stated behaviour break) and 4 (lifting the sink describe
+policy out of `sqlite.ts`). This slice is item 1 only. The dataset-detail direction — which
+pipelines reference this dataset — remains **M9**, and the panel deliberately does not link to it.
 
 ### 2.2 Schema delta
 

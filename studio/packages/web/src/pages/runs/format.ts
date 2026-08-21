@@ -1,3 +1,4 @@
+import { DatasetAddressSchema, describeDatasetAddress } from '@autonomy-studio/shared';
 import type { Run, RunEvent } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
 
@@ -144,6 +145,27 @@ export function eventGloss(event: RunEvent): string {
      and it is pinned by a test. */
   push('kind', p.kind);
   push('code', p.code);
+  /* #996 M6 (#1162, data-movement spec §2.1) — WHERE a dataset-bound dispatch
+     resolved to. §2.1's compensating control is that "the run log says where it
+     actually wrote", and this feed is the run log; it is also the only surface
+     that keeps the address PER ATTEMPT, since the node drill-in folds to the
+     last dispatch by design.
+
+     Read through the event's OWN schema rather than duck-typed. Every other
+     field here is a string that `push` can check inline, and this one is an
+     object — so the alternative is a hand-rolled shape check that would be a
+     second, drifting authority on an address. `safeParse` keeps the stated
+     contract exactly: an odd payload glosses to nothing instead of throwing. */
+  const address = (v: unknown): string | undefined => {
+    const parsed = DatasetAddressSchema.safeParse(v);
+    return parsed.success ? describeDatasetAddress(parsed.data) : undefined;
+  };
+  const addresses = p.datasetAddresses;
+  if (typeof addresses === 'object' && addresses !== null) {
+    const ends = addresses as { source?: unknown; sink?: unknown };
+    push('source', address(ends.source));
+    push('sink', address(ends.sink));
+  }
   return parts.join(' ');
 }
 

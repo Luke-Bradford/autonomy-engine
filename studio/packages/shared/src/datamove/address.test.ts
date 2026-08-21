@@ -96,5 +96,20 @@ describe('describeDatasetAddress', () => {
   it('names the object when there is one, and the store alone when there is not', () => {
     expect(describeDatasetAddress(address())).toBe("'/data/app.db' → 'main.users'");
     expect(describeDatasetAddress(address({ object: null }))).toBe("'/data/app.db'");
+
+    /**
+     * #1162 — an address whose object IS its store reads ONCE.
+     *
+     * Not a special case invented for the display: `resolveDelimitedDatasetAddress`
+     * deliberately sets `object` to the same confined path as `store`, and its
+     * docblock rejects both alternatives (directory-as-store reopens the
+     * case-alias hole; a constant `object` asserts a fact nobody established).
+     * The consequence lands here, where `'…/people.csv' → '…/people.csv'` reads
+     * as a rendering fault rather than as one file. Comparison is untouched —
+     * `sameDatasetAddress` still reads both halves.
+     */
+    expect(
+      describeDatasetAddress(address({ store: '/d/people.csv', object: '/d/people.csv' })),
+    ).toBe("'/d/people.csv'");
   });
 });

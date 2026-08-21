@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { EngineDoc, EngineEvent, RunEvent } from '@autonomy-studio/shared';
+import type { DatasetAddress, EngineDoc, EngineEvent, RunEvent } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 import {
   deriveNodeActivity,
@@ -25,6 +25,9 @@ const NO_LLM_ACTIVITY = {
      value every row carries when nothing of this sort happened. An ordinary node
      spawns no child run, and a row that claimed one would be the bug. */
   childRunIds: [],
+  /* #1162 — likewise. Only a DATASET-BOUND activity resolves an address, so
+     every ordinary node carries the absent one. */
+  datasetAddresses: undefined,
 };
 
 let seq = 0;
@@ -2695,5 +2698,213 @@ describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
     expect(row.cost.responseCount).toBe(0);
     expect(row.cost.complete).toBe(true);
     expect(row.toolCalls).toEqual([]);
+  });
+});
+
+/**
+ * #996 M6 (#1162, data-movement spec §2.1) — WHERE a dataset-bound dispatch
+ * actually resolved to, projected onto the row the drill-in renders.
+ *
+ * §2.1's argument for recording it at all is what these cases pin: a node holds
+ * a dataset *ref*, and a dataset row is MUTABLE, so a rerun pinned to the same
+ * `pipelineVersionId` writes wherever that dataset points TODAY. M6 slice B
+ * (#1149) made the resolved address durable on `node.dispatched`; until this
+ * fold read it, the only way to answer "where did this data go" was a query
+ * against `run_events`, which §2.1 names as the unacceptable state.
+ *
+ * The field is `.optional()` with NO `.default()` in `EngineEventSchema`
+ * (`shared/src/engine/types.ts`), so unlike `failureKind` the parsed event is
+ * already honest about absence and needs no raw-payload presence check.
+ */
+describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
+  const SOURCE: DatasetAddress = {
+    kind: 'sqlite',
+    store: '/data/app.db',
+    storeIdentity: '16777232:914',
+    object: 'main.people',
+  };
+  const SINK: DatasetAddress = {
+    kind: 'sqlite',
+    store: '/data/warehouse.db',
+    storeIdentity: '16777232:915',
+    object: 'main.people_copy',
+  };
+  const OTHER_SINK: DatasetAddress = { ...SINK, object: 'main.people_v2' };
+
+  const rowFor = (events: RunEvent[], nodeId: string): NodeActivity => {
+    const row = deriveNodeActivity(events).find((r) => r.nodeId === nodeId);
+    if (row === undefined) throw new Error(`no row for ${nodeId}`);
+    return row;
+  };
+
+  const dispatch = (attempt: number, addresses?: NodeActivity['datasetAddresses']): RunEvent =>
+    envelope({
+      type: 'node.dispatched',
+      runId: 'r',
+      nodeId: 'c',
+      attemptId: `c#${attempt}`,
+      idempotent: false,
+      ...(addresses === undefined ? {} : { datasetAddresses: addresses }),
+    });
+
+  it('projects both ends of a copy onto the row', () => {
+    const row = rowFor([dispatch(0, { source: SOURCE, sink: SINK })], 'c');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: SINK });
+  });
+
+  /**
+   * SOURCE-ONLY is a real shape, not a defensive branch: `executor.ts` mints
+   * `{ source }` alone and only adds `sink` when the node declares a sink end,
+   * which a read-only dataset activity (M12's `lookup`) never will.
+   */
+  it('projects a source-only address without inventing a sink', () => {
+    const row = rowFor([dispatch(0, { source: SOURCE })], 'c');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE });
+    expect(row.datasetAddresses?.sink).toBeUndefined();
+  });
+
+  it('leaves the field absent for a dispatch that resolved no dataset at all', () => {
+    expect(rowFor([dispatch(0)], 'c').datasetAddresses).toBeUndefined();
+  });
+
+  /**
+   * LAST DISPATCH WINS. The dataset row is mutable, so attempt 2 can resolve
+   * somewhere attempt 1 did not — showing attempt 1's target beside attempt 2's
+   * outcome would be a confident wrong answer about where the data went.
+   */
+  it('replaces an earlier attempt address with the one this attempt resolved', () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }),
+        envelope({
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          error: 'boom',
+          kind: 'transient',
+        }),
+        dispatch(1, { source: SOURCE, sink: OTHER_SINK }),
+      ],
+      'c',
+    );
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: OTHER_SINK });
+  });
+
+  it('drops the address to absent when a dispatch stops recording one', () => {
+    const row = rowFor([dispatch(0, { source: SOURCE, sink: SINK }), dispatch(1)], 'c');
+    expect(row.datasetAddresses).toBeUndefined();
+  });
+
+  /**
+   * THE GUARD, and the reason it is not folded into `clearResult`.
+   *
+   * `node.retryDue`/`node.retryRequested` RE-OPEN the node without starting an
+   * attempt — the `node.dispatched` that follows does that. `dropSpan` already
+   * drops the previous attempt's span in exactly this window, for exactly this
+   * reason, and an address left standing is the same defect: the panel would
+   * name a target over a node that is being re-dispatched and whose mutable
+   * dataset may now point elsewhere.
+   */
+  it('drops the address when a retry re-opens the node, before the re-dispatch', () => {
+    for (const type of ['node.retryDue', 'node.retryRequested'] as const) {
+      const reopen: EngineEvent =
+        type === 'node.retryDue'
+          ? { type, runId: 'r', nodeId: 'c', previousAttemptId: 'c#0' }
+          : { type, runId: 'r', nodeId: 'c', previousAttemptId: 'c#0', reason: 'boot reconciler' };
+      const row = rowFor(
+        [
+          dispatch(0, { source: SOURCE, sink: SINK }),
+          envelope({
+            type: 'node.failed',
+            runId: 'r',
+            nodeId: 'c',
+            attemptId: 'c#0',
+            error: 'boom',
+            kind: 'transient',
+          }),
+          envelope(reopen),
+        ],
+        'c',
+      );
+      expect(row.status, type).toBe('dispatched');
+      expect(row.datasetAddresses, type).toBeUndefined();
+    }
+  });
+
+  /**
+   * THE OPPOSITE GUARD, and the one that would silently kill this ticket.
+   *
+   * Every terminal branch calls `clearResult` at its head, so putting the field
+   * there would blank the address of every copy that actually SETTLED — the
+   * only copies whose destination anyone reads.
+   */
+  it('KEEPS the address across the terminal event, which is when it is read', () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }),
+        envelope({
+          type: 'node.succeeded',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          outputs: { rowsWritten: 2 },
+        }),
+      ],
+      'c',
+    );
+    expect(row.status).toBe('success');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: SINK });
+  });
+
+  /**
+   * A HELD node keeps it too. `node.retryScheduled` does not re-open the node —
+   * it reports the hold — so the address of the attempt that just failed is
+   * still the last true answer to "where was it writing when it failed".
+   */
+  it('KEEPS the address while the node is held for its retry interval', () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }),
+        envelope({
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          error: 'boom',
+          kind: 'transient',
+        }),
+        envelope({
+          type: 'node.retryScheduled',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          nextAttemptAt: 5_000,
+        }),
+      ],
+      'c',
+    );
+    expect(row.status).toBe('retry_pending');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: SINK });
+  });
+
+  /**
+   * A row the fold never saw an event for cannot have resolved anything.
+   * `reconcileNodeActivity` mints it from the reducer's state alone, so there
+   * is no dispatch behind it and no address to invent — the same refusal the
+   * `copiedFromRunId` and `startedAtMs` fields beside it already make.
+   */
+  it('mints a reconciled row that no event named at the absent address', () => {
+    const doc: EngineDoc = {
+      nodes: [{ id: 'c', type: 'copy', position: { x: 0, y: 0 }, config: {} }],
+      edges: [],
+    };
+    const projection = projectRun(doc, [
+      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+    ]);
+    if (!projection.ok) throw new Error(`fixture: must project — ${projection.reason}`);
+    const [row] = reconcileNodeActivity([], projection.state);
+    expect(row?.nodeId).toBe('c');
+    expect(row?.datasetAddresses).toBeUndefined();
   });
 });
