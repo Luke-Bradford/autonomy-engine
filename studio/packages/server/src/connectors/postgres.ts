@@ -14,6 +14,10 @@ import { failed } from './activity-events.js';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
+import {
+  rewriteNamedParametersToPositional,
+  type PostgresStatement,
+} from './postgres-named-parameters.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
 import { yieldToEventLoop } from './scheduling.js';
 // #1196 — the session leaf. `postgres.ts` is the READER + adapter; everything
@@ -30,6 +34,7 @@ import {
   readFailure,
   type PostgresClient,
   type PostgresClientFactory,
+  type PostgresQueryResult,
 } from './postgres-session.js';
 export {
   clientOptionsFor,
@@ -345,7 +350,7 @@ function readerTypes(): { getTypeParser: (oid: number, format?: unknown) => unkn
  * second, divergent copy of that rule in one store.
  */
 export async function describePostgresDatasetColumns(read: PostgresDatasetRead): Promise<string[]> {
-  const sql = sourceStatementFor(read.datasetKind, read.datasetConfig);
+  const statement = sourceStatementFor(read.datasetKind, read.datasetConfig);
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset describe aborted');
   const client = await openSession(
     read.createClient,
@@ -355,7 +360,7 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
     readerTypes(),
   );
   try {
-    const result = await client.query(describeStatementFor(sql));
+    const result = await runBound(client, describeStatementFor(statement.sql), statement);
     return result.fields.map((f) => f.name);
   } catch (err) {
     throw readFailure(err, 'the source statement could not be described', read.secret);
@@ -402,7 +407,7 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
 export async function* readPostgresDatasetBatches(
   read: PostgresDatasetRead,
 ): AsyncIterable<readonly Record<string, unknown>[]> {
-  const sql = sourceStatementFor(read.datasetKind, read.datasetConfig);
+  const statement = sourceStatementFor(read.datasetKind, read.datasetConfig);
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
@@ -418,7 +423,11 @@ export async function* readPostgresDatasetBatches(
     try {
       await client.query('BEGIN READ ONLY');
       inTransaction = true;
-      await client.query(`DECLARE ${CURSOR_NAME} NO SCROLL CURSOR FOR ${sql}`);
+      await runBound(
+        client,
+        `DECLARE ${CURSOR_NAME} NO SCROLL CURSOR FOR ${statement.sql}`,
+        statement,
+      );
     } catch (err) {
       throw readFailure(err, 'the source statement could not be opened for reading', read.secret);
     }
@@ -476,16 +485,17 @@ const CURSOR_NAME = '"__studio_copy"';
  * The SELECT a source dataset resolves to, with every refusal this module owes
  * BEFORE either the describe or the cursor is built.
  *
- * `query`'s two refusals are both measured, and both would otherwise surface as
- * a raw postgres syntax error naming a character rather than a cause:
+ * `query` carries ONE refusal here and one rewrite, both measured:
  *
- * - **Named parameters.** `queryDatasetConfigSchema.parameters` is a record of
- *   NAMED binds, "keyed WITHOUT the `:` prefix the SQL carries", which
- *   better-sqlite3 supports and `pg` does not have at all. MEASURED: `where a =
- *   :id` reaches postgres as SQLSTATE `42601`, `syntax error at or near ":"`.
- *   Rewriting `:name` to `$1` is not something to guess at — a `:` inside a
- *   string literal must not be rewritten — so this REFUSES and #1194 owns the
- *   per-kind parameter style.
+ * - **Named parameters are REWRITTEN, not refused** (#1194). `pg` has no named
+ *   parameters — MEASURED, `where a = :id` reaches postgres as SQLSTATE `42601`,
+ *   `syntax error at or near ":"` — so slice 2 refused them outright and the
+ *   same dataset config meant something on sqlite and nothing here. It is now
+ *   translated to postgres's positional `$n` by `postgres-named-parameters.ts`,
+ *   which owns the whole argument for why that needs a lexer rather than a
+ *   regex. `:name` is the portable AUTHORING style; each store binds it in its
+ *   own. §8 is untouched — the VALUES still leave as bind parameters and never
+ *   enter the statement text.
  * - **A trailing `;`.** MEASURED: the describe wrap below turns `select 1;` into
  *   `syntax error at or near ";"`. It is REFUSED rather than stripped, because
  *   stripping would mean the SQL that runs is not the SQL the operator saved,
@@ -495,7 +505,7 @@ const CURSOR_NAME = '"__studio_copy"';
 function sourceStatementFor(
   datasetKind: DatasetKind,
   datasetConfig: Record<string, unknown>,
-): string {
+): PostgresStatement {
   if (!POSTGRES_DATASET_KINDS.includes(datasetKind)) {
     throw new DatasetIoError('permanent', notAPostgresKind(datasetKind));
   }
@@ -509,23 +519,40 @@ function sourceStatementFor(
 
   if (datasetKind === 'table') {
     const cfg = tableDatasetConfigSchema.parse(parsed.data);
-    return `SELECT * FROM ${qualifiedTable(cfg)}`;
+    return { sql: `SELECT * FROM ${qualifiedTable(cfg)}`, values: [] };
   }
 
   const cfg = queryDatasetConfigSchema.parse(parsed.data);
-  if (cfg.parameters !== undefined && Object.keys(cfg.parameters).length > 0) {
-    throw new DatasetIoError(
-      'permanent',
-      "this query dataset declares named `parameters`, which postgres cannot bind — it binds positionally ($1), and rewriting ':name' automatically is not safe because a ':' inside a string literal must not be rewritten",
-    );
-  }
+  // The `;` refusal runs on the SAVED text, before the rewrite: it is a fact
+  // about what the operator wrote, and reporting it against a statement they
+  // never authored would be a worse message for the same defect.
   if (cfg.sql.trimEnd().endsWith(';')) {
     throw new DatasetIoError(
       'permanent',
       'this query dataset ends in a semicolon; postgres reads the statement as part of a larger one, so remove the trailing `;`',
     );
   }
-  return cfg.sql;
+  return rewriteNamedParametersToPositional(cfg.sql, cfg.parameters);
+}
+
+/**
+ * Run `sql` on `client`, binding `statement`'s values only if there are any.
+ *
+ * The empty case passes NO second argument rather than `[]`, and that is not
+ * tidiness. MEASURED: `pg` sends a valueless call over the SIMPLE query protocol
+ * and a valued one over the EXTENDED protocol, and the two differ — `select 1;
+ * select 2` is accepted with `[]` and raises `42601 cannot insert multiple
+ * commands into a prepared statement` with a value. So every pre-#1194 read
+ * stays on exactly the protocol it was measured on (the multi-statement gate
+ * `describeStatementFor` documents is unchanged), while a parameterised read
+ * additionally picks up the extended protocol's own refusal as a backstop.
+ */
+function runBound(
+  client: PostgresClient,
+  sql: string,
+  statement: PostgresStatement,
+): Promise<PostgresQueryResult> {
+  return statement.values.length === 0 ? client.query(sql) : client.query(sql, statement.values);
 }
 
 /**
