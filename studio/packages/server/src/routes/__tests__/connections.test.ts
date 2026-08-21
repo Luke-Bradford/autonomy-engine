@@ -12,7 +12,8 @@ import {
   listSecrets,
 } from '../../repo/index.js';
 import type { Db } from '../../repo/types.js';
-import { buildTestApp } from '../../__tests__/build-test-app.js';
+import { join } from 'node:path';
+import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 
 /** Bind an ENABLED schedule trigger to a version that references `connId` on an
  * `llm_call` node — the dependency the reverse-gate must find and disable. */
@@ -50,9 +51,12 @@ function bindEnabledTrigger(db: Db, ownerId: string, connId: string): string {
 
 describe('connections routes', () => {
   let app: FastifyInstance;
+  /** The per-test scratch dir — a real, existing directory an `fs` probe can
+   * genuinely reach, and the parent of the missing one it genuinely cannot. */
+  let tmpDir: string;
 
   beforeAll(async () => {
-    app = await buildTestApp();
+    ({ app, tmpDir } = await buildTestAppWithContext());
   });
 
   afterAll(async () => {
@@ -222,6 +226,223 @@ describe('connections routes', () => {
 
     const getRes = await app.inject({ method: 'GET', url: `/api/connections/${other.id}` });
     expect(getRes.statusCode).toBe(404);
+  });
+
+  /**
+   * #1191 — the test-connection routes. Everything here drives REAL adapters
+   * through the app's own registry: the point of the ticket is that eight
+   * implementations had no caller, so a test that mocks the adapter would
+   * recreate exactly the gap it is meant to close.
+   *
+   * `127.0.0.1:1` is the unreachable postgres: no DNS lookup, an immediate
+   * refusal, and — the property these tests actually lean on — a refusal the
+   * adapter only reaches AFTER its own "this connection has no secret" check.
+   * Which of those two sentences comes back is therefore an observation of
+   * whether a secret was resolved and handed over, without mocking anything.
+   */
+  describe('POST /api/connections/test (draft)', () => {
+    it('probes a config that has no row behind it', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections/test',
+        payload: { kind: 'fs', config: { roots: [tmpDir] } },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, probed: 'liveness' });
+    });
+
+    it('returns the adapter’s own refusal sentence for a bad config', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections/test',
+        payload: { kind: 'fs', config: { roots: [join(tmpDir, 'no-such-dir')] } },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: false });
+      expect(res.json().error).toMatch(/not accessible/);
+    });
+
+    it('says `probed: config` for a kind that deliberately reaches nothing', async () => {
+      // `agent_cli` does not spawn — running an arbitrary command as a probe
+      // would be an unsafe side effect. So this `ok: true` means "the settings
+      // parse", and the route must carry that distinction out to the UI rather
+      // than letting it read as "this connection works".
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections/test',
+        payload: { kind: 'agent_cli', config: { command: 'definitely-not-a-real-binary' } },
+      });
+      expect(res.json()).toEqual({ ok: true, probed: 'config' });
+    });
+
+    it('400s an unknown kind rather than answering about a missing adapter', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections/test',
+        payload: { kind: 'not_a_real_kind', config: {} },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /api/connections/:id/test (saved)', () => {
+    /** A postgres row pointed at a refused local port, optionally with a secret. */
+    async function seedPostgres(secret: string | undefined) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: {
+          name: `pg ${String(secret)}`,
+          kind: 'postgres',
+          config: { host: '127.0.0.1', port: 1, database: 'app', user: 'app', sslmode: 'disable' },
+          ...(secret !== undefined ? { secret } : {}),
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json().id as string;
+    }
+
+    it('resolves the STORED secret when the body supplies none', async () => {
+      const withSecret = await seedPostgres('stored-pw');
+      const withoutSecret = await seedPostgres(undefined);
+
+      const probed = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${withSecret}/test`,
+        payload: {},
+      });
+      const bare = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${withoutSecret}/test`,
+        payload: {},
+      });
+
+      // The secretless row stops at the adapter's own no-secret refusal...
+      expect(bare.json().error).toMatch(/has no secret/);
+      // ...while the row WITH one gets past it and fails on the socket instead.
+      // That difference is the proof the stored ciphertext was decrypted and
+      // handed to the adapter; nothing else could move the sentence.
+      expect(probed.json().error).not.toMatch(/has no secret/);
+      expect(probed.json()).toMatchObject({ ok: false });
+    });
+
+    it('never echoes the stored plaintext back to the caller', async () => {
+      const id = await seedPostgres('p4ssw0rd-in-the-clear');
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${id}/test`,
+        payload: {},
+      });
+      expect(res.body).not.toContain('p4ssw0rd-in-the-clear');
+    });
+
+    it('probes the config OVERLAY, not the stored one', async () => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'fs overlay', kind: 'fs', config: { roots: [tmpDir] } },
+      });
+      const id = created.json().id as string;
+
+      // Stored config is fine, so a bare probe passes...
+      expect(
+        (await app.inject({ method: 'POST', url: `/api/connections/${id}/test`, payload: {} })).json(),
+      ).toEqual({ ok: true, probed: 'liveness' });
+
+      // ...and the overlay — what the edit form has on screen — is what a probe
+      // with a body actually tests.
+      const overlaid = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${id}/test`,
+        payload: { config: { roots: [join(tmpDir, 'no-such-dir')] } },
+      });
+      expect(overlaid.json()).toMatchObject({ ok: false });
+      expect(overlaid.json().error).toMatch(/not accessible/);
+    });
+
+    it('REFUSES to spend the stored secret on a destination the saved row does not name', async () => {
+      // The exfiltration primitive this rule exists to close: overlay a host,
+      // omit the secret, and the server would decrypt the stored password and
+      // send it wherever the body said. `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`
+      // names those keys; the refusal must fire BEFORE any socket is opened.
+      const id = await seedPostgres('stored-pw');
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${id}/test`,
+        payload: {
+          // Identical to the stored config in every key BUT `host`, so the
+          // refusal names exactly the one that moved.
+          config: {
+            host: 'attacker.example',
+            port: 1,
+            database: 'app',
+            user: 'app',
+            sslmode: 'disable',
+          },
+        },
+      });
+      expect(res.json()).toMatchObject({ ok: false });
+      expect(res.json().error).toMatch(/would send the stored secret somewhere/);
+      expect(res.json().error).toContain('host');
+    });
+
+    it('allows the same overlay when the body brings its OWN secret', async () => {
+      // The SAME host change the previous test refuses — but with a secret in
+      // the body, so nothing stored is spent and there is nothing to
+      // exfiltrate. This is the ordinary operator move (repoint the connection,
+      // type the password, test it), and the refusal must be narrow enough not
+      // to swallow it.
+      const id = await seedPostgres('stored-pw');
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${id}/test`,
+        payload: {
+          config: {
+            host: 'attacker.example',
+            port: 1,
+            database: 'app',
+            user: 'app',
+            sslmode: 'disable',
+          },
+          secret: 'typed-in-the-form',
+        },
+      });
+      expect(res.json().error).not.toMatch(/would send the stored secret somewhere/);
+    });
+
+    it('allows a boundary-key overlay on a connection that holds NO secret', async () => {
+      // `fs.roots` is a boundary key, but an `fs` connection has no credential,
+      // so the rule has nothing to protect and must not block an ordinary edit.
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'fs no secret', kind: 'fs', config: { roots: [tmpDir] } },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${created.json().id}/test`,
+        payload: { config: { roots: [join(tmpDir, 'no-such-dir')] } },
+      });
+      // Reaches the adapter (and fails there on the missing dir) rather than
+      // being refused at the boundary check.
+      expect(res.json().error).toMatch(/not accessible/);
+    });
+
+    it('404s another owner’s connection', async () => {
+      const other = createConnection(app.db, {
+        ownerId: 'someone-else',
+        name: 'Not mine',
+        kind: 'fs',
+        config: { roots: [tmpDir] },
+        secretRef: null,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/connections/${other.id}/test`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   it('validation: a bad body returns 400 with a structured error, no stack trace', async () => {
