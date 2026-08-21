@@ -120,3 +120,32 @@ export const FS_STREAM_CHUNK_BYTES = 64 * 1024;
  */
 export const DELIMITED_MAX_FIELD_CHARS = 1_048_576;
 export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
+
+/**
+ * §5's bounded-streaming rule, applied to xlsx — where "stream the sheet" is
+ * NOT on its own enough to bound memory.
+ *
+ * A worksheet streams row by row, so rows are bounded by `COPY_BATCH_ROWS` the
+ * same way a CSV's are. Two things in the container are not:
+ *
+ * - **the shared-string table.** xlsx stores most text once in
+ *   `xl/sharedStrings.xml` and cells reference it by index, so a cell cannot be
+ *   resolved until the table is in hand. Memory is therefore proportional to
+ *   DISTINCT STRINGS plus one row batch — never to rows, which is the property
+ *   that matters, but still unbounded without a cap.
+ * - **inflation.** Every entry is deflated. A zip's declared `uncompressedSize`
+ *   is attacker-controlled and must never be trusted as the bound, so the count
+ *   is of bytes ACTUALLY inflated, checked as they arrive.
+ *
+ * These are the reason the readers measured for #1213 were rejected rather than
+ * capped: exceljs's non-streaming path peaked at 1001 MB on a 6.8 MB workbook
+ * and OOM-crashed under a 128 MB heap. A cap makes the bound a guarantee
+ * instead of a hope.
+ *
+ * Generous on the same reasoning as `DELIMITED_MAX_*` directly above: a 64 MiB
+ * string table is already a pathological workbook, and these exist to make a
+ * malformed or hostile file fail FAST, not to police a large one.
+ */
+export const XLSX_MAX_SHARED_STRINGS_BYTES = 67_108_864;
+export const XLSX_MAX_ENTRY_BYTES = 268_435_456;
+export const XLSX_MAX_CELL_CHARS = 1_048_576;
