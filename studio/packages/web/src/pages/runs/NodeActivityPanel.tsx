@@ -338,7 +338,11 @@ export function NodeActivityPanel({
  * above every section (`node.instanceId`), and a second copy beside this one
  * would be a second thing to keep true.
  */
-function DataMovementSection({ addresses }: { addresses: NonNullable<NodeActivity['datasetAddresses']> }) {
+function DataMovementSection({
+  addresses,
+}: {
+  addresses: NonNullable<NodeActivity['datasetAddresses']>;
+}) {
   const { source, sink } = addresses;
   /* A `query` dataset's `object` is `null` BY DESIGN — it is a SELECT over an
      arbitrary set of tables, and `address.ts` refuses to reduce that to one

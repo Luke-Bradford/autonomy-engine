@@ -163,5 +163,4 @@ describe('NodeActivityPanel — the resolved dataset address', () => {
     );
     expect(panel.textContent).not.toMatch(/names no single object/);
   });
-
 });

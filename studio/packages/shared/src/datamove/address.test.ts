@@ -108,8 +108,8 @@ describe('describeDatasetAddress', () => {
      * as a rendering fault rather than as one file. Comparison is untouched —
      * `sameDatasetAddress` still reads both halves.
      */
-    expect(describeDatasetAddress(address({ store: '/d/people.csv', object: '/d/people.csv' }))).toBe(
-      "'/d/people.csv'",
-    );
+    expect(
+      describeDatasetAddress(address({ store: '/d/people.csv', object: '/d/people.csv' })),
+    ).toBe("'/d/people.csv'");
   });
 });
