@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_INCLUDE } from '../../vitest.shared.js';
 
 /**
  * #723 — the server package's test timeouts.
@@ -38,6 +39,16 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    /**
+     * #1199 — the workspace's one test-file allowlist. vitest 4 dropped `dist`
+     * from its default `exclude`, so a compiled `*.test.js` on disk was
+     * collected as a second copy of the entire suite — the `288 (2 x 144)
+     * files / 1395 failed` reading this ticket was filed on, with no source
+     * change. The measurements and the reasoning are in `vitest.shared.ts`;
+     * `tsconfig.json`'s `noEmit` is the other half, stopping the artifacts
+     * being created at all.
+     */
+    include: TEST_INCLUDE,
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },

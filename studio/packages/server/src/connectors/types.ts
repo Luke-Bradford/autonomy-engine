@@ -396,11 +396,16 @@ export interface ConnectorAdapter {
    * every other pure read lives, so an unresolvable address fails the node while
    * it is still `ready`.
    *
-   * THAT PERMISSION HAS A COST, named here because pre-flight is the one region
-   * of `executor.ts` that runs OUTSIDE its `pLimit`: N concurrently dispatching
-   * nodes open N store sessions with no cap, where the running phase is capped.
-   * An implementer that needs I/O should keep it to one session per call and
-   * close it in a `finally`.
+   * THAT PERMISSION HAS A COST, and pre-flight runs outside the `pLimit` that
+   * caps the running phase, so N concurrently dispatching nodes would open N
+   * store sessions at once. #1200 bounds it with a second budget of its own
+   * (`PREFLIGHT_STORE_CONCURRENCY`, `run/executor.ts`), applied at the single
+   * seam every call comes through. Two obligations fall on an implementer:
+   * keep it to ONE session per call and close it in a `finally`, and do not
+   * settle the returned promise before that session does. The cap counts what
+   * the promise covers, so resolving early — racing a backstop, say — would
+   * free the slot while the session lives on and bound nothing
+   * (`connectors/probe.ts` carries the scar from making exactly that mistake).
    *
    * NON-SECRET components only (§8) — see `DatasetAddress`, which lands in the
    * event log verbatim.

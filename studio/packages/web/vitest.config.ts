@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_INCLUDE } from '../../vitest.shared.js';
 import react from '@vitejs/plugin-react';
 
 /**
@@ -13,6 +14,14 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
+    /**
+     * #1199 — the workspace's one test-file allowlist (see `vitest.shared.ts`;
+     * `tsconfig.json`'s `noEmit` is the other half). This package is the least
+     * exposed of the four — it has always set `noEmit`, so `tsc -b` cannot
+     * plant anything, and its `dist/` is vite bundle output containing no test
+     * files — but the guard is structural, not a bet on what is on disk.
+     */
+    include: TEST_INCLUDE,
     // `clearMocks` wipes call history between tests (so a `not.toHaveBeenCalled`
     // never sees a prior test's calls); `restoreMocks` restores `vi.spyOn`
     // targets to their originals.

@@ -27,7 +27,7 @@ import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
-import { createExecutor } from '../executor.js';
+import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
 import { and, eq } from 'drizzle-orm';
@@ -1803,6 +1803,74 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       parameters: [],
     }).id;
   }
+
+  it('#1200 caps concurrent pre-flight store resolutions, on a budget INDEPENDENT of the adapter cap', async () => {
+    // Since M10 (#1193) `resolveDatasetAddress` can open a session against a
+    // networked store, and pre-flight deliberately runs OUTSIDE the `pLimit`
+    // that caps the running phase (every pure read must complete before
+    // `node.dispatched` is durable). So N concurrently dispatching copy nodes
+    // opened N-2N store sessions at once against a server whose slots are
+    // finite, and postgres answers exhaustion with `53300`, which is classified
+    // `transient` — a retrying thundering herd rather than a clean refusal.
+    let live = 0;
+    let peak = 0;
+    const address: NonNullable<ConnectorAdapter['resolveDatasetAddress']> = async ({
+      connectionConfig,
+      dataset,
+    }) => {
+      live += 1;
+      peak = Math.max(peak, live);
+      // Stands in for the session: what the cap must cover is the whole
+      // in-flight attempt, not the time spent waiting to be admitted.
+      await sleep(30);
+      live -= 1;
+      return {
+        kind: 'http',
+        // Per-END, mirroring `stubAddress`: two ends that resolved to one
+        // address would trip the self-copy gate and refuse the dispatch, and
+        // this test would then be measuring the refusal path instead.
+        store: typeof connectionConfig.store === 'string' ? connectionConfig.store : 'S',
+        storeIdentity: null,
+        object: typeof dataset.config.table === 'string' ? dataset.config.table : null,
+      };
+    };
+
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', { store: 'src' }, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', { store: 'dst' }, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const sinkDs = seedDataset(db, sinkConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs, sink: sinkDs }),
+    ]);
+
+    // `concurrency: 1` is the DISCRIMINATING part of this test. The adapter cap
+    // is set as tight as it goes, so if pre-flight were merely running inside
+    // that same limiter — the other candidate fix for #1200 — `peak` could
+    // never exceed 1. Reaching exactly the store budget proves the two are
+    // separate budgets rationing separate resources (this engine's worker slots
+    // vs a remote store's connection slots), which is the property the fix
+    // claims.
+    const d = deps(db, {
+      adapters: pairedRegistry(async function* () {
+        yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+      }, address),
+      catalog: datasetCatalog(),
+      concurrency: 1,
+    });
+    // Enough runs to oversubscribe the budget several times over: each node
+    // resolves its two ends sequentially, so 8 runs offer up to 8 simultaneous
+    // resolutions to a limiter that must admit 4.
+    const runs = [...Array(8)].map(() => seedRun(db, pvId));
+    const states = await Promise.all(runs.map((r) => startRun(d, r)));
+
+    expect(states.every((s) => s.status === 'success')).toBe(true);
+    expect(peak).toBeLessThanOrEqual(PREFLIGHT_STORE_CONCURRENCY);
+    // The lower bound is not decoration: without it the assertion above passes
+    // trivially on a run where the resolutions never happened to overlap, and
+    // the test would certify the cap while measuring nothing.
+    expect(peak).toBeGreaterThanOrEqual(PREFLIGHT_STORE_CONCURRENCY);
+  });
 
   it('resolves BOTH dataset ends into ctx.datasets, as a PROJECTION of the row', async () => {
     let seen: unknown = null;

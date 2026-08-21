@@ -68,7 +68,13 @@ import type { ChildRuns } from './child.js';
  *
  * CONCURRENCY: one shared `p-limit(concurrency)` caps ADAPTER runs across all
  * concurrently-driven runs (P4's scheduler). It wraps only the side effect —
- * `node.dispatched` is not gated (it is cheap + must be durable first). Within a
+ * `node.dispatched` is not gated (it is cheap + must be durable first). A
+ * SECOND, independent budget (`PREFLIGHT_STORE_CONCURRENCY`, #1200) caps the
+ * one part of pre-flight that is no longer local work: since M10 a store can be
+ * asked where a dataset physically is, which opens a session. The two budgets
+ * are deliberately separate — they ration different resources (this engine's
+ * worker slots vs a remote store's connection slots) — and are never held at
+ * the same time, so they cannot deadlock. Within a
  * single run, adapter side effects of DIFFERENT nodes may overlap wall-clock
  * (#4 A4b slice 1: the pump multiplexes its executor streams, bounded by its
  * own per-run cap); what stays strictly serial is the run's FOLD/APPEND path.
@@ -262,6 +268,66 @@ function withTranscript(
   if (text.length > 0) turns.push({ role: 'assistant', content: text });
   return { ...outputs, messages: turns };
 }
+
+/**
+ * #1200 — how many PRE-FLIGHT store sessions may be open at once, across every
+ * run and every executor in the process.
+ *
+ * `createExecutor`'s `limit` caps the RUNNING phase, and only that: it wraps
+ * `runAdapter`, which happens after `node.dispatched`. Pre-flight is outside it
+ * by design, because the module's crash-safety ordering (see the docblock at
+ * the top of this file) requires every pure read to complete BEFORE the
+ * dispatch record is durable. That was free while pre-flight was catalog
+ * lookups and a secret decrypt. M10 (#1193) changed the premise: a postgres
+ * cluster's physical identity is only answerable from a session, so
+ * `resolveDatasetAddress` now opens one — twice per copy node, once per end.
+ *
+ * Per node nothing got worse (the two ends are sequential, each closed in a
+ * `finally`, peak two). ACROSS nodes it was uncapped: N concurrently
+ * dispatching copy nodes opened N-2N sessions at once while the phase that
+ * actually moves the data was capped at 4. That does not refuse cleanly —
+ * postgres `53300 too_many_connections` is classified `transient`, so
+ * exhausting a server's slots produces a retrying thundering herd, reported as
+ * `DATASET_ADDRESS_UNRESOLVABLE` ("this address did not resolve") rather than
+ * as "the engine opened too many sessions at once".
+ *
+ * MODULE-LEVEL, following `PROBE_CONCURRENCY` (`connectors/probe.ts`) rather
+ * than `limit` beside it, and the difference is deliberate. `limit` is
+ * per-`createExecutor` because it rations THIS engine's worker slots. This
+ * rations sessions on a REMOTE store, which two executors in one process
+ * contend for identically — the same argument probe.ts makes for outbound
+ * sockets. Sharing it across instances is the intended reading, not an
+ * oversight. Same value as both existing budgets, which is the house default
+ * rather than a number tuned for this seam. The visible cost is the same one
+ * probe.ts names: concurrent test apps ration each other, which shows up as
+ * slower resolutions and never as a failure. One caveat for whoever writes the
+ * next test here — a `describe.concurrent`/`it.concurrent` in this file would
+ * make two tests contend for THIS budget, so a test asserting a peak would need
+ * its own serial block. Vitest isolates module state per test FILE, so nothing
+ * leaks between files.
+ *
+ * IT BOUNDS RESOURCES, NOT LATENCY, and the cost is real enough to name. A
+ * saturated limiter makes a node WAIT for a slot before `node.dispatched`, with
+ * no event emitted anywhere — so the trade is unbounded sessions for bounded
+ * but invisible pre-dispatch delay. One slot can be held for
+ * `DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS` (10s) plus up to two
+ * `DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS` (30s) enrichment queries
+ * (`connectors/postgres-session.ts`), so a wide fan-out of copy nodes against
+ * one unreachable server queues at roughly ceil(N/4) x that, where today it is
+ * one such window in parallel. A run cancelled while queued still proceeds to
+ * dispatch when its slot arrives — unchanged from today, but the window widens.
+ *
+ * NO DEADLOCK, and it is worth stating because there are now two limiters. A
+ * store slot is acquired and fully released inside pre-flight, strictly before
+ * `limit` is ever acquired; neither limiter is ever held across the other, so
+ * there is no lock-ordering cycle. That holds only while `resolveDatasetAddressFor`
+ * stays the single seam (its two call sites are both pre-flight) — a third call
+ * site from INSIDE `limit(...)` would break it, which is why the seam refuses
+ * to be bypassed rather than merely happening not to be.
+ */
+export const PREFLIGHT_STORE_CONCURRENCY = 4;
+
+const storeLimit = pLimit(PREFLIGHT_STORE_CONCURRENCY);
 
 export function createExecutor(deps: ExecutorDeps): Executor {
   const limit = pLimit(deps.concurrency ?? 4);
@@ -687,7 +753,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // that needs a credential refuses either identically.
     secret: string | null,
   ): Promise<{ error: string; code: string; kind?: FailureKind } | { address: DatasetAddress }> {
-    if (adapter.resolveDatasetAddress === undefined) {
+    // Captured, rather than asserted past with `!` at the call below: the
+    // field is genuinely optional (six of the seven adapters are not stores),
+    // and TS discards a property narrowing inside a closure — which is exactly
+    // what `storeLimit` needs. A local const narrows once, here, next to the
+    // guard that earns it.
+    const resolveAddress = adapter.resolveDatasetAddress;
+    if (resolveAddress === undefined) {
       return {
         error: `connection kind '${adapter.kind}' cannot resolve a physical address for dataset '${dataset.id}', so this dispatch cannot record where it would land`,
         code: FAILURE_CODES.DATASET_ADDRESS_UNSUPPORTED,
@@ -695,7 +767,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     try {
       return {
-        address: await adapter.resolveDatasetAddress({ connectionConfig, dataset, secret }),
+        // #1200 — the ONE seam every pre-flight store session passes through,
+        // and therefore the only place the cap has to be applied. The slot is
+        // held until the adapter's promise SETTLES, which is what makes it
+        // count: `resolvePostgresDatasetAddress` awaits `client.end()` inside
+        // its own `finally`, so the session is closed before the slot frees.
+        // Do not wrap a race (or anything that can settle before the session
+        // does) here — `pLimit` releases on what it wrapped, so a slot freed
+        // on a backstop while a socket lives on bounds nothing. That is not
+        // hypothetical: `connectors/probe.ts` carries the scar.
+        address: await storeLimit(() => resolveAddress({ connectionConfig, dataset, secret })),
       };
     } catch (err) {
       const kind =

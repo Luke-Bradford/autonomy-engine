@@ -24,3 +24,11 @@ blob-report/
 # otherwise vary machine to machine and collide across worktrees.
 packages/server/manifest.json
 
+
+# #1199 — `tsc -b` incremental caches. These were committed by accident
+# (`3d44b5c0`, server + shared), and being tracked they dirty the working tree
+# on every build, which is how the `dist/` artifacts this ticket is about
+# stayed unnoticed: a `git status` that is never clean stops being read. Same
+# reasoning as `manifest.json` directly above — a build-time artifact, machine
+# varying, never authored by hand.
+*.tsbuildinfo

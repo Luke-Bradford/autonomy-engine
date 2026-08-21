@@ -1,4 +1,20 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["src/**/*.test.ts"]
+  // #1199 — the EMIT project. `rootDir` + `include` are re-stated here rather
+  // than inherited so the emitted layout stays `dist/bin.js` (which the package
+  // `bin` entry and the build script's `chmodSync` both name): the parent now
+  // also includes `vitest.config.ts`, which lies outside `src` and would both
+  // break `rootDir` and shift every output path down into `dist/src/`. A
+  // child's `include` REPLACES the parent's, so this is a complete override.
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmit": false
+  },
+  "include": ["src"],
+  // #1199 — BOTH patterns, mirroring `packages/server/tsconfig.build.json`.
+  // `*.test.ts` alone is not enough: a `__tests__/helpers/` module is test-only
+  // code that no production entry point imports, and excluding only the files
+  // named `*.test.ts` left it emitted into `dist/`.
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }
