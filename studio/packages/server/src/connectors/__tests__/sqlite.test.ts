@@ -686,6 +686,9 @@ describe('resolveDatasetAddress', () => {
     return resolve({
       connectionConfig,
       dataset: { id: 'ds_1', name: 'D', kind: dataset.kind, config: dataset.config, columns: [] },
+      // #1193 widened the seam for a NETWORKED store's identity. A sqlite store
+      // is a file and identifies itself from `stat`, so it ignores this.
+      secret: null,
     });
   }
 

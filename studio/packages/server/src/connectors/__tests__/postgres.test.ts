@@ -23,7 +23,7 @@ import {
   type PostgresClient,
 } from '../postgres.js';
 import { COPY_BATCH_ROWS } from '../../limits.js';
-import type { DatasetKind } from '@autonomy-studio/shared';
+import { sameDatasetAddress, type DatasetKind } from '@autonomy-studio/shared';
 import { liveSuiteMustRun } from './live-postgres.js';
 import { readSqliteDatasetBatches } from '../sqlite.js';
 import type { ResolvedDataset } from '../types.js';
@@ -699,80 +699,271 @@ describe('isTransientPostgresCode (#1190 M10)', () => {
   );
 });
 
-describe('resolvePostgresDatasetAddress (#1190 M10)', () => {
-  it('records a non-secret store string', async () => {
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: CONFIG,
-      dataset: dataset('table', { schema: 'public', table: 't' }),
-    });
+/**
+ * A session that answers the ADDRESS seam's two questions.
+ *
+ * Deliberately not `recordingClient` above: that one scripts a CURSOR read
+ * (`FETCH`, `fields`) and its `queries` array is indexed positionally by a dozen
+ * existing assertions. Widening it to also script `pg_control_system()` would
+ * put the address path's behaviour behind the reader's shape.
+ */
+function addressClient(
+  script: {
+    identity?: { sysid: string | null; dboid: string | null; in_recovery?: boolean };
+    relation?: string | null;
+    failOn?: { match: string; error: unknown };
+    failConnect?: unknown;
+  } = {},
+) {
+  const rec = {
+    created: 0,
+    queries: [] as string[],
+    values: [] as (readonly unknown[] | undefined)[],
+    ended: 0,
+  };
+  const factory: PostgresClientFactory = (): PostgresClient => {
+    rec.created += 1;
+    return {
+      connect: async (): Promise<undefined> => {
+        if (script.failConnect !== undefined) throw script.failConnect;
+        return undefined;
+      },
+      query: async (sql: string, values?: readonly unknown[]) => {
+        rec.queries.push(sql);
+        rec.values.push(values);
+        if (script.failOn !== undefined && sql.includes(script.failOn.match)) {
+          throw script.failOn.error;
+        }
+        if (sql.includes('pg_control_system')) {
+          const id = script.identity ?? { sysid: '76763954965725102', dboid: '16384' };
+          return {
+            rows: [{ sysid: id.sysid, dboid: id.dboid, in_recovery: id.in_recovery ?? false }],
+            fields: [],
+          };
+        }
+        if (sql.includes('to_regclass')) {
+          const name = script.relation === undefined ? 'public.t' : script.relation;
+          return { rows: name === null ? [] : [{ name }], fields: [] };
+        }
+        return { rows: [], fields: [] };
+      },
+      end: async () => {
+        rec.ended += 1;
+      },
+    };
+  };
+  return { rec, factory };
+}
+
+/** The two arguments #1193 added, defaulted so each case states only its own point. */
+function addressArgs(
+  ds: ResolvedDataset,
+  factory: PostgresClientFactory,
+  overrides: { connectionConfig?: Record<string, unknown>; secret?: string | null } = {},
+) {
+  return {
+    connectionConfig: overrides.connectionConfig ?? (CONFIG as Record<string, unknown>),
+    dataset: ds,
+    secret: overrides.secret === undefined ? 'pw' : overrides.secret,
+    createClient: factory,
+  };
+}
+
+describe('resolvePostgresDatasetAddress (#1190 M10, credentialled by #1193)', () => {
+  it('records a non-secret store string, the cluster identity and the canonical object', async () => {
+    const { rec, factory } = addressClient();
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'public', table: 't' }), factory),
+    );
     expect(address).toEqual({
       kind: 'postgres',
       store: 'db.example.test:6543/app',
-      storeIdentity: null,
+      // #1193 — was `null`. `<system_identifier>:<database oid>:<primary|standby>`, the
+      // analogue of sqlite's `dev:ino`, which is what makes two spellings of one
+      // host compare EQUAL and so lets the self-copy gate fire at all.
+      storeIdentity: '76763954965725102:16384:primary',
       object: 'public.t',
     });
+    expect(rec.ended).toBe(1);
+  });
+
+  it('separates a physical standby from its primary, which share a system_identifier', async () => {
+    // A standby's control file is a byte copy of its primary's, so without the
+    // recovery part `standby -> primary` — an ordinary ETL shape — would resolve
+    // to one address and be refused as a self-copy.
+    const primary = addressClient({ identity: { sysid: '1', dboid: '2', in_recovery: false } });
+    const standby = addressClient({ identity: { sysid: '1', dboid: '2', in_recovery: true } });
+    const ds = dataset('table', { schema: 'public', table: 't' });
+    const a = await resolvePostgresDatasetAddress(addressArgs(ds, primary.factory));
+    const b = await resolvePostgresDatasetAddress(addressArgs(ds, standby.factory));
+    expect(a.storeIdentity).not.toBe(b.storeIdentity);
+  });
+
+  it('separates two databases in ONE cluster, which share a system_identifier', async () => {
+    const one = addressClient({ identity: { sysid: '1', dboid: '16384' } });
+    const two = addressClient({ identity: { sysid: '1', dboid: '16385' } });
+    const ds = dataset('table', { schema: 'public', table: 't' });
+    const a = await resolvePostgresDatasetAddress(addressArgs(ds, one.factory));
+    const b = await resolvePostgresDatasetAddress(addressArgs(ds, two.factory));
+    expect(a.storeIdentity).not.toBe(b.storeIdentity);
   });
 
   it('never puts the password in the address, which travels to the run log', async () => {
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: CONFIG,
-      dataset: dataset('table', { schema: 'public', table: 't' }),
-    });
-    expect(JSON.stringify(address)).not.toContain('pw');
+    const { factory } = addressClient();
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'public', table: 't' }), factory, {
+        secret: 'hunter2',
+      }),
+    );
+    expect(JSON.stringify(address)).not.toContain('hunter2');
   });
 
-  it('does NOT case-fold the object, because postgres quoting is case-sensitive', async () => {
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: CONFIG,
-      dataset: dataset('table', { schema: 'Reporting', table: 'Users' }),
-    });
+  it('asks to_regclass about the QUOTED name, so postgres case-sensitivity survives', async () => {
+    // Measured on postgres:17 — `to_regclass('People')` folds to `people` while
+    // `to_regclass('"People"')` finds `People`, a DIFFERENT relation. Handing
+    // over the raw spelling would report two distinct tables as one address.
+    const { rec, factory } = addressClient({ relation: 'Reporting.Users' });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'Reporting', table: 'Users' }), factory),
+    );
+    expect(rec.values[rec.queries.findIndex((q) => q.includes('to_regclass'))]).toEqual([
+      '"Reporting"."Users"',
+    ]);
     expect(address.object).toBe('Reporting.Users');
   });
 
-  it('leaves the object null when the schema is not declared', async () => {
-    // Resolving an unqualified name needs `search_path`, which needs a session
-    // this seam cannot open — it receives no secret.
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: CONFIG,
-      dataset: dataset('table', { table: 't' }),
-    });
+  it('resolves an UNQUALIFIED table through the session search_path', async () => {
+    // The whole reason the seam needed a session: `schema` is optional, so a
+    // bare `t` is the DEFAULT spelling, and only postgres can say which schema
+    // it lands in. Before #1193 this recorded `null` and the gate stayed silent.
+    const { rec, factory } = addressClient({ relation: 'reporting.t' });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { table: 't' }), factory),
+    );
+    expect(rec.values[rec.queries.findIndex((q) => q.includes('to_regclass'))]).toEqual(['"t"']);
+    expect(address.object).toBe('reporting.t');
+  });
+
+  it('leaves the object null when the relation does not exist', async () => {
+    const { factory } = addressClient({ relation: null });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'public', table: 'gone' }), factory),
+    );
     expect(address.object).toBeNull();
   });
 
-  it('leaves the object null for a query, which names no single relation', async () => {
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: CONFIG,
-      dataset: dataset('query', { sql: 'select 1' }),
-    });
+  it('leaves the object null for a query, but still records the identity', async () => {
+    // #1196 settled the query self-copy residual deliberately — deciding it means
+    // parsing the operator's SQL. §2.1's dispatch record still wants the store.
+    const { rec, factory } = addressClient();
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('query', { sql: 'select 1' }), factory),
+    );
     expect(address.object).toBeNull();
+    expect(address.storeIdentity).toBe('76763954965725102:16384:primary');
+    expect(rec.queries.some((q) => q.includes('to_regclass'))).toBe(false);
+  });
+
+  it('degrades to a null identity when pg_control_system is REVOKED, rather than refusing', async () => {
+    // The finding this whole asymmetry exists for. `pg_control_system()`'s
+    // execute privilege is a revocable ACL (public on a vanilla 17, measured),
+    // and `42501` is not transient — propagating would classify `permanent` and
+    // refuse EVERY copy against such a server, forever, though the role can
+    // SELECT and INSERT perfectly well. sqlite's opposite choice does not carry:
+    // there, every way `stat` fails leaves the copy unable to proceed anyway.
+    const { rec, factory } = addressClient({
+      failOn: {
+        match: 'pg_control_system',
+        error: Object.assign(new Error('permission denied for function pg_control_system'), {
+          code: '42501',
+        }),
+      },
+    });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'public', table: 't' }), factory),
+    );
+    expect(address.storeIdentity).toBeNull();
+    expect(address.object).toBe('public.t');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('degrades to a null object when to_regclass RAISES, rather than refusing', async () => {
+    // Measured — a role without `USAGE` on a named schema gets `42501` from
+    // `to_regclass` rather than a NULL. Same direction: a null object can only
+    // widen what the gate lets through, never narrow it.
+    const { rec, factory } = addressClient({
+      failOn: {
+        match: 'to_regclass',
+        error: Object.assign(new Error('permission denied for schema rv1'), { code: '42501' }),
+      },
+    });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'rv1', table: 't' }), factory),
+    );
+    expect(address.object).toBeNull();
+    expect(address.storeIdentity).toBe('76763954965725102:16384:primary');
+    expect(rec.ended).toBe(1);
+  });
+
+  it('records a null identity when the identity row comes back empty rather than inventing one', async () => {
+    const { factory } = addressClient({ identity: { sysid: null, dboid: null } });
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('table', { schema: 'public', table: 't' }), factory),
+    );
+    expect(address.storeIdentity).toBeNull();
+  });
+
+  it('PROPAGATES a connect failure, which dooms the copy either way', async () => {
+    const { factory } = addressClient({
+      failConnect: Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }),
+    });
+    await expect(
+      resolvePostgresDatasetAddress(
+        addressArgs(dataset('table', { schema: 'public', table: 't' }), factory),
+      ),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        kind: 'transient',
+        message: expect.stringContaining('cannot reach the postgres server'),
+      }) as unknown as Error,
+    );
+  });
+
+  it('refuses a connection with no secret rather than letting pg read PGPASSWORD', async () => {
+    const { factory } = addressClient();
+    await expect(
+      resolvePostgresDatasetAddress(
+        addressArgs(dataset('table', { schema: 'public', table: 't' }), factory, { secret: null }),
+      ),
+    ).rejects.toThrow(expect.objectContaining({ kind: 'permanent' }) as unknown as Error);
   });
 
   it('defaults the port in the store string when the config omits it', async () => {
     const noPort: Record<string, unknown> = { ...CONFIG };
     delete noPort.port;
-    const address = await resolvePostgresDatasetAddress({
-      connectionConfig: noPort,
-      dataset: dataset('query', { sql: 'select 1' }),
-    });
+    const { factory } = addressClient();
+    const address = await resolvePostgresDatasetAddress(
+      addressArgs(dataset('query', { sql: 'select 1' }), factory, { connectionConfig: noPort }),
+    );
     expect(address.store).toBe(`db.example.test:${String(DEFAULT_POSTGRES_PORT)}/app`);
   });
 
-  it('classifies a malformed table config as permanent, not a raw ZodError', () => {
+  it('classifies a malformed table config as permanent WITHOUT spending a session', async () => {
     // The address seam is reached with operator-authored config like every other
     // seam in this module, so it owes the same failure contract: a config that
     // does not validate is a `permanent` `DatasetIoError` carrying the issues,
-    // never a `ZodError` escaping unclassified.
-    expect(() =>
-      resolvePostgresDatasetAddress({
-        connectionConfig: CONFIG,
-        dataset: dataset('table', { schema: 'public' }),
-      }),
-    ).toThrow(
+    // never a `ZodError` escaping unclassified. #1193 adds the second half —
+    // config is parsed BEFORE the connect, so a typo costs no connection.
+    const { rec, factory } = addressClient();
+    await expect(
+      resolvePostgresDatasetAddress(addressArgs(dataset('table', { schema: 'public' }), factory)),
+    ).rejects.toThrow(
       expect.objectContaining({
         kind: 'permanent',
         message: expect.stringContaining('invalid table dataset config'),
       }) as unknown as Error,
     );
+    expect(rec.created).toBe(0);
   });
 });
 
@@ -1144,6 +1335,98 @@ describe.skipIf(LIVE_HOST === undefined)('against a live postgres', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+  /**
+   * #1193 — THE HOLE, closed against a real server.
+   *
+   * Everything above this point is a fake answering scripted rows. What only a
+   * live cluster can prove is that `pg_control_system()` and `to_regclass` say
+   * what the fix assumes they say, and that two SPELLINGS of one host really do
+   * land on one `system_identifier`.
+   */
+  describe('the physical address a live cluster reports (#1193)', () => {
+    const address = (host: string, config: Record<string, unknown>, kind: DatasetKind = 'table') =>
+      resolvePostgresDatasetAddress({
+        connectionConfig: { ...live, host },
+        dataset: dataset(kind, config),
+        secret: password,
+        createClient: realClientFactory,
+      });
+
+    it('gives two HOST SPELLINGS of one cluster the SAME identity — the self-copy hole', async () => {
+      // The whole ticket in one assertion. `store` differs because it is built
+      // from the operator's spelling; `storeIdentity` does not, because the
+      // cluster answers for itself. Before #1193 the identity was `null` on both
+      // ends, so `sameDatasetAddress` fell back to `store`, the two disagreed,
+      // and a copy reading and overwriting ONE table was not refused.
+      //
+      // Both spellings must reach the same server. They do in CI (a service
+      // container's port is mapped onto the runner's loopback) and locally; an
+      // environment where they do not should go RED here rather than skip.
+      await withLiveTable(async (table) => {
+        const a = await address('127.0.0.1', { schema: 'public', table });
+        const b = await address('localhost', { schema: 'public', table });
+        expect(a.store).not.toBe(b.store);
+        expect(a.storeIdentity).not.toBeNull();
+        expect(a.storeIdentity).toBe(b.storeIdentity);
+        expect(sameDatasetAddress(a, b)).toBe(true);
+      });
+    });
+
+    it('reports a PRIMARY, and an identity shaped sysid:dboid:primary|standby', async () => {
+      await withLiveTable(async (table) => {
+        const a = await address(live.host, { schema: 'public', table });
+        expect(a.storeIdentity).toMatch(/^\d+:\d+:primary$/);
+      });
+    });
+
+    it('resolves an UNQUALIFIED table through search_path to its canonical name', async () => {
+      // The default spelling — `schema` is optional. This recorded `null` before
+      // #1193, which is why closing `storeIdentity` alone would have left the
+      // gate silent for the majority of datasets.
+      await withLiveTable(async (table) => {
+        const a = await address(live.host, { table });
+        expect(a.object).toBe(`public.${table}`);
+        const qualified = await address(live.host, { schema: 'public', table });
+        expect(sameDatasetAddress(a, qualified)).toBe(true);
+      });
+    });
+
+    it('keeps a QUOTED mixed-case relation distinct from its folded twin', async () => {
+      // Measured: `to_regclass('People')` folds to `people`; `to_regclass('"People"')`
+      // finds `People`. Reporting them as one address would call two distinct
+      // tables a self-copy.
+      const upper = `Studio_M10_Mixed_${String(Date.now() % 100000)}`;
+      const lower = upper.toLowerCase();
+      await withAdminClient(async (c) => {
+        await c.query(`create table "${upper}" (id int4)`);
+        await c.query(`create table "${lower}" (id int4)`);
+      });
+      try {
+        const a = await address(live.host, { schema: 'public', table: upper });
+        const b = await address(live.host, { schema: 'public', table: lower });
+        expect(a.object).toBe(`public.${upper}`);
+        expect(b.object).toBe(`public.${lower}`);
+        expect(sameDatasetAddress(a, b)).toBe(false);
+      } finally {
+        await withAdminClient(async (c) => {
+          await c.query(`drop table if exists "${upper}"`);
+          await c.query(`drop table if exists "${lower}"`);
+        });
+      }
+    });
+
+    it('records a null object for a relation that does not exist, never a refusal', async () => {
+      const a = await address(live.host, { schema: 'public', table: 'studio_m10_no_such_table' });
+      expect(a.object).toBeNull();
+      expect(a.storeIdentity).not.toBeNull();
+    });
+
+    it('still records the identity for a QUERY dataset, which names no one relation', async () => {
+      const a = await address(live.host, { sql: 'select 1' }, 'query');
+      expect(a.object).toBeNull();
+      expect(a.storeIdentity).toMatch(/^\d+:\d+:primary$/);
     });
   });
 });

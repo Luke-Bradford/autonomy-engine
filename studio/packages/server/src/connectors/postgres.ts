@@ -29,6 +29,8 @@ import {
   DEFAULT_POSTGRES_PORT,
   notAPostgresKind,
   openSession,
+  resolveRelationName,
+  resolveStoreIdentity,
   POSTGRES_DATASET_KINDS,
   qualifiedTable,
   readFailure,
@@ -153,7 +155,11 @@ export function createPostgresAdapter(
       }
     },
 
-    resolveDatasetAddress: resolvePostgresDatasetAddress,
+    // Closed over the adapter's factory, not a bare reference: #1193 gave this
+    // seam a session, and the session must come from the SAME factory the
+    // recording tests hand `createPostgresAdapter`. `secret` arrives from
+    // `executor.ts` — the SOURCE's for a source end, the SINK's for a sink end.
+    resolveDatasetAddress: (a) => resolvePostgresDatasetAddress({ ...a, createClient }),
 
     async *runActivity(
       ctx: ActivityContext,
@@ -605,37 +611,89 @@ export interface PostgresDatasetRead {
  * kind that ALWAYS fails at dispatch — precisely the trap §12's M5 row was split
  * four ways to avoid, and the trap slice 1 held the binding shut to dodge.
  *
- * `storeIdentity` IS NULL, AND THAT IS A MEASURED LIMIT OF THE SEAM RATHER THAN
- * A SHRUG. Postgres can identify itself precisely — measured, `select
- * system_identifier from pg_control_system()` returns a cluster-unique value and
- * is readable by an ORDINARY role, which paired with the database OID is the
- * exact analogue of sqlite's `dev:ino`. It cannot be used here: this seam
+ * #1193 CLOSED THE SEAM'S CREDENTIAL HOLE, and the premise that kept it open was
+ * simply WRONG. Slice 2 recorded `storeIdentity: null` because "this seam
  * receives `connectionConfig` and `dataset` and NO SECRET, deliberately, because
  * it must be answerable for the SINK — whose adapter never runs and whose
- * credential is therefore never resolved. A networked store's physical identity
- * needs a session, and a session needs a password.
+ * credential is therefore never resolved." The second half of that is false and
+ * was false when written: `executor.ts` resolves the source secret AND
+ * `sinkSecret` in the same pre-flight, BEFORE it reaches this seam. The sink's
+ * adapter indeed never RUNS; its credential is nonetheless in hand. So the seam
+ * now takes a `secret`, opens a session, and asks postgres the two questions
+ * only a session can answer.
  *
- * So `null` is the honest value, and it is the FAIL-OPEN direction the schema
- * documents for exactly this case: the comparison degrades to `store` rather
- * than inventing a refusal on a fact nobody established. In slice 2 nothing
- * turns on it — `sameDatasetAddress` short-circuits on `kind`, and a postgres
- * source can only ever meet a sqlite sink — but slice 3 makes postgres a SINK,
- * at which point two postgres connections naming one cluster through different
- * host spellings become comparable ONLY by `store`. That is a real hole for the
- * self-copy gate, it is recorded as such (#1193), and closing it means giving
- * this seam a credential.
+ * WHY IT HAD TO BE BOTH HALVES. Closing `storeIdentity` alone would have left
+ * the gate silent for the DEFAULT spelling: `sameDatasetAddress` ends on
+ * `a.object !== null && a.object === b.object`, and `object` was null for every
+ * table dataset that did not declare a `schema` — which the schema makes
+ * optional. It would have started refusing schema-QUALIFIED pairs across host
+ * spellings and gone on missing unqualified ones. One seam limitation, one
+ * cause ("it needs the session this seam cannot open"), one fix.
  *
- * `object` is NOT case-folded, unlike sqlite's. `quoteIdentifier` quotes always,
- * so a postgres `table: 'Users'` addresses the relation spelled `Users` and
- * `users` is a DIFFERENT relation — folding them together here would report two
- * distinct tables as one address. It is `null` when the schema is not declared:
- * resolving an unqualified name needs `search_path`, which needs the session
- * this seam cannot open. A null object never matches, which is the same
- * fail-open direction, stated rather than approximated.
+ * THE OBJECT HALF IS A BEHAVIOUR CHANGE, not merely a null filled in, and both
+ * arms of it are deliberate:
+ *  - a resolvable relation now records the CATALOG-CANONICAL `nspname.relname`
+ *    rather than the operator's declared spelling, which is what makes two
+ *    spellings of one table compare equal;
+ *  - a relation that does NOT resolve now records `null` where a qualified
+ *    dataset used to record its declared `schema.table`. That widens the
+ *    fail-open direction, and it is the correct polarity here: a null object can
+ *    never cause a refusal, whereas keeping the declared spelling would let two
+ *    datasets naming one NONEXISTENT relation be refused as a self-copy — a
+ *    `permanent` verdict with a wrong reason, on a copy that fails for its own
+ *    reason a moment later. The declared spelling stays visible in the dataset
+ *    the run binds.
+ *
+ * ENRICHMENT IS BEST-EFFORT; ONLY THE CONNECT MAY REFUSE. A failure to CONNECT
+ * dooms the copy and propagates. A failure of either QUERY degrades to `null`
+ * and the address still resolves. That asymmetry is the whole finding, and
+ * sqlite's opposite choice does not transfer: `resolveSqliteDatasetAddress` lets
+ * a `stat` failure propagate because every way it can fail leaves the copy
+ * unable to proceed anyway. Not so here — `pg_control_system()`'s execute
+ * privilege is a REVOCABLE ACL (public by default on a vanilla 17, measured, but
+ * hardened deployments revoke exactly this class), and `to_regclass` raises
+ * `42501` for a role without `USAGE` on a schema. Neither `42501` is in
+ * `isTransientPostgresCode`, so propagating would classify `permanent` and
+ * refuse EVERY copy against such a server, forever, while a role that can
+ * `SELECT` and `INSERT` would have copied fine.
+ *
+ * The cost of that choice, stated so it is not mistaken for coverage: a
+ * TRANSIENT mid-session drop degrades exactly as a permanent revoke does, so
+ * that one dispatch falls back to the `store`-string comparison this ticket
+ * exists to stop relying on. Classifying the error and propagating only the
+ * transient ones would trade a rare weakened comparison for a common false
+ * refusal, and §7 ② is unambiguous about which of those a gate may prefer. It
+ * is a per-dispatch weakening, not a persistent one — the next dispatch asks
+ * again.
+ *
+ * `object` is NOT case-folded, unlike sqlite's. The name handed to
+ * `to_regclass` comes from `qualifiedTable`, which quotes always, so a postgres
+ * `table: 'Users'` addresses the relation spelled `Users` and `users` is a
+ * DIFFERENT relation — measured, the two return different OIDs. Folding them
+ * together here would report two distinct tables as one address.
+ *
+ * A `query` dataset keeps `object: null`. That is #1193's OTHER residual, and
+ * #1196 settled it deliberately rather than by omission: deciding it means
+ * reading the operator's SQL to learn which relations it touches, and §7 ② is
+ * explicit that a `permanent` refusal reached by parsing SQL badly is the one
+ * direction this gate must never fail in. Its `storeIdentity` is still resolved,
+ * because §2.1's dispatch record wants it even where the gate cannot use it.
+ *
+ * COST, stated rather than discovered. This adds ONE session per dataset end to
+ * the pre-flight, so a postgres-to-postgres copy now opens four sessions across
+ * a dispatch (source address, sink address, then the reader and the writer)
+ * where it opened two. They are SEQUENTIAL and each is closed in a `finally`, so
+ * peak concurrent sessions per node is unchanged at two. The unbounded part is
+ * across NODES: pre-flight runs outside `executor.ts`'s `pLimit`, so N
+ * concurrently dispatching copy nodes open N sessions with no cap, where the
+ * running phase is capped. That is a pre-existing property of pre-flight which
+ * this makes matter more, and it is filed as #1200 rather than fixed here.
  */
-export function resolvePostgresDatasetAddress(args: {
+export async function resolvePostgresDatasetAddress(args: {
   readonly connectionConfig: Record<string, unknown>;
   readonly dataset: ResolvedDataset;
+  readonly secret: string | null;
+  readonly createClient: PostgresClientFactory;
 }): Promise<DatasetAddress> {
   const cfg = postgresConnectionConfigSchema.safeParse(args.connectionConfig);
   if (!cfg.success) {
@@ -654,12 +712,14 @@ export function resolvePostgresDatasetAddress(args: {
   const port = cfg.data.port ?? DEFAULT_POSTGRES_PORT;
   const store = `${cfg.data.host}:${String(port)}/${cfg.data.database}`;
 
-  let object: string | null = null;
+  // The name to ASK about, resolved from config before any session is opened —
+  // an unparseable dataset config is the operator's to fix and must not cost a
+  // connection. Same shape as `sourceStatementFor`: the OUTER parse is the one
+  // that can fail on operator-authored config, so it is a `safeParse` classified
+  // `permanent` rather than a bare `ZodError` escaping the failure contract. The
+  // inner narrowing runs on data the union has already validated.
+  let qualified: string | null = null;
   if (args.dataset.kind === 'table') {
-    // Same shape as `sourceStatementFor`: the OUTER parse is the one that can
-    // fail on operator-authored config, so it is a `safeParse` classified
-    // `permanent` rather than a bare `ZodError` escaping the failure contract.
-    // The inner narrowing runs on data the union has already validated.
     const parsed = datasetConfigSchema('table').safeParse(args.dataset.config);
     if (!parsed.success) {
       throw new DatasetIoError(
@@ -667,11 +727,45 @@ export function resolvePostgresDatasetAddress(args: {
         `invalid table dataset config: ${formatZodIssues(parsed.error.issues)}`,
       );
     }
-    const target = tableDatasetConfigSchema.parse(parsed.data);
-    object = target.schema === undefined ? null : `${target.schema}.${target.table}`;
+    qualified = qualifiedTable(tableDatasetConfigSchema.parse(parsed.data));
   }
 
-  return Promise.resolve({ kind: 'postgres', store, storeIdentity: null, object });
+  // A CONNECT failure propagates — it dooms the copy, so refusing here is the
+  // same verdict the adapter would reach, earlier and better named. Everything
+  // asked of the session afterwards is best-effort; see the docblock.
+  const client = await openSession(
+    args.createClient,
+    args.connectionConfig,
+    args.secret,
+    'cannot reach the postgres server to resolve the dataset address',
+  );
+  let storeIdentity: string | null = null;
+  let object: string | null = null;
+  try {
+    try {
+      storeIdentity = await resolveStoreIdentity(client);
+    } catch {
+      // Unidentifiable — recorded as such, never as a FALSE identity and never
+      // as a refusal. `sameDatasetAddress` degrades to the `store` string, which
+      // is exactly where this stood before #1193.
+    }
+    if (qualified !== null) {
+      try {
+        object = await resolveRelationName(client, qualified);
+      } catch {
+        // Unresolvable — a null object never matches, so this can only ever
+        // widen what the gate lets through, never narrow it.
+      }
+    }
+  } finally {
+    try {
+      await client.end();
+    } catch {
+      // The address is already answered; a failed close has nothing to add.
+    }
+  }
+
+  return { kind: 'postgres', store, storeIdentity, object };
 }
 
 export const postgresAdapter: ConnectorAdapter = createPostgresAdapter();

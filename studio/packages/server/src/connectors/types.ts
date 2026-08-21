@@ -368,10 +368,19 @@ export interface ConnectorAdapter {
    * (which path confinement, which default schema, what counts as one object),
    * so it is asked rather than guessed at.
    *
-   * A PURE READ: it may touch the filesystem to canonicalise, and must not open
-   * a transaction, write, or otherwise change the store. The executor calls it
-   * BEFORE `node.dispatched`, where every other pure read lives, so an
-   * unresolvable address fails the node while it is still `ready`.
+   * A PURE READ: it may touch the filesystem to canonicalise, AND (since #1193)
+   * it may open a session against a networked store, but it must not open a
+   * transaction, write, or otherwise change durable state. Session-local setup
+   * is not a write — `openSession` issues `SET SESSION DateStyle`, which dies
+   * with the session. The executor calls it BEFORE `node.dispatched`, where
+   * every other pure read lives, so an unresolvable address fails the node while
+   * it is still `ready`.
+   *
+   * THAT PERMISSION HAS A COST, named here because pre-flight is the one region
+   * of `executor.ts` that runs OUTSIDE its `pLimit`: N concurrently dispatching
+   * nodes open N store sessions with no cap, where the running phase is capped.
+   * An implementer that needs I/O should keep it to one session per call and
+   * close it in a `finally`.
    *
    * NON-SECRET components only (§8) — see `DatasetAddress`, which lands in the
    * event log verbatim.
@@ -394,5 +403,18 @@ export interface ConnectorAdapter {
   resolveDatasetAddress?(args: {
     readonly connectionConfig: Record<string, unknown>;
     readonly dataset: ResolvedDataset;
+    /**
+     * #1193 — the connection's plaintext credential, for a store whose physical
+     * identity only a SESSION can answer. Slice 2 left it out on the reasoning
+     * that this seam "must be answerable for the SINK, whose adapter never runs
+     * and whose credential is therefore never resolved". The first clause is
+     * true and the second is not: `executor.ts` resolves BOTH ends' secrets in
+     * the same pre-flight, before either address is asked for. `null` means the
+     * connection binds no secret, which a store needing one must refuse rather
+     * than paper over — `pg` would otherwise authenticate from `PGPASSWORD`.
+     *
+     * Never placed in `DatasetAddress`, which lands in the event log verbatim.
+     */
+    readonly secret: string | null;
   }): Promise<DatasetAddress>;
 }

@@ -317,3 +317,93 @@ export function qualifiedTable(cfg: { schema?: string; table: string }): string 
     ? quoteIdentifier(cfg.table, 'table')
     : `${quoteIdentifier(cfg.schema, 'schema')}.${quoteIdentifier(cfg.table, 'table')}`;
 }
+
+/**
+ * #1193 — WHAT PHYSICALLY IDENTIFIES A POSTGRES STORE, and why it takes three
+ * parts rather than one.
+ *
+ * `datamove/address.ts` compares two ends by `storeIdentity` when both have one,
+ * and falls back to the `store` STRING when either is null. For a networked
+ * store that string is `host:port/database`, which an operator can spell two
+ * ways for one server (`localhost` and `127.0.0.1`, a name and its CNAME, the
+ * default port written or omitted). Two such spellings made the physical
+ * self-copy gate fail open the moment #1196 let postgres be a SINK as well as a
+ * source — the hole this closes.
+ *
+ * The three parts, each load-bearing:
+ *  - `system_identifier` from `pg_control_system()` is cluster-unique, and
+ *    MEASURED readable by an ordinary unprivileged role (a freshly created
+ *    `LOGIN`-only role read it) — it is not superuser-gated;
+ *  - the current database's OID, because one cluster holds many databases and a
+ *    copy between two of them is a copy between two stores. `nspname.relname`
+ *    is only database-unique, so the object half cannot carry this;
+ *  - `pg_is_in_recovery()`, which separates a PRIMARY from a physical STANDBY.
+ *    A standby's control file is a byte copy of its primary's, so it reports the
+ *    SAME `system_identifier` and the same database OIDs — without this part,
+ *    `standby -> primary`, an ordinary ETL shape, would resolve to one address
+ *    and be refused as a self-copy. That refusal would be work-that-would-have-
+ *    succeeded, the one direction §7 says this gate must never fail in. It is
+ *    also sound in the other direction: a standby is read-only and can never be
+ *    a sink, so the pair can never be a genuine self-copy. (The byte-copy claim
+ *    is REASONED from `pg_basebackup`'s mechanism and walreceiver's
+ *    `IDENTIFY_SYSTEM` check, not measured here — no replica was to hand. The
+ *    part is included precisely so that the answer does not depend on it.)
+ */
+const STORE_IDENTITY_SQL = `
+  select (select system_identifier::text from pg_control_system()) as sysid,
+         (select oid::text from pg_database where datname = current_database()) as dboid,
+         pg_is_in_recovery() as in_recovery`;
+
+export async function resolveStoreIdentity(client: PostgresClient): Promise<string | null> {
+  const result = await client.query(STORE_IDENTITY_SQL);
+  const row = result.rows[0] as
+    { sysid: string | null; dboid: string | null; in_recovery: boolean | null } | undefined;
+  if (row?.sysid == null || row.dboid == null) return null;
+  return `${row.sysid}:${row.dboid}:${row.in_recovery === true ? 'standby' : 'primary'}`;
+}
+
+/**
+ * The CANONICAL `schema.relation` a name addresses in this session, or `null`.
+ *
+ * `to_regclass` is what applies `search_path`, which is why this needs a session
+ * at all: an unqualified `people` is the DEFAULT spelling of a table dataset
+ * (`schema` is optional), and resolving it is not something a config can be read
+ * for. Measured — `to_regclass('people')` and `to_regclass('s1193.people')`
+ * return the same OID, while `to_regclass('"People"')` returns a different
+ * relation. So the QUOTED name from {@link qualifiedTable} is what must be
+ * passed; handing it the raw spelling would fold `People` onto `people` and
+ * report two distinct tables as one address.
+ *
+ * The bound parameter is not decoration. `postgres-sink.ts`'s `DESCRIBE_SINK_SQL`
+ * measured that `to_regclass('"public"."plain"; drop table public.plain')`
+ * returns NULL — a name that does not parse is simply not a relation, and
+ * nothing executes. Same idiom, same reason.
+ *
+ * NOT SHARED WITH `DESCRIBE_SINK_SQL`, though the `pg_class`/`pg_namespace` join
+ * is the same shape. That query fetches `relkind` and the column list in the
+ * SAME round trip, deliberately per its own docblock, so the sink's describe and
+ * its write cannot disagree about the relation they mean. An address needs the
+ * name alone. Factoring the join out would either make this over-fetch a column
+ * list nothing reads, or split the sink's one round trip into two and give the
+ * describe a window to straddle — paying a real cost to remove four lines of
+ * duplicated SQL that has one measured behaviour between them.
+ *
+ * `null` covers only the relation NOT EXISTING. `to_regclass` can also THROW —
+ * measured, a role without `USAGE` on a named schema gets `42501` rather than a
+ * NULL — and that throw is left to the caller, which treats every query-level
+ * failure here alike.
+ */
+const RELATION_NAME_SQL = `
+  select n.nspname || '.' || c.relname as name
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+   where c.oid = to_regclass($1)`;
+
+export async function resolveRelationName(
+  client: PostgresClient,
+  qualified: string,
+): Promise<string | null> {
+  const result = await client.query(RELATION_NAME_SQL, [qualified]);
+  const row = result.rows[0] as { name: string | null } | undefined;
+  return row?.name ?? null;
+}
