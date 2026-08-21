@@ -3099,7 +3099,8 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       kind: 'permanent',
-      error: expect.stringContaining('invalid http_request activity config'),
+      // #1175 — anchored on the whole message: the fault is one line, not a blob.
+      error: expect.stringMatching(/^invalid http_request activity config: [^\n]+$/),
     });
   });
 });

@@ -365,7 +365,7 @@ describe('what the reader refuses before it opens anything', () => {
           datasetConfig: { table: 't"; DROP TABLE t; --' },
         }),
       ),
-    ).rejects.toThrow(/invalid table dataset config/);
+    ).rejects.toThrow(/^invalid table dataset config: [^\n]+$/);
   });
 
   it('refuses a malformed connection config rather than assuming it is well-formed', async () => {
@@ -377,7 +377,7 @@ describe('what the reader refuses before it opens anything', () => {
           datasetConfig: { table: 't' },
         }),
       ),
-    ).rejects.toThrow(/invalid sqlite connection config/);
+    ).rejects.toThrow(/^invalid sqlite connection config: [^\n]+$/);
   });
 });
 

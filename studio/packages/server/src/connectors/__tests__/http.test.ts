@@ -39,6 +39,23 @@ function fakeResponse(
 }
 
 describe('httpAdapter.runActivity', () => {
+  it('names WHY a connection config was refused, in one line (#1175)', async () => {
+    // This site used to yield a bare `invalid http connection config` with no
+    // reason at all — the opposite failure to the JSON blob, and in the same
+    // function as one. Refused BEFORE the request, so this stays egress-free;
+    // and the secret is in hand at the refusal, so assert it is not echoed.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const events = await drain(
+      httpAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 'soon' } }), 'sk-super-secret'),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).toMatch(/^invalid http connection config: [^\n]+$/);
+    expect(error).toContain('timeoutMs: ');
+    expect(error).not.toContain('sk-super-secret');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('surfaces status, body, and RESPONSE headers on a completed exchange', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
