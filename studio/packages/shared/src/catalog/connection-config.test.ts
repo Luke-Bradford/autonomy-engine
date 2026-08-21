@@ -198,7 +198,14 @@ describe('#1119 M4 — the sqlite store connection', () => {
     // at the front would silently change the default kind of every new
     // connection; this is the cheap assertion that says so.
     expect(CONNECTION_KINDS[0]).toBe('anthropic_api');
-    expect(CONNECTION_KINDS[CONNECTION_KINDS.length - 1]).toBe('sqlite');
+    // #1189 — this used to read "the LAST kind is sqlite", which asserted the
+    // right thing for one release and then failed the moment `postgres`
+    // appended correctly. The invariant is not "sqlite is last", it is "no kind
+    // ever MOVES": an insertion shifts every index after it, so pinning
+    // sqlite's own index catches exactly that and needs no edit when the next
+    // kind is appended after it.
+    expect(CONNECTION_KINDS.indexOf('sqlite')).toBe(6);
+    expect(CONNECTION_KINDS.indexOf('postgres')).toBe(7);
   });
 
   it('needs both an allowlist and a path', () => {
