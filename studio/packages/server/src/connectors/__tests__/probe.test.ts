@@ -139,19 +139,34 @@ describe('probeConnection', () => {
     // The hazard `postgres-session.ts` documents: a client whose own timeout no
     // longer applies once the handshake has begun. Without the backstop the
     // request hangs forever; the server sets no `requestTimeout`.
-    const registry = registryOf('postgres', () => new Promise<ConnectionProbeResult>(() => {}));
-    const result = await probeConnection({
-      registry,
-      kind: 'postgres',
-      config: {},
-      secret: null,
-      backstopMs: 20,
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected a failed probe');
-    // "abandoned", not "the store timed out": the engine gave up, and the
-    // sentence must not be mistaken for the store's own verdict.
-    expect(result.error).toMatch(/did not answer within 0s and was abandoned/);
+    // Releasable, because the slot is now held until the attempt settles: a
+    // genuinely unresolvable promise here would strand one of the module-level
+    // limiter's slots for every test after this one.
+    let release = () => {};
+    const registry = registryOf(
+      'postgres',
+      () =>
+        new Promise<ConnectionProbeResult>((resolve) => {
+          release = () => resolve({ ok: true, probed: 'liveness' });
+        }),
+    );
+    try {
+      const result = await probeConnection({
+        registry,
+        kind: 'postgres',
+        config: {},
+        secret: null,
+        backstopMs: 20,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a failed probe');
+      // "abandoned", not "the store timed out": the engine gave up, and the
+      // sentence must not be mistaken for the store's own verdict.
+      expect(result.error).toMatch(/did not answer within 0s and was abandoned/);
+    } finally {
+      release();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   });
 
   it('caps how many probes are in flight at once, process-wide', async () => {
