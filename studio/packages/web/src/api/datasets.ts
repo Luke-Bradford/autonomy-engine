@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import {
+  DatasetReferencesResponseSchema,
   DatasetSchema,
   NewDatasetSchema,
   paginatedResponseSchema,
   type Dataset,
+  type DatasetReferencesResponse,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -58,6 +60,29 @@ export function listDatasets(signal?: AbortSignal): Promise<Dataset[]> {
   return fetchAllPages((cursor) =>
     apiFetch(`/api/datasets${pageQuery(cursor)}`, { schema: DatasetPageSchema, signal }),
   );
+}
+
+/** One dataset, for the detail page (#996 M9). */
+export function getDataset(id: string, signal?: AbortSignal): Promise<Dataset> {
+  return apiFetch(`/api/datasets/${encodeURIComponent(id)}`, { schema: DatasetSchema, signal });
+}
+
+/**
+ * Which of the caller's pipelines reference this dataset (#996 M9, #1185).
+ *
+ * Deliberately NOT paginated. The response is bounded by the candidate-version
+ * set the server walks — latest ∪ active-published ∪ trigger-pinned — not by
+ * the whole version history, so it is proportional to how many pipelines the
+ * owner has rather than to how often they have saved.
+ */
+export function getDatasetReferences(
+  id: string,
+  signal?: AbortSignal,
+): Promise<DatasetReferencesResponse> {
+  return apiFetch(`/api/datasets/${encodeURIComponent(id)}/references`, {
+    schema: DatasetReferencesResponseSchema,
+    signal,
+  });
 }
 
 export function createDataset(body: DatasetWrite): Promise<Dataset> {

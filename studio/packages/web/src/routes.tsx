@@ -5,6 +5,7 @@ import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { DatasetsPage } from './pages/DatasetsPage';
+import { DatasetDetailRoute } from './pages/datasets/DatasetDetailRoute';
 import { SecretsPage } from './pages/SecretsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 // #698 — loaded on demand (React Flow is reachable only from this route); the
@@ -185,10 +186,23 @@ export const ROUTES: RouteObject[] = [
             element: <ConnectionsPage />,
             handle: { crumb: sectionLabel('/manage/connections') } satisfies ShellRouteHandle,
           },
+          /* `:datasetId` is a CHILD of `datasets`, not its sibling — the same
+             shape (and the same reason) as `runs`/`:runId` above: the middle
+             crumb reads Manage › Datasets › ds_1 and links back. */
           {
             path: 'datasets',
-            element: <DatasetsPage />,
             handle: { crumb: sectionLabel('/manage/datasets') } satisfies ShellRouteHandle,
+            children: [
+              { index: true, element: <DatasetsPage /> },
+              {
+                path: ':datasetId',
+                element: <DatasetDetailRoute />,
+                /* The label IS the URL segment, already decoded by `useParams`. */
+                handle: {
+                  crumb: (params) => params.datasetId ?? '',
+                } satisfies ShellRouteHandle,
+              },
+            ],
           },
           {
             path: 'secrets',

@@ -9,6 +9,8 @@ import {
   availableRefs,
   checkSinkCoverage,
   checkSourceDrift,
+  projectMappingRows,
+  splitUnwritten,
   formatZodIssues,
   getActivity,
   authorsCallBlob,
@@ -2587,23 +2589,13 @@ export function NodePanel({
    * A row whose `sink` is still blank — "Add mapping row" inserts an empty one —
    * names nothing yet, so counting it would report a column as written before
    * the author has said which.
+   *
+   * The projection itself is SHARED (#1185): M9's dataset detail page reads the
+   * same advisory off a stored mapping, and two hand-written readings of one
+   * shape is the drift `copy-automap.ts` exists to prevent. `unnamed` is dropped
+   * here — this panel already shows the blank row it counts.
    */
-  const mappedRows = useMemo(
-    () =>
-      (draftMapping ?? []).flatMap((row) =>
-        typeof row.sink === 'string' && row.sink.length > 0
-          ? [
-              {
-                sink: row.sink,
-                source:
-                  typeof row.source === 'string' && row.source.length > 0 ? row.source : undefined,
-                onError: row.onError === 'null' ? ('null' as const) : ('fail' as const),
-              },
-            ]
-          : [],
-      ),
-    [draftMapping],
-  );
+  const mappedRows = useMemo(() => projectMappingRows(draftMapping ?? []).rows, [draftMapping]);
 
   const sourceAdvisory =
     mappingField && sourceDataset && draftMapping !== null
@@ -2622,8 +2614,9 @@ export function NodePanel({
   // consequence), while the sink side still names its NOT NULL columns —
   // because those are what makes the copy unrunnable, and they are exactly what
   // the author needs to see before pressing Auto-map.
-  const requiredUnwritten = (sinkAdvisory?.notWritten ?? []).filter((c) => !c.nullable);
-  const optionalUnwritten = (sinkAdvisory?.notWritten ?? []).filter((c) => c.nullable);
+  const { required: requiredUnwritten, optional: optionalUnwritten } = splitUnwritten(
+    sinkAdvisory?.notWritten ?? [],
+  );
 
   const autoMapBlocked =
     sourceDataset === undefined || sinkDataset === undefined

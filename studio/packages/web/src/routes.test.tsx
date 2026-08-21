@@ -74,6 +74,24 @@ vi.mock('./api/connections', async (importActual) => ({
 vi.mock('./api/datasets', async (importActual) => ({
   ...(await importActual<typeof import('./api/datasets')>()),
   listDatasets: vi.fn().mockResolvedValue([]),
+  // #996 M9 — the detail page resolves both on mount. `getDataset` echoes the
+  // id so the one-decode case below can read it off the rendered heading.
+  getDataset: vi.fn((id: string) =>
+    Promise.resolve({
+      id,
+      resourceId: 'res_ds',
+      ownerId: 'local',
+      name: id,
+      kind: 'table',
+      connectionId: 'conn_1',
+      config: {},
+      columns: [],
+      parameters: [],
+      createdAt: 1,
+      updatedAt: 1,
+    } as never),
+  ),
+  getDatasetReferences: vi.fn().mockResolvedValue({ references: [], dynamic: [] }),
 }));
 // This suite MOUNTS every hub section for real (see the walk over `HUBS`
 // below), so a page that loads on mount reaches a real `fetch` in jsdom
@@ -226,6 +244,17 @@ describe('route tree', () => {
     // The canvas heading is the pipeline's NAME, resolved by the route from
     // the server — proving the param reached a real fetch, not just a match.
     expect(await page().findByRole('heading', { name: 'Pipeline pl_42' })).toBeInTheDocument();
+  });
+
+  it('renders the dataset detail page at /manage/datasets/:datasetId', async () => {
+    renderAt('/manage/datasets/ds_42');
+    expect(await page().findByRole('heading', { name: 'ds_42' })).toBeInTheDocument();
+  });
+
+  /** Same one-decode contract as `:runId`; see the note on that case. */
+  it('decodes :datasetId exactly once', async () => {
+    renderAt(`/manage/datasets/${encodeURIComponent('ds%20x')}`);
+    expect(await page().findByRole('heading', { name: 'ds%20x' })).toBeInTheDocument();
   });
 
   /** Same one-decode contract as `:runId`; see the note on that case. */
