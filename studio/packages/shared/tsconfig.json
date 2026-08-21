@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
     // #1199 — `noEmit` on the TYPECHECK project, `noEmit: false` on the build
     // project. This is the root-cause half of the fix: `tsc -b packages/shared`
     // selects THIS config (the one that includes tests) and, in build mode,

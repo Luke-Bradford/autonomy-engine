@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
     "types": ["node"],
     // #1199 — `noEmit` here, `noEmit: false` in `tsconfig.build.json`. This is
     // the root-cause half of the fix: `tsc -b packages/cli` selects THIS config

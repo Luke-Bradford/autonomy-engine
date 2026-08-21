@@ -1,17 +1,16 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_INCLUDE } from '../../vitest.shared.js';
 
 /**
- * #1199 — the cli package's test-file allowlist. The full argument for why this
- * is an allowlist rather than a `dist/` exclusion, and the measurements behind
- * it, are in `packages/shared/vitest.config.ts`; it is not repeated four times.
+ * #1199 — nothing package-specific; the argument lives in `vitest.shared.ts`.
  *
  * This package has no `dist/` on disk today, so it is the least exposed of the
- * four. It gets the same guard anyway: the exposure is structural (`tsc -b
- * packages/cli` would select the test-including project and emit), not a
- * property of what happens to be on disk this week.
+ * four. It gets the guard anyway because the exposure is structural — a
+ * project that includes tests and can emit — rather than a property of what
+ * happens to be on disk this week.
  */
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: TEST_INCLUDE,
   },
 });

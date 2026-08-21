@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
     "types": ["node"],
     // #1199 — `noEmit` on the TYPECHECK project, `noEmit: false` on the build
     // project below. `tsc -b packages/server` selects THIS config (the one

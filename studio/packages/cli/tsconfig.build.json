@@ -7,9 +7,14 @@
   // break `rootDir` and shift every output path down into `dist/src/`. A
   // child's `include` REPLACES the parent's, so this is a complete override.
   "compilerOptions": {
+    "outDir": "dist",
     "rootDir": "src",
     "noEmit": false
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  // #1199 — BOTH patterns, mirroring `packages/server/tsconfig.build.json`.
+  // `*.test.ts` alone is not enough: a `__tests__/helpers/` module is test-only
+  // code that no production entry point imports, and excluding only the files
+  // named `*.test.ts` left it emitted into `dist/`.
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }

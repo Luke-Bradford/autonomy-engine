@@ -8,9 +8,14 @@
   // not a merge — `dist/` is byte-identical to before the #1199 restructure.
   // (Verbatim the shape #726 gave `packages/server/tsconfig.build.json`.)
   "compilerOptions": {
+    "outDir": "dist",
     "rootDir": "src",
     "noEmit": false
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  // #1199 — BOTH patterns, mirroring `packages/server/tsconfig.build.json`.
+  // `*.test.ts` alone is not enough: a `__tests__/helpers/` module is test-only
+  // code that no production entry point imports, and excluding only the files
+  // named `*.test.ts` left it emitted into `dist/`.
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }

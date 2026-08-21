@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_INCLUDE } from '../../vitest.shared.js';
 import react from '@vitejs/plugin-react';
 
 /**
@@ -14,17 +15,13 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     /**
-     * #1199 — where this package's tests live, stated as an ALLOWLIST rather
-     * than as a `dist/` exclusion. vitest 4 dropped `dist` from its default
-     * `exclude`, so any compiled test tree on disk is collected as a duplicate
-     * suite; the measurements and the allowlist-over-denylist argument are in
-     * `packages/shared/vitest.config.ts`. This package is the least exposed of
-     * the four — its `tsconfig.json` already sets `noEmit`, so `tsc -b` cannot
-     * plant anything, and `dist/` here is vite bundle output containing no
-     * test files — but the guard is structural, not a bet on what is currently
-     * on disk.
+     * #1199 — the workspace's one test-file allowlist (see `vitest.shared.ts`;
+     * `tsconfig.json`'s `noEmit` is the other half). This package is the least
+     * exposed of the four — it has always set `noEmit`, so `tsc -b` cannot
+     * plant anything, and its `dist/` is vite bundle output containing no test
+     * files — but the guard is structural, not a bet on what is on disk.
      */
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: TEST_INCLUDE,
     // `clearMocks` wipes call history between tests (so a `not.toHaveBeenCalled`
     // never sees a prior test's calls); `restoreMocks` restores `vi.spyOn`
     // targets to their originals.
