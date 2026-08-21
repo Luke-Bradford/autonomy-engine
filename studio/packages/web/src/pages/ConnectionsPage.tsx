@@ -110,6 +110,23 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  /**
+   * How many times a form has been OPENED, and the `key` the form is mounted on.
+   *
+   * Keying on `form.id` was not enough. The "New connection" button is not gated
+   * behind the form being closed, so pressing it with a new-connection form
+   * already open leaves `form.id` at `null` — no remount — while `blankForm()`
+   * hands back byte-identical content, so the recomputed draft signature matches
+   * the stale one and the PREVIOUS draft's verdict renders against a form that
+   * was never tested. A counter cannot collide with itself, so every way of
+   * opening a form (New twice, Edit another row, Edit the same row again) starts
+   * the child clean.
+   */
+  const [formSeq, setFormSeq] = useState(0);
+  const openForm = useCallback((next: FormState) => {
+    setForm(next);
+    setFormSeq((seq) => seq + 1);
+  }, []);
   const guardedLoad = useGuardedLoad();
 
   // The ONE load path: the mount effect below and every post-mutation refetch
@@ -183,7 +200,7 @@ export function ConnectionsPage() {
     <section aria-labelledby="connections-heading">
       <div className="page-header">
         <h2 id="connections-heading">Connections</h2>
-        <button type="button" onClick={() => setForm(blankForm())}>
+        <button type="button" onClick={() => openForm(blankForm())}>
           New connection
         </button>
       </div>
@@ -222,7 +239,7 @@ export function ConnectionsPage() {
                   <code>{conn.kind}</code>
                 </td>
                 <td>
-                  <button type="button" onClick={() => setForm(formForEdit(conn))}>
+                  <button type="button" onClick={() => openForm(formForEdit(conn))}>
                     Edit
                   </button>
                   <button
@@ -248,18 +265,22 @@ export function ConnectionsPage() {
 
       {form && (
         <ConnectionForm
-          /* Remount when the form switches to a DIFFERENT connection. The table
-             stays interactive while the form is open, so "Edit" on another row
-             swaps `form` in place — and without a key the child keeps its own
-             local state across that swap: connection A's `probing`/`error`, and
-             A's probe verdict, rendered against B. The verdict is the sharp
-             one, because a signature over the DRAFT cannot see the switch: two
-             connections sharing non-secret config (a staging/prod pair, or an
-             export/import clone) produce an identical signature, so A's
-             "Connected." would render for a B that was never probed. Keying on
-             identity is what makes "this verdict is about what is on screen"
-             true across rows as well as within one. */
-          key={form.id ?? 'new'}
+          /* Remount on every OPEN. The table stays interactive while the form
+             is open, so "Edit" on another row swaps `form` in place — and
+             without a key the child keeps its own local state across that swap:
+             connection A's `probing`/`error`, and A's probe verdict, rendered
+             against B. The verdict is the sharp one, because a signature over
+             the DRAFT cannot see the switch: two connections sharing non-secret
+             config (a staging/prod pair, or an export/import clone) produce an
+             identical signature, so A's "Connected." would render for a B that
+             was never probed.
+
+             Keyed on the open COUNTER rather than on `form.id`, because `id` is
+             `null` for every new-connection form: pressing "New connection"
+             twice would not remount, and `blankForm()` is byte-identical each
+             time, so the signature would match and the previous draft's verdict
+             would render against a form nothing has tested. */
+          key={formSeq}
           form={form}
           onChange={setForm}
           onClose={() => setForm(null)}

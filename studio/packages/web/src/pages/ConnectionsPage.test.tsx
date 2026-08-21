@@ -643,6 +643,33 @@ describe('ConnectionsPage', () => {
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
+    it('does not carry a verdict into a SECOND new-connection form', async () => {
+      // "New connection" is not gated behind the form being closed, so it can be
+      // pressed with a new-connection form already open. `form.id` is `null`
+      // both times, so keying the form on `id` did not remount it — and
+      // `blankForm()` is byte-identical each time, so the draft SIGNATURE
+      // matched too, and the first draft's "Connected." rendered against a form
+      // nothing had tested.
+      //
+      // The draft is therefore left PRISTINE here, which is the whole point:
+      // the moment a field is touched the signature diverges on its own and the
+      // verdict hides for reasons that have nothing to do with the remount. It
+      // is the untouched blank form — the one case where both guards agree on
+      // the wrong answer — that needs the open COUNTER.
+      const user = userEvent.setup();
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText(/No connections yet/i);
+
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
+      await user.click(screen.getByRole('button', { name: 'Test connection' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
+
+      // Start over. The new form is blank and untested — it must say nothing.
+      await user.click(screen.getByRole('button', { name: 'New connection' }));
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    });
+
     it('never SAVES when testing', async () => {
       const user = userEvent.setup();
       renderWithRouter(<ConnectionsPage />);
