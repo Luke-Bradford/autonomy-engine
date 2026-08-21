@@ -2595,10 +2595,7 @@ export function NodePanel({
    * shape is the drift `copy-automap.ts` exists to prevent. `unnamed` is dropped
    * here — this panel already shows the blank row it counts.
    */
-  const mappedRows = useMemo(
-    () => projectMappingRows(draftMapping ?? []).rows,
-    [draftMapping],
-  );
+  const mappedRows = useMemo(() => projectMappingRows(draftMapping ?? []).rows, [draftMapping]);
 
   const sourceAdvisory =
     mappingField && sourceDataset && draftMapping !== null

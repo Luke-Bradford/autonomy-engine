@@ -63,7 +63,10 @@ describe('datasets routes', () => {
             type: 'copy',
             // Writes a column the dataset does not declare — the drift M9 exists
             // to surface, produced by a mapping pinned in an immutable version.
-            config: { mapping: [{ source: 'id', sink: 'gone', type: 'string', onError: 'fail' }], mode: 'append' },
+            config: {
+              mapping: [{ source: 'id', sink: 'gone', type: 'string', onError: 'fail' }],
+              mode: 'append',
+            },
             connectionIds: { source: store, sink: store },
             datasetIds: { source: ds.id, sink: ds.id },
             position: { x: 0, y: 0 },

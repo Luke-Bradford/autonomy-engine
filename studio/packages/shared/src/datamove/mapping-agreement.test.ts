@@ -1,11 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { DatasetColumn } from '../schemas/dataset.js';
+import type { MappingRow } from './mapping-agreement.js';
 import {
   classifySinkAgreement,
   classifySourceAgreement,
   projectMappingRows,
   splitUnwritten,
 } from './mapping-agreement.js';
+
+/**
+ * Typed rather than an inline literal at each call: `classify*Agreement` takes a
+ * `Pick<MappingRow, …>`, which excess-property-checks a FRESH literal — so an
+ * inline `{ sink, source, onError }` is a type error at the source-side calls
+ * even though a real caller's `MappingRow[]` is assignable. The helper is the
+ * shape a caller actually holds.
+ */
+const row = (sink: string, source?: string, onError: 'fail' | 'null' = 'fail'): MappingRow => ({
+  sink,
+  source,
+  onError,
+});
 
 const col = (name: string, nullable = true): DatasetColumn => ({
   name,
@@ -15,6 +29,9 @@ const col = (name: string, nullable = true): DatasetColumn => ({
 
 describe('projectMappingRows', () => {
   it('keeps only rows that claim a sink column, and reports how many it dropped', () => {
+    // RAW literals, deliberately: this is the untyped blob the function takes
+    // (a stored `Node.config.mapping`, or a half-typed panel draft), not
+    // something that has already been through a schema.
     const projected = projectMappingRows([
       { sink: 'id', source: 'ID', onError: 'fail' },
       { sink: '', source: 'x' },
@@ -23,7 +40,7 @@ describe('projectMappingRows', () => {
     ]);
 
     expect(projected.rows).toEqual([
-      { sink: 'id', source: 'ID', onError: 'fail' },
+      row('id', 'ID', 'fail'),
       { sink: 'name', source: undefined, onError: 'null' },
     ]);
     // The two sink-less rows are not silently discarded — the count is the
@@ -48,26 +65,20 @@ describe('splitUnwritten', () => {
 
 describe('classifySourceAgreement', () => {
   it('agrees when every mapped source column is declared', () => {
-    const verdict = classifySourceAgreement([{ sink: 'id', source: 'id', onError: 'fail' }], ['id']);
+    const verdict = classifySourceAgreement([row('id', 'id', 'fail')], ['id']);
     expect(verdict.agrees).toBe(true);
     expect(verdict.disagreements).toEqual([]);
   });
 
   it('disagrees when a mapped source column is not declared, naming it', () => {
-    const verdict = classifySourceAgreement(
-      [{ sink: 'id', source: 'gone', onError: 'fail' }],
-      ['id'],
-    );
+    const verdict = classifySourceAgreement([row('id', 'gone', 'fail')], ['id']);
     expect(verdict.agrees).toBe(false);
     expect(verdict.disagreements).toEqual([{ kind: 'source_missing', columns: ['gone'] }]);
   });
 
   it('treats an unread declared column as informational, never a disagreement', () => {
     // §7 row 4 — additive drift is allowed and warned, never refused.
-    const verdict = classifySourceAgreement(
-      [{ sink: 'id', source: 'id', onError: 'fail' }],
-      ['id', 'added'],
-    );
+    const verdict = classifySourceAgreement([row('id', 'id', 'fail')], ['id', 'added']);
     expect(verdict.agrees).toBe(true);
     expect(verdict.informational).toEqual([{ kind: 'source_unmapped', columns: ['added'] }]);
   });
@@ -75,26 +86,20 @@ describe('classifySourceAgreement', () => {
 
 describe('classifySinkAgreement', () => {
   it('agrees when every row writes a declared column and every NOT NULL column is written', () => {
-    const verdict = classifySinkAgreement(
-      [{ sink: 'id', source: 'id', onError: 'fail' }],
-      [col('id', false)],
-    );
+    const verdict = classifySinkAgreement([row('id', 'id', 'fail')], [col('id', false)]);
     expect(verdict.agrees).toBe(true);
     expect(verdict.disagreements).toEqual([]);
   });
 
   it('disagrees when a row writes a column the dataset does not declare', () => {
-    const verdict = classifySinkAgreement(
-      [{ sink: 'ghost', source: 'id', onError: 'fail' }],
-      [col('id')],
-    );
+    const verdict = classifySinkAgreement([row('ghost', 'id', 'fail')], [col('id')]);
     expect(verdict.agrees).toBe(false);
     expect(verdict.disagreements).toContainEqual({ kind: 'sink_undeclared', columns: ['ghost'] });
   });
 
   it('disagrees when a NOT NULL column is written by nothing', () => {
     const verdict = classifySinkAgreement(
-      [{ sink: 'id', source: 'id', onError: 'fail' }],
+      [row('id', 'id', 'fail')],
       [col('id'), col('required', false)],
     );
     expect(verdict.agrees).toBe(false);
@@ -106,7 +111,7 @@ describe('classifySinkAgreement', () => {
 
   it('keeps a NULLABLE unwritten column informational — the copy still runs', () => {
     const verdict = classifySinkAgreement(
-      [{ sink: 'id', source: 'id', onError: 'fail' }],
+      [row('id', 'id', 'fail')],
       [col('id'), col('spare', true)],
     );
     expect(verdict.agrees).toBe(true);
@@ -118,10 +123,7 @@ describe('classifySinkAgreement', () => {
 
   it('disagrees when two rows write one column under different spellings', () => {
     const verdict = classifySinkAgreement(
-      [
-        { sink: 'id', source: 'a', onError: 'fail' },
-        { sink: 'ID', source: 'b', onError: 'fail' },
-      ],
+      [row('id', 'a', 'fail'), row('ID', 'b', 'fail')],
       [col('id')],
     );
     expect(verdict.agrees).toBe(false);

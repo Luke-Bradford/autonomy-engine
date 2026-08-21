@@ -165,10 +165,7 @@ function ReferenceList({ refs }: { refs: DatasetReferencesResponse }) {
           {refs.dynamic.length} node
           {refs.dynamic.length === 1 ? '' : 's'} choose their dataset with an expression, so whether
           they use this one is only known when they run:{' '}
-          {refs.dynamic
-            .map((d) => `${d.pipelineName} · ${d.nodeId} (${d.end})`)
-            .join(', ')}
-          .
+          {refs.dynamic.map((d) => `${d.pipelineName} · ${d.nodeId} (${d.end})`).join(', ')}.
         </p>
       )}
     </>
@@ -231,7 +228,9 @@ function MappingVerdict({ reference }: { reference: DatasetReference }) {
       {agreement.informational.length > 0 && (
         <ul className="plain-list">
           {agreement.informational.map((note) => (
-            <li key={`${note.kind}:${note.columns.join(',')}`}>{NOTE_PROSE[note.kind](note.columns)}</li>
+            <li key={`${note.kind}:${note.columns.join(',')}`}>
+              {NOTE_PROSE[note.kind](note.columns)}
+            </li>
           ))}
         </ul>
       )}

@@ -43,13 +43,7 @@ function table(db: Db, connectionId: string, columns: Dataset['columns'], name =
 }
 
 /** A `copy` node bound to `source`/`sink`, carrying `mapping` verbatim. */
-function copyNode(
-  source: string,
-  sink: string,
-  mapping: unknown,
-  id = 'n1',
-  type = 'copy',
-): Node {
+function copyNode(source: string, sink: string, mapping: unknown, id = 'n1', type = 'copy'): Node {
   return {
     id,
     type,
@@ -71,7 +65,11 @@ function versionOf(db: Db, pipelineId: string, nodes: Node[]): string {
   }).id;
 }
 
-function pipelineWith(db: Db, nodes: Node[], name = 'P'): { pipelineId: string; versionId: string } {
+function pipelineWith(
+  db: Db,
+  nodes: Node[],
+  name = 'P',
+): { pipelineId: string; versionId: string } {
   const pipeline = createPipeline(db, { ownerId: OWNER, name });
   return { pipelineId: pipeline.id, versionId: versionOf(db, pipeline.id, nodes) };
 }
@@ -287,7 +285,10 @@ describe('datasetReferences (#996 M9)', () => {
     // `if` declares no `datasetKinds`, so its refs are never dispatched — and
     // reporting one would manufacture an `unreadable` copy that does not exist.
     pipelineWith(db, [
-      { ...copyNode(ds.id, ds.id, undefined, 'n1', 'if'), config: { condition: '${params.which}' } },
+      {
+        ...copyNode(ds.id, ds.id, undefined, 'n1', 'if'),
+        config: { condition: '${params.which}' },
+      },
     ]);
 
     const result = datasetReferences(db, OWNER, ds);

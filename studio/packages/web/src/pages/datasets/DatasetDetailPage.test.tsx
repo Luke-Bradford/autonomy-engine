@@ -112,7 +112,9 @@ describe('DatasetDetailPage (#996 M9)', () => {
     });
     renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
 
-    expect(await screen.findByText(/unreadable — this node declares no column mapping/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/unreadable — this node declares no column mapping/),
+    ).toBeInTheDocument();
     expect(screen.queryByText('agrees')).not.toBeInTheDocument();
   });
 
