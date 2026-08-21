@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import {
   DATASET_CONNECTION_KINDS,
   DATASET_KINDS,
@@ -310,7 +311,9 @@ export function DatasetsPage() {
           <tbody>
             {datasets.map((dataset) => (
               <tr key={dataset.id}>
-                <td>{dataset.name}</td>
+                <td>
+                  <Link to={dataset.id}>{dataset.name}</Link>
+                </td>
                 <td>
                   <code>{dataset.kind}</code>
                 </td>
