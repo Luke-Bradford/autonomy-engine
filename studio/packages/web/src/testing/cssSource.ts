@@ -118,8 +118,7 @@ export function ruleBody(css: string, selector: string): string {
   const matches = heads.filter((h) => h.selectors.includes(wanted));
   if (matches.length > 1) {
     throw new Error(
-      `\`${wanted}\` is declared by ${String(matches.length)} rules; ` +
-        `no single body to return`,
+      `\`${wanted}\` is declared by ${String(matches.length)} rules; ` + `no single body to return`,
     );
   }
   const hit = matches[0];
