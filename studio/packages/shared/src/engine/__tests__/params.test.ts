@@ -898,6 +898,34 @@ describe('M3 (#1117) — datasetIds ${} refs at SAVE time', () => {
     expect(errors[0]).toMatch(/nodes\.n\.datasetIds\.sink/);
   });
 
+  // M12 slice 1 (#1220) — a SOURCE-ONLY binding is valid, so the sink end of the
+  // scan loop now sees `undefined`. This pins the CONTRACT rather than a guard:
+  // the loop deliberately carries no `if (end === undefined) continue`, because
+  // `scan` already no-ops on an undefined value and an explicit skip measured
+  // byte-identical. What must never happen is a spurious diagnostic on a node
+  // that is correctly authored — so if `scan` ever starts erroring on undefined,
+  // this test is what catches it instead of an operator.
+  it('M12 (#1220) — a SOURCE-ONLY binding raises nothing, and still checks its source', () => {
+    const sourceOnly = (source: string) => ({ ...node('n', {}), datasetIds: { source } });
+
+    expect(validateRefs(doc([sourceOnly('ds-a')], []))).toEqual([]);
+    expect(
+      validateRefs(
+        doc(
+          [sourceOnly('${params.target}')],
+          [],
+          [{ name: 'target', type: 'string', required: true }],
+        ),
+      ),
+    ).toEqual([]);
+
+    // The surviving end is still scanned — a source-only pair is not a way to
+    // smuggle an undeclared ref past the check.
+    const bad = validateRefs(doc([sourceOnly('${params.nope}')], []));
+    expect(bad).toHaveLength(1);
+    expect(bad[0]).toMatch(/nodes\.n\.datasetIds\.source/);
+  });
+
   it('REJECTS a malformed ${} expression on either end', () => {
     expect(validateRefs(doc([dsNode('n', '${params.a[0}', 'ds-b')], []))).toHaveLength(1);
     expect(validateRefs(doc([dsNode('n', 'ds-a', '${params.a[0}')], []))).toHaveLength(1);

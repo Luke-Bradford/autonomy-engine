@@ -1361,15 +1361,17 @@ export function validateRefs(
     // credential lives on the connection the dataset names).
     if (node.datasetIds !== undefined) {
       for (const side of ['source', 'sink'] as const) {
-        // M12 slice 1 (#1220) — `sink` is optional, so a source-only binding has
-        // nothing to scan on that side. Skipping the END rather than narrowing
-        // the loop keeps the per-side path above intact, which is what makes a
-        // diagnostic name the side that is actually wrong.
-        const end = node.datasetIds[side];
-        if (end === undefined) continue;
+        // M12 slice 1 (#1220) — `sink` is now optional, so `end` may be
+        // `undefined` for a source-only binding. Deliberately NO guard here:
+        // `scan` already no-ops on an undefined value (it matches no branch and
+        // pushes no error), which was MEASURED rather than assumed — an explicit
+        // `continue` produced byte-identical output and would have been a guard
+        // that guards nothing. The contract is pinned by test instead, so a
+        // future `scan` that started erroring on undefined is caught here rather
+        // than by a spurious diagnostic on a valid source-only node.
         scan(
           `nodes.${node.id}.datasetIds.${side}`,
-          end,
+          node.datasetIds[side],
           scope,
           errors,
           0,
