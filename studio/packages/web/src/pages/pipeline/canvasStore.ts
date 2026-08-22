@@ -1756,14 +1756,24 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // `toEqual` unnoticed and reaches `JSON.stringify` as a dropped key.
         // `portability/export.ts`'s `stripNodeDatasetIds` uses this idiom for
         // the same reason.
+        //
+        // A source-only binding DROPS any sink it inherited, rather than
+        // carrying it forward. Reachable through an imported or API-seeded doc:
+        // `current` spreads the node's existing pair, so editing only the source
+        // of a node whose entry declares no sink would re-commit the stale sink
+        // — and no picker is rendered for that end, so nothing could ever clear
+        // it. Inert at dispatch (the executor resolves a sink dataset only when
+        // the catalog declares the kinds), but "only a complete binding reaches
+        // the doc" should be true because this function makes it true, not
+        // because a later layer ignores the difference.
         const bound =
           source === undefined
             ? undefined
-            : sink !== undefined
-              ? { source, sink }
-              : needsBothEnds
-                ? undefined
-                : { source };
+            : !needsBothEnds
+              ? { source }
+              : sink !== undefined
+                ? { source, sink }
+                : undefined;
         const complete = bound !== undefined;
         const wasCommitted = committed !== undefined;
         if (complete || wasCommitted) {

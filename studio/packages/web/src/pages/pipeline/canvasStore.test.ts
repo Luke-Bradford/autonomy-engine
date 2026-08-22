@@ -3084,6 +3084,29 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(store.getState().pendingBindings['l']).toBeUndefined();
   });
 
+  it('DROPS a sink a source-only node inherited, rather than carrying it forward', () => {
+    // Reachable through an imported or API-seeded doc: the edit spreads the
+    // node's existing pair, so editing only the source would otherwise re-commit
+    // a stale sink that no rendered picker can ever clear.
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'l',
+          type: 'lookup',
+          config: {},
+          datasetIds: { source: 'ds_old', sink: 'ds_stale' },
+          position: { x: 0, y: 0 },
+        },
+      ] as never,
+    });
+    store.getState().setNodeBindingEnd('l', 'datasets', 'source', 'ds_new');
+
+    const bound = store.getState().nodes[0]!.datasetIds;
+    expect(bound).toEqual({ source: 'ds_new' });
+    expect('sink' in (bound as object)).toBe(false);
+  });
+
   it('still requires BOTH ends for a paired activity, and for an UNKNOWN type', () => {
     // The other half of the same rule. The unknown-type case is the fail-safe
     // direction: requiring both ends of something that needs one leaves a node
