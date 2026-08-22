@@ -352,3 +352,45 @@ describe('U6c container fill', () => {
     expect(Number(alpha![1])).toBeLessThan(0.2);
   });
 });
+
+/**
+ * #1239 — the page-header back link's chip.
+ *
+ * `.page-back` is the only thing standing between `← All runs` and the UA link
+ * colour, because this file declares no global `a` rule. Deleting the rule, or
+ * dropping `text-decoration`, is a visible regression in both themes that
+ * nothing else here would catch: the unit specs assert role and `href`, and the
+ * e2e asserts the RESOLVED colours — but only in a browser, so this is the
+ * guard that reds in milliseconds when the rule is edited by hand.
+ */
+describe('the page-header back link', () => {
+  const body = ruleBody(css, '.page-back');
+
+  it.each([
+    ['background', /background:\s*var\(--panel-2\)/],
+    ['colour', /color:\s*var\(--text\)/],
+    ['border', /border:\s*1px solid var\(--border\)/],
+    ['undecorated', /text-decoration:\s*none/],
+    ['inherited font', /font:\s*inherit/],
+  ])('declares its %s from the palette', (_what, pattern) => {
+    expect(body).toMatch(pattern);
+  });
+
+  /** The box has to match the global `button` rule, or the chip visibly moves. */
+  it('keeps the same padding and radius as the button chip it replaced', () => {
+    /* The leading newline anchors the selector to the start of a line, so this
+       reads the BARE `button` element rule. `ruleBody` matches on `indexOf`, so
+       a plain `'button'` finds `.icon-button {` first and would compare against
+       the wrong chip entirely — it did, on the first run of this test (#1243). */
+    const button = ruleBody(css, '\nbutton');
+    for (const property of ['border-radius', 'padding']) {
+      const read = (text: string) =>
+        new RegExp(`${property}:\\s*([^;]+);`).exec(text)?.[1]?.trim();
+      expect(read(body), `.page-back ${property}`).toBe(read(button));
+    }
+  });
+
+  it('hardcodes no colour', () => {
+    expect(findColorLiterals(body)).toEqual([]);
+  });
+});

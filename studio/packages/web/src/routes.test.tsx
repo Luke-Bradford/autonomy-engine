@@ -332,6 +332,20 @@ describe('route tree', () => {
   });
 
   /**
+   * #1239 — the run page's back control became an anchor, and an anchor's href
+   * is only half the claim: it has to LAND on the runs list. Asserted against
+   * the real route table rather than a stub router, because that is the only
+   * thing that can tell a working link from one pointing at a path nothing
+   * matches (which the catch-all would quietly send Home).
+   */
+  it('the run page’s back link lands on the runs list', async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt('/monitor/runs/run_42');
+    await user.click(await page().findByRole('link', { name: '← All runs' }));
+    expect(router.state.location.pathname).toBe('/monitor/runs');
+  });
+
+  /**
    * U4 — the canvas has an address. Before it, the open pipeline was local
    * state inside `PipelinesPage`, so this path matched nothing and the
    * catch-all sent it to Home.

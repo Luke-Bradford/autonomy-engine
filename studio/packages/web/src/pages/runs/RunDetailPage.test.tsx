@@ -151,6 +151,23 @@ describe('RunDetailPage', () => {
   });
 
   /**
+   * #1239 — the page header's back control was the LAST `navigate()`-on-a-button
+   * in `packages/web/src`'s run surface, so it alone could not be
+   * middle-clicked, copied or opened in a new tab. Pinned by ROLE and `href`, so
+   * a regression to a button reds here. Where the click LANDS is asserted in
+   * `routes.test.tsx` against the real route table, per `renderWithRouter`'s own
+   * rule that navigation belongs there; what this owns is that the control is an
+   * anchor at all, and that it carries the class the chip depends on.
+   */
+  it('renders the back control as a link with a real href', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const back = await screen.findByRole('link', { name: '← All runs' });
+    expect(back).toHaveAttribute('href', '/monitor/runs');
+    expect(back).toHaveClass('page-back');
+    expectAccessibleNameContainsText(back);
+  });
+
+  /**
    * U25 — the page had TWO answers for one node, and this is the one that read
    * as a lie: the fixture doc routes `greet --failure--> never`, so a run in
    * which `greet` succeeds leaves `never` skipped. The graph painted it grey;

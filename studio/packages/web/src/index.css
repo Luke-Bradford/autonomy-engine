@@ -817,6 +817,50 @@ body {
   justify-content: space-between;
 }
 
+/* #1239 — the ONE treatment for a back link that sits in a page header.
+
+   `← All runs` was a `<button>` running `navigate()`, so it could not be
+   middle-clicked, copied or opened in a new tab. Converting it to an anchor is
+   a RESTYLE as well as a semantics fix, because there is no global `a` rule in
+   this file — only container-scoped ones (`.hub-cards a`, `.recent-runs a`,
+   `.command-bar__breadcrumb a`) — so a bare anchor takes the UA link colour,
+   which `color-scheme` then resolves differently per theme. This rule is what
+   keeps the chip.
+
+   The box is the global `button` rule's, property for property, so the control
+   is visually unchanged where it already sat next to header buttons. The
+   TYPOGRAPHY is not: nothing in this file resets button typography, so the
+   `<button>` was rendering in the UA's own button font while an anchor inherits
+   `:root`'s. Pinning `font: inherit` + `0.85rem` — the same pin
+   `.factory-resources__filter` and the flat icon buttons use — puts it on the
+   app's font deliberately, rather than letting the family change fall out of
+   the element swap unnoticed.
+
+   An explicit class rather than `.page-header a`: `.page-header` is a layout
+   wrapper used on 18 pages and holds whatever a page puts there, so a
+   descendant selector would silently turn a future breadcrumb or docs link into
+   a chip. The two container-scoped anchor rules above are containers that exist
+   to hold exactly those anchors; this one is not.
+
+   Note an anchor activates on Enter only, where a button also took Space. That
+   is correct anchor semantics — this control navigates — and the UA focus ring
+   is unaffected by `text-decoration: none`, so the keyboard affordance survives
+   the conversion. */
+.page-back {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  text-decoration: none;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.page-back:hover {
+  border-color: var(--accent);
+}
+
 .page-hint {
   color: var(--muted);
   max-width: 60ch;
