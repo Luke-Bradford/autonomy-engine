@@ -384,8 +384,7 @@ describe('the page-header back link', () => {
        the wrong chip entirely — it did, on the first run of this test (#1243). */
     const button = ruleBody(css, '\nbutton');
     for (const property of ['border-radius', 'padding']) {
-      const read = (text: string) =>
-        new RegExp(`${property}:\\s*([^;]+);`).exec(text)?.[1]?.trim();
+      const read = (text: string) => new RegExp(`${property}:\\s*([^;]+);`).exec(text)?.[1]?.trim();
       expect(read(body), `.page-back ${property}`).toBe(read(button));
     }
   });

@@ -436,7 +436,10 @@ export function TriggersPage() {
                   on the arrow alone. `ImportPanel`'s `Manage → Connections` links
                   already carry an arrow in their accessible name, so this is the
                   idiom rather than an exception to it. */}
-              <Link to={runDetailPath(watchRunId)} aria-label={runLinkLabel('Watch live →', watchRunId)}>
+              <Link
+                to={runDetailPath(watchRunId)}
+                aria-label={runLinkLabel('Watch live →', watchRunId)}
+              >
                 Watch live →
               </Link>
             </>

@@ -33,7 +33,9 @@ describe('expectAccessibleNameContainsText', () => {
   /** The defect that shipped: a separator glyph the DOM does not use. */
   it('REDS when a separator glyph differs from the rendered one', () => {
     expect(() =>
-      expectAccessibleNameContainsText(el('<a aria-label="Watch live — run run_9">Watch live →</a>')),
+      expectAccessibleNameContainsText(
+        el('<a aria-label="Watch live — run run_9">Watch live →</a>'),
+      ),
     ).toThrow(/does not contain visible text/);
   });
 
