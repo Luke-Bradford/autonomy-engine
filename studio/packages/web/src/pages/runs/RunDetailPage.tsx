@@ -5,7 +5,7 @@ import {
   TERMINAL_RUN_STATUS,
 } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
@@ -454,6 +454,40 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 <button type="button" onClick={() => void navigate(runDetailPath(rerunOf))}>
                   <code>{rerunOf}</code>
                 </button>
+              </dd>
+            </>
+          )}
+          {/* #1231 / U20 — the drill UP, and the only place a child run says it
+              IS one. `parentRunId` has been on the row since #796 stamped it and
+              was read by nothing: the runs list's Child tab could say a run was
+              a child and never whose.
+
+              Same rule as the `Rerun of` row above — the row is ABSENT on a run
+              nothing called, rather than present reading "—", because this list
+              is the one surface every run shares and a permanent empty row is
+              noise on all of them.
+
+              A `<Link>`, not that row's `navigate`-on-a-button. The anchor is
+              the correct control for going somewhere (hover, copy, middle-click,
+              new tab), it is what six of the seven run-navigation sites in the
+              app already use, and `RunsPage`'s Watch cell records the argument
+              in place. The button beside it is the older idiom and is left
+              alone: converting it churns a control RS2's tests pin by role, for
+              no gain to this ticket. Filed rather than folded in.
+
+              The list is gated on the run ROW alone, so this renders on the
+              doc-resolution fallback too — which is when a failed child most
+              needs a way back to whatever called it. */}
+          {run.parentRunId !== null && (
+            <>
+              <dt>Called by</dt>
+              <dd>
+                <Link
+                  to={runDetailPath(run.parentRunId)}
+                  aria-label={`Parent run ${run.parentRunId}`}
+                >
+                  <code>{run.parentRunId}</code>
+                </Link>
               </dd>
             </>
           )}

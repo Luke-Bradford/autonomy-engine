@@ -84,7 +84,12 @@ export const RUN_TAB_HINT: Record<RunTab, string> = {
   all: 'Every run, whatever started it',
   triggered: 'Started by a trigger, including a manual fire of one',
   manual: 'Runs with no trigger — today, reruns',
-  child: 'Runs spawned by a parent pipeline (not yet produced — see #796)',
+  // #1231 — the parenthetical was a live falsehood on the operator's own strip:
+  // #796 landed the spawn seam on 2026-08-12 and this tab has been populated
+  // since, as this module's own docblock already recorded. A hint that tells a
+  // reader an empty tab is empty BY DESIGN is worse than none, because it stops
+  // them looking for the reason it is actually empty.
+  child: 'Runs spawned by a parent pipeline, which name their caller',
 };
 
 /**
