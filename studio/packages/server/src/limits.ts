@@ -250,5 +250,14 @@ export const LOOKUP_ROW_CAP = 1000;
  * be the drift, not the consistency.
  *
  * 1 MiB, per §5. It is a bound on ONE node's outputs, not on the run.
+ *
+ * WHAT IT DOES NOT BOUND, said out loud rather than left to be discovered: it
+ * caps what is ADMITTED, not what is MATERIALISED. The row is normalised and
+ * serialised in full before the check that rejects it, so peak memory for a
+ * lookup is governed by the largest single ROW in the source. The file kinds
+ * cannot reach that (`XLSX_MAX_CELL_CHARS` and `delimited`'s bounds already cap
+ * a cell), but a sqlite `BLOB` or a postgres `bytea` has no ceiling. Filed as
+ * #1224 — it is an availability gap rather than a correctness one, and the fix
+ * probably belongs at the READER seam where the file kinds already put it.
  */
 export const LOOKUP_BYTE_CAP = 1024 * 1024;
