@@ -1,11 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { expectAccessibleNameContainsText } from './accessibleName';
 
+/**
+ * Build the single element a fixture describes.
+ *
+ * The null check is not defensive noise: `firstElementChild` is `null` for HTML
+ * the parser rejects or drops, and a cast would hand that `null` to the helper
+ * under test, where it surfaces as a `TypeError` on `.textContent`. In a
+ * `not.toThrow()` case that reads as the helper being broken; in the `toThrow`
+ * cases it is a throw for the wrong reason, which the message pattern happens to
+ * catch today only because it is specific. Refusing here names the fixture as
+ * the culprit instead.
+ */
 function el(html: string): HTMLElement {
   const host = document.createElement('div');
   host.innerHTML = html;
-  return host.firstElementChild as HTMLElement;
+  const first = host.firstElementChild;
+  if (first === null) {
+    throw new Error(`el: fixture parsed to no element: ${JSON.stringify(html)}`);
+  }
+  return first as HTMLElement;
 }
+
+describe('el (the fixture builder)', () => {
+  it('REFUSES html that parses to no element, rather than passing null on', () => {
+    expect(() => el('   ')).toThrow(/parsed to no element/);
+  });
+});
 
 describe('expectAccessibleNameContainsText', () => {
   it('passes when the name contains the visible text', () => {
