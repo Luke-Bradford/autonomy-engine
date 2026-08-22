@@ -307,6 +307,37 @@ describe('naming the columns', () => {
     ]);
   });
 
+  it('SKIPS a leading blank row before taking the headerless width', async () => {
+    // A bare `<row r="1"/>` is a formatting artifact Excel emits constantly, and
+    // with `header: false` the first row is also the WIDTH source. Naming from
+    // it yields ZERO columns, and every real row below then refuses as "carries
+    // 2 cells but the source has 0 columns" — a whole sheet rejected because
+    // somebody once set a row height. The width comes from the first row that
+    // CARRIES something, which is the same rule the data path already applies.
+    const path = await seed(
+      'b.xlsx',
+      book({ rows: [[blank], [num(1), text('alpha')], [num(2), text('beta')]] }),
+    );
+    expect(await rowsOf(read(path, { header: false }))).toEqual([
+      { column1: 1, column2: 'alpha' },
+      { column1: 2, column2: 'beta' },
+    ]);
+    expect(await describeExcelDatasetColumns(read(path, { header: false }))).toEqual([
+      'column1',
+      'column2',
+    ]);
+  });
+
+  it('refuses a sheet whose rows are ALL blank, distinctly from one with no rows', async () => {
+    // Not `noRowsError` — the sheet HAS rows, and telling an operator it
+    // "contains no rows" would send them looking for a file that is empty when
+    // the file is not.
+    const path = await seed('b.xlsx', book({ rows: [[blank], [blank]] }));
+    const err = await refusalOf(() => rowsOf(read(path, { header: false })));
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(/has rows but every one of them is blank/);
+  });
+
   it('takes the headerless WIDTH from a blank predicate, not from the naming rules', async () => {
     // A date or an error in row 1 is a perfectly good DATA value; only a header
     // cell has to become a name. Deriving the width through the naming path

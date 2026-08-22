@@ -428,25 +428,39 @@ async function* namedRows(
   for await (const batch of rows) {
     const bound: Record<string, unknown>[] = [];
     for (const row of batch) {
-      if (names === undefined) {
-        if (config.header) {
-          if (row.rowNumber < config.headerRow) {
-            lastSeen = row.rowNumber;
-            continue; // a title row above the header
-          }
-          if (row.rowNumber > config.headerRow) {
-            throw noHeaderRowError(subject, config.headerRow, lastSeen);
-          }
+      // THE HEADER BRANCH IS SEPARATE, and that is the whole reason for the
+      // shape: below this, ONE blank-row skip serves both the data rows and the
+      // headerless width row, because they want the same rule. Up here the rule
+      // is the opposite — a blank row AT `headerRow` must REFUSE (which
+      // `namesFrom` does, via the shared "names no columns" message) rather than
+      // be skipped, since skipping it would silently promote the next row, real
+      // data, into the column names.
+      if (names === undefined && config.header) {
+        if (row.rowNumber < config.headerRow) {
+          lastSeen = row.rowNumber;
+          continue; // a title row above the header
+        }
+        if (row.rowNumber > config.headerRow) {
+          throw noHeaderRowError(subject, config.headerRow, lastSeen);
         }
         lastSeen = row.rowNumber;
-        names = namesFrom(config.header, row, subject);
+        names = namesFrom(true, row, subject);
         onNames?.(names);
-        // With `header: true` the naming row is consumed. With `header: false`
-        // it is DATA as well as the width source, so it falls through.
-        if (config.header) continue;
+        continue; // the header row is consumed, never copied
       }
+
       lastSeen = row.rowNumber;
       if (isBlankRow(row)) continue;
+      if (names === undefined) {
+        // Headerless: the width comes from the first row that CARRIES
+        // something, and this row is DATA as well, so it falls through. Taking
+        // it from a LEADING BLANK row instead would name zero columns and then
+        // refuse every real row below as "carries 2 cells but the source has 0
+        // columns" — a whole sheet rejected because somebody once set a row
+        // height.
+        names = namesFrom(false, row, subject);
+        onNames?.(names);
+      }
       bound.push(bindExcelRow(names, row, subject));
     }
 
@@ -461,10 +475,22 @@ async function* namedRows(
   }
 
   if (names === undefined) {
-    // Either the sheet has no rows at all, or it has rows and stopped short of
-    // `headerRow`. Two different facts, two different sentences.
-    if (config.header && lastSeen > 0 && lastSeen < config.headerRow) {
+    // THREE different facts, three different sentences — a sheet that has rows
+    // must never be told it has none, because that sends an operator looking
+    // for an empty file when the file is not empty.
+    //
+    // With `header: true`, reaching here with any row seen means the sheet
+    // stopped SHORT of `headerRow`; a sheet that stepped over it already threw
+    // inside the loop, and one that reached it has names.
+    if (config.header && lastSeen > 0) {
       throw noHeaderRowError(subject, config.headerRow, lastSeen);
+    }
+    // With `header: false`, it means every row present was blank.
+    if (lastSeen > 0) {
+      throw new DatasetIoError(
+        'permanent',
+        `${subject} has rows but every one of them is blank, so its columns cannot be counted`,
+      );
     }
     throw noRowsError(subject, config.header);
   }
