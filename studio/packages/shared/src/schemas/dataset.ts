@@ -146,3 +146,27 @@ export const NewDatasetSchema = DatasetSchema.omit({
 // uses the PRE-parse type, so a field with `.default()` stays optional for
 // callers instead of appearing spuriously required.
 export type NewDataset = z.input<typeof NewDatasetSchema>;
+
+/**
+ * #1218 — what a `POST /api/datasets/sheets` call answers: the worksheet names
+ * of an `excel` dataset's workbook, so the `sheet` field can be CHOSEN rather
+ * than typed blind.
+ *
+ * The union — and the fact that a refusal travels as a 200 with `ok:false`
+ * rather than a 4xx — is `ConnectionProbeResultSchema`'s, deliberately. Every
+ * way this can fail is an ordinary authoring condition (the path is still being
+ * typed, the file is not there yet, the workbook is not a workbook), not a
+ * client protocol error, and the form renders all of them in ONE place.
+ *
+ * `sheets` elements are `z.string()` and NOT `.min(1)`. Excel cannot author an
+ * empty worksheet name, so this only concerns a malformed container — and
+ * `.min(1)` would make ONE such name fail the parse of the whole response,
+ * turning "one odd sheet" into "this workbook cannot be inspected at all". The
+ * empty name is reported truthfully and the FORM declines to offer it, which is
+ * the narrow response to a narrow fault.
+ */
+export const DatasetSheetsResultSchema = z.union([
+  z.object({ ok: z.literal(true), sheets: z.array(z.string()) }),
+  z.object({ ok: z.literal(false), error: z.string().min(1) }),
+]);
+export type DatasetSheetsResult = z.infer<typeof DatasetSheetsResultSchema>;

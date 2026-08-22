@@ -6,9 +6,9 @@ import {
   type DatasetAddress,
   type DatasetKind,
 } from '@autonomy-studio/shared';
-import { openConfinedFd, resolveWithinRoots } from './confine.js';
+import { confineFsPath, openConfinedFd } from './confine.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import { classifyFsError, fsConnectionConfigSchema, isAbortError } from './fs-connection.js';
+import { classifyFsError, isAbortError } from './fs-connection.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { headerNames, noRowsError, positionalNames } from './source-columns.js';
 import { readXlsxRowBatches, XlsxReadError, type XlsxCell, type XlsxRow } from './xlsx-read.js';
@@ -162,13 +162,6 @@ async function prepareRead(read: ExcelDatasetRead): Promise<{
       `the excel reader reads 'excel' datasets; this one is '${read.datasetKind}'`,
     );
   }
-  const cfg = fsConnectionConfigSchema.safeParse(read.connectionConfig);
-  if (!cfg.success) {
-    throw new DatasetIoError(
-      'permanent',
-      `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`,
-    );
-  }
   const config = excelDatasetConfigSchema.safeParse(read.datasetConfig);
   if (!config.success) {
     throw new DatasetIoError(
@@ -177,16 +170,19 @@ async function prepareRead(read: ExcelDatasetRead): Promise<{
     );
   }
 
-  let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
-  try {
-    confined = await resolveWithinRoots(cfg.data.roots, config.data.path, 'fs');
-  } catch (err) {
-    // `resolveWithinRoots` leaves `realpath` on the target's PARENT unguarded on
-    // purpose, so a missing or unreadable directory arrives as a raw errno; its
-    // docblock says every caller owes this wrapper.
-    throw readFailure(err, read.signal, `the excel file '${config.data.path}'`);
+  // The fs-config parse and the confinement are `confineFsPath`'s (#1218), which
+  // also carries the try/catch `resolveWithinRoots`'s docblock requires — it
+  // leaves `realpath` on the target's PARENT unguarded on purpose, so a missing
+  // or unreadable directory arrives as a raw errno. The three-case outcome is
+  // what lets this reader keep classifying that errno through `readFailure`
+  // (which may call it TRANSIENT) while a policy refusal stays permanent.
+  const confined = await confineFsPath(read.connectionConfig, config.data.path);
+  if (!confined.ok) {
+    if (confined.kind === 'errno') {
+      throw readFailure(confined.cause, read.signal, `the excel file '${config.data.path}'`);
+    }
+    throw new DatasetIoError('permanent', confined.error);
   }
-  if (!confined.ok) throw new DatasetIoError('permanent', confined.error);
   return { path: confined.path, config: config.data };
 }
 
