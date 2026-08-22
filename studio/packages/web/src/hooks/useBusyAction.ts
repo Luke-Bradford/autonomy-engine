@@ -26,6 +26,26 @@ import { useCallback, useRef, useState } from 'react';
  * WHY A SET AND NOT A COUNTER. Callers need to ask about ONE row
  * (`active.has(id)`), and rows complete out of order.
  *
+ * DELIBERATELY NOT MIGRATED, and why — `useGuardedLoad` sets this convention,
+ * because the omissions are the part a later reader cannot reconstruct:
+ *
+ *   - `FactoryResources`'s Export. It is a Fluent `<MenuItem>`, and
+ *     `useMenuItemBase` calls `setOpen(event, {open: false})` BEFORE delegating
+ *     to the handler, so the item unmounts on the first click. There is no
+ *     second click to guard, and a guard there would be dead code that no test
+ *     could redden.
+ *   - `TriggersPage`'s `onFire`/`firingId`. This one IS the page-wide flag this
+ *     hook argues against, and firing a second trigger while the first is in
+ *     flight really is silently ignored. It is not a drop-in swap, though: the
+ *     page reports a fire through ONE `actionMsg` slot and ONE `watchRunId`,
+ *     so permitting concurrent fires would let the later outcome overwrite the
+ *     earlier one — losing a run link the operator was given. Deciding what the
+ *     page says about two fires at once is a design question, not a migration.
+ *     Tracked as #1247.
+ *
+ * `ConnectionsPage.onDelete` — the handler this hook was extracted FROM — is
+ * migrated, and keeps its no-affordance shape: its dialog is the feedback.
+ *
  * THE CALLER OWNS ERROR REPORTING. `run` releases the id in a `finally` and then
  * re-throws whatever `act` threw; it does not catch. Every current caller's `act`
  * already try/catches into that page's own error slot, which is why the call

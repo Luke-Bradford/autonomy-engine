@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
@@ -306,23 +306,21 @@ export function ConnectionsPage() {
    * it 404s into `loadError` — an error banner over an operation that in fact
    * succeeded.
    *
-   * A REF rather than state, because it has to be read and written
-   * SYNCHRONOUSLY inside one handler, before any await. A `useState` flag would
-   * not have re-rendered by the time the second click's handler runs, which is
-   * the entire window being closed.
+   * The guard itself now lives in `useBusyAction`, which was extracted from this
+   * handler in #960 and carries both of its arguments — the ref (read and
+   * written SYNCHRONOUSLY inside one handler, before any await, because a
+   * `useState` flag would not have re-rendered by the time the second click's
+   * handler runs) and the per-id keying (the race is one ROW being deleted
+   * twice, not the page being used twice).
    *
-   * Keyed BY CONNECTION ID rather than a single page-wide flag: the race is one
-   * row being deleted twice, not the page being used twice. A page-wide flag
-   * would make a click on a second row during the first row's dataset read a
-   * silent no-op — no dialog, no error — which reads as a dead button.
+   * Delete deliberately gains no `disabled` affordance here: its dialog is the
+   * feedback, and the guard's whole purpose is to suppress the SECOND dialog.
    */
-  const deleting = useRef(new Set<string>());
+  const { run: runDelete } = useBusyAction();
 
   const onDelete = useCallback(
-    async (conn: ConnectionPublic) => {
-      if (deleting.current.has(conn.id)) return;
-      deleting.current.add(conn.id);
-      try {
+    (conn: ConnectionPublic) =>
+      runDelete(conn.id, async () => {
         let check: StrandCheck;
         try {
           check = {
@@ -339,11 +337,8 @@ export function ConnectionsPage() {
         } catch (err) {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
-      } finally {
-        deleting.current.delete(conn.id);
-      }
-    },
-    [refresh],
+      }),
+    [runDelete, refresh],
   );
 
   return (
