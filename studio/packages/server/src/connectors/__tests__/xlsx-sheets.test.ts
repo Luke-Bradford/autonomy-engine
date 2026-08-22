@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openConfinedFd } from '../confine.js';
 import { listSheetsForConnection } from '../xlsx-sheets.js';
-import { buildXlsx } from './xlsx-fixtures.js';
+import { buildXlsx, buildZip } from './xlsx-fixtures.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 
 /**
@@ -186,6 +186,42 @@ describe('listSheetsForConnection', () => {
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error.length).toBeGreaterThan(0);
+  });
+
+  it('reads xl/workbook.xml ALONE — a corrupt shared-string table cannot stop it', async () => {
+    // The BOUND, pinned. `readWorkbookParts` goes on to inflate
+    // `xl/sharedStrings.xml` at `XLSX_MAX_SHARED_STRINGS_BYTES` (64 MiB) and the
+    // style table, and `walkXml` parses a part SYNCHRONOUSLY with no signal
+    // check — so on an authoring route, where the path is operator-supplied,
+    // that read is the whole exposure and no timeout could interrupt it.
+    // `listXlsxSheetNames` therefore calls `readWorkbookIndex`, which touches
+    // only `xl/workbook.xml`.
+    //
+    // A CORRUPT shared-string entry is the lever: it fails at inflate, so this
+    // test goes red the moment anything reads that part again. Without it the
+    // bound is invisible — reverting to `readWorkbookParts` left the suite green.
+    await writeFile(
+      join(root, 'partial.xlsx'),
+      buildZip([
+        {
+          name: 'xl/workbook.xml',
+          data: '<workbook><sheets><sheet name="Only" r:id="rId1"/></sheets></workbook>',
+        },
+        {
+          name: 'xl/sharedStrings.xml',
+          data: '<sst count="1"><si><t>hello</t></si></sst>',
+          method: 'deflate',
+          corrupt: true,
+        },
+      ]),
+    );
+
+    const result = await listSheetsForConnection({
+      connection: { kind: 'fs', config: { roots: [root] } },
+      path: join(root, 'partial.xlsx'),
+    });
+
+    expect(result).toEqual({ ok: true, sheets: ['Only'] });
   });
 
   it('reports an empty sheet name truthfully rather than dropping it', async () => {
