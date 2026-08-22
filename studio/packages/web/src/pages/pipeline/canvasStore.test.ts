@@ -3063,6 +3063,56 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect(store.getState().pendingBindings['c']).toBeUndefined();
   });
 
+  it('commits a SOURCE-ONLY dataset binding for a source-only activity (#1221)', () => {
+    // The blocker M12 slice 2 exists to remove. Until now `complete` was
+    // `source !== undefined && sink !== undefined`, so a `lookup` — which
+    // declares no `datasetKinds.sink` — could never commit its `datasetIds` and
+    // sat permanently half-bound with no way to finish it.
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [{ id: 'l', type: 'lookup', config: {}, position: { x: 0, y: 0 } }],
+    });
+    store.getState().setNodeBindingEnd('l', 'datasets', 'source', 'ds_a');
+
+    const bound = store.getState().nodes[0]!.datasetIds;
+    expect(bound).toEqual({ source: 'ds_a' });
+    // ABSENT, not present-`undefined`. `toEqual` cannot tell those apart, and
+    // #1220 made `null` vs absent a meaningful distinction one layer down — a
+    // third spelling here would reach `JSON.stringify` as a dropped key.
+    expect('sink' in (bound as object)).toBe(false);
+    // Nothing is left half-picked, so the panel must not claim an unsaved pair.
+    expect(store.getState().pendingBindings['l']).toBeUndefined();
+  });
+
+  it('still requires BOTH ends for a paired activity, and for an UNKNOWN type', () => {
+    // The other half of the same rule. The unknown-type case is the fail-safe
+    // direction: requiring both ends of something that needs one leaves a node
+    // the author can see is unfinished, where accepting one end of something
+    // that needs two writes a doc the server refuses at save.
+    const store = setup();
+    store.getState().setNodeBindingEnd('c', 'datasets', 'source', 'ds_a');
+    expect(node(store).datasetIds).toBeUndefined();
+
+    const unknown = createCanvasStore();
+    unknown.setState({
+      nodes: [{ id: 'u', type: 'not_a_real_activity', config: {}, position: { x: 0, y: 0 } }],
+    });
+    unknown.getState().setNodeBindingEnd('u', 'datasets', 'source', 'ds_a');
+    expect(unknown.getState().nodes[0]!.datasetIds).toBeUndefined();
+  });
+
+  it('a source-only activity still cannot half-bind its CONNECTION pair', () => {
+    // `NodeSchema.connectionIds` was NOT widened by #1220 — only `datasetIds`
+    // was — so a source-only connection pair is not expressible, and relaxing
+    // this alongside the dataset rule would write a doc the server refuses.
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [{ id: 'l', type: 'lookup', config: {}, position: { x: 0, y: 0 } }],
+    });
+    store.getState().setNodeBindingEnd('l', 'connections', 'source', 'conn_a');
+    expect(store.getState().nodes[0]!.connectionIds).toBeUndefined();
+  });
+
   it('keeps connections and datasets independent', () => {
     const store = setup();
     store.getState().setNodeBindingEnd('c', 'datasets', 'source', 'ds_a');

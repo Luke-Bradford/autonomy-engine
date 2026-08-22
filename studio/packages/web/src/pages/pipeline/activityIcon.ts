@@ -6,6 +6,7 @@ import {
   BranchFork20Regular,
   Clock20Regular,
   Copy20Regular,
+  DatabaseArrowDown20Regular,
   DatabaseArrowRight20Regular,
   Delete20Regular,
   Document20Regular,
@@ -72,6 +73,16 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
      catch. A database with an outbound arrow says what a copy does — reads one
      store, writes another — where a pair of pages says only "duplicate". */
   copy: DatabaseArrowRight20Regular,
+  /* #1221 M12 — `lookup` reads a store and writes nowhere, so it is the INBOUND
+     twin of `copy`'s outbound arrow: the glyph says which way data moves, which
+     is the whole distinction between these two activities. It follows the map's
+     own established grammar rather than inventing one — `file_read` is already
+     `DocumentArrowDown`, so arrow-down ALREADY means "read this into the
+     pipeline" here, and a database with the same arrow says the same thing about
+     a store. `DatabaseSearch` (a magnifying glass) was the other candidate and
+     is worse: it reads as a UI affordance an operator might click, not as a data
+     read a pipeline performs. */
+  lookup: DatabaseArrowDown20Regular,
 };
 
 /**

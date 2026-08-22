@@ -2467,6 +2467,17 @@ export function NodePanel({
   // half-picked remainder (see `canvasStore.pendingBindings`).
   const boundConnections = thisNode?.connectionIds ?? pending?.connections;
   const boundDatasets = thisNode?.datasetIds ?? pending?.datasets;
+  // #1221 M12 slice 2 — which connection the SOURCE dataset list is narrowed by.
+  // A paired activity (`copy`) binds it on `connectionIds.source`; an UNPAIRED
+  // one (`lookup`) has no pair at all and binds the singular `connectionId`, so
+  // reading only the pair left `boundConnections?.source` permanently
+  // `undefined` there and the connection axis silently degraded to kind-only —
+  // offering every `table` dataset in the workspace, including ones on stores
+  // the node is not bound to, which slice 4a refuses at dispatch with
+  // `DATASET_CONNECTION_MISMATCH`. Falling back rather than branching on
+  // `paired`: the pair is authoritative where it exists, and `validateDoc`
+  // refuses the two fields together, so they can never disagree.
+  const sourceConnectionId = boundConnections?.source ?? thisNode?.connectionId;
   // A pair the author has STARTED but not finished. It is not on the node, so it
   // is not saved — and saying so is the point: without this the first pick would
   // survive on screen, vanish on reload, and look like the canvas lost it.
@@ -2754,8 +2765,7 @@ export function NodePanel({
               datasets,
               (d) =>
                 datasetKinds.source.includes(d.kind) &&
-                (boundConnections?.source === undefined ||
-                  d.connectionId === boundConnections.source),
+                (sourceConnectionId === undefined || d.connectionId === sourceConnectionId),
               boundDatasets?.source,
             ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
             onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}

@@ -1711,19 +1711,80 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const source = nextPair.source || undefined;
         const sink = nextPair.sink || undefined;
 
-        // Only a WHOLE pair reaches the doc. Either end missing deletes the key,
+        // What counts as a COMPLETE binding is the CATALOG's answer, not a
+        // constant — #1221 M12 slice 2. Until `lookup` this read
+        // `source !== undefined && sink !== undefined`, which was right when
+        // every dataset-bound activity moved data between two ends. A
+        // source-only activity would never satisfy it, so its `datasetIds` would
+        // never reach the doc and the node would sit permanently half-bound with
+        // no way to finish it.
+        //
+        // Asked PER KIND, not per entry, because this one function serves both
+        // pairs — and the two answers are NOT symmetric. A blanket relaxation
+        // keyed off the entry alone would let a half-bound `copy` CONNECTION
+        // pair reach the doc, which is the exact thing the original predicate
+        // existed to stop.
+        //
+        // `connections` ALWAYS needs both ends, unconditionally, because
+        // `NodeSchema.connectionIds` still requires both: M12 slice 1 (#1220)
+        // widened `datasetIds.sink` to optional and deliberately did NOT touch
+        // its connection twin. A source-only connection pair is therefore not
+        // expressible, and an activity that binds no sink connection does not
+        // use this pair at all — it authors the SINGULAR `connectionId` instead
+        // (`PipelineCanvas`'s `paired` branch). Making this conditional would
+        // produce a doc the server refuses at save, for a control nothing
+        // renders.
+        //
+        // An UNKNOWN activity type keeps the pair-required behaviour, and that
+        // polarity is deliberate: it is the safe direction. Requiring both ends
+        // of something that needs one leaves a node the author can see is
+        // unfinished; accepting one end of something that needs two writes a doc
+        // the server refuses at save.
+        const entry = getActivity(node?.type ?? '');
+        const needsBothEnds =
+          kind === 'connections' || entry === undefined || entry.datasetKinds?.sink !== undefined;
+
+        // Only a complete binding reaches the doc. Anything less deletes the key,
         // so the doc is `NodeSchema`-valid at every intermediate step and the
         // client-side `PipelineVersionWriteSchema.parse` on save can never see a
         // half pair — see `pendingBindings` for why that matters.
-        const complete = source !== undefined && sink !== undefined;
+        //
+        // The sink key is OMITTED, never assigned `undefined`. M12 slice 1
+        // (#1220) went to some trouble to keep `null` (the end was stripped on
+        // import) distinct from ABSENT (there is no sink end), and a
+        // present-`undefined` would be a third spelling — one that survives
+        // `toEqual` unnoticed and reaches `JSON.stringify` as a dropped key.
+        // `portability/export.ts`'s `stripNodeDatasetIds` uses this idiom for
+        // the same reason.
+        const bound =
+          source === undefined
+            ? undefined
+            : sink !== undefined
+              ? { source, sink }
+              : needsBothEnds
+                ? undefined
+                : { source };
+        const complete = bound !== undefined;
         const wasCommitted = committed !== undefined;
         if (complete || wasCommitted) {
           edit((s) => ({
             nodes: s.nodes.map((n) => {
               if (n.id !== id) return n;
               const next = { ...n };
-              if (complete) next[field] = { source, sink };
-              else delete next[field];
+              // Narrowed by KIND rather than written through `next[field]`,
+              // because the two fields have genuinely different types: a
+              // `connectionIds` requires both ends and a `datasetIds` does not,
+              // so the union index signature demands a value valid for BOTH and
+              // a source-only pair is not. Splitting it keeps that difference
+              // checked instead of casting past it.
+              if (bound === undefined) delete next[field];
+              else if (kind === 'datasets') next.datasetIds = bound;
+              else if (bound.sink !== undefined)
+                next.connectionIds = { source: bound.source, sink: bound.sink };
+              // A connections pair with no sink is unreachable — `needsBothEnds`
+              // is unconditionally true for that kind — and is left as a no-op
+              // rather than a cast asserting what the branch above already
+              // establishes.
               return next;
             }),
           }));
