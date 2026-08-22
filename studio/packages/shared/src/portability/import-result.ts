@@ -16,9 +16,17 @@ export const ImportAttentionItemSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('unresolvedConnectionRef'), nodeId: z.string().min(1) }),
   /** M3 (#1117) — a pipeline node's `datasetIds` had at least one LITERAL end,
    * which the export nulled (a concrete dataset id from another workspace is
-   * meaningless). `NodeSchema.datasetIds` requires BOTH ends, so the import
-   * dropped the pair whole rather than manufacture the missing half — re-point
-   * it by authoring a new `PipelineVersion` once the datasets exist here.
+   * meaningless). The import dropped the binding whole rather than manufacture
+   * the missing half — re-point it by authoring a new `PipelineVersion` once the
+   * datasets exist here.
+   *
+   * M12 slice 1 (#1220) — this used to rest on "`NodeSchema.datasetIds` requires
+   * BOTH ends", which is no longer true: `sink` is optional, so `{source}` alone
+   * is savable. The rule now rests on the distinction between NULL and ABSENT
+   * (`portability/envelope.ts`) — a NULLED end is one that WAS bound and cannot
+   * be resolved here, so the binding still drops and is still reported, while an
+   * ABSENT sink means none was ever bound and is not an attention item at all.
+   * Reporting the latter would ask an operator to repair something intact.
    *
    * Unlike `unresolvedConnectionRef` this needs no envelope-side list: the
    * singular `connectionId` is nulled on EVERY node whether or not it was bound,

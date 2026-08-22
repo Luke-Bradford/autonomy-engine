@@ -1315,8 +1315,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
       datasets = { source: resolvedSourceDs.dataset };
       // A SOURCE-ONLY activity (M12 `lookup`) declares no sink kinds, so it has
-      // no sink dataset to resolve and its `datasetIds.sink` — which `NodeSchema`
-      // still requires today — is inert, on the same "the catalog decides"
+      // no sink dataset to resolve. M12 slice 1 (#1220) — `NodeSchema.datasetIds`
+      // no longer requires a sink, so such a node usually carries none at all;
+      // where one IS present it is still inert, on the same "the catalog decides"
       // argument as above.
       if (sinkDatasetKinds !== undefined) {
         const resolvedSinkDs = resolveDataset(

@@ -384,6 +384,28 @@
 // already being met: an `excel` dataset lives on an `fs` connection and `fs`
 // joined that list at bump 24. The SINK halves do not move — M11 built a reader
 // and no writer.
+// NO BUMP for M12 slice 1 (#1220), recorded because a silent no-bump is the
+// drift this ledger exists to prevent — and because the OBVIOUS argument for it
+// is the wrong one. `NodeSchema.datasetIds.sink` became optional, so a doc can
+// now carry a source-only dataset binding, and "backward-compatible on immutable
+// rows" does NOT settle it: this number governs whether an EXPORT carries an
+// artifact an older build would MIS-RUN, and a pre-#1220 build meets such a file
+// with a Zod failure that `workspace-parse` turns into a generic diagnostic and
+// CONTINUES past, silently dropping the resource from the apply set. That is
+// exactly the shape bump 26 (M4) was taken for.
+// It survives on the narrower fact instead: in THIS slice nothing can author the
+// shape. No catalog entry declares `datasetKinds.sink === undefined`, and
+// `canvasStore.setNodeBindingEnd` commits a binding pair only when both ends are
+// known, so no authoring surface emits a source-only pair — only the API can.
+// M12 slice 2 (#1221) adds the first such entry and owes the bump there, which
+// is bump 24's "the bump belongs to the slice that widens the catalog entry"
+// precedent applied one milestone later.
+// No `SCHEMA_VERSION` bump and no upgrader either: `NodeExportSchema.datasetIds`
+// widened its `sink` from required-nullable to OPTIONAL-nullable, which only
+// admits a shape older exports could not contain. Every pre-#1220 export carries
+// both ends and parses here unchanged, so there is nothing for an upgrader to
+// repair — see `portability/envelope.ts` for why the null and absent cases must
+// stay distinguishable rather than being collapsed into the existing null.
 export const CATALOG_VERSION = 28;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

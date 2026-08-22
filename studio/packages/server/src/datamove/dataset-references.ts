@@ -204,7 +204,11 @@ function datasetRefsOfNode(
   if (bound === undefined) return [];
   return ENDS.flatMap((end) => {
     if (end === 'sink' && kinds.sink === undefined) return [];
-    const ref = bound[end] as string | undefined;
+    // M12 slice 1 (#1220) — the `as string | undefined` this line used to carry
+    // is gone: `NodeSchema.datasetIds.sink` is now genuinely optional, so the
+    // narrowing is the real type rather than an assertion about one. A cast that
+    // no longer casts is a claim the compiler has stopped checking.
+    const ref = bound[end];
     return ref === undefined ? [] : [{ end, ref }];
   });
 }

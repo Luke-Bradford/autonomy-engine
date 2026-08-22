@@ -1557,7 +1557,8 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     // M5 slice 4a (#1130) — the DATASET pair, widened onto the existing builder
     // rather than added as a second one: a copy binds both pairs on one node, so
     // a separate builder would let the two drift apart in fixtures.
-    datasetIds?: { source: string; sink: string },
+    // M12 slice 1 (#1220) — `sink` optional, matching the widened `NodeSchema`.
+    datasetIds?: { source: string; sink?: string },
   ): Node {
     seq += 1;
     return {
@@ -2507,9 +2508,14 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
 
   it('resolves a SOURCE-ONLY dataset activity (M12 lookup’s shape) and omits datasets.sink', async () => {
     // `datasetKinds.sink` is optional so a source-only reader is expressible
-    // without widening it later; the node's `datasetIds.sink` (which `NodeSchema`
-    // still requires) is then inert, on the same "the catalog decides" argument
-    // as a stray pair.
+    // without widening it later; the node's `datasetIds.sink` is then inert, on
+    // the same "the catalog decides" argument as a stray pair.
+    //
+    // M12 slice 1 (#1220) — this case keeps its STRAY sink deliberately. It used
+    // to be the only shape `NodeSchema` could express; now that a source-only
+    // pair is legal too, the stray is the more interesting of the two, because
+    // it is the one where the catalog has to override what the node says. The
+    // genuinely source-only node is pinned by the test below it.
     let seen: Record<string, unknown> | undefined;
     const adapters = pairedRegistry(async function* (ctx) {
       seen = ctx.datasets as Record<string, unknown>;
@@ -2535,6 +2541,74 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     expect(state.status).toBe('success');
     expect(seen).toMatchObject({ source: { id: sourceDs } });
     expect(seen).not.toHaveProperty('sink');
+  });
+
+  // M12 slice 1 (#1220) — the shape the slice makes legal, reaching the adapter
+  // for the first time. Its predecessor above binds a STRAY sink the catalog then
+  // ignores; here the node genuinely carries none, so the sink is absent from the
+  // DOC, through the reducer, and into `ActivityContext` — the whole chain. What
+  // this pins is that chain: before the widening, `NodeSchema` refused the node
+  // and the version could not be seeded at all.
+  //
+  // It does NOT pin the reducer's key-omission, and measurement is why the
+  // distinction is written down. Against a source-only CATALOG entry the
+  // executor never reads `resolvedDatasetIds.sink` at all, so a stringified
+  // `"undefined"` rides along inert and this test passes with the bug restored.
+  // The test below is the one that catches it; the reducer's own unit test is
+  // the primary guard.
+  it('dispatches a GENUINELY source-only node — no sink in the doc, none in the context', async () => {
+    let seen: Record<string, unknown> | undefined;
+    const adapters = pairedRegistry(async function* (ctx) {
+      seen = ctx.datasets as Record<string, unknown>;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, { adapters, catalog: datasetCatalog({ datasetKinds: { source: ['table'] } }) }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    expect(seen).toMatchObject({ source: { id: sourceDs } });
+    expect(seen).not.toHaveProperty('sink');
+  });
+
+  // M12 slice 1 (#1220) — where a stringified missing sink actually BITES, and
+  // the reason the reducer omits the key rather than coercing it. A source-only
+  // node bound to a dataset-PAIRED activity is a real authoring state (bind a
+  // reader's dataset, then change the node's type), and here the executor DOES
+  // read the sink end. The honest refusal is `dataset_missing` — "you did not
+  // address a sink". With `String(substitute(undefined))` the reducer hands over
+  // the seven-character string `"undefined"`, which is a well-formed id, so the
+  // refusal becomes `dataset_not_found` for a dataset named "undefined": a
+  // diagnostic that sends an operator looking for a row instead of a binding.
+  it('refuses a source-only node on a PAIRED activity as missing, never as a dataset named "undefined"', async () => {
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'http', {}, null);
+    const sinkConn = await seedConnection(db, 'anthropic_api', {}, 'K');
+    const sourceDs = seedDataset(db, sourceConn);
+    const pvId = seedVersion(db, [
+      pairedNode('test_copy', sourceConn, sinkConn, { source: sourceDs }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, { catalog: datasetCatalog({ datasetKinds: { source: ['table'], sink: ['table'] } }) }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ code: 'dataset_missing' });
+    expect(JSON.stringify(failure)).not.toContain('undefined');
   });
 
   it('does NOT label a source-only dataset failure with a side — there is no end to contrast', async () => {

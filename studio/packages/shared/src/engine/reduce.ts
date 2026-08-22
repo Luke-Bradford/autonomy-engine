@@ -1198,8 +1198,15 @@ export function createEngine(doc: EngineDoc): Engine {
       // M12 slice 1 (#1220) — the key is OMITTED, never stringified. An absent
       // sink through the `String(substitute(...))` above yields the SEVEN-
       // CHARACTER STRING "undefined", which is a well-formed dataset id as far
-      // as every layer below is concerned: it reaches the executor and refuses
-      // as DATASET_NOT_FOUND naming a dataset the author never wrote.
+      // as every layer below is concerned.
+      //
+      // Where that bites, measured rather than assumed: against a source-only
+      // CATALOG entry the executor never reads this end, so the bogus id rides
+      // along inert. It bites when a source-only NODE meets a dataset-PAIRED
+      // activity — a reachable authoring state (bind a reader's dataset, then
+      // change the node's type) — and turns the honest refusal DATASET_MISSING
+      // ("you addressed no sink") into DATASET_NOT_FOUND for a dataset named
+      // "undefined", sending an operator to look for a row instead of a binding.
       ...(sink === undefined ? {} : { sink: String(substitute(sink, ctx, 0, item)) }),
     };
   }
