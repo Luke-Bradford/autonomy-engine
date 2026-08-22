@@ -25,12 +25,15 @@
     "nanoid": "^5",
     "p-limit": "^7.3.0",
     "pg": "^8.23.0",
+    "saxes": "^6.0.0",
+    "yauzl": "^3.4.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "26.1.1",
     "@types/pg": "^8.23.1",
+    "@types/yauzl": "^3.4.0",
     "eslint": "10.7.0",
     "tsx": "4.23.0",
     "typescript": "6.0.3",

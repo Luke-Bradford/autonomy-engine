@@ -1290,7 +1290,7 @@ source and a sink.
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
 | **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) is **SHIPPED** and was the `storeIdentity` hole ALONE: row 3 and the `query` self-copy residual were both dispatched by slice 3a's re-measurement (row 3's premise was wrong; the residual is a wasteful no-op and stays deliberately un-guess-refused), leaving one item. It gives `ConnectorAdapter.resolveDatasetAddress` a `secret` — the ticket's stated blocker, that the sink's credential is never resolved, was FALSE — and resolves `<system_identifier>:<database oid>:<primary|standby>` plus the canonical `to_regclass` object, both best-effort so a revoked `pg_control_system()` degrades rather than refusing every copy forever. See §7's amended ④. #1194 is CLOSED out of band: a `query` dataset's named `parameters` now bind on postgres, rewritten `:name` → `$n` by a postgres-aware lexer — see §2.6's amended slice-2 block | slice 1 shipped no operator-reachable caller for the probe — #1191 |
-| **M11** | `excel` dataset kind                                                                                                                                                                                                        |                                                                                                                                                                                                                                           |
+| **M11** | `excel` dataset kind. **SPLIT IN TWO**, as M5/M6/M8/M10 were — slice 1 (#1213) is the READER and moves no data: `server/connectors/xlsx-read.ts`, its three `limits.ts` bounds and its fixtures. It discharges the dependency row below by BUILDING the reader (both measured libraries were disqualified as WRONG, not merely as materialising), and is deliberately unreachable — `excel` does NOT join `IMPLEMENTED_DATASET_KINDS` and the registry is untouched, so nothing user-facing changes. Slice 2 is the KIND: the config schema, `excel-io.ts`, the `fs` fork, the catalog wiring, the form and the e2e — the binding and the reader's first caller land together. |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 
 **Dependencies are named, and checked against packaging, not merely "called out".** `#993` chose the
@@ -1304,6 +1304,61 @@ each must be verified against `2026-07-30-packaging-and-updates.md` and
 | M7     | a CSV parser (streaming, no full materialisation)       | must expose a row stream, not `parse(wholeFile)`                                                                         |
 | M10    | `pg`                                                    | a **second** native/TLS surface alongside `better-sqlite3` in a single-binary target — verify empirically, do not assume |
 | M11    | an xlsx reader                                          | xlsx is a ZIP container; most readers materialise the sheet, which fights §5 — check before choosing                     |
+
+**M11's dependency row is DISCHARGED, and the answer was not the expected one (#1213,
+slice 1).** The row anticipated materialisation. The measured problem is worse: the streaming
+readers are WRONG. Measured on node v25.9.0 against one logical workbook rewritten into three zip
+entry orders.
+
+`exceljs@4.4.0` (MIT) resolves shared strings and number formats only when
+`xl/sharedStrings.xml` and `xl/styles.xml` PRECEDE the worksheet, because it is a single forward
+pass — and **Excel writes them after**. Identical bytes, order alone changed: strings-first gave
+`"hello"` and a real `Date`; the real-Excel order gave `{sharedString: 9}` and the raw serial
+`46255`. No option changes this. On the layout exceljs's OWN `writeFile` emits it throws outright
+(`this.model.sheets`, unguarded, `workbook-reader.js:303`); upstream has been dormant since 2023.
+Its non-streaming reader is correct on every order and peaked at **1001 MB RSS** on a
+6.8 MB/200k-row workbook, OOM-crashing under a 128 MB heap — §5's stated hazard, confirmed.
+
+`xlsx-stream-reader@1.1.1` (MIT) is order-independent and lighter, and is disqualified by one line —
+`lib/worksheet.js:272`, `workingVal || ''` — which returns `''` for `0`, for `false` AND for `''`.
+A genuine zero becomes indistinguishable from a blank cell, so under §6.2 every `0` in a numeric
+column becomes `null` or fails the row. Its only date support is `ssf.format`, which yields a
+locale-shaped display string — the "corruption engine" §6.2 forbids by name.
+
+**So the reader is BUILT, on M7's precedent** (which discharged its own *"a CSV parser"* row by
+hand-rolling `shared/datamove/delimited.ts`). Only the sheet grammar is hand-rolled: `yauzl` (MIT)
+supplies RANDOM ACCESS and `saxes` (ISC) the XML — 4 packages, 408 KB, both pure JS, both on
+`ALLOWED_LICENSES`, versus exceljs's 78 packages / 34 MB. No native addon, so no new per-arch
+artifact for the updater (`2026-07-30-packaging-and-updates.md:219`) and no `.node`
+direct-require caveat (`2026-07-24-bun-single-binary-spike.md:44`).
+
+**Random access is the whole design, not an implementation detail.** Reading the small parts by
+NAME makes entry order irrelevant BY CONSTRUCTION — the property exceljs structurally cannot have.
+Only the worksheet streams, so memory is proportional to DISTINCT STRINGS plus one batch, never to
+rows; `limits.ts`'s `XLSX_MAX_SHARED_STRINGS_BYTES`, `XLSX_MAX_ENTRY_BYTES` and
+`XLSX_MAX_CELL_CHARS` make that a guarantee, and inflation is counted as it ARRIVES because a zip's
+declared `uncompressedSize` is attacker-controlled.
+
+Four value decisions were forced by measurement and are pinned in `xlsx-read.test.ts`:
+
+- a **blank cell binds `null`**, not `undefined`. Excel omits blanks from the XML, so `undefined`
+  would reach `coerceValue` as `absent_value` and fail a row per blank — on sheets that are sparse
+  by construction.
+- **numFmt 45/46/47 are DURATIONS** and 18-21 are times of day, so they stay NUMERIC. `[h]:mm:ss`
+  over `30.5` means 732 elapsed hours; rendering it as `1900-01-30T12:00Z` is exactly what §6.2
+  forbids. 22 does bear a date. The locale date formats (27-36, 50-58) are a knowing omission with
+  a safe failure: such a cell reads as a number, and a number into a `date` column fails visibly.
+- **serial 60 is REFUSED.** It is Excel's phantom `1900-02-29`, inherited from Lotus; mapping it to
+  `1900-03-01` would make it indistinguishable from serial 61.
+- an **error cell travels as a fault OBJECT** that `coerceValue` rejects for every target, because
+  the reader has no per-row error channel. The string `"#N/A"` would land in a text column looking
+  like data.
+
+**Slice 1 is the substrate only** — the reader, its bounds and its fixtures. `excel` does NOT join
+`IMPLEMENTED_DATASET_KINDS` and the registry is untouched, so nothing user-reachable changes. The
+kind (config schema, `excel-io.ts`, the `fs` fork, the catalog wiring, the form and e2e) is slice 2,
+which lands the binding and the reader's first caller together — M5's four-way split exists for
+exactly that reason.
 
 ---
 

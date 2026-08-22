@@ -120,3 +120,91 @@ export const FS_STREAM_CHUNK_BYTES = 64 * 1024;
  */
 export const DELIMITED_MAX_FIELD_CHARS = 1_048_576;
 export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
+
+/**
+ * §5's bounded-streaming rule, applied to xlsx — where "stream the sheet" is
+ * NOT on its own enough to bound memory.
+ *
+ * A worksheet streams row by row, so rows are bounded by `COPY_BATCH_ROWS` the
+ * same way a CSV's are. Two things in the container are not:
+ *
+ * - **the shared-string table.** xlsx stores most text once in
+ *   `xl/sharedStrings.xml` and cells reference it by index, so a cell cannot be
+ *   resolved until the table is in hand. Memory is therefore proportional to
+ *   DISTINCT STRINGS plus one row batch — never to rows, which is the property
+ *   that matters, but still unbounded without a cap.
+ * - **inflation.** Every entry is deflated. A zip's declared `uncompressedSize`
+ *   is attacker-controlled and must never be trusted as the bound, so the count
+ *   is of bytes ACTUALLY inflated, checked as they arrive.
+ *
+ * These are the reason the readers measured for #1213 were rejected rather than
+ * capped: exceljs's non-streaming path peaked at 1001 MB on a 6.8 MB workbook
+ * and OOM-crashed under a 128 MB heap. A cap makes the bound a guarantee
+ * instead of a hope.
+ *
+ * Generous on the same reasoning as `DELIMITED_MAX_*` directly above: a 64 MiB
+ * string table is already a pathological workbook, and these exist to make a
+ * malformed or hostile file fail FAST, not to police a large one.
+ */
+export const XLSX_MAX_SHARED_STRINGS_BYTES = 67_108_864;
+export const XLSX_MAX_ENTRY_BYTES = 268_435_456;
+export const XLSX_MAX_CELL_CHARS = 1_048_576;
+
+/**
+ * The three SMALL parts — `xl/workbook.xml`, its rels, and `xl/styles.xml` —
+ * are read by NAME and fully materialised into one string each, because none of
+ * them can be interpreted incrementally: a sheet cannot be resolved until the
+ * whole `<sheets>` list is in hand.
+ *
+ * They therefore sit OUTSIDE the "proportional to distinct strings plus one row
+ * batch" guarantee above and need their own, much tighter bound. Under
+ * `XLSX_MAX_ENTRY_BYTES` a hostile container could force ~256 MiB of inflation
+ * per part — ~512 MiB resident as UTF-16, three times over — while every real
+ * workbook's three parts together are a few KB.
+ *
+ * 16 MiB is still far above anything Excel emits (its 65,490-cell-format
+ * ceiling puts a pathological `styles.xml` in the low tens of MB only if every
+ * format is also enormous) and 16x below the streamed-entry cap, which is the
+ * point: the amplification is gone and no legitimate file is refused.
+ */
+export const XLSX_MAX_SMALL_PART_BYTES = 16_777_216;
+
+/**
+ * The one bound that is not a byte count, and the reason it cannot be.
+ *
+ * A cell reference carries a COLUMN in letters, and the reader derives an index
+ * from it. That derivation is exponential in the letter run while the bytes are
+ * linear: `r="ZZZZZZ1"` is fifteen bytes of XML and decodes to ~321 million.
+ * The sheet parser fills interior blanks by growing the row's `cells` array to
+ * the declared index, so a few bytes could force a multi-gigabyte synchronous
+ * allocation — an exhaustion path every `XLSX_MAX_*_BYTES` above is blind to,
+ * because they measure what ARRIVES and this is what is DERIVED.
+ *
+ * 16,384 is not a policy choice: it is XFD, the format's own last column, so
+ * nothing Excel can emit is refused and everything past it is malformed by
+ * definition rather than merely large.
+ */
+export const XLSX_MAX_COLUMNS = 16_384;
+
+/**
+ * How many central-directory entries a container may declare.
+ *
+ * The other bound the byte caps cannot reach. `XLSX_MAX_*_BYTES` all measure an
+ * entry's CONTENT, and the directory walk that finds the entries runs to
+ * completion first — so a zip declaring a very large number of tiny nominal
+ * entries builds the whole index Map before any content cap can apply. The
+ * entries are cheap individually and unbounded in number, which is the shape of
+ * every exhaustion bug in this file.
+ *
+ * A real workbook holds a handful: the four small parts, one worksheet per
+ * sheet, and whatever drawings or media it embeds. Even a pathologically
+ * image-heavy one stays in the low thousands.
+ *
+ * 16,384 rather than something larger, and the reason is the format's: a
+ * classic zip records its entry count in the EOCD as a **uint16**, so it cannot
+ * declare more than 65,535 at all. A cap at or above that would therefore never
+ * bind on an ordinary container and would bite only on ZIP64 — a bound that
+ * looks like protection and is dead code for the common case. This one binds on
+ * both.
+ */
+export const XLSX_MAX_ENTRIES = 16_384;
