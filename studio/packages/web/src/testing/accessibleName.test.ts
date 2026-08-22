@@ -39,6 +39,17 @@ describe('expectAccessibleNameContainsText', () => {
     ).toThrow(/does not contain visible text/);
   });
 
+  /**
+   * The vacuous case. Raised as a NITPICK by this PR's own correctness lens:
+   * `includes('')` is always true, so without the guard a labelled icon-only
+   * control would report a passing 2.5.3 check having tested nothing.
+   */
+  it('REFUSES a labelled control with no visible text, rather than passing vacuously', () => {
+    expect(() =>
+      expectAccessibleNameContainsText(el('<a aria-label="Watch run run_1"><svg></svg></a>')),
+    ).toThrow(/would pass vacuously/);
+  });
+
   it('passes a control with no aria-label, whose name IS its visible text', () => {
     expect(() => expectAccessibleNameContainsText(el('<a>Watch</a>'))).not.toThrow();
   });
