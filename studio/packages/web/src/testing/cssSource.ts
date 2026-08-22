@@ -55,8 +55,20 @@ export function findColorLiterals(text: string): string[] {
 function ruleHeads(css: string): { selectors: string[]; open: number }[] {
   const heads: { selectors: string[]; open: number }[] = [];
   let from = 0;
+  let quote: string | null = null;
   for (let i = 0; i < css.length; i += 1) {
     const ch = css[i];
+    /* A quoted value is inert. `content: "}"` and `url("a;b")` are real CSS, and
+       without this the walk treats their punctuation as structure — which is the
+       silent-narrowing failure this module exists to prevent, one level up. */
+    if (quote !== null) {
+      if (ch === quote && css[i - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
     if (ch === '}' || ch === ';') from = i + 1;
     else if (ch === '{') {
       const head = css.slice(from, i).trim();
@@ -67,10 +79,25 @@ function ruleHeads(css: string): { selectors: string[]; open: number }[] {
       }
       const selectors: string[] = [];
       let depth = 0;
+      let inValue: string | null = null;
       let member = '';
-      for (const c of head) {
-        if (c === '(') depth += 1;
-        else if (c === ')') depth -= 1;
+      for (let k = 0; k < head.length; k += 1) {
+        const c = head[k] as string;
+        /* Brackets AND quotes, not just parens: `[data-x="a,b"]` is one member,
+           and splitting it produces both a false reject (the real selector is
+           unfindable) and a false accept (the nonsense tail `b"]` matches). */
+        if (inValue !== null) {
+          member += c;
+          if (c === inValue && head[k - 1] !== '\\') inValue = null;
+          continue;
+        }
+        if (c === '"' || c === "'") {
+          inValue = c;
+          member += c;
+          continue;
+        }
+        if (c === '(' || c === '[') depth += 1;
+        else if (c === ')' || c === ']') depth -= 1;
         if (c === ',' && depth === 0) {
           selectors.push(member.trim());
           member = '';
@@ -87,7 +114,8 @@ function ruleHeads(css: string): { selectors: string[]; open: number }[] {
  * The declaration body of the rule with exactly this selector, brace-balanced so
  * a nested block (`@supports`, `@media`, or any brace-bearing value) cannot
  * truncate it — a truncated body silently NARROWS whatever the caller then
- * asserts over it.
+ * asserts over it. Quoted values are inert to both the balance walk and the head
+ * scan, because `content: "}"` is CSS this file's own claim could not survive.
  *
  * The selector is matched against parsed rule HEADS, not by substring (#1243).
  * `indexOf(`${selector} {`)` had nothing anchoring the query to a rule boundary,
@@ -108,7 +136,10 @@ function ruleHeads(css: string): { selectors: string[]; open: number }[] {
  * - **Ambiguous** — two heads declare the selector, so there is no single body
  *   to return and picking either silently drops the other's declarations. The
  *   caller has to say which it means (a more specific selector, or `customProps`
- *   over both).
+ *   over both). Live instance: `.stream-phase-live` is declared twice in
+ *   `index.css`, once at top level and once inside a `prefers-reduced-motion`
+ *   block, so asking for it by that name refuses rather than answering about
+ *   whichever came first.
  * - **Compound-only** — the selector appears only inside a longer head
  *   (`.x button`), which is exactly the mistake the old matcher made silently.
  */
@@ -133,9 +164,19 @@ export function ruleBody(css: string, selector: string): string {
     );
   }
   let depth = 0;
+  let quote: string | null = null;
   for (let i = hit.open; i < css.length; i += 1) {
-    if (css[i] === '{') depth += 1;
-    else if (css[i] === '}') {
+    const ch = css[i];
+    if (quote !== null) {
+      if (ch === quote && css[i - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
       depth -= 1;
       if (depth === 0) return css.slice(hit.open + 1, i);
     }

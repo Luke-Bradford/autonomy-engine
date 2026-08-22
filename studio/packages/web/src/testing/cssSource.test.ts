@@ -67,6 +67,37 @@ td {
     expect(() => ruleBody(sheet, 'h2')).toThrow(/appears only inside/);
   });
 
+  /* Quotes and brackets, not just parens. The paren-only splitter this rewrite
+     first shipped got `[data-x="a,b"]` wrong in BOTH directions at once — the
+     real selector became unfindable, and the nonsense tail `b"]` matched a rule.
+     A false accept is the worse half: it is the same "certifies nothing" failure
+     as #1243's original bug, reintroduced by its own fix. */
+  it('does not split a comma inside an attribute value', () => {
+    const sheet = `.foo[data-x="a,b"] { color: red; }`;
+    expect(ruleBody(sheet, '.foo[data-x="a,b"]')).toContain('color: red');
+    expect(() => ruleBody(sheet, 'b"]')).toThrow(/no `b"\]` rule found/);
+  });
+
+  /* The docblock's brace-balance claim, taken literally. `content: "}"` is real
+     CSS, and a walk that counts it truncates the body at the quote — silently
+     narrowing whatever the caller then asserts, which is the exact failure the
+     balance walk exists to prevent. */
+  it('ignores braces inside a quoted value', () => {
+    const body = ruleBody(`.chip { content: "}"; color: red; }`, '.chip');
+    expect(body).toContain('color: red');
+  });
+
+  it('mints no phantom rule head from a brace inside a quoted value', () => {
+    const sheet = `.a::before { content: "{"; }\n.b { color: red; }`;
+    expect(ruleBody(sheet, '.b')).toContain('color: red');
+    /* THE assertion, and the reason the `.b` line above is not enough on its
+       own: a quote-blind head scan treats the `{` inside the string as a rule
+       opening and pushes `content: "` as a selector, so a nonsense string
+       becomes matchable. `.b` keeps resolving either way — this test only
+       started meaning something once it said what must NOT resolve. */
+    expect(() => ruleBody(sheet, 'content: "')).toThrow(/no `content: "` rule found/);
+  });
+
   it('tolerates any whitespace between the selector and its brace', () => {
     /* The old literal hardcoded exactly one space, so `button\n{` read as
        absent — a formatter change away from breaking every guard in the file. */

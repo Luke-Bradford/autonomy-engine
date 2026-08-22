@@ -150,10 +150,15 @@ describe('PipelineCanvasRoute', () => {
     renderRoute('/author/pipelines/gone');
 
     expect(await screen.findByRole('heading', { name: 'Pipeline not found' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Back to pipelines/i })).toHaveAttribute(
-      'href',
-      '/author/pipelines',
-    );
+    const back = screen.getByRole('link', { name: /Back to pipelines/i });
+    expect(back).toHaveAttribute('href', '/author/pipelines');
+    /* #1242 — deliberately BARE, and pinned so the decision is not re-litigated
+       by whoever next reads the ticket's "three back controls" table. This one
+       sits in a `<p>` of error prose, not a `page-header`, so `.page-back`'s
+       chip would be wrong here: it is a link in a sentence. What fixed it was
+       the global `a` rule, which needs no class — and adding one would silently
+       turn this into the fourth treatment the ticket exists to remove. */
+    expect(back).not.toHaveAttribute('class');
   });
 
   it('reports a genuine failure with its message', async () => {
