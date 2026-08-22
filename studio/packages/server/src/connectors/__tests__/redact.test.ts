@@ -321,11 +321,15 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
    * before it starts, which would fabricate an empty array — #473's shape, an
    * absence manufactured from a failure and indistinguishable from an array that
    * really was empty. An INFINITE one goes the other way: `.map` throws
-   * `RangeError: Invalid array length` out of the walk. Both take the sentinel.
+   * `RangeError: Invalid array length` out of the walk. A merely ENORMOUS one is
+   * the quiet third case: it is a safe integer, so it passes both of those
+   * checks, and an index loop would simply run for hours. All three take the
+   * sentinel.
    */
   it.each([
     ['negative', -1],
     ['infinite', Number.POSITIVE_INFINITY],
+    ['past the breadth ceiling', Number.MAX_SAFE_INTEGER],
   ])('replaces an array whose length is %s with the sentinel', (_label, length) => {
     const hostile = new Proxy([`Bearer ${SECRET}`] as unknown[], {
       get(target, prop, receiver): unknown {

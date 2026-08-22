@@ -37,6 +37,29 @@ export function redactSecrets(
 const MAX_REDACT_DEPTH = 100;
 
 /**
+ * The same ceiling on the other axis. `MAX_REDACT_DEPTH` bounds how DEEP a
+ * hostile value can drive the walk; this bounds how WIDE. It exists because an
+ * array's length is a READ, and a proxy's `get` trap may answer with a number
+ * that is a perfectly well-formed count and still a lie — `Number.MAX_SAFE_INTEGER`
+ * passes every finite/integer/non-negative check there is, so an index loop over
+ * it runs for hours over a backing array of one element. (Measured: the bare
+ * `.map` this walker used to call was accidentally safe here, because
+ * `ArraySpeciesCreate` throws `RangeError: Invalid array length` above 2^32-1.
+ * An explicit loop has no such accident, so it needs an explicit bound.)
+ *
+ * Above the ceiling the whole array is replaced WHOLESALE with the sentinel
+ * rather than TRUNCATED, for the reason truncation is refused everywhere in this
+ * file: a short array claims the elements it dropped never existed, which is
+ * #473's shape — an absence manufactured from a failure. `***` says "not
+ * walked", which is the truth.
+ *
+ * A million is far above any legitimate adapter output that would be walked into
+ * a run log and far below a runtime a caller would notice, so like the depth cap
+ * this only ever trips on hostile input.
+ */
+const MAX_REDACT_BREADTH = 1_000_000;
+
+/**
  * Set an OWN data property, faithfully — even for a key named `__proto__`. Plain
  * `out[k] = v` treats `__proto__` as the prototype accessor, so a JSON-sourced
  * field literally named `__proto__` (a real own property after `JSON.parse`)
@@ -229,9 +252,11 @@ function walk(
       // of an object that refuses enumeration: nothing can be walked and nothing
       // partial is worth keeping, so the whole value takes the sentinel rather
       // than a truncated array claiming the elements it could not reach never
-      // existed (#473). Each lie fails its own way, both measured: a NEGATIVE
+      // existed (#473). Each lie fails its own way, all measured: a NEGATIVE
       // length makes `.map` return `[]`, fabricating an empty array; an INFINITE
-      // one makes it throw `RangeError: Invalid array length` out of the walk.
+      // one makes it throw `RangeError: Invalid array length` out of the walk;
+      // an ENORMOUS but well-formed one passes every check a count can pass and
+      // is caught by `MAX_REDACT_BREADTH` (see there) instead.
       //
       // A HOLE reads as `undefined` here and is kept as a present element, where
       // `.map` propagated the hole. `JSON.stringify` renders both as `null`, so
@@ -241,6 +266,7 @@ function walk(
       const lengthRead = readOwn(value, 'length');
       const length = lengthRead.ok ? lengthRead.value : null;
       if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return '***';
+      if (length > MAX_REDACT_BREADTH) return '***';
       const out: unknown[] = [];
       for (let i = 0; i < length; i += 1) {
         const read = readOwn(value, String(i));
