@@ -11,7 +11,7 @@ import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
 import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
-import { runDetailPath } from './runPath';
+import { runDetailPath, runLinkLabel } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -451,7 +451,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <>
               <dt>Rerun of</dt>
               <dd>
-                <Link to={runDetailPath(rerunOf)} aria-label={`Source run ${rerunOf}`}>
+                <Link to={runDetailPath(rerunOf)} aria-label={runLinkLabel('Source', rerunOf)}>
                   <code>{rerunOf}</code>
                 </Link>
               </dd>
@@ -488,7 +488,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
               <dd>
                 <Link
                   to={runDetailPath(run.parentRunId)}
-                  aria-label={`Parent run ${run.parentRunId}`}
+                  aria-label={runLinkLabel('Parent', run.parentRunId)}
                 >
                   <code>{run.parentRunId}</code>
                 </Link>

@@ -17,7 +17,7 @@ import { pipelineCostSummary, type PipelineCostSummary } from './pipelineCostSum
 import { listTriggers } from '../../api/triggers';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { formatRunDuration, formatWhen } from './format';
-import { runDetailPath } from './runPath';
+import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
 import { RunTimeline } from './RunTimeline';
 import {
@@ -619,7 +619,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                             section records that U10 owns this conversion. It gives
                             the row action a hoverable/copyable/middle-clickable
                             target, which a button never had. */}
-                        <Link to={runDetailPath(r.id)} aria-label={`Watch run ${r.id}`}>
+                        <Link to={runDetailPath(r.id)} aria-label={runLinkLabel('Watch', r.id)}>
                           Watch
                         </Link>
                       </td>

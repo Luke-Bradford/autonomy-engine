@@ -46,7 +46,7 @@ import {
 } from './triggers/recurrenceForm';
 
 import { listAllPipelineVersions } from '../api/pipelines';
-import { runDetailPath } from './runs/runPath';
+import { runDetailPath, runLinkLabel } from './runs/runPath';
 import { pipelinePath } from './author/pipelinePath';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { usePolledResource } from '../hooks/usePolledResource';
@@ -423,22 +423,20 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              {/* The accessible name CONTAINS the visible text, which is why it is not
-                  the bare `Watch run <id>` that `RunsPage`'s cell uses: WCAG 2.5.3
-                  (Label in Name) is about a speech-input user saying what they can
-                  see, and this control reads "Watch live" where that cell reads
-                  "Watch". The run id is appended because "Watch live" alone does not
-                  say WHICH run, and this notice can name a different one each fire.
+              {/* The lead is this control's OWN visible text, which is what makes the
+                  accessible name contain it — see `runLinkLabel` for why that shape
+                  holds by construction. The run id is appended because "Watch live"
+                  alone does not say WHICH run, and this notice can name a different
+                  one each fire.
 
-                  The arrow is in the name too, and that is deliberate rather than
-                  tidy. "Contains" is a LITERAL substring test (it is what axe's
-                  `label-content-name-mismatch` and WCAG technique G208 check), and
-                  the visible text is `Watch live →` — so a separator that is any
-                  other glyph breaks containment on the arrow alone, which is what an
-                  em dash here did. `ImportPanel`'s `Manage → Connections` links
+                  The arrow belongs in the lead, and that is deliberate rather than
+                  tidy: "contains" is a LITERAL substring test, the visible text is
+                  `Watch live →`, and a lead that dropped the arrow — or used any
+                  other glyph, which is what an em dash here did — breaks containment
+                  on the arrow alone. `ImportPanel`'s `Manage → Connections` links
                   already carry an arrow in their accessible name, so this is the
                   idiom rather than an exception to it. */}
-              <Link to={runDetailPath(watchRunId)} aria-label={`Watch live → run ${watchRunId}`}>
+              <Link to={runDetailPath(watchRunId)} aria-label={runLinkLabel('Watch live →', watchRunId)}>
                 Watch live →
               </Link>
             </>

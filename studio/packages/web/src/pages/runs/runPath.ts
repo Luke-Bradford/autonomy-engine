@@ -1,5 +1,10 @@
 /**
- * The ONE place a run-detail path is built.
+ * The ONE place a run link's PATH and its ACCESSIBLE NAME are built.
+ *
+ * Both are per-run identity that a call site must not re-derive, which is why
+ * they share a module rather than sitting next to the components that render
+ * them. The path half came first and names the rule; #1240 added the name half
+ * for the same reason, after four call sites had grown three templates.
  *
  * Every call site has to `encodeURIComponent` the id, because the route it
  * lands on reads the id back with `useParams`, which DECODES exactly once (see
@@ -17,4 +22,38 @@
  */
 export function runDetailPath(runId: string): string {
   return `/monitor/runs/${encodeURIComponent(runId)}`;
+}
+
+/**
+ * A run link's accessible name: `<lead> run <runId>`.
+ *
+ * Every run-navigation anchor's name has to CONTAIN its visible text, because
+ * WCAG 2.5.3 (Label in Name) is what lets a speech-input user say what they can
+ * see — and "contains" is a LITERAL substring test (it is what axe's
+ * `label-content-name-mismatch` and technique G208 check). An em dash used as a
+ * separator here once broke containment on the arrow alone.
+ *
+ * That property holds BY CONSTRUCTION under this signature, which is the whole
+ * reason there are two parameters rather than three. The four call sites are of
+ * exactly two kinds:
+ *
+ * - an ACT (`Watch`, `Watch live →`) passes its own visible text as the `lead`,
+ *   so the name STARTS with what the control reads;
+ * - a RELATIONSHIP (`Source`, `Parent`) renders the run id as its visible text,
+ *   so the name ENDS with it.
+ *
+ * There is no third shape in which the name could omit either, so there is
+ * nothing left for a runtime check to catch — and a check comparing two
+ * arguments the same caller supplies could not catch the real failure anyway,
+ * which is a name disagreeing with the DOM rather than with itself. That one is
+ * caught where it is visible: `expectAccessibleNameContainsText` runs against
+ * the rendered anchor in each call site's own spec.
+ *
+ * The verb/noun split is deliberate and stays with the caller. `Source`/`Parent`
+ * name a relationship the row's `<dt>` has already introduced; `Watch` names an
+ * act. Collapsing them onto one lead would flatten a distinction the call sites
+ * argue for in place.
+ */
+export function runLinkLabel(lead: string, runId: string): string {
+  return `${lead} run ${runId}`;
 }

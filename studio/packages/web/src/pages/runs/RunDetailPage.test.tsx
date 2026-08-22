@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
@@ -1802,10 +1803,15 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
        `navigate`-on-a-button reds here rather than silently taking away
        hover/copy/middle-click/new-tab. Named `Source run …` rather than by the
        bare id, the same treatment `Called by` and `RunsPage`'s Watch cell get:
-       "run_0" alone tells a screen-reader user nothing about where it goes. */
+       "run_0" alone tells a screen-reader user nothing about where it goes.
+
+       Containment (2.5.3) is asserted through the shared helper rather than by
+       eye: here the visible text is the id itself, so the name has to END with
+       what the row renders. */
     const link = screen.getByRole('link', { name: 'Source run run_0' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_0');
     expect(link.textContent).toBe('run_0');
+    expectAccessibleNameContainsText(link);
   });
 
   it('shows no lineage row on an original run', async () => {
@@ -2504,6 +2510,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     const link = screen.getByRole('link', { name: 'Parent run run_parent' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
     expect(link.textContent).toBe('run_parent');
+    expectAccessibleNameContainsText(link);
   });
 
   /* The ABSENCE of the row is what "not a child" looks like — the same rule the

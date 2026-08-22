@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
+import { expectAccessibleNameContainsText } from '../testing/accessibleName';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
 import type {
@@ -622,8 +623,10 @@ describe('TriggersPage', () => {
     const watch = await screen.findByRole('link', { name: 'Watch live → run run_9' });
     /* Containment asserted as the literal substring test it is, so a separator
        swapped back to any non-arrow glyph reds HERE rather than passing a name
-       check that merely looks close enough. */
-    expect(watch.getAttribute('aria-label')).toContain(watch.textContent?.trim());
+       check that merely looks close enough. Through the shared helper since
+       #1240, so all four run links check the rule the same way — this call site
+       is where the hand-rolled version was. */
+    expectAccessibleNameContainsText(watch);
     expect(watch).toHaveAttribute('href', '/monitor/runs/run_9');
     await user.click(watch);
 
