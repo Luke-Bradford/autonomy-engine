@@ -61,7 +61,66 @@ if (!('elementFromPoint' in Document.prototype)) {
   (Document.prototype as { elementFromPoint?: unknown }).elementFromPoint = (): null => null;
 }
 
+// #1206 — a web test that reaches the REAL `fetch` is doing I/O it believes it
+// stubbed. `routes.test.tsx` carries three separate comments recording the same
+// retrofit (`getWorkspaceGit`, `api/connections`, `api/datasets`) and a fourth
+// was added by hand in the #1124 sweep, because a per-module mock list is closed
+// under nothing: the next page to gain a mount-time call repeats the miss.
+//
+// A THROW ALONE IS NOT ENOUGH, and that is why this records as well. The callers
+// that reach here mostly swallow their own rejection BY DESIGN — `PipelineCanvas`
+// degrades a failed publish-state read to "unread" deliberately — so a stub that
+// only throws is caught by the code under test and the suite stays green, which
+// is precisely today's invisibility with a louder message nobody sees. The
+// recorded URLs are asserted below, where no `catch` in the component tree can
+// reach them.
+//
+// A test that legitimately exercises `fetch` (`api/*.test.ts`) replaces this via
+// `vi.stubGlobal('fetch', …)` and never reaches the recorder — intended: the
+// guard is for the calls nobody meant to make.
+const unmockedFetchUrls: string[] = [];
+
+function urlOf(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (typeof input === 'object' && input !== null && 'url' in input) {
+    return String((input as { url: unknown }).url);
+  }
+  return '<unknown>';
+}
+
+globalThis.fetch = ((input: unknown): never => {
+  const url = urlOf(input);
+  unmockedFetchUrls.push(url);
+  throw new Error(
+    `#1206: unmocked fetch in a web test — ${url}. Mock the api module this call ` +
+      `goes through (or stub \`fetch\` for a test that means to exercise it).`,
+  );
+}) as unknown as typeof fetch;
+
 // Unmount React trees between tests so queries never leak across cases.
+//
+// The fetch assertion lives in THIS hook rather than its own, after `cleanup()`:
+// hook ordering between two separately-registered `afterEach`es is a vitest
+// `sequence.hooks` setting, and a guard that fails the run must not depend on
+// one. Unmount first (an unmount can itself start a request), then judge what
+// was recorded. `splice` clears the list even when it throws, so one offending
+// test cannot fail every test after it.
 afterEach(() => {
-  cleanup();
+  // `finally`, so a throwing `cleanup()` cannot leave this test's recorded urls
+  // behind to be reported against the NEXT one — a failure message naming the
+  // wrong test is worse than no message. The check itself stays OUTSIDE the
+  // `finally`: a throw in there would replace the cleanup error rather than add
+  // to it, and the cleanup failure is the one that explains the other.
+  const seen: string[] = [];
+  try {
+    cleanup();
+  } finally {
+    seen.push(...unmockedFetchUrls.splice(0));
+  }
+  if (seen.length > 0) {
+    throw new Error(
+      `#1206: this test reached the real \`fetch\` ${seen.length} time(s): ${seen.join(', ')}`,
+    );
+  }
 });

@@ -11,6 +11,15 @@ import { AppThemeProvider } from './theme/AppThemeProvider';
 // the composition — that `App` hosts the real route tree, and that the shell it
 // renders shares one store with the theme provider wrapping it. The network
 // stubs exist only so the landed page mounts without real I/O.
+// #1206 — the app shell loads its build identity and update status on EVERY
+// mount, so any suite that renders it makes two network attempts unless they are
+// stubbed. Shared rather than hand-rolled here: this is the fourth file to need
+// the same pair, which is the pattern the guard in `vitest.setup.ts` exists to
+// stop repeating.
+vi.mock('./api/version', async () =>
+  (await import('./testing/apiModuleMocks')).versionModuleMock(),
+);
+
 vi.mock('./api/connections', async (importActual) => ({
   ...(await importActual<typeof import('./api/connections')>()),
   listConnections: vi.fn().mockResolvedValue([]),

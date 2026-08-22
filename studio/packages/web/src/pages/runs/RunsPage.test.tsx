@@ -22,11 +22,26 @@ import { createPipelinesStore } from '../../stores/pipelinesStore';
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
 // convention of stubbing every network fn of the module, so no real call ever
 // escapes to a partially-mocked module).
+// #1206 — the app shell loads its build identity and update status on EVERY
+// mount, so any suite that renders it makes two network attempts unless they are
+// stubbed. Shared rather than hand-rolled here: this is the fourth file to need
+// the same pair, which is the pattern the guard in `vitest.setup.ts` exists to
+// stop repeating.
+vi.mock('../../api/version', async () =>
+  (await import('../../testing/apiModuleMocks')).versionModuleMock(),
+);
+
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
   listRuns: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn(),
+  // #1206 — the Watch cases navigate to the run detail route, which loads R1
+  // (`getRunDetail`) and the diagnostics list. The detail read REJECTS, which is
+  // what the unmocked call already did: the page then falls back to `getRun`
+  // above, the path these tests have always exercised.
+  getRunDetail: vi.fn().mockRejectedValue(new Error('run detail not stubbed')),
+  getRunDiagnostics: vi.fn().mockResolvedValue([]),
 }));
 
 // U26's pickers each reach the network. Triggers get the same whole-module stub
@@ -47,6 +62,10 @@ vi.mock('../../api/triggers', async (importActual) => ({
 vi.mock('../../api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('../../api/pipelines')>()),
   getPipelineCost: vi.fn(),
+  // #1206 — the page's pipeline filter lists pipelines on mount; unmocked that
+  // reached a real `fetch`. Empty is the honest default for a suite whose
+  // fixtures are runs, not pipelines.
+  listPipelines: vi.fn().mockResolvedValue([]),
 }));
 
 const listMock = vi.mocked(runsApi.listRuns);
