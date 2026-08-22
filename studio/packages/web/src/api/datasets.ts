@@ -2,10 +2,12 @@ import { z } from 'zod';
 import {
   DatasetReferencesResponseSchema,
   DatasetSchema,
+  DatasetSheetsResultSchema,
   NewDatasetSchema,
   paginatedResponseSchema,
   type Dataset,
   type DatasetReferencesResponse,
+  type DatasetSheetsResult,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -107,4 +109,25 @@ export function updateDataset(id: string, body: Partial<DatasetWrite>): Promise<
 
 export function deleteDataset(id: string): Promise<void> {
   return apiFetch<void>(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/**
+ * #1218 — what worksheets this workbook holds, so an `excel` dataset's `sheet`
+ * can be chosen rather than typed blind.
+ *
+ * A refusal comes back as a 200 with `{ ok: false }` and therefore does NOT
+ * throw: every failure here is an ordinary authoring condition (a path still
+ * being typed, a file not written yet, a workbook that is not one), so the
+ * caller renders them all in one place instead of splitting them across a
+ * `catch`. `ApiError` still throws for a genuine transport or protocol fault.
+ */
+export function listDatasetSheets(body: {
+  connectionId: string;
+  path: string;
+}): Promise<DatasetSheetsResult> {
+  return apiFetch('/api/datasets/sheets', {
+    method: 'POST',
+    body,
+    schema: DatasetSheetsResultSchema,
+  });
 }

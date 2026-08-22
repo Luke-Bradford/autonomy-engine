@@ -13,14 +13,16 @@ import {
   type Dataset,
   type DatasetColumn,
   type DatasetKind,
+  type DatasetSheetsResult,
 } from '@autonomy-studio/shared';
 import { z } from 'zod';
-import { ApiError } from '../api/client';
+import { ApiError, messageOf } from '../api/client';
 import { listConnections } from '../api/connections';
 import {
   DatasetWriteSchema,
   createDataset,
   deleteDataset,
+  listDatasetSheets,
   listDatasets,
   updateDataset,
   type DatasetWrite,
@@ -39,7 +41,7 @@ import {
   type ConfigField,
   type FieldInput,
 } from './pipeline/configForm';
-import { ConfigFieldControl } from './pipeline/ConfigFieldControl';
+import { ConfigFieldControl, type FieldChoices } from './pipeline/ConfigFieldControl';
 
 const KINDS = DATASET_KINDS;
 
@@ -382,6 +384,22 @@ function DatasetForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * #1218 — the last sheet listing, TAGGED with a signature of the draft it was
+   * taken against, exactly as `ConnectionForm` tags a probe verdict.
+   *
+   * A listing is a reading from one moment. Point `path` at a different
+   * workbook after a successful list and the old sheet names are no longer
+   * about anything on screen — offering them would invite a choice that then
+   * refuses at dispatch, which is the failure this whole ticket exists to
+   * remove. Keeping the signature means a stale listing simply stops rendering
+   * when the draft moves out from under it; no effect has to race to clear it.
+   */
+  const [sheets, setSheets] = useState<{
+    result: DatasetSheetsResult;
+    signature: string;
+  } | null>(null);
+  const [listing, setListing] = useState(false);
   const editing = form.id !== null;
 
   const { fields, carried } = useMemo(
@@ -439,6 +457,78 @@ function DatasetForm({
    * three thin handlers, one of which (`onKindChange`) has genuinely diverged.
    */
   const jsonMode = form.jsonMode || unrenderable.length > 0 || !kindHasReader;
+
+  /**
+   * Everything a sheet listing depends on: which store, and which file in it.
+   * Not `form` whole — a rename would then discard a perfectly good listing.
+   */
+  const sheetSignature = useMemo(
+    () => JSON.stringify([form.connectionId, form.inputs['path'] ?? '']),
+    [form.connectionId, form.inputs],
+  );
+
+  /**
+   * ON A BUTTON, deliberately, and not on every keystroke.
+   *
+   * Each call opens a real container behind a real descriptor. Firing one per
+   * character typed into `path` would spend a server descriptor and a zip parse
+   * on a hundred paths that were never meant to be paths — and the load guard
+   * this codebase has (`useGuardedLoad`) is explicit that it DROPS RESULTS
+   * RATHER THAN CANCELLING REQUESTS, so it would not stop the work, only hide
+   * it. `ConnectionForm`'s Test connection button is the settled shape for
+   * "an expensive reading, taken when the operator asks for it".
+   */
+  async function onListSheets() {
+    setError(null);
+    setSheets(null);
+    const path = form.inputs['path'];
+    if (typeof path !== 'string' || path === '') {
+      setError('Enter the workbook path first, then list its sheets.');
+      return;
+    }
+    setListing(true);
+    try {
+      const result = await listDatasetSheets({ connectionId: form.connectionId, path });
+      setSheets({ result, signature: sheetSignature });
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setListing(false);
+    }
+  }
+
+  const freshSheets =
+    sheets !== null && sheets.signature === sheetSignature && sheets.result.ok
+      ? sheets.result.sheets
+      : null;
+
+  /**
+   * Which fields this panel can offer values for. Today exactly one, and the
+   * mapping lives HERE rather than in `ConfigFieldControl`, which argues at
+   * length against growing a field-name table of its own.
+   *
+   * The empty-name filter is not defensive tidiness: `DatasetSheetsResultSchema`
+   * admits an empty sheet name on purpose (a malformed container should not make
+   * a whole workbook uninspectable), but `sheet` is `z.string().min(1)` — so an
+   * offered blank would be a choice the save then refuses. The reader tells the
+   * truth and the form declines to offer what cannot be chosen.
+   */
+  const choicesFor = (fieldName: string): FieldChoices | undefined => {
+    if (fieldName !== 'sheet' || freshSheets === null) return undefined;
+    return {
+      label: 'Sheet in this workbook',
+      values: freshSheets.filter((name) => name !== ''),
+      onChoose: (value) =>
+        onChange({
+          ...form,
+          // Blanking `sheetIndex` is REQUIRED, not tidiness:
+          // `excelDatasetConfigSchema` refuses a config naming both, so leaving
+          // a previously-typed index behind would make the control that offered
+          // this name the cause of the refusal on Save.
+          inputs: { ...form.inputs, sheet: value, sheetIndex: '' },
+        }),
+    };
+  };
 
   /**
    * What this kind's own schema says about the draft — ADVISORY only.
@@ -769,8 +859,37 @@ function DatasetForm({
                 onChange={(next) =>
                   onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
                 }
+                {...(choicesFor(field.name) === undefined
+                  ? {}
+                  : { choices: choicesFor(field.name) as FieldChoices })}
               />
             ))}
+            {/* #1218 — only `excel` names a sheet, and only the field form can
+                offer one (the JSON editor has no control to attach it to). */}
+            {form.kind === 'excel' && (
+              <>
+                <button type="button" onClick={() => void onListSheets()} disabled={listing}>
+                  {listing ? 'Listing sheets…' : 'List sheets'}
+                </button>
+                {/* `role="status"`, matching the probe verdict: a refusal here is
+                    the server's ANSWER to a question that was asked — the file is
+                    not there yet, the path is outside the roots — not a failure of
+                    the form, so it does not take the page's `alert` slot. */}
+                {sheets !== null &&
+                  sheets.signature === sheetSignature &&
+                  !sheets.result.ok && (
+                    <p role="status" className="probe-failed">
+                      {sheets.result.error}
+                    </p>
+                  )}
+                {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
+                  <p role="status" className="page-hint">
+                    This workbook reports no named sheets — name the sheet by position with
+                    <code>sheetIndex</code> instead.
+                  </p>
+                )}
+              </>
+            )}
             {carried.length > 0 && (
               <p className="contract-advisory">
                 {`Carried from another kind (${carried.join(', ')}) — ${form.kind} ignores these; blank a control to drop the key.`}

@@ -18,6 +18,33 @@ export type FieldPicker = {
 };
 
 /**
+ * Values the OWNING panel can offer for one field, when only it can know them
+ * (#1218).
+ *
+ * Shaped like {@link FieldPicker} and passed the same way, for the same reason:
+ * the derived form has no per-field-name table and must not grow one (see the
+ * argument on the expression flyout below), so "which field gets choices, and
+ * what are they" is the panel's answer, not this control's.
+ *
+ * `onChoose` rather than reusing `onChange`, because a choice can be worth MORE
+ * than this field's value: picking an `excel` sheet by NAME must also blank
+ * `sheetIndex`, since `excelDatasetConfigSchema` refuses a config carrying both
+ * and the operator would otherwise be refused by the very control that offered
+ * the value.
+ *
+ * NOT the expression flyout. That one inserts a `${}` REFERENCE at the caret
+ * (`applyInsert`); these are literals that REPLACE the value, so sharing the
+ * machinery would mean sharing semantics neither wants.
+ */
+export type FieldChoices = {
+  /** What the chooser is called — the panel's words, since only it knows what
+   *  the list IS ("Sheet in this workbook", not "choices"). */
+  readonly label: string;
+  readonly values: readonly string[];
+  readonly onChoose: (value: string) => void;
+};
+
+/**
  * One derived config control (U7).
  *
  * Every string field renders as a `<textarea>` rather than an `<input>`, and that
@@ -42,12 +69,15 @@ export function ConfigFieldControl({
   value,
   onChange,
   picker,
+  choices,
   name,
 }: {
   field: ConfigField;
   value: FieldInput;
   onChange: (next: FieldInput) => void;
   picker?: FieldPicker;
+  /** Server-known values for THIS field, supplied by the owning panel (#1218). */
+  choices?: FieldChoices;
   /**
    * What to CALL this control, when the field's own name is not the whole
    * story. A cell inside a row list is `mapping row 2 sink`, not `sink`: three
@@ -194,6 +224,41 @@ export function ConfigFieldControl({
             run looking like a benign fallthrough.
 
           Both are recorded on #864. */}
+      {/* #1218 — a chooser BESIDE the textarea, never instead of it.
+          The free-text box always survives: a workbook whose path is not
+          readable yet has no list to offer, and a control that replaced the box
+          would make such a dataset unauthorable. So this is purely additive, and
+          its absence is the ordinary case rather than a failure.
+
+          A `<select>` and not a `datalist`: `datalist` does not attach to a
+          `<textarea>` (which every text field here is, for the reason argued at
+          the top of this file), and its options are unreachable by keyboard on
+          several engines. A select is focusable, arrow-key navigable, and
+          announces its own name — the accessibility floor this has to clear.
+
+          Its value is BOUND to the current text when that text is one of the
+          offered values, so the control reflects the field rather than sitting
+          permanently on the placeholder — and falls back to the placeholder for
+          a hand-typed value the list does not contain, which is a legitimate
+          state and not an error. */}
+      {choices && field.kind === 'text' && choices.values.length > 0 && (
+        <label className="config-field-choices">
+          {choices.label}
+          <select
+            value={choices.values.includes(text) ? text : ''}
+            onChange={(e) => {
+              if (e.target.value !== '') choices.onChoose(e.target.value);
+            }}
+          >
+            <option value="">— choose —</option>
+            {choices.values.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {picker && field.kind === 'text' && (
         <ExpressionPicker
           fieldName={field.name}
