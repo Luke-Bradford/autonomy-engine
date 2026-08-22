@@ -1361,9 +1361,15 @@ export function validateRefs(
     // credential lives on the connection the dataset names).
     if (node.datasetIds !== undefined) {
       for (const side of ['source', 'sink'] as const) {
+        // M12 slice 1 (#1220) — `sink` is optional, so a source-only binding has
+        // nothing to scan on that side. Skipping the END rather than narrowing
+        // the loop keeps the per-side path above intact, which is what makes a
+        // diagnostic name the side that is actually wrong.
+        const end = node.datasetIds[side];
+        if (end === undefined) continue;
         scan(
           `nodes.${node.id}.datasetIds.${side}`,
-          node.datasetIds[side],
+          end,
           scope,
           errors,
           0,

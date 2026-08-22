@@ -423,12 +423,24 @@ export const NodeSchema = z.object({
    *
    * Both ends are REQUIRED within the object, mirroring `connectionIds`: a pair
    * with one end missing is not a pair, and a `.partial()` would let a
-   * half-addressed copy reach dispatch instead of failing at save. M12's
-   * `lookup` reads a SOURCE only — when it lands it should widen `sink` to
-   * `.optional()` here, which is safe on immutable rows (no stored doc changes
-   * shape and no stored doc becomes invalid). It must NOT reach for `.partial()`
-   * (which would also make `source` droppable) or for a `config` key (which
-   * would reintroduce the unremapped-ref bug this field exists to kill).
+   * half-addressed copy reach dispatch instead of failing at save.
+   *
+   * M12 slice 1 (#1220) DISCHARGED the widening this docblock used to prescribe:
+   * `sink` is now `.optional()`, because `lookup` reads a SOURCE only and binds
+   * one address rather than a pair. It is safe on immutable rows — no stored doc
+   * changes shape and none becomes invalid. The instruction's two prohibitions
+   * were honoured and still bind: NOT `.partial()` (which would also make
+   * `source` droppable, and a sink-only address names no data to read) and NOT a
+   * `config` key (which would reintroduce the unremapped-ref bug this field
+   * exists to kill). `source` therefore stays REQUIRED, and a sink-only object
+   * is still refused.
+   *
+   * WHICH activities may bind source-only is the CATALOG's to say, not this
+   * schema's: an entry whose `datasetKinds.sink` is undefined is dataset-unpaired
+   * (`catalog/types.ts`), and the executor refuses a mismatch at DISPATCH. That
+   * split is deliberate and is the same one the paragraph below draws for
+   * existence and ownership — a save-time check would need the catalog here and
+   * would go stale against a mutable dataset row anyway.
    *
    * Either end may be a `${}` expression (dynamic routing, #2 L13a), and the
    * existence / ownership / kind-compatibility checks live at DISPATCH, not
@@ -445,7 +457,9 @@ export const NodeSchema = z.object({
    * runs identically on a pre-M3 build. `copy` (M5) is the first entry to
    * consume a dataset ref, and owes the bump then.
    */
-  datasetIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
+  datasetIds: z
+    .object({ source: z.string().min(1), sink: z.string().min(1).optional() })
+    .optional(),
   /**
    * #2 L13b — per-dispatch bindings for the bound connection's declared
    * `parameters` allowlist (`ConnectionSchema.parameters`). String values may
