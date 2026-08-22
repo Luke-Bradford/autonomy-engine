@@ -624,7 +624,7 @@ sentences around a hardcoded `'sqlite'`.
 | Kind        | `config`                                                                                                     |
 | ----------- | ------------------------------------------------------------------------------------------------------------ |
 | `delimited` | `path`, `delimiter` (default `,`), `quote`, `escape`, `header` (bool), `encoding`, `nullValue`, `dateFormat` |
-| `excel`     | `path`, `sheet` (name or index), `headerRow`, `nullValue`, `dateFormat`                                      |
+| `excel`     | `path`, `sheet` (name) XOR `sheetIndex` (1-based), `header` (bool), `headerRow`, `nullValue`, `dateFormat`    |
 | `table`     | `schema`, `table` — **identifiers, so save-time literal-only (§8)**                                          |
 | `query`     | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters`                      |
 
@@ -666,6 +666,31 @@ M4 precedent above rather than left to disagree with the shipped schema:
   deliver `€` for `0x80`; offering `ascii` would promise a 7-bit refusal that never comes. An
   unrecognised label is refused here rather than reaching `TextDecoder` as a raw `RangeError` that
   no connector error maps.
+
+**Three corrections from M11 slice 2, which built the `excel` row** (#1215), on the same precedent.
+Two of them are the `delimited` corrections above arriving unchanged at the second file kind, which
+is itself the finding: the rule generalises, so the next file kind should start from it rather than
+rediscover it.
+
+- **`sheet` and `sheetIndex` are SEPARATE keys, exactly one required**, where this table said
+  "`sheet` (name or index)". A worksheet can legitimately be NAMED `"3"`, so a single name-or-index
+  value makes that sheet unaddressable — and, worse, reads a DIFFERENT sheet while SUCCEEDING. The
+  quieter half is §13's own trap: `configForm.ts` renders any construct it cannot classify as a JSON
+  textarea, and a `z.union` is one, so the single-key spelling would have handed the operator a JSON
+  box where two plain controls belong. **NEITHER IS DEFAULTED**, on the `header` rule: two sheets of
+  one workbook routinely share column names (`Jan`, `Feb`), so guessing the first copies the wrong
+  month and reports success.
+- **`header` is REQUIRED**, an addition to the row, applying M7's correction unchanged and for its
+  reasons unchanged.
+- **`headerRow` means WHICH ROW HOLDS THE HEADER** (default 1), meaningful only with `header: true`.
+  A spreadsheet routinely carries title rows above its header, which is why `delimited` has no such
+  key at all. Setting it past 1 while `header` is false is REFUSED rather than silently ignored.
+
+`nullValue` and `dateFormat` are on this row too, and **they reach less here than they do for
+`delimited`** — a difference of the FORMAT and not of the wiring, worth stating because the row
+looks identical. An Excel date cell is genuinely TYPED, so §6.2's "parsed by the declared format
+ONLY" governs its TEXT cells alone; and a blank cell already arrives as `null`, so the sentinel does
+exactly one thing — turn a text cell whose content IS the sentinel into a null.
 
 ---
 
@@ -1290,7 +1315,7 @@ source and a sink.
 | **M8**  | The mapping authoring panel (§13). **SPLIT IN TWO** — slice 1 (#1169) is the `objectList` PRIMITIVE (§13's *"build it as a primitive rather than a copy-specific panel"*): the derived row control, which upgrades `copy.mapping` and `llm_call.tools`. Slice 2 is the copy-specific half — Auto-map, the explicit *unmapped* state and per-column expressions — all three of which need a sink-column seam that does not exist yet. See §13's as-built block                                                                                                                                                                                          | UI epic; e2e-gated                                                                                                                                                                                                                        |
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
 | **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) is **SHIPPED** and was the `storeIdentity` hole ALONE: row 3 and the `query` self-copy residual were both dispatched by slice 3a's re-measurement (row 3's premise was wrong; the residual is a wasteful no-op and stays deliberately un-guess-refused), leaving one item. It gives `ConnectorAdapter.resolveDatasetAddress` a `secret` — the ticket's stated blocker, that the sink's credential is never resolved, was FALSE — and resolves `<system_identifier>:<database oid>:<primary|standby>` plus the canonical `to_regclass` object, both best-effort so a revoked `pg_control_system()` degrades rather than refusing every copy forever. See §7's amended ④. #1194 is CLOSED out of band: a `query` dataset's named `parameters` now bind on postgres, rewritten `:name` → `$n` by a postgres-aware lexer — see §2.6's amended slice-2 block | slice 1 shipped no operator-reachable caller for the probe — #1191 |
-| **M11** | `excel` dataset kind. **SPLIT IN TWO**, as M5/M6/M8/M10 were — slice 1 (#1213) is the READER and moves no data: `server/connectors/xlsx-read.ts`, its three `limits.ts` bounds and its fixtures. It discharges the dependency row below by BUILDING the reader (both measured libraries were disqualified as WRONG, not merely as materialising), and is deliberately unreachable — `excel` does NOT join `IMPLEMENTED_DATASET_KINDS` and the registry is untouched, so nothing user-facing changes. Slice 2 is the KIND: the config schema, `excel-io.ts`, the `fs` fork, the catalog wiring, the form and the e2e — the binding and the reader's first caller land together. |                                                                                                                                                                                                                                           |
+| **M11** | `excel` dataset kind. **DONE**, split in two as M5/M6/M8/M10 were. Slice 1 (#1213) was the READER and moved no data: `server/connectors/xlsx-read.ts`, its `limits.ts` bounds and its fixtures. It discharged the dependency row below by BUILDING the reader (both measured libraries were disqualified as WRONG, not merely as materialising), and was deliberately unreachable — `excel` did not join `IMPLEMENTED_DATASET_KINDS` and the registry was untouched. Slice 2 (#1215, with #1216) is the KIND: `excelDatasetConfigSchema`, `excel-io.ts`, the `fs` reader fork, the catalog wiring (`CATALOG_VERSION` 27 → 28), the form and the e2e — the binding and the reader's first caller landed together. SOURCE only; there is no workbook writer. |                                                                                                                                                                                                                                           |
 | **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
 
 **Dependencies are named, and checked against packaging, not merely "called out".** `#993` chose the
@@ -1354,11 +1379,53 @@ Four value decisions were forced by measurement and are pinned in `xlsx-read.tes
   the reader has no per-row error channel. The string `"#N/A"` would land in a text column looking
   like data.
 
-**Slice 1 is the substrate only** — the reader, its bounds and its fixtures. `excel` does NOT join
-`IMPLEMENTED_DATASET_KINDS` and the registry is untouched, so nothing user-reachable changes. The
-kind (config schema, `excel-io.ts`, the `fs` fork, the catalog wiring, the form and e2e) is slice 2,
-which lands the binding and the reader's first caller together — M5's four-way split exists for
-exactly that reason.
+**Slice 1 was the substrate only** — the reader, its bounds and its fixtures. `excel` did NOT join
+`IMPLEMENTED_DATASET_KINDS` and the registry was untouched, so nothing user-reachable changed.
+
+**Slice 2 (#1215) is the KIND**, and it landed the binding and the reader's first caller together as
+M5's four-way split requires: `excelDatasetConfigSchema` (§2.6's row, with the three corrections
+recorded there), `connectors/excel-io.ts` implementing `CopyIo`, the `fs` reader FORK, the catalog
+wiring (`CATALOG_VERSION` 27 → 28) and the e2e. Four things it settled that slice 1 could not,
+because none of them has an answer until something CONSUMES the reader:
+
+- **A blank row is SKIPPED, and it is a row rather than a gap.** Measured: Excel writes a bare
+  `<row r="2"/>` for any row whose height, fill or format was ever touched, so a wholly blank row is
+  PRESENT in the XML as `cells: []`. Binding it would emit an all-`null` record per formatting
+  artifact — a different `rowsRead` from the same logical data as a CSV, and a constraint violation
+  against a `nullable: false` column on a row nobody authored. `delimited`'s grammar skips a blank
+  LINE for the same reason. The skip applies only BELOW the header: a blank row AT `headerRow` must
+  refuse, or it silently promotes the next row — real data — into the column names.
+- **A trailing blank is `null`, not absent.** `<c r="B1" s="0"/>` — a styled empty cell, which Excel
+  emits constantly — arrives as a `null` in any position including the last. Slice 1's `XlsxRow`
+  docblock said trailing blanks were absent; that is corrected in this slice, because this is the
+  slice that depends on it.
+- **A DATE-TYPED HEADER CELL IS REFUSED.** Monthly date headers are real, so this costs something
+  and is argued rather than assumed. The reader consumes the cell's format code to CLASSIFY it and
+  does not carry it out, so there is no "as authored" text to recover: any name studio produced
+  would be an invention — `2026-01-01T00:00:00.000Z` at best — that every mapping in the workspace
+  would then depend on. Deriving one from `dateFormat` would be worse, making a key whose documented
+  job is reading VALUES silently RENAME columns. The refusal names all three real fixes (format that
+  row as text, point `headerRow` at a text row, or `header: false`) and fires at the DRIFT GATE,
+  before a row moves.
+- **The SHEET is not part of the `DatasetAddress`.** Two datasets on two sheets of one workbook are
+  the same physical object, and an address is about the object a write would land on; including the
+  sheet would make them compare unequal, which only matters the day a writer exists — and on that
+  day it would be wrong, because writing either sheet rewrites the whole container. It adds a THIRD
+  residual to `delimited`'s two: a `delimited` and an `excel` dataset on the same `path` now produce
+  identical addresses. Unreachable for the same reason as the others (there is no fs writer, so two
+  `fs` ends cannot both exist in one copy), and it belongs on the same list for whichever writer
+  lands first.
+
+**#1216 landed with it**, because it is a slice-2 prerequisite rather than a cleanup:
+`XlsxReadError` gained a bounded `XlsxReadFailureCode` so `excel-io.ts`'s mapper branches by CODE
+rather than by matching prose. FOUR members — `bad_option`, `no_such_sheet`, `past_a_bound`,
+`malformed_workbook` — not the seven a first pass drafted, because a code nothing can FALSIFY is not
+a code: two of those seven emitted the same sentence from different sites, and one described a throw
+that does not exist (slice 1's pinned decision is that an unreadable date RETURNS a fault object).
+Every code every member carries has a witness in `xlsx-read.test.ts`.
+
+**Source only, as `delimited` is.** `datasetKinds.sink` is untouched: there is no workbook writer,
+so widening it would offer an author a pairing every dispatch refuses.
 
 ---
 
