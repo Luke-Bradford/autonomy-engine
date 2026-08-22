@@ -302,14 +302,25 @@ function remapNodeToDb(
   // independently of the connection block above rather than as an `else`: the
   // two are orthogonal (a copy binds two stores AND two addresses), so a fork
   // would silently drop one of them. Same drop-whole rule as the connection
-  // pair — `NodeSchema.datasetIds` requires both ends, so a half-resolved pair
-  // is unsavable and inventing the missing end is the fail-open this codebase
-  // refuses.
+  // pair — a half-resolved pair is unsavable and inventing the missing end is
+  // the fail-open this codebase refuses.
+  //
+  // M12 slice 1 (#1220) — the ABSENT sink is decided BEFORE `toDbRef`, and that
+  // ordering is the point. `toDbRef` returns `undefined` for both "the ref was
+  // null" and "there was no ref", so the `sink !== undefined` test below cannot
+  // tell a stripped sink from a source-only node. Branching on the raw field
+  // keeps the two apart: a null sink still drops the pair whole (unchanged), an
+  // absent one binds `{source}` alone.
   if (datasetIds !== undefined) {
     const source = toDbRef(datasetIds.source, datasetById, 'source dataset');
-    const sink = toDbRef(datasetIds.sink, datasetById, 'sink dataset');
-    if (source !== undefined && sink !== undefined) {
-      dbNode = { ...dbNode, datasetIds: { source, sink } };
+    const rawSink = datasetIds.sink;
+    if (source !== undefined) {
+      if (rawSink === undefined) {
+        dbNode = { ...dbNode, datasetIds: { source } };
+      } else {
+        const sink = toDbRef(rawSink, datasetById, 'sink dataset');
+        if (sink !== undefined) dbNode = { ...dbNode, datasetIds: { source, sink } };
+      }
     }
   }
 

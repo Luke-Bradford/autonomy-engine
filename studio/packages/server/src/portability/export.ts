@@ -128,11 +128,16 @@ function stripNodeDatasetIds(node: NodeExport): NodeExport {
   if (node.datasetIds === undefined) return node;
   const portableEnd = (id: string | null): string | null =>
     id !== null && interpolationMode(id).mode !== 'literal' ? id : null;
+  // M12 slice 1 (#1220) — an ABSENT sink stays absent. Mapping it through
+  // `portableEnd` (or a `?? null`) would emit `sink: null`, which the importer
+  // reads as "export stripped a literal" and drops the whole pair on — losing a
+  // source-only node's binding silently. `envelope.ts` states the two meanings.
+  const sink = node.datasetIds.sink;
   return {
     ...node,
     datasetIds: {
       source: portableEnd(node.datasetIds.source),
-      sink: portableEnd(node.datasetIds.sink),
+      ...(sink === undefined ? {} : { sink: portableEnd(sink) }),
     },
   };
 }
