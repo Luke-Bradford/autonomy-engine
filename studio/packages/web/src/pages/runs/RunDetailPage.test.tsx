@@ -158,13 +158,19 @@ describe('RunDetailPage', () => {
    * `routes.test.tsx` against the real route table, per `renderWithRouter`'s own
    * rule that navigation belongs there; what this owns is that the control is an
    * anchor at all, and that it carries the class the chip depends on.
+   *
+   * No `expectAccessibleNameContainsText` here, deliberately. This control
+   * carries no `aria-label`, so the helper returns immediately and would assert
+   * nothing — and the property it exists to check is already pinned one line
+   * up: querying by ROLE and NAME only matches if the accessible name IS the
+   * visible text. The helper earns its keep on the run links below, whose names
+   * `runLinkLabel` builds and can therefore drift from the DOM.
    */
   it('renders the back control as a link with a real href', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     const back = await screen.findByRole('link', { name: '← All runs' });
     expect(back).toHaveAttribute('href', '/monitor/runs');
     expect(back).toHaveClass('page-back');
-    expectAccessibleNameContainsText(back);
   });
 
   /**
