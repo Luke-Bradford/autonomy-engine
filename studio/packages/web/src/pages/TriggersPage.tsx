@@ -11,7 +11,7 @@ import {
   type PipelineVersion,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import { ApiError, messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportTrigger } from '../api/portability';
@@ -213,7 +213,6 @@ function formForEdit(t: TriggerPublic): FormState {
  * server refuses otherwise — mirrored here for a friendlier message).
  */
 export function TriggersPage() {
-  const navigate = useNavigate();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
@@ -424,9 +423,9 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <button type="button" onClick={() => void navigate(runDetailPath(watchRunId))}>
+              <Link to={runDetailPath(watchRunId)} aria-label={`Watch run ${watchRunId}`}>
                 Watch live →
-              </button>
+              </Link>
             </>
           )}
         </p>
