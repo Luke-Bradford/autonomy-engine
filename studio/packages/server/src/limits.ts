@@ -185,3 +185,26 @@ export const XLSX_MAX_SMALL_PART_BYTES = 16_777_216;
  * definition rather than merely large.
  */
 export const XLSX_MAX_COLUMNS = 16_384;
+
+/**
+ * How many central-directory entries a container may declare.
+ *
+ * The other bound the byte caps cannot reach. `XLSX_MAX_*_BYTES` all measure an
+ * entry's CONTENT, and the directory walk that finds the entries runs to
+ * completion first — so a zip declaring a very large number of tiny nominal
+ * entries builds the whole index Map before any content cap can apply. The
+ * entries are cheap individually and unbounded in number, which is the shape of
+ * every exhaustion bug in this file.
+ *
+ * A real workbook holds a handful: the four small parts, one worksheet per
+ * sheet, and whatever drawings or media it embeds. Even a pathologically
+ * image-heavy one stays in the low thousands.
+ *
+ * 16,384 rather than something larger, and the reason is the format's: a
+ * classic zip records its entry count in the EOCD as a **uint16**, so it cannot
+ * declare more than 65,535 at all. A cap at or above that would therefore never
+ * bind on an ordinary container and would bite only on ZIP64 — a bound that
+ * looks like protection and is dead code for the common case. This one binds on
+ * both.
+ */
+export const XLSX_MAX_ENTRIES = 16_384;

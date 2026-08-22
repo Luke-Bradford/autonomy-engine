@@ -52,6 +52,7 @@
  * container's own directory — never a filesystem path — so a hostile
  * `Relationship Target` can fail a lookup and nothing else.
  */
+import { closeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 import { SaxesParser, type SaxesTagPlain } from 'saxes';
@@ -61,6 +62,7 @@ import {
   COPY_BATCH_ROWS,
   XLSX_MAX_CELL_CHARS,
   XLSX_MAX_COLUMNS,
+  XLSX_MAX_ENTRIES,
   XLSX_MAX_ENTRY_BYTES,
   XLSX_MAX_SHARED_STRINGS_BYTES,
   XLSX_MAX_SMALL_PART_BYTES,
@@ -150,12 +152,28 @@ export class XlsxReadError extends Error {
  */
 function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
+    // Ownership of a caller-supplied `fd` transfers on the SUCCESS path via
+    // `zip.close()`. On the failure path yauzl hands the error back and leaves
+    // the descriptor open — measured — so without this the contract this
+    // module documents ("passing `fd` transfers ownership: this module closes
+    // it") would hold only when nothing goes wrong, and every refused file
+    // would leak one descriptor.
+    const abandonFd = (): void => {
+      if (fd === undefined) return;
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed, or never valid. Nothing to release either way, and
+        // the open error below is the failure worth reporting.
+      }
+    };
     // `lazyEntries` so the entry list is drained deliberately; `autoClose:false`
     // because entries are read by NAME after that drain, and yauzl would
     // otherwise close the handle at the end of it.
     const options = { lazyEntries: true, autoClose: false } as const;
     const onOpen = (err: Error | null, zip: ZipFile | undefined): void => {
       if (err || !zip) {
+        abandonFd();
         reject(
           new XlsxReadError(
             `not a readable .xlsx: ${err?.message ?? 'the file could not be opened'}. ` +
@@ -171,10 +189,27 @@ function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
   });
 }
 
-function entryIndex(zip: ZipFile): Promise<Map<string, Entry>> {
+function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<string, Entry>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, Entry>();
     const onEntry = (entry: Entry): void => {
+      // The directory walk runs to completion BEFORE any `XLSX_MAX_*_BYTES`
+      // applies, because those bound an entry's CONTENT and this is the pass
+      // that finds the entries at all. Unbounded and, without the signal check,
+      // un-abortable: a container declaring millions of tiny nominal entries
+      // would build the whole Map first and answer a cancellation afterwards.
+      if (signal?.aborted === true) {
+        reject(signal.reason ?? new Error('aborted'));
+        return;
+      }
+      if (entries.size >= XLSX_MAX_ENTRIES) {
+        reject(
+          new XlsxReadError(
+            `the container declares more than ${XLSX_MAX_ENTRIES} entries; refusing to index it`,
+          ),
+        );
+        return;
+      }
       entries.set(entry.fileName, entry);
       zip.readEntry();
     };
@@ -596,7 +631,7 @@ export async function* readXlsxRowBatches(
   const zip = await openZip(opts.filePath, opts.fd);
 
   try {
-    const entries = await entryIndex(zip);
+    const entries = await entryIndex(zip, opts.signal);
     const parts = await readWorkbookParts(zip, entries, opts.signal);
     const { target } = resolveSheet(parts, opts);
 
@@ -908,7 +943,7 @@ export async function listXlsxSheetNames(
 ): Promise<readonly string[]> {
   const zip = await openZip(filePath, opts.fd);
   try {
-    const entries = await entryIndex(zip);
+    const entries = await entryIndex(zip, opts.signal);
     const parts = await readWorkbookParts(zip, entries, opts.signal);
     return parts.sheets.map((s) => s.name);
   } finally {

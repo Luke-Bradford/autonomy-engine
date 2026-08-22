@@ -1,4 +1,4 @@
-import { closeSync, constants, openSync, readSync, writeFileSync } from 'node:fs';
+import { constants, fstatSync, openSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -12,6 +12,7 @@ import {
   type XlsxRow,
 } from '../xlsx-read.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
+import { XLSX_MAX_ENTRIES } from '../../limits.js';
 import { ALL_ORDERS, buildXlsx, buildZip, type WorkbookSpec } from './xlsx-fixtures.js';
 
 afterAll(() => {
@@ -38,6 +39,26 @@ async function readAll(
 }
 
 const cellsOf = (rows: readonly XlsxRow[]): XlsxCell[][] => rows.map((r) => [...r.cells]);
+
+/**
+ * Whether `fd` STILL refers to the file it was opened on.
+ *
+ * Not `readSync(fd)` — that only asks whether the NUMBER is readable, and the
+ * kernel recycles descriptor numbers, so any later open in this process can
+ * make the probe succeed against an unrelated file. That made the ownership
+ * assertion below non-deterministic (it failed once in CI and never locally).
+ * Comparing the inode answers the question actually being asked, and closing a
+ * recycled descriptor — which the old probe did on its success path — could
+ * have shut a file belonging to something else.
+ */
+function stillRefersTo(fd: number, ino: number): boolean {
+  try {
+    return fstatSync(fd).ino === ino;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EBADF') return false;
+    throw err;
+  }
+}
 
 describe('readXlsxRowBatches — the container', () => {
   it('reads the same rows whichever ORDER the zip entries are in', async () => {
@@ -115,25 +136,88 @@ describe('readXlsxRowBatches — the container', () => {
     await expect(readAll(path)).rejects.toThrowError(/truncated or corrupt/);
   });
 
+  it('REFUSES a container declaring more entries than it will index', async () => {
+    // The directory walk runs to completion before any `XLSX_MAX_*_BYTES`
+    // applies — those bound an entry's CONTENT, and this is the pass that finds
+    // the entries at all. Tiny and unbounded in number is the same exhaustion
+    // shape as the derived column index, reached from the other direction.
+    seq += 1;
+    const path = join(root, `many-entries-${seq}.xlsx`);
+    const many = Array.from({ length: XLSX_MAX_ENTRIES + 8 }, (_, i) => ({
+      name: `pad/${i}.bin`,
+      data: 'x',
+    }));
+    writeFileSync(path, buildZip(many));
+
+    await expect(readAll(path)).rejects.toThrowError(XlsxReadError);
+    await expect(readAll(path)).rejects.toThrowError(/more than 16384 entries/);
+  });
+
+  it('honours an already-aborted signal DURING the directory walk', async () => {
+    // Asserting "an aborted read rejects" would be vacuous — `throwIfAborted`
+    // downstream already guarantees that, and this test passed with the walk's
+    // own check deleted. What is specific to the walk is WHICH failure wins.
+    // On an over-long container the cap and the abort are both live, and the
+    // abort must answer FIRST: a cancelled read should not be made to index
+    // every entry before it is allowed to stop.
+    seq += 1;
+    const path = join(root, `abort-walk-${seq}.xlsx`);
+    writeFileSync(
+      path,
+      buildZip(
+        Array.from({ length: XLSX_MAX_ENTRIES + 8 }, (_, i) => ({
+          name: `pad/${i}.bin`,
+          data: 'x',
+        })),
+      ),
+    );
+
+    const err: unknown = await readAll(path, { signal: AbortSignal.abort() }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeNull();
+    // Not the cap's refusal — that is what surfaces if the walk stops checking.
+    expect(err).not.toBeInstanceOf(XlsxReadError);
+    expect((err as Error).name).toBe('AbortError');
+  });
+
   it('reads from an already-open descriptor, and takes ownership of it', async () => {
     // The route a caller needs for O_NOFOLLOW: yauzl.open would do a plain
     // fs.open, leaving the lstat->open race that confine.ts warns about.
     const path = seed({ sheets: [{ name: 'S', rows: [[{ kind: 'inline', text: 'via-fd' }]] }] });
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const ino = fstatSync(fd).ino;
 
     const rows: XlsxRow[] = [];
     for await (const batch of readXlsxRowBatches({ filePath: path, fd })) rows.push(...batch);
     expect(cellsOf(rows)).toEqual([['via-fd']]);
 
     // Ownership transferred: the reader closed it, so the caller must not.
-    let closedByReader = false;
-    try {
-      readSync(fd, Buffer.alloc(1), 0, 1, 0);
-      closeSync(fd);
-    } catch (err) {
-      closedByReader = (err as NodeJS.ErrnoException).code === 'EBADF';
-    }
-    expect(closedByReader).toBe(true);
+    expect(stillRefersTo(fd, ino)).toBe(false);
+  });
+
+  it('closes a caller-supplied fd when the container cannot be opened', async () => {
+    // The other half of the ownership contract, and the half that was missing:
+    // yauzl hands an open error back and leaves the caller's descriptor OPEN
+    // (measured), so a module that only closes on success leaks one descriptor
+    // per refused file — and every `.xls` or password-protected workbook an
+    // operator points at is a refused file.
+    seq += 1;
+    const path = join(root, `notzip-${seq}.bin`);
+    writeFileSync(path, 'this is not a zip container');
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const ino = fstatSync(fd).ino;
+
+    await expect(
+      // The open fails before any batch is produced; draining is what forces
+      // the generator to start at all.
+      (async () => {
+        for await (const batch of readXlsxRowBatches({ filePath: path, fd })) void batch;
+      })(),
+    ).rejects.toThrowError(XlsxReadError);
+
+    expect(stillRefersTo(fd, ino)).toBe(false);
   });
 
   it('refuses a zip that carries no workbook part', async () => {
