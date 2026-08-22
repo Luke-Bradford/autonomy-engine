@@ -24,12 +24,7 @@ import {
 import { DatasetIoError } from './dataset-io-error.js';
 import { runLookupActivity } from './lookup.js';
 import type { SourceIo } from './source-io.js';
-import type {
-  ActivityContext,
-  ActivityEvent,
-  ConnectorAdapter,
-  ResolvedDataset,
-} from './types.js';
+import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
 // connector shares the one hardened implementation rather than mirroring it
 // (data-movement spec §8). `fs` is still its primary caller and still layers

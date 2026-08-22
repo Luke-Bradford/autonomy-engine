@@ -80,7 +80,9 @@ test.describe('#1221 — lookup-node authoring', () => {
     // paired ones. `exact` is load-bearing — Playwright matches an accessible
     // name by SUBSTRING, so a loose 'Connection' would also match
     // 'Source connection' and this assertion could not fail.
-    await expect(panel(page).getByRole('combobox', { name: 'Connection', exact: true })).toBeVisible();
+    await expect(
+      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+    ).toBeVisible();
     for (const absent of ['Source connection', 'Sink connection', 'Sink dataset']) {
       await expect(panel(page).getByRole('combobox', { name: absent })).toHaveCount(0);
     }
@@ -105,7 +107,9 @@ test.describe('#1221 — lookup-node authoring', () => {
     // axis silently degraded to kind-only and offered datasets on stores this
     // node is not bound to, which dispatch then refuses with
     // `DATASET_CONNECTION_MISMATCH`.
-    await panel(page).getByRole('combobox', { name: 'Connection', exact: true }).selectOption(connA);
+    await panel(page)
+      .getByRole('combobox', { name: 'Connection', exact: true })
+      .selectOption(connA);
     // Store B's dataset is GONE, store A's remains — and now the total IS
     // deterministic, because narrowing to this connection excludes every other
     // spec's datasets too: "— none —" plus store A's one.
@@ -127,9 +131,9 @@ test.describe('#1221 — lookup-node authoring', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByRole('combobox', { name: 'Connection', exact: true })).toHaveValue(
-      connA,
-    );
+    await expect(
+      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+    ).toHaveValue(connA);
     await expect(panel(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(setA);
 
     // Read from the PERSISTED version: a picker showing the right value proves

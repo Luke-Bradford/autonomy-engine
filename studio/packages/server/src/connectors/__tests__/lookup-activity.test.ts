@@ -76,7 +76,10 @@ async function valueOf(raw: unknown, io: Partial<SourceIo> = {}): Promise<unknow
 
 describe('the happy path contract', () => {
   it('yields ONE terminal carrying exactly the four declared outputs', async () => {
-    const events = await run(lookupCtx(), sourceIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]));
+    const events = await run(
+      lookupCtx(),
+      sourceIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]),
+    );
 
     // Exactly one terminal: the executor folds the FIRST it sees, so a second
     // would be silently discarded state.
@@ -292,9 +295,9 @@ describe('§6.4 the source dataset’s declared format facts', () => {
   it('applies the sentinel at the COLUMN value only, never inside a jsonb document', async () => {
     // It is a fact about how a FILE spells NULL in a field; matching it against a
     // string nested in a database value would apply a delimited rule to one.
-    expect(await valueOf({ note: '\\N' }, { sourceCoercion: () => ({ nullValue: '\\N' }) })).toEqual(
-      { note: '\\N' },
-    );
+    expect(
+      await valueOf({ note: '\\N' }, { sourceCoercion: () => ({ nullValue: '\\N' }) }),
+    ).toEqual({ note: '\\N' });
   });
 
   it('does NOT apply dateFormat — a lookup declares no target type to parse toward', async () => {
@@ -328,7 +331,9 @@ describe('the refusal ladder and failure classification', () => {
   it('reports an already-aborted dispatch as CANCELLED, not as a failure', async () => {
     const controller = new AbortController();
     controller.abort();
-    const end = terminal(await run(lookupCtx({ signal: controller.signal }), sourceIo([[{ a: 1 }]])));
+    const end = terminal(
+      await run(lookupCtx({ signal: controller.signal }), sourceIo([[{ a: 1 }]])),
+    );
     expect(end.type === 'failed' ? end.kind : null).toBe('cancelled');
   });
 
