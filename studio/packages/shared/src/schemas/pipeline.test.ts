@@ -159,12 +159,29 @@ describe('NodeSchema', () => {
     expect(NodeSchema.parse(value)).toEqual(value);
   });
 
-  it('rejects a half dataset pair, and an empty-string end', () => {
-    expect(() => NodeSchema.parse({ ...node, datasetIds: { source: 'ds_src' } })).toThrow();
+  // M12 slice 1 (#1220) — this block INVERTS one half of its M3 predecessor.
+  // `{source}` alone used to throw; it is now the shape a source-only reader
+  // binds. `{sink}` alone still throws, and so does either empty end: the
+  // widening is `sink` becoming optional, NOT the pair becoming `.partial()`.
+  it('accepts a SOURCE-ONLY dataset binding — the shape a source-only reader binds', () => {
+    const value = { ...node, connectionId: undefined, datasetIds: { source: 'ds_src' } };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('a source-only end may be a ${} expression, exactly as a paired end may', () => {
+    const value = { ...node, connectionId: undefined, datasetIds: { source: '${params.src}' } };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('still rejects a SINK-only pair, and an empty-string end on either side', () => {
     expect(() => NodeSchema.parse({ ...node, datasetIds: { sink: 'ds_sink' } })).toThrow();
     expect(() =>
       NodeSchema.parse({ ...node, datasetIds: { source: '', sink: 'ds_sink' } }),
     ).toThrow();
+    expect(() =>
+      NodeSchema.parse({ ...node, datasetIds: { source: 'ds_src', sink: '' } }),
+    ).toThrow();
+    expect(() => NodeSchema.parse({ ...node, datasetIds: { source: '' } })).toThrow();
   });
 });
 

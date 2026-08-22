@@ -371,7 +371,8 @@ type PreparedDispatch = {
   resolvedConnectionParams: Record<string, unknown> | undefined;
   /** M1 (#1104) — the paired source/sink binding, both ends `${}`-resolved. */
   resolvedConnectionIds: { source: string; sink: string } | undefined;
-  resolvedDatasetIds: { source: string; sink: string } | undefined;
+  /** M12 slice 1 (#1220) — `sink` optional: a source-only reader binds one address. */
+  resolvedDatasetIds: { source: string; sink?: string } | undefined;
 };
 
 /**
@@ -1166,6 +1167,18 @@ export function createEngine(doc: EngineDoc): Engine {
    * the property, not an accident — a divergence between them would be a bug in
    * whichever one drifted.
    *
+   * **M12 slice 1 (#1220) ends the byte-alike clause above, deliberately and
+   * once.** The two helpers now differ in exactly one way: this one's `sink` is
+   * OPTIONAL and its twin's is not. That is not drift, and the twin must NOT be
+   * changed to match — the divergence is in the DOC they read, which the same
+   * ticket widened on one side only. `NodeSchema.datasetIds.sink` is now
+   * optional because a source-only reader binds one ADDRESS; `connectionIds`
+   * keeps both ends because such a reader binds a single `connectionId` rather
+   * than a store pair (`engine/params.ts`), so a half connection pair remains
+   * unrepresentable and its unit-resolution argument stands untouched.
+   * Everything else — `substitute`, `String()`, the `undefined`-for-no-pair —
+   * stays byte-alike, and a divergence in any of THOSE is still a bug.
+   *
    * `String()` matters and is not defensive noise: a whole-value `${}` reference
    * PRESERVES its native type (`engine/params.ts`), so `${params.dsId}` bound to
    * a number would otherwise reach the executor as a number and miss every
@@ -1176,12 +1189,25 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
-  ): { source: string; sink: string } | undefined {
+  ): { source: string; sink?: string } | undefined {
     if (node.datasetIds === undefined) return undefined;
     const ctx = buildCtx(state);
+    const sink = node.datasetIds.sink;
     return {
       source: String(substitute(node.datasetIds.source, ctx, 0, item)),
-      sink: String(substitute(node.datasetIds.sink, ctx, 0, item)),
+      // M12 slice 1 (#1220) — the key is OMITTED, never stringified. An absent
+      // sink through the `String(substitute(...))` above yields the SEVEN-
+      // CHARACTER STRING "undefined", which is a well-formed dataset id as far
+      // as every layer below is concerned.
+      //
+      // Where that bites, measured rather than assumed: against a source-only
+      // CATALOG entry the executor never reads this end, so the bogus id rides
+      // along inert. It bites when a source-only NODE meets a dataset-PAIRED
+      // activity — a reachable authoring state (bind a reader's dataset, then
+      // change the node's type) — and turns the honest refusal DATASET_MISSING
+      // ("you addressed no sink") into DATASET_NOT_FOUND for a dataset named
+      // "undefined", sending an operator to look for a row instead of a binding.
+      ...(sink === undefined ? {} : { sink: String(substitute(sink, ctx, 0, item)) }),
     };
   }
 

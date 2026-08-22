@@ -624,10 +624,18 @@ export interface CanvasState {
    * #996 M5 slice 4c (#1139) — HALF-PICKED paired bindings, held here and
    * deliberately OUTSIDE the doc.
    *
-   * `NodeSchema.connectionIds` and `.datasetIds` require BOTH ends
-   * (`schemas/pipeline.ts`, whose docblock forbids `.partial()` by name), but an
-   * author picks source and sink in two separate clicks. Something has to hold
-   * the first pick.
+   * `NodeSchema.connectionIds` requires BOTH ends (`schemas/pipeline.ts`, whose
+   * docblock forbids `.partial()` by name), but an author picks source and sink
+   * in two separate clicks. Something has to hold the first pick.
+   *
+   * M12 slice 1 (#1220) — `.datasetIds` no longer requires both: its `sink` is
+   * optional, so a SOURCE-ONLY dataset binding is a valid doc. That does not
+   * change this store yet, and `complete` below still demands a whole pair —
+   * which is correct for every activity that exists today and wrong for the
+   * first source-only one, whose entry lands in slice 2 (#1221) along with the
+   * catalog-driven predicate that replaces it. Until then no authoring surface
+   * can produce the shape, which is the fact that slice's `CATALOG_VERSION`
+   * no-bump rests on (`schemas/version.ts`).
    *
    * It cannot be the node. `api/pipelines.ts` runs `PipelineVersionWriteSchema.parse`
    * on the body before every POST, so a `{source:'x'}` or an empty-string

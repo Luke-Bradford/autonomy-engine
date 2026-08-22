@@ -341,6 +341,52 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(listPipelines(tgt, 'local')).toHaveLength(0);
   });
 
+  // M12 slice 1 (#1220) — the twin of the test below, and the pair of them IS the
+  // distinction. `toDbRef` answers `undefined` for both "the ref was null" and
+  // "there was no ref", so a single `sink !== undefined` test cannot tell a
+  // stripped sink from a source-only node; the apply decides on the RAW field
+  // before calling it. Null still drops whole (below); absent binds `{source}`.
+  it('M12 (#1220) — a source-only pair APPLIES, remapped, and keeps no sink key', () => {
+    const src = freshDb().db;
+    const { source, pipe, incoming } = datasetSnapshot(src);
+    delete incoming.pipelines[0]!.data.versions[0]!.nodes[0]!.datasetIds!.sink;
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+
+    const tgtSource = getDatasetByResourceId(tgt, 'local', source.resourceId)!;
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const pair = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!.datasetIds;
+
+    expect(pair).toEqual({ source: tgtSource.id });
+    expect('sink' in pair!).toBe(false);
+    // The source end is still REMAPPED, not passed through — a source-only pair
+    // is not a bypass of the remap that makes the address resolve here.
+    expect(pair!.source).not.toBe(source.resourceId);
+  });
+
+  // M12 slice 1 (#1220), found by review — `toDbRef` is a VALIDATION as much as a
+  // lookup: it THROWS on a dangling literal and merely returns `undefined` on a
+  // nulled ref. So the two ends must both be put through it before either end's
+  // outcome is allowed to decide anything. Resolving the sink only when the
+  // source survived would let a broken sink ref ride through unexamined whenever
+  // the source happened to be nulled — a silent drop on a validation path this
+  // codebase otherwise refuses loudly. The dangling-sink test above pairs it with
+  // a VALID source, so only this combination catches it.
+  it('M12 (#1220) — a dangling sink still refuses even when the SOURCE was nulled', () => {
+    const src = freshDb().db;
+    const { incoming } = datasetSnapshot(src);
+    const node = incoming.pipelines[0]!.data.versions[0]!.nodes[0]!;
+    node.datasetIds!.source = null;
+    node.datasetIds!.sink = 'rid_not_here';
+
+    const tgt = freshDb().db;
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      /sink dataset "rid_not_here"/,
+    );
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
   it('M3 (#1117) — a dataset end nulled by a portable export drops the pair WHOLE', () => {
     const src = freshDb().db;
     const { pipe, incoming } = datasetSnapshot(src);

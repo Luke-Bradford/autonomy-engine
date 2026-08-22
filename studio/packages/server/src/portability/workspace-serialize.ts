@@ -289,9 +289,12 @@ function forwardRemapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   // produces the byte-identical content form it did before M3.
   if (datasetIds !== undefined) {
     const ds = maps.datasetResourceId;
+    // M12 slice 1 (#1220) — an absent sink is OMITTED, not forward-mapped. See
+    // `remapNode` below for why turning absence into `null` here loses data.
+    const sink = datasetIds.sink;
     exported.datasetIds = {
       source: forwardRef(datasetIds.source, ds),
-      sink: forwardRef(datasetIds.sink, ds),
+      ...(sink === undefined ? {} : { sink: forwardRef(sink, ds) }),
     };
   }
   if (call) {
@@ -468,27 +471,36 @@ interface NodeRefMasks {
 function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
   let masked = node;
   if (masks.connection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
-  /** One pair, blanked per END. M3 (#1117) — shared by both pairs so "mask only
-   * the end that is actually undecidable" cannot be got right for one and wrong
-   * for the other; over-masking hides a real hand-edit, which is silent. */
-  const maskedPair = (
-    pair: { source: string | null; sink: string | null },
-    sourceMask: Set<string>,
-    sinkMask: Set<string>,
-  ) => ({
-    source: sourceMask.has(node.id) ? UNDECIDABLE_REF : pair.source,
-    sink: sinkMask.has(node.id) ? UNDECIDABLE_REF : pair.sink,
-  });
+  /** One END of a pair. M3 (#1117) — shared by both pairs so "mask only the end
+   * that is actually undecidable" cannot be got right for one and wrong for the
+   * other; over-masking hides a real hand-edit, which is silent.
+   *
+   * M12 slice 1 (#1220) — shared per END rather than per PAIR, which is what
+   * keeps that property intact now the two pairs have different shapes. A
+   * dataset sink may be ABSENT and a connection sink may not, so a pair-shaped
+   * helper would have to invent a `sink` key for the source-only case; an
+   * explicit `sink: undefined` is not the same object as one with no `sink` at
+   * all, and this masked node is compared against the serialized form. The RULE
+   * is still in exactly one place — only its arity changed. */
+  const maskEnd = (value: string | null, mask: Set<string>): string | null =>
+    mask.has(node.id) ? UNDECIDABLE_REF : value;
   if (masked.connectionIds !== undefined) {
     masked = {
       ...masked,
-      connectionIds: maskedPair(masked.connectionIds, masks.source, masks.sink),
+      connectionIds: {
+        source: maskEnd(masked.connectionIds.source, masks.source),
+        sink: maskEnd(masked.connectionIds.sink, masks.sink),
+      },
     };
   }
   if (masked.datasetIds !== undefined) {
+    const sink = masked.datasetIds.sink;
     masked = {
       ...masked,
-      datasetIds: maskedPair(masked.datasetIds, masks.datasetSource, masks.datasetSink),
+      datasetIds: {
+        source: maskEnd(masked.datasetIds.source, masks.datasetSource),
+        ...(sink === undefined ? {} : { sink: maskEnd(sink, masks.datasetSink) }),
+      },
     };
   }
   if (masks.call.has(node.id) && masked.call !== undefined) {
@@ -602,17 +614,30 @@ function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   // INDEPENDENTLY of the connection pair above: the two are orthogonal, so a
   // node may carry either, both or neither.
   if (datasetIds !== undefined) {
+    // M12 slice 1 (#1220) — an ABSENT sink must be OMITTED, and this is the one
+    // site in this file where getting it wrong is silent. `remapRef` maps a
+    // nullish input to `null` (`value == null` catches `undefined` too), so
+    // passing an absent sink straight through would serialize `sink: null` —
+    // which the importer reads as "export stripped a literal" and drops the whole
+    // pair on. A source-only node would lose its dataset binding on a git
+    // round-trip and be reported as an `unresolvedDatasetRef` that never existed.
+    // `envelope.ts` states the null-vs-absent contract this honours.
+    const sink = datasetIds.sink;
     exported.datasetIds = {
       source: remapRef(datasetIds.source, maps.datasetResourceId, () => ({
         ref: 'datasetSource',
         nodeId: node.id,
         danglingId: datasetIds.source,
       })),
-      sink: remapRef(datasetIds.sink, maps.datasetResourceId, () => ({
-        ref: 'datasetSink',
-        nodeId: node.id,
-        danglingId: datasetIds.sink,
-      })),
+      ...(sink === undefined
+        ? {}
+        : {
+            sink: remapRef(sink, maps.datasetResourceId, () => ({
+              ref: 'datasetSink',
+              nodeId: node.id,
+              danglingId: sink,
+            })),
+          }),
     };
   }
   if (call) {

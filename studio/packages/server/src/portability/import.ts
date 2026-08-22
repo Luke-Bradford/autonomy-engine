@@ -44,15 +44,33 @@ function toDbNode(node: NodeExport): Node {
   // M3 (#1117) — the dataset pair's inverse, on the identical drop-whole rule and
   // applied to the RESULT rather than inside the connection branch: the two
   // fields are orthogonal (a copy binds both), so returning early on one would
-  // drop the other. An end nulled by export is unbound, and
-  // `NodeSchema.datasetIds` requires both, so a half pair drops whole — keeping
-  // one end would be unsavable and inventing the other is the fail-open this
-  // codebase refuses. The node is reported as an `unresolvedDatasetRef`. A
-  // fully-`${}` pair survives intact and is correctly not reported.
+  // drop the other. An end nulled by export is unbound, so a pair with a nulled
+  // end drops whole — keeping one end would be unsavable and inventing the other
+  // is the fail-open this codebase refuses. The node is reported as an
+  // `unresolvedDatasetRef`. A fully-`${}` pair survives intact and is correctly
+  // not reported.
+  //
+  // M12 slice 1 (#1220) — the rule now distinguishes NULL from ABSENT, which the
+  // clause "`NodeSchema.datasetIds` requires both" used to make unnecessary:
+  //
+  //   sink null   -> a sink WAS bound and export stripped it. Still drops whole:
+  //                  unchanged, still reported, and the node still needs a rebind.
+  //   sink absent -> no sink was ever bound (a source-only reader). SURVIVES as
+  //                  `{source}`, which `NodeSchema` now accepts. Not reported —
+  //                  nothing was stripped, so there is nothing to re-bind.
+  //
+  // Reading absent as null here is the silent one: a source-only node would lose
+  // its dataset binding on every export/import round-trip and be reported as
+  // needing a repair it cannot express. A null SOURCE always drops whole, on
+  // either shape — an address with no source names no data to read.
   if (datasetIds === undefined || datasetIds.source === null || datasetIds.sink === null) {
     return withConn;
   }
-  return { ...withConn, datasetIds: { source: datasetIds.source, sink: datasetIds.sink } };
+  const { source, sink } = datasetIds;
+  return {
+    ...withConn,
+    datasetIds: { source, ...(sink === undefined ? {} : { sink }) },
+  };
 }
 
 /** M3 (#1117) — the node ids whose exported `datasetIds` has at least one end

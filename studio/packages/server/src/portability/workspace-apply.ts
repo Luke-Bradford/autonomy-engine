@@ -302,14 +302,30 @@ function remapNodeToDb(
   // independently of the connection block above rather than as an `else`: the
   // two are orthogonal (a copy binds two stores AND two addresses), so a fork
   // would silently drop one of them. Same drop-whole rule as the connection
-  // pair — `NodeSchema.datasetIds` requires both ends, so a half-resolved pair
-  // is unsavable and inventing the missing end is the fail-open this codebase
-  // refuses.
+  // pair — a half-resolved pair is unsavable and inventing the missing end is
+  // the fail-open this codebase refuses.
+  //
+  // M12 slice 1 (#1220) — the ABSENT sink is decided BEFORE `toDbRef`, and that
+  // ordering is the point. `toDbRef` returns `undefined` for both "the ref was
+  // null" and "there was no ref", so the `sink !== undefined` test below cannot
+  // tell a stripped sink from a source-only node. Branching on the raw field
+  // keeps the two apart: a null sink still drops the pair whole (unchanged), an
+  // absent one binds `{source}` alone.
   if (datasetIds !== undefined) {
+    const rawSink = datasetIds.sink;
+    // BOTH ends go through `toDbRef` before EITHER outcome decides anything, and
+    // that ordering is load-bearing a second time: `toDbRef` is a VALIDATION as
+    // much as a lookup — it THROWS on a dangling literal and merely returns
+    // `undefined` on a nulled ref. Resolving the sink only when the source
+    // survived would leave a broken sink ref unexamined whenever the source was
+    // nulled, silently dropping it instead of refusing the apply. The connection
+    // pair above resolves both ends unconditionally for the same reason.
     const source = toDbRef(datasetIds.source, datasetById, 'source dataset');
-    const sink = toDbRef(datasetIds.sink, datasetById, 'sink dataset');
-    if (source !== undefined && sink !== undefined) {
-      dbNode = { ...dbNode, datasetIds: { source, sink } };
+    const sink = rawSink === undefined ? undefined : toDbRef(rawSink, datasetById, 'sink dataset');
+    if (source !== undefined) {
+      // Only now does absent-vs-null matter, and only for the SHAPE.
+      if (rawSink === undefined) dbNode = { ...dbNode, datasetIds: { source } };
+      else if (sink !== undefined) dbNode = { ...dbNode, datasetIds: { source, sink } };
     }
   }
 

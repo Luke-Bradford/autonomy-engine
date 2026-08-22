@@ -195,6 +195,50 @@ describe('serializeWorkspace', () => {
   // M3 (#1117) — a dataset ref reaches the branch as a stable `resourceId` or it
   // does not reach it at all. Committing a LOCAL primary key into a shared repo
   // is the exact failure §3 exists to prevent, and it throws nothing.
+  // M12 slice 1 (#1220) — the silent site. `remapRef` maps a NULLISH input to
+  // `null` (`value == null`), so a source-only pair passed through it verbatim
+  // would serialize `sink: null` — which the importer reads as "export stripped
+  // a literal" and drops the whole pair on. The node would lose its binding on a
+  // git round-trip and be reported as needing a repair that never applied. Only
+  // an assertion on key ABSENCE can see this: `toEqual` treats a missing key and
+  // an explicit `undefined` alike, and `null` is a different bug again.
+  it('M12 (#1220) — a SOURCE-ONLY pair serializes with NO sink key, never a null one', () => {
+    const { db } = freshDb();
+    const store = createConnection(db, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const src = createDataset(db, {
+      ownerId: 'local',
+      name: 'Src',
+      connectionId: store.id,
+      kind: 'table',
+      config: {},
+      columns: [],
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: src.id },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    const pair = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/p.json').data.versions[0]
+      .nodes[0].datasetIds;
+    expect(pair).toEqual({ source: src.resourceId });
+    expect('sink' in pair!).toBe(false);
+  });
+
   it('M3 (#1117) — remaps BOTH ends of a datasetIds pair to resourceIds', () => {
     const { db } = freshDb();
     const store = createConnection(db, {
@@ -936,6 +980,51 @@ describe('ownedVersionForms — compare (#1018)', () => {
         nodes: [{ ...branch.nodes[0]!, datasetIds: { source: 'someone-elses-ref', sink: null } }],
       };
       expect(compareFor(db, version.resourceId)(tampered).identical).toBe(false);
+    });
+
+    // M12 slice 1 (#1220) — the drift compare has TWO producers of a `NodeExport`
+    // (`remapNode` writes the branch, `forwardRemapNode` re-derives the DB side),
+    // and they must agree on how a source-only pair is shaped. If one omits the
+    // sink key and the other emits `sink: null`, a source-only node reads as
+    // DRIFTED forever — a permanent phantom diff on a node nobody edited, which
+    // no amount of committing would clear.
+    it('M12 (#1220) — a source-only node is IDENTICAL, not permanently drifted', () => {
+      const db = freshDb().db;
+      const store = createConnection(db, {
+        ownerId: 'local',
+        name: 'Store',
+        kind: 'http',
+        config: {},
+        secretRef: null,
+      });
+      const src = createDataset(db, {
+        ownerId: 'local',
+        name: 'Src',
+        connectionId: store.id,
+        kind: 'table',
+        config: {},
+        columns: [],
+      });
+      const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const version = createPipelineVersion(db, {
+        ...baseVersion(pipe.id),
+        nodes: [
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            datasetIds: { source: src.id },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+        .versions[0]!;
+
+      expect(compareFor(db, version.resourceId)(branch)).toEqual({
+        identical: true,
+        undecidableRefs: 0,
+      });
     });
   });
 });

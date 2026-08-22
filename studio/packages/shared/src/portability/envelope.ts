@@ -60,11 +60,31 @@ export const NodeExportSchema = NodeSchema.omit({
    * node. Here a null end can only mean "export stripped a literal", which is
    * the flag itself — `import.ts` derives the `unresolvedDatasetRef` attention
    * item from it directly rather than carrying a second SSOT for the same fact.
+   *
+   * M12 slice 1 (#1220) — `sink` is additionally OPTIONAL, and the two states are
+   * NOT interchangeable. This is the whole reason the widening is `.optional()`
+   * on top of `.nullable()` rather than a reuse of the existing null:
+   *
+   *   - `sink: null`  — the node BOUND a sink and export stripped the literal.
+   *                     Unresolvable, so the pair drops WHOLE on import.
+   *   - `sink` ABSENT — the node never bound one (a source-only reader).
+   *                     Portable as it stands, so `{source}` survives import.
+   *
+   * Collapsing them either way is a silent loss: reading absent as null drops a
+   * source-only node's binding on a round-trip (the #473 shape), and reading
+   * null as absent would resurrect a stripped copy as a source-only one, which
+   * would then run and copy nothing. The paragraph above still holds for the
+   * flag — a NULL end is what `import.ts` reports; an absent one is not an
+   * attention item, because nothing was lost.
+   *
+   * No `SCHEMA_VERSION` bump and no upgrader (`envelope.ts` carries three). An
+   * older export always carries both ends, so it parses here unchanged; this
+   * widening only admits a shape older exports could not contain.
    */
   datasetIds: z
     .object({
       source: z.string().min(1).nullable(),
-      sink: z.string().min(1).nullable(),
+      sink: z.string().min(1).nullable().optional(),
     })
     .optional(),
 });

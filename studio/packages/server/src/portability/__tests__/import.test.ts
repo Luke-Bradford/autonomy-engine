@@ -217,6 +217,58 @@ describe('importEnvelope: pipeline', () => {
     ).toEqual(['mixed']);
   });
 
+  // M12 slice 1 (#1220) — the source-only binding, and the distinction the whole
+  // slice turns on. NULL means "a sink was bound and export stripped it" (drops
+  // whole, reported); ABSENT means "no sink was ever bound" (survives, silent).
+  // Collapsing them loses a source-only node's dataset binding on every
+  // round-trip while reporting a repair it cannot express.
+  it('M12 (#1220) — a SOURCE-ONLY pair survives the round-trip, and is not reported', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Lookups' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'dynamic_source',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: '${params.target}' },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'stripped_source',
+          type: 'llm_call',
+          config: {},
+          // A source-only node whose ONE end is a local primary key. There is no
+          // portable half left, so it drops and IS reported — a source-only pair
+          // is not a licence to keep an unresolvable source.
+          datasetIds: { source: 'ds_local_id' },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const byId = (id: string) => result.versions[0]!.nodes.find((n) => n.id === id)!;
+
+    const survived = byId('dynamic_source').datasetIds;
+    expect(survived).toEqual({ source: '${params.target}' });
+    // ABSENT, not `sink: null` and not `sink: undefined`. `toEqual` cannot see
+    // the difference, and `sink: null` is exactly what the importer's drop-whole
+    // rule keys on — so assert the key is gone.
+    expect('sink' in survived!).toBe(false);
+
+    expect(byId('stripped_source').datasetIds).toBeUndefined();
+    expect(
+      result.attention.filter((a) => a.type === 'unresolvedDatasetRef').map((a) => a.nodeId),
+    ).toEqual(['stripped_source']);
+  });
+
   // An export carries EVERY immutable version, and a node id is stable across
   // them — so a binding that was never re-authored appears identically in each.
   // Reported once per version, the operator reads the same repair instruction

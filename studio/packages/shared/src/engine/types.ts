@@ -1841,8 +1841,15 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * carries no pair. Ephemeral like its three neighbours — commands are
      * re-derived on each reduce and never persisted in `run_events`, so adding
      * it carries no replay or migration concern.
+     *
+     * M12 slice 1 (#1220) — `sink` is OPTIONAL, matching the doc field. A
+     * source-only binding omits the key entirely rather than carrying the string
+     * `"undefined"`; the reducer's `resolveDatasetIds` states why. This widening
+     * has no replay consequence beyond the one already stated: commands are
+     * never persisted, and this schema has no `.parse()` call site — it types the
+     * command union rather than validating a stored artifact.
      */
-    resolvedDatasetIds: z.object({ source: z.string(), sink: z.string() }).optional(),
+    resolvedDatasetIds: z.object({ source: z.string(), sink: z.string().optional() }).optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

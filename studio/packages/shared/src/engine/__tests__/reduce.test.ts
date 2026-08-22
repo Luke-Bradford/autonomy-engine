@@ -666,6 +666,32 @@ describe('M5 #1130 — datasetIds resolution on dispatchNode', () => {
     expect(dispatchCmd(r.commands, 'a').resolvedDatasetIds).toBeUndefined();
   });
 
+  // M12 slice 1 (#1220) — the source-only pair. `String(substitute(undefined))`
+  // is the seven-character string `"undefined"`, which would reach the executor
+  // and refuse as DATASET_NOT_FOUND naming a dataset the author never wrote.
+  it('OMITS the sink key for a source-only pair — never the string "undefined"', () => {
+    const eng = engine([
+      { ...node('a'), connectionId: 'conn-single', datasetIds: { source: 'ds-orders' } },
+    ]);
+    const r = eng.reduce(eng.seedState(), started());
+    const resolved = dispatchCmd(r.commands, 'a').resolvedDatasetIds;
+    expect(resolved).toEqual({ source: 'ds-orders' });
+    // `toEqual` treats an absent key and an explicit `undefined` alike, so it
+    // cannot see the bug on its own: assert ABSENCE. This goes red both when the
+    // `String()` is restored and when someone writes `sink: x && String(x)`.
+    expect('sink' in resolved!).toBe(false);
+  });
+
+  it('resolves a source-only end through ${} without manufacturing a sink', () => {
+    const eng = engine([
+      { ...node('a'), connectionId: 'conn-single', datasetIds: { source: '${params.from}' } },
+    ]);
+    const r = eng.reduce(eng.seedState(), started({ from: 'ds-orders' }));
+    const resolved = dispatchCmd(r.commands, 'a').resolvedDatasetIds;
+    expect(resolved).toEqual({ source: 'ds-orders' });
+    expect('sink' in resolved!).toBe(false);
+  });
+
   it('the run.resumed re-emit (4th dispatch site) re-derives BOTH dataset ends', () => {
     // The pair rides `PreparedDispatch`/`dispatchNodeCommand`, so all four
     // emission sites are structurally covered — this pins the crash-window
