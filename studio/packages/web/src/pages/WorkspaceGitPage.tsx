@@ -106,17 +106,41 @@ export function WorkspaceGitPage() {
     }
   }, []);
 
+  /**
+   * #1097 — the two-argument `.then`, and the abort check on BOTH branches.
+   *
+   * This page does not adopt `useGuardedLoad` and should not: that hook exists
+   * for the reload-after-mutation race, and this page has none — while `status`
+   * is `undefined` only the loading line renders, so no mutation surface exists
+   * to start a second load alongside this one. But it had hand-rolled the shape
+   * WRONGLY, and a reader comparing it against `SettingsPage` (which hand-rolls
+   * the same exception correctly) could not tell which was the precedent.
+   *
+   * A chained `.catch` also catches whatever the SUCCESS callback throws, so a
+   * bug in state writing would be re-reported to the operator as a failed LOAD.
+   * The trade, stated because it is a trade and not a free win: with the
+   * two-argument form such a throw becomes an unhandled rejection instead of a
+   * misleading banner. Loud and wrong-looking beats quiet and wrong.
+   *
+   * The success-branch abort check is not ceremony either. Whether an aborted
+   * fetch rejects rather than resolves is the fetch's choice, not this
+   * component's, so a resolved-at-unmount answer would otherwise be written by
+   * whichever effect run had already been torn down — visible under StrictMode,
+   * where the first run's controller is aborted while the fiber lives on.
+   */
   useEffect(() => {
     const controller = new AbortController();
-    getWorkspaceGit(controller.signal)
-      .then((git) => {
+    getWorkspaceGit(controller.signal).then(
+      (git) => {
+        if (controller.signal.aborted) return;
         setStatus(git);
         setLoadError(null);
-      })
-      .catch((err: unknown) => {
+      },
+      (err: unknown) => {
         if (controller.signal.aborted) return;
         setLoadError(messageOf(err));
-      });
+      },
+    );
     return () => controller.abort();
   }, []);
 

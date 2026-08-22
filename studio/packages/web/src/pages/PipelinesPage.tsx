@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import {
@@ -115,14 +116,24 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * written a 404 body to the operator's disk as a `.json` file with nothing
    * said (see `api/download.ts`).
    */
-  const onExport = useCallback(async (p: Pipeline) => {
-    setActionMsg(null);
-    try {
-      downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
-    } catch (err) {
-      setActionMsg(`Could not export “${p.name}”: ${messageOf(err)}`);
-    }
-  }, []);
+  /* #960 — per-row single-flight. The visible label deliberately does NOT
+     change to "Exporting…": these buttons carry an `aria-label` naming the row,
+     and a visible string absent from the accessible name violates WCAG 2.5.3
+     (label in name). `disabled` + `aria-busy` is the affordance. */
+  const { active: exporting, run: runExport } = useBusyAction();
+
+  const onExport = useCallback(
+    (p: Pipeline) =>
+      runExport(p.id, async () => {
+        setActionMsg(null);
+        try {
+          downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
+        } catch (err) {
+          setActionMsg(`Could not export “${p.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
@@ -327,6 +338,8 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                     type="button"
                     onClick={() => void onExport(p)}
                     aria-label={`Export ${p.name}`}
+                    disabled={exporting.has(p.id)}
+                    aria-busy={exporting.has(p.id)}
                   >
                     Export
                   </button>

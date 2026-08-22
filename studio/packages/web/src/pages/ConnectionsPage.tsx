@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
@@ -25,6 +25,7 @@ import {
 import { listDatasets } from '../api/datasets';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import {
   datasetsOnConnection,
@@ -251,17 +252,27 @@ export function ConnectionsPage() {
    * and an import turns that boolean into the `requiresSecret` attention item
    * the panel below renders. That is the server's guarantee, not this page's.
    */
-  const onExport = useCallback(async (conn: ConnectionPublic) => {
-    setLoadError(null);
-    try {
-      downloadTextFile(
-        exportFileName('connection', conn.name, conn.id),
-        await exportConnection(conn.id),
-      );
-    } catch (err) {
-      setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
-    }
-  }, []);
+  /* #960 — per-row single-flight. The visible label deliberately does NOT
+     change to "Exporting…": these buttons carry an `aria-label` naming the row,
+     and a visible string absent from the accessible name violates WCAG 2.5.3
+     (label in name). `disabled` + `aria-busy` is the affordance. */
+  const { active: exporting, run: runExport } = useBusyAction();
+
+  const onExport = useCallback(
+    (conn: ConnectionPublic) =>
+      runExport(conn.id, async () => {
+        setLoadError(null);
+        try {
+          downloadTextFile(
+            exportFileName('connection', conn.name, conn.id),
+            await exportConnection(conn.id),
+          );
+        } catch (err) {
+          setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
 
   /**
    * #1174 — the delete confirm names the datasets it would strand.
@@ -295,23 +306,21 @@ export function ConnectionsPage() {
    * it 404s into `loadError` — an error banner over an operation that in fact
    * succeeded.
    *
-   * A REF rather than state, because it has to be read and written
-   * SYNCHRONOUSLY inside one handler, before any await. A `useState` flag would
-   * not have re-rendered by the time the second click's handler runs, which is
-   * the entire window being closed.
+   * The guard itself now lives in `useBusyAction`, which was extracted from this
+   * handler in #960 and carries both of its arguments — the ref (read and
+   * written SYNCHRONOUSLY inside one handler, before any await, because a
+   * `useState` flag would not have re-rendered by the time the second click's
+   * handler runs) and the per-id keying (the race is one ROW being deleted
+   * twice, not the page being used twice).
    *
-   * Keyed BY CONNECTION ID rather than a single page-wide flag: the race is one
-   * row being deleted twice, not the page being used twice. A page-wide flag
-   * would make a click on a second row during the first row's dataset read a
-   * silent no-op — no dialog, no error — which reads as a dead button.
+   * Delete deliberately gains no `disabled` affordance here: its dialog is the
+   * feedback, and the guard's whole purpose is to suppress the SECOND dialog.
    */
-  const deleting = useRef(new Set<string>());
+  const { run: runDelete } = useBusyAction();
 
   const onDelete = useCallback(
-    async (conn: ConnectionPublic) => {
-      if (deleting.current.has(conn.id)) return;
-      deleting.current.add(conn.id);
-      try {
+    (conn: ConnectionPublic) =>
+      runDelete(conn.id, async () => {
         let check: StrandCheck;
         try {
           check = {
@@ -328,11 +337,8 @@ export function ConnectionsPage() {
         } catch (err) {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
-      } finally {
-        deleting.current.delete(conn.id);
-      }
-    },
-    [refresh],
+      }),
+    [runDelete, refresh],
   );
 
   return (
@@ -385,6 +391,8 @@ export function ConnectionsPage() {
                     type="button"
                     onClick={() => void onExport(conn)}
                     aria-label={`Export ${conn.name}`}
+                    disabled={exporting.has(conn.id)}
+                    aria-busy={exporting.has(conn.id)}
                   >
                     Export
                   </button>
