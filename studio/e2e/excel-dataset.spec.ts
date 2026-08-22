@@ -109,20 +109,43 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     // DERIVED CONTROLS, not a JSON textarea — the assertion §13's trap makes
     // worth making. Every key of §2.6's excel row is a real input.
     await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
-    for (const field of ['path', 'sheet', 'sheetIndex', 'headerRow', 'nullValue', 'dateFormat']) {
+    // `path` and `header` carry no "(optional)" suffix and the other four do,
+    // which is not cosmetic — `ConfigFieldControl` derives that suffix from the
+    // SCHEMA, so this asserts the two REQUIRED keys of §2.6's excel row really
+    // did ship required. `header` is the M7 correction this row inherited, and
+    // a defaulted one could not be set to `false` distinguishably from unset.
+    for (const field of ['path', 'header']) {
       await expect(form(page).getByLabel(field, { exact: true })).toBeVisible();
     }
-    // `header` is a REQUIRED boolean, so it renders as a checkbox rather than an
-    // absentable one — the M7 correction this row inherited.
-    await expect(form(page).getByLabel('header', { exact: true })).toBeVisible();
+    // The five optional ones, each by its FULL accessible name. `sheetIndex`
+    // and `headerRow` carry the ` — number` suffix `ConfigFieldControl` appends
+    // to a numeric control, which is itself worth pinning: those two derived as
+    // NUMBER controls rather than degrading to a JSON box, which is what §13's
+    // trap would have produced from a `z.union` spelling of one sheet key.
+    for (const field of [
+      'sheet (optional)',
+      'sheetIndex (optional) — number',
+      'headerRow (optional) — number',
+      'nullValue (optional)',
+      'dateFormat (optional)',
+    ]) {
+      await expect(form(page).getByLabel(field, { exact: true })).toBeVisible();
+    }
     // …and no reader complaint, because M11 gave the last kind a reader.
     await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
     await form(page).getByLabel('Name').fill('#1215 people.xlsx');
     await form(page).getByLabel('path', { exact: true }).fill(bookPath);
-    await form(page).getByLabel('sheet', { exact: true }).fill('People');
+    await form(page).getByLabel('sheet (optional)', { exact: true }).fill('People');
     await form(page).getByLabel('header', { exact: true }).check();
-    await form(page).getByLabel('headerRow', { exact: true }).fill('3');
+    await form(page).getByLabel('headerRow (optional) — number', { exact: true }).fill('3');
+    // REQUIRED by the form, and deliberately so: `[]` is a claim about the
+    // store and never a stand-in for "not described yet".
+    await form(page)
+      .getByLabel('Columns (JSON)')
+      .fill(
+        '[{"name":"id","type":"integer","nullable":false},{"name":"name","type":"string","nullable":true}]',
+      );
     await page.getByRole('button', { name: 'Create dataset' }).click();
 
     // READ BACK through the API, which is what proves those controls wrote the
@@ -130,12 +153,11 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     // ABSENT rather than present-and-empty: the schema refuses both keys at
     // once, so an empty string smuggled through would make every dispatch fail.
     await expect(page.getByText('#1215 people.xlsx')).toBeVisible();
+    // The route is PAGED (`DatasetPageSchema`), so the rows are under `items`.
     const listed = (await (await page.request.get('/api/datasets')).json()) as {
-      name: string;
-      kind: string;
-      config: Record<string, unknown>;
-    }[];
-    const authored = listed.find((d) => d.name === '#1215 people.xlsx');
+      items: { name: string; kind: string; config: Record<string, unknown> }[];
+    };
+    const authored = listed.items.find((d) => d.name === '#1215 people.xlsx');
     expect(authored?.kind).toBe('excel');
     expect(authored?.config).toEqual({
       path: bookPath,
