@@ -86,25 +86,18 @@ type ExcelConfig = ReturnType<typeof excelDatasetConfigSchema.parse>;
 /**
  * Map any throw to a `DatasetIoError` carrying a real failure `kind`.
  *
- * THE ABORT ARM IS FIRST, and the order is the contract rather than a
- * preference. `xlsx-read.ts`'s `entryChunks` re-throws only errors whose `name`
- * is `AbortError` and wraps everything else as an `XlsxReadError` — so a cancel
- * that surfaced as, say, an `EBADF` on a handle closed out from under the read
- * would arrive here already wrapped and `permanent`. §10 turns on the opposite
- * ("`cancelled` never retries"), and `classifyFsError`'s own docblock says the
- * abort arm is part of the contract and names `fs.ts` as always having checked
- * it first.
+ * The arm ORDER is the contract rather than a preference — see the comments in
+ * the body, which is where the reasoning has to survive an edit.
  *
  * The `XlsxReadError` arm reads `err.permanent` rather than hardcoding
  * `'permanent'`. Every code the reader raises today IS permanent, so this
  * changes no behaviour — but hardcoding it would make that flag decorative, and
  * #1216 kept it precisely because it answers a different question from `code`.
  *
- * The `code` is used for WHICH THING THE SENTENCE NAMES, which is the whole
- * reason #1216 exists: a refusal about the dataset's own CONFIG must point at
- * the key an operator can fix, and one about the file must name the file.
- * Deciding that by matching on `.message` is the drift the bounded code
- * replaces.
+ * The `code` decides WHICH THING THE SENTENCE NAMES, which is the whole reason
+ * #1216 exists: a refusal about the dataset's own CONFIG must point at the key
+ * an operator can fix, and one about the file must name the file. Deciding that
+ * by matching on `.message` is the drift the bounded code replaces.
  */
 function readFailure(
   err: unknown,
@@ -240,6 +233,18 @@ async function openSheet(
     filePath: path,
     fd: opened.fd,
     batchRows,
+    // Exactly one of these is set — `excelDatasetConfigSchema`'s `superRefine`
+    // refuses both and refuses neither, which is what makes `resolveSheet`'s
+    // own first-sheet fallback unreachable from a dataset.
+    //
+    // THE OPERATOR TYPES THE NAME BLIND, and that is a real gap rather than an
+    // oversight: `xlsx-read.ts`'s `listXlsxSheetNames` could answer "what does
+    // this workbook hold" without streaming a worksheet, and still has no
+    // production caller. Wiring it needs a ROUTE that opens an
+    // operator-supplied path — a new surface owing the same confinement this
+    // module does — so it is #1218 rather than this slice. The refusal path
+    // does list the sheets, so a wrong name is caught with the right names in
+    // the message; it is caught at run time instead of at authoring time.
     ...(config.sheet === undefined ? {} : { sheet: config.sheet }),
     ...(config.sheetIndex === undefined ? {} : { sheetIndex: config.sheetIndex }),
     ...(signal === undefined ? {} : { signal }),

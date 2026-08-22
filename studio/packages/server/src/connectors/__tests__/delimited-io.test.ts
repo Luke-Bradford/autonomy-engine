@@ -385,7 +385,7 @@ describe('config validation at dispatch (§8)', () => {
     expect(err.message).toMatch(/^invalid delimited dataset config: [^\n]+$/);
   });
 
-  it('refuses a dataset kind this store does not read', async () => {
+  it('refuses a dataset kind this READER does not read', async () => {
     const path = await seed('c.csv', 'a\n1\n');
     const err = await refusalOf(() => rowsOf({ ...read(path), datasetKind: 'excel' }));
     expect(err.kind).toBe('permanent');
