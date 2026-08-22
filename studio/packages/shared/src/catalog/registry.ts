@@ -16,6 +16,7 @@ import {
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
+  LOOKUP_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
@@ -550,6 +551,78 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('truncated', 'boolean'),
     ],
     configSchema: copyInputSchema,
+  },
+  {
+    /**
+     * #996 M12 slice 2 (#1221, data-movement spec §5) — `lookup`: read ONE
+     * dataset, materialise a BOUNDED set of rows into the declared outputs.
+     *
+     * The SOURCE-ONLY entry the catalog type has been anticipating since M5
+     * slice 4a: `sinkConnectionKinds` is omitted entirely and `datasetKinds`
+     * declares no `sink`, which is why both fields were made optional then
+     * rather than now. It is the first entry to exercise that shape, and
+     * therefore the first that can produce a source-only `Node.datasetIds` — the
+     * shape M12 slice 1 (#1220) made legal.
+     *
+     * OUTPUTS, and the two the ticket required this slice to settle:
+     *
+     *  - `rows` carries the materialised records. There is deliberately NO
+     *    `firstRow` convenience: `engine/expr.ts` parses an INDEX segment, so
+     *    `${nodes.x.output.rows[0].sku}` already addresses it, and a second
+     *    spelling would need a value for the empty case that a consumer could
+     *    not distinguish from "row 0 was null". An empty lookup must not
+     *    manufacture a row, and the cheapest way to honour that is not to offer
+     *    a field whose empty value has to be invented.
+     *  - `rowCount` is ALWAYS `rows.length`. On a truncated lookup the source
+     *    total is unknown — the read stopped — and studio does not report what
+     *    it did not count.
+     *  - `bytes` is the DURABLE size of those rows, and is named `bytes` rather
+     *    than `copy`'s `bytesRead` because it is a different quantity measured
+     *    for a different purpose (see `server/limits.ts`'s `LOOKUP_BYTE_CAP`).
+     *    Sharing the name would be the drift, not the consistency.
+     *  - `truncated` is REQUIRED and honest, per §5. Paired with `rows`, it is
+     *    what distinguishes an empty SOURCE (`[]` + `false`) from a source whose
+     *    first row alone would not fit (`[]` + `true`).
+     *
+     * IDEMPOTENT, and it is the third activity ever to say so. The reconciler
+     * RESUMES an idempotent in-flight node and FREEZES the rest, so this claims
+     * that re-running a lookup after a crash is safe — which it is, on
+     * `file_read`/`file_list`'s own reasoning: it opens a store READ-ONLY, moves
+     * nothing, and writes nowhere. The safety is structural rather than
+     * asserted: there is no sink half of this entry for a future slice to widen
+     * without confronting this flag.
+     *
+     * NO CONFIG. `configSchema` is an empty object because a `lookup` node has
+     * no settings: the table, the query and its parameters, the file path, the
+     * sheet and the header row are all the DATASET's, and it is the dataset's
+     * config that the reader re-validates at dispatch (§8). A `maxRows` knob was
+     * considered and CUT — §5 settles the bound as a constant, and a per-node
+     * override would make a durable-log guarantee configurable by the person the
+     * guarantee protects against.
+     */
+    type: LOOKUP_ACTIVITY_TYPE,
+    title: 'Lookup Rows',
+    kind: 'execution',
+    category: 'general',
+    idempotent: true,
+    // The same three source stores `copy` reads from, and for the same reason:
+    // the executor dispatches on the bound connection's kind, so a lookup is
+    // reachable exactly where a reader exists. `sinkConnectionKinds` is ABSENT,
+    // not `[]` — absence means "not paired", and `[]` would mean "paired, but no
+    // sink kind is ever valid", an entry every dispatch refuses.
+    connectionKinds: ['sqlite', 'fs', 'postgres'],
+    // Every source kind that has a reader, which is `copy`'s source list
+    // exactly. It is written out rather than derived from that entry: the two
+    // agreeing today is a fact about which readers exist, not a rule, and a
+    // shared constant would turn the next divergence into a puzzle.
+    datasetKinds: { source: ['table', 'query', 'delimited', 'excel'] },
+    outputs: [
+      out('rows', 'json'),
+      out('rowCount', 'number'),
+      out('bytes', 'number'),
+      out('truncated', 'boolean'),
+    ],
+    configSchema: z.object({}),
   },
 ];
 

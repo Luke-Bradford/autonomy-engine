@@ -253,6 +253,27 @@ export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
 export const COPY_ACTIVITY_TYPE = 'copy';
 
 /**
+ * #996 M12 slice 2 (#1221) — the `lookup` activity `type`, the SOURCE-ONLY half
+ * of the data-movement set (spec §5's `lookup` ruling).
+ *
+ * `lookup` reads ONE dataset and materialises a BOUNDED set of rows into the
+ * node's declared outputs. It is the one activity whose rows become DURABLE:
+ * §5's rule that "rows never enter `run_events`" is a statement about `copy`,
+ * and `lookup` is the deliberate exception — which is why §5 gives it a
+ * CONCRETE bound (`LOOKUP_ROW_CAP`, `LOOKUP_BYTE_CAP` in `server/limits.ts`)
+ * rather than a "bounded" one, and why the truncation has to be VISIBLE in both
+ * the outputs and the run log.
+ *
+ * Unlike {@link COPY_ACTIVITY_TYPE} this constant is NOT ahead of its catalog
+ * entry: the entry ships in the same slice, together with the authoring half
+ * (`canvasStore.setNodeBindingEnd`'s completeness predicate, which until this
+ * slice committed a dataset binding only as a WHOLE pair and would have left a
+ * source-only node permanently half-bound). M12 slice 1 (#1220) is what made
+ * the source-only SHAPE legal; this is the first entry that produces it.
+ */
+export const LOOKUP_ACTIVITY_TYPE = 'lookup';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

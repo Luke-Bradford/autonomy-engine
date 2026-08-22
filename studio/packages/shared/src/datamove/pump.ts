@@ -215,16 +215,27 @@ function byteSizeOf(value: unknown): number {
   // being the whole story at M10 (postgres `numeric` is arbitrary precision), at
   // which point this wants a per-source measurement rather than a constant.
   if (typeof value === 'number' || typeof value === 'bigint') return 8;
-  // Everything else, which as of M11 slice 2 (#1215) is no longer hypothetical:
-  // the `excel` reader yields `Date` values for date-typed cells and
-  // `XlsxCellFault` objects for error cells, so this arm is now REACHED and
-  // charges both 0. Recorded rather than quietly fixed here — the sentence this
-  // replaces ("a kind no v1 source produces") became false the moment that
-  // reader shipped, and #1214 owns the sizing decision, which needs a
-  // per-source measurement rather than a constant chosen in this diff. 0 stays
-  // the honest placeholder in the meantime, on this comment's own original
-  // rule: `bytesRead` is a measurement, and a made-up number is worse than a
-  // missing one.
+  // #1214 — a `Date` charges 8, the same width as the `INTEGER`/`REAL` above,
+  // because a serial instant IS one: every reader that produces a `Date` built
+  // it from a single numeric instant (`postgres.ts` re-parses a naive
+  // `timestamp`/`date` as UTC; the `excel` reader converts a serial). This arm
+  // returned 0 until M12, on a comment claiming "a kind no v1 source produces"
+  // — false since M10 slice 2 and doubly so since M11, so a table that is
+  // mostly timestamps reported a `bytesRead` far below what it moved. §5
+  // defines the figure as "every value the reader materialised for a row", and
+  // 0 for a value that WAS materialised is an under-count, not the principled
+  // abstention the original rule licensed.
+  //
+  // The 0-rather-than-a-guess rule still governs the arm BELOW, and correctly:
+  // it is sound for a genuinely unknown type and a `Date` is not one.
+  if (value instanceof Date) return 8;
+  // Everything else. As of M11 slice 2 (#1215) this is no longer hypothetical —
+  // the `excel` reader yields `XlsxCellFault` objects for error cells — but it
+  // is no longer where its `Date`s land either. An unknown object still charges
+  // 0 on this comment's original rule: `bytesRead` is a measurement, and a
+  // made-up number is worse than a missing one. M10's arbitrary-precision
+  // `numeric` is the case that will eventually want a per-source measurement
+  // rather than the constant above.
   return 0;
 }
 

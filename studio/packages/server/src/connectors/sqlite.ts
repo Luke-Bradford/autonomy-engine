@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { z } from 'zod';
 import { stat } from 'node:fs/promises';
 import {
   datasetConfigSchema,
@@ -7,6 +8,7 @@ import {
   queryDatasetConfigSchema,
   tableDatasetConfigSchema,
   COPY_ACTIVITY_TYPE,
+  LOOKUP_ACTIVITY_TYPE,
   type DatasetAddress,
   type DatasetKind,
 } from '@autonomy-studio/shared';
@@ -45,6 +47,8 @@ import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
+import { runLookupActivity } from './lookup.js';
+import type { SourceIo } from './source-io.js';
 // #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
 // reader rather than duplicated (the macrotask choice is not the obvious one).
 import { yieldToEventLoop } from './scheduling.js';
@@ -189,6 +193,34 @@ function normaliseValue(value: unknown): SqliteValue {
       : value;
   }
   return value as SqliteValue;
+}
+
+/**
+ * #1221 M12 slice 2 — sqlite's half of {@link SourceIo}, built ONCE and shared
+ * by the two activities that read a dataset.
+ *
+ * `copy` spreads it and adds its sink-only members; `lookup` takes it whole.
+ * Declared as a function rather than written out at each arm so the two cannot
+ * drift: a reader change reaching only one of them would be a lookup and a copy
+ * disagreeing about what the same dataset contains.
+ *
+ * §2.6 gives the SQL kinds no format facts to declare — "a database column
+ * already has a type and a real `NULL`, so there is nothing to declare" — so the
+ * `{}` from `sourceCoercion` is a TRUE statement about `table`/`query`, not an
+ * unimplemented stub. The channel is REQUIRED precisely so a store has to say
+ * which of the two it means.
+ */
+function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSchema>): SourceIo {
+  return {
+    sourceCoercion: () => ({}),
+    readBatches: ({ dataset, signal }) =>
+      readSqliteDatasetBatches({
+        connectionConfig,
+        datasetKind: dataset.kind,
+        datasetConfig: dataset.config,
+        ...(signal === undefined ? {} : { signal }),
+      }),
+  };
 }
 
 /**
@@ -522,6 +554,7 @@ export const sqliteAdapter: ConnectorAdapter = {
         return;
       }
       yield* runCopyActivity(ctx, {
+        ...sqliteSource(cfg.data),
         // #1196 — ONE rung, shared. The sink allowlist is the CATALOG's, so
         // this refusal and the entry that makes a dispatch reachable cannot
         // drift apart; before slice 3a each of the three source adapters
@@ -529,21 +562,8 @@ export const sqliteAdapter: ConnectorAdapter = {
         // LADDER RUNG rather than a pre-dispatch check so it takes its declared
         // place behind the two preconditions instead of pre-empting them.
         refuseSink: refuseForeignSink,
-        // §2.6 gives the SQL kinds no format facts to declare — "a database
-        // column already has a type and a real `NULL`, so there is nothing to
-        // declare" — so `{}` here is a true statement about `table`/`query`,
-        // not an unimplemented stub. The channel is REQUIRED precisely so a
-        // store has to say which of the two it means.
-        sourceCoercion: () => ({}),
         describeSource: ({ dataset, signal }) =>
           describeSqliteDatasetColumns({
-            connectionConfig: cfg.data,
-            datasetKind: dataset.kind,
-            datasetConfig: dataset.config,
-            ...(signal === undefined ? {} : { signal }),
-          }),
-        readBatches: ({ dataset, signal }) =>
-          readSqliteDatasetBatches({
             connectionConfig: cfg.data,
             datasetKind: dataset.kind,
             datasetConfig: dataset.config,
@@ -561,6 +581,23 @@ export const sqliteAdapter: ConnectorAdapter = {
             batches,
           ),
       });
+      return;
+    }
+
+    // #1221 M12 slice 2 — `lookup` reads the same store through the same reader
+    // and writes nowhere, so it takes the shared read half whole and adds
+    // nothing. No `refuseSink` (it binds none) and no `describeSource` (it
+    // declares no mapping for §7's gate to check one against).
+    if (ctx.activityType === LOOKUP_ACTIVITY_TYPE) {
+      const cfg = sqliteConnectionConfigSchema.safeParse(ctx.connectionConfig);
+      if (!cfg.success) {
+        yield failed(
+          'permanent',
+          `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+        );
+        return;
+      }
+      yield* runLookupActivity(ctx, sqliteSource(cfg.data));
       return;
     }
 

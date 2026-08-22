@@ -1,6 +1,7 @@
 import pg from 'pg';
 import {
   COPY_ACTIVITY_TYPE,
+  LOOKUP_ACTIVITY_TYPE,
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
@@ -14,6 +15,8 @@ import { failed } from './activity-events.js';
 import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
+import { runLookupActivity } from './lookup.js';
+import type { SourceIo } from './source-io.js';
 import {
   rewriteNamedParametersToPositional,
   type PostgresStatement,
@@ -172,6 +175,27 @@ export function createPostgresAdapter(
       // one server's password to another. Never placed in `ctx` or an event.
       sinkSecret?: string | null,
     ): AsyncIterable<ActivityEvent> {
+      const read = (dataset: ResolvedDataset, signal: AbortSignal | undefined) => ({
+        connectionConfig: ctx.connectionConfig,
+        secret,
+        datasetKind: dataset.kind,
+        datasetConfig: dataset.config,
+        createClient,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      // #1221 M12 slice 2 — the READ half, built ONCE and shared by the two
+      // activities that read a dataset. `copy` spreads it and adds its sink-only
+      // members; `lookup` takes it whole, so a reader change cannot reach one
+      // and miss the other.
+      //
+      // §2.6 gives `table`/`query` no `nullValue`/`dateFormat` to declare, so the
+      // `{}` is a TRUE statement about the SQL kinds rather than a stub — the
+      // polarity `SourceIo.sourceCoercion` requires of every store.
+      const source: SourceIo = {
+        sourceCoercion: () => ({}),
+        readBatches: ({ dataset, signal }) => readPostgresDatasetBatches(read(dataset, signal)),
+      };
+
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection
       // runs, and postgres runs it as the SOURCE end: the executor dispatches on
       // the source connection's kind, resolves the sink alongside it, and hands
@@ -180,15 +204,8 @@ export function createPostgresAdapter(
       // mapping — is `copy.ts`'s; this branch supplies only the halves that are
       // postgres'.
       if (ctx.activityType === COPY_ACTIVITY_TYPE) {
-        const read = (dataset: ResolvedDataset, signal: AbortSignal | undefined) => ({
-          connectionConfig: ctx.connectionConfig,
-          secret,
-          datasetKind: dataset.kind,
-          datasetConfig: dataset.config,
-          createClient,
-          ...(signal === undefined ? {} : { signal }),
-        });
         yield* runCopyActivity(ctx, {
+          ...source,
           // #1196 — ONE rung, shared, derived from the CATALOG's
           // `sinkConnectionKinds`. Slice 3a adds the postgres WRITER, so this
           // adapter is now both ends of a postgres-to-postgres copy as well as
@@ -198,13 +215,8 @@ export function createPostgresAdapter(
           // be refused as "invalid <store> connection config" — a true statement
           // about the wrong thing.
           refuseSink: refuseForeignSink,
-          // §2.6 gives `table`/`query` no `nullValue`/`dateFormat` to declare, so
-          // `{}` is a TRUE statement about the SQL kinds rather than a stub —
-          // the polarity `CopyIo.sourceCoercion` requires of every store.
-          sourceCoercion: () => ({}),
           describeSource: ({ dataset, signal }) =>
             describePostgresDatasetColumns(read(dataset, signal)),
-          readBatches: ({ dataset, signal }) => readPostgresDatasetBatches(read(dataset, signal)),
           // Dispatched by SINK KIND (#1196), and `createClient` is threaded so
           // the sink half is assertable through the same injected seam the
           // reader uses. The sink's config is parsed inside, against the schema
@@ -226,6 +238,15 @@ export function createPostgresAdapter(
               batches,
             ),
         });
+        return;
+      }
+
+      // #1221 M12 slice 2 — `lookup` reads the same store through the same
+      // reader and writes nowhere, so it takes the shared read half whole. No
+      // `refuseSink` (it binds none) and no `describeSource` (it declares no
+      // mapping for §7's drift gate to check one against).
+      if (ctx.activityType === LOOKUP_ACTIVITY_TYPE) {
+        yield* runLookupActivity(ctx, source);
         return;
       }
 

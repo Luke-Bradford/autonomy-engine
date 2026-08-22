@@ -16,6 +16,7 @@ import {
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
 /** The resolved SINK connection, as `ActivityContext` declares it. */
@@ -71,7 +72,7 @@ type ActivitySink = NonNullable<ActivityContext['sink']>;
  * took `ctx` would force every implementation to re-assert it with a `!` or an
  * `as`, which is the same claim made again with less evidence.
  */
-export interface CopyIo {
+export interface CopyIo extends SourceIo {
   /**
    * #1148 M6 (§7) — the source's ACTUAL column names, discovered WITHOUT reading
    * a row, so the gate below can run "before the first row moves".
@@ -90,15 +91,6 @@ export interface CopyIo {
     readonly signal: AbortSignal | undefined;
   }) => Promise<readonly string[]>;
   /**
-   * The source, already bound to its connection + dataset config. Yields batches
-   * of rows as the store reports them, yielding to the event loop between
-   * batches (§9) — a bounded read is a SCHEDULING quantum, not just a read unit.
-   */
-  readonly readBatches: (args: {
-    readonly dataset: ResolvedDataset;
-    readonly signal: AbortSignal | undefined;
-  }) => AsyncIterable<readonly Record<string, unknown>[]>;
-  /**
    * The sink, already bound to its connection + dataset config. Drives the
    * batches it is given and resolves with the rows it durably wrote.
    *
@@ -115,23 +107,6 @@ export interface CopyIo {
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
     readonly signal: AbortSignal | undefined;
   }) => Promise<{ readonly rowsWritten: number }>;
-  /**
-   * §6.4's per-source-dataset format facts (`nullValue`, `dateFormat`), read off
-   * the SOURCE dataset's own config by the store that knows its shape.
-   *
-   * REQUIRED, on {@link CopyIo.describeSource}'s polarity and for the same
-   * reason: an optional channel is one a store can DECLINE, and a store that
-   * declined it would copy with the operator's declared sentinel silently doing
-   * nothing while reading exactly like one that applied it. The SQL kinds return
-   * `{}` — not a stub, a true statement, because §2.6 gives `table`/`query` no
-   * such keys to declare.
-   *
-   * SYNCHRONOUS and non-throwing in the ordinary case: it reads a config the
-   * store has already validated at `describeSource`, so it is a projection
-   * rather than a second gate. A store whose config cannot be parsed here still
-   * throws rather than defaulting to `{}` — see `delimitedCoercionFor`.
-   */
-  readonly sourceCoercion: (dataset: ResolvedDataset) => CoercionOptions;
   /**
    * The store-specific check on the SINK CONNECTION — returns a refusal reason,
    * or `null` to accept. Optional: a store with nothing to say about a sink

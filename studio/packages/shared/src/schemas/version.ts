@@ -406,7 +406,27 @@
 // both ends and parses here unchanged, so there is nothing for an upgrader to
 // repair — see `portability/envelope.ts` for why the null and absent cases must
 // stay distinguishable rather than being collapsed into the existing null.
-export const CATALOG_VERSION = 28;
+// CATALOG_VERSION 29 (#1221, M12 slice 2): the `lookup` ACTIVITY. Bump 23's
+// precedent (the `copy` activity) verbatim — a new catalog type is not runnable
+// AS AUTHORED on a build that has no entry for it, where the executor refuses it
+// before dispatch as `UNKNOWN_ACTIVITY`, so bump 21's rule refuses the artifact
+// at IMPORT rather than half-loading it.
+// IT ALSO DISCHARGES SLICE 1's NO-BUMP, which is the half a reader would
+// otherwise have to reconstruct. That note (#1220, above) let a source-only
+// `datasetIds` land unbumped on the narrower fact that nothing could AUTHOR the
+// shape: "No catalog entry declares `datasetKinds.sink === undefined`, and
+// `canvasStore.setNodeBindingEnd` commits a binding pair only when both ends are
+// known, so no authoring surface emits a source-only pair — only the API can."
+// This slice falsifies BOTH halves in the same commit — the `lookup` entry is
+// that catalog entry, and the canvas predicate now comes from the catalog — so
+// the shape becomes reachable from the UI exactly here. The deferral is
+// therefore settled by this number rather than expiring quietly, which is what
+// slice 1 predicted when it wrote that slice 2 "owes the bump there".
+// No `SCHEMA_VERSION` bump: `NodeSchema` is untouched. `Node.config.outputs` on a
+// `lookup` node is seeded from this entry by F13b lowering at SAVE time, so a
+// pre-29 build meeting such a doc fails the node on a declared output its
+// adapter cannot yield — bump 21's shape exactly, and the same remedy.
+export const CATALOG_VERSION = 29;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

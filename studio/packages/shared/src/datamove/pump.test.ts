@@ -417,6 +417,23 @@ describe('bytesRead', () => {
     expect(counters.bytesRead).toBe(6); // é = 2, 😀 = 4
   });
 
+  it('charges a Date 8 bytes — the width it already charges an INTEGER (#1214)', async () => {
+    // The arm existed and returned 0 on a comment claiming "a kind no v1 source
+    // produces". That became false at M10 slice 2 (`postgres.ts` returns a real
+    // `Date` for `timestamp`/`date` columns) and doubly false at M11 (an Excel
+    // date cell is typed, so the reader hands back a `Date`), so a table that is
+    // mostly timestamps reported a `bytesRead` far below what it moved. §5
+    // defines the figure as "every value the reader materialised for a row", and
+    // 0 for a value that WAS materialised is an under-count, not a principled
+    // abstention.
+    const { counters, batches } = run(
+      batchesOf([{ t: new Date('2026-08-22T00:00:00.000Z'), n: 1 }]),
+      [map({ source: 'n', sink: 'n' })],
+    );
+    await batches;
+    expect(counters.bytesRead).toBe(16);
+  });
+
   it('counts a FAILED row too — it was read before it was rejected', async () => {
     const { counters, batches } = run(batchesOf([{ n: 'nope' }]), [
       map({ source: 'n', sink: 'n', type: 'integer' }),

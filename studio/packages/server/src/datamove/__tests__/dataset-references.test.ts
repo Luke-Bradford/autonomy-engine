@@ -191,6 +191,47 @@ describe('datasetReferences (#996 M9)', () => {
     expect(ref?.unreadable).toContain('no column mapping');
   });
 
+  it('reports a LOOKUP as not_applicable — it has no mapping, so it has no fault', () => {
+    // #1221 M12 slice 2. A `lookup` reads the dataset WHOLE and declares no
+    // column mapping, so `agreementOf`'s `!Array.isArray(mapping)` rung would
+    // have flagged EVERY lookup on this page as `unreadable — this node declares
+    // no column mapping`: a fault manufactured out of a correct pipeline, on the
+    // surface an operator uses to answer "is this dataset still wired up".
+    const { db } = freshDb();
+    const conn = store(db);
+    const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
+    const node: Node = {
+      id: 'n1',
+      type: 'lookup',
+      config: {},
+      connectionId: 'c',
+      datasetIds: { source: ds.id },
+      position: { x: 0, y: 0 },
+    };
+    pipelineWith(db, [node]);
+
+    const [ref] = datasetReferences(db, OWNER, ds).references;
+    expect(ref?.nodeType).toBe('lookup');
+    expect(ref?.end).toBe('source');
+    expect(ref?.status).toBe('not_applicable');
+    // Not folded into `agrees` either — that would claim a mapping checked out
+    // when there is none to check.
+    expect(ref?.agreement).toBeNull();
+    expect(ref?.unreadable).toBeNull();
+  });
+
+  it('still reports a COPY with no mapping as unreadable — the fault is real there', () => {
+    // The other half of the same rule, pinned together so a future widening of
+    // the `not_applicable` gate cannot silence a genuine fault: `copy` DOES
+    // declare a sink, so a missing mapping is a node that should have one.
+    const { db } = freshDb();
+    const conn = store(db);
+    const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
+    pipelineWith(db, [copyNode(ds.id, ds.id, undefined)]);
+
+    expect(datasetReferences(db, OWNER, ds).references[0]?.status).toBe('unreadable');
+  });
+
   it('names a `${}` end as dynamic rather than dropping it', () => {
     const { db } = freshDb();
     const conn = store(db);

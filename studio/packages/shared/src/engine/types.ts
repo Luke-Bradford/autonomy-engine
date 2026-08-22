@@ -808,6 +808,27 @@ export const WARNING_CODES = {
    * which stays silent because it was never read and nothing can observe it go.
    */
   COPY_SOURCE_COLUMNS_UNMAPPED: 'copy_source_columns_unmapped',
+  /**
+   * #996 M12 slice 2 (#1221, spec §5) — a `lookup` returned a PREFIX of its
+   * source: `LOOKUP_ROW_CAP` or `LOOKUP_BYTE_CAP` bound before the source ran
+   * out of rows.
+   *
+   * §5 settles the behaviour this pairs with — "truncate and mark, never fail. A
+   * lookup is a read for a decision, and a bounded answer is usable where an
+   * error is not" — and it settles that the marking is TWO-CHANNEL: `truncated:
+   * true` reaches the declared outputs so a pipeline can branch on it, and this
+   * warning reaches the log "so no consumer can mistake a prefix for the whole".
+   * The counterexample §5 names is `process-supervisor.ts`'s `truncated`, which
+   * `connectors/agent.ts` never read (#1101): a computed fact nothing consumed
+   * is the same as no fact at all.
+   *
+   * The `reason` names WHICH bound bound and the figure it bound at, because the
+   * two have different remedies — a row cap says narrow the query, a byte cap
+   * says select fewer columns. It also carries the one case the outputs cannot
+   * express on their own: a FIRST row that alone exceeded the byte cap, where
+   * `rows` is empty for a reason that is not an empty source.
+   */
+  LOOKUP_TRUNCATED: 'lookup_truncated',
 } as const;
 
 /** The warning codes the engine itself mints — see `WARNING_CODES`. */
