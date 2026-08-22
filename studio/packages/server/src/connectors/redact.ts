@@ -130,6 +130,44 @@ function jsonFormOf(value: object, key: string): JsonForm {
 }
 
 /**
+ * #1223 — enumerate an object's own string keys WITHOUT executing any of it,
+ * and read each value under guard.
+ *
+ * `Object.entries` does both at once, and the reading half invokes every own
+ * enumerable GETTER. A getter that throws sends its message straight out of the
+ * walker uncaught — and that message is exactly the kind this file's header
+ * exists to stop being echoed, because a runtime error routinely quotes the
+ * value it choked on. Measured: `Object.entries({get auth(){throw new
+ * Error('boom sk-x')}})` throws `boom sk-x`, plaintext and all, from the one
+ * function whose job is to make sure that string never travels.
+ *
+ * `Object.keys` invokes no accessor, so the split is: enumerate safely, then
+ * read each key inside its own try. Per KEY rather than per object, so one
+ * hostile accessor costs its own value and not its siblings'.
+ */
+function ownKeysOf(value: object): string[] | null {
+  try {
+    return Object.keys(value);
+  } catch {
+    // A proxy may refuse to be enumerated at all. There is nothing to walk and
+    // nothing partial to keep.
+    return null;
+  }
+}
+
+function readOwn(value: object, key: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    // Bracket access, not a descriptor read: a getter's VALUE is what serialises,
+    // so it has to be invoked — just not unguarded. An own `__proto__` data
+    // property shadows the prototype accessor, so this stays faithful for the
+    // JSON-sourced key `setDataProperty` exists to preserve.
+    return { ok: true, value: (value as Record<string, unknown>)[key] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
  * The walk itself. `key` is the property name this value is reached by, because
  * that is what `JSON.stringify` hands a `toJSON`.
  *
@@ -145,12 +183,20 @@ function jsonFormOf(value: object, key: string): JsonForm {
  *
  * The fixed point buys the property that matters: the output contains no live
  * `toJSON`, so **walking it again cannot change it further** (pinned by an
- * idempotence test). It diverges from a single `JSON.stringify` for exactly one
- * shape — a `toJSON` returning another `toJSON`-carrying value — and diverges by
+ * idempotence test). It diverges from a single `JSON.stringify` for one shape —
+ * a `toJSON` returning another `toJSON`-carrying value — and diverges by
  * PRESERVING what that serialisation would have discarded, which is the safe
  * direction here (#473: never manufacture an absence). The pathological shape,
  * a `toJSON` returning `this`, is bounded by the depth ceiling like any other
  * unbounded value.
+ *
+ * One further difference, stated so the claim above is not read as broader than
+ * it is: a `toJSON` returning `undefined` leaves the key PRESENT with an
+ * `undefined` value, where `JSON.stringify` drops the key. That is not new and
+ * not specific to `toJSON` — this walker has always preserved an
+ * `undefined`-valued key — and the two forms converge the moment the output is
+ * serialised into the event log. Worth knowing only for a reader inspecting the
+ * in-memory value with `in` or `Object.keys`, which `toEqual` cannot see either.
  */
 function walk(
   value: unknown,
@@ -174,9 +220,12 @@ function walk(
     if (Array.isArray(value)) {
       return value.map((v, i) => walk(v, secrets, depth + 1, String(i)));
     }
+    const keys = ownKeysOf(value);
+    if (keys === null) return '***';
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      setDataProperty(out, k, walk(v, secrets, depth + 1, k));
+    for (const k of keys) {
+      const read = readOwn(value, k);
+      setDataProperty(out, k, read.ok ? walk(read.value, secrets, depth + 1, k) : '***');
     }
     return out;
   }
@@ -193,10 +242,21 @@ export function deepRedactRecord(
   record: Record<string, unknown>,
   secrets: readonly (string | null | undefined)[],
 ): Record<string, unknown> {
+  // A record that refuses to be enumerated is the ONE place the sentinel cannot
+  // be expressed — this returns a `Record`, so there is no value to stand in for
+  // the whole map. Inventing an empty one would be #473's shape exactly: an
+  // absence manufactured out of a failure, indistinguishable from a node that
+  // genuinely produced no outputs. So it refuses, with a message of its own that
+  // carries no plaintext.
+  const keys = ownKeysOf(record);
+  if (keys === null) throw new Error('outputs could not be enumerated for redaction');
   const out: Record<string, unknown> = {};
   // Through `walk` rather than `deepRedactSecrets` for one reason: the record's
   // own key is the key a value's `toJSON` must be handed (#1223), and the public
   // entry point has no way to say so.
-  for (const [k, v] of Object.entries(record)) setDataProperty(out, k, walk(v, secrets, 0, k));
+  for (const k of keys) {
+    const read = readOwn(record, k);
+    setDataProperty(out, k, read.ok ? walk(read.value, secrets, 0, k) : '***');
+  }
   return out;
 }

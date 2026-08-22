@@ -107,8 +107,17 @@ globalThis.fetch = ((input: unknown): never => {
 // was recorded. `splice` clears the list even when it throws, so one offending
 // test cannot fail every test after it.
 afterEach(() => {
-  cleanup();
-  const seen = unmockedFetchUrls.splice(0);
+  // `finally`, so a throwing `cleanup()` cannot leave this test's recorded urls
+  // behind to be reported against the NEXT one — a failure message naming the
+  // wrong test is worse than no message. The check itself stays OUTSIDE the
+  // `finally`: a throw in there would replace the cleanup error rather than add
+  // to it, and the cleanup failure is the one that explains the other.
+  let seen: string[] = [];
+  try {
+    cleanup();
+  } finally {
+    seen = unmockedFetchUrls.splice(0);
+  }
   if (seen.length > 0) {
     throw new Error(
       `#1206: this test reached the real \`fetch\` ${seen.length} time(s): ${seen.join(', ')}`,

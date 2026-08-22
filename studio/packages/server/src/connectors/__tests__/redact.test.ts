@@ -250,6 +250,79 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
     expect(out).toEqual({ years: 1, note: 'note ***' });
   });
 
+  /**
+   * `Object.entries` INVOKES every own enumerable getter, and a getter that
+   * throws sends its message — with the plaintext in it — straight out of the
+   * walker uncaught. Measured: `Object.entries({get auth(){throw new
+   * Error('boom sk-x')}})` throws `boom sk-x`. That is the precise failure this
+   * file's header exists to close (an error that embeds a value we passed in,
+   * echoed into a durable event), reached through the one door the walker had
+   * left open. `Object.keys` does not invoke accessors, so enumeration is safe;
+   * it is the per-key READ that needs the guard.
+   *
+   * Per KEY, not per object: one hostile accessor must not cost the siblings,
+   * which are ordinary values that redact fine.
+   */
+  it('replaces a property whose getter throws with the sentinel, keeping its siblings', () => {
+    const hostile = {
+      ok: 1,
+      safe: `Bearer ${SECRET}`,
+      get auth(): string {
+        throw new Error(`boom ${SECRET}`);
+      },
+    };
+    const out = deepRedactSecrets({ v: hostile }, [SECRET]);
+    expect(out).toEqual({ v: { ok: 1, safe: 'Bearer ***', auth: '***' } });
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
+  it('replaces a value that refuses to be ENUMERATED with the sentinel', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error(`no keys ${SECRET}`);
+        },
+      },
+    );
+    const out = deepRedactSecrets({ v: hostile, ok: 1 }, [SECRET]);
+    expect(out).toEqual({ v: '***', ok: 1 });
+  });
+
+  it('guards the same getter hazard inside deepRedactRecord', () => {
+    const rec: Record<string, unknown> = {
+      get body(): string {
+        throw new Error(`boom ${SECRET}`);
+      },
+      status: 200,
+    };
+    expect(deepRedactRecord(rec, [SECRET])).toEqual({ body: '***', status: 200 });
+  });
+
+  /**
+   * The one place the sentinel is not expressible: `deepRedactRecord` returns a
+   * `Record`, so an outputs map that cannot be enumerated at all has no value to
+   * stand in for it. Inventing an empty map would be #473's shape — an absence
+   * manufactured from a failure — so it REFUSES, with a message that carries no
+   * plaintext of its own.
+   */
+  it('refuses an outputs map that cannot be enumerated, without echoing the secret', () => {
+    const rec = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error(`no keys ${SECRET}`);
+        },
+      },
+    ) as Record<string, unknown>;
+    expect(() => deepRedactRecord(rec, [SECRET])).toThrow(/could not be enumerated/);
+    try {
+      deepRedactRecord(rec, [SECRET]);
+    } catch (err) {
+      expect(String(err)).not.toContain(SECRET);
+    }
+  });
+
   it('preserves a Date reached through deepRedactRecord', () => {
     const rec: Record<string, unknown> = { at: new Date('2021-05-06T07:08:09.000Z') };
     expect(deepRedactRecord(rec, [SECRET])).toEqual({ at: '2021-05-06T07:08:09.000Z' });
