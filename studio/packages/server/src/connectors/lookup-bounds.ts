@@ -35,8 +35,16 @@
  * and every NESTED key name — is charged NOTHING. (A top-level COLUMN name is
  * charged, because it is a string from the source like any other and is
  * serialised in full; see {@link estimateRowLowerBound}.) That is deliberate
- * slack, not an oversight: those kinds are individually small, and a row made only of them is
- * already bounded by the reader's own row. A ladder mirroring every arm of
+ * slack, not an oversight: those kinds are individually small, and a row made
+ * only of them is already bounded by the reader's own row. One of them rests on
+ * an assumption worth naming rather than leaving implicit: a `bigint` is charged
+ * nothing because both current readers only ever produce one from a
+ * bounded-width integer column (`sqlite.ts` opens the store with
+ * `defaultSafeIntegers(true)`, and `pg` parses `int8`), so its decimal rendering
+ * is ~20 bytes. A connector that one day handed back an arbitrary-precision
+ * decimal as a `bigint` would cost this slack — it could never cause an
+ * OVER-estimate, since zero is always a valid lower bound, but it would stop
+ * bounding that value. A ladder mirroring every arm of
  * `logSafe` would be a second spelling of it, and would silently become an
  * OVER-estimate the day the two drifted apart.
  *
