@@ -35,6 +35,15 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  *  - a `Date` persists as an ISO string but stays a `Date` in memory, so a
  *    downstream node in the SAME run and a reload of that run see different values.
  *
+ * There is one OTHER walker on that path, and it is not a mitigation:
+ * `redact.ts`'s `deepRedactSecrets` runs over `node.succeeded.outputs`, but only
+ * when the node resolved config-sink secrets (`executor.ts` gates on a non-empty
+ * plaintext list), which a `lookup` never does — and it would make things worse
+ * rather than better, since rebuilding an object by `Object.entries` turns a
+ * `Date` into `{}` and a `Buffer` into `{"0":1,…}`. Filed as #1223; it is
+ * unreachable today precisely because the values below are already primitives
+ * by the time anything else sees them.
+ *
  * So the rows are normalised HERE, before they are yielded — the one point that
  * sees them and can still refuse. `portability/canonical.ts` argues the opposite
  * posture for its own surface (refuse a non-plain value, never convert) and the

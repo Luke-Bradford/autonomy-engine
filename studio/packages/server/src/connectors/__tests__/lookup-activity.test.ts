@@ -13,9 +13,8 @@ import type { ActivityContext, ActivityEvent } from '../types.js';
  * every property this slice settles — §5's two caps, the truncate-and-mark
  * contract, and the value normalisation that keeps a materialised row
  * persistable — is a property of THIS layer and of no store in particular.
- * `lookup-store.test.ts` covers the real reader, and
- * `lookup-run-log.test.ts` covers the one claim a unit test structurally
- * cannot make: that the outputs survive the durable log.
+ * `lookup-store.test.ts` covers both the real reader and the one claim a unit
+ * test structurally cannot make: that the outputs survive the durable log.
  */
 
 function sourceIo(
