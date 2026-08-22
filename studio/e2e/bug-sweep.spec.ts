@@ -463,8 +463,12 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
+  /* The REAL href a browser sees: `#`-prefixed, because the app ships on a hash
+     router where the unit suites mount a memory one. That prefix is the whole
+     point of asserting it here as well — it is what makes the control copyable
+     and openable in a new tab, and only a real build can show it. */
   const back = page.getByRole('link', { name: '← All runs' });
-  await expect(back).toHaveAttribute('href', '/monitor/runs');
+  await expect(back).toHaveAttribute('href', '#/monitor/runs');
 
   for (const theme of ['dark', 'light'] as const) {
     await setTheme(page, theme);
@@ -498,10 +502,14 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
             color: probe({ color: 'var(--text)' }).color,
             background: probe({ color: 'var(--panel-2)' }).color,
             border: probe({ color: 'var(--border)' }).color,
-            /* The typography the conversion deliberately CHANGED: the
-               `<button>` rendered in the UA's own button font, the anchor is
-               pinned to the app's at the house size. */
-            fontFamily: getComputedStyle(document.body).fontFamily,
+            /* The typography the conversion deliberately CHANGED. A form
+               control does NOT inherit font, so the `<button>` rendered in the
+               UA's own; the anchor takes its context's. Compared against the
+               PARENT, not `document.body` — `body` is an ANCESTOR of the
+               FluentProvider root, so it still carries the MVP stack while
+               anything inside the provider carries Fluent's. Reds if this ever
+               regresses to a button. */
+            fontFamily: getComputedStyle(el.parentElement ?? document.body).fontFamily,
             fontSize: probe({ fontSize: '0.85rem' }).fontSize,
           },
         };
@@ -515,7 +523,7 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
     expect(read.background, `${theme}: chip fill is --panel-2`).toBe(read.expected.background);
     expect(read.border, `${theme}: chip border is --border`).toBe(read.expected.border);
     expect(read.decoration, `${theme}: undecorated`).toBe('none');
-    expect(read.fontFamily, `${theme}: on the app font, not the UA button font`).toBe(
+    expect(read.fontFamily, `${theme}: inherits its font, unlike a UA control`).toBe(
       read.expected.fontFamily,
     );
     expect(read.fontSize, `${theme}: at the house control size`).toBe(read.expected.fontSize);
