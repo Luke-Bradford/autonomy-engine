@@ -23,7 +23,7 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 // (data-movement spec §8). `fs` is still its primary caller and still layers
 // `O_NOFOLLOW` on top at open time.
 import { failed } from './activity-events.js';
-import { resolveWithinRoots } from './confine.js';
+import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 // #1165 M7 slice 2 — the connection schema and the errno classifier moved OUT
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
@@ -117,12 +117,6 @@ const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
  */
 const DEFAULT_MAX_LIST_ENTRIES = 10_000;
 
-/**
- * `O_NOFOLLOW` refuses to open a symlink at the final path component (→ `ELOOP`).
- * Defined on the target platforms (macOS + Linux); `?? 0` degrades to a harmless
- * no-op on any platform that lacks it rather than producing `NaN` flags.
- */
-const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
 // SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-

@@ -1,5 +1,8 @@
 import { isAbsolute } from 'node:path';
-import { fsConnectionConfigSchema as sharedFsConnectionConfigSchema } from '@autonomy-studio/shared';
+import {
+  fsConnectionConfigSchema as sharedFsConnectionConfigSchema,
+  type DatasetKind,
+} from '@autonomy-studio/shared';
 import type { ConnectorErrorKind } from './types.js';
 
 /**
@@ -96,4 +99,28 @@ export function classifyFsError(err: unknown, signal: AbortSignal | undefined): 
   // Fail-safe: any errno we do not positively recognise as transient — and any
   // non-errno throw (a programming fault) — is permanent.
   return 'permanent';
+}
+
+/**
+ * #1215 M11 slice 2 -- the dataset kinds an `fs` connection is a STORE for.
+ *
+ * `sqlite-store.ts`'s `SQLITE_DATASET_KINDS` / `notASqliteKind`, mirrored for
+ * the other store, and the mirror is the point: `fs.ts` now has to CHOOSE a
+ * reader (M7's `delimited`, M11's `excel`) rather than having exactly one, and
+ * a kind that is neither needs a refusal worded once. Written at the store
+ * level here, not inside either reader -- each of those still guards its own
+ * kind by name, but its sentence is about ITSELF ("the delimited reader reads
+ * ..."), which is the true fault when the fork has already routed correctly and
+ * something reached the wrong reader anyway.
+ *
+ * NOT `IMPLEMENTED_DATASET_KINDS`, for the reason `delimited-io.ts` states: that
+ * set answers "does a reader exist ANYWHERE", it spans two stores, and as of
+ * this slice it spans all four kinds -- so a store consulting it would accept a
+ * `table` dataset it cannot read.
+ */
+export const FS_DATASET_KINDS: readonly DatasetKind[] = ['delimited', 'excel'];
+
+/** The refusal for a dataset kind that does not live in an `fs` store. */
+export function notAnFsKind(kind: DatasetKind): string {
+  return `the fs store reads ${FS_DATASET_KINDS.map((k) => `'${k}'`).join(' and ')} datasets; this one is '${kind}'`;
 }
