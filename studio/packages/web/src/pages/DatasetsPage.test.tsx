@@ -732,5 +732,4 @@ describe('DatasetsPage', () => {
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
     });
   });
-
 });

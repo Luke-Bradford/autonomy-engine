@@ -875,13 +875,11 @@ function DatasetForm({
                     the server's ANSWER to a question that was asked — the file is
                     not there yet, the path is outside the roots — not a failure of
                     the form, so it does not take the page's `alert` slot. */}
-                {sheets !== null &&
-                  sheets.signature === sheetSignature &&
-                  !sheets.result.ok && (
-                    <p role="status" className="probe-failed">
-                      {sheets.result.error}
-                    </p>
-                  )}
+                {sheets !== null && sheets.signature === sheetSignature && !sheets.result.ok && (
+                  <p role="status" className="probe-failed">
+                    {sheets.result.error}
+                  </p>
+                )}
                 {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
                   <p role="status" className="page-hint">
                     This workbook reports no named sheets — name the sheet by position with

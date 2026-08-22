@@ -227,3 +227,94 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * #1218 — the `sheet` field stops being typed blind.
+ *
+ * What only a real browser plus a real server can prove, and neither unit suite
+ * reaches: the names in the chooser came out of an ACTUAL workbook on disk,
+ * through `POST /api/datasets/sheets`, confined against the connection's own
+ * roots. `DatasetsPage.test.tsx` drives the panel against a mocked client, so
+ * it cannot tell a working route from a well-shaped fake; `xlsx-sheets.test.ts`
+ * reads real files but never renders anything.
+ *
+ * The refusal arm is here for the same reason. A file that does not exist is
+ * the ORDINARY authoring state (the ticket's real degrade case), and the whole
+ * design rests on it arriving as a 200 the form can render rather than an error
+ * the form has to special-case — which is a claim about the wire, not about a
+ * component.
+ */
+test('#1218 — the excel sheet chooser offers what the workbook actually holds', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1218-')));
+  try {
+    const bookPath = join(root, 'people.xlsx');
+    writeFileSync(bookPath, workbook());
+
+    const fsConnection = await seedConnection(page, {
+      name: '#1218 workbook store',
+      kind: 'fs',
+      config: { roots: [root] },
+    });
+
+    await page.goto('/#/manage/datasets');
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    await form(page).getByLabel('Store').selectOption(fsConnection);
+    await form(page).getByLabel('Kind').selectOption('excel');
+
+    // ── 1. NOTHING IS OFFERED UNTIL IT IS ASKED FOR ─────────────────────────
+    // The listing is on a button, not on every keystroke: each call opens a real
+    // container behind a real descriptor, and `useGuardedLoad` drops results
+    // rather than cancelling requests, so a fetch-as-you-type would spend the
+    // work and merely hide it.
+    await expect(form(page).getByLabel('Sheet in this workbook')).toBeHidden();
+    // The free-text box exists from the start and never goes away.
+    await expect(form(page).getByLabel('sheet (optional)', { exact: true })).toBeVisible();
+
+    // ── 2. A REFUSAL IS AN ANSWER, NOT AN ERROR ─────────────────────────────
+    await form(page).getByLabel('path', { exact: true }).fill(join(root, 'not-written-yet.xlsx'));
+    await form(page).getByRole('button', { name: 'List sheets' }).click();
+    // 200 + `{ ok: false }`, rendered as `role="status"`. If this route ever
+    // 500s on ENOENT — the shape it had before `openConfinedFd` was wrapped —
+    // this arm is what says so.
+    await expect(form(page).getByRole('status')).toContainText(/could not be opened/);
+    await expect(form(page).getByLabel('Sheet in this workbook')).toBeHidden();
+
+    // ── 3. THE REAL WORKBOOK ────────────────────────────────────────────────
+    await form(page).getByLabel('path', { exact: true }).fill(bookPath);
+    // A `sheetIndex` typed FIRST, because that is the trap: the schema refuses a
+    // config naming both `sheet` and `sheetIndex`, so a chooser that wrote only
+    // `sheet` would make itself the cause of the refusal on Save.
+    await form(page).getByLabel('sheetIndex (optional) — number', { exact: true }).fill('2');
+    await form(page).getByRole('button', { name: 'List sheets' }).click();
+
+    const chooser = form(page).getByLabel('Sheet in this workbook');
+    await expect(chooser).toBeVisible();
+    // Both names, in WORKBOOK ORDER — index N of the list is `sheetIndex` N+1,
+    // so a reordering would silently re-point the other way of naming a sheet.
+    await expect(chooser.locator('option')).toHaveText(['— choose —', 'People', 'Costs']);
+
+    // ── 4. CHOOSING WRITES ONE FIELD AND CLEARS THE OTHER ───────────────────
+    await chooser.selectOption('Costs');
+    await expect(form(page).getByLabel('sheet (optional)', { exact: true })).toHaveValue('Costs');
+    await expect(
+      form(page).getByLabel('sheetIndex (optional) — number', { exact: true }),
+    ).toHaveValue('');
+
+    // ── 5. A LISTING STOPS BEING OFFERED WHEN ITS DRAFT MOVES ───────────────
+    // The names belong to the workbook that WAS named. Offering them against a
+    // different path would invite a choice that refuses at dispatch.
+    await form(page).getByLabel('path', { exact: true }).fill(join(root, 'somewhere-else.xlsx'));
+    await expect(form(page).getByLabel('Sheet in this workbook')).toBeHidden();
+    // …and the box the operator can always fall back to is still there, still
+    // holding what they chose.
+    await expect(form(page).getByLabel('sheet (optional)', { exact: true })).toHaveValue('Costs');
+
+    await expectQuiet(page, problems);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
