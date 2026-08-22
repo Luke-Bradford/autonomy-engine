@@ -374,7 +374,17 @@
 // exactly — widening this same `connectionKinds` list `['sqlite'] -> ['sqlite',
 // 'fs']` was itself that bump — resting on bump 21's rule that an artifact which
 // is not runnable AS AUTHORED is refused at IMPORT rather than half-loaded.
-export const CATALOG_VERSION = 27;
+// CATALOG_VERSION 28 (#1215, M11 slice 2): `copy.datasetKinds.source` gains
+// `excel`. Bump 24's precedent verbatim, from the other axis: an older build
+// has no `excel` reader (`IMPLEMENTED_DATASET_KINDS`) and no `excel-io.ts`, so
+// a pipeline whose `copy` binds an excel source is not runnable AS AUTHORED
+// there — bump 21's rule then says such an artifact is refused at IMPORT rather
+// than half-loaded. Deliberately NOT paired with a `connectionKinds` widening,
+// which is not an exception to bump 24's pairing rule but its precondition
+// already being met: an `excel` dataset lives on an `fs` connection and `fs`
+// joined that list at bump 24. The SINK halves do not move — M11 built a reader
+// and no writer.
+export const CATALOG_VERSION = 28;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

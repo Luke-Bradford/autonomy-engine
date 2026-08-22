@@ -463,8 +463,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * `delimited` READER and no writer — there is nothing to copy INTO a CSV
      * with. Widening them in sympathy would offer an author a pairing that
      * every dispatch then refuses, which is the shape this entry has now twice
-     * declined. `excel` stays out of both for the older reason: no reader yet
-     * (`IMPLEMENTED_DATASET_KINDS`), so it arrives at M11.
+     * declined. `excel` arrived at M11 slice 2 (#1215) on the SOURCE side only,
+     * for that same reason applied to it: it has a reader and no writer.
      *
      * `connectionKinds` is a SOURCE allowlist with two store kinds in it, and
      * the executor dispatches on the SOURCE connection's kind — so which
@@ -530,7 +530,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // now takes a credential, so two spellings of one host no longer read as two
     // stores. See §7 ④.
     sinkConnectionKinds: ['sqlite', 'postgres'],
-    datasetKinds: { source: ['table', 'query', 'delimited'], sink: ['table'] },
+    // #1215 (M11 slice 2) — `excel` joins the SOURCE list, in the same commit as
+    // `connectors/excel-io.ts`, exactly as `delimited` did at #1167 and
+    // `postgres` did at #1190. `connectionKinds` needs no matching widening this
+    // time and that is not an exception to the pairing rule: an `excel` dataset
+    // lives on an `fs` connection, and `fs` has been on that list since #1167.
+    // `CATALOG_VERSION` 27 -> 28.
+    //
+    // THE SINK HALVES STILL DO NOT MOVE. `excel` is source-only for
+    // `delimited`'s reason unchanged — M11 built a READER and no writer, so
+    // there is nothing to copy INTO a workbook with, and offering the pairing
+    // would only produce a dispatch that always refuses.
+    datasetKinds: { source: ['table', 'query', 'delimited', 'excel'], sink: ['table'] },
     outputs: [
       out('rowsRead', 'number'),
       out('rowsWritten', 'number'),

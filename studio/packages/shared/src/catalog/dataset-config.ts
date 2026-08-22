@@ -225,6 +225,113 @@ export const delimitedDatasetConfigSchema = z
   });
 
 /**
+ * `excel` — one WORKSHEET of an `.xlsx` workbook in an `fs` store (§2.6).
+ * #1215, M11 slice 2.
+ *
+ * §2.6's row is `path`, `sheet` (name or index), `headerRow`, `nullValue`,
+ * `dateFormat`. THREE CORRECTIONS, recorded on the M4/M7 precedent because each
+ * one is a shape that would have saved cleanly and then copied wrong data.
+ *
+ * **1. `sheet` and `sheetIndex` are SEPARATE keys, exactly one required.** A
+ * worksheet can legitimately be NAMED `"3"`, so a single name-or-index value
+ * makes that sheet unaddressable — and, worse, reads a DIFFERENT sheet while
+ * SUCCEEDING. It also avoids §13's named trap: `configForm.ts`'s `classify`
+ * renders any construct it cannot classify as a JSON textarea, and a `z.union`
+ * is one, so the single-key spelling would have handed the operator a JSON box
+ * where two plain controls belong.
+ *
+ * **NEITHER IS DEFAULTED**, and that is the same rule `header` is here for. Two
+ * sheets of one workbook routinely carry the same column names (`Jan`, `Feb`),
+ * so defaulting to the first sheet copies the wrong month and reports success —
+ * invisible, where a mangled value is not. `xlsx-read.ts`'s `resolveSheet` does
+ * carry a first-sheet fallback for a caller that supplies neither; this schema
+ * is what makes that branch unreachable from a dataset, which is the layer the
+ * decision belongs at.
+ *
+ * **2. `header` is REQUIRED**, applying M7's correction unchanged: defaulted
+ * true it eats row 1 of a headerless sheet, defaulted false it turns the header
+ * into a data row, and both succeed with wrong data. `ABSENTABLE_WRAPPERS`
+ * makes it worse for a boolean specifically — a `.default()`ed field reads as
+ * optional and an unchecked optional box OMITS its key, so a defaulted `header`
+ * could not be set to `false` distinguishably from "not set" at all.
+ *
+ * **3. `headerRow` means WHICH ROW HOLDS THE HEADER** (default 1), which is
+ * meaningful only when `header` is true. A spreadsheet routinely carries title
+ * or note rows above its header; a CSV does not, which is why `delimited` has
+ * no such key. Setting it past 1 while `header` is false is REFUSED rather than
+ * silently ignored — the operator has said two contradictory things, and
+ * honouring one quietly is how a copy reads the wrong row.
+ *
+ * `dateFormat` is NARROWER here than in `delimited`, and the difference is the
+ * point of the kind: an Excel date cell is genuinely TYPED, so it needs no
+ * declared format and gets none. §6.2's "parsed by the declared format ONLY,
+ * never guessed" governs TEXT cells, which is where this still applies.
+ *
+ * `nullValue` is narrower for the same reason and it is worth being exact,
+ * because the obvious statement ("Excel distinguishes a blank cell from an
+ * empty string natively") argues for the opposite conclusion. `coerceValue`
+ * applies the sentinel only to a `string` value, and a blank cell already
+ * arrives as `null` — so on an excel dataset this key does exactly one thing:
+ * turn a TEXT cell whose content is literally the sentinel (`\N`, `NULL`) into
+ * a null. That is a real shape in exported spreadsheets, which is why the key
+ * stays; it is simply not doing the work it does for a CSV.
+ */
+export const excelDatasetConfigSchema = z
+  .object({
+    /** Confined against the `fs` connection's `roots` at DISPATCH, never here
+     * (§8) — this schema is shared with the browser and knows no filesystem. */
+    path: z.string().min(1),
+    /** The worksheet BY NAME. Mutually exclusive with `sheetIndex`. */
+    sheet: z.string().min(1).optional(),
+    /** The worksheet by 1-BASED position, for a workbook whose sheet names are
+     * unstable or unprintable. Mutually exclusive with `sheet`. */
+    sheetIndex: z.int().min(1).optional(),
+    header: z.boolean(),
+    /** 1-based; only meaningful with `header: true`. */
+    headerRow: z.int().min(1).default(1),
+    /** §6.4 — the NULL sentinel, for TEXT cells that spell null out. */
+    nullValue: z.string().optional(),
+    /** §6.2 — the ONLY way a TEXTUAL date is read. A date-typed CELL needs none. */
+    dateFormat: z
+      .string()
+      .refine(isValidDateFormat, {
+        message:
+          `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+          'each at most once',
+      })
+      .optional(),
+  })
+  .superRefine((config, ctx) => {
+    // Reported on a FIELD path, never at the object root: `formatZodIssues`
+    // prints a root-level issue with no prefix at all, so the operator would be
+    // told two things clash without being told which control to touch. This is
+    // `delimitedDatasetConfigSchema`'s own lesson, applied rather than restated.
+    const named = config.sheet !== undefined;
+    const indexed = config.sheetIndex !== undefined;
+    if (named && indexed) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sheetIndex'],
+        message: 'sheetIndex cannot be set alongside sheet — name the worksheet exactly one way',
+      });
+    } else if (!named && !indexed) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sheet'],
+        message:
+          'one of sheet (by name) or sheetIndex (1-based) is required — the worksheet is never guessed',
+      });
+    }
+    if (config.header === false && config.headerRow > 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['headerRow'],
+        message: 'headerRow only means something with header: true; it is not silently ignored',
+      });
+    }
+  });
+
+/**
  * The config shape for a kind whose READER has not been built yet.
  *
  * Explicitly permissive — `z.looseObject` KEEPS unknown keys, where a bare
@@ -237,6 +344,16 @@ export const delimitedDatasetConfigSchema = z
  * gate is `IMPLEMENTED_DATASET_KINDS`: the reader consults that positive fact
  * and refuses a kind it cannot read, so "no reader yet" is a stated refusal
  * rather than an empty shape that happens to validate everything.
+ *
+ * **AS OF #1215 IT HAS NO CONSUMER IN `DATASET_CONFIG_SCHEMAS`**, because M11
+ * gave the last kind a real schema. It is KEPT rather than deleted, and the
+ * argument is not sentiment: this record is `Record<DatasetKind, …>` and
+ * therefore TOTAL, so kind #5 must supply something on the day it joins
+ * `DatasetKindSchema` — and what it must supply is a `looseObject` and not a
+ * `z.object({})`, which is a distinction that took a portability round-trip to
+ * learn and would be re-learned the hard way if the only record of it were
+ * deleted. `dataset-config.test.ts` pins both the emptiness and the round-trip
+ * property, so the state is asserted out loud rather than left to be noticed.
  */
 export const unimplementedDatasetConfigSchema = z.looseObject({});
 
@@ -250,7 +367,7 @@ export const unimplementedDatasetConfigSchema = z.looseObject({});
  */
 export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
   delimited: delimitedDatasetConfigSchema,
-  excel: unimplementedDatasetConfigSchema,
+  excel: excelDatasetConfigSchema,
   table: tableDatasetConfigSchema,
   query: queryDatasetConfigSchema,
 };
@@ -262,7 +379,20 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
  * A POSITIVE fact, and that is the point: the alternative (infer "unimplemented"
  * from a permissive schema) would make the refusal an accident of shape, so a
  * kind whose real schema happened to be permissive would silently become
- * readable. `excel` joins at M11.
+ * readable. `excel` joined at M11 slice 2 (#1215) — the slice that shipped
+ * `connectors/excel-io.ts`, which is what "a reader exists" means here.
+ *
+ * IT NOW SPANS EVERY KIND, which makes two things true that were not before and
+ * neither is a reason to delete it. First, the consumers that BRANCH on it
+ * (`DatasetsPage.tsx`'s JSON fallback, `datasetConfigAdvisory`'s no-reader note)
+ * have no reachable false case left; they are kept, because kind #5 arrives
+ * with no reader on its first day and the alternative is re-deriving the
+ * convention then. Second, this set is momentarily indistinguishable from the
+ * enum — so `dataset-config.test.ts` pins it as a LITERAL LIST rather than
+ * against `DatasetKindSchema.options`. Set-equality against the enum would tell
+ * the next maintainer that the way to make the pin green is to add their new
+ * kind to this set, which is precisely the lie a positive fact exists to
+ * prevent.
  *
  * IT IS "A READER EXISTS", NOT "THIS STORE READS IT", and the distinction stopped
  * being academic the moment this set held kinds from two different stores. A
@@ -277,6 +407,7 @@ export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<Datas
   'table',
   'query',
   'delimited',
+  'excel',
 ]);
 
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */
@@ -352,10 +483,15 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  *   the existing `fs` connection", §7 ② says "`fs` becomes a store when
  *   `delimited` lands", and `registry.ts`'s `copy` entry already says in prose
  *   that "a `delimited` dataset lives on an `fs` connection".
- * - `excel` → `fs`. INFERRED, and flagged as inference rather than dressed up as
- *   a citation: M11's row names no connection. The support is §2.5 — format
- *   lives on the dataset precisely BECAUSE one folder holds CSV and Excel side
- *   by side — plus §2.6 giving `excel` a `path`. M11 restates it or corrects it.
+ * - `excel` → `fs`. RESTATED, not inferred, as of M11 slice 2 (#1215): this
+ *   entry was flagged as an inference because M11's row named no connection,
+ *   and the slice that built the kind is the one that owed a confirmation. It
+ *   is confirmed. `excelDatasetConfigSchema` takes a `path` and nothing else a
+ *   store could be, `excel-io.ts` re-parses `fsConnectionConfigSchema` and
+ *   confines against its `roots`, and `fs-connection.ts`'s `FS_DATASET_KINDS`
+ *   is the other half of the same fact. The original support (§2.5 — format
+ *   lives on the dataset BECAUSE one folder holds CSV and Excel side by side)
+ *   was right.
  *
  * WHY `postgres` IS PRESENT ON `table`/`query` (#1190, M10 slice 2). Slice 1
  * deliberately held it out, because listing a store here is what lets an
