@@ -480,11 +480,32 @@ function formatCodeIsDate(code: string): boolean {
   return /[yd]/i.test(bare);
 }
 
-async function readWorkbookParts(
+/**
+ * The workbook INDEX alone: which sheets, in order, plus the 1904 date base.
+ *
+ * Split out of {@link readWorkbookParts} for #1218, and the split is a BOUND
+ * rather than tidiness. `listXlsxSheetNames` needs only these names, but
+ * `readWorkbookParts` goes on to read `xl/sharedStrings.xml` at
+ * `XLSX_MAX_SHARED_STRINGS_BYTES` (64 MiB) plus the style table — and `walkXml`
+ * parses a part SYNCHRONOUSLY, checking no `signal` inside it, so a hostile
+ * container could hold the event loop for the length of a 64 MiB parse on a
+ * call that only ever wanted eight sheet names. Reading LESS is the only fix
+ * that works here: a backstop timer cannot interrupt a synchronous parse, which
+ * is why #1218 does not carry one.
+ *
+ * That bound is load-bearing because #1218 puts this behind an authoring ROUTE,
+ * where the path is operator-supplied. Only `xl/workbook.xml` is touched, so
+ * the read is capped by `XLSX_MAX_SMALL_PART_BYTES` (16 MiB) by construction —
+ * not approximately, and not by convention.
+ */
+async function readWorkbookIndex(
   zip: ZipFile,
   entries: ReadonlyMap<string, Entry>,
   signal: AbortSignal | undefined,
-): Promise<WorkbookParts> {
+): Promise<{
+  readonly sheets: { name: string; rid: string | undefined }[];
+  readonly date1904: boolean;
+}> {
   const workbookEntry = entries.get('xl/workbook.xml');
   if (!workbookEntry) {
     throw new XlsxReadError(
@@ -506,6 +527,15 @@ async function readWorkbookParts(
       }
     },
   });
+  return { sheets, date1904 };
+}
+
+async function readWorkbookParts(
+  zip: ZipFile,
+  entries: ReadonlyMap<string, Entry>,
+  signal: AbortSignal | undefined,
+): Promise<WorkbookParts> {
+  const { sheets, date1904 } = await readWorkbookIndex(zip, entries, signal);
 
   const rels = new Map<string, string>();
   const relsEntry = entries.get('xl/_rels/workbook.xml.rels');
@@ -1071,8 +1101,10 @@ export async function listXlsxSheetNames(
   const zip = await openZip(filePath, opts.fd);
   try {
     const entries = await entryIndex(zip, opts.signal);
-    const parts = await readWorkbookParts(zip, entries, opts.signal);
-    return parts.sheets.map((s) => s.name);
+    // `readWorkbookIndex`, NOT `readWorkbookParts`: see that function's docblock
+    // for why reading less is the bound this call depends on (#1218).
+    const { sheets } = await readWorkbookIndex(zip, entries, opts.signal);
+    return sheets.map((s) => s.name);
   } finally {
     await closeZip(zip);
   }

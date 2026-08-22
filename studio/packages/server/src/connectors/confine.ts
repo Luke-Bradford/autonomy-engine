@@ -7,6 +7,8 @@ import {
 import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { formatZodIssues } from '@autonomy-studio/shared';
+import { fsConnectionConfigSchema } from './fs-connection.js';
 
 /**
  * Which connector is asking — it names ITSELF in the refusal messages below.
@@ -184,4 +186,70 @@ export async function openConfinedFd(
     throw err;
   }
   return { ok: true, fd };
+}
+
+/**
+ * The outcome of {@link confineFsPath}, and it is THREE cases rather than two
+ * on purpose.
+ *
+ * `resolveWithinRoots`'s docblock is explicit that folding its thrown errno into
+ * an `{ ok: false }` result "would flatten that distinction for everyone": a
+ * POLICY refusal is always permanent, while a genuine filesystem error is one
+ * the `fs` connector maps through `failFromError` and may call TRANSIENT. So
+ * the shared helper preserves the distinction and hands the classification back
+ * to the caller, rather than picking one caller's answer for both.
+ */
+export type FsConfinement =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly kind: 'policy'; readonly error: string }
+  | { readonly ok: false; readonly kind: 'errno'; readonly error: string; readonly cause: unknown };
+
+/**
+ * Parse an `fs` connection's config and confine a requested path against its
+ * roots — the four steps every `fs`-backed reader owes, in ONE place (#1218).
+ *
+ * §8 of the data-movement spec says a second copy of the confinement logic "is a
+ * defect by construction", and this was on the edge of becoming exactly that:
+ * `excel-io.ts`'s `prepareRead` had the sequence, and #1218's authoring route
+ * needs the same four steps against the same roots with a different error TYPE.
+ * A copy would have been four chances to drop the try/catch that
+ * `resolveWithinRoots` requires — the omission #1119 already shipped once.
+ *
+ * The `error` on the `errno` case deliberately does NOT echo the underlying
+ * message. `resolveWithinRoots` realpaths the target's PARENT before it checks
+ * containment, so a raw errno would distinguish "outside the roots and the
+ * parent exists" from "outside the roots and it does not" — a small existence
+ * oracle. It is small in the strict sense here (the same principal owns the
+ * connection and therefore owns `roots`, so nothing is learned that editing
+ * `roots` would not also yield), which is why the sentence stays HONEST about
+ * an unresolvable path rather than being flattened into the containment lie:
+ * an operator who typos a subdirectory should not be told their path is outside
+ * roots that in fact contain it. A caller wanting the real error takes `cause`.
+ */
+export async function confineFsPath(
+  connectionConfig: unknown,
+  requested: string,
+): Promise<FsConfinement> {
+  const cfg = fsConnectionConfigSchema.safeParse(connectionConfig);
+  if (!cfg.success) {
+    return {
+      ok: false,
+      kind: 'policy',
+      error: `invalid fs connection config: ${formatZodIssues(cfg.error.issues)}`,
+    };
+  }
+
+  let confined: Awaited<ReturnType<typeof resolveWithinRoots>>;
+  try {
+    confined = await resolveWithinRoots(cfg.data.roots, requested, 'fs');
+  } catch (err) {
+    return {
+      ok: false,
+      kind: 'errno',
+      error: `path '${requested}' could not be resolved; check the path and the fs connection's allowed roots`,
+      cause: err,
+    };
+  }
+  if (!confined.ok) return { ok: false, kind: 'policy', error: confined.error };
+  return { ok: true, path: confined.path };
 }

@@ -686,6 +686,46 @@ rediscover it.
   A spreadsheet routinely carries title rows above its header, which is why `delimited` has no such
   key at all. Setting it past 1 while `header` is false is REFUSED rather than silently ignored.
 
+**AS BUILT (#1218) — the `sheet` name is CHOSEN, not typed blind, and two of the ticket's own
+premises did not survive being built.**
+
+Making `sheet` non-defaulted (above) is right and it left the operator typing an exact worksheet
+name into a free-text box with nothing on screen saying what the workbook holds. `POST
+/api/datasets/sheets` closes that: given a connection id and a path it confines, opens and returns
+`listXlsxSheetNames`'s answer, and the dataset form offers those names beside the box.
+
+- **The chooser is ADDITIVE — the free-text box never goes away.** A workbook that cannot be read at
+  authoring time (not written yet, on a store that is offline) still has to be authorable, so a
+  control that replaced the box would make such a dataset unauthorable. Every refusal is therefore a
+  200 carrying `{ ok: false, error }`, on `ConnectionProbeResultSchema`'s precedent: these are
+  ordinary authoring conditions, not protocol faults, and the form renders them in one place.
+- **Choosing a name BLANKS `sheetIndex`.** The two keys are mutually exclusive by the rule above, so
+  a chooser that wrote only `sheet` would make itself the cause of the refusal on Save.
+- **The listing is on a BUTTON and is tagged with a signature of the draft it was taken against.**
+  Each call opens a real container behind a real descriptor, so fetch-as-you-type would spend that
+  work on every keystroke — and `useGuardedLoad` drops results rather than cancelling requests, so
+  it would hide the cost rather than avoid it. The signature is what stops a listing being offered
+  against a path it was not taken from, which would invite a choice that then refuses at dispatch.
+- **`listXlsxSheetNames` now reads `xl/workbook.xml` ALONE** (`readWorkbookIndex`). It previously
+  went through `readWorkbookParts`, which also inflates `xl/sharedStrings.xml` at
+  `XLSX_MAX_SHARED_STRINGS_BYTES` (64 MiB) and the style table — and `walkXml` parses a part
+  SYNCHRONOUSLY with no signal check, so on a route whose path is operator-supplied that read was
+  the whole exposure and **no backstop timer could have interrupted it**. Reading less is the only
+  bound that holds, which is why this route has no `PROBE_BACKSTOP_MS` analogue.
+- **THE TICKET'S `${}` DEGRADE CASE IS FALSE and was not built.** A dataset's `config` reaches the
+  reader verbatim (`excel-io.ts`'s `prepareRead` takes `dataset.config` as handed over by
+  `copy-sink.ts` and `postgres.ts`), so nothing substitutes a dataset `path` and a `${` in one is
+  simply part of a filename. The literal-only rule that DOES exist (§3, `dataset-references.ts`)
+  governs a NODE's dataset REF — a different field on a different resource. Refusing such a path
+  would have made the picker decline a workbook a run opens without complaint. The degrade case the
+  ticket was really describing is a file that is not there YET, and that one is real.
+- **The confinement is SHARED, not copied.** §8 calls a second copy of the confinement logic a
+  defect by construction, and this was about to be one: `confineFsPath` now carries the fs-config
+  parse, `resolveWithinRoots` and the try/catch that function's docblock requires, for both the
+  reader and the route. It keeps three outcomes rather than two — a POLICY refusal is always
+  permanent, while a thrown errno is one the `fs` connector may classify TRANSIENT, and flattening
+  them would have taken that distinction away from the reader to suit the route.
+
 `nullValue` and `dateFormat` are on this row too, and **they reach less here than they do for
 `delimited`** — a difference of the FORMAT and not of the wiring, worth stating because the row
 looks identical. An Excel date cell is genuinely TYPED, so §6.2's "parsed by the declared format

@@ -46,6 +46,25 @@ import { fluentRootReady } from './support/theme';
 
 const form = (page: Page) => page.getByRole('form', { name: 'Dataset form' });
 
+/**
+ * A text control by its ACCESSIBLE NAME, and deliberately not by `getByLabel`.
+ *
+ * `ConfigFieldControl` wraps its `<textarea>` in the `<label>` rather than
+ * pairing them by `for`/`id`, and React renders a controlled textarea's value as
+ * a CHILD TEXT NODE — so the label's text content is `path` while the box is
+ * empty and `path/data/book.xlsx` the moment anything is typed. `getByLabel`
+ * reads that text, so an `exact` match silently stops resolving as soon as the
+ * field has content, and a non-exact one starts matching on the VALUE. The
+ * accessible name is computed from the label without the embedded control's
+ * value, so it stays `path` throughout.
+ *
+ * This is the second instance of one trap: `ConfigFieldControl`'s own docblock
+ * records `e2e/node-config-form.spec.ts` moving off `getByLabel` because a
+ * BUTTON inside the label contaminated the same string. #1215's test never hit
+ * it only because it fills each control once and never re-reads one afterwards.
+ */
+const box = (page: Page, name: string) => form(page).getByRole('textbox', { name, exact: true });
+
 /** A workbook with a title row ABOVE its header — the shape a CSV never has,
  * and the reason `headerRow` exists as a key at all. */
 function workbook(): Buffer {
@@ -221,6 +240,104 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
       { id: 2, name: 'beta' },
     ]);
     back.close();
+
+    await expectQuiet(page, problems);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * #1218 — the `sheet` field stops being typed blind.
+ *
+ * What only a real browser plus a real server can prove, and neither unit suite
+ * reaches: the names in the chooser came out of an ACTUAL workbook on disk,
+ * through `POST /api/datasets/sheets`, confined against the connection's own
+ * roots. `DatasetsPage.test.tsx` drives the panel against a mocked client, so
+ * it cannot tell a working route from a well-shaped fake; `xlsx-sheets.test.ts`
+ * reads real files but never renders anything.
+ *
+ * The refusal arm is here for the same reason. A file that does not exist is
+ * the ORDINARY authoring state (the ticket's real degrade case), and the whole
+ * design rests on it arriving as a 200 the form can render rather than an error
+ * the form has to special-case — which is a claim about the wire, not about a
+ * component.
+ */
+test('#1218 — the excel sheet chooser offers what the workbook actually holds', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1218-')));
+  try {
+    const bookPath = join(root, 'people.xlsx');
+    writeFileSync(bookPath, workbook());
+
+    const fsConnection = await seedConnection(page, {
+      name: '#1218 workbook store',
+      kind: 'fs',
+      config: { roots: [root] },
+    });
+
+    await page.goto('/#/manage/datasets');
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    await form(page).getByLabel('Store').selectOption(fsConnection);
+    await form(page).getByLabel('Kind').selectOption('excel');
+
+    // ── 1. NOTHING IS OFFERED UNTIL IT IS ASKED FOR ─────────────────────────
+    // The listing is on a button, not on every keystroke: each call opens a real
+    // container behind a real descriptor, and `useGuardedLoad` drops results
+    // rather than cancelling requests, so a fetch-as-you-type would spend the
+    // work and merely hide it.
+    await expect(
+      form(page).getByRole('combobox', { name: 'Sheet in this workbook', exact: true }),
+    ).toBeHidden();
+    // The free-text box exists from the start and never goes away.
+    await expect(box(page, 'sheet (optional)')).toBeVisible();
+
+    // ── 2. A REFUSAL IS AN ANSWER, NOT AN ERROR ─────────────────────────────
+    await box(page, 'path').fill(join(root, 'not-written-yet.xlsx'));
+    await form(page).getByRole('button', { name: 'List sheets' }).click();
+    // 200 + `{ ok: false }`, rendered as `role="status"`. If this route ever
+    // 500s on ENOENT — the shape it had before `openConfinedFd` was wrapped —
+    // this arm is what says so.
+    await expect(form(page).getByRole('status')).toContainText(/could not be opened/);
+    await expect(
+      form(page).getByRole('combobox', { name: 'Sheet in this workbook', exact: true }),
+    ).toBeHidden();
+
+    // ── 3. THE REAL WORKBOOK ────────────────────────────────────────────────
+    await box(page, 'path').fill(bookPath);
+    // A `sheetIndex` typed FIRST, because that is the trap: the schema refuses a
+    // config naming both `sheet` and `sheetIndex`, so a chooser that wrote only
+    // `sheet` would make itself the cause of the refusal on Save.
+    await box(page, 'sheetIndex (optional) — number').fill('2');
+    await form(page).getByRole('button', { name: 'List sheets' }).click();
+
+    const chooser = form(page).getByRole('combobox', {
+      name: 'Sheet in this workbook',
+      exact: true,
+    });
+    await expect(chooser).toBeVisible();
+    // Both names, in WORKBOOK ORDER — index N of the list is `sheetIndex` N+1,
+    // so a reordering would silently re-point the other way of naming a sheet.
+    await expect(chooser.locator('option')).toHaveText(['— choose —', 'People', 'Costs']);
+
+    // ── 4. CHOOSING WRITES ONE FIELD AND CLEARS THE OTHER ───────────────────
+    await chooser.selectOption('Costs');
+    await expect(box(page, 'sheet (optional)')).toHaveValue('Costs');
+    await expect(box(page, 'sheetIndex (optional) — number')).toHaveValue('');
+
+    // ── 5. A LISTING STOPS BEING OFFERED WHEN ITS DRAFT MOVES ───────────────
+    // The names belong to the workbook that WAS named. Offering them against a
+    // different path would invite a choice that refuses at dispatch.
+    await box(page, 'path').fill(join(root, 'somewhere-else.xlsx'));
+    await expect(
+      form(page).getByRole('combobox', { name: 'Sheet in this workbook', exact: true }),
+    ).toBeHidden();
+    // …and the box the operator can always fall back to is still there, still
+    // holding what they chose.
+    await expect(box(page, 'sheet (optional)')).toHaveValue('Costs');
 
     await expectQuiet(page, problems);
   } finally {
