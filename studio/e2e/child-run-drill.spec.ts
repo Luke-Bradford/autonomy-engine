@@ -33,7 +33,9 @@ test('#1231 — a call node names its child run, and the child names its caller'
   const problems = collectPageProblems(page);
 
   const childDoc: SeedDoc = {
-    nodes: [{ id: 'childWork', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+    nodes: [
+      { id: 'childWork', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } },
+    ],
   };
   const { pipelineVersionId: childPv } = await seedVersion(page, '#1231 child', childDoc);
 
@@ -60,7 +62,8 @@ test('#1231 — a call node names its child run, and the child names its caller'
     `/api/runs?parentRunId=${encodeURIComponent(parentRunId)}`,
   );
   expect(childrenRes.status()).toBe(200);
-  const children = ((await childrenRes.json()) as { items: { id: string; status: string }[] }).items;
+  const children = ((await childrenRes.json()) as { items: { id: string; status: string }[] })
+    .items;
   expect(children).toHaveLength(1);
   const childRunId = children[0]!.id;
   expect(children[0]!.status).toBe('success');
