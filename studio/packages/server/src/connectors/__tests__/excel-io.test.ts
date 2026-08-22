@@ -153,7 +153,12 @@ describe('naming the columns', () => {
   it('takes the header from row 1 and does not copy it as data', async () => {
     const path = await seed(
       'b.xlsx',
-      book({ rows: [[text('id'), text('name')], [num(1), text('alpha')]] }),
+      book({
+        rows: [
+          [text('id'), text('name')],
+          [num(1), text('alpha')],
+        ],
+      }),
     );
     expect(await rowsOf(read(path))).toEqual([{ id: 1, name: 'alpha' }]);
     expect(await describeExcelDatasetColumns(read(path))).toEqual(['id', 'name']);
@@ -197,10 +202,7 @@ describe('naming the columns', () => {
   it('refuses a header row that is PRESENT and blank', async () => {
     // A blank row is skipped as DATA. At `headerRow` it must not be — skipping
     // would silently promote the next row into the column names.
-    const path = await seed(
-      'b.xlsx',
-      book({ rows: [[blank], [text('id')], [num(1)]] }),
-    );
+    const path = await seed('b.xlsx', book({ rows: [[blank], [text('id')], [num(1)]] }));
     const err = await refusalOf(() => rowsOf(read(path)));
     expect(err.message).toMatch(/has a header that names no columns/);
   });
@@ -208,7 +210,12 @@ describe('naming the columns', () => {
   it('applies the SHARED naming refusals — duplicates and interior blanks', async () => {
     const dup = await seed(
       'dup.xlsx',
-      book({ rows: [[text('a'), text('b'), text('a')], [num(1), num(2), num(3)]] }),
+      book({
+        rows: [
+          [text('a'), text('b'), text('a')],
+          [num(1), num(2), num(3)],
+        ],
+      }),
     );
     expect((await refusalOf(() => rowsOf(read(dup)))).message).toMatch(
       /names the header column 'a' more than once/,
@@ -216,7 +223,12 @@ describe('naming the columns', () => {
 
     const hole = await seed(
       'hole.xlsx',
-      book({ rows: [[text('a'), blank, text('c')], [num(1), num(2), num(3)]] }),
+      book({
+        rows: [
+          [text('a'), blank, text('c')],
+          [num(1), num(2), num(3)],
+        ],
+      }),
     );
     expect((await refusalOf(() => rowsOf(read(hole)))).message).toMatch(
       /has no name for header column 2/,
@@ -234,7 +246,15 @@ describe('naming the columns', () => {
     // recover — the reader consumes the format code to classify the cell. Any
     // name studio produced would be an invention every mapping then depends on.
     const path = await seed('b.xlsx', {
-      sheets: [{ name: 'Sales', rows: [[text('id'), { kind: 'number', value: 46255, style: 0 }], [num(1), num(2)]] }],
+      sheets: [
+        {
+          name: 'Sales',
+          rows: [
+            [text('id'), { kind: 'number', value: 46255, style: 0 }],
+            [num(1), num(2)],
+          ],
+        },
+      ],
       cellXfs: [14],
     });
     const err = await refusalOf(() => rowsOf(read(path)));
@@ -246,7 +266,12 @@ describe('naming the columns', () => {
   it('refuses an ERROR header cell for the same reason', async () => {
     const path = await seed(
       'b.xlsx',
-      book({ rows: [[text('id'), { kind: 'error', code: '#N/A' }], [num(1), num(2)]] }),
+      book({
+        rows: [
+          [text('id'), { kind: 'error', code: '#N/A' }],
+          [num(1), num(2)],
+        ],
+      }),
     );
     expect((await refusalOf(() => rowsOf(read(path)))).message).toMatch(
       /has an error cell in header column 2/,
@@ -256,13 +281,26 @@ describe('naming the columns', () => {
   it('gives a numeric or boolean header its CANONICAL text form', async () => {
     const path = await seed(
       'b.xlsx',
-      book({ rows: [[num(2026), { kind: 'boolean', value: true }], [num(1), num(2)]] }),
+      book({
+        rows: [
+          [num(2026), { kind: 'boolean', value: true }],
+          [num(1), num(2)],
+        ],
+      }),
     );
     expect(await describeExcelDatasetColumns(read(path))).toEqual(['2026', 'true']);
   });
 
   it('names positionally with `header: false`, and keeps the first row as DATA', async () => {
-    const path = await seed('b.xlsx', book({ rows: [[num(1), text('alpha')], [num(2), text('beta')]] }));
+    const path = await seed(
+      'b.xlsx',
+      book({
+        rows: [
+          [num(1), text('alpha')],
+          [num(2), text('beta')],
+        ],
+      }),
+    );
     expect(await rowsOf(read(path, { header: false }))).toEqual([
       { column1: 1, column2: 'alpha' },
       { column1: 2, column2: 'beta' },
@@ -295,7 +333,12 @@ describe('binding a row', () => {
     // sparse by construction, so that would fail one row per blank.
     const path = await seed(
       'b.xlsx',
-      book({ rows: [[text('a'), text('b'), text('c')], [num(1), blank, num(3)]] }),
+      book({
+        rows: [
+          [text('a'), text('b'), text('c')],
+          [num(1), blank, num(3)],
+        ],
+      }),
     );
     expect(await rowsOf(read(path))).toEqual([{ a: 1, b: null, c: 3 }]);
   });
@@ -313,10 +356,7 @@ describe('binding a row', () => {
   });
 
   it('refuses an extra cell that CARRIES something, and tolerates a blank one', async () => {
-    const carries = await seed(
-      'x.xlsx',
-      book({ rows: [[text('a')], [num(1), num(2)]] }),
-    );
+    const carries = await seed('x.xlsx', book({ rows: [[text('a')], [num(1), num(2)]] }));
     const err = await refusalOf(() => rowsOf(read(carries)));
     expect(err.kind).toBe('permanent');
     expect(err.message).toMatch(/row 2 carries 2 cells but the source has 1 columns/);
@@ -341,10 +381,7 @@ describe('binding a row', () => {
     // all-null record per formatting artifact — a different `rowsRead` from the
     // same logical data as a CSV, and a constraint violation against a
     // `nullable: false` column on a row nobody authored.
-    const path = await seed(
-      'b.xlsx',
-      book({ rows: [[text('a')], [num(1)], [blank], [num(3)]] }),
-    );
+    const path = await seed('b.xlsx', book({ rows: [[text('a')], [num(1)], [blank], [num(3)]] }));
     expect(await rowsOf(read(path))).toEqual([{ a: 1 }, { a: 3 }]);
   });
 
@@ -493,7 +530,9 @@ describe('where an excel dataset physically is (§2.1)', () => {
         { name: 'Costs', rows: [[text('b')]] },
       ],
     });
-    expect(await resolve(path, { sheet: 'Sales' })).toEqual(await resolve(path, { sheet: 'Costs' }));
+    expect(await resolve(path, { sheet: 'Sales' })).toEqual(
+      await resolve(path, { sheet: 'Costs' }),
+    );
   });
 
   it('reports an unidentifiable store as `null`, never as a refusal', async () => {
@@ -518,11 +557,17 @@ describe('the §6.4 projection', () => {
   it('returns only the DECLARED keys, so an absent one is an absent PROPERTY', async () => {
     expect(excelCoercionFor({ path: '/b.xlsx', header: true, sheet: 'S' })).toEqual({});
     expect(
-      excelCoercionFor({ path: '/b.xlsx', header: true, sheet: 'S', nullValue: '', dateFormat: 'yyyy-MM-dd' }),
+      excelCoercionFor({
+        path: '/b.xlsx',
+        header: true,
+        sheet: 'S',
+        nullValue: '',
+        dateFormat: 'yyyy-MM-dd',
+      }),
     ).toEqual({ nullValue: '', dateFormat: 'yyyy-MM-dd' });
-    expect(
-      'nullValue' in excelCoercionFor({ path: '/b.xlsx', header: true, sheet: 'S' }),
-    ).toBe(false);
+    expect('nullValue' in excelCoercionFor({ path: '/b.xlsx', header: true, sheet: 'S' })).toBe(
+      false,
+    );
   });
 
   it('THROWS on an unparseable config rather than degrading to `{}`', () => {

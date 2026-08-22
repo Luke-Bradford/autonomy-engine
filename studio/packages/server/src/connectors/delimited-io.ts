@@ -156,9 +156,12 @@ function readFailure(
  * `sqlite.ts` moved to this literal shape rather than this moving back to that
  * one. The reason outlives the original: `IMPLEMENTED_DATASET_KINDS` answers
  * "does a reader exist ANYWHERE", and from #1167 on it spans two stores, so a
- * store consulting it would accept a kind it cannot read. `excel` also lives on
- * an `fs` connection, and this refuses it BY NAME rather than by trying to parse
- * its config as a CSV's.
+ * store consulting it would accept a kind it cannot read — and from M11 slice 2
+ * (#1215) it spans all four, so the argument is now decisive rather than merely
+ * sound. `excel` also lives on an `fs` connection and is READ by `excel-io.ts`;
+ * this refuses it BY NAME rather than by trying to parse its config as a CSV's,
+ * which is defence in depth behind `fs.ts`'s fork rather than the routing
+ * itself. That is why the message names this READER and not the store.
  */
 async function prepareRead(read: DelimitedDatasetRead): Promise<{
   readonly path: string;
@@ -365,7 +368,9 @@ function parseOptionsFor(
 
 /** The column names for a file's first row, under either header mode. */
 function namesFrom(header: boolean, firstRow: readonly string[], path: string): readonly string[] {
-  return header ? headerNames(firstRow, `'${path}'`) : positionalNames(trimTrailingEmpty(firstRow).length);
+  return header
+    ? headerNames(firstRow, `'${path}'`)
+    : positionalNames(trimTrailingEmpty(firstRow).length);
 }
 
 function chunkBytesFor(read: DelimitedDatasetRead): number {

@@ -52,12 +52,7 @@ describe('dataset config catalog', () => {
     // green is to add their new kind to `IMPLEMENTED_DATASET_KINDS` — the exact
     // lie a positive fact exists to prevent. A literal list reds on the next
     // kind and can only be made green by a decision.
-    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual([
-      'delimited',
-      'excel',
-      'query',
-      'table',
-    ]);
+    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'excel', 'query', 'table']);
     expect(datasetKindIsImplemented('table')).toBe(true);
     expect(datasetKindIsImplemented('delimited')).toBe(true);
     expect(datasetKindIsImplemented('excel')).toBe(true);
@@ -91,7 +86,8 @@ describe('the `excel` dataset config (#1215, M11 slice 2)', () => {
     // part that matters — reads a DIFFERENT sheet while succeeding.
     expect(excelDatasetConfigSchema.safeParse(base).success).toBe(true);
     expect(
-      excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', header: true, sheetIndex: 3 }).success,
+      excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', header: true, sheetIndex: 3 })
+        .success,
     ).toBe(true);
 
     // NEITHER is defaulted. Two sheets of one workbook routinely share column
@@ -106,7 +102,7 @@ describe('the `excel` dataset config (#1215, M11 slice 2)', () => {
     expect(formatZodIssues(both.error!.issues)).toMatch(/sheetIndex/);
   });
 
-  it('requires `header`, on M7\'s correction unchanged', () => {
+  it("requires `header`, on M7's correction unchanged", () => {
     // Defaulted true it EATS row 1 of a headerless sheet; defaulted false it
     // turns the header into a data row. Both succeed and write wrong data.
     const missing = excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', sheet: 'S' });
@@ -131,7 +127,7 @@ describe('the `excel` dataset config (#1215, M11 slice 2)', () => {
     ).toBe(true);
   });
 
-  it('keeps `nullValue: \'\'` meaningful and validates `dateFormat`', () => {
+  it("keeps `nullValue: ''` meaningful and validates `dateFormat`", () => {
     // No `.min(1)`, exactly as `delimited` has none: `coerceValue` tests
     // `opts.nullValue !== undefined`, so '' is a real declaration.
     expect(excelDatasetConfigSchema.parse({ ...base, nullValue: '' }).nullValue).toBe('');
@@ -293,7 +289,9 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
     // gave it a reader too. It now behaves exactly as `delimited` does — a
     // well-formed config draws nothing, a malformed one still speaks — which is
     // the same pair of facts asserted about the other half of the fs store.
-    expect(datasetConfigAdvisory('excel', { path: '/f.xlsx', header: true, sheet: 'S' })).toBeNull();
+    expect(
+      datasetConfigAdvisory('excel', { path: '/f.xlsx', header: true, sheet: 'S' }),
+    ).toBeNull();
     expect(datasetConfigAdvisory('excel', { path: '/f.xlsx', header: true })).toMatch(/sheet/i);
   });
 });

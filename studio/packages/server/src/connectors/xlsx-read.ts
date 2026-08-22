@@ -242,7 +242,8 @@ function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
       if (err || !zip) {
         abandonFd();
         reject(
-          new XlsxReadError('malformed_workbook', 
+          new XlsxReadError(
+            'malformed_workbook',
             `not a readable .xlsx: ${err?.message ?? 'the file could not be opened'}. ` +
               'A .xls, .xlsb or password-protected workbook is not a zip and cannot be read here.',
           ),
@@ -307,7 +308,8 @@ function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<
       if (entries.size >= XLSX_MAX_ENTRIES) {
         detach();
         reject(
-          new XlsxReadError('past_a_bound', 
+          new XlsxReadError(
+            'past_a_bound',
             `the container declares more than ${XLSX_MAX_ENTRIES} entries; refusing to index it`,
           ),
         );
@@ -345,7 +347,10 @@ async function* entryChunks(
     zip.openReadStream(entry, (err, s) => {
       if (err || !s) {
         reject(
-          new XlsxReadError('malformed_workbook', `could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`),
+          new XlsxReadError(
+            'malformed_workbook',
+            `could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`,
+          ),
         );
         return;
       }
@@ -361,7 +366,8 @@ async function* entryChunks(
       // on what actually arrives.
       seen += chunk.length;
       if (seen > maxBytes) {
-        throw new XlsxReadError('past_a_bound', 
+        throw new XlsxReadError(
+          'past_a_bound',
           `${entry.fileName} inflates past ${maxBytes} bytes; refusing rather than reading it into memory`,
         );
       }
@@ -375,7 +381,8 @@ async function* entryChunks(
     // that contract for the most ordinary real-world damage there is.
     if (err instanceof XlsxReadError) throw err;
     if (err instanceof Error && err.name === 'AbortError') throw err;
-    throw new XlsxReadError('malformed_workbook', 
+    throw new XlsxReadError(
+      'malformed_workbook',
       `${entry.fileName} could not be inflated: ${err instanceof Error ? err.message : String(err)}. ` +
         'The workbook is truncated or corrupt.',
     );
@@ -430,7 +437,8 @@ function walkXml(
   if (handlers.text) parser.on('text', handlers.text);
   if (handlers.close) parser.on('closetag', handlers.close);
   parser.write(xml).close();
-  if (state.failure) throw new XlsxReadError('malformed_workbook', `malformed xlsx XML: ${state.failure.message}`);
+  if (state.failure)
+    throw new XlsxReadError('malformed_workbook', `malformed xlsx XML: ${state.failure.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,7 +487,8 @@ async function readWorkbookParts(
 ): Promise<WorkbookParts> {
   const workbookEntry = entries.get('xl/workbook.xml');
   if (!workbookEntry) {
-    throw new XlsxReadError('malformed_workbook', 
+    throw new XlsxReadError(
+      'malformed_workbook',
       'the container has no xl/workbook.xml, so it is not a spreadsheet — an .xlsb workbook stores sheets as sheetN.bin and is not supported',
     );
   }
@@ -589,14 +598,18 @@ async function readWorkbookParts(
  */
 function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: string } {
   const { sheets } = parts;
-  if (sheets.length === 0) throw new XlsxReadError('malformed_workbook', 'the workbook declares no sheets');
+  if (sheets.length === 0)
+    throw new XlsxReadError('malformed_workbook', 'the workbook declares no sheets');
 
   let index: number;
   if (opts.sheet !== undefined) {
     index = sheets.findIndex((s) => s.name === opts.sheet);
     if (index < 0) {
       const names = sheets.map((s) => `"${s.name}"`).join(', ');
-      throw new XlsxReadError('no_such_sheet', `no sheet named "${opts.sheet}" in this workbook; it has ${names}`);
+      throw new XlsxReadError(
+        'no_such_sheet',
+        `no sheet named "${opts.sheet}" in this workbook; it has ${names}`,
+      );
     }
   } else if (opts.sheetIndex !== undefined) {
     if (
@@ -604,7 +617,8 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
       opts.sheetIndex < 1 ||
       opts.sheetIndex > sheets.length
     ) {
-      throw new XlsxReadError('no_such_sheet', 
+      throw new XlsxReadError(
+        'no_such_sheet',
         `sheet index ${opts.sheetIndex} is out of range; this workbook has only ${sheets.length} sheet(s)`,
       );
     }
@@ -625,7 +639,8 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
 
   const relTarget = parts.rels.get(rid);
   if (relTarget === undefined) {
-    throw new XlsxReadError('malformed_workbook', 
+    throw new XlsxReadError(
+      'malformed_workbook',
       `sheet "${sheet.name}" points at relationship ${rid}, which this workbook does not define`,
     );
   }
@@ -739,7 +754,8 @@ export async function* readXlsxRowBatches(
 
     const sheetEntry = entries.get(target);
     if (!sheetEntry)
-      throw new XlsxReadError('malformed_workbook', 
+      throw new XlsxReadError(
+        'malformed_workbook',
         `the workbook names a sheet at ${target}, which the container does not hold`,
       );
 
@@ -776,7 +792,8 @@ export async function* readXlsxRowBatches(
             // other malformed reference in this module refuses (§6.2).
             const parsed = Number(declared);
             if (!Number.isInteger(parsed) || parsed < 1) {
-              state.failure ??= new XlsxReadError('malformed_workbook', 
+              state.failure ??= new XlsxReadError(
+                'malformed_workbook',
                 `a row declares r="${declared}", which is not a positive row number`,
               );
             } else {
@@ -822,7 +839,8 @@ export async function* readXlsxRowBatches(
       if (!inValue && !inText) return;
       buffer += text;
       if (buffer.length > XLSX_MAX_CELL_CHARS) {
-        state.failure ??= new XlsxReadError('past_a_bound', 
+        state.failure ??= new XlsxReadError(
+          'past_a_bound',
           `a cell exceeds ${XLSX_MAX_CELL_CHARS} characters; refusing rather than accumulating it`,
         );
         buffer = '';
@@ -856,7 +874,8 @@ export async function* readXlsxRowBatches(
           } else {
             const parsed = columnIndexOf(cellRef);
             if (parsed === null) {
-              state.failure ??= new XlsxReadError('malformed_workbook', 
+              state.failure ??= new XlsxReadError(
+                'malformed_workbook',
                 `row ${rowNumber} declares cell r="${cellRef}", which is not a cell reference`,
               );
               cellRef = undefined;
@@ -877,7 +896,8 @@ export async function* readXlsxRowBatches(
           // XFD is the format's own last column, so past it is malformed rather
           // than merely large.
           if (column >= XLSX_MAX_COLUMNS) {
-            state.failure ??= new XlsxReadError('malformed_workbook', 
+            state.failure ??= new XlsxReadError(
+              'malformed_workbook',
               `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`}, past the ` +
                 `${XLSX_MAX_COLUMNS}-column ceiling the format allows`,
             );
@@ -885,7 +905,8 @@ export async function* readXlsxRowBatches(
             break;
           }
           if (column <= lastColumn) {
-            state.failure ??= new XlsxReadError('malformed_workbook', 
+            state.failure ??= new XlsxReadError(
+              'malformed_workbook',
               `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`} after a later ` +
                 'column; refusing rather than overwriting a value already read',
             );
@@ -977,7 +998,8 @@ function materialise(
       // turning a truncated workbook into an apparently-successful import.
       const index = Number(raw);
       if (raw === '' || !Number.isInteger(index) || index < 0 || index >= parts.shared.length) {
-        state.failure ??= new XlsxReadError('malformed_workbook', 
+        state.failure ??= new XlsxReadError(
+          'malformed_workbook',
           `a cell references shared string ${JSON.stringify(raw)}, which this workbook's ` +
             `table of ${parts.shared.length} does not hold`,
         );
@@ -996,7 +1018,8 @@ function materialise(
       // that `workingVal || ''` cost `xlsx-stream-reader` its place in #1213.
       if (raw === '1' || raw === 'true') return true;
       if (raw === '0' || raw === 'false') return false;
-      state.failure ??= new XlsxReadError('malformed_workbook', 
+      state.failure ??= new XlsxReadError(
+        'malformed_workbook',
         `a boolean cell holds ${JSON.stringify(raw)}, which is neither 0 nor 1`,
       );
       return null;
@@ -1024,7 +1047,8 @@ function materialise(
       // the same present-vs-absent collapse the `s` and `b` branches above
       // already refuse.
       if (raw === '') {
-        state.failure ??= new XlsxReadError('malformed_workbook', 
+        state.failure ??= new XlsxReadError(
+          'malformed_workbook',
           'a numeric cell holds an empty <v>; a blank cell carries no <v> at all',
         );
         return null;

@@ -80,7 +80,12 @@ export type CoercionResult =
  *
  * `delimited`'s config DECLARES both (#1163) and M7 slice 3 (#1167) wired them:
  * `CopyIo.sourceCoercion` reads them off the source dataset and `copy.ts` passes
- * them to `pumpCopyRows`. `excel`'s config waits for M11.
+ * them to `pumpCopyRows`. `excel`'s config declares both too as of M11 slice 2
+ * (#1215), through the same channel — but they REACH LESS THERE, and the
+ * difference is a property of the format rather than of the wiring. An Excel
+ * date cell is TYPED, so `dateFormat` governs only its TEXT cells; and a blank
+ * cell already arrives as `null`, so `nullValue` does exactly one thing —
+ * turn a text cell whose content IS the sentinel into a null.
  *
  * They are applied by the PUMP and never by the reader, which is a decision
  * rather than a layering accident. `nullValue` in the reader would look

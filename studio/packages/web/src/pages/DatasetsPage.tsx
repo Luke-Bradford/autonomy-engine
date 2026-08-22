@@ -405,16 +405,27 @@ function DatasetForm({
    * not described yet. The JSON editor is the honest surface for a shape this
    * build cannot name, and the advisory below says why it is showing.
    *
-   * `delimited` is NO LONGER such a kind, on EITHER count, and the two arrived
-   * one slice apart. #1163 gave it §2.6's eight keys (`path`, `delimiter`,
-   * `quote`, `escape`, `header`, `encoding`, `nullValue`, `dateFormat`), so
+   * `delimited` stopped being such a kind on EITHER count, and the two facts
+   * arrived one slice apart. #1163 gave it §2.6's eight keys, so
    * `deriveConfigFields` yields controls for it; #1167 then gave it a reader, so
    * a typed form no longer presents a dataset as ready to copy while every copy
-   * naming it refuses at dispatch. It gets the field form. That the two facts
-   * moved separately is exactly why this branch keys on
-   * `datasetKindIsImplemented` and not on `fields.length` — `excel` is the kind
-   * that now holds this branch open, and it holds it for the READER reason with
-   * no fields of its own either.
+   * naming it refuses at dispatch. That the two moved separately is exactly why
+   * this branch keys on `datasetKindIsImplemented` and not on `fields.length`.
+   *
+   * **AS OF M11 SLICE 2 (#1215) NO KIND HOLDS THIS BRANCH OPEN.** `excel` was
+   * the last one, and it now has both a schema and a reader — so `kindHasReader`
+   * is true for every member of the enum and the JSON fallback below is
+   * unreachable through the picker.
+   *
+   * It is KEPT rather than deleted, and the reason is the paragraph above: the
+   * two facts are independent and a new kind arrives without either. Deleting
+   * this would mean the next kind's first day ships a typed form for a dataset
+   * every copy refuses at dispatch — the precise trap the branch exists for —
+   * and the code would have to be re-derived from a git log. What keeps "kept"
+   * from meaning "rotting": `dataset-config.test.ts` pins
+   * `IMPLEMENTED_DATASET_KINDS` as a LITERAL LIST, so adding a kind reds it, and
+   * `DatasetsPage.test.tsx` drives these branches through a narrow mock of the
+   * one predicate rather than deleting five real tests with their witness.
    */
   const kindHasReader = datasetKindIsImplemented(form.kind);
   /*
@@ -718,12 +729,12 @@ function DatasetForm({
       <div className="dataset-config" role="group" aria-label="Config">
         <div className="config-header">
           <span>Config</span>
-          {/* Hidden, not disabled, when the kind has no reader — `excel` alone
-              as of #1167, which gave `delimited` its reader and so this toggle.
-              The reason is the READER and never an absent field form: a typed
-              form for a kind every copy refuses at dispatch would present a
-              dataset as ready to copy. A control that can only refuse is
-              furniture either way. */}
+          {/* Hidden, not disabled, when the kind has no reader. No kind is in
+              that state as of #1215 — see `kindHasReader` above for why the
+              branch is kept anyway. The reason is the READER and never an
+              absent field form: a typed form for a kind every copy refuses at
+              dispatch would present a dataset as ready to copy. A control that
+              can only refuse is furniture either way. */}
           {kindHasReader && (
             <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
               {jsonMode ? 'Edit as fields' : 'Edit as JSON'}

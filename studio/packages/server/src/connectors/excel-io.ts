@@ -314,11 +314,7 @@ function headerCellName(cell: XlsxCell, subject: string, column: number): string
 }
 
 /** The column names for a sheet's first meaningful row, under either header mode. */
-function namesFrom(
-  header: boolean,
-  row: XlsxRow,
-  subject: string,
-): readonly string[] {
+function namesFrom(header: boolean, row: XlsxRow, subject: string): readonly string[] {
   if (!header) return positionalNames(widthOf(row.cells));
   return headerNames(
     row.cells.map((cell, index) => headerCellName(cell, subject, index + 1)),

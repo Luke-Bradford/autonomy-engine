@@ -1,4 +1,9 @@
-import { close as closeCb, constants as fsConstants, fstat as fstatCb, open as openCb } from 'node:fs';
+import {
+  close as closeCb,
+  constants as fsConstants,
+  fstat as fstatCb,
+  open as openCb,
+} from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';

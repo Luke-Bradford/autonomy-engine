@@ -193,11 +193,15 @@ export async function confineStorePath(
  * to fix a config that is correct for the store it actually lives in.
  *
  * ONE guard and ONE message, deliberately, rather than a not-implemented arm
- * stacked on a not-mine arm. Layered, one of the two is unreachable for every
- * kind (`excel` is neither implemented nor a sqlite kind), and the pair would
- * only ever say which of two true things a given ordering happened to reach
- * first. `delimited-io.ts`'s `prepareRead` is the same shape from the other
- * store, which is what keeps the two symmetric.
+ * stacked on a not-mine arm. When this was written, `excel` was neither
+ * implemented nor a sqlite kind, so one of a layered pair would have been
+ * unreachable for every kind and the pair could only ever have said which of
+ * two true things a given ordering reached first. M11 slice 2 (#1215)
+ * implemented `excel` and so removed that particular witness — and left the
+ * conclusion stronger rather than weaker: with every kind implemented, a
+ * not-implemented arm here would now be DEAD for every kind rather than merely
+ * redundant for one. `delimited-io.ts` and `excel-io.ts` are the same shape
+ * from the other store, which is what keeps them symmetric.
  *
  * The MISMATCH this refuses is a dispatch the executor should already have
  * refused — `DATASET_CONNECTION_MISMATCH` fires when the dataset's store is not

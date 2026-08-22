@@ -132,7 +132,15 @@ describe('Excel -> SQLite, end to end', () => {
     const root = tempRoot('copy-excel-fork');
     const sinkPath = seedSink(root, 'dst.db');
     const path = seedBook(root, {
-      sheets: [{ name: 'People', rows: [[text('id'), text('name')], [num(1), text('alpha')]] }],
+      sheets: [
+        {
+          name: 'People',
+          rows: [
+            [text('id'), text('name')],
+            [num(1), text('alpha')],
+          ],
+        },
+      ],
     });
 
     const events = await run(
@@ -184,7 +192,11 @@ describe('Excel -> SQLite, end to end', () => {
       sheets: [
         {
           name: 'People',
-          rows: [[text('id'), text('name')], [num(1), text('\\N')], [num(2), text('beta')]],
+          rows: [
+            [text('id'), text('name')],
+            [num(1), text('\\N')],
+            [num(2), text('beta')],
+          ],
         },
       ],
     });
