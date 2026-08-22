@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
+import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import { emptyNodeCost } from './runSummary';
 import type { DatasetAddress } from '@autonomy-studio/shared';
@@ -41,8 +42,14 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
   };
 }
 
+/*
+ * `renderWithRouter`, not a bare `render`: the Child runs section renders real
+ * `<Link>`s, and `useHref` throws outside a router context. The shared helper is
+ * the one `RunDetailPage.test.tsx` already uses, so there is no second opinion
+ * here about what "a router that exists and goes nowhere" means.
+ */
 function renderPanel(node: NodeActivity): HTMLElement {
-  render(<NodeActivityPanel node={node} name={null} onClose={vi.fn()} />);
+  renderWithRouter(<NodeActivityPanel node={node} name={null} onClose={vi.fn()} />);
   return screen.getByRole('complementary');
 }
 
@@ -205,5 +212,87 @@ describe('NodeActivityPanel — the resolved dataset address', () => {
       row({ nodeId: 'c', status: 'success', datasetAddresses: { source: SOURCE, sink: SINK } }),
     );
     expect(panel.textContent).not.toMatch(/names no single object/);
+  });
+});
+
+/**
+ * #1231 (U20 slice 1) — the child-run drill.
+ *
+ * Asserted on the ROW rather than through the page for the reason the file's
+ * head docblock already gives: the interesting shapes here are ones the page
+ * can only reach through a crash or a container timeout.
+ */
+describe('NodeActivityPanel — child runs', () => {
+  function childSection(panel: HTMLElement): HTMLElement {
+    return within(panel).getByRole('region', { name: 'Child runs' });
+  }
+
+  it('renders no Child runs section for a node that spawned none', () => {
+    const panel = renderPanel(row({ nodeId: 'a', status: 'success' }));
+    expect(within(panel).queryByRole('region', { name: 'Child runs' })).toBeNull();
+  });
+
+  it('links the one child a call node spawned, named so it is not a bare id', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'waiting', attempts: 1, childRunIds: ['run_child1'] }),
+    );
+    const link = within(childSection(panel)).getByRole('link', { name: 'Child run run_child1' });
+    expect(link).toHaveAttribute('href', '/monitor/runs/run_child1');
+    /* The visible text stays the raw id — it is what the event feed and the
+       runs list are keyed on, so naming the link must not cost the lookup. */
+    expect(link.textContent).toBe('run_child1');
+  });
+
+  it('lists every child a re-opened call node spawned, as a list', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'success',
+        attempts: 2,
+        childRunIds: ['run_c1', 'run_c2'],
+      }),
+    );
+    const section = childSection(panel);
+    expect(within(section).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(section).getByRole('link', { name: 'Child run run_c1' })).toBeInTheDocument();
+    expect(within(section).getByRole('link', { name: 'Child run run_c2' })).toBeInTheDocument();
+    /* The multiplicity is STRUCTURAL — a back-edge loop round spawns an
+       additional child and a parallel foreach folds its items onto one row — so
+       the section must say why there is more than one rather than let it read
+       as a duplicate. */
+    expect(section.textContent).toMatch(/loop round|foreach/);
+  });
+
+  /*
+   * THE STATE THE TICKET IS ABOUT, and the one a naive `length > 0` gate ships
+   * silent. The reducer parks the node on the `startChild` COMMAND; the
+   * `call.started` announcement lands only after the child row exists. So a node
+   * reads `waiting` with no id at all: transiently on every live spawn, and
+   * permanently if the server died between the command and the append (#1041).
+   * Rendering nothing there says "no children" about a node that has one.
+   */
+  it('says why a waiting call node has no child to show yet', () => {
+    const panel = renderPanel(row({ nodeId: 'a', status: 'waiting', attempts: 1 }));
+    expect(panel.textContent).toMatch(/has not been announced/);
+  });
+
+  it('does not offer that explanation once the child is announced', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'waiting', attempts: 1, childRunIds: ['run_child1'] }),
+    );
+    expect(panel.textContent).not.toMatch(/has not been announced/);
+  });
+
+  /*
+   * `childRunIds` is append-only and never cleared, so this section outlives the
+   * park it was opened for. It may therefore never claim a child is RUNNING —
+   * nothing on the row carries a child's status, and a `skipped` call node
+   * (a container timeout via `abandonLiveChildren`) can hold one that is.
+   */
+  it('never claims a listed child is still running', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'skipped', attempts: 1, childRunIds: ['run_c1'] }),
+    );
+    expect(childSection(panel).textContent).not.toMatch(/in flight|still running|is running/);
   });
 });
