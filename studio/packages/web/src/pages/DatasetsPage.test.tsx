@@ -14,6 +14,7 @@ vi.mock('../api/datasets', async (importActual) => {
   return {
     ...actual,
     listDatasets: vi.fn(),
+    listDatasetSheets: vi.fn(),
     createDataset: vi.fn(),
     updateDataset: vi.fn(),
     deleteDataset: vi.fn(),
@@ -61,6 +62,7 @@ const createMock = vi.mocked(datasetsApi.createDataset);
 const updateMock = vi.mocked(datasetsApi.updateDataset);
 const deleteMock = vi.mocked(datasetsApi.deleteDataset);
 const listConnectionsMock = vi.mocked(connectionsApi.listConnections);
+const sheetsMock = vi.mocked(datasetsApi.listDatasetSheets);
 
 function store(overrides: Partial<ConnectionPublic> = {}): ConnectionPublic {
   return {
@@ -118,6 +120,7 @@ beforeEach(() => {
   createMock.mockResolvedValue(dataset());
   updateMock.mockResolvedValue(dataset());
   deleteMock.mockResolvedValue(undefined);
+  sheetsMock.mockResolvedValue({ ok: true, sheets: ['People', 'Costs'] });
 });
 
 afterEach(() => {
@@ -621,4 +624,113 @@ describe('DatasetsPage', () => {
 
     expect(within(form()).queryByText(/Kind and store disagree/)).not.toBeInTheDocument();
   });
+
+  /**
+   * #1218 — the `sheet` field stops being typed blind.
+   *
+   * Driven through the PAGE rather than the control, because the parts that can
+   * actually go wrong are the panel's: which field gets offered values, what a
+   * choice does to the OTHER field, and when a listing stops being about the
+   * draft on screen.
+   */
+  describe('excel sheet chooser (#1218)', () => {
+    async function openExcelForm(user: ReturnType<typeof userEvent.setup>) {
+      listConnectionsMock.mockResolvedValue([store({ id: 'conn_fs', kind: 'fs', name: 'Files' })]);
+      renderWithRouter(<DatasetsPage />);
+      await user.click(await screen.findByRole('button', { name: 'New dataset' }));
+      await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_fs');
+      await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+      await pasteInto(user, within(form()).getByLabelText('path'), '/data/book.xlsx');
+    }
+
+    it('offers no chooser until the sheets have been listed', async () => {
+      const user = userEvent.setup();
+      await openExcelForm(user);
+
+      // The free-text box is the ONLY surface before a listing, and it must
+      // remain reachable: a workbook whose path is not readable yet has no list
+      // to offer, and a form that demanded one would be unauthorable.
+      expect(within(form()).getByLabelText('sheet (optional)')).toBeInTheDocument();
+      expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
+      expect(sheetsMock).not.toHaveBeenCalled();
+    });
+
+    it('lists on demand and offers every named sheet', async () => {
+      const user = userEvent.setup();
+      await openExcelForm(user);
+
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+
+      const chooser = await within(form()).findByLabelText('Sheet in this workbook');
+      expect(sheetsMock).toHaveBeenCalledWith({
+        connectionId: 'conn_fs',
+        path: '/data/book.xlsx',
+      });
+      expect(within(chooser).getByRole('option', { name: 'People' })).toBeInTheDocument();
+      expect(within(chooser).getByRole('option', { name: 'Costs' })).toBeInTheDocument();
+    });
+
+    it('writes the chosen name into `sheet` AND blanks `sheetIndex`', async () => {
+      const user = userEvent.setup();
+      await openExcelForm(user);
+      // A `sheetIndex` typed first is the trap: the schema refuses a config
+      // naming both, so a chooser that only wrote `sheet` would make itself the
+      // cause of the refusal on Save.
+      await pasteInto(user, within(form()).getByLabelText('sheetIndex (optional) — number'), '2');
+
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+      await user.selectOptions(
+        await within(form()).findByLabelText('Sheet in this workbook'),
+        'Costs',
+      );
+
+      expect(within(form()).getByLabelText('sheet (optional)')).toHaveValue('Costs');
+      expect(within(form()).getByLabelText('sheetIndex (optional) — number')).toHaveValue('');
+    });
+
+    it('stops offering a listing once the path moves out from under it', async () => {
+      const user = userEvent.setup();
+      await openExcelForm(user);
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+      await within(form()).findByLabelText('Sheet in this workbook');
+
+      await pasteInto(user, within(form()).getByLabelText('path'), '-other');
+
+      // The names belong to the workbook that WAS named. Offering them against a
+      // different path would invite a choice that refuses at dispatch — the very
+      // failure this ticket exists to remove.
+      await waitFor(() =>
+        expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull(),
+      );
+    });
+
+    it('shows a refusal as an answer, not as a form error', async () => {
+      sheetsMock.mockResolvedValue({ ok: false, error: "'/data/book.xlsx' could not be opened" });
+      const user = userEvent.setup();
+      await openExcelForm(user);
+
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+
+      const said = await screen.findByText(/could not be opened/);
+      expect(said).toHaveAttribute('role', 'status');
+      expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
+      // The box survives the refusal — the operator can still type the name.
+      expect(within(form()).getByLabelText('sheet (optional)')).toBeInTheDocument();
+    });
+
+    it('declines to offer an unnamed sheet, and says how to reach it', async () => {
+      // `DatasetSheetsResultSchema` admits an empty name so one odd sheet cannot
+      // make a whole workbook uninspectable; `sheet` is `.min(1)`, so offering
+      // it would be a choice the save refuses.
+      sheetsMock.mockResolvedValue({ ok: true, sheets: [''] });
+      const user = userEvent.setup();
+      await openExcelForm(user);
+
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+
+      expect(await screen.findByText(/no named sheets/)).toBeInTheDocument();
+      expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
+    });
+  });
+
 });
