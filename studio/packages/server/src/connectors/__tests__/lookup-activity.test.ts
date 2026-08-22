@@ -541,7 +541,7 @@ describe('lookup — the pre-screen that bounds what is MATERIALISED (#1224)', (
   it('admits a BLOB that fits, with no cushion to spare', async () => {
     // The boundary case, because the estimate has NO slack: 786,000 bytes
     // base64s to exactly ceil(786000/3)*4 = 1,048,000 chars, which with its
-    // quotes and the `{"b":…}` around it is 1,048,009 — 567 bytes under the cap.
+    // quotes and the `{"b":…}` around it is 1,048,008 — 568 bytes under the cap.
     // An estimator charging the base64 length rather than the byte length would
     // still admit this; one off by a single factor would falsely truncate it,
     // which is what this pins.
