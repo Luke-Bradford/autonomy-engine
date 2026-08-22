@@ -11,6 +11,7 @@ import {
 } from '../repo/index.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
 import { datasetReferences } from '../datamove/dataset-references.js';
+import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import type { Db } from '../repo/types.js';
 import type { Principal } from '../auth/principal.js';
@@ -71,12 +72,32 @@ const DatasetWriteBodySchema = NewDatasetSchema.omit({
  * distinguish "no such connection" from "not yours" — that difference is exactly
  * the existence oracle an unauthorised caller would be probing for.
  */
-function requireOwnedConnection(db: Db, principal: Principal, connectionId: string): void {
+function requireOwnedConnection(
+  db: Db,
+  principal: Principal,
+  connectionId: string,
+): ReturnType<typeof getConnection> & object {
   const connection = getConnection(db, connectionId);
   if (!connection || connection.ownerId !== principal.ownerId) {
     throw new BadRequestError(`no such connection "${connectionId}"`);
   }
+  // Returns the ROW (#1218) rather than only asserting: the sheet-listing route
+  // needs the very config this has just proved the caller owns, and re-fetching
+  // it would be a second lookup that could disagree with the one that authorised.
+  return connection;
 }
+
+/**
+ * #1218 — the body of `POST /api/datasets/sheets`.
+ *
+ * `path` is NOT `.min(1)`: an empty box is the ordinary state of a form the
+ * operator has not finished filling in, and the answer to it is a refusal
+ * sentence in the panel, not a 400 the form has to special-case.
+ */
+const DatasetSheetsBodySchema = z.object({
+  connectionId: z.string().min(1),
+  path: z.string(),
+});
 
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
@@ -86,6 +107,41 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     requireOwnedConnection(db, request.principal, body.connectionId);
     const created = createDataset(db, { ...body, ownerId: request.principal.ownerId });
     reply.status(201).send(created);
+  });
+
+  /**
+   * #1218 — the worksheet names of a workbook, so an `excel` dataset's `sheet`
+   * can be CHOSEN instead of typed blind.
+   *
+   * THE ONLY ROUTE IN THIS PLUGIN THAT TOUCHES NO DATASET ROW, and it lives here
+   * anyway: the caller is the dataset form, `path` is a dataset config field, and
+   * the non-disclosing `requireOwnedConnection` above is already the right gate.
+   * `routes/connections.ts` would have used `requireOwned`, which 404s and would
+   * therefore tell an unauthorised caller which connection ids exist.
+   *
+   * It is a POST because the workbook path is data the operator is mid-way
+   * through typing — a query string would put it in access logs and in browser
+   * history. `/sheets` is a static segment and cannot collide with `/:id`;
+   * find-my-way prefers the static one regardless.
+   *
+   * A refusal is a 200 carrying `{ ok: false, error }`, matching
+   * `ConnectionProbeResultSchema` and for the same reason: every way this fails
+   * is an ordinary authoring condition, so the form renders them all in one
+   * place. The 400s that remain are protocol faults — a body that is not a body.
+   *
+   * SECURITY. Ownership is proved before the path is looked at; the path is then
+   * confined against that connection's own `roots` and opened `O_NOFOLLOW`
+   * (`confineFsPath` → `openConfinedFd`), so this route can reach nothing the
+   * bound connection could not already read. It resolves no secret — an `fs`
+   * connection has none — and the read is `xl/workbook.xml` alone.
+   */
+  fastify.post('/api/datasets/sheets', async (request) => {
+    const body = DatasetSheetsBodySchema.parse(request.body);
+    const connection = requireOwnedConnection(db, request.principal, body.connectionId);
+    return listSheetsForConnection({
+      connection: { kind: connection.kind, config: connection.config },
+      path: body.path,
+    });
   });
 
   fastify.get('/api/datasets', async (request) => {

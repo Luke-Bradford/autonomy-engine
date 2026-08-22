@@ -7,7 +7,15 @@ import {
   createPipelineVersion,
   getDataset,
 } from '../../repo/index.js';
-import { CATALOG_VERSION, DatasetReferencesResponseSchema } from '@autonomy-studio/shared';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  CATALOG_VERSION,
+  DatasetReferencesResponseSchema,
+  DatasetSheetsResultSchema,
+} from '@autonomy-studio/shared';
+import { buildXlsx } from '../../connectors/__tests__/xlsx-fixtures.js';
+import { cleanupTempRoots, tempRoot } from '../../connectors/__tests__/temp-roots.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 /** The store every fixture dataset lives in — a REAL owned connection, because
@@ -40,6 +48,7 @@ describe('datasets routes', () => {
 
   afterAll(async () => {
     await app.close();
+    cleanupTempRoots();
   });
 
   describe('GET /:id/references (#996 M9)', () => {
@@ -236,6 +245,109 @@ describe('datasets routes', () => {
     ).toBe(404);
     // ...and it is still there.
     expect(getDataset(app.db, other.id)).not.toBeNull();
+  });
+
+  describe('POST /sheets (#1218)', () => {
+    it('lists the sheets of a workbook inside the connection roots', async () => {
+      const root = tempRoot('sheets-route-');
+      const fsConn = createConnection(app.db, {
+        ownerId: 'local',
+        name: 'Sheets root',
+        kind: 'fs',
+        config: { roots: [root] },
+        secretRef: null,
+      });
+      writeFileSync(
+        join(root, 'book.xlsx'),
+        buildXlsx({
+          sheets: [
+            { name: 'People', rows: [[{ kind: 'inline', text: 'name' }]] },
+            { name: 'Costs', rows: [[{ kind: 'inline', text: 'amount' }]] },
+          ],
+        }),
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/sheets',
+        payload: { connectionId: fsConn.id, path: join(root, 'book.xlsx') },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(DatasetSheetsResultSchema.parse(res.json())).toEqual({
+        ok: true,
+        sheets: ['People', 'Costs'],
+      });
+    });
+
+    it('answers a refusal as a 200, so the form renders every failure in one place', async () => {
+      const root = tempRoot('sheets-route-');
+      const fsConn = createConnection(app.db, {
+        ownerId: 'local',
+        name: 'Empty root',
+        kind: 'fs',
+        config: { roots: [root] },
+        secretRef: null,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/sheets',
+        payload: { connectionId: fsConn.id, path: join(root, 'nothing-here.xlsx') },
+      });
+
+      // NOT a 4xx: a file the operator has not created yet is an ordinary
+      // authoring state, not a protocol fault.
+      expect(res.statusCode).toBe(200);
+      expect(res.json().ok).toBe(false);
+    });
+
+    // Authentication is not authorisation, and this route reads a FILE — so
+    // binding to someone else's connection would read through their roots.
+    it('refuses a connection that is not the caller’s, without disclosing which', async () => {
+      const theirRoot = tempRoot('sheets-route-theirs-');
+      const theirs = createConnection(app.db, {
+        ownerId: 'someone_else',
+        name: 'Their root',
+        kind: 'fs',
+        config: { roots: [theirRoot] },
+        secretRef: null,
+      });
+      writeFileSync(
+        join(theirRoot, 'secret.xlsx'),
+        buildXlsx({ sheets: [{ name: 'Payroll', rows: [[{ kind: 'inline', text: 'x' }]] }] }),
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/sheets',
+        payload: { connectionId: theirs.id, path: join(theirRoot, 'secret.xlsx') },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).not.toContain('Payroll');
+
+      // The same existence-oracle rule the create path holds: "not yours" and
+      // "no such connection" must be one sentence.
+      const missing = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/sheets',
+        payload: { connectionId: 'conn_does_not_exist', path: 'book.xlsx' },
+      });
+      expect(missing.statusCode).toBe(400);
+      expect(res.json().message.replace(theirs.id, 'X')).toBe(
+        missing.json().message.replace('conn_does_not_exist', 'X'),
+      );
+    });
+
+    it('rejects a body that is not a body', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/datasets/sheets',
+        payload: { path: 'book.xlsx' },
+      });
+      expect(res.statusCode).toBe(400);
+    });
   });
 
   // Authentication is not authorisation. `connectionId` is raw HTTP input, so a
