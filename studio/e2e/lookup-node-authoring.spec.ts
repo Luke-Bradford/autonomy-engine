@@ -66,7 +66,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     const connA = await seedConnection(page, 'e2e 1221 store A', 'e2e-1221-a.db');
     const connB = await seedConnection(page, 'e2e 1221 store B', 'e2e-1221-b.db');
     const setA = await seedDataset(page, 'e2e 1221 people', connA, 'people');
-    await seedDataset(page, 'e2e 1221 elsewhere', connB, 'elsewhere');
+    const setB = await seedDataset(page, 'e2e 1221 elsewhere', connB, 'elsewhere');
 
     const pipelineId = await openSeededCanvas(page, 'e2e 1221 lookup', { nodes: [] });
 
@@ -91,9 +91,13 @@ test.describe('#1221 — lookup-node authoring', () => {
     // degrading to a raw JSON textarea.
     await expect(panel(page)).toContainText('This activity has no settings.');
 
-    // Before a connection is picked, every `table` dataset is on offer.
+    // Before a connection is picked, both stores' datasets are on offer. Asserted
+    // by IDENTITY rather than by a total count: the e2e workspace is shared
+    // across specs, so the unnarrowed list also carries whatever they seeded and
+    // a fixed number would be a flake waiting on test-ordering.
     const sourceDataset = panel(page).getByRole('combobox', { name: 'Source dataset' });
-    await expect(sourceDataset.locator('option')).toHaveCount(3); // "— none —" + both
+    await expect(sourceDataset.locator(`option[value="${setB}"]`)).toHaveCount(1);
+    await expect(sourceDataset.locator(`option[value="${setA}"]`)).toHaveCount(1);
 
     // THE NARROWING FIX. On an unpaired node the bound connection is the
     // SINGULAR `connectionId`, and the source-dataset list used to read only
@@ -102,7 +106,12 @@ test.describe('#1221 — lookup-node authoring', () => {
     // node is not bound to, which dispatch then refuses with
     // `DATASET_CONNECTION_MISMATCH`.
     await panel(page).getByRole('combobox', { name: 'Connection', exact: true }).selectOption(connA);
-    await expect(sourceDataset.locator('option')).toHaveCount(2); // "— none —" + store A's only
+    // Store B's dataset is GONE, store A's remains — and now the total IS
+    // deterministic, because narrowing to this connection excludes every other
+    // spec's datasets too: "— none —" plus store A's one.
+    await expect(sourceDataset.locator(`option[value="${setB}"]`)).toHaveCount(0);
+    await expect(sourceDataset.locator(`option[value="${setA}"]`)).toHaveCount(1);
+    await expect(sourceDataset.locator('option')).toHaveCount(2);
 
     await sourceDataset.selectOption(setA);
 
