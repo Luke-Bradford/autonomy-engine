@@ -112,11 +112,11 @@ afterEach(() => {
   // wrong test is worse than no message. The check itself stays OUTSIDE the
   // `finally`: a throw in there would replace the cleanup error rather than add
   // to it, and the cleanup failure is the one that explains the other.
-  let seen: string[] = [];
+  const seen: string[] = [];
   try {
     cleanup();
   } finally {
-    seen = unmockedFetchUrls.splice(0);
+    seen.push(...unmockedFetchUrls.splice(0));
   }
   if (seen.length > 0) {
     throw new Error(
