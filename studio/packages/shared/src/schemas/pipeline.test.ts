@@ -178,7 +178,9 @@ describe('NodeSchema', () => {
     expect(() =>
       NodeSchema.parse({ ...node, datasetIds: { source: '', sink: 'ds_sink' } }),
     ).toThrow();
-    expect(() => NodeSchema.parse({ ...node, datasetIds: { source: 'ds_src', sink: '' } })).toThrow();
+    expect(() =>
+      NodeSchema.parse({ ...node, datasetIds: { source: 'ds_src', sink: '' } }),
+    ).toThrow();
     expect(() => NodeSchema.parse({ ...node, datasetIds: { source: '' } })).toThrow();
   });
 });

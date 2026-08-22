@@ -1849,9 +1849,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * never persisted, and this schema has no `.parse()` call site — it types the
      * command union rather than validating a stored artifact.
      */
-    resolvedDatasetIds: z
-      .object({ source: z.string(), sink: z.string().optional() })
-      .optional(),
+    resolvedDatasetIds: z.object({ source: z.string(), sink: z.string().optional() }).optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

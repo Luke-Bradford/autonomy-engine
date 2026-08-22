@@ -2601,7 +2601,9 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     const run = seedRun(db, pvId);
 
     const state = await startRun(
-      deps(db, { catalog: datasetCatalog({ datasetKinds: { source: ['table'], sink: ['table'] } }) }),
+      deps(db, {
+        catalog: datasetCatalog({ datasetKinds: { source: ['table'], sink: ['table'] } }),
+      }),
       run,
     );
 
