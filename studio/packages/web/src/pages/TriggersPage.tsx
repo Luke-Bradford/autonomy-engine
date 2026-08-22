@@ -423,7 +423,13 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <Link to={runDetailPath(watchRunId)} aria-label={`Watch run ${watchRunId}`}>
+              {/* The accessible name CONTAINS the visible text, which is why it is not
+                  the bare `Watch run <id>` that `RunsPage`'s cell uses: WCAG 2.5.3
+                  (Label in Name) is about a speech-input user saying what they can
+                  see, and this control reads "Watch live" where that cell reads
+                  "Watch". The run id is appended because "Watch live" alone does not
+                  say WHICH run, and this notice can name a different one each fire. */}
+              <Link to={runDetailPath(watchRunId)} aria-label={`Watch live — run ${watchRunId}`}>
                 Watch live →
               </Link>
             </>

@@ -616,7 +616,10 @@ describe('TriggersPage', () => {
     render(<RouterProvider router={router} />);
 
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
-    const watch = await screen.findByRole('link', { name: /Watch run run_9/i });
+    /* The FULL accessible name, so both halves are pinned at once: the visible
+       "Watch live" it must contain (WCAG 2.5.3) and the run id that says which
+       run it goes to. */
+    const watch = await screen.findByRole('link', { name: 'Watch live — run run_9' });
     expect(watch).toHaveAttribute('href', '/monitor/runs/run_9');
     await user.click(watch);
 
