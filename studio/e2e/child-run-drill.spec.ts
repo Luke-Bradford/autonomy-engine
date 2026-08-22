@@ -17,31 +17,23 @@ import { fluentRootReady } from './support/theme';
  * render: both links are followed for real, so a path that 404s fails here.
  * (The unit tests own the wording and the presence rules.)
  *
- * EGRESS-FREE on the precedent `run-cost-summary.spec.ts` documents: an
- * `agent_cli` connection running `/bin/echo` is a subprocess that really ran,
- * with no network, no credential and no provider.
+ * The child is a `wait ${0}` and NOT the `agent_cli` + `/bin/echo` pair the
+ * nearest precedent (`run-cost-summary.spec.ts`) uses, because that spec is
+ * about SPEND and this one is not. The suite runs `workers: 1,
+ * fullyParallel: false` against one shared DB, and `monitor-ai-activity.spec.ts`
+ * asserts an EMPTY AI window on the premise that "a fresh e2e DB has no runs at
+ * all" — a premise every earlier-sorting spec that bills an exchange falsifies.
+ * This spec needs no exchange, so it takes the node that needs no connection at
+ * all: nothing here is egress-adjacent and nothing here is billable. (The
+ * order-dependency that made that visible is real and is filed separately.)
  */
 test('#1231 — a call node names its child run, and the child names its caller', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
 
-  const created = await page.request.post('/api/connections', {
-    data: { name: 'e2e echo cli child-drill', kind: 'agent_cli', config: { command: '/bin/echo' } },
-  });
-  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
-  const { id: connectionId } = (await created.json()) as { id: string };
-
   const childDoc: SeedDoc = {
-    nodes: [
-      {
-        id: 'childWork',
-        type: 'agent_task',
-        config: { task: 'e2e child drill' },
-        connectionId,
-        position: { x: 0, y: 0 },
-      },
-    ],
+    nodes: [{ id: 'childWork', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
   };
   const { pipelineVersionId: childPv } = await seedVersion(page, '#1231 child', childDoc);
 
