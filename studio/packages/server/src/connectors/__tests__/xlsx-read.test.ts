@@ -5,10 +5,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { coerceValue } from '@autonomy-studio/shared';
 
 import {
+  XLSX_READ_FAILURE_CODES,
   XlsxReadError,
   listXlsxSheetNames,
   readXlsxRowBatches,
   type XlsxCell,
+  type XlsxReadFailureCode,
   type XlsxRow,
 } from '../xlsx-read.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
@@ -1122,5 +1124,106 @@ describe('readXlsxRowBatches — streaming', () => {
     const rows = await readAll(path);
     expect(rows.map((r) => r.rowNumber)).toEqual([1, 2, 3]);
     expect(rows[1]!.cells).toEqual([]);
+  });
+});
+
+/**
+ * #1216 — the bounded `code` every refusal carries.
+ *
+ * Slice 1 shipped `XlsxReadError` with `permanent` alone, so a consumer wanting
+ * to tell "no such sheet" from "malformed container" had only free-text prose
+ * to match on — which `DelimitedParseError`'s bounded `code` exists to prevent
+ * and which #1175 has already broken once across every connector. `excel-io.ts`
+ * is the consumer that forced the partition, and it branches on these codes to
+ * decide WHICH THING a refusal names: the dataset's own config, or the file.
+ *
+ * EVERY MEMBER HAS A WITNESS HERE, and that is the whole discipline: a code no
+ * test can produce is a code assigned by SITE rather than by fact, and the
+ * seven-member first draft had two of those (`not_a_container` and
+ * `malformed_container` emitted the same sentence; a `phantom_date` member had
+ * no throw site at all, because slice 1's pinned decision is that an unreadable
+ * date RETURNS a fault object rather than raising).
+ */
+describe('the bounded failure code (#1216)', () => {
+  async function codeOf(run: () => Promise<unknown>): Promise<XlsxReadFailureCode> {
+    try {
+      await run();
+    } catch (err) {
+      expect(err).toBeInstanceOf(XlsxReadError);
+      return (err as XlsxReadError).code;
+    }
+    throw new Error('expected an XlsxReadError');
+  }
+
+  const oneSheet: WorkbookSpec = {
+    sheets: [{ name: 'S', rows: [[{ kind: 'inline', text: 'a' }]] }],
+  };
+
+  it('tags a bad option `bad_option`', async () => {
+    const path = seed(oneSheet);
+    expect(await codeOf(() => readAll(path, { batchRows: 0 }))).toBe('bad_option');
+  });
+
+  it('tags a sheet the workbook does not have `no_such_sheet`, by name and by index', async () => {
+    const path = seed(oneSheet);
+    expect(await codeOf(() => readAll(path, { sheet: 'Nope' }))).toBe('no_such_sheet');
+    expect(await codeOf(() => readAll(path, { sheetIndex: 9 }))).toBe('no_such_sheet');
+  });
+
+  it('tags a studio budget `past_a_bound`', async () => {
+    const path = join(root, 'too-many.xlsx');
+    writeFileSync(
+      path,
+      buildZip(
+        Array.from({ length: XLSX_MAX_ENTRIES + 8 }, (_, i) => ({
+          name: `pad/${i}.txt`,
+          data: 'x',
+          method: 'store' as const,
+        })),
+      ),
+    );
+    expect(await codeOf(() => readAll(path))).toBe('past_a_bound');
+  });
+
+  it('tags anything that is not a valid workbook `malformed_workbook`', async () => {
+    const notAZip = join(root, 'not-a-zip.xlsx');
+    writeFileSync(notAZip, 'plain text, not a container');
+    expect(await codeOf(() => readAll(notAZip))).toBe('malformed_workbook');
+
+    // A structurally fine zip that is not a spreadsheet — a DIFFERENT site with
+    // the same code, which is the point: the partition is by FACT, and "this
+    // is not a workbook" is one fact however it is discovered.
+    const noWorkbook = join(root, 'no-workbook.xlsx');
+    writeFileSync(noWorkbook, buildZip([{ name: 'hello.txt', data: 'hi' }]));
+    expect(await codeOf(() => readAll(noWorkbook))).toBe('malformed_workbook');
+
+    // A cell reference the format does not admit — malformed at the VALUE
+    // level, deliberately NOT `past_a_bound` even though `XLSX_MAX_COLUMNS`
+    // bounds it: 16,384 is the FORMAT's own ceiling, not a studio budget.
+    const badRef = seed({
+      sheets: [{ name: 'S', rows: [[{ kind: 'raw', xml: '<c r="ZZZ1"><v>1</v></c>' }]] }],
+    });
+    expect(await codeOf(() => readAll(badRef))).toBe('malformed_workbook');
+  });
+
+  it('leaves no member without a witness, and no witness without a member', () => {
+    // The set is closed, so a new member added without a test above makes this
+    // list disagree with the ones asserted — which is the only mechanism that
+    // stops the next code from being assigned by site.
+    expect([...XLSX_READ_FAILURE_CODES].sort()).toEqual([
+      'bad_option',
+      'malformed_workbook',
+      'no_such_sheet',
+      'past_a_bound',
+    ]);
+  });
+
+  it('keeps `permanent` answering a DIFFERENT question from `code`', () => {
+    // #1216 kept both deliberately: `code` says what was wrong, `permanent`
+    // says whether a retry could ever help. `excel-io.ts` reads the flag for
+    // the `DatasetIoError` kind and the code for the wording, which is what
+    // stops the flag becoming decorative.
+    expect(new XlsxReadError('no_such_sheet', 'x').permanent).toBe(true);
+    expect(new XlsxReadError('past_a_bound', 'x', false).permanent).toBe(false);
   });
 });
