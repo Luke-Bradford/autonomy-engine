@@ -882,6 +882,63 @@ The lookup caps have no `shared` consumer, so `server/src/limits.ts` stays their
   bounded answer is usable where an error is not. `truncated: true` reaches the output and an
   `activity.warned` reaches the log, so no consumer can mistake a prefix for the whole.
 
+**AS BUILT (#1221, M12 slice 2).** Five things this section left open, settled by building it.
+
+**① The outputs are `rows`, `rowCount`, `bytes`, `truncated` — and there is deliberately no
+`firstRow`.** `engine/expr.ts` parses an INDEX segment, so `${nodes.x.output.rows[0].sku}` already
+addresses the first row; a convenience field would be a second spelling whose EMPTY value has to be
+invented, and a present-`null` `firstRow` is indistinguishable to a consumer from "row 0 was null".
+`rowCount` is always `rows.length` — on a truncated lookup the source total is unknown, and studio
+does not report what it did not count.
+
+**② A row is admitted only if it FITS — the cap is checked before, never after.** Admit-then-stop
+would bound the payload at "the cap plus one row", and a row is bounded by nothing (a sqlite BLOB or
+a postgres `text` column is arbitrarily large), so the bound this section asks for would not exist.
+The cost is the case where the FIRST row alone exceeds the cap, which then yields zero rows from a
+non-empty source. That cost buys the property that makes `rows: []` honest: **`[]` + `truncated:
+false` means the source is genuinely empty, `[]` + `truncated: true` means at least one row exists
+and none fit.** The two declared outputs distinguish the cases with no third output, and the warning
+says which happened in words. "Truncate and mark, never fail" holds on every one of these paths —
+each still SUCCEEDS.
+
+**③ `LOOKUP_BYTE_CAP` is measured on the DURABLE form, not on the source values, and that is not the
+obvious implementation.** Reusing the pump's `byteSizeOf` — which sizes VALUES, because that is what
+this section defines `bytesRead` to be — does not bound what the cap exists to bound: it charges a
+`null` 0 and charges nothing for key names, and a lookup's column count is bounded lookup-side by
+nothing (`XLSX_MAX_COLUMNS` is 16,384). A 1000-row × 4000-column sheet of blanks measures 0 bytes,
+passes untouched, and still writes hundreds of megabytes into `run_events.payload` — a column with
+no size limit and no CHECK. So the gate is the UTF-8 length of the row AS SERIALISED, keys and
+punctuation included. The output is named `bytes` rather than `bytesRead` precisely because it is a
+different quantity from a copy's: sharing the name would be the drift, not the consistency.
+
+**④ `lookup` is the first activity to put STORE values into `node.succeeded.outputs`, and nothing on
+that path makes them JSON-safe.** Traced: `EngineEventSchema` declares `outputs` as
+`z.record(z.string(), z.unknown())`, `validateOutputs`'s `matchesType` ends `case 'json': return
+true`, `storeOutputs` is key-filtering with no value transform, and `run_events.payload` is drizzle
+`text(..., { mode: 'json' })` — i.e. `JSON.stringify` on insert. Measured consequences on values
+these readers actually produce: a `bigint` (which `sqlite.ts` deliberately KEEPS past
+`Number.MAX_SAFE_INTEGER`) makes `JSON.stringify` THROW *inside the insert transaction*, so the
+append rolls back, the `node.succeeded` fact is lost permanently and the run ends `interrupted` after
+the read already happened; a `Uint8Array` becomes `{"0":1,…}`; a `Date` persists as a string but
+stays a `Date` in memory, so the same run and a reload of it disagree. So `lookup` normalises before
+yielding — `bigint`→exact decimal string, `Date`→ISO, bytes→base64, non-finite number→its name (never
+`null`, which would manufacture absence). The predicate is STRUCTURAL round-trippability, never
+`typeof`: postgres `json`/`jsonb` and every array type arrive as plain objects and arrays that
+round-trip perfectly, so a rule refusing "any object" would fail an ordinary schema on its first row
+— while `XlsxCellFault`, the value that genuinely must be refused, IS a plain object and is therefore
+refused BY NAME. There is no reusable normaliser in the tree: `canonical.ts` and `assertJsonReplaySafe`
+are a refuser and a detector, and neither is wired to outputs.
+
+**⑤ A `lookup` reference on the Dataset detail page is `not_applicable`, a FOURTH status.** M9's
+`agreementOf` reads `node.config.mapping` and reports a non-array as `unreadable — this node declares
+no column mapping`. A lookup has no mapping by design, so shipping the entry alone would have flagged
+every lookup ever authored as broken on the one page an operator uses to answer "is this dataset
+still wired up correctly" — manufacturing a fault, which is the same dishonesty as manufacturing
+reassurance and is what `datasetRefsOfNode`'s own docblock refuses. The status is decided from the
+CATALOG (an entry declaring no `datasetKinds.sink` moves nothing between two ends, so it has no
+mapping) and never from the node's shape, so a `copy` whose mapping was deleted still reports the
+genuine fault.
+
 **Progress.** A long copy must not look hung: it emits `node.output` ticks (`engine/types.ts:916` —
 _"Observability/streaming ONLY — never enters `outputs` or substitution"_), which is exactly this
 channel and needs no new event. Ticks are **per batch, never per row** — one event per row would
@@ -1316,7 +1373,7 @@ source and a sink.
 | **M9**  | Dataset detail: referencing pipelines, flagged where mappings no longer agree (§2.1). **SHIPPED (#1185)** — `GET /api/datasets/:id/references` + `Manage › Datasets › <id>`; see §2.1's as-built block for the candidate-version bound, the shared classifier the M8 panel now also uses, and why `unreadable` is a third state | UI epic; e2e-gated                                                                                                                                                                                                                                   |
 | **M10** | `postgres` kind — networked + credentialled, `SECRET_REQUIRING_CONNECTION_KINDS`, TLS. **SPLIT IN THREE**, as M5/M6/M8 were — slice 1 (#1189) is the CONNECTION half and moves NO data: the kind, its config, the `SECRET_REQUIRING_CONNECTION_KINDS` join §8 names a build step, the non-overridable-key boundary, a `pg`-backed `testConnection`, migration 0038's CHECK widening and `CATALOG_VERSION` 25. **SHIPPED**, with `DATASET_CONNECTION_KINDS` deliberately UNCHANGED — see §2.6's as-built block for that and for the three MEASURED `pg` behaviours that shaped it. Slice 2 (#1190) is the `CopyIo` reader — **SHIPPED**: it opens that binding in the same commit, adds `resolveDatasetAddress` (without which every postgres copy refuses at dispatch), re-parses naive `timestamp`/`date` as UTC to close a silent TZ-dependent corruption, guards the read with a subquery wrap plus `BEGIN READ ONLY`, and stands up the CI `postgres:17` service with a guard that makes a MISSING service red rather than a silent skip. §7's row 3 and the `query` self-copy residual were NOT taken and were re-assigned to slice 3 (#1193): both need postgres to be a SINK, which slice 2 is not — see §2.6's slice 2 as-built block and §7's amended ③. Slice 3 is the sink and the source × sink mesh — **SPLIT IN TWO**: slice 3a (#1196) is the WRITER and the mesh (`sinkConnectionKinds` `['sqlite','postgres']`, `CATALOG_VERSION` 27), and it re-measured both of slice 2's deferrals rather than expiring them silently — §7 row 3's premise turned out to be WRONG (a bound parameter coerces per VALUE) and the `query` self-copy residual measured as a wasteful no-op rather than destruction. It also forced the sink REGISTRY `copy.ts` deferred until "a second SINK exists", via four leaf extractions that break the adapter-imports-adapter cycle. Slice 3b (#1193) is **SHIPPED** and was the `storeIdentity` hole ALONE: row 3 and the `query` self-copy residual were both dispatched by slice 3a's re-measurement (row 3's premise was wrong; the residual is a wasteful no-op and stays deliberately un-guess-refused), leaving one item. It gives `ConnectorAdapter.resolveDatasetAddress` a `secret` — the ticket's stated blocker, that the sink's credential is never resolved, was FALSE — and resolves `<system_identifier>:<database oid>:<primary|standby>` plus the canonical `to_regclass` object, both best-effort so a revoked `pg_control_system()` degrades rather than refusing every copy forever. See §7's amended ④. #1194 is CLOSED out of band: a `query` dataset's named `parameters` now bind on postgres, rewritten `:name` → `$n` by a postgres-aware lexer — see §2.6's amended slice-2 block | slice 1 shipped no operator-reachable caller for the probe — #1191 |
 | **M11** | `excel` dataset kind. **DONE**, split in two as M5/M6/M8/M10 were. Slice 1 (#1213) was the READER and moved no data: `server/connectors/xlsx-read.ts`, its `limits.ts` bounds and its fixtures. It discharged the dependency row below by BUILDING the reader (both measured libraries were disqualified as WRONG, not merely as materialising), and was deliberately unreachable — `excel` did not join `IMPLEMENTED_DATASET_KINDS` and the registry was untouched. Slice 2 (#1215, with #1216) is the KIND: `excelDatasetConfigSchema`, `excel-io.ts`, the `fs` reader fork, the catalog wiring (`CATALOG_VERSION` 27 → 28), the form and the e2e — the binding and the reader's first caller landed together. SOURCE only; there is no workbook writer. |                                                                                                                                                                                                                                           |
-| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation                                                                                                                                                          |                                                                                                                                                                                                                                           |
+| **M12** | `lookup` with §5's concrete row + byte caps and visible truncation. **DONE**, split in two as M5/M6/M8/M10/M11 were. Slice 1 (#1220) was the SCHEMA half and shipped no activity: `NodeSchema.datasetIds.sink` became optional so a binding may name a source alone, and `null` stopped meaning absent across the portability surface. Slice 2 (#1221) is the ACTIVITY and the authoring half together, on M11 slice 2's precedent — a catalog entry landing without the canvas predicate would put a node on the canvas that an operator can drop and can never finish binding. See §5's as-built block for the four decisions only a consumer could settle. **#1214 folded in** (`byteSizeOf` charged a `Date` 0 bytes on a comment that M10 had already falsified), because `LOOKUP_BYTE_CAP` was about to turn that function from a metric into a gate. |                                                                                                                                                                                                                                           |
 
 **Dependencies are named, and checked against packaging, not merely "called out".** `#993` chose the
 data-movement build, so these are consequences of a settled decision rather than an open fork — but
