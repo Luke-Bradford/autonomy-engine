@@ -380,18 +380,29 @@ async function readWorkbookParts(
   if (sharedEntry) {
     let current: string | null = null;
     let inText = false;
+    let inPhonetic = false;
     walkXml(await entryText(zip, sharedEntry, XLSX_MAX_SHARED_STRINGS_BYTES, signal), {
       open: (tag) => {
-        if (tag.name === 'si') current = '';
-        // Rich text is <si><r><t>..</t></r><r><t>..</t></r></si>; every run's
-        // text belongs to one value.
-        if (tag.name === 't') inText = true;
+        if (tag.name === 'si') {
+          current = '';
+          inPhonetic = false;
+        }
+        // ECMA-376's CT_Rst admits <rPh> beside the content runs: a phonetic
+        // READING (furigana), routine in Japanese-authored workbooks and NOT
+        // part of the string's value. Capturing every <t> under <si> would
+        // concatenate the reading onto the word — a cell silently corrupted,
+        // the same present-but-different-shape class as the refusals above.
+        if (tag.name === 'rPh') inPhonetic = true;
+        // Rich text is <si><r><t>..</t></r><r><t>..</t></r></si>; every content
+        // run's text belongs to one value.
+        if (tag.name === 't' && !inPhonetic) inText = true;
       },
       text: (text) => {
         if (current !== null && inText) current += text;
       },
       close: (tag) => {
         if (tag.name === 't') inText = false;
+        if (tag.name === 'rPh') inPhonetic = false;
         if (tag.name === 'si') {
           shared.push(current ?? '');
           current = null;
@@ -608,6 +619,9 @@ export async function* readXlsxRowBatches(
     let inValue = false;
     let inText = false;
     let inInline = false;
+    // <is> is the SAME CT_Rst type as <si>, so an inline string carries <rPh>
+    // phonetic runs too and needs the identical exclusion.
+    let inPhonetic = false;
     let sawValue = false;
 
     const parser = new SaxesParser();
@@ -640,6 +654,7 @@ export async function* readXlsxRowBatches(
         case 'c':
           cellRef = tag.attributes['r'];
           cellType = tag.attributes['t'] ?? 'n';
+          inPhonetic = false;
           cellStyle = tag.attributes['s'];
           buffer = '';
           sawValue = false;
@@ -652,8 +667,11 @@ export async function* readXlsxRowBatches(
           inInline = true;
           sawValue = true;
           break;
+        case 'rPh':
+          inPhonetic = true;
+          break;
         case 't':
-          if (inInline) inText = true;
+          if (inInline && !inPhonetic) inText = true;
           break;
         default:
           break;
@@ -681,6 +699,9 @@ export async function* readXlsxRowBatches(
           break;
         case 't':
           inText = false;
+          break;
+        case 'rPh':
+          inPhonetic = false;
           break;
         case 'is':
           inInline = false;

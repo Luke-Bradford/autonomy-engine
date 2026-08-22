@@ -136,6 +136,9 @@ export type CellSpec =
   | { readonly kind: 'shared'; readonly text: string }
   /** Rich text: one `<si>` of several `<r><t>` runs, which must concatenate. */
   | { readonly kind: 'sharedRuns'; readonly runs: readonly string[] }
+  /** An `<si>`'s inner XML verbatim, for CT_Rst shapes the helpers above cannot
+   *  express — `<rPh>` phonetic runs in particular. */
+  | { readonly kind: 'sharedRaw'; readonly si: string }
   | { readonly kind: 'number'; readonly value: number; readonly style?: number }
   | { readonly kind: 'boolean'; readonly value: boolean }
   | { readonly kind: 'error'; readonly code: string }
@@ -211,6 +214,10 @@ function buildSheetXml(sheet: SheetSpec, shared: string[]): BuiltSheet {
             case 'sharedRuns': {
               const runs = cell.runs.map((r) => `<r><t>${esc(r)}</t></r>`).join('');
               const idx = shared.push(`<si>${runs}</si>`) - 1;
+              return `<c${ref} t="s"><v>${idx}</v></c>`;
+            }
+            case 'sharedRaw': {
+              const idx = shared.push(`<si>${cell.si}</si>`) - 1;
               return `<c${ref} t="s"><v>${idx}</v></c>`;
             }
             case 'number': {

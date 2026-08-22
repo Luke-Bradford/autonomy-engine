@@ -601,6 +601,72 @@ describe('readXlsxRowBatches — malformed references', () => {
     expect(rows[0]!.cells[16_383]).toBe('last');
   });
 
+  it('EXCLUDES phonetic <rPh> runs from a shared string', async () => {
+    // ECMA-376's CT_Rst admits `<rPh>` alongside the content runs: a phonetic
+    // READING (furigana), routinely present in Japanese-authored workbooks. It
+    // is not part of the string's value. Capturing every `<t>` under `<si>`
+    // concatenates the reading onto the word — "present-but-different-shape
+    // read as if it were the plain case", and it corrupts the cell silently.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              {
+                kind: 'sharedRaw',
+                si: '<r><t>東京</t></r><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1"/>',
+              },
+            ],
+          ],
+        },
+      ],
+    });
+    expect(cellsOf(await readAll(path))).toEqual([['東京']]);
+  });
+
+  it('EXCLUDES phonetic <rPh> runs from an INLINE string', async () => {
+    // `<is>` is the same CT_Rst type as `<si>`, so it carries `<rPh>` too — the
+    // sheet parser needs the identical exclusion, not just the string table.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              {
+                kind: 'raw',
+                xml: '<c r="A1" t="inlineStr"><is><r><t>大阪</t></r><rPh sb="0" eb="2"><t>オオサカ</t></rPh></is></c>',
+              },
+            ],
+          ],
+        },
+      ],
+    });
+    expect(cellsOf(await readAll(path))).toEqual([['大阪']]);
+  });
+
+  it('still concatenates ordinary rich-text runs, phonetics aside', async () => {
+    // The other half: `<rPh>` is the only thing excluded. Content runs — the
+    // reason the walker captures across `<r>` at all — must still join.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [
+              {
+                kind: 'sharedRaw',
+                si: '<r><t>Hello, </t></r><rPh sb="0" eb="1"><t>IGNORED</t></rPh><r><t>world</t></r>',
+              },
+            ],
+          ],
+        },
+      ],
+    });
+    expect(cellsOf(await readAll(path))).toEqual([['Hello, world']]);
+  });
+
   it('REFUSES a numeric cell whose <v> is explicitly empty', async () => {
     // `sawValue` already returned the ABSENT cell before this branch, so an
     // empty `raw` here means the cell carried `<v></v>` — present and
