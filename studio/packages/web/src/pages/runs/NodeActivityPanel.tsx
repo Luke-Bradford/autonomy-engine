@@ -1,6 +1,8 @@
+import { Link } from 'react-router';
 import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
+import { runDetailPath } from './runPath';
 import { formatNodeDuration } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
@@ -250,6 +252,14 @@ export function NodeActivityPanel({
         </section>
       )}
 
+      {/* #1231 / U20 — the drill DOWN. Placed between Failure and Outputs
+          deliberately: a failed call node's failure came from the child, so the
+          link is the next thing wanted; and it must sit above Outputs because a
+          call node's outputs ARE the child's projection (`lower.ts` skips call
+          nodes for exactly that reason), so the link explains the section under
+          it rather than trailing after it. */}
+      <ChildRuns node={node} />
+
       {node.outputValues !== undefined && (
         <section className="contract-section">
           <h4>Outputs</h4>
@@ -293,6 +303,98 @@ export function NodeActivityPanel({
         </p>
       </section>
     </aside>
+  );
+}
+
+/**
+ * #1231 (U20) — the runs this node spawned, and the way down into them.
+ *
+ * The parent could already SEE a call node park — #796 gave it `call.started`
+ * and the node sits `waiting` for the whole time its child is in flight — but
+ * there was nowhere to go from there. `childRunIds` had exactly one consumer,
+ * `RunCostSummary`'s `ExcludedChildren`, which links the same ids while making a
+ * claim about MONEY ("this figure excludes those runs"). That is a different
+ * sentence, and a node panel must not carry it, which is why this is a second
+ * site rather than a shared component: the two agree on the ids and on nothing
+ * else, and the accessible names have to differ anyway (both render on this one
+ * page, so two links named the bare run id would be ambiguous to any reader
+ * addressing controls by name — a screen reader's and a test's alike).
+ *
+ * THE SOURCE IS THE FOLD, not `GET /api/runs?parentRunId=`, and for a NODE-scoped
+ * section the query is not merely a weaker source — it cannot answer the
+ * question. `RunSchema` carries `parentRunId` and no call-node id, so it can say
+ * a run is a child of this RUN and never which node spawned it. The fold's own
+ * docblock argues it is "more complete about rows and less truthful about spend"
+ * than the query; for navigation that polarity inverts too, because
+ * `call.returned` echoes a `childRunId` for a spawn `child.ts` REFUSED — a run
+ * that never existed — and this array is filled only from `call.started`, which
+ * is appended after the child's row. So it can never hold an id that 404s.
+ *
+ * NOT gated on `stream.replayComplete`, where the cost section deliberately is,
+ * and the difference is what each surface CLAIMS. A truncated replay makes both
+ * under-count; the cost section would then print a total that is wrong by an
+ * unknown amount, which is the manufactured authority #473/F13a forbid, whereas
+ * this one would show fewer links — a missing way down, not a false statement.
+ * The panel takes no stream props, and the live park is precisely the moment an
+ * operator wants the link, so waiting for replay would withhold it exactly then.
+ */
+function ChildRuns({ node }: { node: NodeActivity }) {
+  if (node.childRunIds.length === 0) {
+    /* The state a bare `length > 0` gate ships silent. The reducer parks the
+       node on the `startChild` COMMAND and the announcement is appended only
+       once the child's row exists, so `waiting` with no id is the normal gap
+       during a spawn — and what a server that died in between leaves behind
+       permanently (#1041's `pending` orphan). Rendering nothing here would say
+       "no children" about a node that is parked on one. */
+    if (node.status !== 'waiting') return null;
+    return (
+      <p className="page-hint">
+        This node is parked on a child run that has not been announced yet. The engine parks it on
+        the spawn command and records the child only once the child&apos;s own run row exists, so a
+        moment of this is normal during a spawn. If it persists, the spawn did not complete and no
+        child run was created.
+      </p>
+    );
+  }
+  return (
+    <section className="contract-section" aria-label="Child runs">
+      <h4>Child runs</h4>
+      {/* Tense-neutral ON PURPOSE. `childRunIds` is append-only and never
+          cleared, so this list outlives the park it was opened for and holds
+          finished children as readily as live ones — and nothing on the row
+          carries a child's STATUS. It may therefore never say "running": a
+          `skipped` call node (a container timeout via `abandonLiveChildren`)
+          can be holding a child that still is, and a `success` one is holding
+          children that are not. The child's own page is the authority. */}
+      <p className="page-hint">
+        {node.childRunIds.length === 1 ? 'The run' : 'The runs'} this node spawned.{' '}
+        {node.childRunIds.length === 1 ? 'It has' : 'Each has'} its own log, its own outputs and its
+        own spend, so this node&apos;s duration and cost above are not{' '}
+        {node.childRunIds.length === 1 ? 'its' : 'theirs'}.
+        {node.childRunIds.length > 1 && (
+          <>
+            {' '}
+            One node holds several because it ran several times: a back-edge loop round spawns an
+            ADDITIONAL child rather than replacing the last, and a parallel foreach folds its item
+            instances onto the one node you drew.
+          </>
+        )}
+      </p>
+      {/* A LIST, not comma-separated spans: the count is then announced, and
+          each id is an item rather than a run-on sentence. `aria-label` carries
+          the name because the visible text is the raw id and stays that way —
+          it is what the event feed, the `${nodes.…}` expressions and the runs
+          list are all keyed on, so naming the link must not cost the lookup. */}
+      <ul className="plain-list">
+        {node.childRunIds.map((id) => (
+          <li key={id}>
+            <Link to={runDetailPath(id)} aria-label={`Child run ${id}`}>
+              <code>{id}</code>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

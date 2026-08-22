@@ -2464,3 +2464,60 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
     });
   });
 });
+
+/**
+ * #1231 (U20 slice 1) — the child-run drill UP.
+ *
+ * `Run.parentRunId` has been on the schema and in `GET /api/runs/:id` since
+ * #796 stamped it, and until this row nothing on the page read it: the word did
+ * not appear in `RunDetailPage.tsx` at all. A child run was therefore
+ * indistinguishable from any other run and there was no way back to the parent
+ * that called it — the runs list's Child tab could say a run WAS a child and
+ * never whose.
+ *
+ * Its own describe and its own six-line mount rather than borrowing: the two
+ * helpers nearby are scoped to other suites and await other surfaces
+ * (`renderRun` waits on the cost region, `mountWithStatus` on `pv_1`), so
+ * reusing either would tie this row's tests to a section it has nothing to do
+ * with.
+ */
+describe('RunDetailPage — the parent a child run was called by', () => {
+  async function mountRun(overrides: Partial<Run> = {}) {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'success', finishedAt: 1_700_000_001_000, ...overrides }),
+      pipelineVersion: version(),
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByText('pv_1');
+  }
+
+  it('links up to the run that called this one', async () => {
+    await mountRun({ parentRunId: 'run_parent', triggerId: null });
+    expect(screen.getByText('Called by')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'Parent run run_parent' });
+    expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
+    expect(link.textContent).toBe('run_parent');
+  });
+
+  /* The ABSENCE of the row is what "not a child" looks like — the same rule the
+     `Rerun of` row above it already sets. A row reading "—" on every ordinary
+     run would be noise on the one surface every run shares. */
+  it('shows no lineage row on a run nothing called', async () => {
+    await mountRun();
+    expect(screen.queryByText('Called by')).not.toBeInTheDocument();
+  });
+
+  /* The `run-meta` list is gated on the run ROW alone, independently of the
+     stream and the projection — so the way up still renders on the page's
+     doc-resolution fallback, which is exactly when a failed run most needs
+     reading. This pins that: the pipeline version fails to load and the link
+     survives. */
+  it('still offers the way up when the pipeline version will not resolve', async () => {
+    getRunDetailMock.mockRejectedValue(new Error('nope'));
+    vi.mocked(runsApi.getRun).mockResolvedValue(
+      run({ status: 'failure', parentRunId: 'run_parent', triggerId: null }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByRole('link', { name: 'Parent run run_parent' })).toBeInTheDocument();
+  });
+});

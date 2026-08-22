@@ -2659,10 +2659,12 @@ td button + button {
   overflow-wrap: anywhere;
 }
 
-/* #996 M9 (#1185) — an unbulleted, unindented list used inside a table cell and
-   a `.run-meta` <dd>, where a default disc + 40px indent would read as a nested
-   document rather than as the cell's own content. Deliberately generic: it
-   carries no colour, so `.contract-advisory` on an <li> still decides emphasis. */
+/* #996 M9 (#1185) — an unbulleted, unindented list used inside a table cell, a
+   `.run-meta` <dd> and (since #1231) a `.contract-section` on the run monitor's
+   node drill-in, where a default disc + 40px indent would read as a nested
+   document rather than as the surrounding block's own content. Deliberately
+   generic: it carries no colour, so `.contract-advisory` on an <li> still
+   decides emphasis. */
 .plain-list {
   list-style: none;
   margin: 0;
