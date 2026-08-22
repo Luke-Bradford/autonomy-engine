@@ -1798,7 +1798,14 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
   it('links back to the source run, and says nothing on a run that is not a rerun', async () => {
     await mountWithStatus('failure', { rerunOf: 'run_0' });
     expect(screen.getByText('Rerun of')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'run_0' })).toBeInTheDocument();
+    /* #1232 — an ANCHOR, and pinned by role so a regression to
+       `navigate`-on-a-button reds here rather than silently taking away
+       hover/copy/middle-click/new-tab. Named `Source run …` rather than by the
+       bare id, the same treatment `Called by` and `RunsPage`'s Watch cell get:
+       "run_0" alone tells a screen-reader user nothing about where it goes. */
+    const link = screen.getByRole('link', { name: 'Source run run_0' });
+    expect(link).toHaveAttribute('href', '/monitor/runs/run_0');
+    expect(link.textContent).toBe('run_0');
   });
 
   it('shows no lineage row on an original run', async () => {

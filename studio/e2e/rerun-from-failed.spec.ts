@@ -82,10 +82,25 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
      server really minted R2 and linked it: the row cannot appear unless the
      producer ran and wrote the column. */
   await expect(page.getByText('Rerun of')).toBeVisible();
-  await expect(page.getByRole('button', { name: sourceRunId })).toBeVisible();
+  /* #1232 — the lineage control is an ANCHOR now, not `navigate` on a button.
+     Both halves are pinned because neither implies the other: the `href` is
+     what a middle-click, a copy-link and an open-in-new-tab use and a click can
+     never demonstrate, and the WALK below is what proves the href points at a
+     route that resolves. `home-recent-runs.spec.ts` sets the RegExp form, which
+     stays honest under hash routing. */
+  const sourceLink = page.getByRole('link', { name: `Source run ${sourceRunId}` });
+  await expect(sourceLink).toHaveAttribute('href', new RegExp(`/monitor/runs/${sourceRunId}$`));
   expect(page.url(), 'the monitor should follow the NEW run, not stay on the source').not.toContain(
     sourceRunId,
   );
+
+  // The drill BACK. The row is a way to the source run, not merely a label of
+  // one — which is the whole reason it is a control rather than a `<code>`.
+  await sourceLink.click();
+  await expect(page.getByRole('heading', { name: new RegExp(sourceRunId) })).toBeVisible();
+  expect(page.url(), 'the lineage link must land on the SOURCE run').toContain(sourceRunId);
+  // …and the source run is a rerun of nothing, so it carries no lineage row.
+  await expect(page.getByText('Rerun of')).toHaveCount(0);
 
   await expectQuiet(page, problems);
 });

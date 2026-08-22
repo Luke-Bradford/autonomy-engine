@@ -599,8 +599,12 @@ describe('TriggersPage', () => {
    * The one deep link U2 rewrote on this page (`/runs/:id` ->
    * `/monitor/runs/:id`), asserted against the app's REAL `ROUTES` so a moved
    * route fails here rather than silently sending "Watch live" nowhere. The
-   * page previously had no coverage of this button at all, which made it the
+   * page previously had no coverage of this control at all, which made it the
    * only rewritten path in the ticket with nothing watching it.
+   *
+   * #1232 made it an ANCHOR. The `href` is asserted as well as the landing, so
+   * the half a click cannot show — that it is reachable by middle-click, copy
+   * and open-in-new-tab — is pinned too.
    */
   it('"Watch live" after a fire lands on that run under the Monitor hub', async () => {
     const user = userEvent.setup();
@@ -612,7 +616,16 @@ describe('TriggersPage', () => {
     render(<RouterProvider router={router} />);
 
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
-    await user.click(await screen.findByRole('button', { name: /Watch live/i }));
+    /* The FULL accessible name, so both halves are pinned at once: the visible
+       "Watch live" it must contain (WCAG 2.5.3) and the run id that says which
+       run it goes to. */
+    const watch = await screen.findByRole('link', { name: 'Watch live → run run_9' });
+    /* Containment asserted as the literal substring test it is, so a separator
+       swapped back to any non-arrow glyph reds HERE rather than passing a name
+       check that merely looks close enough. */
+    expect(watch.getAttribute('aria-label')).toContain(watch.textContent?.trim());
+    expect(watch).toHaveAttribute('href', '/monitor/runs/run_9');
+    await user.click(watch);
 
     expect(router.state.location.pathname).toBe('/monitor/runs/run_9');
     expect(await screen.findByRole('heading', { name: /run_9/ })).toBeInTheDocument();

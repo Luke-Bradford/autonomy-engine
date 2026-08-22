@@ -233,6 +233,49 @@ describe('AiActivityPage', () => {
   });
 
   /**
+   * #1233 — the two empty-window strings, pinned where nothing can un-pin them.
+   *
+   * `e2e/monitor-ai-activity.spec.ts` used to assert these against a GLOBALLY
+   * empty database, which was never a property it owned — one shared DB,
+   * `workers: 1`, so "empty" only meant "no earlier-sorting spec has billed an
+   * exchange yet". That spec now asserts the weaker thing it CAN own (the panel
+   * agrees with whatever the server reports), which leaves these two strings
+   * exercised there only on the empty branch.
+   *
+   * So they are pinned HERE instead, off a stubbed snapshot that no other spec
+   * can reach. Both directions, because "the empty line is gone" and "the real
+   * summary is shown" are different claims and only the pair refuses a blank
+   * panel.
+   */
+  describe('the empty window says so, in both panels (#1233)', () => {
+    it('names nothing billed AND no subprocesses', async () => {
+      activityMock.mockResolvedValue(snapshot());
+
+      render(<AiActivityPage />);
+
+      expect(
+        await screen.findByText('No AI or agent activity in this window.'),
+      ).toBeInTheDocument();
+      expect(screen.getByText('No agent CLI subprocesses in this window.')).toBeInTheDocument();
+    });
+
+    it('replaces the subprocess line with a real summary once one ran', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          agentCli: { invocations: 2, completed: 1, notCompleted: 1, lastAt: 1_785_999_000_000 },
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      expect(
+        await screen.findByText(/2 agent CLI subprocesses — 1 completed, 1 did not\./),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('No agent CLI subprocesses in this window.')).toBeNull();
+    });
+  });
+
+  /**
    * #1023 — what the panel shows once a partial reading is a reading.
    */
   describe('a reading the provider only partly reported (#1023)', () => {

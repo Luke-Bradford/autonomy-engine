@@ -451,9 +451,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <>
               <dt>Rerun of</dt>
               <dd>
-                <button type="button" onClick={() => void navigate(runDetailPath(rerunOf))}>
+                <Link to={runDetailPath(rerunOf)} aria-label={`Source run ${rerunOf}`}>
                   <code>{rerunOf}</code>
-                </button>
+                </Link>
               </dd>
             </>
           )}
@@ -467,13 +467,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
               is the one surface every run shares and a permanent empty row is
               noise on all of them.
 
-              A `<Link>`, not that row's `navigate`-on-a-button. The anchor is
-              the correct control for going somewhere (hover, copy, middle-click,
-              new tab), it is what six of the seven run-navigation sites in the
-              app already use, and `RunsPage`'s Watch cell records the argument
-              in place. The button beside it is the older idiom and is left
-              alone: converting it churns a control RS2's tests pin by role, for
-              no gain to this ticket. Filed rather than folded in.
+              A `<Link>`, not a `navigate`-on-a-button. The anchor is the
+              correct control for going somewhere (hover, copy, middle-click, new
+              tab), and `RunsPage`'s Watch cell records the argument in place.
+              #1232 converted the `Rerun of` row above to match — so the two
+              lineage rows now state the same act the same way, and every
+              run-navigation site in the app is an anchor.
+
+              The `← All runs` control in this page's header is NOT one of them
+              and stays a button: it goes to a LIST rather than to a run, and it
+              is a header chip drawn by the global `button` rule, so converting
+              it would be a restyle rather than a semantics fix (#1239).
 
               The list is gated on the run ROW alone, so this renders on the
               doc-resolution fallback too — which is when a failed child most

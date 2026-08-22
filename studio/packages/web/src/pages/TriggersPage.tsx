@@ -11,7 +11,7 @@ import {
   type PipelineVersion,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import { ApiError, messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportTrigger } from '../api/portability';
@@ -213,7 +213,6 @@ function formForEdit(t: TriggerPublic): FormState {
  * server refuses otherwise — mirrored here for a friendlier message).
  */
 export function TriggersPage() {
-  const navigate = useNavigate();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
@@ -424,9 +423,24 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <button type="button" onClick={() => void navigate(runDetailPath(watchRunId))}>
+              {/* The accessible name CONTAINS the visible text, which is why it is not
+                  the bare `Watch run <id>` that `RunsPage`'s cell uses: WCAG 2.5.3
+                  (Label in Name) is about a speech-input user saying what they can
+                  see, and this control reads "Watch live" where that cell reads
+                  "Watch". The run id is appended because "Watch live" alone does not
+                  say WHICH run, and this notice can name a different one each fire.
+
+                  The arrow is in the name too, and that is deliberate rather than
+                  tidy. "Contains" is a LITERAL substring test (it is what axe's
+                  `label-content-name-mismatch` and WCAG technique G208 check), and
+                  the visible text is `Watch live →` — so a separator that is any
+                  other glyph breaks containment on the arrow alone, which is what an
+                  em dash here did. `ImportPanel`'s `Manage → Connections` links
+                  already carry an arrow in their accessible name, so this is the
+                  idiom rather than an exception to it. */}
+              <Link to={runDetailPath(watchRunId)} aria-label={`Watch live → run ${watchRunId}`}>
                 Watch live →
-              </button>
+              </Link>
             </>
           )}
         </p>
