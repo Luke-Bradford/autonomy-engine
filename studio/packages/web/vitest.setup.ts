@@ -3,6 +3,7 @@ import { afterEach, expect } from 'vitest';
 import {
   formatUnmockedFetchReport,
   installUnmockedFetchGuard,
+  type UnmockedFetch,
 } from './src/testing/unmockedFetchGuard.js';
 import { cleanup, configure } from '@testing-library/react';
 
@@ -92,17 +93,19 @@ afterEach(() => {
   // wrong test is worse than no message. The check itself stays OUTSIDE the
   // `finally`: a throw in there would replace the cleanup error rather than add
   // to it, and the cleanup failure is the one that explains the other.
-  let report: string | null = null;
+  const seen: UnmockedFetch[] = [];
   try {
     cleanup();
   } finally {
-    // The drain stays in the `finally` for its original reason — a throwing
+    // The DRAIN stays in the `finally` for its original reason — a throwing
     // `cleanup()` must not leave this test's records behind to be reported
-    // against the next one. FORMATTING moved in with it (#1229) so the message
-    // is built from the names captured at push time, but the THROW stays
-    // outside: a throw in a `finally` replaces the cleanup error rather than
-    // adding to it, and the cleanup failure is the one that explains the other.
-    report = formatUnmockedFetchReport(unmockedFetch.drain(), expect.getState().currentTestName);
+    // against the next one. What changed with #1229 is only what is drained:
+    // records carrying the test that MADE each call, rather than bare urls.
+    seen.push(...unmockedFetch.drain());
   }
+  // Formatting and the throw both stay OUTSIDE: a throw in a `finally` replaces
+  // the cleanup error rather than adding to it, and the cleanup failure is the
+  // one that explains the other.
+  const report = formatUnmockedFetchReport(seen, expect.getState().currentTestName);
   if (report !== null) throw new Error(report);
 });

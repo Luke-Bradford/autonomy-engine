@@ -105,7 +105,9 @@ describe('installUnmockedFetchGuard', () => {
     expect(() =>
       (h.target.fetch as (input: URL) => never)(new URL('https://example.test/api/two')),
     ).toThrow();
-    expect(() => (h.target.fetch as (input: { url: string }) => never)({ url: '/api/three' })).toThrow();
+    expect(() =>
+      (h.target.fetch as (input: { url: string }) => never)({ url: '/api/three' }),
+    ).toThrow();
 
     const report = formatUnmockedFetchReport(h.guard.drain(), h.running);
 
