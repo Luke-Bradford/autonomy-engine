@@ -31,6 +31,8 @@ describe('activity catalog', () => {
       'http_request',
       'if',
       'llm_call',
+      // #1221 M12 slice 2 — `lookup`, the SOURCE-ONLY data-movement activity.
+      'lookup',
       'switch',
       'wait',
       'webhook',
@@ -52,7 +54,12 @@ describe('activity catalog', () => {
     const idempotent = [...catalog.values()]
       .filter((entry) => entry.idempotent)
       .map((entry) => entry.type);
-    expect(idempotent).toEqual(['file_read', 'file_list']);
+    // #1221 M12 slice 2 — `lookup` is the THIRD, and it is claimed rather than
+    // inherited: it opens a store READ-ONLY, moves nothing and writes nowhere,
+    // so the reconciler resuming it after a crash re-reads and is safe. That is
+    // `file_read`/`file_list`'s own reasoning, and the entry has no sink half
+    // for a later slice to widen without confronting this flag.
+    expect(idempotent).toEqual(['file_read', 'file_list', 'lookup']);
     // file_write/copy/move/delete MUST stay non-idempotent — each is a side effect.
     for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete']) {
       expect(getActivity(type)!.idempotent).toBe(false);
@@ -118,10 +125,16 @@ describe('activity catalog', () => {
     // same way the sink pin above carries M1's. One CATALOG_VERSION bump (23)
     // discharges both, which is what M3's ledger entry predicted: the two fields
     // become load-bearing together.
+    //
+    // #1221 (M12 slice 2) makes it TWO, and the second is the one this field's
+    // optional `sink` was made optional FOR: `lookup` declares a source and no
+    // sink at all, so it is also the first entry from which a source-only
+    // `Node.datasetIds` can be authored — the shape M12 slice 1 (#1220) made
+    // legal but could not yet produce.
     const bound = [...catalog.values()]
       .filter((entry) => entry.datasetKinds !== undefined)
       .map((entry) => entry.type);
-    expect(bound).toEqual(['copy']);
+    expect(bound).toEqual(['copy', 'lookup']);
   });
 
   it('`copy` declares a sink of `table` only — a query dataset has nothing to write into', () => {
