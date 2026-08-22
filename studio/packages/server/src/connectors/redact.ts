@@ -70,15 +70,101 @@ export function deepRedactSecrets(
   secrets: readonly (string | null | undefined)[],
   depth = 0,
 ): unknown {
+  return walk(value, secrets, depth, '');
+}
+
+/**
+ * #1223 — the serialised form of a value, when that form is NOT its
+ * own-enumerable-key form.
+ *
+ * Rebuilding an object from `Object.entries` is the identity for most values,
+ * and silently destructive for the ones that carry a `toJSON`. Measured on node
+ * v25.9.0:
+ *
+ *   Object.entries(new Date())          => []          // the instant, gone
+ *   Object.entries(Buffer.from([1,2]))  => [["0",1],…]  // an index map
+ *
+ * so a `Date` in a node's outputs became `{}` — indistinguishable from an
+ * activity that returned an empty object — and a `Buffer` lost its
+ * `{type:'Buffer',data:[…]}` form. That happened IN MEMORY before the fold, so
+ * the reducer stored the flattened value and every `${nodes.x.output.*}` read it.
+ *
+ * `toJSON` is exactly where the two forms diverge, which is why it is the test
+ * rather than a list of known classes: `Map`/`Set`/a plain class instance (`pg`'s
+ * `PostgresInterval`, say) define none, and their JSON form IS their key form, so
+ * the existing rebuild is already faithful for them — and must stay, because a
+ * secret nested in one still has to be scrubbed.
+ *
+ * A `toJSON` result is NORMALISED, never passed through: it can itself be a
+ * string carrying a resolved secret, and this walker's posture is never-leak.
+ * A `toJSON` that throws (adversarial adapter output, or a hostile proxy that
+ * throws on the property ACCESS) yields the redaction sentinel — never leak,
+ * never crash, the same posture as the depth ceiling.
+ */
+type JsonForm = { kind: 'none' } | { kind: 'value'; value: unknown } | { kind: 'hostile' };
+
+function jsonFormOf(value: object, key: string): JsonForm {
+  let method: unknown;
+  try {
+    method = (value as { toJSON?: unknown }).toJSON;
+  } catch {
+    return { kind: 'hostile' };
+  }
+  if (typeof method !== 'function') return { kind: 'none' };
+  try {
+    // The KEY is passed because `JSON.stringify` passes it (measured: `''` at
+    // the root, the property name inside an object, the index as a string inside
+    // an array). A `toJSON` that reads it is exotic, but a walker claiming to
+    // reproduce serialisation does not get to choose which arguments to honour.
+    return { kind: 'value', value: (method as (k: string) => unknown).call(value, key) };
+  } catch {
+    return { kind: 'hostile' };
+  }
+}
+
+/**
+ * The walk itself. `key` is the property name this value is reached by, because
+ * that is what `JSON.stringify` hands a `toJSON`.
+ *
+ * A `toJSON` RESULT is walked like any other value, so a chain of them runs to
+ * its FIXED POINT. That is a deliberate choice over reproducing `stringify`
+ * exactly, and the alternative was measured before it was rejected: applying
+ * `toJSON` once and rebuilding the result by keys leaves the result's OWN
+ * `toJSON` alive in the output, so the downstream serialisation of the event log
+ * applies it a second time anyway — `{"a":1}` where the unredacted value gives
+ * `{"a":{}}`. "Once" is therefore not reachable from here at all; the honest
+ * choices are the fixed point or a walker that drops function-valued keys the
+ * way `stringify` does, which would be a behaviour change well outside this fix.
+ *
+ * The fixed point buys the property that matters: the output contains no live
+ * `toJSON`, so **walking it again cannot change it further** (pinned by an
+ * idempotence test). It diverges from a single `JSON.stringify` for exactly one
+ * shape — a `toJSON` returning another `toJSON`-carrying value — and diverges by
+ * PRESERVING what that serialisation would have discarded, which is the safe
+ * direction here (#473: never manufacture an absence). The pathological shape,
+ * a `toJSON` returning `this`, is bounded by the depth ceiling like any other
+ * unbounded value.
+ */
+function walk(
+  value: unknown,
+  secrets: readonly (string | null | undefined)[],
+  depth: number,
+  key: string,
+): unknown {
   // At the ceiling, redact the whole remaining subtree — conservatively assume
   // it could carry a secret we can no longer walk to, and never overflow.
   if (depth >= MAX_REDACT_DEPTH) return '***';
   if (typeof value === 'string') return redactSecrets(value, secrets);
-  if (Array.isArray(value)) return value.map((v) => deepRedactSecrets(v, secrets, depth + 1));
+  if (Array.isArray(value)) {
+    return value.map((v, i) => walk(v, secrets, depth + 1, String(i)));
+  }
   if (value !== null && typeof value === 'object') {
+    const form = jsonFormOf(value, key);
+    if (form.kind === 'hostile') return '***';
+    if (form.kind === 'value') return walk(form.value, secrets, depth + 1, key);
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      setDataProperty(out, k, deepRedactSecrets(v, secrets, depth + 1));
+      setDataProperty(out, k, walk(v, secrets, depth + 1, k));
     }
     return out;
   }
@@ -96,7 +182,9 @@ export function deepRedactRecord(
   secrets: readonly (string | null | undefined)[],
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(record))
-    setDataProperty(out, k, deepRedactSecrets(v, secrets));
+  // Through `walk` rather than `deepRedactSecrets` for one reason: the record's
+  // own key is the key a value's `toJSON` must be handed (#1223), and the public
+  // entry point has no way to say so.
+  for (const [k, v] of Object.entries(record)) setDataProperty(out, k, walk(v, secrets, 0, k));
   return out;
 }

@@ -93,3 +93,140 @@ describe('deepRedactRecord — typed outputs-map wrapper', () => {
     expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
   });
 });
+
+describe('deepRedactSecrets — values whose JSON form is not their key form (#1223)', () => {
+  const SECRET = 'sk-super-secret';
+
+  /**
+   * The walker's contract is "scrub string leaves, leave everything else as it
+   * was". Rebuilding an object from `Object.entries` keeps that promise only for
+   * values whose JSON form IS their own-enumerable-key form. It is not for a
+   * value carrying a `toJSON`, and the failure is invisible: a `{}` where a date
+   * was reads exactly like an activity that returned an empty object.
+   */
+  it('preserves a Date as its ISO string rather than flattening it to {}', () => {
+    const when = new Date('2026-08-22T09:15:00.000Z');
+    expect(deepRedactSecrets({ at: when }, [SECRET])).toEqual({ at: '2026-08-22T09:15:00.000Z' });
+  });
+
+  it('preserves a Buffer as its serialised form rather than an index map', () => {
+    const out = deepRedactSecrets({ blob: Buffer.from([1, 2, 3]) }, [SECRET]);
+    expect(out).toEqual({ blob: { type: 'Buffer', data: [1, 2, 3] } });
+  });
+
+  it('agrees with what JSON.stringify would have produced, for the whole tree', () => {
+    const value = { at: new Date('2020-01-02T03:04:05.000Z'), blob: Buffer.from([9]), n: 1 };
+    expect(deepRedactSecrets(value, [SECRET])).toEqual(JSON.parse(JSON.stringify(value)));
+  });
+
+  /**
+   * The reason a `toJSON` value is NORMALISED rather than passed through: its
+   * serialised form can itself carry a resolved secret, and this walker's whole
+   * posture is never-leak. Passing such a value through untouched would be a
+   * fail-open trade of one bug for a worse one.
+   */
+  it('still redacts a secret carried in a toJSON result', () => {
+    const carrier = { toJSON: () => `Bearer ${SECRET}` };
+    expect(deepRedactSecrets({ auth: carrier }, [SECRET])).toEqual({ auth: 'Bearer ***' });
+  });
+
+  it('still redacts a secret nested inside a toJSON result', () => {
+    const carrier = { toJSON: () => ({ headers: { auth: SECRET } }) };
+    expect(deepRedactSecrets(carrier, [SECRET])).toEqual({ headers: { auth: '***' } });
+  });
+
+  it('replaces a throwing toJSON with the sentinel rather than crashing the walk', () => {
+    const hostile = {
+      toJSON: () => {
+        throw new Error(`boom ${SECRET}`);
+      },
+    };
+    expect(deepRedactSecrets({ bad: hostile, ok: 1 }, [SECRET])).toEqual({ bad: '***', ok: 1 });
+  });
+
+  /**
+   * A chain of `toJSON`s runs to its FIXED POINT, which is the one place the
+   * walker deliberately does not reproduce a single `JSON.stringify` (measured:
+   * that gives `{"a":{}}`). "Apply once" was tried first and is not reachable —
+   * it leaves the result's own `toJSON` alive in the output, which the event
+   * log's own serialisation then applies anyway. Diverging by PRESERVING what
+   * stringify discards is the safe direction (#473).
+   */
+  it('walks a toJSON chain to its fixed point rather than discarding the result', () => {
+    const value = { a: { toJSON: () => ({ toJSON: () => 1 }) } };
+    expect(deepRedactSecrets(value, [SECRET])).toEqual({ a: 1 });
+  });
+
+  /**
+   * The property the fixed point buys, and the reason it is worth the divergence
+   * above: no live `toJSON` survives into the output, so nothing downstream can
+   * transform the value a second time.
+   */
+  it('is idempotent — walking the output again cannot change it', () => {
+    const value = {
+      at: new Date('2023-03-04T05:06:07.000Z'),
+      blob: Buffer.from([7, 8]),
+      auth: `Bearer ${SECRET}`,
+      list: [{ toJSON: () => ({ n: 1 }) }],
+    };
+    const once = deepRedactSecrets(value, [SECRET]);
+    expect(deepRedactSecrets(once, [SECRET])).toEqual(once);
+  });
+
+  /**
+   * The ACCESS is guarded, not just the call. A hostile proxy throws on every
+   * property read, so `Object.entries` in the rebuild below would throw too —
+   * the sentinel is what stops adapter output from crashing the walk.
+   */
+  it('replaces a value whose toJSON access throws with the sentinel', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('hostile getter');
+        },
+      },
+    );
+    expect(deepRedactSecrets({ bad: hostile, ok: 1 }, [SECRET])).toEqual({ bad: '***', ok: 1 });
+  });
+
+  it('bounds a self-returning toJSON at the depth ceiling instead of looping', () => {
+    const looping: { toJSON: () => unknown } = { toJSON: () => looping };
+    expect(deepRedactSecrets({ v: looping }, [SECRET])).toEqual({ v: '***' });
+  });
+
+  it('hands toJSON the key it is reached by, as JSON.stringify does', () => {
+    const value = { inner: { toJSON: (k: string) => k }, list: [{ toJSON: (k: string) => k }] };
+    expect(deepRedactSecrets(value, [SECRET])).toEqual(JSON.parse(JSON.stringify(value)));
+    expect(deepRedactSecrets(value, [SECRET])).toEqual({ inner: 'inner', list: ['0'] });
+  });
+
+  it('hands toJSON the OUTPUTS-MAP key through deepRedactRecord', () => {
+    const rec: Record<string, unknown> = { body: { toJSON: (k: string) => k } };
+    expect(deepRedactRecord(rec, [SECRET])).toEqual({ body: 'body' });
+  });
+
+  /**
+   * A class instance is NOT automatically special-cased, and this pins that.
+   * `pg`'s `interval` parser returns a `PostgresInterval` — a class instance
+   * carrying all of its data as own enumerable properties and no `toJSON`, so
+   * its JSON form IS its key form. Rebuilding it by keys is already faithful,
+   * and a fix that passed every non-plain object through would leave any secret
+   * inside one unscrubbed.
+   */
+  it('still rebuilds a class instance that has no toJSON, scrubbing inside it', () => {
+    class PostgresIntervalish {
+      constructor(
+        readonly years: number,
+        readonly note: string,
+      ) {}
+    }
+    const out = deepRedactSecrets(new PostgresIntervalish(1, `note ${SECRET}`), [SECRET]);
+    expect(out).toEqual({ years: 1, note: 'note ***' });
+  });
+
+  it('preserves a Date reached through deepRedactRecord', () => {
+    const rec: Record<string, unknown> = { at: new Date('2021-05-06T07:08:09.000Z') };
+    expect(deepRedactRecord(rec, [SECRET])).toEqual({ at: '2021-05-06T07:08:09.000Z' });
+  });
+});
