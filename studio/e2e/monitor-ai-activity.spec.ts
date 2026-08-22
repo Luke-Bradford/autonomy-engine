@@ -84,19 +84,114 @@ test.describe('#917 Monitor › AI activity', () => {
     await expectQuiet(page, problems);
   });
 
-  test('reports an empty window truthfully rather than as blank panels', async ({ page }) => {
+  /**
+   * #1233 — this test used to assert a GLOBALLY empty window on the strength of
+   * a comment reading "a fresh e2e DB has no runs at all". That was never a
+   * property of the spec; it was a property of its position in the ALPHABET.
+   * `playwright.config.ts` runs `workers: 1, fullyParallel: false` against ONE
+   * shared database, so "fresh" only meant "no earlier-sorting spec has billed
+   * an exchange yet".
+   *
+   * Measured, not theorised: #1231 added `child-run-drill.spec.ts`, which sorts
+   * before this file, and seeding an `agent_cli` child in it turned exactly
+   * these two assertions red — 304 passed, 1 failed — with the new spec itself
+   * green. It was worked around there by not needing an exchange, which fixes
+   * that spec and not this one: the next early-sorting spec to need a real
+   * `agent_cli` breaks it again, and the failure points HERE rather than at the
+   * spec that caused it.
+   *
+   * Scoping the window cannot fix it. `RunSinceSchema` is a closed relative
+   * enum and the server resolves `windowStart = generatedAt - RUN_SINCE_MS[w]`
+   * (`routes/monitor.ts`), so every window ends at *now* and therefore contains
+   * any recent pollution. There is no window this spec can pick that another
+   * spec's activity cannot enter.
+   *
+   * So the premise this test owns is not "the window is empty" but "the panel
+   * states whatever the server reports, and never renders blank". It reads the
+   * server's own answer first and asserts the rendering AGREES with it, in both
+   * directions. That cannot go red for another spec's activity.
+   *
+   * WHAT THIS DOES NOT PIN, said plainly rather than left to be discovered: on
+   * a polluted database the empty-state STRINGS go unexercised here. They are
+   * pinned unconditionally one layer down, in `AiActivityPage.test.tsx`, which
+   * renders the empty snapshot directly and needs no cooperation from the DB.
+   * The end-to-end value this keeps is the one the unit test cannot have — that
+   * the real endpoint, real SQLite and real render agree.
+   *
+   * The activity half stays UNSTUBBED for the reason the file docblock gives:
+   * stubbing it would make the agreement vacuous, since both sides would then
+   * be this spec's own fixture.
+   */
+  test('the panel states what the server reports, and never renders blank', async ({ page }) => {
     const problems = collectPageProblems(page);
     await stubQuota(page, {
       generated_at: Math.floor(Date.now() / 1000),
       account: { claude: null },
       unavailable: { claude: 'no_credential' },
     });
+
+    // The window the page requests on mount (`AiActivityPage`'s `since` state).
+    const res = await page.request.get('/api/monitor/ai-activity?since=1h');
+    expect(res.status()).toBe(200);
+    const snapshot = (await res.json()) as {
+      models?: unknown;
+      agentCli?: { invocations?: unknown };
+      external?: { invocations?: unknown };
+    };
+
+    /* Read by NAME and checked here rather than parsed through the shared Zod
+       schema. NO e2e file imports `@autonomy-studio/shared` — these specs drive
+       the app through its HTTP surface as an operator does, which
+       `support/seedDoc.ts` and `canvas-issue-legibility.spec.ts` both record and
+       the e2e tsconfig enforces by not resolving the package. The check is what
+       keeps that cheap: a drifted shape fails by name on the line below instead
+       of as a downstream "cannot read properties of undefined". */
+    const invocations = (label: string, value: unknown): number => {
+      expect(typeof value, `ai-activity snapshot: ${label} must be a number`).toBe('number');
+      return value as number;
+    };
+    expect(Array.isArray(snapshot.models), 'ai-activity snapshot: models must be an array').toBe(
+      true,
+    );
+    /* Both read BEFORE the predicate below, not inside it: `&&` short-circuits,
+       so folding these into it would skip the check on everything after the
+       first zero and let a drifted field through unvalidated. */
+    const agentCliInvocations = invocations('agentCli.invocations', snapshot.agentCli?.invocations);
+    const externalInvocations = invocations('external.invocations', snapshot.external?.invocations);
+
+    // The page's own two predicates, derived identically (`AiActivityPage.tsx`).
+    const nothing =
+      (snapshot.models as unknown[]).length === 0 &&
+      agentCliInvocations === 0 &&
+      externalInvocations === 0;
+    const noAgentCli = agentCliInvocations === 0;
+
     await page.goto('/#/monitor/ai');
     await fluentRootReady(page);
 
-    // A fresh e2e DB has no runs at all, so this is the real server's real answer.
-    await expect(page.getByText('No AI or agent activity in this window.')).toBeVisible();
-    await expect(page.getByText('No agent CLI subprocesses in this window.')).toBeVisible();
+    const idleNotice = page.getByText('No AI or agent activity in this window.');
+    const noSubprocesses = page.getByText('No agent CLI subprocesses in this window.');
+
+    /* `toHaveCount(0)` rather than `not.toBeVisible()` for the absent side: a
+       locator that matches nothing satisfies `not.toBeVisible()` for the wrong
+       reason, so it would pass against a panel that rendered neither branch —
+       which is the blank panel this test exists to refuse. */
+    if (nothing) {
+      await expect(idleNotice).toBeVisible();
+    } else {
+      await expect(idleNotice).toHaveCount(0);
+    }
+
+    if (noAgentCli) {
+      await expect(noSubprocesses).toBeVisible();
+    } else {
+      await expect(noSubprocesses).toHaveCount(0);
+      // Not merely "the empty line is gone" — the populated summary is what the
+      // server's non-zero count must render as.
+      await expect(page.getByText(/agent CLI subprocess/)).toBeVisible();
+    }
+
+    // Unconditional: the run-count tile is on the page whatever the window holds.
     await expect(page.getByText(/Runs executing/)).toBeVisible();
 
     await expectQuiet(page, problems);

@@ -477,7 +477,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
               The `← All runs` control in this page's header is NOT one of them
               and stays a button: it goes to a LIST rather than to a run, and it
               is a header chip drawn by the global `button` rule, so converting
-              it would be a restyle rather than a semantics fix (#1240).
+              it would be a restyle rather than a semantics fix (#1239).
 
               The list is gated on the run ROW alone, so this renders on the
               doc-resolution fallback too — which is when a failed child most
