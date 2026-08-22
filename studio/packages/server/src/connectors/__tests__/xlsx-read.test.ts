@@ -197,6 +197,39 @@ describe('readXlsxRowBatches — the container', () => {
     expect(stillRefersTo(fd, ino)).toBe(false);
   });
 
+  it('releases a caller-supplied fd when the read is ABANDONED mid-stream', async () => {
+    // The drift-check path — read one row, stop — and the one that proves the
+    // close is AWAITED rather than merely called. `zip.close()` only unrefs;
+    // yauzl releases the descriptor through `RandomAccessReader.close`, which
+    // is a `setImmediate`. So a `finally` that just calls it settles the
+    // generator with the fd still open, and a caller that reopens or unlinks
+    // the file next is racing a dependency's internals. Abandoning mid-stream
+    // leaves the read stream to be destroyed, which is where that gap is
+    // widest and most reliably observable.
+    const path = seed({
+      sheets: [
+        {
+          name: 'S',
+          rows: [
+            [{ kind: 'inline', text: 'one' }],
+            [{ kind: 'inline', text: 'two' }],
+            [{ kind: 'inline', text: 'three' }],
+          ],
+        },
+      ],
+    });
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const ino = fstatSync(fd).ino;
+
+    for await (const batch of readXlsxRowBatches({ filePath: path, fd, batchRows: 1 })) {
+      expect(batch).toHaveLength(1);
+      break; // -> generator.return() -> the finally
+    }
+
+    // No awaits between the loop and here: the descriptor must already be gone.
+    expect(stillRefersTo(fd, ino)).toBe(false);
+  });
+
   it('closes a caller-supplied fd when the container cannot be opened', async () => {
     // The other half of the ownership contract, and the half that was missing:
     // yauzl hands an open error back and leaves the caller's descriptor OPEN

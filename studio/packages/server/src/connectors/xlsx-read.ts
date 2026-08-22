@@ -189,6 +189,33 @@ function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
   });
 }
 
+/**
+ * Close the handle and WAIT for the descriptor to actually be released.
+ *
+ * `zip.close()` does not close anything by itself: it `unref()`s, and yauzl
+ * releases the descriptor only when the last reference drops — through
+ * `RandomAccessReader.close`, which is `setImmediate(callback)`. So the raw
+ * call RETURNS BEFORE THE FD IS CLOSED, and a generator whose `finally` merely
+ * calls it settles with the descriptor still open.
+ *
+ * That made the module's stated contract — "passing `fd` transfers ownership:
+ * this module closes it" — true only eventually, with no point a caller could
+ * name. A caller that reopens or unlinks the file straight after the read is
+ * racing an implementation detail of a dependency. Awaiting the handle's own
+ * 'close' gives the ownership transfer a defined discharge point: when the
+ * generator settles, the descriptor is gone.
+ *
+ * It cannot hang short of a leaked reference, and there is no path to one:
+ * every `openReadStream` in this module is destroyed in a `finally`, and
+ * yauzl's own ref/unref around a failed open is balanced.
+ */
+function closeZip(zip: ZipFile): Promise<void> {
+  return new Promise((resolve) => {
+    zip.once('close', () => resolve());
+    zip.close();
+  });
+}
+
 function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<string, Entry>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, Entry>();
@@ -842,8 +869,9 @@ export async function* readXlsxRowBatches(
   } finally {
     // Reached by the generator's `.return()` too, which is the COMMON path:
     // a drift check reads one row and stops. Without this each check would
-    // leak a descriptor.
-    zip.close();
+    // leak a descriptor. Awaited, so ownership is discharged BEFORE the
+    // generator settles rather than a turn or two later — see `closeZip`.
+    await closeZip(zip);
   }
 }
 
@@ -955,6 +983,6 @@ export async function listXlsxSheetNames(
     const parts = await readWorkbookParts(zip, entries, opts.signal);
     return parts.sheets.map((s) => s.name);
   } finally {
-    zip.close();
+    await closeZip(zip);
   }
 }
