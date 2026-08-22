@@ -865,8 +865,14 @@ a {
    descendant selector would silently turn a future breadcrumb or docs link into
    a chip. #1242 gave the class its second and third users (the canvas's
    `← Back to pipelines`, the dataset detail page's `Back to datasets`) — opting
-   in, one site at a time, is the point. The two container-scoped anchor rules above are containers that exist
-   to hold exactly those anchors; this one is not.
+   in, one site at a time, is the point. The container-scoped anchor rules above
+   are containers that exist to hold exactly those anchors; this one is not.
+
+   #1245 — beside the canvas's other header controls this chip is the only one
+   in the app's own font, because nothing here resets button typography and a
+   form control does not inherit `font`. The sizes agree (0.85rem is 13.6px
+   against the UA button's ~13.33px); the families do not. Fixing that is an
+   app-wide restyle, so it has its own ticket rather than riding along here.
 
    Note an anchor activates on Enter only, where a button also took Space. That
    is correct anchor semantics — this control navigates — and the UA focus ring
