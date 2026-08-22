@@ -151,9 +151,13 @@ describe('activity catalog', () => {
     // `datasetKinds.sink` STILL does not move, and that half of the pin is
     // untouched: there is no `delimited` writer, so a CSV remains something a
     // copy can read and not something it can write.
+    // #1215 (M11 slice 2) widened SOURCE only, for `delimited`'s reason
+    // unchanged: M11 built a reader and no writer, so there is nothing to copy
+    // INTO a workbook with. The sink halves therefore still do not move — which
+    // is the half of this pin that has now survived three widenings.
     const copy = catalog.get('copy');
     expect(copy?.datasetKinds).toEqual({
-      source: ['table', 'query', 'delimited'],
+      source: ['table', 'query', 'delimited', 'excel'],
       sink: ['table'],
     });
     expect(copy?.connectionKinds).toEqual(['sqlite', 'fs', 'postgres']);

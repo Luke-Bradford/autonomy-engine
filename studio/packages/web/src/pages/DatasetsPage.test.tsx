@@ -24,6 +24,38 @@ vi.mock('../api/connections', async (importActual) => ({
   listConnections: vi.fn(),
 }));
 
+/**
+ * #1215 — the no-reader seam, made TESTABLE after the last real witness went.
+ *
+ * Five arms below exercise production branches that fire when a dataset kind
+ * has no reader: the JSON editor is forced open, the toggle is hidden, and a
+ * kind change commits the field draft into the JSON text. They used `excel` as
+ * the witness, because it was the last kind without a reader — and M11 gave it
+ * one, so no kind can produce those branches any more.
+ *
+ * Deleting the arms was the alternative and it is worse: the branches are live
+ * code that the NEXT dataset kind reaches on its first day, and `DatasetsPage`
+ * would then ship them untested for however long that takes. So the seam is
+ * mocked at its narrowest point — one predicate, opt-in per test through
+ * `unreadableKind`, defaulting to the REAL behaviour (every kind readable) so
+ * every other arm in this file runs against the shipped function.
+ *
+ * This is a fiction about which KIND lacks a reader, and not about the branch:
+ * the contract under test is "what the form does when `datasetKindIsImplemented`
+ * says no", and that is exactly what is driven. `dataset-config.test.ts` pins
+ * the other half — that the set really does span every kind today, and reds the
+ * moment a fifth arrives.
+ */
+let unreadableKind: string | null = null;
+vi.mock('@autonomy-studio/shared', async (importActual) => {
+  const actual = await importActual<typeof import('@autonomy-studio/shared')>();
+  return {
+    ...actual,
+    datasetKindIsImplemented: (kind: string) =>
+      kind === unreadableKind ? false : actual.datasetKindIsImplemented(kind as never),
+  };
+});
+
 const listMock = vi.mocked(datasetsApi.listDatasets);
 const createMock = vi.mocked(datasetsApi.createDataset);
 const updateMock = vi.mocked(datasetsApi.updateDataset);
@@ -89,6 +121,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unreadableKind = null;
   vi.restoreAllMocks();
 });
 
@@ -277,6 +310,7 @@ describe('DatasetsPage', () => {
   });
 
   it('forces the JSON editor for a kind with no reader, and says why', async () => {
+    unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     const user = userEvent.setup();
     renderWithRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
@@ -284,16 +318,20 @@ describe('DatasetsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
-    // `excel` rather than `delimited`, and the swap is the point rather than a
-    // relocation. #1163 gave `delimited` a real schema and #1167 gave it a
-    // READER, so it now gets the typed form (the test below asserts that) — and
-    // `excel` is what holds this branch open, on the READER fact alone, exactly
-    // as `delimited` did between the two slices. `DatasetsPage` keys the branch
-    // on `datasetKindIsImplemented` and not on `fields.length`, which is what
-    // keeps the two apart — break that and this test goes red.
+    // The branch keys on `datasetKindIsImplemented` and NOT on `fields.length`,
+    // which is precisely what this arm proves: under the seam, `excel` has a
+    // full field schema and STILL gets the JSON editor, because the reason is
+    // the reader and never an absent form.
     expect(within(form()).getByLabelText('Config (JSON)')).toBeInTheDocument();
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
-    expect(within(form()).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
+
+    // The "no reader exists for a …" SENTENCE is deliberately not asserted
+    // here. It comes from `datasetConfigAdvisory`, which consults
+    // `datasetKindIsImplemented` through an intra-module call the seam above
+    // cannot reach — and faking that function too would mean asserting the
+    // mock's own string, which proves nothing. That sentence is the shared
+    // package's, its branch is unreachable there for the same reason, and
+    // `dataset-config.test.ts` pins the fact that makes it so.
     // No mode toggle: the reader gate, not an absent field form, is why.
     expect(
       within(form()).queryByRole('button', { name: 'Edit as fields' }),
@@ -301,6 +339,7 @@ describe('DatasetsPage', () => {
   });
 
   it('carries a typed field into the JSON editor a reader-less kind forces open', async () => {
+    unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     // The one mode change that does not run through the explicit toggle: a kind
     // with no reader forces `jsonMode` on. Without committing the field draft
     // first, the textarea opens on a `jsonText` written before anything was
@@ -329,6 +368,7 @@ describe('DatasetsPage', () => {
   });
 
   it('carries a JSON edit back into the fields when the kind change closes the editor', async () => {
+    unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     // The mirror of the case above, and the one the textarea itself creates:
     // its `onChange` writes `jsonText` and NEVER `config`, so re-seeding the
     // new kind's controls from `config` seeds them from before those
@@ -369,6 +409,7 @@ describe('DatasetsPage', () => {
   });
 
   it('keeps the JSON editor open when the kind changes on a draft that will not parse', async () => {
+    unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     // The parse-failure half of the case above. `jsonMode` is DERIVED, so a new
     // kind that happens to render the stale `config` would reopen the field
     // form on the pre-edit value while the operator's unparseable text vanished
@@ -397,6 +438,7 @@ describe('DatasetsPage', () => {
   });
 
   it('names the unreadable control instead of opening JSON on a draft that omits it', async () => {
+    unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     const user = userEvent.setup();
     listMock.mockResolvedValue([
       dataset({ kind: 'query', config: { sql: 'select 1', parameters: { a: 1 } } }),

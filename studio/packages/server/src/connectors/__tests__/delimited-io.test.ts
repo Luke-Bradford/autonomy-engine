@@ -385,7 +385,7 @@ describe('config validation at dispatch (§8)', () => {
     expect(err.message).toMatch(/^invalid delimited dataset config: [^\n]+$/);
   });
 
-  it('refuses a dataset kind this store does not read', async () => {
+  it('refuses a dataset kind this READER does not read', async () => {
     const path = await seed('c.csv', 'a\n1\n');
     const err = await refusalOf(() => rowsOf({ ...read(path), datasetKind: 'excel' }));
     expect(err.kind).toBe('permanent');
@@ -678,7 +678,13 @@ describe('where a delimited dataset physically is', () => {
     await expect(resolve(link)).rejects.toMatchObject({ kind: 'permanent' });
   });
 
-  it('refuses a kind this store does not read, BY NAME', async () => {
+  it('refuses a kind this READER does not read, BY NAME', async () => {
+    // #1215 re-worded this from "the fs store reads 'delimited' datasets": as
+    // of M11 the fs store reads TWO kinds, so that sentence became false. The
+    // fault a caller reaching HERE with an `excel` dataset has is not that the
+    // store cannot read it — `excel-io.ts` can — it is that the fork in `fs.ts`
+    // routed it to the wrong reader. The store-level refusal (for a kind
+    // NEITHER reader handles) is `fs-connection.ts`'s `notAnFsKind`.
     await expect(
       resolveDelimitedDatasetAddress({
         connectionConfig: { roots: [root] },
@@ -686,7 +692,7 @@ describe('where a delimited dataset physically is', () => {
       }),
     ).rejects.toMatchObject({
       kind: 'permanent',
-      message: "the fs store reads 'delimited' datasets; this one is 'excel'",
+      message: "the delimited reader reads 'delimited' datasets; this one is 'excel'",
     });
   });
 });

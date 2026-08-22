@@ -215,8 +215,16 @@ function byteSizeOf(value: unknown): number {
   // being the whole story at M10 (postgres `numeric` is arbitrary precision), at
   // which point this wants a per-source measurement rather than a constant.
   if (typeof value === 'number' || typeof value === 'bigint') return 8;
-  // A kind no v1 source produces. 0 rather than a guessed size: `bytesRead` is
-  // a measurement, and a made-up number is worse than a missing one.
+  // Everything else, which as of M11 slice 2 (#1215) is no longer hypothetical:
+  // the `excel` reader yields `Date` values for date-typed cells and
+  // `XlsxCellFault` objects for error cells, so this arm is now REACHED and
+  // charges both 0. Recorded rather than quietly fixed here — the sentence this
+  // replaces ("a kind no v1 source produces") became false the moment that
+  // reader shipped, and #1214 owns the sizing decision, which needs a
+  // per-source measurement rather than a constant chosen in this diff. 0 stays
+  // the honest placeholder in the meantime, on this comment's own original
+  // rule: `bytesRead` is a measurement, and a made-up number is worse than a
+  // missing one.
   return 0;
 }
 

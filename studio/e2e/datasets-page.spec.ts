@@ -223,13 +223,17 @@ test.describe('#1115 Manage → Datasets', () => {
       "dataset kind 'delimited' lives in a store of kind 'fs'",
     );
 
-    // `excel` holds the reader gate open now — same branch, same reason. Kept
-    // so this spec still has an arm that can fail rather than becoming a
-    // restatement of the enum.
+    // `excel` used to hold the reader gate open, and M11 slice 2 (#1215) closed
+    // it — no kind is unreadable now, so the no-reader arm cannot be produced
+    // in a REAL BUILD at all (the unit suite drives it through a narrow mock of
+    // the one predicate; a browser has no such seam). It is replaced by its
+    // INVERSE, which is strictly better coverage of the shipped bundle: `excel`
+    // renders derived controls rather than a JSON textarea, and says nothing
+    // about readers.
     await form(page).getByLabel('Kind').selectOption('excel');
-    await expect(form(page).getByLabel('Config (JSON)')).toBeVisible();
-    await expect(form(page).getByText('This kind has no settings.')).toBeHidden();
-    await expect(form(page).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
+    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
+    await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
     await expectQuiet(page, problems);
   });
@@ -305,21 +309,22 @@ test.describe('#1115 Manage → Datasets', () => {
     // refused what the server accepts would be the worse defect.
     await expect(page.getByRole('button', { name: 'Create dataset' })).toBeEnabled();
 
-    // The PILE-UP, asserted where both store kinds are controlled rather than
-    // inherited from whatever the shared database happens to hold first. The
-    // kind carrying it is `excel` as of #1167, NOT `delimited`: this arm needs a
-    // kind that is BOTH unreadable and mis-stored, and #1167 gave `delimited` a
-    // reader, so it can now only be the second of those. `excel` still lives on
-    // `fs` (`DATASET_CONNECTION_KINDS`) and still has no reader
-    // (`IMPLEMENTED_DATASET_KINDS`), so it is the pair this test was written
-    // for — two true, independent notes, and #1145 must not have swallowed
-    // #1120's.
+    // The MIS-STORE note on its own, asserted where both store kinds are
+    // controlled rather than inherited from whatever the shared database
+    // happens to hold first. This arm was written for the PILE-UP — a kind that
+    // was BOTH unreadable and mis-stored, proving #1145's note had not
+    // swallowed #1120's — and `excel` was the last kind that could carry both.
+    // #1215 gave it a reader, so the pile-up is no longer producible in a real
+    // build and the arm keeps the half that is: `excel` still lives on `fs`
+    // only, so binding it to a `sqlite` store still disagrees, and the
+    // no-reader note is asserted ABSENT rather than dropped — which is what
+    // would catch the two notes being fused after all.
     await form(page).getByLabel('Store').selectOption(storeId);
     await form(page).getByLabel('Kind').selectOption('excel');
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
       "dataset kind 'excel' lives in a store of kind 'fs'",
     );
-    await expect(form(page).getByText(/no reader exists for a excel dataset yet/)).toBeVisible();
+    await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
     await expectQuiet(page, problems);
   });

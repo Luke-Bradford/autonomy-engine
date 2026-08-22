@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DatasetKindSchema } from '../schemas/dataset.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import { catalog } from './registry.js';
 import {
   DATASET_CONFIG_SCHEMAS,
@@ -16,6 +17,7 @@ import {
   isSqlIdentifier,
   queryDatasetConfigSchema,
   tableDatasetConfigSchema,
+  excelDatasetConfigSchema,
   unimplementedDatasetConfigSchema,
 } from './dataset-config.js';
 
@@ -38,27 +40,120 @@ describe('dataset config catalog', () => {
     // Not inferred from "the schema is permissive": a future kind whose real
     // schema happened to be permissive would then become silently readable.
     //
-    // `delimited` joined at M7 slice 3 (#1167) — the slice that wired the `fs`
-    // copy arm, which is what "a reader exists" means here. `excel` is the last
-    // holdout and waits for M11, which is why this pin still has a `false` arm
-    // to fail on rather than becoming a restatement of the enum.
-    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'query', 'table']);
+    // `delimited` joined at M7 slice 3 (#1167) and `excel` at M11 slice 2
+    // (#1215) — each time, the slice that wired the store's copy arm, which is
+    // what "a reader exists" means here.
+    //
+    // The set now spans every kind, so this pin no longer has a `false` arm to
+    // fail on. It stays a LITERAL LIST anyway, and deliberately does NOT become
+    // `toEqual(new Set(DatasetKindSchema.options))`: set-equality against the
+    // enum would assert "every kind has a reader", which is a coincidence of
+    // today, and it would tell the next maintainer that the way to make this
+    // green is to add their new kind to `IMPLEMENTED_DATASET_KINDS` — the exact
+    // lie a positive fact exists to prevent. A literal list reds on the next
+    // kind and can only be made green by a decision.
+    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'excel', 'query', 'table']);
     expect(datasetKindIsImplemented('table')).toBe(true);
     expect(datasetKindIsImplemented('delimited')).toBe(true);
-    expect(datasetKindIsImplemented('excel')).toBe(false);
+    expect(datasetKindIsImplemented('excel')).toBe(true);
   });
 
   it('keeps an unimplemented kind’s config INTACT rather than stripping it', () => {
-    // M2 already ships `delimited`/`excel` in the address vocabulary, so a
-    // config authored today must survive a parse unchanged. A bare
-    // `z.object({})` would silently return `{}` and wipe it.
+    // A config authored against a kind with no schema yet must survive a parse
+    // unchanged, or portability cannot round-trip it. A bare `z.object({})`
+    // would silently return `{}` and wipe it.
     //
-    // Re-pointed from `delimited` to `excel` by #1163: `delimited` now has a
-    // REAL schema, so it is no longer an example of this property. `excel`
-    // still is, until M11 — which is why the test moved rather than went.
+    // This arm has now outlived every witness: it was `delimited`'s until #1163
+    // gave that kind a real schema, then `excel`'s until #1215 gave that one
+    // one. NO KIND demonstrates the property any more, so it is asserted on
+    // `unimplementedDatasetConfigSchema` DIRECTLY — which is the honest form,
+    // because the property was always the schema's and never any kind's. The
+    // second half (`datasetConfigSchema('excel')`) is deleted rather than
+    // re-pointed: it would now THROW on the missing `header`, and there is no
+    // kind left to move it to.
     const authored = { path: '/data/in.xlsx', sheet: 'Sheet1', headerRow: 1 };
     expect(unimplementedDatasetConfigSchema.parse(authored)).toEqual(authored);
-    expect(datasetConfigSchema('excel').parse(authored)).toEqual(authored);
+  });
+});
+
+describe('the `excel` dataset config (#1215, M11 slice 2)', () => {
+  const base = { path: '/d/book.xlsx', header: true, sheet: 'Sales' };
+
+  it('needs EXACTLY ONE of `sheet` and `sheetIndex`, and defaults neither', () => {
+    // Two keys rather than one name-or-index value, and the reason is a real
+    // workbook rather than a type-system preference: a worksheet can legitimately
+    // be NAMED "3", so a single value makes that sheet unaddressable AND — the
+    // part that matters — reads a DIFFERENT sheet while succeeding.
+    expect(excelDatasetConfigSchema.safeParse(base).success).toBe(true);
+    expect(
+      excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', header: true, sheetIndex: 3 })
+        .success,
+    ).toBe(true);
+
+    // NEITHER is defaulted. Two sheets of one workbook routinely share column
+    // names (`Jan`, `Feb`), so guessing the first would copy the wrong month and
+    // SUCCEED — invisible in a way a mangled value never is.
+    const neither = excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', header: true });
+    expect(neither.success).toBe(false);
+    expect(formatZodIssues(neither.error!.issues)).toMatch(/sheet/);
+
+    const both = excelDatasetConfigSchema.safeParse({ ...base, sheetIndex: 2 });
+    expect(both.success).toBe(false);
+    expect(formatZodIssues(both.error!.issues)).toMatch(/sheetIndex/);
+  });
+
+  it("requires `header`, on M7's correction unchanged", () => {
+    // Defaulted true it EATS row 1 of a headerless sheet; defaulted false it
+    // turns the header into a data row. Both succeed and write wrong data.
+    const missing = excelDatasetConfigSchema.safeParse({ path: '/d/b.xlsx', sheet: 'S' });
+    expect(missing.success).toBe(false);
+    expect(formatZodIssues(missing.error!.issues)).toMatch(/header/);
+  });
+
+  it('defaults `headerRow` to 1 and refuses it past 1 when there is no header', () => {
+    expect(excelDatasetConfigSchema.parse(base).headerRow).toBe(1);
+    // A spreadsheet routinely carries title rows ABOVE its header, which a CSV
+    // does not — so `headerRow` is a real key here and not a CSV import.
+    expect(excelDatasetConfigSchema.parse({ ...base, headerRow: 4 }).headerRow).toBe(4);
+
+    // Refused rather than silently ignored: an operator who set both has said
+    // two contradictory things, and honouring one of them quietly is how a copy
+    // reads the wrong row.
+    const clash = excelDatasetConfigSchema.safeParse({ ...base, header: false, headerRow: 4 });
+    expect(clash.success).toBe(false);
+    expect(formatZodIssues(clash.error!.issues)).toMatch(/headerRow/);
+    expect(
+      excelDatasetConfigSchema.safeParse({ ...base, header: false, headerRow: 1 }).success,
+    ).toBe(true);
+  });
+
+  it("keeps `nullValue: ''` meaningful and validates `dateFormat`", () => {
+    // No `.min(1)`, exactly as `delimited` has none: `coerceValue` tests
+    // `opts.nullValue !== undefined`, so '' is a real declaration.
+    expect(excelDatasetConfigSchema.parse({ ...base, nullValue: '' }).nullValue).toBe('');
+    expect(excelDatasetConfigSchema.safeParse({ ...base, dateFormat: 'yyyy-MM-dd' }).success).toBe(
+      true,
+    );
+    expect(excelDatasetConfigSchema.safeParse({ ...base, dateFormat: 'nonsense' }).success).toBe(
+      false,
+    );
+  });
+
+  it('renders as an object-rooted schema, so the form derives FIELDS not a JSON box', () => {
+    // §13's named trap: `configForm.ts` falls back to a whole-config JSON
+    // textarea for any root it cannot classify as an object. A `z.union` for
+    // sheet-or-index would have been exactly such a root — the second, quieter
+    // reason the two keys are separate.
+    expect(excelDatasetConfigSchema.def.type).toBe('object');
+    expect(Object.keys(excelDatasetConfigSchema.shape).sort()).toEqual([
+      'dateFormat',
+      'header',
+      'headerRow',
+      'nullValue',
+      'path',
+      'sheet',
+      'sheetIndex',
+    ]);
   });
 });
 
@@ -190,8 +285,14 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
     expect(datasetConfigAdvisory('delimited', { path: '/f.csv', header: true })).toBeNull();
     // A MALFORMED one still speaks — the advisory did not go quiet altogether.
     expect(datasetConfigAdvisory('delimited', { header: true })).toMatch(/path/i);
-    // And `excel` still carries the no-reader note this arm used to prove.
-    expect(datasetConfigAdvisory('excel', { path: '/f.xlsx' })).toMatch(/reader/i);
+    // `excel` carried the no-reader note this arm used to prove, until #1215
+    // gave it a reader too. It now behaves exactly as `delimited` does — a
+    // well-formed config draws nothing, a malformed one still speaks — which is
+    // the same pair of facts asserted about the other half of the fs store.
+    expect(
+      datasetConfigAdvisory('excel', { path: '/f.xlsx', header: true, sheet: 'S' }),
+    ).toBeNull();
+    expect(datasetConfigAdvisory('excel', { path: '/f.xlsx', header: true })).toMatch(/sheet/i);
   });
 });
 
@@ -266,14 +367,23 @@ describe('datasetConfigAdvisory (#1120)', () => {
     expect(spaced).toContain('bare SQL identifier');
   });
 
-  it('reports a kind with no reader even though its config parses', () => {
-    // `unimplementedDatasetConfigSchema` is a `looseObject`, so this config is
-    // VALID — which is exactly why the note has to come from the positive
-    // `IMPLEMENTED_DATASET_KINDS` fact rather than from the parse result.
+  it('has no kind left without a reader to report — and says so rather than looping over nothing', () => {
+    // This arm used to iterate the unimplemented kinds and assert each drew the
+    // no-reader note. #1215 implemented the last one, so that filter is now
+    // EMPTY and the loop would pass VACUOUSLY — a green test that has stopped
+    // testing, which is worse than a deleted one because it still reads as
+    // proof. The emptiness is therefore asserted directly.
+    expect(DATASET_KINDS.filter((k) => !IMPLEMENTED_DATASET_KINDS.has(k))).toEqual([]);
+
+    // `datasetConfigAdvisory`'s no-reader branch is consequently UNREACHABLE
+    // through the kind enum. It is kept, not deleted: kind #5 arrives with no
+    // reader on its first day, and the two properties that branch depends on —
+    // a permissive placeholder schema that ROUND-TRIPS, and a note derived from
+    // the positive `IMPLEMENTED_DATASET_KINDS` fact rather than from a parse
+    // result — are pinned here so they cannot rot while the branch waits.
     expect(unimplementedDatasetConfigSchema.safeParse({ path: '/tmp/x.csv' }).success).toBe(true);
-    for (const kind of DATASET_KINDS.filter((k) => !IMPLEMENTED_DATASET_KINDS.has(k))) {
-      expect(datasetConfigAdvisory(kind, { path: '/tmp/x.csv' })).toContain('no reader exists');
-    }
+    // And the literal pin in the catalog describe above goes red on the same
+    // commit that adds a kind, which is what turns "kept" into "maintained".
   });
 
   it('reports BOTH a schema complaint and a missing reader in one sentence', () => {

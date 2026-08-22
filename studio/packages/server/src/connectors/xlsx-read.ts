@@ -95,7 +95,21 @@ export type XlsxCell = string | number | boolean | Date | XlsxCellFault | null;
 export interface XlsxRow {
   /** The sheet's own 1-based row number, so a gap is visible rather than closed. */
   readonly rowNumber: number;
-  /** Indexed from column A. An interior blank is `null`; trailing blanks are absent. */
+  /**
+   * Indexed from column A. A blank cell is `null`.
+   *
+   * MEASURED, and corrected here by #1215 because it is the slice that depends
+   * on it: a blank is absent from `cells` only when it is absent from the XML.
+   * Excel emits `<c r="B1" s="0"/>` for a blank cell that carries a STYLE — a
+   * fill, a border, a number format — which is extremely common, and that cell
+   * arrives as a `null` in every position including the last. So a consumer
+   * must treat "absent" and "`null`" as the same fact rather than assuming a
+   * trailing run is always absent; `excel-io.ts`'s `bindExcelRow` does.
+   *
+   * A row that is present but wholly blank yields `cells: []` (or all-`null`),
+   * which is also measured rather than assumed: Excel writes a bare `<row>` for
+   * a row whose height or fill was ever touched. It is a ROW, not a gap.
+   */
   readonly cells: readonly XlsxCell[];
 }
 
@@ -115,17 +129,70 @@ export interface ReadXlsxOptions {
   readonly signal?: AbortSignal | undefined;
 }
 
+/**
+ * #1216 — the CLOSED set of reasons this module refuses a workbook.
+ *
+ * Bounded on `DelimitedParseError`'s `DelimitedParseFailureCode` precedent, and
+ * for the reason that docblock gives in as many words: so a consumer can map a
+ * failure BY CODE rather than by matching on a message. Slice 1 shipped without
+ * one because it had no consumer, and inventing the partition then would have
+ * been guessing at the cut without the thing that needs it. `excel-io.ts` is
+ * that consumer, and this is the cut its mapper actually branches on.
+ *
+ * FOUR members, not the seven a first pass drafted, because a code nothing can
+ * FALSIFY is not a code. `not_a_container` and `malformed_container` were
+ * separate until it turned out both sites emit the same sentence — yauzl
+ * reaches them for a `.xls` and for a corrupt central directory alike — so they
+ * were assignable by SITE and never by fact. And a `phantom_date` member had no
+ * throw site at all: slice 1's pinned decision is that serial 60 and an
+ * unreadable date RETURN an `XlsxCellFault`, they do not raise.
+ *
+ * WHAT THE MAPPER DOES WITH THEM, stated plainly because the honest answer is
+ * "not what a `kind` enum usually does": every code here is `permanent` today,
+ * so the branch is not transient-vs-permanent. It is WHICH THING THE REFUSAL
+ * NAMES — `no_such_sheet` and `bad_option` are the dataset's own CONFIG being
+ * wrong and the sentence must point at the key the operator can fix, where the
+ * rest are facts about the FILE. Deciding that by reading `.message` is exactly
+ * the drift `#1175` has already caused once, across every connector.
+ *
+ * `past_a_bound` is a limit STUDIO sets (`limits.ts`'s `XLSX_MAX_*`), which is
+ * why `XLSX_MAX_COLUMNS` is deliberately NOT one: 16,384 is the FORMAT's own
+ * ceiling, so a cell reference past it is a malformed workbook rather than a
+ * file that outgrew a studio budget, and the two want different sentences.
+ */
+export const XLSX_READ_FAILURE_CODES = [
+  /** The caller passed an option this module cannot honour (`batchRows`). */
+  'bad_option',
+  /** The dataset names a sheet this workbook does not have, by name or index. */
+  'no_such_sheet',
+  /** A `limits.ts` `XLSX_MAX_*` budget was exceeded. */
+  'past_a_bound',
+  /** The container, its XML, or a value inside it is not a valid workbook. */
+  'malformed_workbook',
+] as const;
+
+export type XlsxReadFailureCode = (typeof XLSX_READ_FAILURE_CODES)[number];
+
 export class XlsxReadError extends Error {
+  /** Which closed reason this is — see {@link XLSX_READ_FAILURE_CODES}. */
+  readonly code: XlsxReadFailureCode;
   /** `true` when re-running unchanged cannot help — a malformed or unsupported
    * container, a missing sheet, a value past a bound. Every failure this module
    * raises today is permanent; the flag exists because the caller's
    * `DatasetIoError` draws the same distinction, and a transient case (a
-   * vanishing network mount, say) belongs to the layer that owns the path. */
+   * vanishing network mount, say) belongs to the layer that owns the path.
+   *
+   * It answers a DIFFERENT question from `code` and both are kept, on the
+   * delimited precedent: `code` says what was wrong, this says whether a retry
+   * could ever help. `excel-io.ts` reads this one for the `DatasetIoError`
+   * kind rather than hardcoding `'permanent'`, which is what keeps the flag
+   * load-bearing instead of decorative. */
   readonly permanent: boolean;
 
-  constructor(message: string, permanent = true) {
+  constructor(code: XlsxReadFailureCode, message: string, permanent = true) {
     super(message);
     this.name = 'XlsxReadError';
+    this.code = code;
     this.permanent = permanent;
   }
 }
@@ -176,6 +243,7 @@ function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
         abandonFd();
         reject(
           new XlsxReadError(
+            'malformed_workbook',
             `not a readable .xlsx: ${err?.message ?? 'the file could not be opened'}. ` +
               'A .xls, .xlsb or password-protected workbook is not a zip and cannot be read here.',
           ),
@@ -241,6 +309,7 @@ function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<
         detach();
         reject(
           new XlsxReadError(
+            'past_a_bound',
             `the container declares more than ${XLSX_MAX_ENTRIES} entries; refusing to index it`,
           ),
         );
@@ -262,7 +331,7 @@ function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<
     zip.on('entry', onEntry);
     zip.on('end', onEnd);
     zip.on('error', (err: Error) =>
-      reject(new XlsxReadError(`not a readable .xlsx: ${err.message}`)),
+      reject(new XlsxReadError('malformed_workbook', `not a readable .xlsx: ${err.message}`)),
     );
     zip.readEntry();
   });
@@ -278,7 +347,10 @@ async function* entryChunks(
     zip.openReadStream(entry, (err, s) => {
       if (err || !s) {
         reject(
-          new XlsxReadError(`could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`),
+          new XlsxReadError(
+            'malformed_workbook',
+            `could not read ${entry.fileName}: ${err?.message ?? 'no stream'}`,
+          ),
         );
         return;
       }
@@ -295,6 +367,7 @@ async function* entryChunks(
       seen += chunk.length;
       if (seen > maxBytes) {
         throw new XlsxReadError(
+          'past_a_bound',
           `${entry.fileName} inflates past ${maxBytes} bytes; refusing rather than reading it into memory`,
         );
       }
@@ -309,6 +382,7 @@ async function* entryChunks(
     if (err instanceof XlsxReadError) throw err;
     if (err instanceof Error && err.name === 'AbortError') throw err;
     throw new XlsxReadError(
+      'malformed_workbook',
       `${entry.fileName} could not be inflated: ${err instanceof Error ? err.message : String(err)}. ` +
         'The workbook is truncated or corrupt.',
     );
@@ -363,7 +437,8 @@ function walkXml(
   if (handlers.text) parser.on('text', handlers.text);
   if (handlers.close) parser.on('closetag', handlers.close);
   parser.write(xml).close();
-  if (state.failure) throw new XlsxReadError(`malformed xlsx XML: ${state.failure.message}`);
+  if (state.failure)
+    throw new XlsxReadError('malformed_workbook', `malformed xlsx XML: ${state.failure.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +488,7 @@ async function readWorkbookParts(
   const workbookEntry = entries.get('xl/workbook.xml');
   if (!workbookEntry) {
     throw new XlsxReadError(
+      'malformed_workbook',
       'the container has no xl/workbook.xml, so it is not a spreadsheet — an .xlsb workbook stores sheets as sheetN.bin and is not supported',
     );
   }
@@ -522,14 +598,18 @@ async function readWorkbookParts(
  */
 function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: string } {
   const { sheets } = parts;
-  if (sheets.length === 0) throw new XlsxReadError('the workbook declares no sheets');
+  if (sheets.length === 0)
+    throw new XlsxReadError('malformed_workbook', 'the workbook declares no sheets');
 
   let index: number;
   if (opts.sheet !== undefined) {
     index = sheets.findIndex((s) => s.name === opts.sheet);
     if (index < 0) {
       const names = sheets.map((s) => `"${s.name}"`).join(', ');
-      throw new XlsxReadError(`no sheet named "${opts.sheet}" in this workbook; it has ${names}`);
+      throw new XlsxReadError(
+        'no_such_sheet',
+        `no sheet named "${opts.sheet}" in this workbook; it has ${names}`,
+      );
     }
   } else if (opts.sheetIndex !== undefined) {
     if (
@@ -538,6 +618,7 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
       opts.sheetIndex > sheets.length
     ) {
       throw new XlsxReadError(
+        'no_such_sheet',
         `sheet index ${opts.sheetIndex} is out of range; this workbook has only ${sheets.length} sheet(s)`,
       );
     }
@@ -559,6 +640,7 @@ function resolveSheet(parts: WorkbookParts, opts: ReadXlsxOptions): { target: st
   const relTarget = parts.rels.get(rid);
   if (relTarget === undefined) {
     throw new XlsxReadError(
+      'malformed_workbook',
       `sheet "${sheet.name}" points at relationship ${rid}, which this workbook does not define`,
     );
   }
@@ -661,7 +743,7 @@ export async function* readXlsxRowBatches(
   // yields an empty batch — so a caller's bad value would hang the server
   // rather than fail. Refuse it at the boundary instead.
   if (!Number.isInteger(batchRows) || batchRows < 1) {
-    throw new XlsxReadError(`batchRows must be a positive integer; got ${batchRows}`);
+    throw new XlsxReadError('bad_option', `batchRows must be a positive integer; got ${batchRows}`);
   }
   const zip = await openZip(opts.filePath, opts.fd);
 
@@ -673,6 +755,7 @@ export async function* readXlsxRowBatches(
     const sheetEntry = entries.get(target);
     if (!sheetEntry)
       throw new XlsxReadError(
+        'malformed_workbook',
         `the workbook names a sheet at ${target}, which the container does not hold`,
       );
 
@@ -710,6 +793,7 @@ export async function* readXlsxRowBatches(
             const parsed = Number(declared);
             if (!Number.isInteger(parsed) || parsed < 1) {
               state.failure ??= new XlsxReadError(
+                'malformed_workbook',
                 `a row declares r="${declared}", which is not a positive row number`,
               );
             } else {
@@ -756,6 +840,7 @@ export async function* readXlsxRowBatches(
       buffer += text;
       if (buffer.length > XLSX_MAX_CELL_CHARS) {
         state.failure ??= new XlsxReadError(
+          'past_a_bound',
           `a cell exceeds ${XLSX_MAX_CELL_CHARS} characters; refusing rather than accumulating it`,
         );
         buffer = '';
@@ -790,6 +875,7 @@ export async function* readXlsxRowBatches(
             const parsed = columnIndexOf(cellRef);
             if (parsed === null) {
               state.failure ??= new XlsxReadError(
+                'malformed_workbook',
                 `row ${rowNumber} declares cell r="${cellRef}", which is not a cell reference`,
               );
               cellRef = undefined;
@@ -811,6 +897,7 @@ export async function* readXlsxRowBatches(
           // than merely large.
           if (column >= XLSX_MAX_COLUMNS) {
             state.failure ??= new XlsxReadError(
+              'malformed_workbook',
               `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`}, past the ` +
                 `${XLSX_MAX_COLUMNS}-column ceiling the format allows`,
             );
@@ -819,6 +906,7 @@ export async function* readXlsxRowBatches(
           }
           if (column <= lastColumn) {
             state.failure ??= new XlsxReadError(
+              'malformed_workbook',
               `row ${rowNumber} declares cell ${cellRef ?? `column ${column + 1}`} after a later ` +
                 'column; refusing rather than overwriting a value already read',
             );
@@ -879,7 +967,7 @@ function throwIfMalformed(failure: Error | null): void {
   if (!failure) return;
   throw failure instanceof XlsxReadError
     ? failure
-    : new XlsxReadError(`malformed sheet XML: ${failure.message}`);
+    : new XlsxReadError('malformed_workbook', `malformed sheet XML: ${failure.message}`);
 }
 
 /**
@@ -911,6 +999,7 @@ function materialise(
       const index = Number(raw);
       if (raw === '' || !Number.isInteger(index) || index < 0 || index >= parts.shared.length) {
         state.failure ??= new XlsxReadError(
+          'malformed_workbook',
           `a cell references shared string ${JSON.stringify(raw)}, which this workbook's ` +
             `table of ${parts.shared.length} does not hold`,
         );
@@ -930,6 +1019,7 @@ function materialise(
       if (raw === '1' || raw === 'true') return true;
       if (raw === '0' || raw === 'false') return false;
       state.failure ??= new XlsxReadError(
+        'malformed_workbook',
         `a boolean cell holds ${JSON.stringify(raw)}, which is neither 0 nor 1`,
       );
       return null;
@@ -958,6 +1048,7 @@ function materialise(
       // already refuse.
       if (raw === '') {
         state.failure ??= new XlsxReadError(
+          'malformed_workbook',
           'a numeric cell holds an empty <v>; a blank cell carries no <v> at all',
         );
         return null;

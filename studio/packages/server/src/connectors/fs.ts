@@ -16,24 +16,34 @@ import {
   fileReadConfigSchema,
   fileWriteConfigSchema,
   formatZodIssues,
+  type CoercionOptions,
+  type DatasetAddress,
+  type DatasetKind,
 } from '@autonomy-studio/shared';
+import { DatasetIoError } from './dataset-io-error.js';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
 // connector shares the one hardened implementation rather than mirroring it
 // (data-movement spec §8). `fs` is still its primary caller and still layers
 // `O_NOFOLLOW` on top at open time.
 import { failed } from './activity-events.js';
-import { resolveWithinRoots } from './confine.js';
+import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 // #1165 M7 slice 2 — the connection schema and the errno classifier moved OUT
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
-import { classifyFsError, fsConnectionConfigSchema } from './fs-connection.js';
+import { classifyFsError, fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
 // #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
 // adapter's `delimited` reader with sqlite's writer, so the import direction is
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
 // imports neither store, which is the property its own docblock protects.
 import { runCopyActivity } from './copy.js';
 import { refuseForeignSink, writeRowsToSink } from './copy-sink.js';
+import {
+  describeExcelDatasetColumns,
+  excelCoercionFor,
+  readExcelDatasetBatches,
+  resolveExcelDatasetAddress,
+} from './excel-io.js';
 import {
   delimitedCoercionFor,
   describeDelimitedDatasetColumns,
@@ -116,13 +126,6 @@ const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
  * failure), so it never materialises more than this many dirents.
  */
 const DEFAULT_MAX_LIST_ENTRIES = 10_000;
-
-/**
- * `O_NOFOLLOW` refuses to open a symlink at the final path component (→ `ELOOP`).
- * Defined on the target platforms (macOS + Linux); `?? 0` degrades to a harmless
- * no-op on any platform that lacks it rather than producing `NaN` flags.
- */
-const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
 // SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-
@@ -488,6 +491,77 @@ async function doList(
   }
 }
 
+/**
+ * #1215 M11 slice 2 — WHICH fs reader a dataset gets.
+ *
+ * An `fs` connection is a store for two dataset kinds now, so this adapter has
+ * to CHOOSE rather than having exactly one reader to hand `runCopyActivity`.
+ * Four seams need the choice — the address, the describe, the batches, the
+ * coercion — and four ternaries would be four places for the fork to drift; one
+ * that forgot to branch would read a workbook with the CSV parser and refuse it
+ * with a message about a delimiter. So the fork is written ONCE, as a table.
+ *
+ * `null` for a kind neither reader handles, never a default to `delimited`. A
+ * default is the fail-open direction: it would hand a `table` dataset to the
+ * CSV reader, which happens to refuse it today by its own kind guard, and would
+ * silently do something else the moment that guard's wording or placement
+ * changed. The refusal is `notAnFsKind`'s, worded once beside
+ * `FS_DATASET_KINDS`.
+ *
+ * The seam takes the FLAT read record every reader already accepts, and the
+ * address resolver is adapted to it here rather than widening the record —
+ * `resolveDatasetAddress` is handed a `ResolvedDataset` at dispatch time and
+ * the readers are handed a config at activity time, and folding those two
+ * shapes together would make each implementation carry the other's fields.
+ */
+interface FsDatasetRead {
+  readonly connectionConfig: Record<string, unknown>;
+  readonly datasetKind: DatasetKind;
+  readonly datasetConfig: Record<string, unknown>;
+  readonly signal?: AbortSignal;
+}
+
+interface FsDatasetIo {
+  readonly describeColumns: (read: FsDatasetRead) => Promise<readonly string[]>;
+  readonly readBatches: (
+    read: FsDatasetRead,
+  ) => AsyncGenerator<Record<string, unknown>[], void, undefined>;
+  readonly resolveAddress: (args: {
+    readonly connectionConfig: Record<string, unknown>;
+    readonly dataset: { readonly kind: DatasetKind; readonly config: Record<string, unknown> };
+  }) => Promise<DatasetAddress>;
+  readonly coercionFor: (datasetConfig: Record<string, unknown>) => CoercionOptions;
+}
+
+const DELIMITED_IO: FsDatasetIo = {
+  describeColumns: describeDelimitedDatasetColumns,
+  readBatches: readDelimitedDatasetBatches,
+  resolveAddress: resolveDelimitedDatasetAddress,
+  coercionFor: delimitedCoercionFor,
+};
+
+const EXCEL_IO: FsDatasetIo = {
+  describeColumns: describeExcelDatasetColumns,
+  readBatches: readExcelDatasetBatches,
+  resolveAddress: resolveExcelDatasetAddress,
+  coercionFor: excelCoercionFor,
+};
+
+function fsReaderFor(kind: DatasetKind): FsDatasetIo | null {
+  if (kind === 'delimited') return DELIMITED_IO;
+  if (kind === 'excel') return EXCEL_IO;
+  return null;
+}
+
+/** The chosen reader, or a `permanent` refusal naming the kinds this store does
+ * read. Thrown rather than returned, because every consumer below is already
+ * inside a path whose failures `copy.ts` maps. */
+function requireFsReader(kind: DatasetKind): FsDatasetIo {
+  const io = fsReaderFor(kind);
+  if (io === null) throw new DatasetIoError('permanent', notAnFsKind(kind));
+  return io;
+}
+
 export const fsAdapter: ConnectorAdapter = {
   kind: 'fs',
   configSchema: fsConnectionConfigSchema,
@@ -496,7 +570,7 @@ export const fsAdapter: ConnectorAdapter = {
   // binding, so it owes §2.1's address seam. It is not optional in practice for
   // this adapter: `run/executor.ts` refuses a `copy` whose store cannot say
   // where it lands, rather than dispatching without the record.
-  resolveDatasetAddress: resolveDelimitedDatasetAddress,
+  resolveDatasetAddress: (args) => requireFsReader(args.dataset.kind).resolveAddress(args),
 
   async testConnection(config) {
     const cfg = fsConnectionConfigSchema.safeParse(config);
@@ -573,16 +647,21 @@ export const fsAdapter: ConnectorAdapter = {
         // and the sentence has to follow the catalog rather than restate one
         // store's name.
         refuseSink: refuseForeignSink,
-        sourceCoercion: (dataset) => delimitedCoercionFor(dataset.config),
+        // #1215 — every one of these three goes through the SAME fork, so a
+        // copy cannot describe a workbook with one reader and scan it with the
+        // other. `cfg.data` is still deliberately not threaded in: §8 requires
+        // the reader to re-validate at dispatch, and handing it a pre-parsed
+        // config would make that re-validation a claim rather than a check.
+        sourceCoercion: (dataset) => requireFsReader(dataset.kind).coercionFor(dataset.config),
         describeSource: ({ dataset, signal }) =>
-          describeDelimitedDatasetColumns({
+          requireFsReader(dataset.kind).describeColumns({
             connectionConfig: ctx.connectionConfig,
             datasetKind: dataset.kind,
             datasetConfig: dataset.config,
             ...(signal === undefined ? {} : { signal }),
           }),
         readBatches: ({ dataset, signal }) =>
-          readDelimitedDatasetBatches({
+          requireFsReader(dataset.kind).readBatches({
             connectionConfig: ctx.connectionConfig,
             datasetKind: dataset.kind,
             datasetConfig: dataset.config,

@@ -158,6 +158,18 @@ export interface SheetSpec {
   /** Omit the `r` reference on every `<c>`, which the format permits — position
    * is then implicit. */
   readonly omitCellRefs?: boolean;
+  /**
+   * The sheet's own `r` for each row, index-aligned with `rows`.
+   *
+   * #1215 added it, because Excel OMITS a row that never held anything — data
+   * in rows 1-3 and 100 is four `<row>` elements, not a hundred — and every
+   * fixture before this one was contiguous by construction (`r="${rowIdx+1}"`).
+   * A reader that scans for a `headerRow` has to be tested against a sheet that
+   * steps straight over it, and that shape was previously unbuildable.
+   *
+   * Absent means contiguous from 1, which is what every existing fixture wants.
+   */
+  readonly rowNumbers?: readonly number[];
 }
 
 export interface WorkbookSpec {
@@ -197,7 +209,7 @@ interface BuiltSheet {
 function buildSheetXml(sheet: SheetSpec, shared: string[]): BuiltSheet {
   const rowsXml = sheet.rows
     .map((cells, rowIdx) => {
-      const rowNum = rowIdx + 1;
+      const rowNum = sheet.rowNumbers?.[rowIdx] ?? rowIdx + 1;
       const cellsXml = cells
         .map((cell, colIdx) => {
           if (cell.kind === 'blank') return '';

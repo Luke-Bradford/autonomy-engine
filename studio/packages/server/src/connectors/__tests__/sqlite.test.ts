@@ -790,8 +790,14 @@ describe('resolveDatasetAddress', () => {
   it('refuses a dataset kind that does not live in a SQLITE store', async () => {
     // Both guards moved together (#1167) and both are pinned by message, so the
     // address seam and the reader cannot start describing the same mismatch
-    // differently. `excel` is the kind that has no reader ANYWHERE and it is
-    // refused by the same sentence — one guard, one message.
+    // differently — one guard, one message.
+    //
+    // `excel` used to be the kind with no reader ANYWHERE, which is why it was
+    // the second member of this loop. M11 slice 2 (#1215) gave it one, and the
+    // loop is BETTER for it rather than stale: both members are now kinds that
+    // a real store reads — just not THIS one — so this pins the distinction
+    // that actually matters (not-mine, said once) instead of conflating it with
+    // not-implemented-anywhere.
     const root = tempRoot();
     const path = seedDb(root, 1);
     for (const kind of ['delimited', 'excel'] as const) {

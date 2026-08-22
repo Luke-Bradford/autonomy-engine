@@ -1,5 +1,12 @@
+import {
+  close as closeCb,
+  constants as fsConstants,
+  fstat as fstatCb,
+  open as openCb,
+} from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 /**
  * Which connector is asking — it names ITSELF in the refusal messages below.
@@ -113,4 +120,68 @@ export async function resolveWithinRoots(
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
   return { ok: true, path: finalPath };
+}
+
+/**
+ * #1215 — the flags a confined READ must open with, in ONE place.
+ *
+ * `O_NOFOLLOW` is what closes the lstat->open race this module's docblock names
+ * as its own residual, and `?? 0` is the load-bearing half of the expression:
+ * the constant is absent on platforms that have no such flag, and a bare
+ * `fsConstants.O_NOFOLLOW` would then make the whole bitmask `NaN` and every
+ * open throw. That idiom was already written out twice (`fs.ts`'s file
+ * activities, `delimited-io.ts`'s chunk reader) and a third copy was about to
+ * be written for the xlsx reader -- three chances to drop the `?? 0`, on a
+ * security control. It lives here instead, beside the guard whose residual it
+ * exists to cover.
+ */
+export const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
+/** `O_RDONLY | O_NOFOLLOW` -- what {@link openConfinedFd} and every confined
+ * read open with. */
+export const CONFINED_READ_FLAGS = fsConstants.O_RDONLY | O_NOFOLLOW;
+
+const openFd = promisify(openCb);
+const fstatFd = promisify(fstatCb);
+const closeFd = promisify(closeCb);
+
+/**
+ * Open an already-confined path for reading and hand back a RAW descriptor.
+ *
+ * A raw `number` and deliberately not a `FileHandle`, which is the shape every
+ * other reader in this tree uses. The consumer is `yauzl`, whose `fromFd` takes
+ * ownership and closes the descriptor itself (`xlsx-read.ts`'s `openZip`
+ * documents that transfer and measures it). A `FileHandle` also carries a
+ * `FinalizationRegistry` that closes on GC, so handing `fh.fd` away would leave
+ * two owners of one descriptor -- and because the kernel RECYCLES fd numbers,
+ * the late close would land on whatever file had since taken the number. That
+ * is the same hazard #1213 hit from the other side, and an inode probe is what
+ * proved it real; a raw fd with exactly one owner makes it unrepresentable.
+ *
+ * The `isFile` check is `delimited-io.ts`'s, for its stated reason: `open`
+ * succeeds on a DIRECTORY, and the read that follows either throws a bare
+ * `EISDIR` or reports zero bytes -- which is then indistinguishable from an
+ * empty file. Refusing here is the same fact said where it can be understood.
+ * The descriptor is closed on that refusal, because ownership has not
+ * transferred to anyone yet.
+ */
+export async function openConfinedFd(
+  path: string,
+): Promise<{ ok: true; fd: number } | { ok: false; error: string }> {
+  const fd = await openFd(path, CONFINED_READ_FLAGS);
+  try {
+    const stats = await fstatFd(fd);
+    if (!stats.isFile()) {
+      await closeFd(fd);
+      return { ok: false, error: `'${path}' is not a regular file` };
+    }
+  } catch (err) {
+    // The fstat failed, so nothing downstream can use this descriptor and
+    // nobody else owns it yet. Close it and re-throw for the caller's errno
+    // mapper -- swallowing the error here would report the read as succeeding
+    // over zero rows.
+    await closeFd(fd).catch(() => undefined);
+    throw err;
+  }
+  return { ok: true, fd };
 }
