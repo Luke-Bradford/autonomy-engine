@@ -428,3 +428,106 @@ test.describe('#1008 the skipped node', () => {
     await expectQuiet(page, problems);
   });
 });
+
+/**
+ * #1239 — the run page's back control, converted from a `navigate()` button to
+ * an anchor.
+ *
+ * The semantics half (role, `href`, where the click lands) is asserted in the
+ * unit suites, which is where it is cheapest. What CANNOT be asserted there is
+ * the reason the ticket called this a restyle rather than a one-line fix: this
+ * app declares no global `a` rule, so an unstyled anchor takes the UA link
+ * colour, which `color-scheme` then resolves DIFFERENTLY per theme. jsdom
+ * computes no cascade, so only a browser can tell the chip from a bare blue
+ * link — and only in both themes, since a rule that resolved correctly in dark
+ * and wrongly in light is exactly the silent failure `palette.test.ts` exists
+ * for.
+ *
+ * Asserted POSITIVELY, against probe-resolved tokens. "Not the UA link colour"
+ * would stay green if the rule were deleted and the anchor landed on `--muted`
+ * or an inherited value.
+ *
+ * One seeded run covers both themes rather than one per theme, unlike the pill
+ * specs above: a link's own colours are read straight off the element, with no
+ * surface to walk, so the second theme needs nothing but the toggle — and this
+ * suite is already among the slowest things in CI.
+ */
+test('#1239 — the run page’s back link is a themed chip, not a bare UA link', async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, `#1239 back link ${Date.now()}`, {
+    nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+    edges: [],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, '#1239 sweep');
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  /* The REAL href a browser sees: `#`-prefixed, because the app ships on a hash
+     router where the unit suites mount a memory one. That prefix is the whole
+     point of asserting it here as well — it is what makes the control copyable
+     and openable in a new tab, and only a real build can show it. */
+  const back = page.getByRole('link', { name: '← All runs' });
+  await expect(back).toHaveAttribute('href', '#/monitor/runs');
+
+  for (const theme of ['dark', 'light'] as const) {
+    await setTheme(page, theme);
+
+    /* ONE round-trip for every assertion in this theme. Each expected value is
+       resolved by the SAME engine, through a probe that uses the token — so
+       both sides are computed values and the comparison cannot fail on
+       hex-vs-rgb serialization. */
+    const read = await page.evaluate(() => {
+      const el = document.querySelector('.page-back');
+      if (!el) throw new Error('no .page-back element');
+      const host = document.createElement('div');
+      document.body.append(host);
+      try {
+        const probe = (css: Partial<CSSStyleDeclaration>) => {
+          const p = document.createElement('span');
+          Object.assign(p.style, css);
+          host.append(p);
+          return getComputedStyle(p);
+        };
+        const cs = getComputedStyle(el);
+        return {
+          tag: el.tagName,
+          color: cs.color,
+          background: cs.backgroundColor,
+          border: cs.borderTopColor,
+          decoration: cs.textDecorationLine,
+          fontFamily: cs.fontFamily,
+          fontSize: cs.fontSize,
+          expected: {
+            color: probe({ color: 'var(--text)' }).color,
+            background: probe({ color: 'var(--panel-2)' }).color,
+            border: probe({ color: 'var(--border)' }).color,
+            /* The typography the conversion deliberately CHANGED. A form
+               control does NOT inherit font, so the `<button>` rendered in the
+               UA's own; the anchor takes its context's. Compared against the
+               PARENT, not `document.body` — `body` is an ANCESTOR of the
+               FluentProvider root, so it still carries the MVP stack while
+               anything inside the provider carries Fluent's. Reds if this ever
+               regresses to a button. */
+            fontFamily: getComputedStyle(el.parentElement ?? document.body).fontFamily,
+            fontSize: probe({ fontSize: '0.85rem' }).fontSize,
+          },
+        };
+      } finally {
+        host.remove();
+      }
+    });
+
+    expect(read.tag, `${theme}: still an anchor`).toBe('A');
+    expect(read.color, `${theme}: text colour is --text`).toBe(read.expected.color);
+    expect(read.background, `${theme}: chip fill is --panel-2`).toBe(read.expected.background);
+    expect(read.border, `${theme}: chip border is --border`).toBe(read.expected.border);
+    expect(read.decoration, `${theme}: undecorated`).toBe('none');
+    expect(read.fontFamily, `${theme}: inherits its font, unlike a UA control`).toBe(
+      read.expected.fontFamily,
+    );
+    expect(read.fontSize, `${theme}: at the house control size`).toBe(read.expected.fontSize);
+  }
+
+  await expectQuiet(page, problems);
+});

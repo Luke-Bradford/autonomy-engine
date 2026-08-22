@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
-import { runDetailPath } from './runPath';
+import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
@@ -388,7 +388,7 @@ function ChildRuns({ node }: { node: NodeActivity }) {
       <ul className="plain-list">
         {node.childRunIds.map((id) => (
           <li key={id}>
-            <Link to={runDetailPath(id)} aria-label={`Child run ${id}`}>
+            <Link to={runDetailPath(id)} aria-label={runLinkLabel('Child', id)}>
               <code>{id}</code>
             </Link>
           </li>

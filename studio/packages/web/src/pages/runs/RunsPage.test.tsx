@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
+import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
@@ -499,6 +500,7 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />);
     const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
     expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
+    expectAccessibleNameContainsText(link);
   });
 });
 

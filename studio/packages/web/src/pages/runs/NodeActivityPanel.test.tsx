@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import { emptyNodeCost } from './runSummary';
@@ -237,6 +238,9 @@ describe('NodeActivityPanel — child runs', () => {
       row({ nodeId: 'a', status: 'waiting', attempts: 1, childRunIds: ['run_child1'] }),
     );
     const link = within(childSection(panel)).getByRole('link', { name: 'Child run run_child1' });
+    /* The visible text is the id, so the name has to END with it — the same
+       relationship shape `Source`/`Parent` use, checked the same way (#1240). */
+    expectAccessibleNameContainsText(link);
     expect(link).toHaveAttribute('href', '/monitor/runs/run_child1');
     /* The visible text stays the raw id — it is what the event feed and the
        runs list are keyed on, so naming the link must not cost the lookup. */

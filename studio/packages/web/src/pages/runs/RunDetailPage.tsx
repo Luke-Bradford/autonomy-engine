@@ -11,7 +11,7 @@ import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
 import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
-import { runDetailPath } from './runPath';
+import { runDetailPath, runLinkLabel } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -107,7 +107,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
    *
    * `live` is why the settle handlers check before touching anything. The
    * component has three other ways to unmount while a request is open — the
-   * "← All runs" button, the lineage link, and the browser's own back — and
+   * "← All runs" link, the lineage links, and the browser's own back — and
    * react-router's `navigate` carries no unmount guard of its own (its active
    * flag is set in a layout effect with no cleanup). Without this check, a 202
    * landing after the operator has already walked away would yank them off the
@@ -375,9 +375,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <h2 id="run-heading">
           Run <code>{runId}</code>
         </h2>
-        <button type="button" onClick={() => void navigate('/monitor/runs')}>
+        {/* #1239 — an anchor, not `navigate()` on a button: going somewhere is
+            what an anchor is for, and this one is now hoverable, copyable,
+            middle-clickable and openable in a new tab like every run link on
+            the page. `.page-back` keeps the header chip the global `button`
+            rule was drawing; without it the anchor would fall back to the UA
+            link colour, since this app declares no global `a` rule. */}
+        <Link className="page-back" to="/monitor/runs">
           ← All runs
-        </button>
+        </Link>
       </div>
 
       <p className="page-hint">
@@ -451,7 +457,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <>
               <dt>Rerun of</dt>
               <dd>
-                <Link to={runDetailPath(rerunOf)} aria-label={`Source run ${rerunOf}`}>
+                <Link to={runDetailPath(rerunOf)} aria-label={runLinkLabel('Source', rerunOf)}>
                   <code>{rerunOf}</code>
                 </Link>
               </dd>
@@ -474,10 +480,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
               lineage rows now state the same act the same way, and every
               run-navigation site in the app is an anchor.
 
-              The `← All runs` control in this page's header is NOT one of them
-              and stays a button: it goes to a LIST rather than to a run, and it
-              is a header chip drawn by the global `button` rule, so converting
-              it would be a restyle rather than a semantics fix (#1239).
+              The `← All runs` control in this page's header followed in #1239.
+              It is not a RUN-navigation site (it goes to a list), and converting
+              it needed a restyle as well — a `.page-back` rule to keep the chip
+              the global `button` rule had been drawing. Back controls elsewhere
+              in the app are still buttons or unthemed anchors (#1242).
 
               The list is gated on the run ROW alone, so this renders on the
               doc-resolution fallback too — which is when a failed child most
@@ -488,7 +495,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
               <dd>
                 <Link
                   to={runDetailPath(run.parentRunId)}
-                  aria-label={`Parent run ${run.parentRunId}`}
+                  aria-label={runLinkLabel('Parent', run.parentRunId)}
                 >
                   <code>{run.parentRunId}</code>
                 </Link>

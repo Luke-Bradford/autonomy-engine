@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
@@ -147,6 +148,29 @@ describe('RunDetailPage', () => {
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('trg_1')).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
+  });
+
+  /**
+   * #1239 — the page header's back control was the LAST `navigate()`-on-a-button
+   * in `packages/web/src`'s run surface, so it alone could not be
+   * middle-clicked, copied or opened in a new tab. Pinned by ROLE and `href`, so
+   * a regression to a button reds here. Where the click LANDS is asserted in
+   * `routes.test.tsx` against the real route table, per `renderWithRouter`'s own
+   * rule that navigation belongs there; what this owns is that the control is an
+   * anchor at all, and that it carries the class the chip depends on.
+   *
+   * No `expectAccessibleNameContainsText` here, deliberately. This control
+   * carries no `aria-label`, so the helper returns immediately and would assert
+   * nothing — and the property it exists to check is already pinned one line
+   * up: querying by ROLE and NAME only matches if the accessible name IS the
+   * visible text. The helper earns its keep on the run links below, whose names
+   * `runLinkLabel` builds and can therefore drift from the DOM.
+   */
+  it('renders the back control as a link with a real href', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    const back = await screen.findByRole('link', { name: '← All runs' });
+    expect(back).toHaveAttribute('href', '/monitor/runs');
+    expect(back).toHaveClass('page-back');
   });
 
   /**
@@ -1802,10 +1826,15 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
        `navigate`-on-a-button reds here rather than silently taking away
        hover/copy/middle-click/new-tab. Named `Source run …` rather than by the
        bare id, the same treatment `Called by` and `RunsPage`'s Watch cell get:
-       "run_0" alone tells a screen-reader user nothing about where it goes. */
+       "run_0" alone tells a screen-reader user nothing about where it goes.
+
+       Containment (2.5.3) is asserted through the shared helper rather than by
+       eye: here the visible text is the id itself, so the name has to END with
+       what the row renders. */
     const link = screen.getByRole('link', { name: 'Source run run_0' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_0');
     expect(link.textContent).toBe('run_0');
+    expectAccessibleNameContainsText(link);
   });
 
   it('shows no lineage row on an original run', async () => {
@@ -2504,6 +2533,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     const link = screen.getByRole('link', { name: 'Parent run run_parent' });
     expect(link).toHaveAttribute('href', '/monitor/runs/run_parent');
     expect(link.textContent).toBe('run_parent');
+    expectAccessibleNameContainsText(link);
   });
 
   /* The ABSENCE of the row is what "not a child" looks like — the same rule the
