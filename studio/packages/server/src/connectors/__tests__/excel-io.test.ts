@@ -1,6 +1,17 @@
 import { writeFile, symlink } from 'node:fs/promises';
+
+// Pass every export through to the real implementation — only `openConfinedFd`
+// becomes a spy, so a test can prove a refusal happened BEFORE the descriptor
+// was taken. The pass-through idiom (rather than a fake) is
+// `delimited-io.test.ts`'s, for its stated reason: this layer's subject is real
+// filesystem behaviour and a fake would test itself.
+vi.mock('../confine.js', async (importActual) => {
+  const actual = await importActual<typeof import('../confine.js')>();
+  return { ...actual, openConfinedFd: vi.fn(actual.openConfinedFd) };
+});
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openConfinedFd } from '../confine.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import {
   describeExcelDatasetColumns,
@@ -34,6 +45,7 @@ let outside = '';
 beforeEach(async () => {
   root = await tempRoot('excel-io-root');
   outside = await tempRoot('excel-io-outside');
+  vi.mocked(openConfinedFd).mockClear();
 });
 afterEach(async () => {
   await cleanupTempRoots();
@@ -418,13 +430,45 @@ describe('scheduling and cancellation', () => {
   });
 
   it('refuses a bad `batchRows` BEFORE the descriptor is opened', async () => {
-    // The one throw inside `readXlsxRowBatches` that happens before `openZip`,
-    // so a descriptor handed over on that path would never be closed. Refusing
-    // ahead of the open makes the window not exist.
+    // `readXlsxRowBatches` validates `batchRows` too, and that is the ONE throw
+    // inside it that happens before `openZip` — i.e. before ownership of the
+    // descriptor transfers — so a caller that opened first would leak one on
+    // exactly that path. Asserting only the MESSAGE would therefore prove
+    // nothing: the reader's own refusal says the same thing. The claim is that
+    // the open never happened, so that is what is asserted.
     const path = await seed('b.xlsx', book({ rows: [[text('a')], [num(1)]] }));
     const err = await refusalOf(() => rowsOf({ ...read(path), batchRows: 0 }));
     expect(err.kind).toBe('permanent');
     expect(err.message).toMatch(/batchRows must be a positive integer/);
+    expect(vi.mocked(openConfinedFd)).not.toHaveBeenCalled();
+  });
+
+  it('reports a cancel that lands AFTER the pre-open check as `cancelled`', async () => {
+    // The reader wraps every non-`AbortError` throw as an `XlsxReadError`, so a
+    // cancel surfacing as an errno (an `EBADF` on a handle closed out from
+    // under the read) arrives already wrapped. Classifying it by that wrapper
+    // would call it `permanent`, and §10 turns on the opposite.
+    //
+    // The double is a signal that reads FALSE once — satisfying the pre-open
+    // check, the way a real cancel that had not landed yet would — and true
+    // afterwards. A real `AbortController` cannot express that ordering
+    // deterministically, and a test that raced a timer would be the flake this
+    // suite exists to avoid.
+    let reads = 0;
+    const signal = {
+      get aborted() {
+        reads += 1;
+        return reads > 1;
+      },
+      throwIfAborted() {},
+      addEventListener() {},
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+
+    const junk = join(root, 'junk.xlsx');
+    await writeFile(junk, 'this is not a zip at all');
+    const err = await refusalOf(() => rowsOf({ ...read(junk), signal }));
+    expect(err.kind).toBe('cancelled');
   });
 });
 

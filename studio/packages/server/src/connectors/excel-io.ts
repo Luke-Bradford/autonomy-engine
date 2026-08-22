@@ -111,10 +111,21 @@ function readFailure(
   signal: AbortSignal | undefined,
   subject: string,
 ): DatasetIoError {
+  // An error this module already classified is trusted, on `delimited-io`'s
+  // ordering: it was raised with the facts to hand.
+  if (err instanceof DatasetIoError) return err;
+  // THEN the abort arm, and its position ahead of `XlsxReadError` is the
+  // contract rather than a preference. `xlsx-read.ts`'s `entryChunks` re-throws
+  // only errors whose `name` is `AbortError` and WRAPS everything else, so a
+  // cancel that surfaced as an errno — an `EBADF` on a handle closed out from
+  // under an in-flight read is the ordinary way — would arrive here already
+  // wrapped, and the arm below would call it `permanent`. §10 turns on the
+  // opposite ("`cancelled` never retries"), and `classifyFsError`'s docblock
+  // states the abort arm is part of the contract and names `fs.ts` as always
+  // having checked it first.
   if (isAbortError(err, signal)) {
     return new DatasetIoError('cancelled', 'dataset read aborted', { cause: err });
   }
-  if (err instanceof DatasetIoError) return err;
   if (err instanceof XlsxReadError) {
     const kind = err.permanent ? 'permanent' : 'transient';
     const context =
