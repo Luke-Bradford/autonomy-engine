@@ -48,6 +48,7 @@ import {
 import { listAllPipelineVersions } from '../api/pipelines';
 import { runDetailPath, runLinkLabel } from './runs/runPath';
 import { pipelinePath } from './author/pipelinePath';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { usePolledResource } from '../hooks/usePolledResource';
 import { readPublishState } from './pipeline/publishState';
@@ -338,18 +339,28 @@ export function TriggersPage() {
    * both come back as attention items on import, which the panel below
    * renders. That is the server's guarantee, not this page's.
    */
-  const onExport = useCallback(async (t: TriggerPublic) => {
-    setLoadError(null);
-    try {
-      downloadTextFile(exportFileName('trigger', t.name, t.id), await exportTrigger(t.id));
-    } catch (err) {
-      // `loadError`, not `actionMsg`: this page's `actionMsg` is a
-      // `role="status"` notice (it carries "Fired X: started"), and a failed
-      // export is an ERROR. `onDelete` already routes its failure here, so
-      // this is the page's existing surface for "an action did not happen".
-      setLoadError(`Could not export “${t.name}”: ${messageOf(err)}`);
-    }
-  }, []);
+  /* #960 — per-row single-flight. The visible label deliberately does NOT
+     change to "Exporting…": these buttons carry an `aria-label` naming the row,
+     and a visible string absent from the accessible name violates WCAG 2.5.3
+     (label in name). `disabled` + `aria-busy` is the affordance. */
+  const { active: exporting, run: runExport } = useBusyAction();
+
+  const onExport = useCallback(
+    (t: TriggerPublic) =>
+      runExport(t.id, async () => {
+        setLoadError(null);
+        try {
+          downloadTextFile(exportFileName('trigger', t.name, t.id), await exportTrigger(t.id));
+        } catch (err) {
+          // `loadError`, not `actionMsg`: this page's `actionMsg` is a
+          // `role="status"` notice (it carries "Fired X: started"), and a failed
+          // export is an ERROR. `onDelete` already routes its failure here, so
+          // this is the page's existing surface for "an action did not happen".
+          setLoadError(`Could not export “${t.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
 
   const onFire = useCallback(
     async (t: TriggerPublic) => {
@@ -507,6 +518,8 @@ export function TriggersPage() {
                     type="button"
                     onClick={() => void onExport(t)}
                     aria-label={`Export ${t.name}`}
+                    disabled={exporting.has(t.id)}
+                    aria-busy={exporting.has(t.id)}
                   >
                     Export
                   </button>

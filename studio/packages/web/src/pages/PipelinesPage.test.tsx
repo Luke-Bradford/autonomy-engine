@@ -466,6 +466,39 @@ describe('PipelinesPage', () => {
     );
   });
 
+  /**
+   * #960 — the AFFORDANCE half. The correctness half (two clicks in one tick,
+   * before React re-renders) is proved in `hooks/useBusyAction.test.ts`, and
+   * deliberately NOT here: `user.click` does not dispatch on a natively
+   * disabled button, so a click-twice test through this page would stay green
+   * with the ref guard deleted and would certify nothing.
+   */
+  it('disables the Export button for THAT row while its export is in flight', async () => {
+    const user = userEvent.setup();
+    const gate = deferred<string>();
+    exportMock.mockReturnValue(gate.promise);
+    listMock.mockResolvedValue([
+      pipeline({ id: 'pl_7', name: 'Nightly digest' }),
+      pipeline({ id: 'pl_8', name: 'Other' }),
+    ]);
+    renderPage();
+
+    const target = await screen.findByRole('button', { name: /Export Nightly digest/i });
+    const other = await screen.findByRole('button', { name: /Export Other/i });
+    expect(target).toBeEnabled();
+
+    await user.click(target);
+
+    await waitFor(() => expect(target).toBeDisabled());
+    expect(target).toHaveAttribute('aria-busy', 'true');
+    // Keyed by row, not page-wide: a second pipeline stays exportable, which is
+    // why this is a Set rather than one busy flag.
+    expect(other).toBeEnabled();
+
+    gate.resolve('{"canonical":"bytes"}');
+    await waitFor(() => expect(target).toBeEnabled());
+  });
+
   it('reports a failed export instead of saving the error body to disk', async () => {
     const user = userEvent.setup();
     exportMock.mockRejectedValue(new ApiError(404, 'pipeline "pl_1" not found'));

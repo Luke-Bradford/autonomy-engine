@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type {
   WorkspaceGitApplyResult,
@@ -65,6 +66,17 @@ function status(overrides: Partial<WorkspaceGitStatus> = {}): WorkspaceGitStatus
     hasStoredToken: false,
     ...overrides,
   };
+}
+
+/** A mount load whose completion moment the test controls. */
+function deferredStatus() {
+  let resolve!: (value: WorkspaceGitStatus | null) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<WorkspaceGitStatus | null>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function drift(overrides: Partial<WorkspaceGitDrift> = {}): WorkspaceGitDrift {
@@ -169,6 +181,89 @@ afterEach(() => {
 });
 
 describe('WorkspaceGitPage', () => {
+  /**
+   * #1097 — the mount load's success branch must drop an answer whose
+   * controller was aborted.
+   *
+   * StrictMode is what makes this observable rather than theoretical. React
+   * mounts, tears down and remounts on the SAME fiber, so the first effect
+   * run's controller is aborted while the component is still very much alive —
+   * and `getWorkspaceGit` is mocked, so it resolves regardless of the abort,
+   * which is precisely the case the check exists for ("whether an aborted fetch
+   * rejects is the fetch's choice, not this component's"). Resolve the second
+   * run's answer FIRST and the first run's second, and without the guard the
+   * torn-down run's stale answer lands last and wins.
+   *
+   * In production a route remount gets a fresh fiber, where React 19 makes the
+   * write a silent no-op — so this is the dev-mode path. It is still the reason
+   * the two branches must carry the same check: the invariant is "a dead load
+   * writes nothing", and it holds on both branches or it is not an invariant.
+   */
+  it('drops a mount-load answer from an ABORTED controller, under StrictMode', async () => {
+    const first = deferredStatus();
+    const second = deferredStatus();
+    getMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    render(
+      <StrictMode>
+        <WorkspaceGitPage />
+      </StrictMode>,
+    );
+
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    // The LIVE run answers first, then the torn-down one.
+    await act(async () => {
+      second.resolve(status({ repoUrl: 'https://github.com/acme/live.git' }));
+      await second.promise;
+    });
+    expect(fact('Repository')).toBe('https://github.com/acme/live.git');
+
+    // Flushed to SETTLED before asserting, not `waitFor`-ed: `waitFor` passes on
+    // its first poll while the live value is still showing, so it would go green
+    // without ever observing the stale overwrite it exists to forbid.
+    await act(async () => {
+      first.resolve(status({ repoUrl: 'https://github.com/acme/stale.git' }));
+      await first.promise;
+    });
+    expect(fact('Repository')).toBe('https://github.com/acme/live.git');
+  });
+
+  /**
+   * #1097 — the ERROR branch carries the same check, and is proved separately.
+   *
+   * The docblock on the effect claims the invariant holds on BOTH branches "or
+   * it is not an invariant", so proving only the success branch would leave the
+   * claim half-earned. A torn-down run whose fetch REJECTS must not raise an
+   * error banner over a page whose live load succeeded — that would report a
+   * failure the operator does not have.
+   */
+  it('drops a mount-load REJECTION from an aborted controller, under StrictMode', async () => {
+    const first = deferredStatus();
+    const second = deferredStatus();
+    getMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    render(
+      <StrictMode>
+        <WorkspaceGitPage />
+      </StrictMode>,
+    );
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve(status({ repoUrl: 'https://github.com/acme/live.git' }));
+      await second.promise;
+    });
+
+    await act(async () => {
+      first.reject(new Error('torn-down run failed'));
+      await first.promise.catch(() => undefined);
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(fact('Repository')).toBe('https://github.com/acme/live.git');
+  });
+
   it('offers the connect form when the workspace has no repo', async () => {
     getMock.mockResolvedValue(null);
     render(<WorkspaceGitPage />);
