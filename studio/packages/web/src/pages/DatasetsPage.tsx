@@ -851,19 +851,20 @@ function DatasetForm({
         ) : (
           <>
             {fields.length === 0 && <p className="page-hint">This kind has no settings.</p>}
-            {fields.map((field) => (
-              <ConfigFieldControl
-                key={field.name}
-                field={field}
-                value={form.inputs[field.name] ?? emptyControlValue(field)}
-                onChange={(next) =>
-                  onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
-                }
-                {...(choicesFor(field.name) === undefined
-                  ? {}
-                  : { choices: choicesFor(field.name) as FieldChoices })}
-              />
-            ))}
+            {fields.map((field) => {
+              const choices = choicesFor(field.name);
+              return (
+                <ConfigFieldControl
+                  key={field.name}
+                  field={field}
+                  value={form.inputs[field.name] ?? emptyControlValue(field)}
+                  onChange={(next) =>
+                    onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
+                  }
+                  {...(choices === undefined ? {} : { choices })}
+                />
+              );
+            })}
             {/* #1218 — only `excel` names a sheet, and only the field form can
                 offer one (the JSON editor has no control to attach it to). */}
             {form.kind === 'excel' && (

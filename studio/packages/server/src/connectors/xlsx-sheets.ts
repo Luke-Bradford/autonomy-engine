@@ -48,9 +48,13 @@ import { listXlsxSheetNames } from './xlsx-read.js';
  */
 
 /**
- * How many workbooks may be open at once. `PROBE_CONCURRENCY`'s value and its
- * reason: a bound on descriptors and buffers, not on anything the event loop
- * would have interleaved anyway.
+ * How many workbooks may be open at once.
+ *
+ * The same NUMBER as `probe.ts`'s `PROBE_CONCURRENCY` and deliberately NOT the
+ * same constant: that one bounds outbound sockets to third-party services, this
+ * one bounds local descriptors and resident buffers. They agree today by
+ * coincidence of scale, so tying them together would mean a future change to
+ * either silently re-tuning the other.
  */
 const SHEETS_CONCURRENCY = 4;
 const limit = pLimit(SHEETS_CONCURRENCY);

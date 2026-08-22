@@ -655,6 +655,20 @@ describe('DatasetsPage', () => {
       expect(sheetsMock).not.toHaveBeenCalled();
     });
 
+    it('asks for a path before it asks the server for anything', async () => {
+      const user = userEvent.setup();
+      listConnectionsMock.mockResolvedValue([store({ id: 'conn_fs', kind: 'fs', name: 'Files' })]);
+      renderWithRouter(<DatasetsPage />);
+      await user.click(await screen.findByRole('button', { name: 'New dataset' }));
+      await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_fs');
+      await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+
+      await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
+
+      expect(await screen.findByText(/Enter the workbook path first/)).toBeInTheDocument();
+      expect(sheetsMock).not.toHaveBeenCalled();
+    });
+
     it('lists on demand and offers every named sheet', async () => {
       const user = userEvent.setup();
       await openExcelForm(user);

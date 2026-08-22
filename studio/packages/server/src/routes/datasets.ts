@@ -76,7 +76,7 @@ function requireOwnedConnection(
   db: Db,
   principal: Principal,
   connectionId: string,
-): ReturnType<typeof getConnection> & object {
+): NonNullable<ReturnType<typeof getConnection>> {
   const connection = getConnection(db, connectionId);
   if (!connection || connection.ownerId !== principal.ownerId) {
     throw new BadRequestError(`no such connection "${connectionId}"`);
@@ -96,7 +96,19 @@ function requireOwnedConnection(
  */
 const DatasetSheetsBodySchema = z.object({
   connectionId: z.string().min(1),
-  path: z.string(),
+  /**
+   * `path` is NOT `.min(1)`: an empty box is the ordinary state of a form the
+   * operator has not finished filling in, and the answer to that is a refusal
+   * sentence in the panel, not a 400 the form would have to special-case.
+   *
+   * It IS capped. Nothing downstream would be harmed by a long string — the
+   * confinement resolves it and the open fails — but every other size-sensitive
+   * input in this tree is bounded by construction (`limits.ts`'s `XLSX_MAX_*`),
+   * and an unbounded one here would be the exception that has to be argued
+   * rather than the rule that holds. 4096 is `PATH_MAX` on Linux and four times
+   * it on macOS, so it cannot refuse a path any filesystem could accept.
+   */
+  path: z.string().max(4096),
 });
 
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {

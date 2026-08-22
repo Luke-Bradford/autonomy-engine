@@ -170,6 +170,15 @@ async function prepareRead(read: ExcelDatasetRead): Promise<{
     );
   }
 
+  // NOTE the ORDER this settles: the dataset config is parsed BEFORE the fs
+  // connection config, where `prepareRead` previously did the reverse. It is
+  // forced rather than chosen — `confineFsPath` needs `config.data.path`, which
+  // only exists once the dataset config has parsed — and it is observable only
+  // when BOTH configs are invalid at once, where the message now names the
+  // dataset fault first. Both are validated at their own write time, so that
+  // state is not reachable through the app; recorded because it is a real
+  // difference, not because it is a live one.
+  //
   // The fs-config parse and the confinement are `confineFsPath`'s (#1218), which
   // also carries the try/catch `resolveWithinRoots`'s docblock requires — it
   // leaves `realpath` on the target's PARENT unguarded on purpose, so a missing
