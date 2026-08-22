@@ -63,32 +63,32 @@ vi.mock('./api/runs', async (importActual) => {
     finishedAt: null,
   });
   return {
-  ...(await importActual<typeof import('./api/runs')>()),
-  // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
-  // `page.items`, so a stale `[]` here throws inside the hook rather than
-  // rendering an empty list.
-  listRuns: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
-  getRunEvents: vi.fn().mockResolvedValue([]),
-  // #1065 — the run detail page's diagnostics section loads on mount, so it
-  // needs a resolved default here for the same reason as the rest of this
-  // factory: unmocked it reaches a real `fetch` in jsdom.
-  getRunDiagnostics: vi.fn().mockResolvedValue([]),
-  // The run detail page reads R1 (`getRunDetail`), which resolves the run AND
-  // the version doc its node overlay needs.
-  getRunDetail: vi.fn((runId: string) =>
-    Promise.resolve({
-      pipelineVersion: {
-        id: 'pv_1',
-        nodes: [],
-        edges: [],
-        containers: [],
-      },
-      run: runRow(runId),
-    }),
-  ),
-  // #1206 — the detail page reads the run on its own too (the R1 fallback, and
-  // the refresh after a rerun). Unmocked that reached a real `fetch`.
-  getRun: vi.fn((runId: string) => Promise.resolve(runRow(runId))),
+    ...(await importActual<typeof import('./api/runs')>()),
+    // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
+    // `page.items`, so a stale `[]` here throws inside the hook rather than
+    // rendering an empty list.
+    listRuns: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    getRunEvents: vi.fn().mockResolvedValue([]),
+    // #1065 — the run detail page's diagnostics section loads on mount, so it
+    // needs a resolved default here for the same reason as the rest of this
+    // factory: unmocked it reaches a real `fetch` in jsdom.
+    getRunDiagnostics: vi.fn().mockResolvedValue([]),
+    // The run detail page reads R1 (`getRunDetail`), which resolves the run AND
+    // the version doc its node overlay needs.
+    getRunDetail: vi.fn((runId: string) =>
+      Promise.resolve({
+        pipelineVersion: {
+          id: 'pv_1',
+          nodes: [],
+          edges: [],
+          containers: [],
+        },
+        run: runRow(runId),
+      }),
+    ),
+    // #1206 — the detail page reads the run on its own too (the R1 fallback, and
+    // the refresh after a rerun). Unmocked that reached a real `fetch`.
+    getRun: vi.fn((runId: string) => Promise.resolve(runRow(runId))),
   };
 });
 vi.mock('./pages/runs/useRunStream', async (importActual) => ({
