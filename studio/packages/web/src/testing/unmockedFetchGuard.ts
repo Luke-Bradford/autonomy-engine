@@ -117,10 +117,15 @@ export function formatUnmockedFetchReport(
 ): string | null {
   if (records.length === 0) return null;
   const detail = records.map((record) => attribution(record, observedBy)).join(', ');
-  const foreign = records.some((record) => record.testName !== observedBy);
-  const lead = foreign
-    ? `#1206: ${records.length} unmocked \`fetch\` call(s) were recorded, not all of them ` +
-      `by this test — a call whose promise settles after its own test's cleanup lands here`
-    : `#1206: this test reached the real \`fetch\` ${records.length} time(s)`;
+  // COUNTED, not `some`: a batch where EVERY record is foreign is the common
+  // shape (one leaked call, drained by the next test), and "not all of them"
+  // reads there as if some were the observing test's own. Say "none".
+  const foreign = records.filter((record) => record.testName !== observedBy).length;
+  const lead =
+    foreign === 0
+      ? `#1206: this test reached the real \`fetch\` ${records.length} time(s)`
+      : `#1206: ${records.length} unmocked \`fetch\` call(s) were recorded, ` +
+        `${foreign === records.length ? 'none' : 'not all'} of them by this test — a call ` +
+        `whose promise settles after its own test's cleanup lands here`;
   return `${lead}: ${detail}`;
 }

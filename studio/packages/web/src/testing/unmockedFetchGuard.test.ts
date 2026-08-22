@@ -58,7 +58,28 @@ describe('installUnmockedFetchGuard', () => {
 
     expect(report).toContain('/api/late');
     expect(report).toContain('the test that actually leaked');
+    // Every record here is foreign, so "not all" would read as if some were the
+    // observing test's own. It gets the stronger, true claim.
+    expect(report).toContain('none of them by this test');
+    expect(report).not.toContain('not all of them');
+  });
+
+  it('says "not all" only when the batch is genuinely MIXED', () => {
+    // The distinction the count buys: one of these two calls really is the
+    // observing test's own, so "not all of them" is the accurate reading.
+    const h = harness();
+    h.running = 'suite > the test that actually leaked';
+    callFetch(h.target, '/api/late');
+    h.running = 'suite > the innocent next test';
+    callFetch(h.target, '/api/its-own');
+
+    const report = formatUnmockedFetchReport(h.guard.drain(), h.running);
+
     expect(report).toContain('not all of them by this test');
+    expect(report).toContain('/api/late [from: suite > the test that actually leaked]');
+    // Its own call carries no `[from: …]`, so the two are told apart at a glance.
+    expect(report).toContain('/api/its-own');
+    expect(report).not.toContain('/api/its-own [from:');
   });
 
   it('says nothing about attribution when the call is the observing test s own', () => {
