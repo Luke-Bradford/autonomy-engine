@@ -3,6 +3,7 @@ import { open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { z } from 'zod';
 import {
   COPY_ACTIVITY_TYPE,
+  LOOKUP_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
@@ -21,7 +22,14 @@ import {
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
-import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
+import { runLookupActivity } from './lookup.js';
+import type { SourceIo } from './source-io.js';
+import type {
+  ActivityContext,
+  ActivityEvent,
+  ConnectorAdapter,
+  ResolvedDataset,
+} from './types.js';
 // #1119 M4 — the confinement guard moved OUT of this file so the `sqlite` store
 // connector shares the one hardened implementation rather than mirroring it
 // (data-movement spec §8). `fs` is still its primary caller and still layers
@@ -154,9 +162,17 @@ function failFromError(err: unknown, signal: AbortSignal): ActivityEvent {
  * dispatched on this connection is not one of them — it is a dataset copy whose
  * source happens to be a file — and reporting it as a file activity would send
  * an operator looking for a `file_*` node that does not exist in their pipeline.
+ * #1221 adds `lookup` for the same reason, and it is the case that shows the
+ * default was never "everything else": a lookup over a CSV is a dataset read,
+ * and it said "file activity aborted" until this table named it.
  */
+const ABORT_REASONS: Readonly<Record<string, string>> = {
+  [COPY_ACTIVITY_TYPE]: 'dataset copy aborted',
+  [LOOKUP_ACTIVITY_TYPE]: 'dataset lookup aborted',
+};
+
 function abortedReason(activityType: string): string {
-  return activityType === COPY_ACTIVITY_TYPE ? 'dataset copy aborted' : 'file activity aborted';
+  return ABORT_REASONS[activityType] ?? 'file activity aborted';
 }
 
 /** Close a file handle, swallowing a close error so it never masks the result. */
@@ -638,8 +654,33 @@ export const fsAdapter: ConnectorAdapter = {
     // so. `cfg.data` is deliberately NOT threaded into the reader below; §8
     // requires it to re-validate at dispatch, and handing it a pre-parsed
     // config would make that re-validation a claim rather than a check.
+    // #1221 M12 slice 2 — the READ half, built ONCE and shared by the two
+    // activities that read a dataset. `copy` spreads it and adds its sink-only
+    // members; `lookup` takes it whole. Written this way rather than as two
+    // literals so the two arms cannot drift: a reader change that reached only
+    // one of them would be a lookup and a copy disagreeing about what the same
+    // dataset contains.
+    //
+    // #1215 — all three members go through the SAME fork, so a copy cannot
+    // describe a workbook with one reader and scan it with the other. `cfg.data`
+    // is deliberately not threaded in: §8 requires the reader to re-validate at
+    // dispatch, and handing it a pre-parsed config would make that
+    // re-validation a claim rather than a check.
+    const readOf = (dataset: ResolvedDataset, signal: AbortSignal | undefined) => ({
+      connectionConfig: ctx.connectionConfig,
+      datasetKind: dataset.kind,
+      datasetConfig: dataset.config,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const source: SourceIo = {
+      sourceCoercion: (dataset) => requireFsReader(dataset.kind).coercionFor(dataset.config),
+      readBatches: ({ dataset, signal }) =>
+        requireFsReader(dataset.kind).readBatches(readOf(dataset, signal)),
+    };
+
     if (ctx.activityType === COPY_ACTIVITY_TYPE) {
       yield* runCopyActivity(ctx, {
+        ...source,
         // #1196 — ONE rung, shared, derived from the CATALOG's
         // `sinkConnectionKinds` rather than a literal. There is still no
         // `delimited` WRITER, so an `fs` copy reads a file and writes into a
@@ -647,26 +688,8 @@ export const fsAdapter: ConnectorAdapter = {
         // and the sentence has to follow the catalog rather than restate one
         // store's name.
         refuseSink: refuseForeignSink,
-        // #1215 — every one of these three goes through the SAME fork, so a
-        // copy cannot describe a workbook with one reader and scan it with the
-        // other. `cfg.data` is still deliberately not threaded in: §8 requires
-        // the reader to re-validate at dispatch, and handing it a pre-parsed
-        // config would make that re-validation a claim rather than a check.
-        sourceCoercion: (dataset) => requireFsReader(dataset.kind).coercionFor(dataset.config),
         describeSource: ({ dataset, signal }) =>
-          requireFsReader(dataset.kind).describeColumns({
-            connectionConfig: ctx.connectionConfig,
-            datasetKind: dataset.kind,
-            datasetConfig: dataset.config,
-            ...(signal === undefined ? {} : { signal }),
-          }),
-        readBatches: ({ dataset, signal }) =>
-          requireFsReader(dataset.kind).readBatches({
-            connectionConfig: ctx.connectionConfig,
-            datasetKind: dataset.kind,
-            datasetConfig: dataset.config,
-            ...(signal === undefined ? {} : { signal }),
-          }),
+          requireFsReader(dataset.kind).describeColumns(readOf(dataset, signal)),
         // Dispatched by SINK KIND (#1196). Parsed from `ctx.sink` inside, never
         // from this adapter's own connection — and here that is not merely the
         // safer answer, it is the only coherent one: an `fs` config has no
@@ -677,6 +700,14 @@ export const fsAdapter: ConnectorAdapter = {
             batches,
           ),
       });
+      return;
+    }
+
+    // #1221 — `lookup` reads the same file through the same reader and writes
+    // nowhere. No `refuseSink` and no `describeSource`: it binds no sink, and it
+    // declares no mapping for §7's drift gate to check one against.
+    if (ctx.activityType === LOOKUP_ACTIVITY_TYPE) {
+      yield* runLookupActivity(ctx, source);
       return;
     }
 
