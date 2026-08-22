@@ -20,6 +20,15 @@ import { ROUTES } from '../routes';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
+// #1206 — the app shell loads its build identity and update status on EVERY
+// mount, so any suite that renders it makes two network attempts unless they are
+// stubbed. Shared rather than hand-rolled here: this is the fourth file to need
+// the same pair, which is the pattern the guard in `vitest.setup.ts` exists to
+// stop repeating.
+vi.mock('../api/version', async () =>
+  (await import('../testing/apiModuleMocks')).versionModuleMock(),
+);
+
 vi.mock('../api/triggers', async (importActual) => {
   const actual = await importActual<typeof import('../api/triggers')>();
   return {
@@ -55,6 +64,11 @@ vi.mock('../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../api/runs')>()),
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
+  // #1206 — the run detail route this case lands on loads R1 and the
+  // diagnostics list too. The detail read rejects, as the unmocked call did, so
+  // the page falls back to `getRun` — the routing assertion is unchanged.
+  getRunDetail: vi.fn().mockRejectedValue(new Error('run detail not stubbed')),
+  getRunDiagnostics: vi.fn().mockResolvedValue([]),
   // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
   // `page.items`, so a stale `[]` here throws inside the hook rather than
   // rendering an empty list.

@@ -16,12 +16,53 @@ import { PANE_DEFAULT_WIDTH, uiStore } from './stores/uiStore';
 // would reach a real `fetch` in jsdom — and the "every hub section renders"
 // walk below mounts it for real, so this is load-bearing, not decoration.
 // `null` is the honest default here: no repo connected.
+// #1206 — the app shell loads its build identity and update status on EVERY
+// mount, so any suite that renders it makes two network attempts unless they are
+// stubbed. Shared rather than hand-rolled here: this is the fourth file to need
+// the same pair, which is the pattern the guard in `vitest.setup.ts` exists to
+// stop repeating.
+vi.mock('./api/version', async () =>
+  (await import('./testing/apiModuleMocks')).versionModuleMock(),
+);
+
+// The Monitor hub's AI-activity page loads a cross-run snapshot and the account
+// quota on mount. Both REJECT here, which is exactly what the unmocked calls
+// already did (jsdom's `fetch` fails), so no assertion below changes meaning —
+// what changes is that the attempt no longer leaves this process. A test that
+// wants a POPULATED panel mocks its own resolved snapshot; none does yet.
+vi.mock('./api/monitor', async (importActual) => ({
+  ...(await importActual<typeof import('./api/monitor')>()),
+  fetchAiActivity: vi.fn().mockRejectedValue(new Error('ai activity not stubbed')),
+  fetchAccountQuotaDisplay: vi.fn().mockRejectedValue(new Error('quota not stubbed')),
+}));
+
 vi.mock('./api/workspaceGit', async (importActual) => ({
   ...(await importActual<typeof import('./api/workspaceGit')>()),
   getWorkspaceGit: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('./api/runs', async (importActual) => ({
+vi.mock('./api/runs', async (importActual) => {
+  // A local builder rather than a shared const: `vi.mock` is hoisted above every
+  // top-level binding, so anything outside this factory is in its temporal dead
+  // zone. Two entry points read the same row (`getRunDetail` resolves it with
+  // its version doc, `getRun` alone), and they must not drift apart.
+  const runRow = (runId: string) => ({
+    id: runId,
+    ownerId: 'local',
+    pipelineVersionId: 'pv_1',
+    triggerId: null,
+    parentRunId: null,
+    params: {},
+    status: 'running',
+    leaseUntil: null,
+    heartbeatAt: null,
+    queuedAt: null,
+    triggerContext: null,
+    rerunOf: null,
+    startedAt: 1,
+    finishedAt: null,
+  });
+  return {
   ...(await importActual<typeof import('./api/runs')>()),
   // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
   // `page.items`, so a stale `[]` here throws inside the hook rather than
@@ -42,25 +83,14 @@ vi.mock('./api/runs', async (importActual) => ({
         edges: [],
         containers: [],
       },
-      run: {
-        id: runId,
-        ownerId: 'local',
-        pipelineVersionId: 'pv_1',
-        triggerId: null,
-        parentRunId: null,
-        params: {},
-        status: 'running',
-        leaseUntil: null,
-        heartbeatAt: null,
-        queuedAt: null,
-        triggerContext: null,
-        rerunOf: null,
-        startedAt: 1,
-        finishedAt: null,
-      },
+      run: runRow(runId),
     }),
   ),
-}));
+  // #1206 — the detail page reads the run on its own too (the R1 fallback, and
+  // the refresh after a rerun). Unmocked that reached a real `fetch`.
+  getRun: vi.fn((runId: string) => Promise.resolve(runRow(runId))),
+  };
+});
 vi.mock('./pages/runs/useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./pages/runs/useRunStream')>()),
   useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
@@ -108,6 +138,12 @@ vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),
   listPipelineVersions: vi.fn().mockResolvedValue([]),
+  // #1206 — mocked DIRECTLY, not composed from the two above: the real
+  // `listAllPipelineVersions` calls them through module-internal references that
+  // `vi.mock` does not intercept, so a stub built out of them reaches the
+  // network anyway. `TriggersPage.test.tsx` records the same finding; the
+  // Triggers page is what mounts it here.
+  listAllPipelineVersions: vi.fn().mockResolvedValue([]),
   getPipeline: vi.fn((id: string) =>
     Promise.resolve({
       id,
