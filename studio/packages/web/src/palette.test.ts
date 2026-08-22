@@ -356,13 +356,56 @@ describe('U6c container fill', () => {
 /**
  * #1239 — the page-header back link's chip.
  *
- * `.page-back` is the only thing standing between `← All runs` and the UA link
- * colour, because this file declares no global `a` rule. Deleting the rule, or
- * dropping `text-decoration`, is a visible regression in both themes that
+ * `.page-back` is the only thing standing between the three header back links
+ * and rendering as ordinary prose — since #1242 a bare anchor is accent-coloured
+ * rather than UA blue, which makes deleting this rule LESS obviously broken, not
+ * more. Deleting it, or dropping `text-decoration`, is a visible regression in
+ * both themes that
  * nothing else here would catch: the unit specs assert role and `href`, and the
  * e2e asserts the RESOLVED colours — but only in a browser, so this is the
  * guard that reds in milliseconds when the rule is edited by hand.
  */
+/**
+ * #1242 — the global `a` rule.
+ *
+ * Before it, the only anchor rules in `index.css` were container-scoped, so
+ * every link outside those containers took the UA link colour — a hue this
+ * palette never declared, resolved differently per theme by `color-scheme`.
+ * Deleting this rule silently returns ~14 links across the app to that state,
+ * and nothing else here would notice: the per-page unit specs assert role and
+ * `href`, not colour.
+ *
+ * The companion assertion is the one that makes the rule SAFE rather than
+ * merely present: each container-scoped anchor rule must still declare its own
+ * `color`. They out-specify the global one at (0,1,1) and (0,2,0), so as long as
+ * they keep saying what they want, the global rule cannot capture them.
+ */
+describe('the global anchor colour', () => {
+  const body = ruleBody(css, 'a');
+
+  it('paints a bare link from the palette', () => {
+    expect(body).toMatch(/color:\s*var\(--accent\)/);
+  });
+
+  it('hardcodes no colour', () => {
+    expect(findColorLiterals(body)).toEqual([]);
+  });
+
+  /* Not `text-decoration: none`. An underline is the only signal left once
+     colour is discounted, which WCAG 1.4.1 asks for and which `.page-back`
+     drops only because a chip has a border and a surface instead. */
+  it('leaves the underline alone, so colour is not the only signal', () => {
+    expect(body).not.toMatch(/text-decoration/);
+  });
+
+  it.each(['.hub-cards a', '.recent-runs a', '.command-bar__breadcrumb a'])(
+    '%s still declares its own colour, so the global rule cannot capture it',
+    (selector) => {
+      expect(ruleBody(css, selector)).toMatch(/(^|[\s;]) ?color:\s*var\(--[a-z-]+\)/);
+    },
+  );
+});
+
 describe('the page-header back link', () => {
   const body = ruleBody(css, '.page-back');
 
@@ -378,11 +421,13 @@ describe('the page-header back link', () => {
 
   /** The box has to match the global `button` rule, or the chip visibly moves. */
   it('keeps the same padding and radius as the button chip it replaced', () => {
-    /* The leading newline anchors the selector to the start of a line, so this
-       reads the BARE `button` element rule. `ruleBody` matches on `indexOf`, so
-       a plain `'button'` finds `.icon-button {` first and would compare against
-       the wrong chip entirely — it did, on the first run of this test (#1243). */
-    const button = ruleBody(css, '\nbutton');
+    /* A plain `'button'`, which reads the BARE element rule only because #1243
+       made `ruleBody` match parsed rule HEADS. Under the old substring matcher
+       this found `.icon-button {` — 300 lines earlier, the first selector in the
+       file merely ENDING in `button` — and compared the chip against the wrong
+       rule entirely. It did, on the first run of this test, and needed a
+       `'\nbutton'` workaround here to anchor the match by hand. */
+    const button = ruleBody(css, 'button');
     for (const property of ['border-radius', 'padding']) {
       const read = (text: string) => new RegExp(`${property}:\\s*([^;]+);`).exec(text)?.[1]?.trim();
       expect(read(body), `.page-back ${property}`).toBe(read(button));

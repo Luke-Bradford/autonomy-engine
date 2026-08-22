@@ -435,17 +435,17 @@ test.describe('#1008 the skipped node', () => {
  *
  * The semantics half (role, `href`, where the click lands) is asserted in the
  * unit suites, which is where it is cheapest. What CANNOT be asserted there is
- * the reason the ticket called this a restyle rather than a one-line fix: this
- * app declares no global `a` rule, so an unstyled anchor takes the UA link
- * colour, which `color-scheme` then resolves DIFFERENTLY per theme. jsdom
- * computes no cascade, so only a browser can tell the chip from a bare blue
- * link — and only in both themes, since a rule that resolved correctly in dark
- * and wrongly in light is exactly the silent failure `palette.test.ts` exists
- * for.
+ * the reason the ticket called this a restyle rather than a one-line fix: an
+ * unstyled anchor is not a chip, and jsdom computes no cascade, so only a
+ * browser can tell the two apart — and only in both themes, since a rule that
+ * resolved correctly in dark and wrongly in light is exactly the silent failure
+ * `palette.test.ts` exists for.
  *
- * Asserted POSITIVELY, against probe-resolved tokens. "Not the UA link colour"
- * would stay green if the rule were deleted and the anchor landed on `--muted`
- * or an inherited value.
+ * When this was written the fallback was the UA link colour, resolved per theme
+ * by `color-scheme`. #1242 has since given bare anchors `--accent`, so the
+ * fallback is now a palette colour — which is why every assertion below is
+ * POSITIVE, against probe-resolved tokens. "Not the UA link colour" would have
+ * quietly stopped meaning anything.
  *
  * One seeded run covers both themes rather than one per theme, unlike the pill
  * specs above: a link's own colours are read straight off the element, with no
@@ -527,6 +527,95 @@ test('#1239 — the run page’s back link is a themed chip, not a bare UA link'
       read.expected.fontFamily,
     );
     expect(read.fontSize, `${theme}: at the house control size`).toBe(read.expected.fontSize);
+  }
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1242 — the two halves of "one treatment for a back control".
+ *
+ * `.page-back` had exactly one user when #1239 minted it, so the app carried a
+ * named convention that two of its three back controls did not follow. This
+ * walks both of the ones that changed, in one seeded pipeline, because they sit
+ * one click apart: the canvas's `← Back to pipelines` (a `navigate()` button
+ * until now, so it had no `href` at all) and — through it — the pipelines list,
+ * whose row links are the bare anchors the new global `a` rule exists for.
+ *
+ * The colour half CANNOT be asserted in the unit suites. jsdom computes no
+ * cascade, so a missing rule and a present one look identical there; the class
+ * assertions in `PipelineCanvasRoute.test.tsx` and `DatasetDetailPage.test.tsx`
+ * prove the opt-in was made, and only a browser can prove it resolves. Both
+ * themes, because a rule that lands correctly in dark and wrongly in light is
+ * the exact failure `palette.test.ts` exists for — and here the light value is
+ * a DIFFERENT literal (`#2a5db0` against dark's `#6ea8fe`), not the same one
+ * re-resolved.
+ *
+ * Asserted POSITIVELY against probe-resolved tokens, plus a real contrast
+ * measurement against whatever actually paints behind the link. "Not UA blue"
+ * would stay green if the rule were deleted and the anchor inherited `--text`.
+ */
+test('#1242 — the canvas back control is an anchor, and a bare link takes the palette colour', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const name = `#1242 back sweep ${Date.now()}`;
+  await openCanvas(page, name);
+
+  /* Row 1. The `#`-prefixed href is the point of asserting it in a browser:
+     the app ships on a hash router where the unit suites mount a memory one,
+     and that prefix is what makes the control copyable and openable in a new
+     tab — the thing a `navigate()` button never offered. */
+  const back = page.getByRole('link', { name: '← Back to pipelines' });
+  await expect(back).toHaveAttribute('href', '#/author/pipelines');
+  await expect(back).toHaveClass(/\bpage-back\b/);
+
+  /* And it actually navigates, which lands us on the surface row 2 needs. */
+  await back.click();
+  await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+  await fluentRootReady(page);
+
+  const open = page.getByRole('link', { name: `Open ${name}`, exact: true });
+  await expect(open).toBeVisible();
+
+  for (const theme of ['dark', 'light'] as const) {
+    await setTheme(page, theme);
+
+    /* ONE round-trip per theme: the expected value is resolved by the SAME
+       engine through a probe that uses the token, so both sides are computed
+       values and the comparison cannot fail on hex-vs-rgb serialization. */
+    const read = await page.evaluate((linkLabel) => {
+      const el = document.querySelector(`a[aria-label="${linkLabel}"]`);
+      if (!el) throw new Error(`no anchor labelled ${linkLabel}`);
+      const host = document.createElement('div');
+      document.body.append(host);
+      try {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--accent)';
+        host.append(probe);
+        const cs = getComputedStyle(el);
+        return {
+          color: cs.color,
+          decoration: cs.textDecorationLine,
+          expected: getComputedStyle(probe).color,
+        };
+      } finally {
+        host.remove();
+      }
+    }, `Open ${name}`);
+
+    expect(read.color, `${theme}: a bare link paints var(--accent)`).toBe(read.expected);
+    /* The underline is deliberately LEFT to the UA. `.page-back` drops it
+       because a chip has a border and a surface to say "control"; a link in a
+       table row has neither, so colour would be the only signal. */
+    expect(read.decoration, `${theme}: keeps the underline`).toContain('underline');
+
+    const surface = await surfaceBehind(page, `a[aria-label="Open ${name}"]`);
+    expect(isOpaque(surface.color), `${theme}: measured against an opaque surface`).toBe(true);
+    expect(
+      contrastRatio(read.color, surface.color),
+      `${theme}: link is below AA for small text: ${read.color} on ${surface.color} (${surface.from})`,
+    ).toBeGreaterThanOrEqual(4.5);
   }
 
   await expectQuiet(page, problems);

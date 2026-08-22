@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router';
+import { Link, Navigate, useParams } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
@@ -40,7 +40,6 @@ export function PipelineCanvasRoute({ store = pipelinesStore }: { store?: Pipeli
 }
 
 function CanvasFor({ pipelineId, store }: { pipelineId: string; store: PipelinesStore }) {
-  const navigate = useNavigate();
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [error, setError] = useState<{ message: string; missing: boolean } | null>(null);
 
@@ -111,7 +110,7 @@ function CanvasFor({ pipelineId, store }: { pipelineId: string; store: Pipelines
          pipelines by default and so cannot answer "is this one archived". */
       archived={pipeline.archived}
       onUnarchived={() => setPipeline((p) => (p === null ? p : { ...p, archived: false }))}
-      onBack={() => void navigate(PIPELINES_PATH)}
+      backTo={PIPELINES_PATH}
     />
   );
 }
