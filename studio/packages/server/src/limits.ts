@@ -208,3 +208,47 @@ export const XLSX_MAX_COLUMNS = 16_384;
  * both.
  */
 export const XLSX_MAX_ENTRIES = 16_384;
+
+/**
+ * #996 M12 slice 2 (#1221, data-movement spec §5) — how many rows a `lookup`
+ * may materialise into its declared outputs.
+ *
+ * `lookup` is the one activity whose rows become DURABLE. §5's rule that "rows
+ * never enter `run_events`" is a statement about `copy`, and `lookup` is the
+ * deliberate exception — which is why §5 gives it a CONCRETE bound rather than
+ * a "bounded" one: "there is no generic output cap in studio", so nothing else
+ * on the path would stop a lookup over a large table from writing that table
+ * into the run log, once per attempt, re-parsed on every read of the log.
+ *
+ * Behaviour at the cap is settled by §5 and is not this constant's to choose:
+ * **truncate and mark, never fail** — "a lookup is a read for a decision, and a
+ * bounded answer is usable where an error is not".
+ */
+export const LOOKUP_ROW_CAP = 1000;
+
+/**
+ * §5's other `lookup` bound: how many bytes of materialised rows may reach the
+ * outputs, whichever of the two binds first.
+ *
+ * MEASURED ON THE DURABLE FORM, NOT ON THE SOURCE VALUES, and the difference is
+ * the whole point of the constant. The obvious implementation — reuse the pump's
+ * `byteSizeOf`, which sizes VALUES because that is what §5 defines `bytesRead`
+ * to be — does not bound what this exists to bound. `byteSizeOf` charges a
+ * `null` 0 and charges nothing at all for key names, and a lookup's column count
+ * is bounded lookup-side by nothing (`XLSX_MAX_COLUMNS` is 16,384). So a
+ * 1000-row × 4000-column sheet of blanks measures 0 bytes on the value
+ * definition, passes the cap untouched, and still writes a payload of hundreds
+ * of megabytes into `run_events.payload` — a column `db/schema.ts` declares as
+ * plain `text(..., { mode: 'json' })` with no size limit and no CHECK.
+ *
+ * So the gate is the UTF-8 length of the row AS SERIALISED — keys, punctuation
+ * and nulls included — measured on the already-normalised row, which is exactly
+ * the string drizzle's `JSON.stringify` will hand the insert. That makes
+ * `truncated` an honest statement about the LOG, which is the fact §5 asks it to
+ * protect, and it is why the `bytes` output is named `bytes` rather than
+ * `copy`'s `bytesRead`: they are different quantities and sharing a name would
+ * be the drift, not the consistency.
+ *
+ * 1 MiB, per §5. It is a bound on ONE node's outputs, not on the run.
+ */
+export const LOOKUP_BYTE_CAP = 1024 * 1024;
