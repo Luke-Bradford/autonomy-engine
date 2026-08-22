@@ -428,8 +428,17 @@ export function TriggersPage() {
                   (Label in Name) is about a speech-input user saying what they can
                   see, and this control reads "Watch live" where that cell reads
                   "Watch". The run id is appended because "Watch live" alone does not
-                  say WHICH run, and this notice can name a different one each fire. */}
-              <Link to={runDetailPath(watchRunId)} aria-label={`Watch live — run ${watchRunId}`}>
+                  say WHICH run, and this notice can name a different one each fire.
+
+                  The arrow is in the name too, and that is deliberate rather than
+                  tidy. "Contains" is a LITERAL substring test (it is what axe's
+                  `label-content-name-mismatch` and WCAG technique G208 check), and
+                  the visible text is `Watch live →` — so a separator that is any
+                  other glyph breaks containment on the arrow alone, which is what an
+                  em dash here did. `ImportPanel`'s `Manage → Connections` links
+                  already carry an arrow in their accessible name, so this is the
+                  idiom rather than an exception to it. */}
+              <Link to={runDetailPath(watchRunId)} aria-label={`Watch live → run ${watchRunId}`}>
                 Watch live →
               </Link>
             </>

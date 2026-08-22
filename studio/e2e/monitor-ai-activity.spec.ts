@@ -121,6 +121,14 @@ test.describe('#917 Monitor › AI activity', () => {
    * The activity half stays UNSTUBBED for the reason the file docblock gives:
    * stubbing it would make the agreement vacuous, since both sides would then
    * be this spec's own fixture.
+   *
+   * There IS a window between the snapshot read and the page's own mount-time
+   * fetch, and both windows end at *now*, so activity billed in the gap is in
+   * the second and not the first. Left rather than closed: the suite is
+   * `workers: 1, fullyParallel: false`, so the gap is sub-second and nothing
+   * else is running to fill it — and the failure it could cause is a RED, the
+   * render honestly disagreeing with a stale snapshot. That is the safe
+   * polarity. It cannot manufacture a green.
    */
   test('the panel states what the server reports, and never renders blank', async ({ page }) => {
     const problems = collectPageProblems(page);
@@ -142,8 +150,11 @@ test.describe('#917 Monitor › AI activity', () => {
     /* Read by NAME and checked here rather than parsed through the shared Zod
        schema. NO e2e file imports `@autonomy-studio/shared` — these specs drive
        the app through its HTTP surface as an operator does, which
-       `support/seedDoc.ts` and `canvas-issue-legibility.spec.ts` both record and
-       the e2e tsconfig enforces by not resolving the package. The check is what
+       `support/seedDoc.ts` and `canvas-issue-legibility.spec.ts` both record.
+       It is not merely a convention: `e2e/` is outside `pnpm-workspace.yaml`'s
+       `packages/*` glob and the root manifest does not depend on the package, so
+       under pnpm's non-hoisted layout the import does not resolve at all — and
+       `tsconfig.e2e.json` maps no `paths` that would rescue it. The check is what
        keeps that cheap: a drifted shape fails by name on the line below instead
        of as a downstream "cannot read properties of undefined". */
     const invocations = (label: string, value: unknown): number => {
@@ -180,6 +191,23 @@ test.describe('#917 Monitor › AI activity', () => {
       await expect(idleNotice).toBeVisible();
     } else {
       await expect(idleNotice).toHaveCount(0);
+      /* "The idle line is gone" is only half of "never renders blank" — a panel
+         that drew NOTHING satisfies it too. So whichever side made the window
+         non-empty is asserted to have rendered its own content. Each is checked
+         under its own predicate rather than as one `or`, so the branch that was
+         actually taken is the branch that gets proved. */
+      if ((snapshot.models as unknown[]).length > 0) {
+        /* The metered block is gated on `!noMeteredActivity`, which any model row
+           satisfies. `toBeAttached` and not `toBeVisible`: the claim being made is
+           "the block rendered", and a chart's own height is a layout question this
+           test has no business failing on. The table is NOT used for this — its
+           `.ai-model-table` class is shared with the reported table below it, so it
+           would pass on the wrong element. */
+        await expect(page.locator('.token-flow')).toBeAttached();
+      }
+      if (externalInvocations > 0) {
+        await expect(page.locator('.reported-activity-summary')).toBeVisible();
+      }
     }
 
     if (noAgentCli) {

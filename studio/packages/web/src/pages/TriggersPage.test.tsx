@@ -619,7 +619,11 @@ describe('TriggersPage', () => {
     /* The FULL accessible name, so both halves are pinned at once: the visible
        "Watch live" it must contain (WCAG 2.5.3) and the run id that says which
        run it goes to. */
-    const watch = await screen.findByRole('link', { name: 'Watch live — run run_9' });
+    const watch = await screen.findByRole('link', { name: 'Watch live → run run_9' });
+    /* Containment asserted as the literal substring test it is, so a separator
+       swapped back to any non-arrow glyph reds HERE rather than passing a name
+       check that merely looks close enough. */
+    expect(watch.getAttribute('aria-label')).toContain(watch.textContent?.trim());
     expect(watch).toHaveAttribute('href', '/monitor/runs/run_9');
     await user.click(watch);
 
