@@ -121,6 +121,14 @@ function readFailure(
   }
   if (err instanceof XlsxReadError) {
     const kind = err.permanent ? 'permanent' : 'transient';
+    // `bad_option` shares `no_such_sheet`'s sentence because both are the
+    // CALLER's declaration being wrong rather than the file's. Reachable here
+    // only in principle: `openSheet` pre-validates `batchRows` and refuses
+    // before the reader is ever entered, deliberately (that is the one throw
+    // inside `readXlsxRowBatches` that precedes its `openZip`, so opening first
+    // would leak a descriptor). It is mapped anyway, because a code the mapper
+    // silently dropped would fall to the "could not be read" arm and blame the
+    // workbook for a caller's bug.
     const context =
       err.code === 'no_such_sheet' || err.code === 'bad_option'
         ? "this dataset's config does not fit the workbook"
@@ -186,8 +194,14 @@ async function prepareRead(read: ExcelDatasetRead): Promise<{
  * workbook holds several and "'/d/book.xlsx' has no header row" would not say
  * which one. `source-columns.ts` takes an already-quoted subject for this. */
 function subjectOf(path: string, config: ExcelConfig): string {
-  const which = config.sheet !== undefined ? `"${config.sheet}"` : `#${config.sheetIndex ?? 1}`;
-  return `sheet ${which} of '${path}'`;
+  if (config.sheet !== undefined) return `sheet "${config.sheet}" of '${path}'`;
+  if (config.sheetIndex !== undefined) return `sheet #${config.sheetIndex} of '${path}'`;
+  // Unreachable — the schema refuses a config naming neither. Written as a
+  // third branch rather than a `?? 1` fallback, because that fallback would
+  // name "#1": a sheet the operator never chose, in the message they would be
+  // reading precisely because something went wrong. An unreachable branch that
+  // stays TRUE if the schema ever loosens is worth three words.
+  return `the sheet of '${path}'`;
 }
 
 /**
