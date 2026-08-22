@@ -267,7 +267,7 @@ export const LOOKUP_ROW_CAP = 1000;
  * WHAT REMAINS, because a bound this file cannot state is a hazard rather than a
  * fact: the READER materialised the row before the lookup saw it, and hands over
  * a whole batch of them. {@link LOOKUP_BATCH_ROWS} shrinks that batch; the
- * per-CELL residue is #1240, and it needs a bounded-cell read no driver offers
+ * per-CELL residue is #1237, and it needs a bounded-cell read no driver offers
  * today.
  */
 export const LOOKUP_BYTE_CAP = 1024 * 1024;

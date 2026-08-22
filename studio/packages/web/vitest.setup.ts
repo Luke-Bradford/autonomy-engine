@@ -1,5 +1,9 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, expect } from 'vitest';
+import {
+  formatUnmockedFetchReport,
+  installUnmockedFetchGuard,
+} from './src/testing/unmockedFetchGuard.js';
 import { cleanup, configure } from '@testing-library/react';
 
 // #723 — Testing Library's default `asyncUtilTimeout` is 1,000 ms, which is
@@ -61,42 +65,18 @@ if (!('elementFromPoint' in Document.prototype)) {
   (Document.prototype as { elementFromPoint?: unknown }).elementFromPoint = (): null => null;
 }
 
-// #1206 — a web test that reaches the REAL `fetch` is doing I/O it believes it
-// stubbed. `routes.test.tsx` carries three separate comments recording the same
-// retrofit (`getWorkspaceGit`, `api/connections`, `api/datasets`) and a fourth
-// was added by hand in the #1124 sweep, because a per-module mock list is closed
-// under nothing: the next page to gain a mount-time call repeats the miss.
+// #1206's unmocked-`fetch` guard, installed here and IMPLEMENTED in
+// `src/testing/unmockedFetchGuard.ts`.
 //
-// A THROW ALONE IS NOT ENOUGH, and that is why this records as well. The callers
-// that reach here mostly swallow their own rejection BY DESIGN — `PipelineCanvas`
-// degrades a failed publish-state read to "unread" deliberately — so a stub that
-// only throws is caught by the code under test and the suite stays green, which
-// is precisely today's invisibility with a louder message nobody sees. The
-// recorded URLs are asserted below, where no `catch` in the component tree can
-// reach them.
-//
-// A test that legitimately exercises `fetch` (`api/*.test.ts`) replaces this via
-// `vi.stubGlobal('fetch', …)` and never reaches the recorder — intended: the
-// guard is for the calls nobody meant to make.
-const unmockedFetchUrls: string[] = [];
-
-function urlOf(input: unknown): string {
-  if (typeof input === 'string') return input;
-  if (input instanceof URL) return input.href;
-  if (typeof input === 'object' && input !== null && 'url' in input) {
-    return String((input as { url: unknown }).url);
-  }
-  return '<unknown>';
-}
-
-globalThis.fetch = ((input: unknown): never => {
-  const url = urlOf(input);
-  unmockedFetchUrls.push(url);
-  throw new Error(
-    `#1206: unmocked fetch in a web test — ${url}. Mock the api module this call ` +
-      `goes through (or stub \`fetch\` for a test that means to exercise it).`,
-  );
-}) as unknown as typeof fetch;
+// The move is #1229's fix, not tidying. The guard was blaming the wrong test —
+// a `fetch` that settles after its own test's `afterEach` lands in the next
+// test's bucket — and the line carrying that bug (which test name is captured,
+// and when) lived in THIS file, which is the setup for every web test and so the
+// one file no test can drive. In its own module it is an ordinary unit test.
+const unmockedFetch = installUnmockedFetchGuard({
+  target: globalThis as unknown as { fetch: typeof fetch },
+  currentTestName: () => expect.getState().currentTestName,
+});
 
 // Unmount React trees between tests so queries never leak across cases.
 //
@@ -112,15 +92,17 @@ afterEach(() => {
   // wrong test is worse than no message. The check itself stays OUTSIDE the
   // `finally`: a throw in there would replace the cleanup error rather than add
   // to it, and the cleanup failure is the one that explains the other.
-  const seen: string[] = [];
+  let report: string | null = null;
   try {
     cleanup();
   } finally {
-    seen.push(...unmockedFetchUrls.splice(0));
+    // The drain stays in the `finally` for its original reason — a throwing
+    // `cleanup()` must not leave this test's records behind to be reported
+    // against the next one. FORMATTING moved in with it (#1229) so the message
+    // is built from the names captured at push time, but the THROW stays
+    // outside: a throw in a `finally` replaces the cleanup error rather than
+    // adding to it, and the cleanup failure is the one that explains the other.
+    report = formatUnmockedFetchReport(unmockedFetch.drain(), expect.getState().currentTestName);
   }
-  if (seen.length > 0) {
-    throw new Error(
-      `#1206: this test reached the real \`fetch\` ${seen.length} time(s): ${seen.join(', ')}`,
-    );
-  }
+  if (report !== null) throw new Error(report);
 });
