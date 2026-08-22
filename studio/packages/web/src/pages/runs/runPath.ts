@@ -4,7 +4,9 @@
  * Both are per-run identity that a call site must not re-derive, which is why
  * they share a module rather than sitting next to the components that render
  * them. The path half came first and names the rule; #1240 added the name half
- * for the same reason, after four call sites had grown three templates.
+ * for the same reason, after five call sites had grown three templates. (Its
+ * ticket counted four — it was written from #1232's diff and did not see the
+ * `Child run` link #1231 had already added.)
  *
  * Every call site has to `encodeURIComponent` the id, because the route it
  * lands on reads the id back with `useParams`, which DECODES exactly once (see
@@ -34,13 +36,13 @@ export function runDetailPath(runId: string): string {
  * separator here once broke containment on the arrow alone.
  *
  * That property holds BY CONSTRUCTION under this signature, which is the whole
- * reason there are two parameters rather than three. The four call sites are of
+ * reason there are two parameters rather than three. The five call sites are of
  * exactly two kinds:
  *
  * - an ACT (`Watch`, `Watch live →`) passes its own visible text as the `lead`,
  *   so the name STARTS with what the control reads;
- * - a RELATIONSHIP (`Source`, `Parent`) renders the run id as its visible text,
- *   so the name ENDS with it.
+ * - a RELATIONSHIP (`Source`, `Parent`, `Child`) renders the run id as its
+ *   visible text, so the name ENDS with it.
  *
  * There is no third shape in which the name could omit either, so there is
  * nothing left for a runtime check to catch — and a check comparing two

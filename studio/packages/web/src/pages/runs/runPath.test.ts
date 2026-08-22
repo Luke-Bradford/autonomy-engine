@@ -29,6 +29,8 @@ describe('runLinkLabel', () => {
     // RunDetailPage's two lineage rows — visible text is the id itself.
     expect(runLinkLabel('Source', 'run_0')).toBe('Source run run_0');
     expect(runLinkLabel('Parent', 'run_p')).toBe('Parent run run_p');
+    // NodeActivityPanel's Child runs list — the fifth site #1240's table missed.
+    expect(runLinkLabel('Child', 'run_c1')).toBe('Child run run_c1');
   });
 
   /**
@@ -39,7 +41,7 @@ describe('runLinkLabel', () => {
    * There is no third shape in which the name could omit either.
    */
   it('contains its lead and its run id, which is what 2.5.3 tests', () => {
-    for (const lead of ['Watch', 'Watch live →', 'Source', 'Parent']) {
+    for (const lead of ['Watch', 'Watch live →', 'Source', 'Parent', 'Child']) {
       const name = runLinkLabel(lead, 'run_x');
       expect(name.includes(lead)).toBe(true);
       expect(name.includes('run_x')).toBe(true);
