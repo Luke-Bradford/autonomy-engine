@@ -218,7 +218,35 @@ function walk(
     if (form.kind === 'hostile') return '***';
     if (form.kind === 'value') return walk(form.value, secrets, depth + 1, key);
     if (Array.isArray(value)) {
-      return value.map((v, i) => walk(v, secrets, depth + 1, String(i)));
+      // Guarded per ELEMENT, exactly as the object branch below is. `.map` reads
+      // every index bare, so an element backed by a throwing getter (or a proxy
+      // `get` trap) propagated the exception straight out of `walk` — and an
+      // exception message is precisely where the plaintext we were called to
+      // scrub ends up. One hostile index must not cost its siblings.
+      //
+      // The LENGTH is a read of its own, and on a proxy a trap that can throw or
+      // answer with something that is not a count. That is the array's analogue
+      // of an object that refuses enumeration: nothing can be walked and nothing
+      // partial is worth keeping, so the whole value takes the sentinel rather
+      // than a truncated array claiming the elements it could not reach never
+      // existed (#473). Each lie fails its own way, both measured: a NEGATIVE
+      // length makes `.map` return `[]`, fabricating an empty array; an INFINITE
+      // one makes it throw `RangeError: Invalid array length` out of the walk.
+      //
+      // A HOLE reads as `undefined` here and is kept as a present element, where
+      // `.map` propagated the hole. `JSON.stringify` renders both as `null`, so
+      // the serialised form this walker feeds is unchanged — the same
+      // present-vs-absent divergence the `toJSON`-returns-`undefined` note above
+      // describes, and visible only to an in-memory `Object.keys`.
+      const lengthRead = readOwn(value, 'length');
+      const length = lengthRead.ok ? lengthRead.value : null;
+      if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return '***';
+      const out: unknown[] = [];
+      for (let i = 0; i < length; i += 1) {
+        const read = readOwn(value, String(i));
+        out.push(read.ok ? walk(read.value, secrets, depth + 1, String(i)) : '***');
+      }
+      return out;
     }
     const keys = ownKeysOf(value);
     if (keys === null) return '***';

@@ -276,6 +276,68 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
     expect(JSON.stringify(out)).not.toContain(SECRET);
   });
 
+  /**
+   * The same guard, one branch over — the one the object branch's fix left open.
+   * `.map` reads every index bare, so an element backed by a throwing getter
+   * propagated the exception out of `walk`, and that message is exactly where
+   * plaintext lands. Per ELEMENT, not per array: a hostile index must not cost
+   * the siblings, which redact fine.
+   */
+  it('replaces an ARRAY element whose getter throws with the sentinel, keeping its siblings', () => {
+    const hostile: unknown[] = [1, `Bearer ${SECRET}`];
+    Object.defineProperty(hostile, 2, {
+      get(): string {
+        throw new Error(`boom ${SECRET}`);
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const out = deepRedactSecrets({ v: hostile }, [SECRET]);
+    expect(out).toEqual({ v: [1, 'Bearer ***', '***'] });
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
+  /**
+   * An array's LENGTH is itself a read, and on a proxy it is a trap that can
+   * throw. It is the array's analogue of the object branch's enumeration
+   * failure: nothing can be walked and nothing partial is worth keeping, so the
+   * whole value takes the sentinel rather than a truncated array that would
+   * claim the missing elements never existed.
+   */
+  it('replaces an array whose LENGTH cannot be read with the sentinel', () => {
+    const hostile = new Proxy([] as unknown[], {
+      get(target, prop, receiver): unknown {
+        if (prop === 'length') throw new Error(`no length ${SECRET}`);
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const out = deepRedactSecrets({ v: hostile, ok: 1 }, [SECRET]);
+    expect(out).toEqual({ v: '***', ok: 1 });
+  });
+
+  /**
+   * A length that is not a usable count is a lie about how much there is to
+   * walk, and each lie fails in its own direction. A NEGATIVE one ends the walk
+   * before it starts, which would fabricate an empty array — #473's shape, an
+   * absence manufactured from a failure and indistinguishable from an array that
+   * really was empty. An INFINITE one goes the other way: `.map` throws
+   * `RangeError: Invalid array length` out of the walk. Both take the sentinel.
+   */
+  it.each([
+    ['negative', -1],
+    ['infinite', Number.POSITIVE_INFINITY],
+  ])('replaces an array whose length is %s with the sentinel', (_label, length) => {
+    const hostile = new Proxy([`Bearer ${SECRET}`] as unknown[], {
+      get(target, prop, receiver): unknown {
+        if (prop === 'length') return length;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const out = deepRedactSecrets({ v: hostile, ok: 1 }, [SECRET]);
+    expect(out).toEqual({ v: '***', ok: 1 });
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+
   it('replaces a value that refuses to be ENUMERATED with the sentinel', () => {
     const hostile = new Proxy(
       {},
