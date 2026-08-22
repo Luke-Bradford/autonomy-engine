@@ -95,6 +95,13 @@ export function deepRedactSecrets(
  * the existing rebuild is already faithful for them — and must stay, because a
  * secret nested in one still has to be scrubbed.
  *
+ * `lookup.ts`'s `logSafe` meets the same values and answers differently on
+ * purpose — it REFUSES a value it cannot render honestly, failing the row. It
+ * can: a lookup has a failure channel and a wrong decision is worse than none.
+ * This walker has neither. It runs mid-dispatch on a node that has already
+ * succeeded, so refusing would turn a redaction into an outage; its only
+ * permitted answers are the faithful value or the sentinel.
+ *
  * A `toJSON` result is NORMALISED, never passed through: it can itself be a
  * string carrying a resolved secret, and this walker's posture is never-leak.
  * A `toJSON` that throws (adversarial adapter output, or a hostile proxy that
@@ -155,13 +162,18 @@ function walk(
   // it could carry a secret we can no longer walk to, and never overflow.
   if (depth >= MAX_REDACT_DEPTH) return '***';
   if (typeof value === 'string') return redactSecrets(value, secrets);
-  if (Array.isArray(value)) {
-    return value.map((v, i) => walk(v, secrets, depth + 1, String(i)));
-  }
   if (value !== null && typeof value === 'object') {
+    // BEFORE the array branch, because `JSON.stringify` applies `toJSON` before
+    // it looks at the type: an array (or an Array subclass) carrying one
+    // serialises as that result, and dispatching on `isArray` first would walk
+    // its elements and discard the result unwalked — a string that could carry a
+    // secret, never produced and so never scrubbed.
     const form = jsonFormOf(value, key);
     if (form.kind === 'hostile') return '***';
     if (form.kind === 'value') return walk(form.value, secrets, depth + 1, key);
+    if (Array.isArray(value)) {
+      return value.map((v, i) => walk(v, secrets, depth + 1, String(i)));
+    }
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       setDataProperty(out, k, walk(v, secrets, depth + 1, k));

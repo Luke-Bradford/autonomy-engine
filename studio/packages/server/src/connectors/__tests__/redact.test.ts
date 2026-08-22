@@ -178,6 +178,27 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
   });
 
   /**
+   * AN ARRAY CAN CARRY ONE TOO, and the walk order decides whether it is seen.
+   * `JSON.stringify` applies `toJSON` before it looks at the type at all
+   * (measured: `{"a":"from-toJSON"}`, and an Array SUBCLASS with a `toJSON`
+   * serialises as `"listy"`), so an `Array.isArray` branch placed first would
+   * silently walk the indexed elements and discard the serialised form. That is
+   * leak-shaped, not merely lossy: a secret appearing only in the `toJSON`
+   * result would never be produced, and so never scrubbed.
+   */
+  it('consults a toJSON on an ARRAY as well — the isArray branch must not shadow it', () => {
+    const listy = Object.assign([SECRET], { toJSON: () => `Bearer ${SECRET}` });
+    expect(deepRedactSecrets({ v: listy }, [SECRET])).toEqual({ v: 'Bearer ***' });
+
+    class Listy extends Array<string> {
+      toJSON(): string {
+        return `sub ${SECRET}`;
+      }
+    }
+    expect(deepRedactSecrets({ v: Listy.from([SECRET]) }, [SECRET])).toEqual({ v: 'sub ***' });
+  });
+
+  /**
    * The ACCESS is guarded, not just the call. A hostile proxy throws on every
    * property read, so `Object.entries` in the rebuild below would throw too —
    * the sentinel is what stops adapter output from crashing the walk.
