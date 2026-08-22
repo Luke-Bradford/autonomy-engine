@@ -231,6 +231,13 @@ function MappingVerdict({ reference }: { reference: DatasetReference }) {
   if (reference.status === 'unreadable') {
     return <span className="contract-advisory">unreadable — {reference.unreadable}</span>;
   }
+  // #1221 — NOT an advisory, deliberately. A `lookup` reads the dataset whole
+  // and has no column mapping, so there is nothing here that could disagree;
+  // styling it like a problem would make this page cry wolf on every correct
+  // lookup, which is the failure the fourth status was added to prevent.
+  if (reference.status === 'not_applicable') {
+    return <span>reads the whole dataset — no column mapping to check</span>;
+  }
   const agreement = reference.agreement;
   if (agreement === null) return <span>—</span>;
   return (

@@ -104,7 +104,7 @@ export function datasetReferences(
           nodeId: node.id,
           nodeType: node.type,
           end,
-          ...agreementOf(node, end, dataset),
+          ...agreementOf(node, end, dataset, activityCatalog.get(node.type)),
         });
       }
     }
@@ -229,7 +229,37 @@ type Verdict = Pick<
  * `unreadable` is therefore reserved for a mapping that is absent or is not an
  * array — the two states from which no reading can be made at all.
  */
-function agreementOf(node: Node, end: DatasetReferenceEnd, dataset: Dataset): Verdict {
+function agreementOf(
+  node: Node,
+  end: DatasetReferenceEnd,
+  dataset: Dataset,
+  entry: ActivityCatalogEntry | undefined,
+): Verdict {
+  // #1221 M12 slice 2 — an activity that declares no SINK dataset moves nothing
+  // between two ends, so it has no column mapping and no agreement to compute.
+  // `lookup` is the first, and this rung exists because without it every lookup
+  // node on this page would read as `unreadable — this node declares no column
+  // mapping`: a fault manufactured out of a correct pipeline, which is precisely
+  // what `datasetRefsOfNode`'s docblock above refuses to do by presence-gating.
+  //
+  // Decided from the CATALOG and not from the node, on `datasetRefsOfNode`'s own
+  // reasoning: a node's shape is operator input, so reading "has no `mapping`
+  // key" off it would let a `copy` whose mapping was deleted quietly downgrade
+  // from a reported fault to "nothing to check here".
+  //
+  // The rule is "declares no sink dataset ⇒ no mapping", which is exact for
+  // every entry that exists. An activity that one day declares a sink AND no
+  // mapping, or a mapping AND no sink, breaks the correlation and must make the
+  // fact explicit on the entry rather than widen this inference.
+  if (entry !== undefined && entry.datasetKinds?.sink === undefined) {
+    return {
+      status: 'not_applicable',
+      agreement: null,
+      unreadable: null,
+      unnamedRows: 0,
+      mappedRows: 0,
+    };
+  }
   const mapping = node.config.mapping;
   if (!Array.isArray(mapping)) {
     return {

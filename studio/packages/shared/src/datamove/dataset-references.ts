@@ -36,8 +36,29 @@ export type DatasetReferenceBinding = z.infer<typeof DatasetReferenceBindingSche
  * readable mapping is an unknown, and reporting an unknown as agreement would
  * manufacture an absent fact into a reassuring one — the failure #473 was filed
  * for, and the same polarity as "a `gh` failure is never CI-green".
+ *
+ * `not_applicable` (#1221, M12 slice 2) is the fourth state, and it exists
+ * because that rule cuts BOTH ways. `lookup` reads a dataset WHOLE and declares
+ * no column mapping at all, so there is no agreement to compute — and the three
+ * prior states have no room for that fact. Folding it into `unreadable` would
+ * report "this node declares no column mapping" as a FAULT on every lookup ever
+ * authored, which is the same manufacturing in the other direction: inventing a
+ * problem where there is none is as dishonest as inventing reassurance, and it
+ * would make M9's page — the surface an operator uses to answer "is this dataset
+ * still wired up correctly" — cry wolf on correct pipelines. Folding it into
+ * `agrees` would be worse still, claiming a mapping checked out when none exists.
+ *
+ * The distinction is: `unreadable` means "this node SHOULD have a readable
+ * mapping and does not", `not_applicable` means "this kind of node has no
+ * mapping to read". It is decided from the CATALOG, never from the node's own
+ * shape — see `agreementOf`.
  */
-export const DatasetReferenceStatusSchema = z.enum(['agrees', 'disagrees', 'unreadable']);
+export const DatasetReferenceStatusSchema = z.enum([
+  'agrees',
+  'disagrees',
+  'unreadable',
+  'not_applicable',
+]);
 export type DatasetReferenceStatus = z.infer<typeof DatasetReferenceStatusSchema>;
 
 export const DatasetReferenceSchema = z.object({
