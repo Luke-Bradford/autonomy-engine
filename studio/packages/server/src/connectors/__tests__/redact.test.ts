@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../redact.js';
 
+/**
+ * A proxy whose `ownKeys` trap claims one more key than `MAX_REDACT_BREADTH`
+ * allows. Built once per call and deliberately just over the line, because
+ * materialising the keys is the expensive part — see the ceiling's own note on
+ * why that cost is the whole difference between this branch and the array one.
+ */
+function hugeKeyProxy(secret: string): object {
+  const keys = Array.from({ length: 1_000_001 }, (_, i) => `k${i}`);
+  return new Proxy(
+    {},
+    {
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor: () => ({
+        value: `Bearer ${secret}`,
+        enumerable: true,
+        configurable: true,
+      }),
+      get: () => `Bearer ${secret}`,
+    },
+  );
+}
+
 describe('redactSecrets — string substring scrub', () => {
   it('replaces every occurrence of each non-empty secret with ***', () => {
     expect(redactSecrets('token=abc and again abc', ['abc'])).toBe('token=*** and again ***');
@@ -353,6 +375,37 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
     );
     const out = deepRedactSecrets({ v: hostile, ok: 1 }, [SECRET]);
     expect(out).toEqual({ v: '***', ok: 1 });
+  });
+
+  /**
+   * The breadth ceiling's object sibling. An `ownKeys` trap can fabricate a key
+   * list far larger than anything real, and the walker then pays per key. This
+   * is a LESSER hazard than the array-length lie and the difference is measured,
+   * not assumed: a fake `length` is one number, so it buys an unbounded walk for
+   * free, whereas an `ownKeys` trap must MATERIALISE every key it claims (5M of
+   * them cost ~4.5s to build). Linear rather than unbounded — but the walker
+   * still does far more work per key than the trap did, so the ceiling applies
+   * on both branches or the walker is only half-defended.
+   */
+  it('replaces an object with more own keys than the breadth ceiling with the sentinel', () => {
+    const out = deepRedactSecrets({ v: hugeKeyProxy(SECRET), ok: 1 }, [SECRET]);
+    expect(out).toEqual({ v: '***', ok: 1 });
+  });
+
+  /**
+   * Same ceiling, but `deepRedactRecord` returns a `Record`, so — exactly as for
+   * the map that cannot be enumerated at all — there is no value to stand in for
+   * the whole thing and inventing an empty one would be #473's shape. It refuses
+   * instead, with a message carrying no plaintext.
+   */
+  it('refuses an outputs map wider than the breadth ceiling, without echoing the secret', () => {
+    const rec = hugeKeyProxy(SECRET) as Record<string, unknown>;
+    expect(() => deepRedactRecord(rec, [SECRET])).toThrow(/too many keys/);
+    try {
+      deepRedactRecord(rec, [SECRET]);
+    } catch (err) {
+      expect(String(err)).not.toContain(SECRET);
+    }
   });
 
   it('guards the same getter hazard inside deepRedactRecord', () => {

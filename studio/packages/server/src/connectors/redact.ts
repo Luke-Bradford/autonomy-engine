@@ -276,6 +276,12 @@ function walk(
     }
     const keys = ownKeysOf(value);
     if (keys === null) return '***';
+    // The ceiling's object sibling. An `ownKeys` trap must MATERIALISE every key
+    // it claims, so this is a linear hazard where the array-length lie was an
+    // unbounded one — but the walker still does far more work per key than the
+    // trap did to fabricate it, so the bound applies on both branches or the
+    // walker is only half-defended.
+    if (keys.length > MAX_REDACT_BREADTH) return '***';
     const out: Record<string, unknown> = {};
     for (const k of keys) {
       const read = readOwn(value, k);
@@ -304,6 +310,10 @@ export function deepRedactRecord(
   // carries no plaintext.
   const keys = ownKeysOf(record);
   if (keys === null) throw new Error('outputs could not be enumerated for redaction');
+  // Wider than the breadth ceiling is the same situation as unenumerable, for
+  // the same reason: no value can stand in for the whole map, and a truncated
+  // one would claim the dropped keys never existed. So it refuses here too.
+  if (keys.length > MAX_REDACT_BREADTH) throw new Error('outputs had too many keys to redact');
   const out: Record<string, unknown> = {};
   // Through `walk` rather than `deepRedactSecrets` for one reason: the record's
   // own key is the key a value's `toJSON` must be handed (#1223), and the public
