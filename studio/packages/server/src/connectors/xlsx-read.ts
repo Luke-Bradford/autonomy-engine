@@ -192,6 +192,13 @@ function openZip(path: string, fd: number | undefined): Promise<ZipFile> {
 function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<string, Entry>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, Entry>();
+    // Detaching is the walk's own cleanup and belongs on EVERY path out of it,
+    // not just the one that finishes. The error listener deliberately stays —
+    // see `onEnd`.
+    const detach = (): void => {
+      zip.removeListener('entry', onEntry);
+      zip.removeListener('end', onEnd);
+    };
     const onEntry = (entry: Entry): void => {
       // The directory walk runs to completion BEFORE any `XLSX_MAX_*_BYTES`
       // applies, because those bound an entry's CONTENT and this is the pass
@@ -199,10 +206,12 @@ function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<
       // un-abortable: a container declaring millions of tiny nominal entries
       // would build the whole Map first and answer a cancellation afterwards.
       if (signal?.aborted === true) {
+        detach();
         reject(signal.reason ?? new Error('aborted'));
         return;
       }
       if (entries.size >= XLSX_MAX_ENTRIES) {
+        detach();
         reject(
           new XlsxReadError(
             `the container declares more than ${XLSX_MAX_ENTRIES} entries; refusing to index it`,
@@ -220,8 +229,7 @@ function entryIndex(zip: ZipFile, signal: AbortSignal | undefined): Promise<Map<
       // and a late zip-level error would then take the process down. A late
       // error settles nothing here (the promise is already resolved) — the
       // read path surfaces its own failures, which is finding #1's fix.
-      zip.removeListener('entry', onEntry);
-      zip.removeListener('end', onEnd);
+      detach();
       resolve(entries);
     };
     zip.on('entry', onEntry);
