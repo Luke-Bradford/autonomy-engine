@@ -251,13 +251,40 @@ export const LOOKUP_ROW_CAP = 1000;
  *
  * 1 MiB, per §5. It is a bound on ONE node's outputs, not on the run.
  *
- * WHAT IT DOES NOT BOUND, said out loud rather than left to be discovered: it
- * caps what is ADMITTED, not what is MATERIALISED. The row is normalised and
- * serialised in full before the check that rejects it, so peak memory for a
- * lookup is governed by the largest single ROW in the source. The file kinds
- * cannot reach that (`XLSX_MAX_CELL_CHARS` and `delimited`'s bounds already cap
- * a cell), but a sqlite `BLOB` or a postgres `bytea` has no ceiling. Filed as
- * #1224 — it is an availability gap rather than a correctness one, and the fix
- * probably belongs at the READER seam where the file kinds already put it.
+ * WHAT IT BOUNDS AND WHAT IT DOES NOT, said out loud rather than left to be
+ * discovered. On its own it caps what is ADMITTED, not what is MATERIALISED:
+ * the row used to be normalised and serialised in full before the check that
+ * rejects it, so peak memory for a lookup was governed by the largest single ROW
+ * in the source. The file kinds cannot reach that (`XLSX_MAX_CELL_CHARS` and
+ * `delimited`'s bounds already cap a cell), but a sqlite `BLOB` or a postgres
+ * `bytea` has no ceiling.
+ *
+ * #1224 closed that with a second, EARLIER check — `lookup-bounds.ts` reads a
+ * lower bound off the RAW row from the size fields of the only two kinds that
+ * arrive unbounded, so no copy is ever made to build a row that will be
+ * rejected. This constant is still the quantity both checks compare against.
+ *
+ * WHAT REMAINS, because a bound this file cannot state is a hazard rather than a
+ * fact: the READER materialised the row before the lookup saw it, and hands over
+ * a whole batch of them. {@link LOOKUP_BATCH_ROWS} shrinks that batch; the
+ * per-CELL residue is #1240, and it needs a bounded-cell read no driver offers
+ * today.
  */
 export const LOOKUP_BYTE_CAP = 1024 * 1024;
+
+/**
+ * How many rows a `lookup` asks its reader for at a time (#1224).
+ *
+ * {@link COPY_BATCH_ROWS} is sized for a streaming copy, which wants long pulls
+ * because every row it reads is a row it will write. A lookup is the opposite
+ * shape: it keeps at most {@link LOOKUP_ROW_CAP} rows and
+ * {@link LOOKUP_BYTE_CAP} bytes and discards the rest, so a 1000-row pull buys
+ * it nothing and costs it up to 1000 fully-materialised rows resident at once —
+ * which for the SQL kinds is the one quantity nothing else bounds.
+ *
+ * 100 is a tenth of the copy batch: still ten rows per event-loop yield short of
+ * `LOOKUP_ROW_CAP`, so a full lookup is at most ten pulls, and a tenth of the
+ * peak. Not 1, which would make a bounded read a per-row round trip against the
+ * store for no further bound — the largest single row still dominates.
+ */
+export const LOOKUP_BATCH_ROWS = 100;

@@ -661,16 +661,21 @@ export const fsAdapter: ConnectorAdapter = {
     // is deliberately not threaded in: §8 requires the reader to re-validate at
     // dispatch, and handing it a pre-parsed config would make that
     // re-validation a claim rather than a check.
-    const readOf = (dataset: ResolvedDataset, signal: AbortSignal | undefined) => ({
+    const readOf = (
+      dataset: ResolvedDataset,
+      signal: AbortSignal | undefined,
+      batchRows?: number,
+    ) => ({
       connectionConfig: ctx.connectionConfig,
       datasetKind: dataset.kind,
       datasetConfig: dataset.config,
       ...(signal === undefined ? {} : { signal }),
+      ...(batchRows === undefined ? {} : { batchRows }),
     });
     const source: SourceIo = {
       sourceCoercion: (dataset) => requireFsReader(dataset.kind).coercionFor(dataset.config),
-      readBatches: ({ dataset, signal }) =>
-        requireFsReader(dataset.kind).readBatches(readOf(dataset, signal)),
+      readBatches: ({ dataset, signal, batchRows }) =>
+        requireFsReader(dataset.kind).readBatches(readOf(dataset, signal, batchRows)),
     };
 
     if (ctx.activityType === COPY_ACTIVITY_TYPE) {

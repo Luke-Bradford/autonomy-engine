@@ -37,6 +37,19 @@ export interface SourceIo {
   readonly readBatches: (args: {
     readonly dataset: ResolvedDataset;
     readonly signal: AbortSignal | undefined;
+    /**
+     * Rows per pull, and so per event-loop yield. Optional, and every store
+     * already had the knob (`readSqliteDatasetBatches` and its four siblings all
+     * take `batchRows` and default to `COPY_BATCH_ROWS`) — #1224 threaded it
+     * through this seam so a CONSUMER can choose, because the right batch size
+     * is a property of what the reader is being read FOR.
+     *
+     * `copy` leaves it unset and takes the streaming default: every row it reads
+     * is a row it writes, so a long pull is pure throughput. `lookup` asks for
+     * {@link LOOKUP_BATCH_ROWS}, because it discards all but a bounded prefix
+     * and a batch is otherwise the one quantity nothing bounds for it.
+     */
+    readonly batchRows?: number;
   }) => AsyncIterable<readonly Record<string, unknown>[]>;
   /**
    * §6.4's per-source-dataset format facts (`nullValue`, `dateFormat`), read off

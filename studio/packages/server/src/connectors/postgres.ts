@@ -175,13 +175,18 @@ export function createPostgresAdapter(
       // one server's password to another. Never placed in `ctx` or an event.
       sinkSecret?: string | null,
     ): AsyncIterable<ActivityEvent> {
-      const read = (dataset: ResolvedDataset, signal: AbortSignal | undefined) => ({
+      const read = (
+        dataset: ResolvedDataset,
+        signal: AbortSignal | undefined,
+        batchRows?: number,
+      ) => ({
         connectionConfig: ctx.connectionConfig,
         secret,
         datasetKind: dataset.kind,
         datasetConfig: dataset.config,
         createClient,
         ...(signal === undefined ? {} : { signal }),
+        ...(batchRows === undefined ? {} : { batchRows }),
       });
       // #1221 M12 slice 2 — the READ half, built ONCE and shared by the two
       // activities that read a dataset. `copy` spreads it and adds its sink-only
@@ -193,7 +198,8 @@ export function createPostgresAdapter(
       // polarity `SourceIo.sourceCoercion` requires of every store.
       const source: SourceIo = {
         sourceCoercion: () => ({}),
-        readBatches: ({ dataset, signal }) => readPostgresDatasetBatches(read(dataset, signal)),
+        readBatches: ({ dataset, signal, batchRows }) =>
+          readPostgresDatasetBatches(read(dataset, signal, batchRows)),
       };
 
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LOOKUP_ACTIVITY_TYPE, WARNING_CODES } from '@autonomy-studio/shared';
-import { LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../../limits.js';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../../limits.js';
+import { estimateRowLowerBound } from '../lookup-bounds.js';
 import { runLookupActivity } from '../lookup.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import type { SourceIo } from '../source-io.js';
@@ -458,5 +459,152 @@ describe('the round-trip property', () => {
       ),
     );
     expect(JSON.parse(JSON.stringify(out))).toEqual(out);
+  });
+});
+
+/**
+ * #1224 — the byte cap bounds what is ADMITTED; these bound what is
+ * MATERIALISED.
+ *
+ * `LOOKUP_BYTE_CAP` is measured on the row AS SERIALISED, which meant the row
+ * was normalised (base64'ing a BLOB, itself a ~1.33x copy) and serialised in
+ * full BEFORE the check that rejects it. Peak memory for a lookup was therefore
+ * governed by the largest single ROW in the source rather than by the cap — and
+ * only the SQL kinds can reach that, because a sqlite `BLOB`/`TEXT` and a
+ * postgres `bytea`/`text` have no per-cell ceiling the file readers do.
+ *
+ * The pre-screen closes it by charging the two value kinds that are unbounded,
+ * from facts that cost nothing to read (`Uint8Array.byteLength`, a string's
+ * `.length`), before anything is copied.
+ */
+describe('lookup — the pre-screen that bounds what is MATERIALISED (#1224)', () => {
+  /**
+   * Values `logSafe` ACCEPTS, one per arm of its ladder. Refused ones are
+   * deliberately absent: the lower-bound property is a statement about rows that
+   * would be serialised, and a refused value has no serialisation to compare to.
+   */
+  const CORPUS: readonly { readonly name: string; readonly value: unknown }[] = [
+    { name: 'null', value: null },
+    { name: 'boolean', value: true },
+    { name: 'number', value: 1234.5 },
+    { name: 'negative zero', value: -0 },
+    { name: 'NaN', value: Number.NaN },
+    { name: 'negative Infinity', value: Number.NEGATIVE_INFINITY },
+    { name: 'bigint past MAX_SAFE_INTEGER', value: 9007199254740993n },
+    { name: 'ascii string', value: 'hello' },
+    { name: 'multibyte string', value: 'héllo — ✓ \u{1d518}' },
+    { name: 'string needing JSON escapes', value: 'a"b\\c\td' },
+    { name: 'lone surrogate', value: String.fromCharCode(0xd800) },
+    { name: 'Date', value: new Date('2026-08-22T10:00:00.000Z') },
+    { name: 'Uint8Array', value: new Uint8Array([1, 2, 3, 4, 5]) },
+    { name: 'empty Uint8Array', value: new Uint8Array(0) },
+    { name: 'array', value: [1, 'two', [3, 'four']] },
+    { name: 'jsonb-ish object', value: { a: 1, b: 'two', c: { d: [true, null] } } },
+    { name: 'object with a __proto__ key', value: JSON.parse('{"__proto__":"x"}') as unknown },
+  ];
+
+  it.each(CORPUS)(
+    'never over-estimates, so a valid row is never falsely truncated: $name',
+    async ({ value }) => {
+      // Cross-checked against the REAL serialisation rather than a second
+      // spelling of it: `bytes` IS `Buffer.byteLength(JSON.stringify(row))`, so
+      // this compares the estimate to the quantity it must not exceed. Admitting
+      // the row first also proves `logSafe` accepted the value.
+      const out = outputsOf(await run(lookupCtx(), sourceIo([[{ col: value }]])));
+      expect((out.rows as unknown[]).length).toBe(1);
+      expect(
+        estimateRowLowerBound({ col: value }, undefined, Number.POSITIVE_INFINITY),
+      ).toBeLessThanOrEqual(out.bytes as number);
+    },
+  );
+
+  it.each([
+    { name: 'a TEXT cell', big: (): unknown => 'x'.repeat(LOOKUP_BYTE_CAP + 1) },
+    { name: 'a BLOB cell', big: (): unknown => new Uint8Array(LOOKUP_BYTE_CAP + 1) },
+    {
+      name: 'a string nested in a jsonb document',
+      big: (): unknown => ({ deep: ['x'.repeat(LOOKUP_BYTE_CAP + 1)] }),
+    },
+  ])('rejects an over-cap row WITHOUT normalising it: $name', async ({ big }) => {
+    // The proof that the row was never normalised is a value `logSafe` REFUSES.
+    // Were the row still built before the cap check, the invalid `Date` would
+    // throw and the activity would end `failed('permanent')`. It truncates
+    // instead — the row is past the cap, and rows past the cap are not inspected.
+    const events = await run(lookupCtx(), sourceIo([[{ big: big(), when: new Date(Number.NaN) }]]));
+
+    expect(terminal(events).type).toBe('succeeded');
+    const out = outputsOf(events);
+    expect(out.rows).toEqual([]);
+    expect(out.truncated).toBe(true);
+  });
+
+  it('admits a BLOB that fits, with no cushion to spare', async () => {
+    // The boundary case, because the estimate has NO slack: 786,000 bytes
+    // base64s to exactly ceil(786000/3)*4 = 1,048,000 chars, which with its
+    // quotes and the `{"b":…}` around it is 1,048,009 — 567 bytes under the cap.
+    // An estimator charging the base64 length rather than the byte length would
+    // still admit this; one off by a single factor would falsely truncate it,
+    // which is what this pins.
+    const out = outputsOf(await run(lookupCtx(), sourceIo([[{ b: new Uint8Array(786_000) }]])));
+    expect((out.rows as unknown[]).length).toBe(1);
+    expect(out.truncated).toBe(false);
+    expect(out.bytes as number).toBeLessThanOrEqual(LOOKUP_BYTE_CAP);
+  });
+
+  it('charges the NULL SENTINEL as null, so a long sentinel is not falsely truncated', async () => {
+    // §6.4's sentinel is applied by `logSafeRow` BEFORE the value is rendered,
+    // so a column matching it serialises as `null` — 4 bytes — however long the
+    // sentinel is. An estimator that skipped the sentinel would charge the whole
+    // string and truncate a row that is, in the durable form, tiny.
+    const sentinel = 'N'.repeat(LOOKUP_BYTE_CAP + 1);
+    const io = sourceIo([[{ v: sentinel }]], { sourceCoercion: () => ({ nullValue: sentinel }) });
+
+    const out = outputsOf(await run(lookupCtx(), io));
+    expect(out.rows).toEqual([{ v: null }]);
+    expect(out.truncated).toBe(false);
+  });
+
+  it('abandons the walk as soon as the budget is passed', () => {
+    // The short-circuit is what keeps the pre-screen from being its own O(n)
+    // cost on a `jsonb` document: a million-element array must not be traversed
+    // to establish that its first few elements already exceed 1 MiB.
+    //
+    // Asserted on ELEMENTS READ rather than on the answer, which is the whole
+    // point and was this test's first mistake. `walk` returns `running`
+    // unchanged once the budget is passed, so the ANSWER is identical with the
+    // early return deleted — only the number of iterations differs, and the
+    // iterations are the cost. A proxy is the one way to observe them.
+    let reads = 0;
+    const backing = Array.from({ length: 100_000 }, () => 'x'.repeat(2_000));
+    const counted = new Proxy(backing, {
+      get(target, prop, receiver): unknown {
+        if (typeof prop === 'string' && Number.isInteger(Number(prop))) reads += 1;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const got = estimateRowLowerBound({ v: counted }, undefined, 10_000);
+    expect(got).toBeGreaterThan(10_000);
+    expect(reads).toBeLessThan(100);
+  });
+
+  it('asks the reader for a SMALL batch, so a lookup never holds COPY_BATCH_ROWS rows', async () => {
+    // The pre-screen bounds what the LOOKUP copies; it cannot bound what the
+    // reader already materialised, and the reader hands over a whole batch. A
+    // lookup keeps at most `LOOKUP_ROW_CAP` rows and 1 MiB, so a batch sized for
+    // a streaming copy buys it nothing and costs it up to `COPY_BATCH_ROWS`
+    // resident rows.
+    let seen: unknown;
+    const io = sourceIo([[]], {
+      readBatches: (args): AsyncIterable<readonly Record<string, unknown>[]> => {
+        seen = (args as { batchRows?: number }).batchRows;
+        return (async function* () {
+          // Nothing to yield: the assertion is about the REQUEST, not the rows.
+        })();
+      },
+    });
+
+    await run(lookupCtx(), io);
+    expect(seen).toBe(LOOKUP_BATCH_ROWS);
   });
 });

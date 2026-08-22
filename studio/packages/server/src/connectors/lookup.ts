@@ -1,7 +1,8 @@
 import { WARNING_CODES, type CoercionOptions } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import { LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../limits.js';
+import { LOOKUP_BATCH_ROWS, LOOKUP_BYTE_CAP, LOOKUP_ROW_CAP } from '../limits.js';
+import { MAX_VALUE_DEPTH, estimateRowLowerBound } from './lookup-bounds.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 
@@ -76,18 +77,6 @@ class LookupValueError extends Error {
     this.name = 'LookupValueError';
   }
 }
-
-/**
- * How deep a nested value may be before it is refused rather than walked.
- *
- * `redact.ts`'s `MAX_REDACT_DEPTH` is the precedent and the number is the same,
- * but the ACTION at the ceiling is deliberately the opposite. That walker
- * replaces an over-deep subtree with a sentinel because its job is never to leak
- * and never to crash; this one is establishing that a value can be persisted at
- * all, and substituting a sentinel would answer that question by inventing the
- * data. A postgres `jsonb` nested 100 deep is refused out loud instead.
- */
-const MAX_VALUE_DEPTH = 100;
 
 /** Whether `v` is a plain object — an object literal or `Object.create(null)`. */
 function isPlainObject(v: object): boolean {
@@ -168,6 +157,14 @@ function logSafe(value: unknown, column: string, rowIndex: number, depth = 0): u
     // silently is the wrong answer for a read whose whole purpose is a DECISION:
     // a decision made over a set that quietly lost its bad rows is worse than
     // one that did not run. So the activity refuses.
+    //
+    // #1224 NARROWED THAT, and the narrowing is worth naming rather than
+    // leaving to be discovered. A row the pre-screen rejects is never handed to
+    // this function, so an unreadable cell sitting in an OVER-CAP row now
+    // reports as `truncated: true` rather than by name. The argument above still
+    // holds where it applies: the set did not quietly lose that row, it lost it
+    // LOUDLY, to a bound the warning states — and every other row past the cap
+    // was already leaving unexamined by the same door.
     if ('xlsxFault' in value) {
       const fault = (value as { xlsxFault: unknown }).xlsxFault;
       return refuse(`the source cell is unreadable (${String(fault)})`);
@@ -321,7 +318,10 @@ function lookupFailure(err: unknown): ActivityEvent {
  * Run one `lookup`, streaming at most one warning and exactly one terminal event.
  *
  * THE CAP IS CHECKED BEFORE A ROW IS ADMITTED, never after, and that ordering is
- * the slice's second settled decision. Admit-then-stop would bound the payload
+ * the slice's second settled decision. It is checked TWICE (#1224): a lower
+ * bound read off the RAW row first, so nothing is copied to build a row that
+ * will be rejected, and then the exact serialised size, which is what actually
+ * governs admission. Admit-then-stop would bound the payload
  * at "the cap plus one row", and a row is bounded by nothing — a sqlite BLOB or
  * a postgres `text` column is arbitrarily large — so the bound §5 asks for would
  * not exist. Checking first costs the case where the FIRST row alone is over the
@@ -377,10 +377,35 @@ export async function* runLookupActivity(
   let cause: TruncationCause | null = null;
 
   try {
-    outer: for await (const batch of io.readBatches({ dataset: source, signal: ctx.signal })) {
+    // `batchRows` (#1224): the pre-screen bounds what THIS activity copies, and
+    // can bound nothing the reader already materialised — and a reader hands
+    // over a whole batch. `COPY_BATCH_ROWS` is sized for a streaming copy, which
+    // wants long pulls; a lookup keeps at most `LOOKUP_ROW_CAP` rows and 1 MiB
+    // and so gains nothing from them while paying up to 1000 resident rows for
+    // them. A smaller batch also yields to the event loop more often, which §9
+    // asks of a bounded read anyway.
+    outer: for await (const batch of io.readBatches({
+      dataset: source,
+      signal: ctx.signal,
+      batchRows: LOOKUP_BATCH_ROWS,
+    })) {
       for (const raw of batch) {
         if (rows.length >= LOOKUP_ROW_CAP) {
           cause = 'rows';
+          break outer;
+        }
+        // #1224 — the FIRST of the two checks, and the reason the second one is
+        // safe to make. `logSafeRow` below base64s a BLOB and `JSON.stringify`
+        // renders the whole row, so measuring only after them made peak memory a
+        // function of the largest single ROW rather than of the cap: a 500 MB
+        // sqlite BLOB was copied twice on its way to being thrown away.
+        // `estimateRowLowerBound` charges the two kinds that arrive unbounded
+        // from their own size fields, so a row that cannot fit is refused
+        // without being touched. It is a LOWER bound, so it can only ever refuse
+        // early — a row it admits is still measured exactly below.
+        const remaining = LOOKUP_BYTE_CAP - bytes;
+        if (estimateRowLowerBound(raw, coercion.nullValue, remaining) > remaining) {
+          cause = rows.length === 0 ? 'first-row' : 'bytes';
           break outer;
         }
         const row = logSafeRow(raw, rows.length, coercion.nullValue);

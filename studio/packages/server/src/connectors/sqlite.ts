@@ -213,12 +213,13 @@ function normaliseValue(value: unknown): SqliteValue {
 function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSchema>): SourceIo {
   return {
     sourceCoercion: () => ({}),
-    readBatches: ({ dataset, signal }) =>
+    readBatches: ({ dataset, signal, batchRows }) =>
       readSqliteDatasetBatches({
         connectionConfig,
         datasetKind: dataset.kind,
         datasetConfig: dataset.config,
         ...(signal === undefined ? {} : { signal }),
+        ...(batchRows === undefined ? {} : { batchRows }),
       }),
   };
 }
