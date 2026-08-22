@@ -25,6 +25,7 @@ import {
 import { listDatasets } from '../api/datasets';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import {
   datasetsOnConnection,
@@ -251,17 +252,27 @@ export function ConnectionsPage() {
    * and an import turns that boolean into the `requiresSecret` attention item
    * the panel below renders. That is the server's guarantee, not this page's.
    */
-  const onExport = useCallback(async (conn: ConnectionPublic) => {
-    setLoadError(null);
-    try {
-      downloadTextFile(
-        exportFileName('connection', conn.name, conn.id),
-        await exportConnection(conn.id),
-      );
-    } catch (err) {
-      setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
-    }
-  }, []);
+  /* #960 — per-row single-flight. The visible label deliberately does NOT
+     change to "Exporting…": these buttons carry an `aria-label` naming the row,
+     and a visible string absent from the accessible name violates WCAG 2.5.3
+     (label in name). `disabled` + `aria-busy` is the affordance. */
+  const { active: exporting, run: runExport } = useBusyAction();
+
+  const onExport = useCallback(
+    (conn: ConnectionPublic) =>
+      runExport(conn.id, async () => {
+        setLoadError(null);
+        try {
+          downloadTextFile(
+            exportFileName('connection', conn.name, conn.id),
+            await exportConnection(conn.id),
+          );
+        } catch (err) {
+          setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
 
   /**
    * #1174 — the delete confirm names the datasets it would strand.
@@ -385,6 +396,8 @@ export function ConnectionsPage() {
                     type="button"
                     onClick={() => void onExport(conn)}
                     aria-label={`Export ${conn.name}`}
+                    disabled={exporting.has(conn.id)}
+                    aria-busy={exporting.has(conn.id)}
                   >
                     Export
                   </button>
