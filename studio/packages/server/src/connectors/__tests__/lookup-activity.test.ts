@@ -164,6 +164,37 @@ describe('§5 the two caps — truncate and MARK, never fail', () => {
     expect(reason?.type === 'warned' ? reason.reason : '').toContain('NO rows were');
   });
 
+  it('TERMINATES on an unbounded source, and lets the reader clean up', async () => {
+    // Two properties in one, because the second is only observable while the
+    // first is at risk. A source that never ends is not hypothetical — it is
+    // what a large table looks like to this loop — so the row cap has to be what
+    // stops it, not the source running out.
+    //
+    // And stopping is a `break` out of a `for await`, which calls the
+    // generator's `.return()` and runs its `finally`. That is where every store
+    // reader releases its cursor and its handle (`sqlite.ts`'s reader closes the
+    // cursor then the db, in that order, and says why). If this loop ever exited
+    // by any means that skips it — a `return` from inside the iteration, a flag
+    // checked after the loop — a TRUNCATED lookup would leak a connection on a
+    // path that by definition runs whenever the cap bites.
+    let cleanedUp = false;
+    const endless: SourceIo = {
+      sourceCoercion: () => ({}),
+      async *readBatches() {
+        try {
+          for (;;) yield [{ a: 'x' }];
+        } finally {
+          cleanedUp = true;
+        }
+      },
+    };
+
+    const out = outputsOf(await run(lookupCtx(), endless));
+    expect((out.rows as unknown[]).length).toBe(LOOKUP_ROW_CAP);
+    expect(out.truncated).toBe(true);
+    expect(cleanedUp).toBe(true);
+  });
+
   it('an EMPTY source is `[]` with truncated FALSE — the pair that keeps `[]` honest', async () => {
     // The property the refuse-before-admit ordering buys, and the reason no
     // third output is needed: `[]` + false means the source is genuinely empty,
@@ -219,6 +250,35 @@ describe('value normalisation — a materialised row must survive the durable lo
     });
   });
 
+  it('ACCEPTS a class instance that carries its data as own properties (pg `interval`)', async () => {
+    // `postgres.ts` delegates every OID it does not override to
+    // `pg.types.getTypeParser`, and the `interval` parser returns a
+    // `PostgresInterval` — a class instance whose data is entirely own
+    // enumerable properties. Measured: it stringifies to
+    // `{"years":1,"months":2,…}` and round-trips as a plain object. Refusing it
+    // would have failed the whole lookup on any table with an interval column.
+    //
+    // Shaped like the real thing rather than importing `pg-types`: the property
+    // under test is "not a plain object, but carries own enumerable data", and a
+    // local class states that directly.
+    class PostgresInterval {
+      constructor(
+        readonly years: number,
+        readonly months: number,
+        readonly days: number,
+      ) {}
+    }
+    expect(await valueOf(new PostgresInterval(1, 2, 3))).toEqual({ years: 1, months: 2, days: 3 });
+  });
+
+  it('normalises NEGATIVE ZERO to 0 — JSON cannot hold it, so the two must agree', async () => {
+    // The third number JSON cannot represent, and the only one whose loss is
+    // harmless: `JSON.stringify(-0)` is `"0"`. Normalised up front so the
+    // in-memory outputs and the reloaded ones are the same value.
+    expect(Object.is(await valueOf(-0), 0)).toBe(true);
+    expect(Object.is(await valueOf(-0), -0)).toBe(false);
+  });
+
   it('keeps a key literally named `__proto__` as DATA', async () => {
     const out = (await valueOf({ ['__proto__']: 'sneaky' })) as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(out, '__proto__')).toBe(true);
@@ -263,11 +323,29 @@ describe('value normalisation — what it REFUSES, and how it reports it', () =>
     expect(end.type === 'failed' ? end.kind : null).toBe('permanent');
   });
 
-  it('refuses a class instance, which cannot round-trip as itself', async () => {
-    class Money {
-      constructor(readonly amount: number) {}
+  it('refuses a class instance that carries NO own data — a rebuild would invent `{}`', async () => {
+    // The refusal is about what the value CARRIES, not what constructed it. This
+    // one has only a getter on its prototype, so rebuilding it from own
+    // enumerable properties would produce `{}` — manufacturing an empty object
+    // out of a real value, which is #1223's failure exactly.
+    class Opaque {
+      get amount(): number {
+        return 3;
+      }
     }
-    expect(await failureOf(new Money(3))).toContain('Money');
+    expect(await failureOf(new Opaque())).toContain('Opaque');
+  });
+
+  it('refuses an object that defines its own JSON form', async () => {
+    // It would serialise as something the rebuild does not produce, so what got
+    // persisted would differ from what was checked.
+    class Custom {
+      readonly a = 1;
+      toJSON(): string {
+        return 'something else';
+      }
+    }
+    expect(await failureOf(new Custom())).toContain('own JSON form');
   });
 
   it('refuses an invalid Date rather than rendering it as something', async () => {
@@ -371,6 +449,7 @@ describe('the round-trip property', () => {
               blob: new Uint8Array([255, 0, 128]),
               doc: { a: [1, null, 'x'], b: { c: true } },
               nan: Number.NaN,
+              negZero: -0,
               nil: null,
               s: 'héllo 😀',
             },

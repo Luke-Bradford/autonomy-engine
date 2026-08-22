@@ -124,7 +124,16 @@ function logSafe(value: unknown, column: string, rowIndex: number, depth = 0): u
     // #473's shape exactly, and the one direction this file must never take. The
     // string that NAMES the value is lossless and honest, on the same reasoning
     // as `bigint` below.
-    return Number.isFinite(value) ? value : String(value);
+    if (!Number.isFinite(value)) return String(value);
+    // NEGATIVE ZERO is the third number JSON cannot hold, and the only one whose
+    // loss is harmless — `JSON.stringify(-0)` is `"0"`, so the value comes back
+    // as `0` and `Object.is` can tell. Normalised HERE rather than left to the
+    // serializer so the in-memory outputs and the reloaded ones are the same
+    // value: the fixed-point property is the contract, and a difference nothing
+    // can act on is still a difference this function promised not to leave.
+    // Unlike `NaN` there is nothing to preserve — `-0 === 0` numerically, and no
+    // consumer of a lookup row can distinguish them except by `Object.is`.
+    return Object.is(value, -0) ? 0 : value;
   }
   if (typeof value === 'bigint') {
     // Exact decimal, never `Number(value)`. `sqlite.ts:175` opens the store with
@@ -164,7 +173,42 @@ function logSafe(value: unknown, column: string, rowIndex: number, depth = 0): u
       return refuse(`the source cell is unreadable (${String(fault)})`);
     }
     if (!isPlainObject(value)) {
-      return refuse(`values of type ${value.constructor?.name ?? 'object'} cannot be persisted`);
+      const name = value.constructor?.name ?? 'object';
+      // A CLASS INSTANCE IS NOT AUTOMATICALLY A REFUSAL, and the first draft of
+      // this function got that wrong in a way that would have broken an ordinary
+      // postgres schema. `postgres.ts` overrides only the two naive date/time
+      // OIDs and delegates the rest to `pg.types.getTypeParser`, whose parser for
+      // `interval` (OID 1186) returns a `PostgresInterval` — measured:
+      //
+      //   ctor      PostgresInterval        isPlain   false
+      //   ownEnum   [["years",1],["months",2],["days",3],…]
+      //   stringify {"years":1,"months":2,"days":3,…}
+      //
+      // It is a class instance that carries ALL of its data as own enumerable
+      // properties, so it serialises perfectly and round-trips as a plain object.
+      // Refusing it would have failed the WHOLE lookup, permanently, on any table
+      // with a non-null `interval` column — which is exactly the "refusing it
+      // would refuse the product" outcome this file's header argues against.
+      //
+      // So the test is what the value CARRIES, not what it was constructed by.
+      // Two things are still refused, and both are refusals rather than guesses:
+      if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+        // An object that defines its own JSON form serialises as something the
+        // rebuild below would not produce, so persisting it would silently store
+        // a different value than the one this function checked. `Date` and
+        // `Buffer` are the two such types a reader actually yields and both are
+        // handled above, so this arm is a guard against the next one rather than
+        // a live case.
+        return refuse(`values of type ${name} define their own JSON form`);
+      }
+      if (Object.keys(value).length === 0) {
+        // No own enumerable data: the rebuild would produce `{}`, manufacturing
+        // an empty object out of a value that was not empty. That is the exact
+        // failure #1223 records in `deepRedactSecrets` (which turns a `Date` into
+        // `{}` by doing this rebuild unguarded), and an absent fact must never be
+        // manufactured into a benign-looking one.
+        return refuse(`values of type ${name} carry no data that can be persisted`);
+      }
     }
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
