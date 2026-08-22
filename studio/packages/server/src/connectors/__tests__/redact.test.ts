@@ -167,6 +167,10 @@ describe('deepRedactSecrets — values whose JSON form is not their key form (#1
       at: new Date('2023-03-04T05:06:07.000Z'),
       blob: Buffer.from([7, 8]),
       auth: `Bearer ${SECRET}`,
+      // A CHAIN, not a single `toJSON`: a fixture whose `toJSON` returns a plain
+      // object is idempotent under the rejected "apply once" design too, so it
+      // pins nothing. This one is the shape that separates them.
+      chain: { toJSON: () => ({ toJSON: () => 1 }) },
       list: [{ toJSON: () => ({ n: 1 }) }],
     };
     const once = deepRedactSecrets(value, [SECRET]);
