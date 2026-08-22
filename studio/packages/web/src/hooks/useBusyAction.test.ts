@@ -117,15 +117,42 @@ describe('useBusyAction', () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it('survives StrictMode double-mounting', async () => {
-    const { result } = renderHook(() => useBusyAction(), { wrapper: StrictMode });
-    const act1 = vi.fn().mockResolvedValue(undefined);
+  /**
+   * A LATER duplicate — after React has re-rendered — is still dropped. Distinct
+   * from the same-tick case above: re-rendering mid-flight is the normal course
+   * here, because `run` sets state and so re-renders its caller immediately
+   * after every start. Run under StrictMode because that is how the app mounts.
+   *
+   * What this does NOT prove, stated so nobody reads it as more than it is:
+   * that the `useRef` is what carries the Set across the render. It is not —
+   * `run` is a `useCallback` with empty deps, so it closes over the FIRST
+   * render's object either way, and swapping the ref for a plain object leaves
+   * every test in this file green (measured). The ref is the correct idiom and
+   * the thing lint expects, not a load-bearing choice this suite can pin.
+   */
+  it('keeps the in-flight id across a re-render, so a later duplicate is still dropped', async () => {
+    const { result, rerender } = renderHook(() => useBusyAction(), { wrapper: StrictMode });
+    const gate = deferred();
+    const act1 = vi.fn().mockReturnValue(gate.promise);
+    const act2 = vi.fn().mockResolvedValue(undefined);
 
     await act(async () => {
-      await result.current.run('a', act1);
+      void result.current.run('a', act1);
     });
-
     expect(act1).toHaveBeenCalledTimes(1);
+
+    rerender();
+    expect(result.current.active.has('a')).toBe(true);
+
+    await act(async () => {
+      void result.current.run('a', act2);
+    });
+    expect(act2).not.toHaveBeenCalled();
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
     expect(result.current.active.has('a')).toBe(false);
   });
 });

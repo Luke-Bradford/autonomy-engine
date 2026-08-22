@@ -907,6 +907,35 @@ describe('#854 review follow-ups', () => {
 });
 
 describe('#959 portability — export and import on the triggers list', () => {
+  /**
+   * #960 — the affordance, per row. The correctness half (two clicks in one
+   * tick) is proved once in `hooks/useBusyAction.test.ts`; a click-twice test
+   * here would prove nothing, because `user.click` does not dispatch on a
+   * natively disabled button.
+   */
+  it('disables the Export button for THAT trigger while its export is in flight', async () => {
+    const user = userEvent.setup();
+    const gate = deferred<string>();
+    exportMock.mockReturnValue(gate.promise);
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_9', name: 'Nightly' }),
+      trigger({ id: 'trg_10', name: 'Weekly' }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+
+    const target = await screen.findByRole('button', { name: 'Export Nightly' });
+    const other = await screen.findByRole('button', { name: 'Export Weekly' });
+
+    await user.click(target);
+
+    await waitFor(() => expect(target).toBeDisabled());
+    expect(target).toHaveAttribute('aria-busy', 'true');
+    expect(other).toBeEnabled();
+
+    gate.resolve('{"kind":"trigger"}');
+    await waitFor(() => expect(target).toBeEnabled());
+  });
+
   // #959 — the export half. The server has carried
   // `GET /api/triggers/:id/export` since P1c with no web caller.
   it('exports a trigger as the server bytes, under a name carrying its id', async () => {

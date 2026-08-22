@@ -447,6 +447,35 @@ describe('ConnectionsPage', () => {
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * #960 — the affordance, per row. The correctness half (two clicks in one
+   * tick) is proved once in `hooks/useBusyAction.test.ts`; a click-twice test
+   * here would prove nothing, because `user.click` does not dispatch on a
+   * natively disabled button.
+   */
+  it('disables the Export button for THAT connection while its export is in flight', async () => {
+    const user = userEvent.setup();
+    const gate = deferred<string>();
+    exportMock.mockReturnValue(gate.promise);
+    listMock.mockResolvedValue([
+      conn({ id: 'conn_9', name: 'My Claude' }),
+      conn({ id: 'conn_10', name: 'Other key' }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+
+    const target = await screen.findByRole('button', { name: 'Export My Claude' });
+    const other = await screen.findByRole('button', { name: 'Export Other key' });
+
+    await user.click(target);
+
+    await waitFor(() => expect(target).toBeDisabled());
+    expect(target).toHaveAttribute('aria-busy', 'true');
+    expect(other).toBeEnabled();
+
+    gate.resolve('{"kind":"connection"}');
+    await waitFor(() => expect(target).toBeEnabled());
+  });
+
   // #959 — the export half. The server has carried
   // `GET /api/connections/:id/export` since P1c with no web caller.
   it('exports a connection as the server bytes, under a name carrying its id', async () => {

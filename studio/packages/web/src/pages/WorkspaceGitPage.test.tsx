@@ -71,10 +71,12 @@ function status(overrides: Partial<WorkspaceGitStatus> = {}): WorkspaceGitStatus
 /** A mount load whose completion moment the test controls. */
 function deferredStatus() {
   let resolve!: (value: WorkspaceGitStatus | null) => void;
-  const promise = new Promise<WorkspaceGitStatus | null>((r) => {
-    resolve = r;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<WorkspaceGitStatus | null>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function drift(overrides: Partial<WorkspaceGitDrift> = {}): WorkspaceGitDrift {
@@ -224,6 +226,41 @@ describe('WorkspaceGitPage', () => {
       first.resolve(status({ repoUrl: 'https://github.com/acme/stale.git' }));
       await first.promise;
     });
+    expect(fact('Repository')).toBe('https://github.com/acme/live.git');
+  });
+
+  /**
+   * #1097 — the ERROR branch carries the same check, and is proved separately.
+   *
+   * The docblock on the effect claims the invariant holds on BOTH branches "or
+   * it is not an invariant", so proving only the success branch would leave the
+   * claim half-earned. A torn-down run whose fetch REJECTS must not raise an
+   * error banner over a page whose live load succeeded — that would report a
+   * failure the operator does not have.
+   */
+  it('drops a mount-load REJECTION from an aborted controller, under StrictMode', async () => {
+    const first = deferredStatus();
+    const second = deferredStatus();
+    getMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    render(
+      <StrictMode>
+        <WorkspaceGitPage />
+      </StrictMode>,
+    );
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve(status({ repoUrl: 'https://github.com/acme/live.git' }));
+      await second.promise;
+    });
+
+    await act(async () => {
+      first.reject(new Error('torn-down run failed'));
+      await first.promise.catch(() => undefined);
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(fact('Repository')).toBe('https://github.com/acme/live.git');
   });
 
