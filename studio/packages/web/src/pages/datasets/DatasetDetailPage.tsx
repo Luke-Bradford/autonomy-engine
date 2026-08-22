@@ -93,7 +93,12 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
     <section aria-labelledby="dataset-detail-heading">
       <div className="page-header">
         <h2 id="dataset-detail-heading">{dataset ? dataset.name : 'Dataset'}</h2>
-        <Link to="/manage/datasets">Back to datasets</Link>
+        {/* #1242 — `page-back` is the ONE treatment for a back link in a
+            `page-header`. Without it this anchor took the UA link colour, which
+            `color-scheme` resolved differently in each theme. */}
+        <Link to="/manage/datasets" className="page-back">
+          Back to datasets
+        </Link>
       </div>
 
       {loadError && (

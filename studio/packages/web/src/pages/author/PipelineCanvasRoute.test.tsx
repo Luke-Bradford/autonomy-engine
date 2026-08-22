@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { PipelineCanvasRoute } from './PipelineCanvasRoute';
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../testing/renderWithRouter';
@@ -22,13 +22,13 @@ vi.mock('../pipeline/PipelineCanvas', () => ({
     pipelineName,
     archived,
     onUnarchived,
-    onBack,
+    backTo,
   }: {
     pipelineId: string;
     pipelineName: string;
     archived: boolean;
     onUnarchived: () => void;
-    onBack: () => void;
+    backTo: string;
   }) => (
     <div>
       <span>{`canvas:${pipelineId}:${pipelineName}`}</span>
@@ -40,9 +40,11 @@ vi.mock('../pipeline/PipelineCanvas', () => ({
       <button type="button" onClick={onUnarchived}>
         Report unarchived
       </button>
-      <button type="button" onClick={onBack}>
-        Back
-      </button>
+      {/* #1242 — a `<Link>`, because that is what the real canvas now renders.
+          The route's contract changed from "run this callback" to "hand down a
+          DESTINATION", and a stub that kept a button would let the route ship a
+          `backTo` no anchor could use while this file stayed green. */}
+      <Link to={backTo}>Back</Link>
     </div>
   ),
 }));
@@ -148,10 +150,15 @@ describe('PipelineCanvasRoute', () => {
     renderRoute('/author/pipelines/gone');
 
     expect(await screen.findByRole('heading', { name: 'Pipeline not found' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Back to pipelines/i })).toHaveAttribute(
-      'href',
-      '/author/pipelines',
-    );
+    const back = screen.getByRole('link', { name: /Back to pipelines/i });
+    expect(back).toHaveAttribute('href', '/author/pipelines');
+    /* #1242 — deliberately BARE, and pinned so the decision is not re-litigated
+       by whoever next reads the ticket's "three back controls" table. This one
+       sits in a `<p>` of error prose, not a `page-header`, so `.page-back`'s
+       chip would be wrong here: it is a link in a sentence. What fixed it was
+       the global `a` rule, which needs no class — and adding one would silently
+       turn this into the fourth treatment the ticket exists to remove. */
+    expect(back).not.toHaveAttribute('class');
   });
 
   it('reports a genuine failure with its message', async () => {
@@ -164,12 +171,18 @@ describe('PipelineCanvasRoute', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('the server exploded');
   });
 
-  it('takes Back to the pipelines list', async () => {
+  it('hands the canvas a back DESTINATION, and it lands', async () => {
     const user = userEvent.setup();
     renderRoute('/author/pipelines/pl_1');
     await screen.findByText('canvas:pl_1:Nightly digest');
 
-    await user.click(screen.getByRole('button', { name: 'Back' }));
+    /* By ROLE `link`, with the `href` asserted before the click: the href is
+       the half of #1242 a button never had, and a click that lands in the right
+       place proves nothing about whether the control could be middle-clicked or
+       copied. */
+    const back = screen.getByRole('link', { name: 'Back' });
+    expect(back).toHaveAttribute('href', '/author/pipelines');
+    await user.click(back);
 
     expect(screen.getByTestId('location').textContent).toBe('/author/pipelines');
   });

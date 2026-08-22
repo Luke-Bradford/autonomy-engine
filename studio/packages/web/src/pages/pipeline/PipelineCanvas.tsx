@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
@@ -140,7 +141,11 @@ interface PipelineCanvasProps {
   archived: boolean;
   /** Called after a successful unarchive, so the route's copy stops saying archived. */
   onUnarchived: () => void;
-  onBack: () => void;
+  /* #1242 — a DESTINATION, not a callback. The control's whole job is to go
+     somewhere, so it renders as an anchor and needs an `href` a browser can
+     see; a `() => navigate(...)` prop cannot be middle-clicked, copied or
+     opened in a new tab, which is the same defect #1239 fixed on the run page. */
+  backTo: string;
 }
 
 /**
@@ -153,7 +158,7 @@ export function PipelineCanvas({
   pipelineName,
   archived,
   onUnarchived,
-  onBack,
+  backTo,
 }: PipelineCanvasProps) {
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
@@ -869,9 +874,9 @@ export function PipelineCanvas({
       <div className="page-header">
         <h2 id="canvas-heading">{pipelineName}</h2>
         <div className="form-actions">
-          <button type="button" onClick={onBack}>
+          <Link to={backTo} className="page-back">
             ← Back to pipelines
-          </button>
+          </Link>
           {/* U17 — undo/redo. Before the Save button because they act on the
               working graph that Save is about to mint, and in that order.
               `onMouseDown={preventDefault}` keeps the click from moving focus

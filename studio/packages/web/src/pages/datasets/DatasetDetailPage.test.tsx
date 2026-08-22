@@ -79,6 +79,26 @@ describe('DatasetDetailPage (#996 M9)', () => {
     expect(screen.getByText(/not null/)).toBeInTheDocument();
   });
 
+  /**
+   * #1242 — the back link's TREATMENT, not merely its presence.
+   *
+   * `page-back` is not decoration here: `index.css` styles the header chip by
+   * that class alone (a `.page-header a` descendant selector was rejected in
+   * #1239, because `.page-header` is a layout wrapper 18 pages put arbitrary
+   * content in). So the class IS the contract, and dropping it silently
+   * downgrades the control to accent-coloured prose — a change jsdom cannot
+   * see, since it computes no cascade. The resolved colours are pinned in
+   * `e2e/bug-sweep.spec.ts`; what this file owns is that the opt-in is made.
+   */
+  it('offers a back link that is an anchor, addressed, and carries the header treatment', async () => {
+    resolve();
+    renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
+
+    const back = await screen.findByRole('link', { name: 'Back to datasets' });
+    expect(back).toHaveAttribute('href', '/manage/datasets');
+    expect(back).toHaveClass('page-back');
+  });
+
   it('lists a referencing pipeline with the version and the end it binds', async () => {
     resolve({ references: [reference()] });
     renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);

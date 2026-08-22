@@ -379,8 +379,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             what an anchor is for, and this one is now hoverable, copyable,
             middle-clickable and openable in a new tab like every run link on
             the page. `.page-back` keeps the header chip the global `button`
-            rule was drawing; without it the anchor would fall back to the UA
-            link colour, since this app declares no global `a` rule. */}
+            rule was drawing; without it this would render as accent-coloured
+            prose — #1242 gave bare anchors a palette colour, so the fallback is
+            no longer the UA link blue, but it is still not a control. */}
         <Link className="page-back" to="/monitor/runs">
           ← All runs
         </Link>

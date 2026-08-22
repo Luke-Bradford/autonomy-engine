@@ -817,15 +817,39 @@ body {
   justify-content: space-between;
 }
 
+/* #1242 — the ONE colour a bare anchor takes.
+
+   Until this rule, the only anchor rules in this file were container-scoped
+   (`.hub-cards a`, `.recent-runs a`, `.command-bar__breadcrumb a`), so every
+   link OUTSIDE those containers — a row link in the pipelines, datasets, runs
+   and triggers tables, the cost-summary links, the run timeline's, the import
+   panel's, the error-state "Back to pipelines" — fell through to the UA link
+   colour. `color-scheme` then resolved that differently per theme, so the app
+   shipped a hue nothing in this palette declares, in two variants nobody chose.
+
+   `--accent`, not `--text`: a link that reads exactly like body text is a
+   regression in affordance, and the UA underline is deliberately LEFT ALONE so
+   colour is never the only signal. Measured against both themes' surfaces
+   (`--bg`, `--panel`, `--panel-2`) it clears WCAG AA for small text: 6.6-7.9:1
+   in dark, 5.4-6.4:1 in light.
+
+   Specificity is what keeps this from capturing anything: it is (0,0,1), so
+   every rule above that owns its own anchors — and `.page-back` below, at
+   (0,1,0) — still wins. An author-origin colour also displaces the UA's
+   `:visited` purple, which this palette likewise never declared. */
+a {
+  color: var(--accent);
+}
+
 /* #1239 — the ONE treatment for a back link that sits in a page header.
 
    `← All runs` was a `<button>` running `navigate()`, so it could not be
    middle-clicked, copied or opened in a new tab. Converting it to an anchor is
-   a RESTYLE as well as a semantics fix, because there is no global `a` rule in
-   this file — only container-scoped ones (`.hub-cards a`, `.recent-runs a`,
-   `.command-bar__breadcrumb a`) — so a bare anchor takes the UA link colour,
-   which `color-scheme` then resolves differently per theme. This rule is what
-   keeps the chip.
+   a RESTYLE as well as a semantics fix: an anchor is not a chip. #1242 has
+   since given every bare anchor `--accent` above, so what this rule now adds is
+   the BOX — surface, border, radius and padding — and the `--text` colour that
+   says "control", not "link in prose". Without it the header control renders as
+   accent-coloured text.
 
    The box is the global `button` rule's, property for property, so the control
    is visually unchanged where it already sat next to header buttons. The
@@ -839,8 +863,16 @@ body {
    An explicit class rather than `.page-header a`: `.page-header` is a layout
    wrapper used on 18 pages and holds whatever a page puts there, so a
    descendant selector would silently turn a future breadcrumb or docs link into
-   a chip. The two container-scoped anchor rules above are containers that exist
-   to hold exactly those anchors; this one is not.
+   a chip. #1242 gave the class its second and third users (the canvas's
+   `← Back to pipelines`, the dataset detail page's `Back to datasets`) — opting
+   in, one site at a time, is the point. The container-scoped anchor rules above
+   are containers that exist to hold exactly those anchors; this one is not.
+
+   #1245 — beside the canvas's other header controls this chip is the only one
+   in the app's own font, because nothing here resets button typography and a
+   form control does not inherit `font`. The sizes agree (0.85rem is 13.6px
+   against the UA button's ~13.33px); the families do not. Fixing that is an
+   app-wide restyle, so it has its own ticket rather than riding along here.
 
    Note an anchor activates on Enter only, where a button also took Space. That
    is correct anchor semantics — this control navigates — and the UA focus ring
