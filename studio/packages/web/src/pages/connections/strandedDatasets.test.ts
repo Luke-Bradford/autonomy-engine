@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   datasetsOnConnection,
   deleteConfirmMessage,
-  formatNameList,
   kindChangeAdvisory,
   strandedByKindChange,
-  STRAND_NAME_LIMIT,
 } from './strandedDatasets';
 
 /**
@@ -98,19 +96,6 @@ describe('strandedByKindChange', () => {
     expect(strandedByKindChange([fsDataset], 'conn-a', 'fs', 'sqlite').map((d) => d.name)).toEqual([
       'feed',
     ]);
-  });
-});
-
-describe('formatNameList', () => {
-  it('spells out a short list', () => {
-    expect(formatNameList(['a', 'b'])).toBe('a, b');
-  });
-
-  it('counts the tail past the limit rather than running on', () => {
-    const many = Array.from({ length: STRAND_NAME_LIMIT + 3 }, (_, i) => `d${i}`);
-    const out = formatNameList(many);
-    expect(out).toContain('and 3 more');
-    expect(out).not.toContain(`d${STRAND_NAME_LIMIT}`);
   });
 });
 

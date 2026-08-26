@@ -3,6 +3,7 @@ import {
   type ConnectionKind,
   type Dataset,
 } from '@autonomy-studio/shared';
+import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**
  * #1174 — which datasets an edit to a connection would STRAND, computed once
@@ -45,38 +46,11 @@ import {
 
 /**
  * What is known about the datasets bound to a connection, at the moment a
- * surface has to speak.
- *
- * THE THIRD STATE IS THE POINT. A list that was never read and a list that was
- * read and found empty are DIFFERENT facts, and collapsing them renders
- * "nothing would be stranded" on the strength of a fetch that failed —
- * prevention-log #18, the healthy verdict must be EARNED rather than be the
- * fallback, and #473's lesson in miniature (an absent fact manufactured as a
- * benign default). Every consumer below is total over these three.
+ * surface has to speak — the shared three-state shape, which #1211 moved to
+ * `dependencyCheck.ts` when the dependent-TRIGGER advisory became its second
+ * consumer. Aliased here because every sentence below is about datasets.
  */
-export type StrandCheck =
-  /** The list is in flight. Nothing can be said yet, and nothing is claimed. */
-  | { state: 'loading' }
-  /** The list could not be read. `detail` is the failure's own message. */
-  | { state: 'unavailable'; detail: string }
-  /** The list was read. An empty `names` is a real, earned "none". */
-  | { state: 'known'; names: readonly string[] };
-
-/** How many names either surface spells out before it starts counting. */
-export const STRAND_NAME_LIMIT = 5;
-
-/**
- * `a, b and 3 more` — bounded, because neither surface has room for an
- * unbounded list. `.contract-advisory` has no `max-width` and a `window.confirm`
- * is a fixed dialog, so a workspace with forty datasets on one store would push
- * the actionable half of the sentence off both.
- */
-export function formatNameList(names: readonly string[], limit = STRAND_NAME_LIMIT): string {
-  const shown = names.slice(0, limit);
-  const extra = names.length - shown.length;
-  const listed = shown.join(', ');
-  return extra > 0 ? `${listed} and ${extra} more` : listed;
-}
+export type StrandCheck = DependencyCheck;
 
 /** Every dataset naming this connection — what a DELETE strands, whatever its kind. */
 export function datasetsOnConnection(

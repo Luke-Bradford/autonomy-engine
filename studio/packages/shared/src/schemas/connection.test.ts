@@ -6,6 +6,8 @@ import {
   NewConnectionSchema,
   SECRET_REQUIRING_CONNECTION_KINDS,
   connectionKindRequiresSecret,
+  connectionNotReadyReason,
+  deriveSecretStatus,
 } from './connection.js';
 
 const validConnection = {
@@ -182,5 +184,52 @@ describe('ConnectionSchema readiness fields (G8a)', () => {
 
   it('rejects an unknown secretStatus value', () => {
     expect(() => ConnectionSchema.parse({ ...validConnection, secretStatus: 'pending' })).toThrow();
+  });
+});
+
+/**
+ * #1211 — the two readiness predicates moved here from
+ * `server/src/repo/connections.ts`, so the CLIENT can answer "would saving this
+ * kind change disable my triggers?" with the SAME function the server runs
+ * rather than a re-derivation that drifts from it.
+ *
+ * Nothing about the rules changed; these tests pin them at their new home. The
+ * server's own tests still exercise them through the re-export, so a move that
+ * altered a verdict would fail on both sides.
+ */
+describe('#1211 readiness predicates (lifted to shared)', () => {
+  it('derives secretStatus from kind first, then the ref', () => {
+    expect(deriveSecretStatus('fs', null)).toBe('not_required');
+    // A stray ref on a credential-less kind is still `not_required` — the status
+    // is about the REQUIRED credential, not any credential.
+    expect(deriveSecretStatus('fs', 'secref_x')).toBe('not_required');
+    expect(deriveSecretStatus('anthropic_api', null)).toBe('needs_secret');
+    expect(deriveSecretStatus('anthropic_api', 'secref_x')).toBe('ready');
+  });
+
+  it('reports WHY a connection is not dispatchable, and null when it is', () => {
+    const base = {
+      id: 'conn_1',
+      resourceId: 'res_1',
+      ownerId: null,
+      name: 'c',
+      kind: 'anthropic_api' as const,
+      config: {},
+      parameters: [],
+      enabled: true,
+      secretStatus: 'ready' as const,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    expect(connectionNotReadyReason(base)).toBeNull();
+    expect(connectionNotReadyReason({ ...base, enabled: false })).toBe('disabled');
+    expect(connectionNotReadyReason({ ...base, secretStatus: 'needs_secret' })).toBe(
+      'needs_secret',
+    );
+    // `enabled` is checked FIRST — a row that is both disabled and secretless
+    // reports `disabled`, which is the axis the operator can act on.
+    expect(
+      connectionNotReadyReason({ ...base, enabled: false, secretStatus: 'needs_secret' }),
+    ).toBe('disabled');
   });
 });

@@ -21,6 +21,12 @@ vi.mock('../api/connections', async (importActual) => {
     deleteConnection: vi.fn(),
     testDraftConnection: vi.fn(),
     testSavedConnection: vi.fn(),
+    // #1211 — mocked to the EMPTY response for exactly the reason the datasets
+    // mock below gives: unmocked it reaches the real `fetch` under jsdom, and
+    // every unrelated test would render "could not check" instead of the state
+    // it means to assert. An empty response is a page that MADE the check and
+    // earned its silence.
+    listConnectionDependents: vi.fn(),
   };
 });
 
@@ -68,6 +74,7 @@ const updateMock = vi.mocked(api.updateConnection);
 const deleteMock = vi.mocked(api.deleteConnection);
 const testDraftMock = vi.mocked(api.testDraftConnection);
 const testSavedMock = vi.mocked(api.testSavedConnection);
+const dependentsMock = vi.mocked(api.listConnectionDependents);
 const listDatasetsMock = vi.mocked(datasetsApi.listDatasets);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportConnection);
@@ -97,6 +104,7 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   exportMock.mockResolvedValue('{"kind":"connection"}');
   listDatasetsMock.mockResolvedValue([]);
+  dependentsMock.mockResolvedValue({ triggers: [], dynamic: [] });
 });
 
 afterEach(() => {
@@ -903,5 +911,117 @@ describe('ConnectionsPage', () => {
       // advisory in both directions.
       await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
     });
+  });
+});
+
+describe('#1211 — the enabled triggers a connection edit switches off', () => {
+  // `ollama` is credential-less ⟹ `not_required` ⟹ READY. Changing it to a
+  // secret-requiring kind with no secret is the one PATCH transition the
+  // server's reverse gate fires on.
+  const ready = conn({ id: 'conn_1', name: 'Local', kind: 'ollama', secretStatus: 'not_required' });
+
+  async function openEdit(row: ConnectionPublic = ready) {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([row]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(row.name);
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
+  }
+
+  it('names them before any save, and does not gate Save on them', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalledWith('conn_1', expect.anything()));
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'anthropic_api');
+
+    const note = await within(form).findByText(/switches off 1 enabled trigger/);
+    expect(note).toHaveTextContent('nightly');
+    // The disable is not undone by supplying the secret later — the sentence
+    // has to say so, which is why it names them rather than counting them.
+    expect(note).toHaveTextContent(/re-enable/i);
+    // ADVISORY, never a gate — the server accepts this write.
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the SAME edit supplies the secret — nothing gets disabled', async () => {
+    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'anthropic_api');
+    expect(await within(form).findByText(/switches off/)).toBeInTheDocument();
+
+    await user.type(within(form).getByLabelText('Secret'), 'sk-abc');
+    await waitFor(() => expect(within(form).queryByText(/switches off/)).not.toBeInTheDocument());
+  });
+
+  it('never renders "none" from a read that FAILED', async () => {
+    dependentsMock.mockRejectedValue(new Error('offline'));
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'anthropic_api');
+    expect(
+      await within(form).findByText(/Could not check which enabled triggers/),
+    ).toHaveTextContent('offline');
+    // A failed advisory is not a failure of the page.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('speaks about a ${}-dynamic dependency rather than reading it as silence', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [],
+      dynamic: [{ id: 't2', name: 'router', nodeIds: ['n1'] }],
+    });
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'anthropic_api');
+    expect(await within(form).findByText(/router/)).toHaveTextContent(/only a run can say/);
+  });
+
+  it('names them in the DELETE confirm, alongside the datasets it strands', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ready]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Local');
+
+    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]![0] as string;
+    expect(message).toContain('Delete connection "Local"?');
+    expect(message).toContain('1 enabled trigger (nightly)');
+    expect(deleteMock).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('a datasets outage does not erase the trigger answer, or the other way round', async () => {
+    // The two reads are independent; `allSettled` is what keeps one failure
+    // from silencing the advisory that DID succeed.
+    listDatasetsMock.mockRejectedValue(new Error('datasets down'));
+    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ready]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Local');
+
+    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]![0] as string;
+    expect(message).toContain('datasets down');
+    expect(message).toContain('1 enabled trigger (nightly)');
+    confirmSpy.mockRestore();
   });
 });

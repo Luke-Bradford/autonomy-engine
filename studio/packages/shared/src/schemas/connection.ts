@@ -92,6 +92,63 @@ export function connectionKindRequiresSecret(kind: ConnectionKind): boolean {
 export const SecretStatusSchema = z.enum(['not_required', 'ready', 'needs_secret']);
 export type SecretStatus = z.infer<typeof SecretStatusSchema>;
 
+/**
+ * #3 G8a — derive a connection's `secretStatus` (the dispatch readiness gate)
+ * from its kind + `secretRef`, the SINGLE source both write paths use so create
+ * and update can never disagree on what "ready" means. `secretStatus` answers
+ * "is this connection's REQUIRED credential present?", so the KIND axis decides
+ * first:
+ * - a credential-less kind (`connectionKindRequiresSecret` false) ⟹
+ *   `not_required` — no connection secret is needed, so readiness is settled
+ *   regardless of whether a stray `secretRef` happens to be set (that ref, if
+ *   any, is still fetched + decrypted at dispatch; `secretStatus` is about the
+ *   REQUIRED credential, not any credential).
+ * - a secret-requiring kind ⟹ `ready` iff `secretRef` is present, else
+ *   `needs_secret`. The `connections.secret_ref` FK onto `secrets.ref` is
+ *   `onDelete: 'restrict'`, so a stored non-null ref ALWAYS resolves to a real
+ *   row — no `getSecretByRef` probe needed (and `ready` means PRESENT, not
+ *   decryptable; the executor's `SECRET_UNDECRYPTABLE` check is the separate,
+ *   later guard for a rotated key / corrupt ciphertext).
+ * Pure — no DB read — so it is trivially testable and can never partially fail.
+ * Migration 0030's backfill CASE mirrors this exact ordering.
+ *
+ * #1211 — lifted from `server/src/repo/connections.ts` (which re-exports it, so
+ * every server call site is unchanged) because the Connections page must run
+ * this exact rule to say what an unsaved kind change would disable. Note the
+ * one thing a CLIENT cannot supply: `ConnectionPublicSchema` omits `secretRef`,
+ * so a caller holding only a public row can pass presence but not the ref.
+ */
+export function deriveSecretStatus(kind: ConnectionKind, secretRef: string | null): SecretStatus {
+  if (!connectionKindRequiresSecret(kind)) return 'not_required';
+  return secretRef !== null ? 'ready' : 'needs_secret';
+}
+
+/**
+ * #3 G8b — the SINGLE readiness decision for a resolved connection row, shared by
+ * the executor's DISPATCH gate (`resolveConnection`, G8a), the enable-time gate
+ * (`unreadyConnectionsForVersion` → the trigger routes) and — since #1211 — the
+ * Connections page's pre-save advisory. Returns WHY a connection is not
+ * dispatchable, or `null` when it is ready. Extracting the boolean here (rather
+ * than re-inlining `!enabled`/`secretStatus` in each caller) means the gates can
+ * never drift as later readiness axes are added — the same SSOT posture as
+ * `deriveSecretStatus`. The distinct human messages stay in each caller; only the
+ * decision is shared. The `missing`/cross-owner case is NOT part of this
+ * predicate: it is each caller's own earlier owner-scoped lookup branch (a null
+ * or foreign row never reaches here).
+ *
+ * Takes the READABLE readiness fields rather than a whole `Connection`, so a
+ * caller holding only a `ConnectionPublic` (the client) can pass its row
+ * directly and a caller holding the full row (the server) is unchanged.
+ */
+export function connectionNotReadyReason(connection: {
+  enabled: boolean;
+  secretStatus: SecretStatus;
+}): 'disabled' | 'needs_secret' | null {
+  if (!connection.enabled) return 'disabled';
+  if (connection.secretStatus === 'needs_secret') return 'needs_secret';
+  return null;
+}
+
 export const ConnectionSchema = z.object({
   id: z.string().min(1),
   /**

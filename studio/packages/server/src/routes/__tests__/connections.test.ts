@@ -604,4 +604,74 @@ describe('connections routes', () => {
       expect(getTrigger(app.db, triggerId)!.enabled).toBe(false);
     });
   });
+
+  describe('#1211 GET /api/connections/:id/dependents — the reverse-gate PREVIEW', () => {
+    it('names the enabled trigger that a kind change would then disable', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Local', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const triggerId = bindEnabledTrigger(app.db, 'local', created.id);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/connections/${created.id}/dependents`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        triggers: [{ id: triggerId, name: expect.any(String) }],
+        dynamic: [],
+      });
+
+      // And the preview was TRUE: the write it described disables exactly that.
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/connections/${created.id}`,
+        payload: { kind: 'anthropic_api' },
+      });
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(false);
+    });
+
+    it('returns an EARNED empty when nothing depends on the connection', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Lonely', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/connections/${created.id}/dependents`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ triggers: [], dynamic: [] });
+    });
+
+    it('404s an unknown connection rather than answering "nothing depends on it"', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/connections/conn_nope/dependents',
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404s another owner’s connection — the read is owner-scoped like every other', async () => {
+      const foreign = createConnection(app.db, {
+        ownerId: 'someone-else',
+        name: 'Theirs',
+        kind: 'ollama',
+        config: {},
+        secretRef: null,
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/connections/${foreign.id}/dependents`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
 });

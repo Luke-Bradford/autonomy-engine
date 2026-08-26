@@ -2,6 +2,7 @@ import {
   catalog,
   interpolationMode,
   type ActivityCatalogEntry,
+  type ConnectionDependentsResponse,
   type Node,
 } from '@autonomy-studio/shared';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
@@ -93,17 +94,37 @@ function connectionRefsOfNode(node: Node, entry: ActivityCatalogEntry | undefine
   return node.connectionId === undefined ? [] : [node.connectionId];
 }
 
-export function unreadyConnectionsForVersion(
-  db: Db,
-  ownerId: string | null,
-  versionId: string,
-  activityCatalog: CatalogOverride = catalog,
-): UnreadyConnection[] {
-  const version = getPipelineVersion(db, versionId);
-  if (version === null) return [];
+/**
+ * #1211 — every connection reference a VERSION makes, split by whether it can be
+ * resolved statically. Extracted from `unreadyConnectionsForVersion` so the
+ * readiness scan and the dependency PREVIEW (`connectionDependents`) enumerate
+ * refs through ONE walk and cannot disagree about what a version references.
+ *
+ * `literal` is deduped and in node order; `dynamic` records the NODE rather than
+ * the (unresolvable) ref, because a node is what a surface can point at — and is
+ * therefore deduped BY NODE, since a PAIRED node may have two dynamic ends and
+ * still be one node to point at. (Counting it twice would have the advisory say
+ * "2 enabled triggers (router, router)".) A vanished version yields both empty,
+ * exactly as the scan did before — a trigger bound to a deleted version must
+ * read the same to the preview as to the gate.
+ */
+interface VersionConnectionRefs {
+  literal: string[];
+  dynamic: { nodeId: string }[];
+}
 
-  const unready: UnreadyConnection[] = [];
+function connectionRefsForVersion(
+  db: Db,
+  versionId: string,
+  activityCatalog: CatalogOverride,
+): VersionConnectionRefs {
+  const version = getPipelineVersion(db, versionId);
+  if (version === null) return { literal: [], dynamic: [] };
+
+  const literal: string[] = [];
+  const dynamic: { nodeId: string }[] = [];
   const seen = new Set<string>();
+  const seenDynamicNodes = new Set<string>();
   for (const node of version.nodes) {
     // Every ref this node contributes — one, or a pair's two. The per-ref skips
     // below apply per END: a paired node may legitimately have a literal source
@@ -111,20 +132,39 @@ export function unreadyConnectionsForVersion(
     // (`getConnection` on a raw template returns null) would refuse to enable a
     // trigger that dispatches perfectly well.
     for (const connectionId of connectionRefsOfNode(node, activityCatalog.get(node.type))) {
-      if (interpolationMode(connectionId).mode !== 'literal') continue; // dynamic — dispatch's domain
-      if (seen.has(connectionId)) continue;
-      seen.add(connectionId);
-
-      const connection = getConnection(db, connectionId);
-      // Owner authorization, mirroring `resolveConnection`: a null or cross-owner
-      // (or null-owner-run vs owned-connection) hit folds into `missing`.
-      if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
-        unready.push({ connectionId, reason: 'missing' });
+      if (interpolationMode(connectionId).mode !== 'literal') {
+        // Dispatch's domain — but REPORTED rather than swallowed, see below.
+        if (!seenDynamicNodes.has(node.id)) {
+          seenDynamicNodes.add(node.id);
+          dynamic.push({ nodeId: node.id });
+        }
         continue;
       }
-      const reason = connectionNotReadyReason(connection);
-      if (reason !== null) unready.push({ connectionId, reason });
+      if (seen.has(connectionId)) continue;
+      seen.add(connectionId);
+      literal.push(connectionId);
     }
+  }
+  return { literal, dynamic };
+}
+
+export function unreadyConnectionsForVersion(
+  db: Db,
+  ownerId: string | null,
+  versionId: string,
+  activityCatalog: CatalogOverride = catalog,
+): UnreadyConnection[] {
+  const unready: UnreadyConnection[] = [];
+  for (const connectionId of connectionRefsForVersion(db, versionId, activityCatalog).literal) {
+    const connection = getConnection(db, connectionId);
+    // Owner authorization, mirroring `resolveConnection`: a null or cross-owner
+    // (or null-owner-run vs owned-connection) hit folds into `missing`.
+    if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
+      unready.push({ connectionId, reason: 'missing' });
+      continue;
+    }
+    const reason = connectionNotReadyReason(connection);
+    if (reason !== null) unready.push({ connectionId, reason });
   }
   return unready;
 }
@@ -225,4 +265,117 @@ export function regateTriggersForConnection(
     }
     return disabled;
   });
+}
+
+/**
+ * #1211 — the PREVIEW of the reverse gate above: which of THIS OWNER's enabled
+ * triggers would be switched off if `connectionId` stopped being ready, read
+ * BEFORE the write that would do it.
+ *
+ * WHY IT EXISTS. `routes/connections.ts` runs `regateTriggersForConnection` on
+ * two paths — a `kind` PATCH that leaves the connection `needs_secret`, and a
+ * DELETE (dependents fold to `missing`) — and both disable every dependent
+ * enabled trigger silently. Correct behaviour, and the operator is told nothing
+ * before or after, so an operator can change a connection's kind and stop a
+ * nightly schedule without ever seeing a word about it (#1211). This read is
+ * what lets the Connections page say it at the point the operator can still
+ * reconsider.
+ *
+ * IT REFUSES NOTHING. Like M9's `datasetReferences`, it is called from no gate;
+ * the enable gate (G8b-1), the dispatch gate (G8a) and the reverse gate (G8b-2)
+ * are untouched and remain the only refusals. Advisory is also the polarity
+ * #1145/#1158/#1174 set deliberately for this page: the server accepts these
+ * writes, and a form must not refuse what the server accepts.
+ *
+ * PARITY WITH THE WRITE IT DESCRIBES is the load-bearing property, and it is
+ * asserted rather than asserted-about: the tests run this preview, perform the
+ * transition, then run `regateTriggersForConnection` and compare id sets. It
+ * holds because the two share `connectionRefsForVersion` and apply the same
+ * enabled/bound filters — the ONLY difference is that the gate additionally
+ * tests present readiness (which is false at preview time by construction, that
+ * being the whole point) and this assumes the transition.
+ *
+ * Both transitions land on the same set: `needs_secret` makes every literal
+ * reference unready via `connectionNotReadyReason`, and a DELETE makes every one
+ * of them `missing` via the owner-scoped lookup. So one preview answers both,
+ * and the two surfaces differ only in wording.
+ *
+ * ONE PARSE PER VERSION however many triggers pin it — `getPipelineVersion`
+ * parses a whole doc, and N triggers on one version is the common shape (the
+ * same cost `candidateVersions` in `datamove/dataset-references.ts` was written
+ * to avoid).
+ *
+ * NOT `candidateVersions`, deliberately, though it also builds a
+ * triggers-by-version map: its candidate set is "latest-of-each-pipeline ∪
+ * active-published ∪ trigger-pinned" and is unfiltered by `enabled`, which
+ * answers a different question and is wrong here in both directions — it admits
+ * versions no enabled trigger is bound to, and its `listPipelines(db, ownerId)`
+ * root drops a trigger pinning a SHARED pipeline's version. This mirrors the
+ * gate's own walk instead, which is the only walk parity can be claimed against.
+ *
+ * Owner-scoped, and therefore a LOWER BOUND — see
+ * `ConnectionDependentsResponseSchema` for why that is the safe direction here
+ * and what it costs.
+ *
+ * `ownerId` is NON-NULL, unlike the `string | null` its neighbours above take,
+ * and the difference is load-bearing rather than incidental. Those functions
+ * NARROW on a null owner (a null-owner scan matches only shared connections).
+ * `listTriggers` does the opposite: its filter is applied only when `ownerId`
+ * is defined, so a `null ?? undefined` here would drop the WHERE clause and
+ * return every owner's triggers — inverting the exact scoping this function's
+ * response schema documents as a guarantee, and turning a deliberate
+ * under-report into a leak of other owners' trigger names. Non-null is what the
+ * only caller has (`Principal.ownerId` is a `string`), so the unsafe value is
+ * refused by the type rather than handled by a branch nothing exercises.
+ */
+export function connectionDependents(
+  db: Db,
+  ownerId: string,
+  connectionId: string,
+  activityCatalog: CatalogOverride = catalog,
+): ConnectionDependentsResponse {
+  const refsByVersion = new Map<string, VersionConnectionRefs>();
+  const triggers: ConnectionDependentsResponse['triggers'] = [];
+  const dynamic: ConnectionDependentsResponse['dynamic'] = [];
+
+  for (const trigger of listTriggers(db, { ownerId })) {
+    if (!trigger.enabled) continue;
+    if (trigger.pipelineVersionId === null) continue;
+
+    let refs = refsByVersion.get(trigger.pipelineVersionId);
+    if (refs === undefined) {
+      refs = connectionRefsForVersion(db, trigger.pipelineVersionId, activityCatalog);
+      refsByVersion.set(trigger.pipelineVersionId, refs);
+    }
+
+    // THE TWO BUCKETS ARE DISJOINT, and the literal one wins. A trigger whose
+    // version names this connection outright WILL be disabled — that is settled,
+    // whatever else its version does. A `${}` node elsewhere in the same version
+    // adds no uncertainty to a trigger whose fate is already known, and reporting
+    // it in both would have the advisory name one trigger twice as though they
+    // were two: "switches off 1 enabled trigger (nightly) … 1 other enabled
+    // trigger (nightly)". `dynamic` means "could not be settled", so a settled
+    // trigger is not a member of it.
+    if (refs.literal.includes(connectionId)) {
+      triggers.push({ id: trigger.id, name: trigger.name });
+      continue;
+    }
+    // Reported rather than swallowed: a `${}`-dynamic ref MAY address this
+    // connection, and a surface that inherited the gate's silent skip would
+    // render an earned-looking "nothing would be disabled" over it.
+    //
+    // ONE entry for this trigger however many of its nodes are dynamic — the
+    // advisory names TRIGGERS, so a row per node would list one trigger twice
+    // ("2 enabled triggers (router, router)"). `connectionRefsForVersion`
+    // already dedupes a single PAIRED node's two ends; this is the same rule at
+    // the level above it, and the response shape makes both structural.
+    if (refs.dynamic.length > 0) {
+      dynamic.push({
+        id: trigger.id,
+        name: trigger.name,
+        nodeIds: refs.dynamic.map((node) => node.nodeId),
+      });
+    }
+  }
+  return { triggers, dynamic };
 }

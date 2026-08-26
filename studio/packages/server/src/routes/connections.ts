@@ -21,7 +21,7 @@ import {
   updateSecretCiphertext,
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
-import { regateTriggersForConnection } from '../run/connection-readiness.js';
+import { connectionDependents, regateTriggersForConnection } from '../run/connection-readiness.js';
 import { configKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
 import { SecretDecryptionError, decrypt, encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
@@ -122,6 +122,33 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     return toPublic(row);
+  });
+
+  /**
+   * #1211 — the connection→dependent-triggers REVERSE read: which of the
+   * caller's enabled triggers the PATCH and DELETE below would DISABLE.
+   *
+   * Both of those writes run `regateTriggersForConnection` and switch off every
+   * dependent enabled trigger, and until now said nothing about it before or
+   * after — so an operator could change a connection's kind and silently stop a
+   * nightly schedule. This is what lets the Connections page say it at the point
+   * the operator can still reconsider.
+   *
+   * A READ. It gates nothing and is called from no gate — the enable gate
+   * (G8b-1), the dispatch gate (G8a) and the reverse gate (G8b-2) are unchanged
+   * and remain the only refusals. Mirrors M9's `GET /api/datasets/:id/references`
+   * in shape and in `requireOwned`-first ordering: an unknown or foreign
+   * connection 404s rather than answering "nothing depends on it", which would
+   * be the reassuring-default-on-a-failed-lookup this codebase refuses.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/connections/:id/dependents', async (request) => {
+    const connection = requireOwned(
+      getConnection(db, request.params.id),
+      request.principal,
+      'connection',
+      request.params.id,
+    );
+    return connectionDependents(db, request.principal.ownerId, connection.id);
   });
 
   fastify.patch<{ Params: { id: string } }>('/api/connections/:id', async (request) => {
