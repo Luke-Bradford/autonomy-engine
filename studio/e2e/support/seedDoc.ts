@@ -249,12 +249,17 @@ export function rectOf(page: Page, selector: string): Promise<ScreenRect> {
  * Bind a manual trigger to `pipelineVersionId` and FIRE it. Returns the run id,
  * without waiting for anything.
  *
+ * The CREATE half is `seedManualTrigger` above — split out for #1247, whose spec
+ * needs two bound triggers it fires from the UI rather than through the API. The
+ * split follows the same precedent as this function's own: one helper owns the
+ * request body, so a spec that needs only part of the sequence does not restate it.
+ *
  * Split out of `fireAndSettle` (#870) for the runs that DO NOT settle: a
  * pipeline parked on a timer or an inbound callback is a legitimate, indefinite
  * state, and the Monitor's job is to say so. A spec about a parked run cannot
  * use the settling helper — it would simply time out.
  */
-export async function fireManualTrigger(
+export async function seedManualTrigger(
   page: Page,
   pipelineVersionId: string,
   name = 'e2e manual',
@@ -273,7 +278,16 @@ export async function fireManualTrigger(
     },
   });
   expect(trigger.status(), `creating trigger: ${await trigger.text()}`).toBe(201);
-  const { id: triggerId } = (await trigger.json()) as { id: string };
+  const { id } = (await trigger.json()) as { id: string };
+  return id;
+}
+
+export async function fireManualTrigger(
+  page: Page,
+  pipelineVersionId: string,
+  name = 'e2e manual',
+): Promise<string> {
+  const triggerId = await seedManualTrigger(page, pipelineVersionId, name);
 
   const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`);
   expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
