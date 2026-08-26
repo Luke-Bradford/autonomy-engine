@@ -34,17 +34,26 @@ import { useCallback, useRef, useState } from 'react';
  *     to the handler, so the item unmounts on the first click. There is no
  *     second click to guard, and a guard there would be dead code that no test
  *     could redden.
- *   - `TriggersPage`'s `onFire`/`firingId`. This one IS the page-wide flag this
- *     hook argues against, and firing a second trigger while the first is in
- *     flight really is silently ignored. It is not a drop-in swap, though: the
- *     page reports a fire through ONE `actionMsg` slot and ONE `watchRunId`,
- *     so permitting concurrent fires would let the later outcome overwrite the
- *     earlier one — losing a run link the operator was given. Deciding what the
- *     page says about two fires at once is a design question, not a migration.
- *     Tracked as #1247.
+ *
+ * `TriggersPage`'s `onFire` WAS on that list, as the page-wide flag this hook
+ * argues against, deferred because the page reported a fire through ONE
+ * `actionMsg` slot and ONE `watchRunId` — so permitting concurrent fires would
+ * have let the later outcome overwrite the earlier one, losing a run link the
+ * operator was given. That was a design question rather than a migration, and
+ * #1247 answered it: the page now keys its outcomes per trigger, so `onFire` is
+ * MIGRATED and the entry is kept here only so the next reader does not re-derive
+ * the objection and re-defer it.
  *
  * `ConnectionsPage.onDelete` — the handler this hook was extracted FROM — is
  * migrated, and keeps its no-affordance shape: its dialog is the feedback.
+ *
+ * `NodeActivityPanel`'s `OutputsSection` copy control (#869) is the one caller
+ * that passes a CONSTANT key, and it is worth saying why that is not the
+ * page-wide flag this hook argues against. The section is mounted keyed by node
+ * identity, so an instance owns exactly one button and there is no second row a
+ * shared key could silently disable. What it guards is not two rows racing but
+ * two clicks racing to fill ONE outcome slot, where the winner would be
+ * whichever `writeText` settled last rather than whichever was asked for last.
  *
  * THE CALLER OWNS ERROR REPORTING. `run` releases the id in a `finally` and then
  * re-throws whatever `act` threw; it does not catch. Every current caller's `act`

@@ -488,6 +488,32 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     expect(within(panel).getByRole('button', { name: /^Copy all / })).not.toBeDisabled();
   });
 
+  /*
+   * The companion to the case above, and the one that matters more: a guard
+   * that leaks on the FAILURE path turns a refused copy into a permanently dead
+   * button, which is a worse outcome than the misreport the guard exists to
+   * prevent. `useBusyAction` releases in a `finally`, so the release does not
+   * depend on which branch ran — this pins that, because the release is the part
+   * a later change to the `act` shape could quietly break.
+   */
+  it('releases the guard after a refused copy, so the control is not dead', async () => {
+    const user = userEvent.setup();
+    const panel = renderPanel(bigRow(2000));
+    const write = vi
+      .spyOn(navigator.clipboard, 'writeText')
+      .mockRejectedValueOnce(new Error('denied'));
+
+    const button = () => within(panel).getByRole('button', { name: /^Copy all / });
+    await user.click(button());
+    await screen.findByText(/Could not copy/);
+    expect(button()).not.toBeDisabled();
+
+    // The retry is a real second attempt, not a click the guard swallowed.
+    await user.click(button());
+    expect(write).toHaveBeenCalledTimes(2);
+    await screen.findByText(/Copied the full value/);
+  });
+
   it('offers no copy control at all where the clipboard does not exist', () => {
     const original = navigator.clipboard;
     // A control that cannot work is worse than no control.
