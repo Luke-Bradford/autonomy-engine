@@ -2556,7 +2556,12 @@ td button + button {
 
 /* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
    break opportunity or it pushes the panel sideways — the same fix `.run-meta
-   dd` already carries — plus a cap, since an agent node's output is unbounded. */
+   dd` already carries — plus a cap, since an agent node's output is unbounded.
+
+   The height cap here and `MAX_OUTPUT_CHARS` in `NodeActivityPanel.tsx` are NOT
+   redundant, in the same pairing `.node-tool-calls` makes with `MAX_TOOL_ROWS`:
+   this stops the payload taking over the PANEL, the constant stops it entering
+   the DOCUMENT. Neither substitutes for the other. */
 .node-detail-outputs {
   display: block;
   overflow-wrap: anywhere;

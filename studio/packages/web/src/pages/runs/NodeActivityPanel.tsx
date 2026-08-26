@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
@@ -91,7 +92,6 @@ export function NodeActivityPanel({
   name: string | null;
   onClose: () => void;
 }) {
-  const outputNames = node.outputValues === undefined ? [] : Object.keys(node.outputValues);
   return (
     <aside
       id={PANEL_ID}
@@ -260,30 +260,16 @@ export function NodeActivityPanel({
           it rather than trailing after it. */}
       <ChildRuns node={node} />
 
-      {node.outputValues !== undefined && (
-        <section className="contract-section">
-          <h4>Outputs</h4>
-          {outputNames.length === 0 ? (
-            /* #911 — a statement about the RECORDING, not about the contract.
-               It used to read "This node declared no outputs.", which was safe
-               only while `node.succeeded`/`call.returned` were the sole
-               producers of an empty set: for a DECLARED contract `storeOutputs`
-               always emits the declared keys, so empty really did imply no
-               declaration. A pre-A16 `externalWait.completed` breaks that — its
-               `outputs` field is `.optional()`, folds to `{}`, and would print
-               "declared no outputs" for a webhook that declares `decision`.
-               The empty set is evidence about what was recorded and nothing
-               more, so it may only say that much. */
-            <p className="page-hint">No output values were recorded.</p>
-          ) : (
-            /* `JSON.stringify` emits no spaces, so a long value is one
-               unbreakable token; an agent node's `text` output is realistically
-               tens of KB. The class wraps and scrolls it rather than letting it
-               push the panel sideways. */
-            <code className="node-detail-outputs">{JSON.stringify(node.outputValues)}</code>
-          )}
-        </section>
-      )}
+      {/* KEYED on the node's identity, which is load-bearing rather than tidy.
+          `RunDetailPage` swaps this panel IN PLACE when a different node is
+          opened — it is not remounted (`node-drill-in.spec.ts` asserts exactly
+          that: opening a second node swaps the panel rather than stacking one).
+          So without a key, an Outputs section expanded on node A would carry
+          `expanded` into node B and put B's whole un-requested payload into the
+          DOM: the very thing the cap exists to prevent, reintroduced by the
+          control that relieves it. A foreach folds every item onto ONE
+          `nodeId`, so `instanceId` is part of the identity too. */}
+      <OutputsSection key={`${node.nodeId}#${node.instanceId ?? ''}`} node={node} />
 
       {/* The `||` is DEFENCE, not a live path: the tool loop yields its `metered`
           event before its `toolCalled` ones in the same round, so tool calls today
@@ -588,6 +574,89 @@ function CostSection({ node }: { node: NodeActivity }) {
  * person reads — but the size is the one thing about an opaque payload that is
  * actionable.
  */
+/** The element the disclosure toggle owns, named so it can be `aria-controls`. */
+const OUTPUTS_ID = 'node-detail-output-values';
+
+/**
+ * #869 — the cap on serialized output characters kept in the DOM.
+ *
+ * `index.css` bounds `.node-detail-outputs` by HEIGHT, which stops the payload
+ * taking over the panel but does nothing about the document: the whole string
+ * was still serialized and still present. An agent node's `text` output is
+ * realistically tens of KB and a `foreach` fan-in has no bound at all, so the
+ * two bounds are not redundant — exactly the pairing `MAX_TOOL_ROWS` below
+ * already makes with `.node-tool-calls`.
+ *
+ * Truncating on its own would be the WRONG fix, and that is why this is a
+ * disclosure rather than a `slice`: the panel exists so an operator can read
+ * what a node produced, and the tail is precisely what someone debugging a bad
+ * output came for. So the remainder stays out of the DOM until it is ASKED
+ * for, and the withholding is stated rather than trailed off — a payload that
+ * merely stopped would read as the whole value, which is the silent-subset lie
+ * `ToolCallSection` refuses for the same reason.
+ */
+const MAX_OUTPUT_CHARS = 4000;
+
+function OutputsSection({ node }: { node: NodeActivity }) {
+  /* Unconditional, before any branch: this is the panel's first local state and
+     the empty/absent cases below return early. */
+  const [expanded, setExpanded] = useState(false);
+  if (node.outputValues === undefined) return null;
+  const names = Object.keys(node.outputValues);
+  /* `JSON.stringify` emits no spaces, so a long value is one unbreakable token;
+     `.node-detail-outputs` wraps and scrolls it rather than letting it push the
+     panel sideways. */
+  const text = JSON.stringify(node.outputValues);
+  const truncated = text.length > MAX_OUTPUT_CHARS;
+  const shown = truncated && !expanded ? text.slice(0, MAX_OUTPUT_CHARS) : text;
+  return (
+    <section className="contract-section">
+      <h4>Outputs</h4>
+      {names.length === 0 ? (
+        /* #911 — a statement about the RECORDING, not about the contract.
+           It used to read "This node declared no outputs.", which was safe
+           only while `node.succeeded`/`call.returned` were the sole
+           producers of an empty set: for a DECLARED contract `storeOutputs`
+           always emits the declared keys, so empty really did imply no
+           declaration. A pre-A16 `externalWait.completed` breaks that — its
+           `outputs` field is `.optional()`, folds to `{}`, and would print
+           "declared no outputs" for a webhook that declares `decision`.
+           The empty set is evidence about what was recorded and nothing
+           more, so it may only say that much. */
+        <p className="page-hint">No output values were recorded.</p>
+      ) : (
+        <>
+          <code className="node-detail-outputs" id={OUTPUTS_ID}>
+            {shown}
+          </code>
+          {truncated && (
+            <>
+              <p className="page-hint">
+                {expanded
+                  ? `Showing all ${text.length} characters.`
+                  : `… showing the first ${MAX_OUTPUT_CHARS} of ${text.length} characters.`}
+              </p>
+              {/* A real button, so the reveal is reachable by keyboard and not
+                  by pointer alone. It is local VIEW state — U28 keeps this
+                  monitor read-only and a disclosure dispatches nothing. */}
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-controls={OUTPUTS_ID}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded
+                  ? `Show first ${MAX_OUTPUT_CHARS} characters`
+                  : `Show all ${text.length} characters`}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 /**
  * The cap on RENDERED rows. `index.css` also bounds the list by height, and the
  * two are not redundant: the stylesheet stops the panel growing, this stops the

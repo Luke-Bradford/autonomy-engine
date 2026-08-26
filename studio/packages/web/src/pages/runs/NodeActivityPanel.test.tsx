@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
@@ -298,5 +300,125 @@ describe('NodeActivityPanel — child runs', () => {
       row({ nodeId: 'a', status: 'skipped', attempts: 1, childRunIds: ['run_c1'] }),
     );
     expect(childSection(panel).textContent).not.toMatch(/in flight|still running|is running/);
+  });
+});
+
+/**
+ * #869 — the Outputs block is bounded in the DOM, not merely on screen.
+ *
+ * `index.css` clamped `.node-detail-outputs` to `12rem` with a scrollbar, which
+ * stops a payload taking over the panel and does nothing about the document: an
+ * agent node's `text` output is realistically tens of KB and a `foreach` fan-in
+ * has no bound at all, and every character of it was serialized and mounted.
+ *
+ * The tail is exactly what someone debugging a bad output came to read, so a
+ * bare truncation would trade one defect for a worse one. These pin the whole
+ * contract: bounded by default, the withholding STATED, and the remainder
+ * reachable — including by keyboard, and including after the panel is reused
+ * for a different node.
+ */
+describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () => {
+  const CAP = 4000;
+  /* A marker in the TAIL, past the cap. Asserting on it rather than on a length
+     alone is what makes these tests fail for the right reason: a cap that was
+     applied to the wrong end, or not at all, both move this string. */
+  const TAIL = 'THE_TAIL_MARKER';
+  /** A single output value whose serialization overshoots the cap by `over`. */
+  function bigRow(over: number) {
+    // `{"text":"…"}` — 11 characters of envelope around the padded value.
+    const pad = 'x'.repeat(CAP + over - 11 - TAIL.length);
+    return row({ nodeId: 'a', status: 'succeeded', attempts: 1, outputValues: { text: pad + TAIL } });
+  }
+  const outputsCode = (panel: HTMLElement): HTMLElement => {
+    const el = panel.querySelector('.node-detail-outputs');
+    if (el === null) throw new Error('no outputs element');
+    return el as HTMLElement;
+  };
+  const toggle = (panel: HTMLElement) => within(panel).queryByRole('button', { name: /Show (all|first)/ });
+
+  it('leaves a payload under the cap exactly as it was, with no disclosure', () => {
+    const panel = renderPanel(row({ nodeId: 'a', status: 'succeeded', attempts: 1, outputValues: { text: 'short' } }));
+    expect(outputsCode(panel).textContent).toBe('{"text":"short"}');
+    expect(toggle(panel)).toBeNull();
+    expect(panel.textContent).not.toMatch(/showing the first/);
+  });
+
+  it('keeps a payload of exactly the cap whole — the boundary is not off by one', () => {
+    const panel = renderPanel(bigRow(0));
+    expect(outputsCode(panel).textContent).toHaveLength(CAP);
+    expect(panel.textContent).toContain(TAIL);
+    expect(toggle(panel)).toBeNull();
+  });
+
+  it('holds the tail of an oversized payload OUT of the DOM, and says how much', () => {
+    const panel = renderPanel(bigRow(2000));
+    expect(outputsCode(panel).textContent).toHaveLength(CAP);
+    // Not merely short: the withheld tail is absent from the whole panel.
+    expect(panel.textContent).not.toContain(TAIL);
+    expect(panel.textContent).toMatch(new RegExp(`showing the first ${CAP} of ${CAP + 2000} characters`));
+    expect(toggle(panel)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('reveals the remainder on request, and takes it back', async () => {
+    const user = userEvent.setup();
+    const panel = renderPanel(bigRow(2000));
+    const button = toggle(panel);
+    if (button === null) throw new Error('no disclosure');
+
+    await user.click(button);
+    expect(outputsCode(panel).textContent).toHaveLength(CAP + 2000);
+    expect(panel.textContent).toContain(TAIL);
+    expect(toggle(panel)).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(toggle(panel) as HTMLElement);
+    expect(outputsCode(panel).textContent).toHaveLength(CAP);
+    expect(panel.textContent).not.toContain(TAIL);
+  });
+
+  /*
+   * The reveal is a `<button>` so that it answers the keyboard, not the pointer
+   * alone. A `div` with an onClick would pass every assertion above and be
+   * unreachable for anyone not using a mouse.
+   */
+  it('reveals by keyboard as well as by pointer', async () => {
+    const user = userEvent.setup();
+    const panel = renderPanel(bigRow(2000));
+    (toggle(panel) as HTMLElement).focus();
+    await user.keyboard('{Enter}');
+    expect(panel.textContent).toContain(TAIL);
+  });
+
+  /*
+   * `RunDetailPage` swaps this panel IN PLACE when another node is opened — it
+   * is not remounted. Without an identity key on the section, `expanded` would
+   * survive the swap and mount the NEXT node's whole un-requested payload: the
+   * cap defeated by the control that relieves it.
+   */
+  it('does not carry an expansion from one node onto the next', async () => {
+    /* A harness that SWAPS the node prop on a mounted panel, which is what
+       `RunDetailPage` does — deliberately not RTL's `rerender`, which would
+       replace the router wrapper `renderWithRouter` provides and take the
+       reconciliation being tested with it. */
+    function Swapper({ nodes }: { nodes: NodeActivity[] }) {
+      const [i, setI] = useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setI(1)}>
+            open the next node
+          </button>
+          <NodeActivityPanel node={nodes[i] as NodeActivity} name={null} onClose={vi.fn()} />
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    renderWithRouter(<Swapper nodes={[bigRow(2000), { ...bigRow(2000), nodeId: 'b' }]} />);
+
+    await user.click(screen.getByRole('button', { name: /Show all/ }));
+    expect(screen.getByRole('complementary').textContent).toContain(TAIL);
+
+    await user.click(screen.getByRole('button', { name: 'open the next node' }));
+    const panel = screen.getByRole('complementary');
+    expect(outputsCode(panel).textContent).toHaveLength(CAP);
+    expect(panel.textContent).not.toContain(TAIL);
   });
 });
