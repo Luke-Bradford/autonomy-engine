@@ -77,7 +77,14 @@ test('names the enabled trigger a kind change would switch off, and then switche
   await page.getByRole('heading', { name: 'Connections' }).waitFor();
   await fluentRootReady(page);
 
-  await page.getByRole('button', { name: `Edit ${connectionName}`, exact: true }).click();
+  // Scoped by ROW rather than by the button's accessible name: unlike Export
+  // and Delete, this page's Edit button carries no `aria-label` naming its row,
+  // and the suite shares one SQLite file so many connections are on screen.
+  // (That asymmetry is worth fixing on the page, not in this spec — filed.)
+  await page
+    .getByRole('row', { name: new RegExp(connectionName) })
+    .getByRole('button', { name: 'Edit', exact: true })
+    .click();
   await expect(form(page)).toBeVisible();
 
   // Nothing is said until the change would actually cross the readiness
