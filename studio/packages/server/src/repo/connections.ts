@@ -2,7 +2,8 @@ import { and, eq } from 'drizzle-orm';
 import {
   ConnectionSchema,
   NewConnectionSchema,
-  connectionKindRequiresSecret,
+  connectionNotReadyReason,
+  deriveSecretStatus,
   type Connection,
   type ConnectionKind,
   type NewConnection,
@@ -16,49 +17,20 @@ import type { CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
 
 /**
- * #3 G8a — derive a connection's `secretStatus` (the dispatch readiness gate)
- * from its kind + `secretRef`, the SINGLE source both write paths use so create
- * and update can never disagree on what "ready" means. `secretStatus` answers
- * "is this connection's REQUIRED credential present?", so the KIND axis decides
- * first:
- * - a credential-less kind (`connectionKindRequiresSecret` false) ⟹
- *   `not_required` — no connection secret is needed, so readiness is settled
- *   regardless of whether a stray `secretRef` happens to be set (that ref, if
- *   any, is still fetched + decrypted at dispatch; `secretStatus` is about the
- *   REQUIRED credential, not any credential).
- * - a secret-requiring kind ⟹ `ready` iff `secretRef` is present, else
- *   `needs_secret`. The `connections.secret_ref` FK onto `secrets.ref` is
- *   `onDelete: 'restrict'`, so a stored non-null ref ALWAYS resolves to a real
- *   row — no `getSecretByRef` probe needed (and `ready` means PRESENT, not
- *   decryptable; the executor's `SECRET_UNDECRYPTABLE` check is the separate,
- *   later guard for a rotated key / corrupt ciphertext).
- * Pure — no DB read — so it is trivially testable and can never partially fail.
- * Migration 0030's backfill CASE mirrors this exact ordering.
+ * #1211 — `deriveSecretStatus` and `connectionNotReadyReason` used to live HERE,
+ * and now live in `@autonomy-studio/shared` (`schemas/connection.ts`) with their
+ * full rationale. They moved because the Connections page has to answer "would
+ * saving this kind change disable my dependent triggers?" BEFORE the write, and
+ * the only honest way to answer it is to run the server's own predicate rather
+ * than re-spell its rule in the client — where the two would drift silently, the
+ * form falling quiet about a disable the server still performs.
+ *
+ * Both are pure functions of a `Connection` row and of `connectionKindRequiresSecret`,
+ * which was already shared, so the move cost nothing and changed no verdict.
+ * Re-exported here so every existing server call site keeps its import, and so
+ * this file remains the place a reader looks for the readiness rules.
  */
-export function deriveSecretStatus(kind: ConnectionKind, secretRef: string | null): SecretStatus {
-  if (!connectionKindRequiresSecret(kind)) return 'not_required';
-  return secretRef !== null ? 'ready' : 'needs_secret';
-}
-
-/**
- * #3 G8b — the SINGLE readiness decision for a resolved connection row, shared by
- * the executor's DISPATCH gate (`resolveConnection`, G8a) and the enable-time
- * gate (`unreadyConnectionsForVersion` → the trigger routes). Returns WHY a
- * connection is not dispatchable, or `null` when it is ready. Extracting the
- * boolean here (rather than re-inlining `!enabled`/`secretStatus` in each caller)
- * means the two gates can never drift as later readiness axes are added — the
- * same SSOT posture as `deriveSecretStatus`. The distinct human messages stay in
- * each caller; only the decision is shared. The `missing`/cross-owner case is NOT
- * part of this predicate: it is each caller's own earlier owner-scoped lookup
- * branch (a null/foreign row never reaches here).
- */
-export function connectionNotReadyReason(
-  connection: Connection,
-): 'disabled' | 'needs_secret' | null {
-  if (!connection.enabled) return 'disabled';
-  if (connection.secretStatus === 'needs_secret') return 'needs_secret';
-  return null;
-}
+export { connectionNotReadyReason, deriveSecretStatus };
 
 export function createConnection(
   db: Db,
