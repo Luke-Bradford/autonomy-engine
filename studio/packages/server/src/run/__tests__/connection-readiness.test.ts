@@ -8,13 +8,14 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { connections } from '../../db/schema.js';
-import { createConnection, deleteConnection } from '../../repo/connections.js';
+import { createConnection, deleteConnection, updateConnection } from '../../repo/connections.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, getTrigger, updateTrigger } from '../../repo/triggers.js';
 import type { Db } from '../../repo/types.js';
 import {
   readyVersionResourceIds,
+  connectionDependents,
   regateTriggersForConnection,
   unreadyConnectionsForVersion,
   type CatalogOverride,
@@ -440,5 +441,108 @@ describe('regateTriggersForConnection (#3 G8b-2 reverse-gate)', () => {
     const foreign = triggerOn(db, 'ownerB', versionRef(db, 'ownerB', owned));
     expect(regateTriggersForConnection(db, owned)).toEqual([foreign]);
     expect(getTrigger(db, foreign)!.enabled).toBe(false);
+  });
+});
+
+/**
+ * #1211 — the PREVIEW of the reverse gate: what a `kind` PATCH or a DELETE would
+ * switch off, read BEFORE the write, so the Connections page can say it.
+ *
+ * THE PARITY PIN is the first test and is the reason this lives beside the
+ * reverse gate rather than in its own file: a preview that diverges from the
+ * write it describes is worse than no preview, so the equivalence is asserted
+ * against `regateTriggersForConnection` itself rather than against a
+ * hand-written expectation of it.
+ */
+describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
+  it('names EXACTLY the triggers the kind-change regate then disables', () => {
+    const { db } = freshDb();
+    // Still READY at preview time — which is the whole point: the operator is
+    // told before the transition, not after it.
+    const connId = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    const other = triggerOn(db, 'local', versionRef(db, 'local', readyConnection(db)));
+
+    const preview = connectionDependents(db, 'local', connId);
+    expect(preview.triggers.map((t) => t.id)).toEqual([tId]);
+    expect(preview.dynamic).toEqual([]);
+
+    // Now perform the transition the form was warning about, and compare.
+    updateConnection(db, connId, { kind: 'anthropic_api', secretRef: null });
+    expect(regateTriggersForConnection(db, connId)).toEqual(preview.triggers.map((t) => t.id));
+    expect(getTrigger(db, other)!.enabled).toBe(true);
+  });
+
+  it('names EXACTLY the triggers the DELETE regate then disables', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+
+    const preview = connectionDependents(db, 'local', connId);
+    expect(preview.triggers.map((t) => t.id)).toEqual([tId]);
+
+    deleteConnection(db, connId);
+    expect(regateTriggersForConnection(db, connId)).toEqual(preview.triggers.map((t) => t.id));
+  });
+
+  it('carries each trigger NAME, because the advisory names them rather than counting them', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    triggerOn(db, 'local', versionRef(db, 'local', connId));
+    expect(connectionDependents(db, 'local', connId).triggers[0]!.name).toBe('T');
+  });
+
+  it('skips an ALREADY-disabled trigger — the regate never touches one either', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    updateTrigger(db, tId, { enabled: false });
+    expect(connectionDependents(db, 'local', connId).triggers).toEqual([]);
+  });
+
+  it('skips an UNBOUND (null-version) trigger', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    triggerOn(db, 'local', null);
+    expect(connectionDependents(db, 'local', connId).triggers).toEqual([]);
+  });
+
+  it('REPORTS a ${}-dynamic connection ref rather than skipping it silently', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const vId = versionWithNodes(db, 'local', [llmNode('n1', '${params.conn}')]);
+    const tId = triggerOn(db, 'local', vId);
+
+    const preview = connectionDependents(db, 'local', connId);
+    // Not a dependent — the reverse gate would not disable it (parity), ...
+    expect(preview.triggers).toEqual([]);
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+    // ... but the surface must not read this as an earned "nothing depends on it".
+    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeId: 'n1' }]);
+  });
+
+  it('is OWNER-SCOPED: a foreign trigger the regate WOULD disable is not named', () => {
+    const { db } = freshDb();
+    // The documented lower bound (`ConnectionDependentsResponseSchema`): the
+    // regate disables this foreign dependent, and the owner-scoped read cannot
+    // name it without pointing at a row invisible from every list route.
+    const owned = readyConnection(db, 'ownerA');
+    const foreign = triggerOn(db, 'ownerB', versionRef(db, 'ownerB', owned));
+
+    expect(connectionDependents(db, 'ownerA', owned).triggers).toEqual([]);
+
+    deleteConnection(db, owned);
+    expect(regateTriggersForConnection(db, owned)).toEqual([foreign]);
+  });
+
+  it('parses ONE version doc however many triggers pin it', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const vId = versionRef(db, 'local', connId);
+    const a = triggerOn(db, 'local', vId);
+    const b = triggerOn(db, 'local', vId);
+    expect(connectionDependents(db, 'local', connId).triggers.map((t) => t.id).sort()).toEqual(
+      [a, b].sort(),
+    );
   });
 });
