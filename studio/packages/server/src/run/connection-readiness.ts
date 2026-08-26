@@ -308,10 +308,21 @@ export function regateTriggersForConnection(
  * Owner-scoped, and therefore a LOWER BOUND — see
  * `ConnectionDependentsResponseSchema` for why that is the safe direction here
  * and what it costs.
+ *
+ * `ownerId` is NON-NULL, unlike the `string | null` its neighbours above take,
+ * and the difference is load-bearing rather than incidental. Those functions
+ * NARROW on a null owner (a null-owner scan matches only shared connections).
+ * `listTriggers` does the opposite: its filter is applied only when `ownerId`
+ * is defined, so a `null ?? undefined` here would drop the WHERE clause and
+ * return every owner's triggers — inverting the exact scoping this function's
+ * response schema documents as a guarantee, and turning a deliberate
+ * under-report into a leak of other owners' trigger names. Non-null is what the
+ * only caller has (`Principal.ownerId` is a `string`), so the unsafe value is
+ * refused by the type rather than handled by a branch nothing exercises.
  */
 export function connectionDependents(
   db: Db,
-  ownerId: string | null,
+  ownerId: string,
   connectionId: string,
   activityCatalog: CatalogOverride = catalog,
 ): ConnectionDependentsResponse {
@@ -319,7 +330,7 @@ export function connectionDependents(
   const triggers: ConnectionDependentsResponse['triggers'] = [];
   const dynamic: ConnectionDependentsResponse['dynamic'] = [];
 
-  for (const trigger of listTriggers(db, { ownerId: ownerId ?? undefined })) {
+  for (const trigger of listTriggers(db, { ownerId })) {
     if (!trigger.enabled) continue;
     if (trigger.pipelineVersionId === null) continue;
 

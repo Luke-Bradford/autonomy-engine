@@ -36,8 +36,15 @@ describe('kindChangeDisablesTriggers', () => {
 
   it('is FALSE when the same edit SUPPLIES the secret — the connection stays ready', () => {
     expect(kindChangeDisablesTriggers(stored(), 'anthropic_api', 'sk-abc')).toBe(false);
-    // Whitespace is not a secret.
-    expect(kindChangeDisablesTriggers(stored(), 'anthropic_api', '   ')).toBe(true);
+  });
+
+  it('treats a WHITESPACE secret as supplied, because the save path does', () => {
+    // Not tidiness — fidelity. `ConnectionsPage`'s submit sends the secret on
+    // `form.secret !== ''` with no trim, and the server's `z.string().min(1)`
+    // accepts it, so a whitespace secret is stored and the connection stays
+    // READY. Trimming here would predict a disable that never happens.
+    expect(kindChangeDisablesTriggers(stored(), 'anthropic_api', '   ')).toBe(false);
+    expect(kindChangeDisablesTriggers(stored(), 'anthropic_api', '')).toBe(true);
   });
 
   it('is FALSE when the stored connection is ALREADY unready — no transition, nothing left to disable', () => {
@@ -87,6 +94,13 @@ describe('triggerDisableAdvisory', () => {
     const said = triggerDisableAdvisory(known(['nightly'], ['maybe']));
     expect(said).toContain('nightly');
     expect(said).toContain('maybe');
+  });
+
+  it('says "other" only when a named set precedes it in the same sentence', () => {
+    // On its own the dynamic clause contrasts with nothing, so "1 other
+    // enabled trigger" would be describing a set the sentence never mentioned.
+    expect(triggerDisableAdvisory(known([], ['maybe']))).not.toContain('other');
+    expect(triggerDisableAdvisory(known(['nightly'], ['maybe']))).toContain('other');
   });
 });
 

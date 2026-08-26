@@ -84,6 +84,16 @@ export type TriggerCheck = DependencyCheck<{
  * dependents left to disable; warning there would describe a write that does
  * nothing.
  *
+ * `typedSecret` is tested with `!== ''` and deliberately NOT trimmed, because
+ * that is the exact condition the submit path uses (`ConnectionsPage.tsx` sends
+ * `form.secret !== '' ? { secret: form.secret } : {}`) and the server accepts
+ * (`ConnectionWriteBodySchema`'s `z.string().min(1)` does not trim either). A
+ * whitespace-only secret is therefore stored as a real secret and leaves the
+ * connection READY — so trimming here would predict a disable that does not
+ * happen. Mirroring the write is the point; a tidier-looking rule that the save
+ * path does not share is exactly the drift this module was moved to shared to
+ * avoid.
+ *
  * THE ONE INEXACTNESS, and it over-warns rather than under-warns.
  * `ConnectionPublicSchema` omits `secretRef`, so where the stored kind is
  * credential-less (`secretStatus: 'not_required'`) this cannot see whether a
@@ -100,7 +110,7 @@ export function kindChangeDisablesTriggers(
 ): boolean {
   if (connectionNotReadyReason(stored) !== null) return false;
   const secretRefAfterSave =
-    typedSecret.trim() !== '' || stored.secretStatus === 'ready' ? 'present' : null;
+    typedSecret !== '' || stored.secretStatus === 'ready' ? 'present' : null;
   return (
     connectionNotReadyReason({
       enabled: stored.enabled,
@@ -119,11 +129,14 @@ function triggerPhrase(names: readonly string[]): string {
  * The clause naming triggers whose dependency only dispatch can settle. Empty
  * for an empty list, so both callers can append it unconditionally.
  */
-function dynamicClause(dynamicNames: readonly string[]): string {
+function dynamicClause(dynamicNames: readonly string[], alsoNamed: boolean): string {
   if (dynamicNames.length === 0) return '';
   const verb = dynamicNames.length === 1 ? 'chooses' : 'choose';
   const noun = dynamicNames.length === 1 ? 'enabled trigger' : 'enabled triggers';
-  return ` ${dynamicNames.length} other ${noun} (${formatNameList(dynamicNames)}) ${verb} a connection at run time, so only a run can say whether this affects them.`;
+  // "other" only when a named set precedes it in the same sentence — on its own
+  // it would contrast with nothing.
+  const qualifier = alsoNamed ? 'other ' : '';
+  return ` ${dynamicNames.length} ${qualifier}${noun} (${formatNameList(dynamicNames)}) ${verb} a connection at run time, so only a run can say whether this affects them.`;
 }
 
 /**
@@ -140,9 +153,11 @@ export function triggerDisableAdvisory(check: TriggerCheck): string | null {
       return `Could not check which enabled triggers depend on this connection (${check.detail}) — saving may switch some off.`;
     case 'known': {
       if (check.names.length === 0) {
-        return check.dynamicNames.length === 0 ? null : dynamicClause(check.dynamicNames).trim();
+        return check.dynamicNames.length === 0
+          ? null
+          : dynamicClause(check.dynamicNames, false).trim();
       }
-      return `Saving this switches off ${triggerPhrase(check.names)} — supplying a secret later makes the connection ready again but does NOT re-enable them, so you would turn each back on by hand.${dynamicClause(check.dynamicNames)}`;
+      return `Saving this switches off ${triggerPhrase(check.names)} — supplying a secret later makes the connection ready again but does NOT re-enable them, so you would turn each back on by hand.${dynamicClause(check.dynamicNames, true)}`;
     }
   }
 }
@@ -160,9 +175,11 @@ export function deleteConfirmTriggerClause(check: TriggerCheck): string {
       return `Could not check which enabled triggers depend on it (${check.detail}) — any that do will be switched off.`;
     case 'known': {
       if (check.names.length === 0) {
-        return check.dynamicNames.length === 0 ? '' : dynamicClause(check.dynamicNames).trim();
+        return check.dynamicNames.length === 0
+          ? ''
+          : dynamicClause(check.dynamicNames, false).trim();
       }
-      return `Deleting it also switches off ${triggerPhrase(check.names)}, and they stay off until you re-enable each one.${dynamicClause(check.dynamicNames)}`;
+      return `Deleting it also switches off ${triggerPhrase(check.names)}, and they stay off until you re-enable each one.${dynamicClause(check.dynamicNames, true)}`;
     }
   }
 }
