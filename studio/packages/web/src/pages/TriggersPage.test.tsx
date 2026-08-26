@@ -215,7 +215,7 @@ describe('TriggersPage', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
+    await user.click(await screen.findByRole('button', { name: /Fire now: Nightly/i }));
     await waitFor(() => expect(fireMock).toHaveBeenCalledWith('trg_1'));
     expect(await screen.findByText(/started \(run run_9\)/i)).toBeInTheDocument();
   });
@@ -225,7 +225,7 @@ describe('TriggersPage', () => {
     fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'a run is already active' });
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
+    await user.click(await screen.findByRole('button', { name: /Fire now: Nightly/i }));
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
   });
 
@@ -584,16 +584,153 @@ describe('TriggersPage', () => {
     );
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithRouter(<TriggersPage />);
-    const fireBtn = await screen.findByRole('button', { name: /Fire Nightly now/i });
+    const fireBtn = await screen.findByRole('button', { name: /Fire now: Nightly/i });
     await user.click(fireBtn);
     // Button reflects the in-flight state and is disabled.
     expect(fireBtn).toBeDisabled();
-    expect(fireBtn).toHaveTextContent(/Firing/i);
+    /* #1247 — `aria-busy`, NOT a visible "Firing…". The label naming the row is
+       an `aria-label`, so a visible string absent from it would violate WCAG
+       2.5.3; the Export button in this same cell already resolves it this way. */
+    expect(fireBtn).toHaveAttribute('aria-busy', 'true');
+    expect(fireBtn).toHaveTextContent('Fire now');
+    expectAccessibleNameContainsText(fireBtn);
     await user.click(fireBtn);
     expect(fireMock).toHaveBeenCalledTimes(1);
 
     resolveFire({ outcome: 'started', runId: 'run_9' });
     await waitFor(() => expect(fireBtn).not.toBeDisabled());
+  });
+
+  /**
+   * #1247 — the defect the per-row guard exists to kill. The page-wide
+   * `if (firingId) return;` this replaced blocked EVERY row while the `disabled`
+   * beside it disabled only the clicked one, so this click landed on an enabled
+   * button and did nothing at all: no run, no error, no message.
+   */
+  it('fires a SECOND trigger while the first is still in flight', async () => {
+    const user = userEvent.setup();
+    let resolveFirst!: (v: { outcome: 'started'; runId: string }) => void;
+    fireMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_b' });
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_a', name: 'Alpha' }),
+      trigger({ id: 'trg_b', name: 'Beta' }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+
+    const alpha = await screen.findByRole('button', { name: /Fire now: Alpha/i });
+    const beta = await screen.findByRole('button', { name: /Fire now: Beta/i });
+    await user.click(alpha);
+    expect(alpha).toBeDisabled();
+    // The single-flight is per ROW: Beta is untouched by Alpha's request.
+    expect(beta).toBeEnabled();
+
+    await user.click(beta);
+    expect(fireMock).toHaveBeenCalledTimes(2);
+    expect(fireMock).toHaveBeenNthCalledWith(2, 'trg_b');
+    // Beta's fire resolved; Alpha's is still held, and still disabled.
+    await screen.findByText(/Fired "Beta": started \(run run_b\)/);
+    expect(alpha).toBeDisabled();
+
+    resolveFirst({ outcome: 'started', runId: 'run_a' });
+    await waitFor(() => expect(alpha).toBeEnabled());
+  });
+
+  /**
+   * #1247's second half. Permitting concurrent fires is only an improvement if
+   * the earlier outcome SURVIVES the later one — the single `actionMsg`/
+   * `watchRunId` pair could not hold two, and what a bare guard-swap would have
+   * discarded is a run link the operator had already been offered.
+   */
+  it('keeps every fired trigger its own outcome and its own run link', async () => {
+    const user = userEvent.setup();
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_a' });
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_b' });
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_a', name: 'Alpha' }),
+      trigger({ id: 'trg_b', name: 'Beta' }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_a' });
+    await user.click(await screen.findByRole('button', { name: /Fire now: Beta/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_b' });
+
+    // BOTH are still on screen — the first was not overwritten by the second.
+    expect(screen.getByText(/Fired "Alpha": started \(run run_a\)/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Watch live → run run_a' })).toHaveAttribute(
+      'href',
+      '/monitor/runs/run_a',
+    );
+    expect(screen.getByRole('link', { name: 'Watch live → run run_b' })).toHaveAttribute(
+      'href',
+      '/monitor/runs/run_b',
+    );
+  });
+
+  /**
+   * The bound on the list. Keyed by TRIGGER, not by click, so a session of
+   * repeated fires cannot grow the notice without limit — and the entry is
+   * replaced IN PLACE, so it does not jump position under the operator.
+   */
+  it('replaces a re-fired trigger’s outcome in place rather than appending', async () => {
+    const user = userEvent.setup();
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_a1' });
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_b1' });
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_a2' });
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_a', name: 'Alpha' }),
+      trigger({ id: 'trg_b', name: 'Beta' }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_a1' });
+    await user.click(await screen.findByRole('button', { name: /Fire now: Beta/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_b1' });
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_a2' });
+
+    // Alpha's superseded entry is GONE — two fires of one trigger leave one line.
+    expect(screen.queryByText(/run run_a1/)).not.toBeInTheDocument();
+    // Two triggers fired, two lines, and Alpha is still FIRST despite re-firing.
+    const outcomes = within(screen.getByRole('log')).getAllByText(/^Fired "/);
+    expect(outcomes.map((p) => p.textContent)).toEqual([
+      'Fired "Alpha": started (run run_a2). Watch live →',
+      'Fired "Beta": started (run run_b1). Watch live →',
+    ]);
+  });
+
+  /**
+   * A failed fire is still that trigger's outcome, and must not take another
+   * trigger's successful one down with it.
+   */
+  it('reports a failed fire against its own trigger, leaving the other intact', async () => {
+    const user = userEvent.setup();
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_a' });
+    fireMock.mockRejectedValueOnce(new Error('launcher refused'));
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_a', name: 'Alpha' }),
+      trigger({ id: 'trg_b', name: 'Beta' }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_a' });
+    await user.click(await screen.findByRole('button', { name: /Fire now: Beta/i }));
+
+    await screen.findByText(/Fire failed for "Beta": launcher refused/);
+    expect(screen.getByText(/Fired "Alpha": started \(run run_a\)/)).toBeInTheDocument();
+    // A failure has no run to watch, so it offers no link of its own.
+    expect(screen.getAllByRole('link', { name: /Watch live/ })).toHaveLength(1);
+    // The button is released, so the operator can retry.
+    expect(await screen.findByRole('button', { name: /Fire now: Beta/i })).toBeEnabled();
   });
 
   /**
@@ -616,7 +753,7 @@ describe('TriggersPage', () => {
     const router = createMemoryRouter(ROUTES, { initialEntries: ['/manage/triggers'] });
     render(<RouterProvider router={router} />);
 
-    await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
+    await user.click(await screen.findByRole('button', { name: /Fire now: Nightly/i }));
     /* The FULL accessible name, so both halves are pinned at once: the visible
        "Watch live" it must contain (WCAG 2.5.3) and the run id that says which
        run it goes to. */

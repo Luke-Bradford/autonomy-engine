@@ -574,13 +574,20 @@ export function TriggersPage() {
                       `aria-label` naming the row, so a visible string absent from that
                       accessible name violates WCAG 2.5.3 (label in name). Its sibling
                       in this same cell already resolves it this way, and two busy
-                      treatments on two buttons in one `<td>` is the defect #1242 closed. */}
+                      treatments on two buttons in one `<td>` is the defect #1242 closed.
+
+                      The label is `Fire now: <name>` and NOT `Fire <name> now`, which is
+                      what it was and which failed the same rule for a second reason: 2.5.3
+                      is a literal SUBSTRING test, and infixing the row name split the
+                      visible "Fire now" in half. Lead-then-detail is the shape `runLinkLabel`
+                      and the Export button beside it already use, and it is the only one
+                      that survives the check — hence the assertion in the spec. */}
                   <button
                     type="button"
                     onClick={() => void onFire(t)}
                     disabled={firing.has(t.id)}
                     aria-busy={firing.has(t.id)}
-                    aria-label={`Fire ${t.name} now`}
+                    aria-label={`Fire now: ${t.name}`}
                   >
                     Fire now
                   </button>
