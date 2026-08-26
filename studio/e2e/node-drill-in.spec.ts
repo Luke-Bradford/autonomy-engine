@@ -113,3 +113,126 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #869 — a node's declared outputs are bounded in the DOM, not merely clamped
+ * on screen.
+ *
+ * `.node-detail-outputs` capped the block at `12rem` with a scrollbar, which
+ * stops a payload taking over the panel and does nothing about the document:
+ * every character was still serialized and still mounted. An agent node's
+ * `text` output is realistically tens of KB.
+ *
+ * EGRESS-FREE like the test above. `filter` is the only egress-free activity
+ * that SUCCEEDS carrying a real declared output (`kind:'control'`, no
+ * connection, never dispatched — the reducer evaluates it and the driver
+ * appends `node.succeeded{outputs:{result}}`; see `rerun-from-failed.spec.ts`).
+ * Its `items` come from a param DEFAULT because `fireManualTrigger` sends no
+ * params and `resolveRunParams` applies defaults at run start.
+ *
+ * The predicate passes EVERY item through deliberately: the fixture's purpose
+ * is a large `result`, and a filtering predicate would make the rendered size
+ * depend on arithmetic rather than on the cap under test.
+ */
+const BIG_OUTPUT_DOC = {
+  params: [
+    {
+      name: 'nums',
+      type: 'json' as const,
+      required: false,
+      // ~8.9 KB serialized — comfortably past the 4,000-character cap, and
+      // stated as a range rather than a literal so the intent survives an edit.
+      default: Array.from({ length: 2000 }, (_, i) => i + 1),
+    },
+  ],
+  nodes: [
+    {
+      id: 'big',
+      type: 'filter',
+      config: { items: '${params.nums}', predicate: '${greater(item, 0)}' },
+      position: { x: 0, y: 0 },
+    },
+  ],
+};
+
+const OUTPUT_CAP = 4000;
+
+test('#869 — an oversized output is capped in the DOM, and the rest is one click away', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, '#869 big output', BIG_OUTPUT_DOC);
+  const runId = await fireAndSettle(page, pipelineVersionId);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  await page.getByRole('button', { name: 'Filter 1', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
+  await expect(panel).toBeVisible();
+
+  /* ONE evaluate for every collapsed-state assertion — a per-assertion round
+     trip is what makes a browser-driven verification expensive. */
+  const collapsed = await page.evaluate(() => {
+    const el = document.querySelector('aside.node-detail-panel');
+    const code = el?.querySelector('.node-detail-outputs');
+    const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
+      /^Show all /.test(b.textContent ?? ''),
+    );
+    return {
+      // The DOM cap, read off the live document rather than off a snapshot.
+      chars: code?.textContent?.length ?? -1,
+      // The whole panel, so a tail hidden from the <code> but leaked elsewhere
+      // would still be caught.
+      panelChars: (el as HTMLElement | null)?.innerText.length ?? -1,
+      hint: [...(el?.querySelectorAll('.page-hint') ?? [])]
+        .map((p) => p.textContent ?? '')
+        .join(' '),
+      expanded: button?.getAttribute('aria-expanded') ?? null,
+      controls: button?.getAttribute('aria-controls') ?? null,
+      controlled: code?.id ?? null,
+      // Offered WHILE COLLAPSED — selecting the block by hand at this point
+      // would copy the cut string, so the full-value copy must not be behind
+      // the reveal.
+      copy: [...(el?.querySelectorAll('button') ?? [])].some((b) =>
+        /^Copy all /.test(b.textContent ?? ''),
+      ),
+    };
+  });
+
+  expect(collapsed.chars).toBe(OUTPUT_CAP);
+  expect(collapsed.hint).toContain(`showing the first ${OUTPUT_CAP} of`);
+  expect(collapsed.expanded).toBe('false');
+  // The toggle names the region it reveals, so a screen reader is not asked to
+  // guess which block just changed.
+  expect(collapsed.controls).toBe(collapsed.controlled);
+  expect(collapsed.controlled).not.toBeNull();
+  /* Presence only, here. WHAT it puts on the clipboard is pinned by the unit
+     test, which can assert the string without asking Chromium for a
+     clipboard-read permission this suite does not otherwise need. */
+  expect(collapsed.copy).toBe(true);
+
+  await panel.getByRole('button', { name: /^Show all / }).click();
+
+  const opened = await page.evaluate(() => {
+    const el = document.querySelector('aside.node-detail-panel');
+    const code = el?.querySelector('.node-detail-outputs');
+    const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
+      /^Show first /.test(b.textContent ?? ''),
+    );
+    return {
+      chars: code?.textContent?.length ?? -1,
+      tail: (code?.textContent ?? '').slice(-6),
+      expanded: button?.getAttribute('aria-expanded') ?? null,
+    };
+  });
+
+  // The whole value, ending where the real payload ends — a fixed tail rather
+  // than "longer than the cap", which a merely-larger truncation would pass.
+  expect(opened.chars).toBeGreaterThan(OUTPUT_CAP);
+  expect(opened.tail).toBe('2000]}');
+  expect(opened.expanded).toBe('true');
+
+  await expectQuiet(page, problems);
+});
