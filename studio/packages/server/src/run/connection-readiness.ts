@@ -101,9 +101,12 @@ function connectionRefsOfNode(node: Node, entry: ActivityCatalogEntry | undefine
  * refs through ONE walk and cannot disagree about what a version references.
  *
  * `literal` is deduped and in node order; `dynamic` records the NODE rather than
- * the (unresolvable) ref, because a node is what a surface can point at. A
- * vanished version yields both empty, exactly as the scan did before — a trigger
- * bound to a deleted version must read the same to the preview as to the gate.
+ * the (unresolvable) ref, because a node is what a surface can point at — and is
+ * therefore deduped BY NODE, since a PAIRED node may have two dynamic ends and
+ * still be one node to point at. (Counting it twice would have the advisory say
+ * "2 enabled triggers (router, router)".) A vanished version yields both empty,
+ * exactly as the scan did before — a trigger bound to a deleted version must
+ * read the same to the preview as to the gate.
  */
 interface VersionConnectionRefs {
   literal: string[];
@@ -121,6 +124,7 @@ function connectionRefsForVersion(
   const literal: string[] = [];
   const dynamic: { nodeId: string }[] = [];
   const seen = new Set<string>();
+  const seenDynamicNodes = new Set<string>();
   for (const node of version.nodes) {
     // Every ref this node contributes — one, or a pair's two. The per-ref skips
     // below apply per END: a paired node may legitimately have a literal source
@@ -129,7 +133,11 @@ function connectionRefsForVersion(
     // trigger that dispatches perfectly well.
     for (const connectionId of connectionRefsOfNode(node, activityCatalog.get(node.type))) {
       if (interpolationMode(connectionId).mode !== 'literal') {
-        dynamic.push({ nodeId: node.id }); // dispatch's domain — but REPORTED, see below
+        // Dispatch's domain — but REPORTED rather than swallowed, see below.
+        if (!seenDynamicNodes.has(node.id)) {
+          seenDynamicNodes.add(node.id);
+          dynamic.push({ nodeId: node.id });
+        }
         continue;
       }
       if (seen.has(connectionId)) continue;

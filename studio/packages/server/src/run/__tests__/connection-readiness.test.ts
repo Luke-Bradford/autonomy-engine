@@ -535,6 +535,20 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
     expect(regateTriggersForConnection(db, owned)).toEqual([foreign]);
   });
 
+  it('reports a PAIRED node whose BOTH ends are dynamic ONCE, not once per end', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    // The `dynamic` bucket points at a NODE, so a node contributes at most one
+    // entry however many of its ends are expressions — otherwise the advisory
+    // would count one trigger twice and say "2 enabled triggers (router,
+    // router)".
+    const vId = versionWithNodes(db, 'local', [pairNode('n1', '${params.conn}', '${params.go}')]);
+    const tId = triggerOn(db, 'local', vId);
+
+    const preview = connectionDependents(db, 'local', connId, pairedCatalog());
+    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeId: 'n1' }]);
+  });
+
   it('parses ONE version doc however many triggers pin it', () => {
     const { db } = freshDb();
     const connId = readyConnection(db);
