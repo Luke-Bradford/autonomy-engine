@@ -49,8 +49,8 @@ export type DependentTrigger = z.infer<typeof DependentTriggerSchema>;
 export const DynamicDependentTriggerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  /** The node whose connection reference is an expression. */
-  nodeId: z.string().min(1),
+  /** Every node of this trigger's version whose connection reference is an expression. */
+  nodeIds: z.array(z.string().min(1)).min(1),
 });
 export type DynamicDependentTrigger = z.infer<typeof DynamicDependentTriggerSchema>;
 

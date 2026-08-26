@@ -518,7 +518,7 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
     expect(preview.triggers).toEqual([]);
     expect(regateTriggersForConnection(db, connId)).toEqual([]);
     // ... but the surface must not read this as an earned "nothing depends on it".
-    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeId: 'n1' }]);
+    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeIds: ['n1'] }]);
   });
 
   it('is OWNER-SCOPED: a foreign trigger the regate WOULD disable is not named', () => {
@@ -546,7 +546,24 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
     const tId = triggerOn(db, 'local', vId);
 
     const preview = connectionDependents(db, 'local', connId, pairedCatalog());
-    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeId: 'n1' }]);
+    expect(preview.dynamic).toEqual([{ id: tId, name: 'T', nodeIds: ['n1'] }]);
+  });
+
+  it('reports a trigger whose version has TWO dynamic nodes ONCE, naming both nodes', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    // The advisory names TRIGGERS, so a row per node would have it say
+    // "2 enabled triggers (T, T)" over a single trigger. The paired-ends dedupe
+    // one level down does not cover this: these are two separate nodes.
+    const vId = versionWithNodes(db, 'local', [
+      llmNode('n1', '${params.conn}'),
+      llmNode('n2', '${params.conn}'),
+    ]);
+    const tId = triggerOn(db, 'local', vId);
+
+    expect(connectionDependents(db, 'local', connId).dynamic).toEqual([
+      { id: tId, name: 'T', nodeIds: ['n1', 'n2'] },
+    ]);
   });
 
   it('parses ONE version doc however many triggers pin it', () => {

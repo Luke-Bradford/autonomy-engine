@@ -977,7 +977,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   it('speaks about a ${}-dynamic dependency rather than reading it as silence', async () => {
     dependentsMock.mockResolvedValue({
       triggers: [],
-      dynamic: [{ id: 't2', name: 'router', nodeId: 'n1' }],
+      dynamic: [{ id: 't2', name: 'router', nodeIds: ['n1'] }],
     });
     const { user, form } = await openEdit();
     await waitFor(() => expect(dependentsMock).toHaveBeenCalled());

@@ -354,8 +354,18 @@ export function connectionDependents(
     // Reported rather than swallowed: a `${}`-dynamic ref MAY address this
     // connection, and a surface that inherited the gate's silent skip would
     // render an earned-looking "nothing would be disabled" over it.
-    for (const node of refs.dynamic) {
-      dynamic.push({ id: trigger.id, name: trigger.name, nodeId: node.nodeId });
+    //
+    // ONE entry for this trigger however many of its nodes are dynamic — the
+    // advisory names TRIGGERS, so a row per node would list one trigger twice
+    // ("2 enabled triggers (router, router)"). `connectionRefsForVersion`
+    // already dedupes a single PAIRED node's two ends; this is the same rule at
+    // the level above it, and the response shape makes both structural.
+    if (refs.dynamic.length > 0) {
+      dynamic.push({
+        id: trigger.id,
+        name: trigger.name,
+        nodeIds: refs.dynamic.map((node) => node.nodeId),
+      });
     }
   }
   return { triggers, dynamic };
