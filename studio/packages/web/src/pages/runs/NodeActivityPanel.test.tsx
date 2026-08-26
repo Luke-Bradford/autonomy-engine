@@ -369,6 +369,29 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     expect(toggle(panel)).toHaveAttribute('aria-expanded', 'false');
   });
 
+  /*
+   * The cap counts UTF-16 code units, and an astral character is two of them —
+   * `JSON.stringify` emits the pair raw rather than escaping it. A cut landing
+   * between the halves would mount a lone high surrogate, and the payload would
+   * end in a replacement glyph rather than ending where it was cut.
+   */
+  it('does not cut an astral character in half at the boundary', () => {
+    // 9 chars of `{"text":"` envelope, so a value offset of 3990 puts the
+    // emoji's HIGH half at index 3999 — the last unit a nominal cut keeps.
+    const value = 'x'.repeat(CAP - 10) + '\u{1F680}' + 'y'.repeat(2000);
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { text: value } }),
+    );
+    const rendered = outputsCode(panel).textContent ?? '';
+    expect(rendered).toHaveLength(CAP - 1);
+    // The mounted string is well-formed: no unpaired surrogate anywhere in it.
+    expect(rendered).toMatch(/^[\s\S]*$/u);
+    expect(rendered.codePointAt(rendered.length - 1)).toBe('x'.codePointAt(0));
+    // The hint reports what was MOUNTED, not the nominal cap — otherwise the
+    // two numbers on screen would disagree by one for no stated reason.
+    expect(panel.textContent).toMatch(new RegExp(`showing the first ${CAP - 1} of`));
+  });
+
   it('reveals the remainder on request, and takes it back', async () => {
     const user = userEvent.setup();
     const panel = renderPanel(bigRow(2000));

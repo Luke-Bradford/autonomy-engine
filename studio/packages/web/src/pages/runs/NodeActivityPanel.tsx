@@ -574,6 +574,11 @@ function CostSection({ node }: { node: NodeActivity }) {
  * person reads — but the size is the one thing about an opaque payload that is
  * actionable.
  */
+/** A UTF-16 high surrogate — the FIRST half of an astral character's pair. */
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
 /** The element the disclosure toggle owns, named so it can be `aria-controls`. */
 const OUTPUTS_ID = 'node-detail-output-values';
 
@@ -608,7 +613,18 @@ function OutputsSection({ node }: { node: NodeActivity }) {
      panel sideways. */
   const text = JSON.stringify(node.outputValues);
   const truncated = text.length > MAX_OUTPUT_CHARS;
-  const shown = truncated && !expanded ? text.slice(0, MAX_OUTPUT_CHARS) : text;
+  /* The cap counts UTF-16 CODE UNITS, which is what `.slice` and `.length`
+     both count — but an astral character (an emoji in an agent's completion,
+     CJK Extension B) is TWO of them, and `JSON.stringify` emits the pair raw
+     rather than escaping it. A cap landing between the halves would mount a
+     lone high surrogate, so the payload would end in a replacement glyph
+     instead of ending where it was cut. Stepping back one unit is the whole
+     fix: the withheld half is shown by the toggle like everything else after
+     the cut, and the hint below reports the number actually mounted rather
+     than the nominal cap, so the two never disagree. */
+  const cutsPair = truncated && isHighSurrogate(text.charCodeAt(MAX_OUTPUT_CHARS - 1));
+  const cut = cutsPair ? MAX_OUTPUT_CHARS - 1 : MAX_OUTPUT_CHARS;
+  const shown = truncated && !expanded ? text.slice(0, cut) : text;
   return (
     <section className="contract-section">
       <h4>Outputs</h4>
@@ -634,7 +650,7 @@ function OutputsSection({ node }: { node: NodeActivity }) {
               <p className="page-hint">
                 {expanded
                   ? `Showing all ${text.length} characters.`
-                  : `… showing the first ${MAX_OUTPUT_CHARS} of ${text.length} characters.`}
+                  : `… showing the first ${cut} of ${text.length} characters.`}
               </p>
               {/* A real button, so the reveal is reachable by keyboard and not
                   by pointer alone. It is local VIEW state — U28 keeps this
@@ -645,9 +661,7 @@ function OutputsSection({ node }: { node: NodeActivity }) {
                 aria-controls={OUTPUTS_ID}
                 onClick={() => setExpanded(!expanded)}
               >
-                {expanded
-                  ? `Show first ${MAX_OUTPUT_CHARS} characters`
-                  : `Show all ${text.length} characters`}
+                {expanded ? `Show first ${cut} characters` : `Show all ${text.length} characters`}
               </button>
             </>
           )}
