@@ -8,6 +8,7 @@ import {
   formatZodIssues,
   type ConnectionKind,
   type ConnectionProbeResult,
+  type ConnectionDependentsResponse,
   type ConnectionPublic,
   type Dataset,
 } from '@autonomy-studio/shared';
@@ -16,6 +17,7 @@ import {
   ConnectionWriteSchema,
   createConnection,
   deleteConnection,
+  listConnectionDependents,
   listConnections,
   testDraftConnection,
   testSavedConnection,
@@ -34,6 +36,12 @@ import {
   strandedByKindChange,
   type StrandCheck,
 } from './connections/strandedDatasets';
+import {
+  deleteConfirmTriggerClause,
+  kindChangeDisablesTriggers,
+  triggerDisableAdvisory,
+  type TriggerCheck,
+} from './connections/dependentTriggers';
 import { ImportPanel } from './ImportPanel';
 import {
   assembleConfig,
@@ -146,6 +154,16 @@ export function ConnectionsPage() {
    */
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
   const [datasetsUnavailable, setDatasetsUnavailable] = useState<string | null>(null);
+  /**
+   * #1211 — the enabled TRIGGERS a kind change or a delete would switch off,
+   * and whether that question could be answered at all. Same three states and
+   * the same reason as the datasets pair above, kept as a separate pair rather
+   * than folded in with them: the two are read from different routes and either
+   * can fail alone, and a shared "unavailable" would silence the advisory that
+   * did succeed.
+   */
+  const [dependents, setDependents] = useState<ConnectionDependentsResponse | null>(null);
+  const [dependentsUnavailable, setDependentsUnavailable] = useState<string | null>(null);
   const openForm = useCallback((next: FormState) => {
     setForm(next);
     setFormSeq((seq) => seq + 1);
@@ -168,6 +186,12 @@ export function ConnectionsPage() {
    * exists exactly so that failure stays local.
    */
   const datasetsLoad = useGuardedLoad();
+  /**
+   * A THIRD instance, for the same "one instance per state target" reason: this
+   * load and the datasets load write different state, so sharing a runner would
+   * make each discard the other's answer. #1211.
+   */
+  const dependentsLoad = useGuardedLoad();
 
   // The ONE load path: the mount effect below and every post-mutation refetch
   // (delete / save / import) go through it. That is what ORDERS them — #1062:
@@ -231,14 +255,41 @@ export function ConnectionsPage() {
     [datasetsLoad],
   );
 
+  /**
+   * #1211 — read the triggers this connection's version-bound dependents would
+   * lose, on EDIT-FORM OPEN for exactly the staleness reason `refreshDatasets`
+   * documents above: bound to the gesture, so the reading is at most as old as
+   * the form. Not on mount, and not for the New-connection form (nothing can
+   * depend on a row that does not exist yet).
+   */
+  const refreshDependents = useCallback(
+    (connectionId: string) =>
+      dependentsLoad((signal) => listConnectionDependents(connectionId, signal), {
+        onData: (result) => {
+          setDependents(result);
+          setDependentsUnavailable(null);
+        },
+        // Local to the advisory, exactly like the datasets read — a diagnostic
+        // that could not be computed must not present as a failure of the page.
+        onError: (err) => {
+          setDependents(null);
+          setDependentsUnavailable(messageOf(err));
+        },
+      }),
+    [dependentsLoad],
+  );
+
   const openEditForm = useCallback(
     (conn: ConnectionPublic) => {
       setDatasets(null);
       setDatasetsUnavailable(null);
+      setDependents(null);
+      setDependentsUnavailable(null);
       openForm(formForEdit(conn));
       void refreshDatasets();
+      void refreshDependents(conn.id);
     },
-    [openForm, refreshDatasets],
+    [openForm, refreshDatasets, refreshDependents],
   );
 
   /**
@@ -321,16 +372,44 @@ export function ConnectionsPage() {
   const onDelete = useCallback(
     (conn: ConnectionPublic) =>
       runDelete(conn.id, async () => {
-        let check: StrandCheck;
-        try {
-          check = {
-            state: 'known',
-            names: datasetsOnConnection(await listDatasets(), conn.id).map((d) => d.name),
-          };
-        } catch (err) {
-          check = { state: 'unavailable', detail: messageOf(err) };
-        }
-        if (!window.confirm(deleteConfirmMessage(conn.name, check))) return;
+        /**
+         * #1211 — TWO reads now, CONCURRENTLY and independently failable. The
+         * datasets list and the dependent triggers come from different routes,
+         * and `allSettled` is what keeps a failure of one from erasing the
+         * other's answer: each folds into its OWN three-state check, so a
+         * datasets outage still lets the dialog name the triggers it is about
+         * to switch off. Sequential awaits would also have doubled the dead
+         * time in front of a dialog that already waits for a round trip.
+         *
+         * The delete path fetches fresh rather than reading the form-open
+         * state above, for the reason #1174 gives: Delete is reachable from the
+         * row without any form ever having been opened.
+         */
+        const [datasetsResult, dependentsResult] = await Promise.allSettled([
+          listDatasets(),
+          listConnectionDependents(conn.id),
+        ]);
+        const check: StrandCheck =
+          datasetsResult.status === 'fulfilled'
+            ? {
+                state: 'known',
+                names: datasetsOnConnection(datasetsResult.value, conn.id).map((d) => d.name),
+              }
+            : { state: 'unavailable', detail: messageOf(datasetsResult.reason) };
+        const triggerCheck: TriggerCheck =
+          dependentsResult.status === 'fulfilled'
+            ? {
+                state: 'known',
+                names: dependentsResult.value.triggers.map((t) => t.name),
+                dynamicNames: dependentsResult.value.dynamic.map((t) => t.name),
+              }
+            : { state: 'unavailable', detail: messageOf(dependentsResult.reason) };
+
+        const clause = deleteConfirmTriggerClause(triggerCheck);
+        const message = clause === ''
+          ? deleteConfirmMessage(conn.name, check)
+          : `${deleteConfirmMessage(conn.name, check)}\n\n${clause}`;
+        if (!window.confirm(message)) return;
         try {
           await deleteConnection(conn.id);
           await refresh();
@@ -429,15 +508,23 @@ export function ConnectionsPage() {
              would render against a form nothing has tested. */
           key={formSeq}
           form={form}
-          /* #1174 — the three inputs the strand note needs. `storedKind` is
-             read from the LIST rather than snapshotted at form-open, so a
-             refreshed list moves it; `undefined` means the row is gone from
-             under the open form, which the save's own 404 reports and the note
-             deliberately stays silent about (there is no stored kind left for
-             an edit to have changed FROM). */
-          storedKind={connections?.find((conn) => conn.id === form.id)?.kind}
+          /* #1174 — the inputs the strand note needs, read from the LIST rather
+             than snapshotted at form-open, so a refreshed list moves them;
+             `undefined` means the row is gone from under the open form, which
+             the save's own 404 reports and the note deliberately stays silent
+             about (there is no stored kind left for an edit to have changed
+             FROM).
+
+             #1211 widened this from `storedKind` to the whole row: the trigger
+             note's readiness predicate runs the SERVER's own
+             `connectionNotReadyReason`, which reads `enabled` and
+             `secretStatus` as well as the kind. One prop rather than three,
+             with the same "from the list" semantics. */
+          stored={connections?.find((conn) => conn.id === form.id)}
           datasets={datasets}
           datasetsUnavailable={datasetsUnavailable}
+          dependents={dependents}
+          dependentsUnavailable={dependentsUnavailable}
           onChange={setForm}
           onClose={() => setForm(null)}
           onSaved={async () => {
@@ -459,17 +546,21 @@ export function ConnectionsPage() {
 
 function ConnectionForm({
   form,
-  storedKind,
+  stored,
   datasets,
   datasetsUnavailable,
+  dependents,
+  dependentsUnavailable,
   onChange,
   onClose,
   onSaved,
 }: {
   form: FormState;
-  storedKind: ConnectionKind | undefined;
+  stored: ConnectionPublic | undefined;
   datasets: Dataset[] | null;
   datasetsUnavailable: string | null;
+  dependents: ConnectionDependentsResponse | null;
+  dependentsUnavailable: string | null;
   onChange: (next: FormState) => void;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
@@ -574,7 +665,7 @@ function ConnectionForm({
    * whole of a rename or a config edit.
    */
   const strandAdvisory = useMemo(() => {
-    if (form.id === null || storedKind === undefined || storedKind === form.kind) return null;
+    if (form.id === null || stored === undefined || stored.kind === form.kind) return null;
     const check: StrandCheck =
       datasetsUnavailable !== null
         ? { state: 'unavailable', detail: datasetsUnavailable }
@@ -582,12 +673,41 @@ function ConnectionForm({
           ? { state: 'loading' }
           : {
               state: 'known',
-              names: strandedByKindChange(datasets, form.id, storedKind, form.kind).map(
+              names: strandedByKindChange(datasets, form.id, stored.kind, form.kind).map(
                 (dataset) => dataset.name,
               ),
             };
     return kindChangeAdvisory(check, form.kind);
-  }, [form.id, form.kind, storedKind, datasets, datasetsUnavailable]);
+  }, [form.id, form.kind, stored, datasets, datasetsUnavailable]);
+
+  /**
+   * #1211 — what this kind change would SWITCH OFF, which is a state change
+   * rather than the strand note's future-dispatch diagnostic, and so is drawn
+   * whenever the change crosses the readiness boundary the server's reverse
+   * gate fires on.
+   *
+   * Gated on `kindChangeDisablesTriggers` rather than on "the kind moved": a
+   * kind change that leaves the connection READY — a repair, a move between two
+   * credential-less kinds, or one that supplies the secret in the same edit —
+   * disables nothing, and a note there would describe a write that does not
+   * happen. The predicate runs the server's own readiness rule; see its
+   * docblock for the single documented over-warn.
+   */
+  const triggerAdvisory = useMemo(() => {
+    if (form.id === null || stored === undefined || stored.kind === form.kind) return null;
+    if (!kindChangeDisablesTriggers(stored, form.kind, form.secret)) return null;
+    const check: TriggerCheck =
+      dependentsUnavailable !== null
+        ? { state: 'unavailable', detail: dependentsUnavailable }
+        : dependents === null
+          ? { state: 'loading' }
+          : {
+              state: 'known',
+              names: dependents.triggers.map((trigger) => trigger.name),
+              dynamicNames: dependents.dynamic.map((trigger) => trigger.name),
+            };
+    return triggerDisableAdvisory(check);
+  }, [form.id, form.kind, form.secret, stored, dependents, dependentsUnavailable]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
@@ -817,6 +937,15 @@ function ConnectionForm({
           interruption: it appears next to the control that caused it, in
           response to the operator's own gesture. */}
       {strandAdvisory !== null && <p className="contract-advisory">{strandAdvisory}</p>}
+
+      {/* #1211 — a second bare `.contract-advisory`, for the same reasons the
+          comment above gives: no `role`, because both live-region roles on this
+          form are already claimed in the singular and a strand/disable note is
+          not an interruption. Separate from the strand note rather than merged
+          into it: one is about OTHER resources breaking later, this one is
+          about a write the server performs on save, and the two are drawn on
+          different conditions. */}
+      {triggerAdvisory !== null && <p className="contract-advisory">{triggerAdvisory}</p>}
 
       <label>
         Secret
