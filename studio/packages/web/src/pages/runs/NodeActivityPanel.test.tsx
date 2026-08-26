@@ -327,17 +327,25 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
   function bigRow(over: number) {
     // `{"text":"…"}` — 11 characters of envelope around the padded value.
     const pad = 'x'.repeat(CAP + over - 11 - TAIL.length);
-    return row({ nodeId: 'a', status: 'succeeded', attempts: 1, outputValues: { text: pad + TAIL } });
+    return row({
+      nodeId: 'a',
+      status: 'success',
+      attempts: 1,
+      outputValues: { text: pad + TAIL },
+    });
   }
   const outputsCode = (panel: HTMLElement): HTMLElement => {
     const el = panel.querySelector('.node-detail-outputs');
     if (el === null) throw new Error('no outputs element');
     return el as HTMLElement;
   };
-  const toggle = (panel: HTMLElement) => within(panel).queryByRole('button', { name: /Show (all|first)/ });
+  const toggle = (panel: HTMLElement) =>
+    within(panel).queryByRole('button', { name: /Show (all|first)/ });
 
   it('leaves a payload under the cap exactly as it was, with no disclosure', () => {
-    const panel = renderPanel(row({ nodeId: 'a', status: 'succeeded', attempts: 1, outputValues: { text: 'short' } }));
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'success', attempts: 1, outputValues: { text: 'short' } }),
+    );
     expect(outputsCode(panel).textContent).toBe('{"text":"short"}');
     expect(toggle(panel)).toBeNull();
     expect(panel.textContent).not.toMatch(/showing the first/);
@@ -355,7 +363,9 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     expect(outputsCode(panel).textContent).toHaveLength(CAP);
     // Not merely short: the withheld tail is absent from the whole panel.
     expect(panel.textContent).not.toContain(TAIL);
-    expect(panel.textContent).toMatch(new RegExp(`showing the first ${CAP} of ${CAP + 2000} characters`));
+    expect(panel.textContent).toMatch(
+      new RegExp(`showing the first ${CAP} of ${CAP + 2000} characters`),
+    );
     expect(toggle(panel)).toHaveAttribute('aria-expanded', 'false');
   });
 
