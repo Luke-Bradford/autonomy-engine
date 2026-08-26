@@ -409,6 +409,58 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
   });
 
   /*
+   * The disclosure alone does not close the ticket, and this is the case that
+   * proves it: selecting the block by hand while it is COLLAPSED yields the cut
+   * string. The copy control must therefore hand over the WHOLE value without
+   * first requiring the display to change, or the cap would have turned a
+   * display bound into a data one.
+   */
+  it('copies the whole value while still collapsed', async () => {
+    const user = userEvent.setup();
+    const node = bigRow(2000);
+    const panel = renderPanel(node);
+
+    // Still collapsed: what is on screen is the cut string.
+    expect(outputsCode(panel).textContent).toHaveLength(CAP);
+
+    await user.click(within(panel).getByRole('button', { name: /^Copy all / }));
+    expect(await navigator.clipboard.readText()).toBe(JSON.stringify(node.outputValues));
+    expect(panel.textContent).toContain('Copied the full value');
+  });
+
+  /*
+   * `navigator.clipboard` is undefined outside a secure context and `writeText`
+   * can still reject under a permissions policy. A copy that quietly did nothing
+   * would leave the operator believing they hold the full value — the same lie
+   * in a different place — so a refusal is SAID, and the disclosure stays as the
+   * path that needs no API at all.
+   */
+  it('says so when the clipboard refuses, rather than looking like it worked', async () => {
+    const user = userEvent.setup();
+    const panel = renderPanel(bigRow(2000));
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'));
+
+    await user.click(within(panel).getByRole('button', { name: /^Copy all / }));
+    await screen.findByText(/Could not copy/);
+    expect(panel.textContent).not.toContain('Copied the full value');
+    // The reveal is still offered — it is the path that needs no clipboard.
+    expect(toggle(panel)).not.toBeNull();
+  });
+
+  it('offers no copy control at all where the clipboard does not exist', () => {
+    const original = navigator.clipboard;
+    // A control that cannot work is worse than no control.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      const panel = renderPanel(bigRow(2000));
+      expect(within(panel).queryByRole('button', { name: /^Copy all / })).toBeNull();
+      expect(toggle(panel)).not.toBeNull();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: original, configurable: true });
+    }
+  });
+
+  /*
    * The reveal is a `<button>` so that it answers the keyboard, not the pointer
    * alone. A `div` with an onClick would pass every assertion above and be
    * unreachable for anyone not using a mouse.

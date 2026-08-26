@@ -560,20 +560,6 @@ function CostSection({ node }: { node: NodeActivity }) {
   );
 }
 
-/**
- * #866 slice 2 — WHICH TOOLS the node's LLM loop ran.
- *
- * `round` alone does not identify a row: it restarts at 0 on every attempt, and
- * sibling parallel-foreach items run their own exchanges concurrently. So the
- * attempt and the instance are stamped on each call by the fold and rendered as
- * their own columns whenever more than one of either appears — rather than left
- * as a caveat under the table for the reader to apply themselves.
- *
- * Args and results are shown as SIZES. Their content is not in the log at all
- * (only chars + a hash), and the hash is a drift fingerprint, not something a
- * person reads — but the size is the one thing about an opaque payload that is
- * actionable.
- */
 /** A UTF-16 high surrogate — the FIRST half of an astral character's pair. */
 function isHighSurrogate(unit: number): boolean {
   return unit >= 0xd800 && unit <= 0xdbff;
@@ -606,6 +592,10 @@ function OutputsSection({ node }: { node: NodeActivity }) {
   /* Unconditional, before any branch: this is the panel's first local state and
      the empty/absent cases below return early. */
   const [expanded, setExpanded] = useState(false);
+  /* `null` until a copy is attempted; then the OUTCOME, because a copy that
+     silently did nothing is the same class of lie the cap exists to prevent —
+     the operator would believe they hold the full value. */
+  const [copyFailed, setCopyFailed] = useState<boolean | null>(null);
   if (node.outputValues === undefined) return null;
   const names = Object.keys(node.outputValues);
   /* `JSON.stringify` emits no spaces, so a long value is one unbreakable token;
@@ -625,6 +615,10 @@ function OutputsSection({ node }: { node: NodeActivity }) {
   const cutsPair = truncated && isHighSurrogate(text.charCodeAt(MAX_OUTPUT_CHARS - 1));
   const cut = cutsPair ? MAX_OUTPUT_CHARS - 1 : MAX_OUTPUT_CHARS;
   const shown = truncated && !expanded ? text.slice(0, cut) : text;
+  /* Read at render, not cached: `navigator.clipboard` is undefined outside a
+     secure context, and offering a control that cannot work is worse than not
+     offering one. */
+  const canCopy = typeof navigator !== 'undefined' && navigator.clipboard !== undefined;
   return (
     <section className="contract-section">
       <h4>Outputs</h4>
@@ -663,6 +657,44 @@ function OutputsSection({ node }: { node: NodeActivity }) {
               >
                 {expanded ? `Show first ${cut} characters` : `Show all ${text.length} characters`}
               </button>
+              {/* Copies the WHOLE value, and deliberately does not depend on
+                  `expanded`.
+
+                  The disclosure alone is not enough, and the argument that it
+                  is has a hole worth recording so it is not re-made: selecting
+                  the block by hand while it is COLLAPSED copies the cut string,
+                  which is exactly the silent tail-loss #869 is about — the cap
+                  would have turned a display bound into a data one. So the
+                  reachable-by-selection path is only true after a click that
+                  changes what is displayed, and this offers the full value
+                  without that precondition.
+
+                  Feature-detected rather than assumed: `navigator.clipboard` is
+                  absent outside a secure context, and `writeText` can still
+                  reject under a permissions policy. Neither is treated as
+                  success — the button is not offered at all in the first case,
+                  and says so in the second, with the disclosure still there as
+                  the path that needs no API. */}
+              {canCopy && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(text).then(
+                      () => setCopyFailed(false),
+                      () => setCopyFailed(true),
+                    );
+                  }}
+                >
+                  Copy all {text.length} characters
+                </button>
+              )}
+              {copyFailed !== null && (
+                <p className="page-hint" role="status">
+                  {copyFailed
+                    ? 'Could not copy — show all, then select and copy.'
+                    : 'Copied the full value.'}
+                </p>
+              )}
             </>
           )}
         </>
@@ -671,6 +703,20 @@ function OutputsSection({ node }: { node: NodeActivity }) {
   );
 }
 
+/**
+ * #866 slice 2 — WHICH TOOLS the node's LLM loop ran.
+ *
+ * `round` alone does not identify a row: it restarts at 0 on every attempt, and
+ * sibling parallel-foreach items run their own exchanges concurrently. So the
+ * attempt and the instance are stamped on each call by the fold and rendered as
+ * their own columns whenever more than one of either appears — rather than left
+ * as a caveat under the table for the reader to apply themselves.
+ *
+ * Args and results are shown as SIZES. Their content is not in the log at all
+ * (only chars + a hash), and the hash is a drift fingerprint, not something a
+ * person reads — but the size is the one thing about an opaque payload that is
+ * actionable.
+ */
 /**
  * The cap on RENDERED rows. `index.css` also bounds the list by height, and the
  * two are not redundant: the stylesheet stops the panel growing, this stops the

@@ -192,6 +192,12 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
       expanded: button?.getAttribute('aria-expanded') ?? null,
       controls: button?.getAttribute('aria-controls') ?? null,
       controlled: code?.id ?? null,
+      // Offered WHILE COLLAPSED — selecting the block by hand at this point
+      // would copy the cut string, so the full-value copy must not be behind
+      // the reveal.
+      copy: [...(el?.querySelectorAll('button') ?? [])].some((b) =>
+        /^Copy all /.test(b.textContent ?? ''),
+      ),
     };
   });
 
@@ -202,6 +208,10 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   // guess which block just changed.
   expect(collapsed.controls).toBe(collapsed.controlled);
   expect(collapsed.controlled).not.toBeNull();
+  /* Presence only, here. WHAT it puts on the clipboard is pinned by the unit
+     test, which can assert the string without asking Chromium for a
+     clipboard-read permission this suite does not otherwise need. */
+  expect(collapsed.copy).toBe(true);
 
   await panel.getByRole('button', { name: /^Show all / }).click();
 
