@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import {
+  ConnectionDependentsResponseSchema,
   ConnectionProbeResultSchema,
   ConnectionPublicSchema,
   NewConnectionSchema,
   paginatedResponseSchema,
+  type ConnectionDependentsResponse,
   type ConnectionKind,
   type ConnectionProbeResult,
   type ConnectionPublic,
@@ -117,5 +119,26 @@ export function testSavedConnection(
     method: 'POST',
     body,
     schema: ConnectionProbeResultSchema,
+  });
+}
+
+/**
+ * #1211 — which of this owner's enabled triggers a `kind` change or a DELETE
+ * would SWITCH OFF, read before the write so the form can say it.
+ *
+ * A server route rather than a client-side filter, unlike #1174's dataset half.
+ * That half could be answered from rows the page already holds because
+ * `GET /api/datasets` carries `connectionId`; a trigger row carries only
+ * `pipelineVersionId`, and the connection reference lives inside the bound
+ * version's node JSON — the same version-crossing edge that made M9's
+ * `GET /api/datasets/:id/references` a route.
+ */
+export function listConnectionDependents(
+  id: string,
+  signal?: AbortSignal,
+): Promise<ConnectionDependentsResponse> {
+  return apiFetch(`/api/connections/${encodeURIComponent(id)}/dependents`, {
+    schema: ConnectionDependentsResponseSchema,
+    signal,
   });
 }
