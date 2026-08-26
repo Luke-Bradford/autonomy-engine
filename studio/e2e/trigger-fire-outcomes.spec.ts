@@ -81,9 +81,7 @@ test.describe('#1247 firing several triggers', () => {
     // Two fires, two DISTINCT run links, each pointing at its own run.
     const links = page.getByRole('link', { name: /^Watch live → run / });
     await expect(links).toHaveCount(2);
-    const hrefs = await links.evaluateAll((els) =>
-      els.map((el) => el.getAttribute('href') ?? ''),
-    );
+    const hrefs = await links.evaluateAll((els) => els.map((el) => el.getAttribute('href') ?? ''));
     expect(new Set(hrefs).size, `two fires must yield two runs, got ${hrefs.join(', ')}`).toBe(2);
     // Hash routing in the shipped build, so the `href` carries the `#` the unit
     // suite's memory router does not — asserted as the real app serves it.
