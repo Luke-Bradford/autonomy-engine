@@ -73,7 +73,16 @@ export type DynamicDependentTrigger = z.infer<typeof DynamicDependentTriggerSche
  * the two that leaks. Tracked rather than swallowed.
  */
 export const ConnectionDependentsResponseSchema = z.object({
+  /** Settled: these WILL be disabled. */
   triggers: z.array(DependentTriggerSchema),
+  /**
+   * Unsettled: only a run can say. DISJOINT from `triggers` — `dynamic` means
+   * "could not be settled", so a trigger whose version names this connection
+   * outright is never a member, however many `${}` nodes it also has. Without
+   * that rule the advisory names one trigger twice as though they were two:
+   * "switches off 1 enabled trigger (nightly) … 1 other enabled trigger
+   * (nightly)".
+   */
   dynamic: z.array(DynamicDependentTriggerSchema),
 });
 export type ConnectionDependentsResponse = z.infer<typeof ConnectionDependentsResponseSchema>;

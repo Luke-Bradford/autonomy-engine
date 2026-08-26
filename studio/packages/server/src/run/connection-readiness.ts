@@ -348,8 +348,17 @@ export function connectionDependents(
       refsByVersion.set(trigger.pipelineVersionId, refs);
     }
 
+    // THE TWO BUCKETS ARE DISJOINT, and the literal one wins. A trigger whose
+    // version names this connection outright WILL be disabled — that is settled,
+    // whatever else its version does. A `${}` node elsewhere in the same version
+    // adds no uncertainty to a trigger whose fate is already known, and reporting
+    // it in both would have the advisory name one trigger twice as though they
+    // were two: "switches off 1 enabled trigger (nightly) … 1 other enabled
+    // trigger (nightly)". `dynamic` means "could not be settled", so a settled
+    // trigger is not a member of it.
     if (refs.literal.includes(connectionId)) {
       triggers.push({ id: trigger.id, name: trigger.name });
+      continue;
     }
     // Reported rather than swallowed: a `${}`-dynamic ref MAY address this
     // connection, and a surface that inherited the gate's silent skip would

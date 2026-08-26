@@ -566,6 +566,28 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
     ]);
   });
 
+  it('puts a trigger in ONE bucket: a settled dependent is never also "dynamic"', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    // One node names the connection outright, another routes on an expression.
+    // The trigger's fate is SETTLED by the first, so the second adds nothing —
+    // and reporting both would have the advisory read "switches off 1 enabled
+    // trigger (T) ... 1 other enabled trigger (T)", naming one trigger twice.
+    const vId = versionWithNodes(db, 'local', [
+      llmNode('n1', connId),
+      llmNode('n2', '${params.conn}'),
+    ]);
+    const tId = triggerOn(db, 'local', vId);
+
+    const preview = connectionDependents(db, 'local', connId);
+    expect(preview.triggers).toEqual([{ id: tId, name: 'T' }]);
+    expect(preview.dynamic).toEqual([]);
+
+    // And the settled half is still true: the regate disables exactly it.
+    deleteConnection(db, connId);
+    expect(regateTriggersForConnection(db, connId)).toEqual([tId]);
+  });
+
   it('parses ONE version doc however many triggers pin it', () => {
     const { db } = freshDb();
     const connId = readyConnection(db);
