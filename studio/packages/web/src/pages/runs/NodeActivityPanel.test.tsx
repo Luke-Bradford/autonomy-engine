@@ -447,6 +447,47 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     expect(toggle(panel)).not.toBeNull();
   });
 
+  /*
+   * The review's NITPICK on #1251, taken as a defect rather than deferred. Two
+   * clicks before the first `writeText` settles leave TWO promises racing to
+   * write ONE outcome slot, and the loser is whichever settles LAST, not
+   * whichever the operator asked for last. The reachable misreport is a stale
+   * "Could not copy" over a write that in fact succeeded — fail-safe in
+   * direction (it steers to the disclosure, which needs no clipboard) but a
+   * lie about what happened all the same, in a control whose entire reason for
+   * existing is that a copy which silently did nothing must not read as one
+   * that worked.
+   *
+   * Single-flight kills the race at its source rather than resolving it: with
+   * only one attempt in flight there is only one outcome to report, so no
+   * ordering question arises. `useBusyAction` is that guard — a ref checked
+   * SYNCHRONOUSLY, because two clicks in one tick both read the same stale
+   * `disabled` state before React re-renders.
+   */
+  it('runs one copy at a time, so a second click cannot report over the first', async () => {
+    const user = userEvent.setup();
+    const panel = renderPanel(bigRow(2000));
+    let settle!: () => void;
+    const write = vi.spyOn(navigator.clipboard, 'writeText').mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    const button = within(panel).getByRole('button', { name: /^Copy all / });
+    await user.click(button);
+    await user.click(button);
+
+    // The second click found the first still in flight and did nothing.
+    expect(write).toHaveBeenCalledTimes(1);
+
+    settle();
+    await screen.findByText(/Copied the full value/);
+    expect(panel.textContent).not.toContain('Could not copy');
+    // Released once settled, so the control is not a one-shot.
+    expect(within(panel).getByRole('button', { name: /^Copy all / })).not.toBeDisabled();
+  });
+
   it('offers no copy control at all where the clipboard does not exist', () => {
     const original = navigator.clipboard;
     // A control that cannot work is worse than no control.

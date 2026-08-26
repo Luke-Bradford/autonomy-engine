@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { useBusyAction } from '../../hooks/useBusyAction';
 import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
@@ -587,6 +588,8 @@ const OUTPUTS_ID = 'node-detail-output-values';
  * `ToolCallSection` refuses for the same reason.
  */
 const MAX_OUTPUT_CHARS = 4000;
+/** The lone act `OutputsSection` guards — see the `useBusyAction` note below. */
+const COPY_KEY = 'copy';
 
 function OutputsSection({ node }: { node: NodeActivity }) {
   /* Unconditional, before any branch: this is the panel's first local state and
@@ -596,6 +599,24 @@ function OutputsSection({ node }: { node: NodeActivity }) {
      silently did nothing is the same class of lie the cap exists to prevent —
      the operator would believe they hold the full value. */
   const [copyFailed, setCopyFailed] = useState<boolean | null>(null);
+  /* Single-flight, because `copyFailed` is ONE slot and two overlapping writes
+     would race to fill it — the winner being whichever settled last rather than
+     whichever the operator asked for last. The reachable misreport is a stale
+     "Could not copy" over a write that succeeded; fail-safe in direction, since
+     it points at the disclosure that needs no clipboard, but still a lie about
+     what happened, from the one control whose reason for existing is that a
+     copy which silently did nothing must not read as one that worked.
+
+     Guarding beats ordering here: with one attempt in flight there is only one
+     outcome, so there is no ordering question left to get wrong. `useBusyAction`
+     is the shared guard (#960) rather than a sixth hand-rolled one, and its ref
+     is what makes it correct — two clicks in one tick both read the same stale
+     `disabled` prop, because React has not re-rendered in between.
+
+     Keyed by a constant: `OutputsSection` is keyed by node identity at its call
+     site, so an instance owns exactly one copy button and there is nothing to
+     tell apart. */
+  const copy = useBusyAction();
   if (node.outputValues === undefined) return null;
   const names = Object.keys(node.outputValues);
   /* `JSON.stringify` emits no spaces, so a long value is one unbreakable token;
@@ -678,10 +699,16 @@ function OutputsSection({ node }: { node: NodeActivity }) {
               {canCopy && (
                 <button
                   type="button"
+                  disabled={copy.active.has(COPY_KEY)}
                   onClick={() => {
-                    void navigator.clipboard.writeText(text).then(
-                      () => setCopyFailed(false),
-                      () => setCopyFailed(true),
+                    void copy.run(COPY_KEY, () =>
+                      /* Resolves either way: `run` re-throws whatever `act`
+                         rejects with, and a refusal is already REPORTED here
+                         rather than thrown. */
+                      navigator.clipboard.writeText(text).then(
+                        () => setCopyFailed(false),
+                        () => setCopyFailed(true),
+                      ),
                     );
                   }}
                 >
