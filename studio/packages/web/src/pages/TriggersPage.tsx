@@ -207,6 +207,29 @@ function formForEdit(t: TriggerPublic): FormState {
 }
 
 /**
+ * The outcome of one "Fire now", kept per TRIGGER (#1247).
+ *
+ * WHY THIS IS A LIST AND NOT A SLOT. The page used to report a fire through one
+ * `actionMsg` string and one `watchRunId`, which is only sound while exactly one
+ * fire can be in flight — and the guard that enforced that was the bug: a
+ * page-wide `if (firingId) return;` made "Fire now" on a second trigger a silent
+ * no-op on an ENABLED button. Removing the guard without this is the worse
+ * trade, because the later outcome would overwrite the earlier one and the thing
+ * lost is a run link the operator was already offered.
+ *
+ * BOUNDED BY TRIGGER COUNT, NOT BY CLICKS. `triggerId` is the identity: re-firing
+ * the same trigger REPLACES its entry in place rather than appending a second
+ * one, so a session of repeated fires cannot grow the notice without limit and
+ * an entry does not jump position under the operator as they re-fire it.
+ */
+interface FireOutcome {
+  triggerId: string;
+  text: string;
+  /** Non-null only for an `outcome: 'started'` fire — a `skipped`/`queued`/failed fire has no run to watch. */
+  runId: string | null;
+}
+
+/**
  * Triggers page: the third MVP-bar step ("create a trigger and fire it"). Full
  * CRUD over `/api/triggers`, plus a manual "Fire now" and, for a webhook
  * trigger, one-time secret provisioning. A trigger binds ONE immutable pipeline
@@ -219,14 +242,13 @@ export function TriggersPage() {
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  // Since #1247 this carries `onProvisionSecret`'s failure ONLY — a fire reports
+  // through `fireOutcomes`, because a fire's outcome has to survive another
+  // trigger being fired beside it and a single slot cannot do that.
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  // The id of the trigger whose "Fire now" is currently in flight, so the
-  // button can be disabled to prevent a rapid double-click dispatching two
-  // fires before `actionMsg` updates.
-  const [firingId, setFiringId] = useState<string | null>(null);
-  // The run id of the most recent successful "Fire now", so we can offer a
-  // one-click jump to its live monitor (the last step of the MVP-bar flow).
-  const [watchRunId, setWatchRunId] = useState<string | null>(null);
+  // One entry per trigger fired this session, newest state per trigger. See
+  // `FireOutcome` for why this is keyed by trigger rather than being a slot.
+  const [fireOutcomes, setFireOutcomes] = useState<readonly FireOutcome[]>([]);
   const guardedLoad = useGuardedLoad();
   const [webhookSecret, setWebhookSecret] = useState<{
     triggerName: string;
@@ -362,32 +384,55 @@ export function TriggersPage() {
     [runExport],
   );
 
+  /* #1247 — per-ROW single-flight, through the same hook as `onExport` above.
+     The guard this replaced was page-wide (`if (firingId) return;`) while the
+     `disabled` beside it was per-row, so firing a second trigger while the first
+     was in flight was a silent no-op on an enabled button. `useBusyAction`'s
+     docblock argues the shape; this is the call site it named. */
+  const { active: firing, run: runFire } = useBusyAction();
+
   const onFire = useCallback(
-    async (t: TriggerPublic) => {
-      // Guard against a double-click firing twice before the request resolves.
-      if (firingId) return;
-      setActionMsg(null);
-      setWatchRunId(null);
-      setFiringId(t.id);
-      try {
-        const result = await fireTrigger(t.id);
-        const detail =
-          result.outcome === 'started'
-            ? `started (run ${result.runId ?? '?'})`
-            : result.outcome === 'skipped'
-              ? `skipped — ${result.reason ?? 'no reason given'}`
-              : 'queued';
-        setActionMsg(`Fired "${t.name}": ${detail}.`);
-        if (result.outcome === 'started' && result.runId) setWatchRunId(result.runId);
-      } catch (err) {
-        setActionMsg(
-          `Fire failed for "${t.name}": ${err instanceof Error ? err.message : String(err)}`,
-        );
-      } finally {
-        setFiringId(null);
-      }
-    },
-    [firingId],
+    (t: TriggerPublic) =>
+      runFire(t.id, async () => {
+        /* Clearing `actionMsg` is KEPT from the single-slot version: it holds a
+           provisioning failure, and starting a new action should not leave a
+           stale error from a previous one on screen. What is deliberately NOT
+           cleared is any OTHER trigger's `fireOutcomes` entry — that is another
+           action's result, and discarding it is the defect this ticket fixes.
+           The asymmetry is the point: clear what this action owns, nothing else. */
+        setActionMsg(null);
+        const record = (outcome: FireOutcome) =>
+          setFireOutcomes((prev) =>
+            prev.some((o) => o.triggerId === outcome.triggerId)
+              ? // Replace IN PLACE. Appending would move a re-fired trigger's
+                // entry to the end, reordering the notice under the operator.
+                prev.map((o) => (o.triggerId === outcome.triggerId ? outcome : o))
+              : [...prev, outcome],
+          );
+        try {
+          const result = await fireTrigger(t.id);
+          const detail =
+            result.outcome === 'started'
+              ? `started (run ${result.runId ?? '?'})`
+              : result.outcome === 'skipped'
+                ? `skipped — ${result.reason ?? 'no reason given'}`
+                : 'queued';
+          record({
+            triggerId: t.id,
+            text: `Fired "${t.name}": ${detail}.`,
+            runId: result.outcome === 'started' ? (result.runId ?? null) : null,
+          });
+        } catch (err) {
+          // Caught HERE rather than left to `useBusyAction`, which re-throws
+          // whatever `act` throws — see its "THE CALLER OWNS ERROR REPORTING".
+          record({
+            triggerId: t.id,
+            text: `Fire failed for "${t.name}": ${messageOf(err)}`,
+            runId: null,
+          });
+        }
+      }),
+    [runFire],
   );
 
   const onProvisionSecret = useCallback(async (t: TriggerPublic) => {
@@ -428,13 +473,31 @@ export function TriggersPage() {
         </p>
       )}
 
-      {actionMsg && (
-        <p role="status" className="notice">
-          {actionMsg}
-          {watchRunId && (
-            <>
-              {' '}
-              {/* The lead is this control's OWN visible text, which is what makes the
+      {/* ONE region for both, rather than a second live region beside the three
+          this page already has (#1249 tracks the app-wide count).
+
+          `role="log"` and NOT `role="status"`, which is this file's first use of
+          it and therefore needs saying: `status` is implicitly
+          `aria-atomic="true"`, so a screen reader re-reads the WHOLE region on
+          every change — with a list that grows by one entry per trigger fired,
+          the fifth fire would re-announce outcomes one to five. `log` declares
+          `aria-live="polite"` without the atomic default, which is exactly the
+          "announce what was added" semantics an append-style outcome list wants.
+
+          `ImportPanel`'s `ImportOutcome` already renders `div.notice` wrapping
+          several `<p>`s, so the container shape is this page's idiom rather than
+          something new. `useTransientNotice` was considered and rejected: it
+          auto-clears, which would evaporate a run link the operator was given. */}
+      {(actionMsg || fireOutcomes.length > 0) && (
+        <div role="log" className="notice">
+          {actionMsg && <p>{actionMsg}</p>}
+          {fireOutcomes.map((outcome) => (
+            <p key={outcome.triggerId}>
+              {outcome.text}
+              {outcome.runId && (
+                <>
+                  {' '}
+                  {/* The lead is this control's OWN visible text, which is what makes the
                   accessible name contain it — see `runLinkLabel` for why that shape
                   holds by construction. The run id is appended because "Watch live"
                   alone does not say WHICH run, and this notice can name a different
@@ -447,15 +510,17 @@ export function TriggersPage() {
                   on the arrow alone. `ImportPanel`'s `Manage → Connections` links
                   already carry an arrow in their accessible name, so this is the
                   idiom rather than an exception to it. */}
-              <Link
-                to={runDetailPath(watchRunId)}
-                aria-label={runLinkLabel('Watch live →', watchRunId)}
-              >
-                Watch live →
-              </Link>
-            </>
-          )}
-        </p>
+                  <Link
+                    to={runDetailPath(outcome.runId)}
+                    aria-label={runLinkLabel('Watch live →', outcome.runId)}
+                  >
+                    Watch live →
+                  </Link>
+                </>
+              )}
+            </p>
+          ))}
+        </div>
       )}
 
       {webhookSecret && (
@@ -503,13 +568,21 @@ export function TriggersPage() {
                 <td>{labelFor(t.pipelineVersionId)}</td>
                 <td>{t.enabled ? 'yes' : 'no'}</td>
                 <td>
+                  {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
+                      visible label deliberately does NOT flip to "Firing…". Verbatim
+                      the rule `onExport` states 170 lines above: this button carries an
+                      `aria-label` naming the row, so a visible string absent from that
+                      accessible name violates WCAG 2.5.3 (label in name). Its sibling
+                      in this same cell already resolves it this way, and two busy
+                      treatments on two buttons in one `<td>` is the defect #1242 closed. */}
                   <button
                     type="button"
                     onClick={() => void onFire(t)}
-                    disabled={firingId === t.id}
+                    disabled={firing.has(t.id)}
+                    aria-busy={firing.has(t.id)}
                     aria-label={`Fire ${t.name} now`}
                   >
-                    {firingId === t.id ? 'Firing…' : 'Fire now'}
+                    Fire now
                   </button>
                   <button type="button" onClick={() => setForm(formForEdit(t))}>
                     Edit
