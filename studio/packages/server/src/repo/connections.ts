@@ -5,10 +5,8 @@ import {
   connectionNotReadyReason,
   deriveSecretStatus,
   type Connection,
-  type ConnectionKind,
   type NewConnection,
   type Paginated,
-  type SecretStatus,
 } from '@autonomy-studio/shared';
 import { connections } from '../db/schema.js';
 import { newId } from './ids.js';

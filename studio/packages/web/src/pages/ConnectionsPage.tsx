@@ -406,9 +406,10 @@ export function ConnectionsPage() {
             : { state: 'unavailable', detail: messageOf(dependentsResult.reason) };
 
         const clause = deleteConfirmTriggerClause(triggerCheck);
-        const message = clause === ''
-          ? deleteConfirmMessage(conn.name, check)
-          : `${deleteConfirmMessage(conn.name, check)}\n\n${clause}`;
+        const message =
+          clause === ''
+            ? deleteConfirmMessage(conn.name, check)
+            : `${deleteConfirmMessage(conn.name, check)}\n\n${clause}`;
         if (!window.confirm(message)) return;
         try {
           await deleteConnection(conn.id);

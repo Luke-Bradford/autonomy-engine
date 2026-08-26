@@ -21,10 +21,7 @@ import {
   updateSecretCiphertext,
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
-import {
-  connectionDependents,
-  regateTriggersForConnection,
-} from '../run/connection-readiness.js';
+import { connectionDependents, regateTriggersForConnection } from '../run/connection-readiness.js';
 import { configKeysChangedByOverlay, probeConnection } from '../connectors/probe.js';
 import { SecretDecryptionError, decrypt, encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';

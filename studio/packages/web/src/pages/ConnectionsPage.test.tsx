@@ -958,9 +958,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     expect(await within(form).findByText(/switches off/)).toBeInTheDocument();
 
     await user.type(within(form).getByLabelText('Secret'), 'sk-abc');
-    await waitFor(() =>
-      expect(within(form).queryByText(/switches off/)).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(within(form).queryByText(/switches off/)).not.toBeInTheDocument());
   });
 
   it('never renders "none" from a read that FAILED', async () => {
@@ -969,9 +967,9 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
 
     await user.selectOptions(within(form).getByLabelText('Kind'), 'anthropic_api');
-    expect(await within(form).findByText(/Could not check which enabled triggers/)).toHaveTextContent(
-      'offline',
-    );
+    expect(
+      await within(form).findByText(/Could not check which enabled triggers/),
+    ).toHaveTextContent('offline');
     // A failed advisory is not a failure of the page.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

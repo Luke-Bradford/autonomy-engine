@@ -541,8 +541,10 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
     const vId = versionRef(db, 'local', connId);
     const a = triggerOn(db, 'local', vId);
     const b = triggerOn(db, 'local', vId);
-    expect(connectionDependents(db, 'local', connId).triggers.map((t) => t.id).sort()).toEqual(
-      [a, b].sort(),
-    );
+    expect(
+      connectionDependents(db, 'local', connId)
+        .triggers.map((t) => t.id)
+        .sort(),
+    ).toEqual([a, b].sort());
   });
 });
