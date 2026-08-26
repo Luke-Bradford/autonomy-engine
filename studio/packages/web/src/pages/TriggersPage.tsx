@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   ConcurrencyPolicySchema,
   TriggerModeSchema,
@@ -217,10 +217,11 @@ function formForEdit(t: TriggerPublic): FormState {
  * trade, because the later outcome would overwrite the earlier one and the thing
  * lost is a run link the operator was already offered.
  *
- * BOUNDED BY TRIGGER COUNT, NOT BY CLICKS. `triggerId` is the identity: re-firing
+ * BOUNDED BY LIVE TRIGGER COUNT, NOT BY CLICKS. `triggerId` is the identity: re-firing
  * the same trigger REPLACES its entry in place rather than appending a second
  * one, so a session of repeated fires cannot grow the notice without limit and
- * an entry does not jump position under the operator as they re-fire it.
+ * an entry does not jump position under the operator as they re-fire it. An
+ * entry whose trigger no longer exists is dropped at render — see `visibleOutcomes`.
  */
 interface FireOutcome {
   triggerId: string;
@@ -374,10 +375,14 @@ export function TriggersPage() {
         try {
           downloadTextFile(exportFileName('trigger', t.name, t.id), await exportTrigger(t.id));
         } catch (err) {
-          // `loadError`, not `actionMsg`: this page's `actionMsg` is a
-          // `role="status"` notice (it carries "Fired X: started"), and a failed
-          // export is an ERROR. `onDelete` already routes its failure here, so
-          // this is the page's existing surface for "an action did not happen".
+          // `loadError`, not the outcome notice: that notice is `role="log"` and
+          // reports what an action DID (a fire's result, a provisioning failure),
+          // whereas a failed export is an ERROR and belongs in the page's
+          // `role="alert"` surface. `onDelete` already routes its failure there,
+          // so this is the page's existing home for "an action did not happen".
+          // (Was described here as `actionMsg`'s `role="status"` notice "carrying
+          // Fired X: started" — #1247 moved fire outcomes to `fireOutcomes` and
+          // the region to `log`, so both halves of that had stopped being true.)
           setLoadError(`Could not export “${t.name}”: ${messageOf(err)}`);
         }
       }),
@@ -452,6 +457,26 @@ export function TriggersPage() {
     }
   }, []);
 
+  /* An outcome belongs to a trigger ROW, so when that row goes away its outcome
+     and its "Watch live" link go with it — otherwise a fired-then-deleted trigger
+     leaves a message in the notice naming a trigger the table no longer lists,
+     for the rest of the session. The old single-slot code hid this by losing the
+     message on the next fire, which is the very defect #1247 removes, so the
+     bound has to be made explicit instead.
+
+     DERIVED, not pruned inside `onDelete`: that covers every way a trigger can
+     disappear (deleted in another session, gone by the next `refresh`), not just
+     the one this page performs. `triggers === null` is the pre-load state ONLY —
+     `refresh` replaces the list and never returns it to null — so this cannot
+     transiently hide a live outcome mid-refresh. */
+  const visibleOutcomes = useMemo(
+    () =>
+      triggers === null
+        ? fireOutcomes
+        : fireOutcomes.filter((o) => triggers.some((t) => t.id === o.triggerId)),
+    [fireOutcomes, triggers],
+  );
+
   return (
     <section aria-labelledby="triggers-heading">
       <div className="page-header">
@@ -488,10 +513,10 @@ export function TriggersPage() {
           several `<p>`s, so the container shape is this page's idiom rather than
           something new. `useTransientNotice` was considered and rejected: it
           auto-clears, which would evaporate a run link the operator was given. */}
-      {(actionMsg || fireOutcomes.length > 0) && (
+      {(actionMsg || visibleOutcomes.length > 0) && (
         <div role="log" className="notice">
           {actionMsg && <p>{actionMsg}</p>}
-          {fireOutcomes.map((outcome) => (
+          {visibleOutcomes.map((outcome) => (
             <p key={outcome.triggerId}>
               {outcome.text}
               {outcome.runId && (
@@ -570,7 +595,7 @@ export function TriggersPage() {
                 <td>
                   {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
                       visible label deliberately does NOT flip to "Firing…". Verbatim
-                      the rule `onExport` states 170 lines above: this button carries an
+                      the rule `onExport` states earlier in this file: this button carries an
                       `aria-label` naming the row, so a visible string absent from that
                       accessible name violates WCAG 2.5.3 (label in name). Its sibling
                       in this same cell already resolves it this way, and two busy

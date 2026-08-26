@@ -708,6 +708,57 @@ describe('TriggersPage', () => {
   });
 
   /**
+   * The bound has to survive DELETION. Keying outcomes by trigger removed the
+   * old code's accidental cleanup — it lost the message on the next fire — so a
+   * fired-then-deleted trigger would otherwise leave a notice naming a row the
+   * table no longer lists, with a "Watch live" link beside it, for the rest of
+   * the session.
+   */
+  it('drops a fired trigger’s outcome once that trigger no longer exists', async () => {
+    const user = userEvent.setup();
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_a' });
+    fireMock.mockResolvedValueOnce({ outcome: 'started', runId: 'run_b' });
+    const alpha = trigger({ id: 'trg_a', name: 'Alpha' });
+    const beta = trigger({ id: 'trg_b', name: 'Beta' });
+    listTriggersMock.mockResolvedValue([alpha, beta]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(triggersApi.deleteTrigger).mockResolvedValue(undefined as never);
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_a' });
+    await user.click(await screen.findByRole('button', { name: /Fire now: Beta/i }));
+    await screen.findByRole('link', { name: 'Watch live → run run_b' });
+
+    // Alpha is deleted; the refresh that follows returns only Beta.
+    listTriggersMock.mockResolvedValue([beta]);
+    await user.click(screen.getByRole('button', { name: 'Delete Alpha' }));
+
+    await waitFor(() => expect(screen.queryByText(/Fired "Alpha"/)).not.toBeInTheDocument());
+    // Its run link went with it — no orphan pointing at a row that is gone.
+    expect(screen.queryByRole('link', { name: 'Watch live → run run_a' })).not.toBeInTheDocument();
+    // Beta's outcome is untouched by Alpha's removal.
+    expect(screen.getByText(/Fired "Beta": started \(run run_b\)/)).toBeInTheDocument();
+  });
+
+  /**
+   * `skipped` and `queued` are successful fires that started NO run, so there is
+   * nothing to watch. Asserted separately from the failure path because they
+   * reach the same `runId` ternary by a different branch.
+   */
+  it('offers no run link for a fire that started no run', async () => {
+    const user = userEvent.setup();
+    fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'already running' });
+    listTriggersMock.mockResolvedValue([trigger({ id: 'trg_a', name: 'Alpha' })]);
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
+
+    await screen.findByText(/Fired "Alpha": skipped — already running\./);
+    expect(screen.queryByRole('link', { name: /Watch live/ })).not.toBeInTheDocument();
+  });
+
+  /**
    * A failed fire is still that trigger's outcome, and must not take another
    * trigger's successful one down with it.
    */
