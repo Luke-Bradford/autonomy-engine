@@ -40,18 +40,42 @@ test.describe('#1247 firing several triggers', () => {
     await fluentRootReady(page);
     await expect(page.getByRole('heading', { name: 'Triggers' })).toBeVisible();
 
+    /* The FIRST fire is held in flight, and that is what makes this spec able to
+       fail. Without it the two fires are sequential — the first has already
+       released its slot before the second is clicked, so even the page-wide
+       guard this ticket removes would let both through, and the spec would pass
+       against the very defect it is named for. Verified: with the fires
+       sequential, mutating the guard back to a page-wide slot still passed. */
+    let held = false;
+    await page.route('**/api/triggers/*/fire', async (route) => {
+      if (!held) {
+        held = true;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      await route.continue();
+    });
+
     /* The accessible name is `Fire now: <name>` — lead first, so the visible
        "Fire now" is a literal substring of it (WCAG 2.5.3). It used to infix the
        row name (`Fire <name> now`), which split the visible label in half and
        failed that check; locating by the current shape pins it here too. */
-    await page.getByRole('button', { name: 'Fire now: Alpha trigger' }).click();
-    const alpha = page.getByText(/Fired "Alpha trigger": started \(run /);
-    await expect(alpha).toBeVisible();
+    const alphaBtn = page.getByRole('button', { name: 'Fire now: Alpha trigger' });
+    const betaBtn = page.getByRole('button', { name: 'Fire now: Beta trigger' });
+    await alphaBtn.click();
 
-    await page.getByRole('button', { name: 'Fire now: Beta trigger' }).click();
+    // The single-flight is per ROW: Alpha is busy, Beta is untouched by it.
+    await expect(alphaBtn).toBeDisabled();
+    await expect(betaBtn).toBeEnabled();
+
+    /* THE DEFECT, end to end. Under the page-wide guard this click landed on an
+       enabled button and did nothing at all — no run, no error, no message — so
+       this outcome never appeared. */
+    await betaBtn.click();
     await expect(page.getByText(/Fired "Beta trigger": started \(run /)).toBeVisible();
 
-    // The point of the ticket: the FIRST outcome is still there, not overwritten.
+    // And when the held fire finally lands, BOTH outcomes are on screen: the
+    // later one did not overwrite the earlier one's run link.
+    const alpha = page.getByText(/Fired "Alpha trigger": started \(run /);
     await expect(alpha).toBeVisible();
 
     // Two fires, two DISTINCT run links, each pointing at its own run.
@@ -61,7 +85,9 @@ test.describe('#1247 firing several triggers', () => {
       els.map((el) => el.getAttribute('href') ?? ''),
     );
     expect(new Set(hrefs).size, `two fires must yield two runs, got ${hrefs.join(', ')}`).toBe(2);
-    for (const href of hrefs) expect(href).toMatch(/^\/monitor\/runs\/.+/);
+    // Hash routing in the shipped build, so the `href` carries the `#` the unit
+    // suite's memory router does not — asserted as the real app serves it.
+    for (const href of hrefs) expect(href).toMatch(/^#\/monitor\/runs\/.+/);
 
     /* The outcome region is a `log`, not a `status`. `status` is implicitly
        `aria-atomic="true"`, so a screen reader would re-read every prior outcome
