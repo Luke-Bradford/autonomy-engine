@@ -250,3 +250,44 @@ test.describe('U14b recurrence builder', () => {
     await expectQuiet(page, problems);
   });
 });
+
+test.describe('#855 recurrence bounds say what they will actually store', () => {
+  // Pinned, or this would pass vacuously on a UTC CI box: the gap only exists in
+  // a zone that springs forward. BST jumps 01:00 -> 02:00 on 2026-03-29.
+  test.use({ timezoneId: 'Europe/London' });
+
+  test('a start time typed into a DST gap is named, and a bounded preview is not a bare cron', async ({
+    page,
+  }) => {
+    const problems = await openTriggers(page);
+
+    await page.getByRole('button', { name: /New trigger/i }).click();
+    const form = triggerForm(page);
+    await form.getByLabel(/^Mode/).selectOption('schedule');
+    await form.getByLabel('Frequency', { exact: true }).selectOption('day');
+    await form.getByLabel(/^Hours/).fill('9');
+
+    // Unbounded, UTC, interval 1: the cron IS the whole truth, and no warning.
+    const preview = form.getByTestId('recurrence-preview');
+    await expect(preview).toHaveText('Fires on cron: 0 9 * * *');
+    await expect(form.getByTestId('bound-shift')).toHaveCount(0);
+
+    // A wall clock that exists: bounded now, so no longer a bare cron — still no warning.
+    const start = form.getByLabel('Start time (optional)');
+    await start.fill('2026-03-29T03:30');
+    await expect(preview).not.toContainText('cron');
+    await expect(preview).toContainText('from 2026-03-29T02:30:00.000Z');
+    await expect(form.getByTestId('bound-shift')).toHaveCount(0);
+
+    // 01:30 does not exist in London that day. It is saved as 01:30Z, which
+    // reads back as 02:30 — the editor has to say so where it was typed.
+    await start.fill('2026-03-29T01:30');
+    await expect(form.getByTestId('bound-shift')).toHaveText(
+      "Start time 2026-03-29T01:30 does not exist in your browser's time zone " +
+        '(a daylight-saving jump) — it will be saved as 2026-03-29T02:30.',
+    );
+    await expect(preview).toContainText('from 2026-03-29T01:30:00.000Z');
+
+    await expectQuiet(page, problems);
+  });
+});

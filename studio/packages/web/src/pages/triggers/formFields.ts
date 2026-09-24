@@ -97,6 +97,51 @@ export function resolveBound(local: string, originalIso: string): string | null 
   return localInputToUtcIso(local);
 }
 
+/**
+ * The local wall clock a bound will actually READ BACK as, when that differs
+ * from what the operator typed — `null` otherwise, and for a blank or
+ * unreadable control (#855).
+ *
+ * The one case it catches is a daylight-saving GAP: under `Europe/London`,
+ * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` resolves
+ * it with the pre-transition offset and the stored instant reloads as `02:30`.
+ * That instant is well-defined and stable, so the editors WARN rather than
+ * refuse — what they must not do is let the typed value change with nothing
+ * said. An ambiguous fall-back wall clock round-trips stably and is not
+ * reported. An untouched bound cannot shift: `resolveBound` hands back the
+ * loaded instant, whose read-back is by definition the control's value.
+ */
+export function boundShift(local: string, originalIso: string): string | null {
+  const iso = resolveBound(local, originalIso);
+  if (iso === null) return null;
+  const readBack = utcIsoToLocalInput(iso);
+  // `utcIsoToLocalInput` omits zero seconds, so compare against the typed value
+  // in that same shape rather than report `09:00:00` as having moved to `09:00`.
+  const typed = local.trim().replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}):00$/, '$1');
+  return readBack === typed ? null : readBack;
+}
+
+/**
+ * One sentence per bound that `boundShift` reports, for both editors to render.
+ * Held here so the recurrence and tumbling-window editors cannot word the same
+ * fact two ways.
+ */
+export function boundShiftWarnings(form: BoundFields): string[] {
+  const warnings: string[] = [];
+  for (const [bound, label] of [
+    ['startTime', 'Start time'],
+    ['endTime', 'End time'],
+  ] as const) {
+    const shifted = boundShift(form[bound], form[`${bound}Iso`]);
+    if (shifted === null) continue;
+    warnings.push(
+      `${label} ${form[bound].trim()} does not exist in your browser's time zone ` +
+        `(a daylight-saving jump) — it will be saved as ${shifted}.`,
+    );
+  }
+  return warnings;
+}
+
 /** The two `datetime-local` bound controls every builder shares. */
 export interface BoundFields {
   startTime: string;
