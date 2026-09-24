@@ -632,7 +632,8 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
  * stack, so it would be the wrong reference.
  *
  * The SIZE half is the decision the fix made: family-only, so the buttons keep
- * the UA control size rather than growing to their container's 1rem. The
+ * the UA control size rather than growing to their container's (14px inside
+ * the Fluent root). The
  * reference is a bare `<button>` probe, sized by the same engine's UA sheet, so
  * no pixel literal is hard-coded. A `font: inherit` shorthand in place of the
  * family reset would pass the family half and fail this one.
@@ -689,7 +690,9 @@ test('#1245 — form controls take the app font family, and keep the UA control 
   }
   expect(read.probeFamily, 'a bare button inherits the family').toBe(read.expectedFamily);
   /* Family only: the size did not follow the container. */
-  expect(read.rowSize, 'the row is not itself at the UA control size').not.toBe(read.probeSize);
+  expect(read.probeSize, 'a bare button keeps the UA control size, not the row size').not.toBe(
+    read.rowSize,
+  );
   expect(read.undoSize, 'Undo keeps the UA control size').toBe(read.probeSize);
 
   /* An input, on the list page the helper walked through. */

@@ -936,7 +936,7 @@ th {
    moment a `.page-back` chip, which does inherit, sat in a row of buttons.
 
    FAMILY only, deliberately not the `font: inherit` shorthand. The shorthand
-   would also inherit the SIZE — 1rem in most containers — and make every
+   would also inherit the SIZE — the Fluent root's 14px — and make every
    control in the app visibly larger at once, reflowing dense rows (table row
    buttons, the canvas toolbar, the node panel forms) that were laid out against
    the UA's ~13.33px. The rules that already opt in to `font: inherit` (the flat
