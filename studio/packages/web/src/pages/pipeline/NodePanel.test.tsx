@@ -432,6 +432,18 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
 
+  it('does not let the JSON editor invent an outputs contract the node never had', () => {
+    const panel = mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.click(toJson());
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://y","outputs":[{"name":"s","type":"string"}]}' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toEqual({ url: 'https://y' });
+  });
+
   it('never lets the JSON editor touch the outputs contract, which U16 owns', () => {
     // Neither editor holds `outputs`, so Apply puts the stored one back — and a
     // copy typed into the JSON is neither stored nor shown to a `.strict()`
