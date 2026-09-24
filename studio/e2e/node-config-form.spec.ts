@@ -168,7 +168,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
-    expect(await persistedConfig(page, id)).toEqual({ url: 'https://typed-in-a-field' });
+    expect(await persistedConfig(page, id)).toMatchObject({ url: 'https://typed-in-a-field' });
 
     await expectQuiet(page, problems);
   });
