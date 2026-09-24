@@ -34,19 +34,12 @@ import {
  * `CoercedValue` (slice 1) is the vocabulary the coercion matrix produces, and
  * taking it rather than `unknown` is what stops this file writing casts — "a
  * cast that claims a type its value is outside of is the failure no type error
- * catches" (`datamove/coerce.ts`). It is widened by exactly one member:
- * `Uint8Array`, because the M4 reader hands BLOBs back as `Buffer` (a
- * `Uint8Array`) and a BLOB→BLOB copy must not be silently unsupported. The
- * widening is written down here rather than left implicit at the call site.
- *
- * AMENDED by slice 3 (#1129), because that last sentence now overstates what
- * the product can do: `DataTypeSchema` has no binary member, so `coerceValue`
- * fails every `Uint8Array` against every declared target and no BLOB can reach
- * this sink THROUGH A COPY. The member stays — a direct caller may bind one, and
- * removing it would put the cast back — but the capability is filed as #1131
- * rather than implied by a type.
+ * catches" (`datamove/coerce.ts`). It used to be widened here by `Uint8Array`,
+ * which no coercion could produce; #1131's `binary` type put the member in
+ * `CoercedValue` itself, so a BLOB→BLOB copy now reaches this sink and the
+ * alias is the matrix's vocabulary exactly.
  */
-export type SinkValue = CoercedValue | Uint8Array;
+export type SinkValue = CoercedValue;
 
 /** `append` adds to what is there; `overwrite` replaces the table's contents. */
 export type SqliteWriteMode = 'append' | 'overwrite';

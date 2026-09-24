@@ -136,6 +136,66 @@ describe('reader → pump → sink', () => {
   });
 
   /**
+   * #1131 — a BLOB column copies BLOB→BLOB, byte for byte, through `binary`.
+   *
+   * Before `binary` existed no declared type could hold a `Uint8Array`, so every
+   * such row failed coercion and a table with a BLOB column could not be copied
+   * whole. The bytes chosen are the ones a text round trip destroys: an embedded
+   * NUL, and 0xff/0xc3 0x28, which are not valid UTF-8.
+   */
+  it('copies a BLOB column byte for byte, and a NULL blob stays NULL (#1131)', async () => {
+    const root = tempRoot();
+    const srcPath = join(root, 'blobs.db');
+    const bytes = Buffer.from([0x00, 0xff, 0xc3, 0x28, 0x00, 0x7f]);
+    const src = new Database(srcPath);
+    src.exec('CREATE TABLE src (id INTEGER, b BLOB)');
+    const insert = src.prepare('INSERT INTO src (id, b) VALUES (?, ?)');
+    insert.run(1, bytes);
+    insert.run(2, null);
+    insert.run(3, Buffer.alloc(0));
+    src.close();
+    const sinkPath = seedSink(root, 'out.db');
+    const counters = newCopyCounters();
+
+    await writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, sinkPath),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id', 'payload'],
+        mode: 'append',
+        onBatch: (rowsWritten) => (counters.rowsWritten = rowsWritten),
+      },
+      pumpCopyRows(
+        readSqliteDatasetBatches({
+          connectionConfig: { roots: [root], path: srcPath },
+          datasetKind: 'table',
+          datasetConfig: { table: 'src' },
+        }),
+        {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer', onError: 'fail' },
+            { source: 'b', sink: 'payload', type: 'binary', onError: 'fail' },
+          ],
+          counters,
+        },
+      ),
+    );
+
+    expect(counters).toMatchObject({ rowsRead: 3, rowsWritten: 3, rowsFailed: 0 });
+    // `typeof(payload)` is what the STORE holds: a stringified or base64'd value
+    // would read back as 'text' even where the bytes happened to survive.
+    expect(
+      rowsOf(sinkPath, 'SELECT id, payload, typeof(payload) AS t FROM sink ORDER BY id'),
+    ).toEqual([
+      { id: 1, payload: bytes, t: 'blob' },
+      { id: 2, payload: null, t: 'null' },
+      { id: 3, payload: Buffer.alloc(0), t: 'blob' },
+    ]);
+  });
+
+  /**
    * #1155 — the SAME contract as the test above, at the other end of `integer`.
    *
    * better-sqlite3 12.11.1 refuses to bind a bigint outside int64 (measured:

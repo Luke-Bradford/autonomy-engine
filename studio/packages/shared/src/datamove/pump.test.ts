@@ -188,7 +188,7 @@ describe('a per-row failure', () => {
     expect(counters.rowsFailed).toBe(3);
   });
 
-  it('fails a BLOB row rather than stringifying it — no declared type can hold one (#1131)', async () => {
+  it('fails a BLOB row mapped to a TEXT type rather than stringifying it', async () => {
     const { counters, batches } = run(batchesOf([{ b: new Uint8Array([1, 2, 3]) }]), [
       map({ source: 'b', sink: 'b', type: 'string' }),
     ]);
@@ -196,6 +196,26 @@ describe('a per-row failure', () => {
     expect(await batches).toEqual([]);
     expect(counters.rowsFailed).toBe(1);
     expect(counters.failuresByCode).toEqual({ unsupported_source_type: 1 });
+  });
+
+  it('copies a BLOB row mapped to binary, with the bytes intact (#1131)', async () => {
+    const blob = new Uint8Array([0x00, 0xff, 0x10]);
+    const { counters, batches } = run(batchesOf([{ b: blob }, { b: null }]), [
+      map({ source: 'b', sink: 'b', type: 'binary' }),
+    ]);
+
+    expect(await batches).toEqual([[{ b: blob }, { b: null }]]);
+    expect(counters.rowsFailed).toBe(0);
+  });
+
+  it('refuses a binary CONSTANT from an expression once, as a mapping error (#1131)', async () => {
+    const err = await failed(
+      run(batchesOf([{ a: '1' }]), [
+        map({ expression: 'not bytes', sink: 'blob_col', type: 'binary' }),
+      ]).batches,
+    );
+    expect(err.code).toBe('uncoercible_constant');
+    expect(err.message).toContain('blob_col');
   });
 
   it('fails only the RAGGED row when a later row is missing a key the first row had', async () => {
