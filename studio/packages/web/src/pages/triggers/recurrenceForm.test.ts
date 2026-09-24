@@ -439,7 +439,9 @@ describe('cronPreview', () => {
       startTime: '2026-08-01T09:00:00.000Z',
     });
     expect(preview.kind).toBe('summary');
-    if (preview.kind === 'summary') expect(preview.text).toContain('every 2 weeks');
+    if (preview.kind === 'summary') {
+      expect(preview.text).toBe('every 2 weeks · Mon · UTC · from 2026-08-01T09:00:00.000Z');
+    }
   });
 
   it('refuses to show a cron for a non-UTC zone, which the cron string cannot carry', () => {

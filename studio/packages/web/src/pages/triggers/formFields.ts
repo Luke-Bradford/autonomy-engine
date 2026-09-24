@@ -98,6 +98,14 @@ export function resolveBound(local: string, originalIso: string): string | null 
   return localInputToUtcIso(local);
 }
 
+/** The two `datetime-local` bound controls every builder shares. */
+export interface BoundFields {
+  startTime: string;
+  endTime: string;
+  startTimeIso: string;
+  endTimeIso: string;
+}
+
 /**
  * The local wall clock a bound will actually READ BACK as, when that differs
  * from what the operator typed — `null` otherwise, and for a blank or
@@ -141,14 +149,6 @@ export function boundShiftWarnings(form: BoundFields): string[] {
     );
   }
   return warnings;
-}
-
-/** The two `datetime-local` bound controls every builder shares. */
-export interface BoundFields {
-  startTime: string;
-  endTime: string;
-  startTimeIso: string;
-  endTimeIso: string;
 }
 
 /**

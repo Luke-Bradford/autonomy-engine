@@ -13,7 +13,8 @@ import {
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
-import { boundEcho, boundShiftWarnings } from './formFields';
+import { boundEcho } from './formFields';
+import { BoundShiftNotices } from './BoundShiftNotices';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
@@ -71,9 +72,6 @@ export function RecurrenceEditor({
    * re-derivation. */
   const startUtc = boundEcho(value.startTime, value.startTimeIso);
   const endUtc = boundEcho(value.endTime, value.endTimeIso);
-  /** A bound typed into a daylight-saving gap is saved as a different wall
-   * clock than the one typed (#855) — said here, where it was typed. */
-  const shifts = boundShiftWarnings(value);
 
   return (
     <fieldset className="recurrence-editor">
@@ -204,11 +202,7 @@ export function RecurrenceEditor({
         </p>
       )}
 
-      {shifts.map((warning) => (
-        <p key={warning} className="page-hint" data-testid="bound-shift">
-          {warning}
-        </p>
-      ))}
+      <BoundShiftNotices bounds={value} />
 
       {preview && (
         <p className="page-hint" data-testid="recurrence-preview">

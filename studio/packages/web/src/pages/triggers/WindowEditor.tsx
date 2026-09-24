@@ -7,7 +7,8 @@ import {
   type WindowFrequency,
 } from '@autonomy-studio/shared';
 import { formToWindow, type WindowFormState } from './windowForm';
-import { boundEcho, boundShiftWarnings } from './formFields';
+import { boundEcho } from './formFields';
+import { BoundShiftNotices } from './BoundShiftNotices';
 
 const FREQUENCIES = WindowFrequencySchema.options;
 
@@ -51,9 +52,6 @@ export function WindowEditor({
    * will be written rather than as a truncated re-derivation. */
   const startUtc = boundEcho(value.startTime, value.startTimeIso);
   const endUtc = boundEcho(value.endTime, value.endTimeIso);
-  /** A bound typed into a daylight-saving gap is saved as a different wall
-   * clock than the one typed (#855) — said here, where it was typed. */
-  const shifts = boundShiftWarnings(value);
 
   return (
     <fieldset className="window-editor">
@@ -141,11 +139,7 @@ export function WindowEditor({
         </p>
       )}
 
-      {shifts.map((warning) => (
-        <p key={warning} className="page-hint" data-testid="bound-shift">
-          {warning}
-        </p>
-      ))}
+      <BoundShiftNotices bounds={value} />
 
       {built && (
         <p className="page-hint" data-testid="window-preview">
