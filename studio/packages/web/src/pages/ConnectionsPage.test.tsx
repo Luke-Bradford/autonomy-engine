@@ -382,6 +382,27 @@ describe('ConnectionsPage', () => {
     expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
+  it('a kind change over unparseable JSON keeps the editor open and names the parse failure (#1146)', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([conn({ name: 'Fs one', kind: 'fs', config: { roots: ['/tmp'] } })]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Fs one');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    await user.click(within(form).getByRole('button', { name: 'Edit as JSON' }));
+    const textarea = within(form).getByLabelText('Config (JSON)');
+    await user.clear(textarea);
+    await user.paste('{oops');
+
+    // The shared `changeConfigKind` rule, which this form did not have before
+    // #1146: a draft that does not parse has nothing to carry, so the operator
+    // is told now rather than at Save, and their text stays on screen.
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'sqlite');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Invalid config JSON/);
+    expect(within(form).getByLabelText('Config (JSON)')).toHaveValue('{oops');
+  });
+
   it('warns about a RELATIVE fs root, which the shared schema does not refuse', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([

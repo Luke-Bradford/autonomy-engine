@@ -550,9 +550,9 @@ function DatasetForm({
     setError(null);
 
     // Read back whichever draft is on screen — never the other one, which is
-    // why each MODE toggle above commits to `config` before switching. A kind
-    // change deliberately does not: it rewrites neither draft, so an operator's
-    // JSON is never edited under them. The advisory is what covers that seam.
+    // why each mode toggle commits to `config` before switching. An ordinary
+    // kind change does not (`changeConfigKind`): it rewrites neither draft, so an
+    // operator's JSON is never edited under them. The advisory covers that seam.
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) {
       setError(draft.message);

@@ -49,17 +49,14 @@ import {
 } from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
 import {
-  assembleConfig,
   deriveFieldsWithCarried,
-  emptyControlValue,
-  parseConfigText,
   readConfigDraft,
   seedFieldInputs,
-  unrepresentableFields,
   type ConfigField,
   type FieldInput,
 } from './pipeline/configForm';
-import { ConfigFieldControl } from './pipeline/ConfigFieldControl';
+import { ConfigEditor } from './pipeline/ConfigEditor';
+import { useConfigEditor } from './pipeline/useConfigEditor';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -604,18 +601,8 @@ function ConnectionForm({
   const [probing, setProbing] = useState(false);
   const editing = form.id !== null;
 
-  const { fields, carried } = useMemo(
-    () => connectionFields(form.kind, form.config),
-    [form.kind, form.config],
-  );
-  // A STORED value its control cannot represent forces the JSON editor: showing
-  // a form that cannot round-trip what is already saved would corrupt the
-  // connection on a save the operator believes touched one other key.
-  const unrenderable = useMemo(
-    () => unrepresentableFields(fields, form.config),
-    [fields, form.config],
-  );
-  const jsonMode = form.jsonMode || unrenderable.length > 0;
+  const editor = useConfigEditor({ form, onChange, setError, fieldsFor: connectionFields });
+  const { fields, jsonMode } = editor;
 
   /**
    * Everything a probe's verdict depends on. The same inputs the advisory memo
@@ -743,59 +730,6 @@ function ConnectionForm({
     );
   }, [form.id, form.kind, form.secret, stored, dependents, dependentsUnavailable]);
 
-  /** Switch kinds WITHOUT discarding anything typed or stored. */
-  function onKindChange(kind: ConnectionKind) {
-    setError(null); // a parse/save error from the previous kind is not this one's
-    const next = connectionFields(kind, form.config);
-    // Seed the new kind's controls from the stored config, then let anything
-    // already typed win. A plain re-seed would drop every in-progress edit; no
-    // re-seed at all would leave a key the new kind owns showing an empty
-    // control, which `assembleConfig` reads as a clearing gesture and DELETES.
-    onChange({
-      ...form,
-      kind,
-      inputs: { ...seedFieldInputs(next.fields, form.config), ...form.inputs },
-    });
-  }
-
-  /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
-  function toJsonMode() {
-    const assembled = assembleConfig(form.config, fields, form.inputs);
-    if (!assembled.ok) {
-      setError(assembled.message);
-      return;
-    }
-    setError(null);
-    onChange({
-      ...form,
-      config: assembled.config,
-      jsonText: JSON.stringify(assembled.config, null, 2),
-      jsonMode: true,
-    });
-  }
-
-  /** JSON → fields: parse first, and refuse if the result has no form to show. */
-  function toFieldMode() {
-    const parsed = parseConfigText(form.jsonText);
-    if (!parsed.ok) {
-      setError(parsed.message);
-      return;
-    }
-    const next = connectionFields(form.kind, parsed.config);
-    const bad = unrepresentableFields(next.fields, parsed.config);
-    if (bad.length > 0) {
-      setError(`These settings have no form control: ${bad.join(', ')}.`);
-      return;
-    }
-    setError(null);
-    onChange({
-      ...form,
-      config: parsed.config,
-      inputs: seedFieldInputs(next.fields, parsed.config),
-      jsonMode: false,
-    });
-  }
-
   /**
    * #1191 — probe what is ON SCREEN, not what is stored: the same
    * `readConfigDraft` the submit path uses, so "Test" and "Save" can never
@@ -835,9 +769,9 @@ function ConnectionForm({
     setError(null);
 
     // Read back whichever draft is on screen — never the other one, which is
-    // why each MODE toggle above commits to `config` before switching. A kind
-    // change deliberately does not: it rewrites neither draft, so an operator's
-    // JSON is never edited under them. The advisory is what covers that seam.
+    // why each mode toggle commits to `config` before switching. An ordinary
+    // kind change does not (`changeConfigKind`): it rewrites neither draft, so an
+    // operator's JSON is never edited under them. The advisory covers that seam.
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) {
       setError(draft.message);
@@ -895,7 +829,10 @@ function ConnectionForm({
 
       <label>
         Kind
-        <select value={form.kind} onChange={(e) => onKindChange(e.target.value as ConnectionKind)}>
+        <select
+          value={form.kind}
+          onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+        >
           {KINDS.map((kind) => (
             <option key={kind} value={kind}>
               {kind}
@@ -904,58 +841,7 @@ function ConnectionForm({
         </select>
       </label>
 
-      <div className="connection-config" role="group" aria-label="Config">
-        <div className="config-header">
-          <span>Config</span>
-          <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
-            {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
-          </button>
-        </div>
-
-        {unrenderable.length > 0 && (
-          <p className="contract-advisory">
-            {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
-          </p>
-        )}
-
-        {jsonMode ? (
-          <label>
-            Config (JSON)
-            <textarea
-              value={form.jsonText}
-              onChange={(e) => onChange({ ...form, jsonText: e.target.value })}
-              rows={8}
-              spellCheck={false}
-            />
-          </label>
-        ) : (
-          <>
-            {fields.length === 0 && <p className="page-hint">This kind has no settings.</p>}
-            {fields.map((field) => (
-              <ConfigFieldControl
-                key={field.name}
-                field={field}
-                value={form.inputs[field.name] ?? emptyControlValue(field)}
-                onChange={(next) =>
-                  onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
-                }
-              />
-            ))}
-            {carried.length > 0 && (
-              <p className="contract-advisory">
-                {`Carried from another kind (${carried.join(', ')}) — ${form.kind} ignores these; blank a control to drop the key.`}
-              </p>
-            )}
-          </>
-        )}
-
-        {/* Outside the mode branch on purpose: the Kind select is reachable in
-            BOTH modes, and the JSON draft is exactly where a kind change can
-            leave a config shaped for the previous one. */}
-        {advisory !== null && (
-          <p className="contract-advisory">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
-        )}
-      </div>
+      <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
 
       {/* #1174 — outside the Config group, because it is a fact about OTHER
           resources rather than about this config, and outside the mode branch
