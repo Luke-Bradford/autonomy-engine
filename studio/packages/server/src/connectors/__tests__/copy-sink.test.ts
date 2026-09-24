@@ -72,6 +72,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
     };
     const result = await writeRowsToSink(
       {
+        nullOnError: [],
         dataset: dataset({ table: 'people' }),
         connection,
         sinkSecret: null,
@@ -132,6 +133,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
     };
     const result = await writeRowsToSink(
       {
+        nullOnError: [],
         dataset: dataset({ schema: 'public', table: 'people' }),
         connection,
         sinkSecret: 'pw',
@@ -157,6 +159,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
     await expect(
       writeRowsToSink(
         {
+          nullOnError: [],
           dataset: dataset({ schema: 'public', table: 'people' }),
           connection: {
             kind: 'postgres',
@@ -189,6 +192,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
     await expect(
       writeRowsToSink(
         {
+          nullOnError: [],
           dataset: dataset({ table: 'people' }),
           connection: { kind: 'http', connectionConfig: {} },
           sinkSecret: null,
@@ -212,6 +216,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
     await expect(
       writeRowsToSink(
         {
+          nullOnError: [],
           dataset: dataset({ table: 'people' }),
           connection: { kind: 'sqlite', connectionConfig: { path: 42 } },
           sinkSecret: null,

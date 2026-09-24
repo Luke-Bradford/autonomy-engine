@@ -59,6 +59,10 @@ export interface SqliteDatasetWrite {
   readonly datasetConfig: Record<string, unknown>;
   /** The sink columns this copy writes, matched case-insensitively (§7). */
   readonly columns: readonly string[];
+  /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
+   * against the store's own NOT NULL columns (#1162). Required, so no path
+   * can reach a store without the gate. */
+  readonly nullOnError: readonly string[];
   readonly mode: SqliteWriteMode;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;

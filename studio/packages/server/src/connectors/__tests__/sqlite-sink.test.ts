@@ -52,6 +52,7 @@ describe('the `writable` gate', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: { roots: [root], path },
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -76,6 +77,7 @@ describe('the `writable` gate', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: { roots: [root], path, writable: false },
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -95,6 +97,7 @@ describe('the `writable` gate', () => {
     const path = seedSink(root);
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -117,6 +120,7 @@ describe('what may be a sink at all', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'query',
           datasetConfig: { sql: 'SELECT 1' },
@@ -138,6 +142,7 @@ describe('what may be a sink at all', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'delimited',
           datasetConfig: { path: 'x.csv' },
@@ -160,6 +165,7 @@ describe('what may be a sink at all', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink"; DROP TABLE sink; --' },
@@ -189,6 +195,7 @@ describe('what may be a sink at all', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: { roots: [root], path, writable: true },
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -210,6 +217,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'nope' },
@@ -236,6 +244,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'v' },
@@ -259,6 +268,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const path = seedSink(root);
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'SINK' },
@@ -281,6 +291,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -300,6 +311,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -318,6 +330,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const path = seedSink(root);
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -355,6 +368,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     await expect(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'kt' },
@@ -374,6 +388,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -403,6 +418,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
 
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'spaced' },
@@ -431,6 +447,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
 
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'quoted' },
@@ -455,6 +472,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -487,6 +505,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { schema: 'not an identifier', table: 'sink' },
@@ -507,6 +526,7 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -528,6 +548,7 @@ describe('value binding', () => {
     const path = seedSink(root);
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -551,6 +572,7 @@ describe('value binding', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -571,6 +593,7 @@ describe('value binding', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -595,6 +618,7 @@ describe('value binding', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -615,6 +639,7 @@ describe('value binding', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -636,6 +661,7 @@ describe('write modes', () => {
     const write = (id: number) =>
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -654,6 +680,7 @@ describe('write modes', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -664,6 +691,7 @@ describe('write modes', () => {
     );
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -681,6 +709,7 @@ describe('write modes', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -692,6 +721,7 @@ describe('write modes', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -715,6 +745,7 @@ describe('write modes', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -726,6 +757,7 @@ describe('write modes', () => {
     async function* nothing(): AsyncIterable<readonly Record<string, SinkValue>[]> {}
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -745,6 +777,7 @@ describe('atomicity (§4)', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -761,6 +794,7 @@ describe('atomicity (§4)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -779,6 +813,7 @@ describe('atomicity (§4)', () => {
     const path = seedSink(root);
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -794,6 +829,7 @@ describe('atomicity (§4)', () => {
     await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -815,6 +851,7 @@ describe('atomicity (§4)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'strict_sink' },
@@ -862,6 +899,7 @@ describe('the one state the sink cannot prove clean', () => {
       const err = await failure(
         writeSqliteDatasetRows(
           {
+            nullOnError: [],
             connectionConfig: writableConfig(root, path),
             datasetKind: 'table',
             datasetConfig: { table: 'sink' },
@@ -901,6 +939,7 @@ describe('the one state the sink cannot prove clean', () => {
       const err = await failure(
         writeSqliteDatasetRows(
           {
+            nullOnError: [],
             connectionConfig: writableConfig(root, path),
             datasetKind: 'table',
             datasetConfig: { table: 'sink' },
@@ -941,6 +980,7 @@ describe('the busy timeout (§9)', () => {
       const err = await failure(
         writeSqliteDatasetRows(
           {
+            nullOnError: [],
             connectionConfig: writableConfig(root, path),
             datasetKind: 'table',
             datasetConfig: { table: 'sink' },
@@ -991,6 +1031,7 @@ describe('cancellation (§10)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, path),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -1017,6 +1058,7 @@ describe('cancellation (§10)', () => {
     const err = await failure(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: { roots: [root], path, writable: true },
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },
@@ -1042,6 +1084,7 @@ describe('progress (§5)', () => {
     }
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, path),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },

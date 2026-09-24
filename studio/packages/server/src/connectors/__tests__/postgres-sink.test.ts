@@ -122,6 +122,7 @@ function write(
     datasetKind: 'table',
     datasetConfig: { schema: 'public', table: 'tgt' },
     columns: ['a', 'b'],
+    nullOnError: [],
     mode: 'append',
     ...overrides,
   };
