@@ -870,9 +870,9 @@ a {
 
    #1245 — the form-control FAMILY reset below the `button` rule now puts every
    button in the app's font too, so the chip no longer differs in family from
-   the header buttons beside it. The pin stays: an anchor inherits its context's
-   SIZE (1rem in most containers), and 0.85rem is what keeps the chip at the
-   house control size (13.6px against the UA button's ~13.33px).
+   the header buttons beside it. The size pin stays: without it an anchor would
+   take its container's size, and 0.85rem is what keeps the chip at the house
+   control size (13.6px against the UA button's ~13.33px).
 
    Note an anchor activates on Enter only, where a button also took Space. That
    is correct anchor semantics — this control navigates — and the UA focus ring

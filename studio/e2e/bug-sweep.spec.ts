@@ -646,7 +646,9 @@ test('#1245 — form controls take the app font family, and keep the UA control 
 }) => {
   const problems = collectPageProblems(page);
   await openCanvas(page, `#1245 control font ${Date.now()}`);
-  await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+  /* `exact`: the suite shares one SQLite file, so an earlier spec's pipeline
+     named "…undo…" puts a `More actions for … undo` row button on the page. */
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
 
   const read = await page.evaluate(() => {
     const row = document.querySelector('.canvas-page .page-header .form-actions');
