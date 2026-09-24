@@ -22,7 +22,7 @@ agent:
     # still the gate); both halves are now thinking-tier. Fallback is sonnet-5
     # so a rate-limited primary degrades to a CURRENT model, not a stale one.
     # See docs/settled-decisions.md SD-33 (amended).
-    primary: claude-opus-5
+    primary: claude-opus-5-5
     fallback: claude-sonnet-5
 
 merge_gate:
