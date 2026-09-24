@@ -733,10 +733,10 @@ export function deriveFieldsWithCarried<K extends string>(
  * switching, so the two never disagree about a key the operator has finished
  * with. A KIND change ordinarily does NOT commit — it must not rewrite an
  * operator's JSON under them — which is precisely the seam a live advisory
- * covers. The exception is a page where the kind itself decides which editor is
- * on screen (`DatasetsPage`: a kind with no reader forces JSON on, and leaving
- * that kind takes it away again). There the kind change IS a mode toggle, so it
- * commits like one; a page whose kind never moves the editor must not.
+ * covers. The exception is a kind change that itself moves the editor — into a
+ * kind the page forces into JSON (a dataset kind with no reader), or one whose
+ * controls cannot show the stored value. There the kind change IS a mode toggle,
+ * so it commits like one (`changeConfigKind`); an ordinary kind change must not.
  */
 export function readConfigDraft(
   jsonMode: boolean,
@@ -754,4 +754,182 @@ export function readConfigDraft(
   // config to store and the subset to validate — there is no "keys the form does
   // not own" distinction to preserve, because no form was in the way.
   return { ok: true, config: parsed.config, owned: parsed.config };
+}
+
+/**
+ * The state a two-mode config editor works on (#1146).
+ *
+ * `config` is the AUTHORITATIVE value; `inputs` and `jsonText` are the two
+ * drafts the operator types into, and each mode change reads its draft back into
+ * `config`. `jsonMode` records only that the operator ASKED for JSON — the mode
+ * on screen is derived (`configEditorView`), because other facts force it too.
+ */
+export interface ConfigDraft<K extends string> {
+  kind: K;
+  config: Record<string, unknown>;
+  inputs: Record<string, FieldInput>;
+  jsonText: string;
+  jsonMode: boolean;
+}
+
+/** One kind's controls plus its carried keys — `deriveFieldsWithCarried`'s shape. */
+export type FieldsFor<K extends string> = (
+  kind: K,
+  config: Record<string, unknown>,
+) => { fields: ConfigField[]; carried: string[] };
+
+/** Whether a page shows this kind ONLY as JSON, whatever the operator asked for. */
+export type ForcedJson<K extends string> = (kind: K) => boolean;
+
+const neverForced = (): boolean => false;
+
+/**
+ * What the editor shows for a draft, and why.
+ *
+ * Three facts put the textarea on screen, and only these: the operator asked
+ * (`jsonMode`); a STORED value its control cannot represent (a form that cannot
+ * round-trip what is saved would corrupt it on a save the operator believes
+ * touched one other key); or a kind the page forces (`forcedJson`).
+ */
+export function configEditorView<K extends string>(
+  draft: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K> = neverForced,
+): { fields: ConfigField[]; carried: string[]; unrenderable: string[]; jsonMode: boolean } {
+  const { fields, carried } = fieldsFor(draft.kind, draft.config);
+  const unrenderable = unrepresentableFields(fields, draft.config);
+  return {
+    fields,
+    carried,
+    unrenderable,
+    jsonMode: draft.jsonMode || unrenderable.length > 0 || forcedJson(draft.kind),
+  };
+}
+
+/** Read the field draft into `config` AND `jsonText`, so the textarea opens on what Save would write. */
+function commitFieldDraft<K extends string, F extends ConfigDraft<K>>(
+  form: F,
+  fields: readonly ConfigField[],
+): { ok: true; form: F } | { ok: false; error: string } {
+  const assembled = assembleConfig(form.config, fields, form.inputs);
+  if (!assembled.ok) return { ok: false, error: assembled.message };
+  return {
+    ok: true,
+    form: {
+      ...form,
+      config: assembled.config,
+      jsonText: JSON.stringify(assembled.config, null, 2),
+    },
+  };
+}
+
+/**
+ * Switch kinds WITHOUT discarding anything typed or stored.
+ *
+ * Always returns the moved form — the operator is never trapped in a kind — and
+ * an `error` naming anything that could not be carried (`null` otherwise, which
+ * the caller writes too, so an error from the previous kind does not linger).
+ */
+export function changeConfigKind<K extends string, F extends ConfigDraft<K>>(
+  form: F,
+  // `NoInfer`: the kind set comes from `fieldsFor`, not from the one literal passed.
+  kind: NoInfer<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K> = neverForced,
+): { form: F; error: string | null } {
+  const current = configEditorView(form, fieldsFor, forcedJson);
+
+  // In JSON mode the textarea is the ONLY draft being typed into: its `onChange`
+  // writes `jsonText` and never `config` or `inputs`. Seeding the new kind's
+  // controls from those would seed them from BEFORE every keystroke — and
+  // because a kind change can CLOSE the editor (leaving a forced kind), the
+  // operator would land in a field form holding their pre-edit config, with
+  // nothing on screen to say the edit was dropped. So the parsed JSON is the
+  // whole seed: no `inputs` overlay, because those values predate the editor and
+  // would otherwise win over the very edit being carried. The DERIVED mode, not
+  // the flag: a forced kind has the textarea up with `jsonMode` false.
+  if (current.jsonMode) {
+    const parsed = parseConfigText(form.jsonText);
+    if (parsed.ok) {
+      return {
+        form: {
+          ...form,
+          kind,
+          config: parsed.config,
+          // Left exactly as typed: re-stringifying would reformat the operator's
+          // text under their cursor when the editor stays open, and it is
+          // re-derived by `configToJson` when it reopens.
+          inputs: seedFieldInputs(fieldsFor(kind, parsed.config).fields, parsed.config),
+        },
+        error: null,
+      };
+    }
+    // A draft that does not parse has no committed form to carry, so the change
+    // must not CLOSE the editor — a new kind that happens to render the stale
+    // `config` would reopen the field form on the pre-edit value while the
+    // unparseable text vanished behind it. Pin it open instead, the same rule
+    // `configToFields` applies. The kind still changes; the message names what
+    // has to be fixed first.
+    return { form: { ...form, kind, jsonMode: true }, error: parsed.message };
+  }
+
+  // Seed the new kind's controls from the stored config, then let anything
+  // already typed win. A plain re-seed would drop every in-progress edit; no
+  // re-seed at all would leave a key the new kind owns showing an empty control,
+  // which `assembleConfig` reads as a clearing gesture and DELETES.
+  const moved: F = {
+    ...form,
+    kind,
+    inputs: {
+      ...seedFieldInputs(fieldsFor(kind, form.config).fields, form.config),
+      ...form.inputs,
+    },
+  };
+
+  // Ordinarily a kind change rewrites NEITHER draft, so an operator's JSON is
+  // never edited under them. The exception is a switch that itself takes the
+  // field form away — by EITHER forcing reason, the kind or an unrenderable
+  // stored value — which is the one route into JSON that does not run through
+  // `configToJson`. The textarea would otherwise open on a `jsonText` written
+  // before anything was typed into the controls, and SAVE it.
+  if (!configEditorView(moved, fieldsFor, forcedJson).jsonMode) return { form: moved, error: null };
+  const committed = commitFieldDraft<K, F>(moved, current.fields);
+  // A control that will not read back (non-numeric text in a number box) has no
+  // committed form to carry; the message names it rather than letting the
+  // textarea open on a draft that silently omits it.
+  return committed.ok
+    ? { form: committed.form, error: null }
+    : { form: moved, error: committed.error };
+}
+
+/** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
+export function configToJson<K extends string, F extends ConfigDraft<K>>(
+  form: F,
+  fields: readonly ConfigField[],
+): { ok: true; form: F } | { ok: false; error: string } {
+  const committed = commitFieldDraft<K, F>(form, fields);
+  return committed.ok ? { ok: true, form: { ...committed.form, jsonMode: true } } : committed;
+}
+
+/** JSON → fields: parse first, and refuse if the result has no form to show. */
+export function configToFields<K extends string, F extends ConfigDraft<K>>(
+  form: F,
+  fieldsFor: FieldsFor<K>,
+): { ok: true; form: F } | { ok: false; error: string } {
+  const parsed = parseConfigText(form.jsonText);
+  if (!parsed.ok) return { ok: false, error: parsed.message };
+  const { fields } = fieldsFor(form.kind, parsed.config);
+  const bad = unrepresentableFields(fields, parsed.config);
+  if (bad.length > 0) {
+    return { ok: false, error: `These settings have no form control: ${bad.join(', ')}.` };
+  }
+  return {
+    ok: true,
+    form: {
+      ...form,
+      config: parsed.config,
+      inputs: seedFieldInputs(fields, parsed.config),
+      jsonMode: false,
+    },
+  };
 }
