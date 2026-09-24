@@ -954,7 +954,8 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   }
 
   it('names them before any save, and does not gate Save on them', async () => {
-    dependentsMock.mockResolvedValue({ ...NO_NODES,
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -974,7 +975,11 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('stays silent when the SAME edit supplies the secret — nothing gets disabled', async () => {
-    dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
     const { user, form } = await openEdit();
     await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
 
@@ -999,7 +1004,8 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('speaks about a ${}-dynamic dependency rather than reading it as silence', async () => {
-    dependentsMock.mockResolvedValue({ ...NO_NODES,
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [],
       dynamic: [{ id: 't2', name: 'router', nodeIds: ['n1'] }],
     });
@@ -1010,8 +1016,75 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     expect(await within(form).findByText(/router/)).toHaveTextContent(/only a run can say/);
   });
 
+  /* #1252 — the kind change that disables NOTHING: ollama → agent_cli stays
+     ready, so the trigger note is rightly silent, and a node that cannot use
+     the new kind is what has to be said. */
+  it('names the pipeline node a still-ready kind change breaks, with no trigger note', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+      nodes: [
+        {
+          pipelineId: 'p1',
+          pipelineName: 'etl',
+          versionId: 'v1',
+          version: 1,
+          nodeId: 'summarise',
+          nodeType: 'llm_call',
+          acceptedKinds: ['ollama', 'openai_api'],
+        },
+      ],
+      dynamicNodes: [],
+    });
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'openai_api');
+    await waitFor(() => expect(within(form).queryByText(/Still checking/)).not.toBeInTheDocument());
+    expect(within(form).queryByText(/breaks/)).not.toBeInTheDocument();
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'agent_cli');
+    const note = await within(form).findByText(/Saving this breaks 1 pipeline node/);
+    expect(note).toHaveTextContent('etl › summarise');
+    expect(note).toHaveTextContent(/stay enabled/);
+    expect(within(form).queryByText(/switches off/)).not.toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  it('names the pipeline nodes in the DELETE confirm', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [],
+      dynamic: [],
+      nodes: [
+        {
+          pipelineId: 'p1',
+          pipelineName: 'etl',
+          versionId: 'v1',
+          version: 1,
+          nodeId: 'summarise',
+          nodeType: 'llm_call',
+          acceptedKinds: ['ollama'],
+        },
+      ],
+      dynamicNodes: [],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ready]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Local');
+
+    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]![0] as string;
+    expect(message).toContain('Delete connection "Local"?');
+    expect(message).toContain('1 pipeline node (etl › summarise) uses it');
+    confirmSpy.mockRestore();
+  });
+
   it('names them in the DELETE confirm, alongside the datasets it strands', async () => {
-    dependentsMock.mockResolvedValue({ ...NO_NODES,
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -1034,7 +1107,11 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     // The two reads are independent; `allSettled` is what keeps one failure
     // from silencing the advisory that DID succeed.
     listDatasetsMock.mockRejectedValue(new Error('datasets down'));
-    dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);

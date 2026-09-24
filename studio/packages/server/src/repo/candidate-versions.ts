@@ -100,4 +100,3 @@ export function candidateVersions(db: Db, ownerId: string): Candidate[] {
   }
   return candidates;
 }
-

@@ -666,7 +666,10 @@ describe('connectionDependents — the NODE buckets (#1252)', () => {
     const v1 = versionOf(db, pipeline.id, [llmNode('old', connId)]);
     const v2 = versionOf(db, pipeline.id, [llmNode('new', connId)]);
     triggerOn(db, 'local', v1, false);
-    const seen = connectionDependents(db, 'local', connId).nodes.map((n) => [n.versionId, n.nodeId]);
+    const seen = connectionDependents(db, 'local', connId).nodes.map((n) => [
+      n.versionId,
+      n.nodeId,
+    ]);
     expect(seen).toEqual([
       [v1, 'old'],
       [v2, 'new'],

@@ -119,3 +119,56 @@ test('names the enabled trigger a kind change would switch off, and then switche
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1252 — the kind change that disables NOTHING. `ollama` → `fs` keeps the
+ * connection ready (both credential-less), so the reverse gate never fires and
+ * the trigger note above is rightly silent; the `llm_call` node bound to it
+ * would fail every run with `CONNECTION_KIND_INVALID` while its trigger stays
+ * enabled. What only the real chain proves: the server's candidate-version walk
+ * finds a node no trigger is even bound to, and the form tests the selected
+ * kind against the accepted kinds the wire carried.
+ */
+test('names the pipeline node a still-ready kind change breaks, where no trigger would be switched off', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const suffix = Date.now();
+  const connectionName = `e2e 1252 conn ${suffix}`;
+  const connectionId = await seedConnection(page, {
+    name: connectionName,
+    kind: 'ollama',
+    config: {},
+  });
+  const pipelineName = `e2e 1252 pipeline ${suffix}`;
+  await seedVersion(page, pipelineName, {
+    nodes: [
+      {
+        id: 'summarise',
+        type: 'llm_call',
+        position: { x: 0, y: 0 },
+        connectionId,
+        config: { prompt: 'hi' },
+      },
+    ],
+  });
+
+  await page.goto('/#/manage/connections');
+  await page.getByRole('heading', { name: 'Connections' }).waitFor();
+  await fluentRootReady(page);
+  await page.getByRole('button', { name: `Edit ${connectionName}`, exact: true }).click();
+  await expect(form(page)).toBeVisible();
+
+  // A kind the node still accepts breaks nothing, and says nothing.
+  await form(page).getByLabel('Kind').selectOption('openai_api');
+  await expect(form(page).getByText(/Saving this breaks/)).toHaveCount(0);
+
+  await form(page).getByLabel('Kind').selectOption('fs');
+  const note = form(page).getByText(/Saving this breaks 1 pipeline node/);
+  await expect(note).toBeVisible();
+  await expect(note).toContainText(`${pipelineName} › summarise`);
+  await expect(note).toContainText(/stay enabled/);
+  await expect(form(page).getByText(/switches off/)).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
