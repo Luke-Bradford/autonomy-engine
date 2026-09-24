@@ -9,6 +9,10 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithRouter } from '../testing/renderWithRouter';
 
+/** A row's Edit button — named for its row since #1253, and never the form's
+ *  own "Edit as JSON" / "Edit as fields" toggle. */
+const ROW_EDIT = /^Edit (?!as )/;
+
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
 vi.mock('../api/connections', async (importActual) => {
@@ -122,6 +126,24 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     expect(await screen.findByText('My Claude')).toBeInTheDocument();
     expect(screen.getByText('anthropic_api')).toBeInTheDocument();
+  });
+
+  /* #1253 — Edit names its row, as Export and Delete already did, so a
+     screen-reader user walking the button list hears which connection each
+     Edit opens rather than "Edit, Edit, Edit". */
+  it('names the row on every row action, Edit included', async () => {
+    listMock.mockResolvedValue([
+      conn({ id: 'conn_a', name: 'Staging' }),
+      conn({ id: 'conn_b', name: 'Prod' }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Staging');
+    for (const name of ['Staging', 'Prod']) {
+      for (const act of ['Edit', 'Export', 'Delete']) {
+        expect(screen.getByRole('button', { name: `${act} ${name}` })).toBeInTheDocument();
+      }
+    }
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {
@@ -262,7 +284,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Legacy');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.clear(within(form).getByLabelText('model (optional)'));
     await user.type(within(form).getByLabelText('model (optional)'), 'claude-opus-5');
@@ -282,7 +304,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Switched');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByText(/Carried from another kind \(model\)/)).toBeInTheDocument();
 
@@ -300,7 +322,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Odd');
 
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByText(/Saved settings this form cannot show \(model\)/)).toBeVisible();
     expect(within(form).getByLabelText('Config (JSON)')).toBeInTheDocument();
@@ -348,7 +370,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Fs one');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.click(within(form).getByRole('button', { name: 'Edit as JSON' }));
 
@@ -369,7 +391,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Fs rel');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     // The absolute-root check is the SERVER's (`node:path`), so a schema-only
     // advisory would say nothing about the one path-safety key in the catalog.
@@ -384,7 +406,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Editable');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByLabelText('Name')).toHaveValue('Editable');
     // Secret is never prefilled — it is write-only.
@@ -407,7 +429,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Rotatable');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.type(within(form).getByLabelText('Secret'), 'sk-new');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -588,7 +610,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Claude');
 
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
 
@@ -606,7 +628,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Claude');
 
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       await user.type(screen.getByLabelText('Secret'), 'sk-new');
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -683,14 +705,14 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Staging');
 
-      const rows = screen.getAllByRole('button', { name: 'Edit' });
+      const rows = screen.getAllByRole('button', { name: ROW_EDIT });
       await user.click(rows[0]!);
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
 
       // Switch to the OTHER connection without closing the form.
-      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+      await user.click(screen.getAllByRole('button', { name: ROW_EDIT })[1]!);
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
@@ -763,7 +785,7 @@ describe('ConnectionsPage', () => {
       listMock.mockResolvedValue([store]);
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
     }
 
@@ -925,7 +947,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     listMock.mockResolvedValue([row]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(row.name);
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
   }
 

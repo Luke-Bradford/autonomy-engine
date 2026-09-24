@@ -7,6 +7,10 @@ import * as datasetsApi from '../api/datasets';
 import * as connectionsApi from '../api/connections';
 import { renderWithRouter } from '../testing/renderWithRouter';
 
+/** A row's Edit button — named for its row since #1253, and never the form's
+ *  own "Edit as JSON" / "Edit as fields" toggle. */
+const ROW_EDIT = /^Edit (?!as )/;
+
 // Mock only the network calls; `DatasetWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
 vi.mock('../api/datasets', async (importActual) => {
@@ -234,13 +238,23 @@ describe('DatasetsPage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  /* #1253 — Edit names its row, as Delete already did. */
+  it('names the row on every row action, Edit included', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    renderWithRouter(<DatasetsPage />);
+    await screen.findByText('Orders');
+    expect(screen.getByRole('button', { name: 'Edit Orders' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete Orders' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
   it('seeds the edit form from the stored row, so a rename cannot wipe the columns', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     await user.clear(within(form()).getByLabelText('Name'));
     await user.type(within(form()).getByLabelText('Name'), 'Orders v2');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -268,7 +282,7 @@ describe('DatasetsPage', () => {
     await screen.findByText('Orders');
     expect(screen.getByText('conn_gone')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     expect(within(form()).getByLabelText('Store')).toHaveValue('conn_gone');
     expect(
       within(form()).getByText(/names a connection that no longer exists/),
@@ -291,7 +305,7 @@ describe('DatasetsPage', () => {
     renderWithRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     // `table` belongs to the `table` kind, not to `query` — but the stored
     // config holds it, so it is rendered (optional) and can be blanked away.
     expect(within(form()).getByLabelText('table (optional)')).toHaveValue('orders');
@@ -448,7 +462,7 @@ describe('DatasetsPage', () => {
     ]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText('Orders');
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
 
     // `parameters` is a record, so it derives a JSON control; typing something
     // unparseable into it makes the field draft unreadable.

@@ -330,7 +330,11 @@ export function DatasetsPage() {
                 </td>
                 <td>{dataset.columns.length}</td>
                 <td>
-                  <button type="button" onClick={() => setForm(formForEdit(dataset))}>
+                  <button
+                    type="button"
+                    onClick={() => setForm(formForEdit(dataset))}
+                    aria-label={`Edit ${dataset.name}`}
+                  >
                     Edit
                   </button>
                   <button

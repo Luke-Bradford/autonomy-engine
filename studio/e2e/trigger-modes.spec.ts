@@ -61,7 +61,7 @@ test.describe('#854 event mode', () => {
     // Re-opening rebuilds the same form from what was persisted.
     await page
       .getByRole('row', { name: /On order placed/ })
-      .getByRole('button', { name: /^Edit$/ })
+      .getByRole('button', { name: /^Edit / })
       .click();
     await expect(triggerForm(page).getByLabel('Event name')).toHaveValue('order.placed');
 
@@ -88,7 +88,7 @@ test.describe('#854 event mode', () => {
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded subscription/ });
-    await row.getByRole('button', { name: /^Edit$/ }).click();
+    await row.getByRole('button', { name: /^Edit / }).click();
     const form = triggerForm(page);
     await expect(form.getByLabel('Event name')).toHaveValue('order.placed');
 
@@ -149,7 +149,7 @@ test.describe('#854 tumbling mode', () => {
 
     await page
       .getByRole('row', { name: /Two-hourly windows/ })
-      .getByRole('button', { name: /^Edit$/ })
+      .getByRole('button', { name: /^Edit / })
       .click();
     const reopened = triggerForm(page);
     await expect(reopened.getByLabel('Window frequency')).toHaveValue('hour');
@@ -181,7 +181,7 @@ test.describe('#854 tumbling mode', () => {
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded windows/ });
-    await row.getByRole('button', { name: /^Edit$/ }).click();
+    await row.getByRole('button', { name: /^Edit / }).click();
     const form = triggerForm(page);
     await expect(form.getByLabel('Window frequency')).toHaveValue('hour');
 

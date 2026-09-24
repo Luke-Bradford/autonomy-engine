@@ -464,7 +464,11 @@ export function ConnectionsPage() {
                   <code>{conn.kind}</code>
                 </td>
                 <td>
-                  <button type="button" onClick={() => openEditForm(conn)}>
+                  <button
+                    type="button"
+                    onClick={() => openEditForm(conn)}
+                    aria-label={`Edit ${conn.name}`}
+                  >
                     Edit
                   </button>
                   <button

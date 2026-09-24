@@ -298,11 +298,10 @@ test.describe('#1174 an edit says what it would strand', () => {
    * another control's label ('Kind', 'Name', 'Columns') breaks
    * `datasets-page.spec.ts` from over here, in a shared single-worker database.
    * `e2e-1174-*` is clear of all of them — see that file's own note. The SUFFIX
-   * is under the same rule for a second reason: the Export and Delete buttons
-   * carry `aria-label`s that embed the connection's name, so a suffix of `edit`
-   * makes all three row buttons match `getByRole('button', { name: 'Edit' })`.
-   * Hence `alpha`/`beta`, and `exact: true` on the one button whose label is a
-   * prefix of nothing.
+   * is under the same rule for a second reason: every row button carries an
+   * `aria-label` embedding the connection's name (Edit too, since #1253), so a
+   * loose name match on one action can land on another. Hence `alpha`/`beta`,
+   * and the row's Edit addressed by an ANCHORED `/^Edit /`.
    */
   async function seedStoreWithDataset(page: Page, suffix: string) {
     const connectionId = await seedConnection(page, {
@@ -352,7 +351,7 @@ test.describe('#1174 an edit says what it would strand', () => {
     await gotoConnections(page);
 
     const row = page.getByRole('row', { name: /e2e-1174-strand-alpha/ });
-    await row.getByRole('button', { name: 'Edit', exact: true }).click();
+    await row.getByRole('button', { name: /^Edit / }).click();
     // Nothing to say yet — the stored kind has not moved.
     await expect(form(page).getByText(/strands/)).toHaveCount(0);
 

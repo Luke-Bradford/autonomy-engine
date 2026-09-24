@@ -19,6 +19,10 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { ROUTES } from '../routes';
 
+/** A row's Edit button — named for its row since #1253, and never the form's
+ *  own "Edit as JSON" / "Edit as fields" toggle. */
+const ROW_EDIT = /^Edit (?!as )/;
+
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
 // #1206 — the app shell loads its build identity and update status on EVERY
@@ -418,7 +422,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Inert', mode: 'schedule', schedule: null, recurrence: null }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByLabelText(/Schedule authored as/i)).toHaveValue('cron');
@@ -446,7 +450,7 @@ describe('TriggersPage', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // The builder round-trips the stored recurrence, and the raw-cron field is
@@ -546,7 +550,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
 
@@ -562,7 +566,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // Switch away from webhook — the stored secret must be actively cleared.
     await user.selectOptions(form.getByLabelText('Mode'), 'manual');
@@ -923,7 +927,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -944,7 +948,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'manual');
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -973,7 +977,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByTestId('window-preserved')).toHaveTextContent(/retry policy/i);
     await user.type(form.getByLabelText('Name'), ' renamed');
@@ -1017,7 +1021,7 @@ describe('#854 review follow-ups', () => {
     ]);
     return (async () => {
       renderWithRouter(<TriggersPage />);
-      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
       expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
@@ -1049,7 +1053,7 @@ describe('#854 review follow-ups', () => {
     ]);
     return (async () => {
       renderWithRouter(<TriggersPage />);
-      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
       expect(form.getByTestId('window-bounds-utc')).toHaveTextContent('2026-08-01T08:00:30.500Z');
     })();
@@ -1067,7 +1071,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByTestId('event-preserved')).toHaveTextContent('filter, source');
   });
@@ -1084,7 +1088,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     renderWithRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.clear(form.getByLabelText('Event name'));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -1254,6 +1258,17 @@ describe('TriggersPage — binding to the active published version', () => {
     expect(form.getByLabelText('Pipeline version')).toHaveValue('plv_1');
   });
 
+  /* #1253 — Edit names its row, as Export and Delete already did. */
+  it('names the row on every row action, Edit included', async () => {
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    renderWithRouter(<TriggersPage />);
+    await screen.findByRole('row', { name: /Nightly/ });
+    for (const act of ['Edit', 'Export', 'Delete']) {
+      expect(screen.getByRole('button', { name: `${act} Nightly` })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
   /* PATCH is concrete-only by design, so that a patch can never silently
      re-resolve a pinned binding (`TriggerCreateBodySchema`). */
   it('does NOT offer bind-to-active when editing an existing trigger', async () => {
@@ -1261,7 +1276,7 @@ describe('TriggersPage — binding to the active published version', () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithRouter(<TriggersPage />);
     const row = within(await screen.findByRole('row', { name: /Nightly/ }));
-    await user.click(row.getByRole('button', { name: 'Edit' }));
+    await user.click(row.getByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(
       form.queryByRole('radio', { name: /active published version/i }),

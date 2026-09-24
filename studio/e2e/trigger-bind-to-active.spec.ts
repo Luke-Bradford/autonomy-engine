@@ -145,7 +145,7 @@ test('editing an existing trigger offers no bind-to-active', async ({ page }) =>
   await fluentRootReady(page);
   await page
     .getByRole('row', { name: /Already bound/ })
-    .getByRole('button', { name: 'Edit', exact: true })
+    .getByRole('button', { name: /^Edit / })
     .click();
 
   const form = triggerForm(page);

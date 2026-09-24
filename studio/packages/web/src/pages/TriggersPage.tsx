@@ -616,7 +616,11 @@ export function TriggersPage() {
                   >
                     Fire now
                   </button>
-                  <button type="button" onClick={() => setForm(formForEdit(t))}>
+                  <button
+                    type="button"
+                    onClick={() => setForm(formForEdit(t))}
+                    aria-label={`Edit ${t.name}`}
+                  >
                     Edit
                   </button>
                   <button
