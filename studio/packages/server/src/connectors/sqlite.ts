@@ -576,7 +576,16 @@ export const sqliteAdapter: ConnectorAdapter = {
         // and never this adapter's — a fallback to the source store is the one
         // wrong answer available, because it would write the right rows into the
         // wrong database and report success.
-        writeRows: ({ dataset, connection, columns, nullOnError, mode, onBatch, batches, signal }) =>
+        writeRows: ({
+          dataset,
+          connection,
+          columns,
+          nullOnError,
+          mode,
+          onBatch,
+          batches,
+          signal,
+        }) =>
           writeRowsToSink(
             {
               dataset,

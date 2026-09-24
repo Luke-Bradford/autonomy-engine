@@ -279,6 +279,42 @@ describe('copy activity — the refusal ladder', () => {
     expect(rowsOf(sinkPath)).toEqual([]);
   });
 
+  it("refuses onError:'null' where the DATASET says nullable but the STORE says NOT NULL (#1162)", async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'nn-dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec(
+      "CREATE TABLE sink (id INTEGER, name TEXT NOT NULL); INSERT INTO sink VALUES (9, 'kept')",
+    );
+    dst.close();
+    const end = terminal(
+      await run(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath,
+          // The declaration is stale: it calls `name` nullable. §7 says the
+          // declared schema is not the gate, so the dispatch rung admits this —
+          // and the sink, reading the real schema, is what refuses it.
+          sinkColumns: columns(['id', true], ['name', true]),
+          input: {
+            mapping: [
+              { source: 'id', sink: 'id', type: 'integer' },
+              { source: 'name', sink: 'name', type: 'string', onError: 'null' },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(end).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining(
+        "sink column 'name' sets onError:'null', but the sink table in the store is NOT NULL",
+      ),
+    });
+    expect(rowsOf(sinkPath)).toEqual([{ id: 9, name: 'kept' }]);
+  });
+
   it("allows onError:'null' where the sink column is NULLABLE", async () => {
     const root = tempRoot();
     const end = terminal(

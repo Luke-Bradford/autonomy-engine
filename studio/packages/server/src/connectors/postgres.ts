@@ -229,7 +229,16 @@ export function createPostgresAdapter(
           // of the kind it claims to be and never this adapter's — including
           // when both ends are postgres, where the two connections are still two
           // connections and may name different servers.
-          writeRows: ({ dataset, connection, columns, nullOnError, mode, onBatch, batches, signal }) =>
+          writeRows: ({
+            dataset,
+            connection,
+            columns,
+            nullOnError,
+            mode,
+            onBatch,
+            batches,
+            signal,
+          }) =>
             writeRowsToSink(
               {
                 dataset,

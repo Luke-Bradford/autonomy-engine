@@ -694,7 +694,16 @@ export const fsAdapter: ConnectorAdapter = {
         // from this adapter's own connection — and here that is not merely the
         // safer answer, it is the only coherent one: an `fs` config has no
         // database in it at all.
-        writeRows: ({ dataset, connection, columns, nullOnError, mode, onBatch, batches, signal }) =>
+        writeRows: ({
+          dataset,
+          connection,
+          columns,
+          nullOnError,
+          mode,
+          onBatch,
+          batches,
+          signal,
+        }) =>
           writeRowsToSink(
             {
               dataset,
