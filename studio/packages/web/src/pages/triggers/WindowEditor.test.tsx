@@ -13,7 +13,8 @@ import { blankWindowForm } from './windowForm';
 describe('#855 WindowEditor names a bound the DST gap will move', () => {
   const originalTz = process.env.TZ;
   afterEach(() => {
-    process.env.TZ = originalTz;
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
   });
 
   it('warns for an epoch inside the gap, and is silent for one that exists', () => {

@@ -311,7 +311,8 @@ describe('recurrenceToForm — round trip', () => {
 describe('localInputToUtcIso / utcIsoToLocalInput', () => {
   const originalTz = process.env.TZ;
   afterEach(() => {
-    process.env.TZ = originalTz;
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
   });
 
   it('reads a datetime-local value as BROWSER-LOCAL wall clock', () => {
@@ -347,7 +348,8 @@ describe('localInputToUtcIso / utcIsoToLocalInput', () => {
 describe('boundShift — a wall clock the browser zone does not have (#855)', () => {
   const originalTz = process.env.TZ;
   afterEach(() => {
-    process.env.TZ = originalTz;
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
   });
 
   it('reports the wall clock a DST-gap value will actually be saved as', () => {
