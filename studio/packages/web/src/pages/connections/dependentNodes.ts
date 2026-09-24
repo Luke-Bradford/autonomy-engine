@@ -83,11 +83,17 @@ function dynamicNodeClause(
 /**
  * The edit-form note. `null` ONLY when the select has not moved, or from a
  * completed read in which nothing breaks and nothing is unsettled.
+ *
+ * `triggersDisabled` is the trigger note's own condition
+ * (`kindChangeDisablesTriggers`). When it holds, the save switches bound
+ * triggers OFF and the note beside this one says so, so the "stays enabled"
+ * clause would contradict it — it is dropped, not reworded.
  */
 export function nodeKindAdvisory(
   check: NodeCheck,
   storedKind: ConnectionKind,
   nextKind: ConnectionKind,
+  triggersDisabled: boolean,
 ): string | null {
   if (storedKind === nextKind) return null;
   const question = `whether ${nextKind} suits them`;
@@ -103,7 +109,7 @@ export function nodeKindAdvisory(
         return dynamic === '' ? null : dynamic;
       }
       const verb = broken.length === 1 ? 'does' : 'do';
-      return `Saving this breaks ${nodePhrase(broken)}: ${broken.length === 1 ? 'its' : 'their'} activity ${verb} not accept a ${nextKind} connection, so every run of ${broken.length === 1 ? 'it' : 'them'} fails — and any trigger bound to ${broken.length === 1 ? 'it' : 'them'} will stay enabled and keep firing.${dynamicNodeClause(check.dynamicNodes, true, question)}`;
+      return `Saving this breaks ${nodePhrase(broken)}: ${broken.length === 1 ? 'its' : 'their'} activity ${verb} not accept a ${nextKind} connection, so every run of ${broken.length === 1 ? 'it' : 'them'} fails${triggersDisabled ? '' : ` — and any trigger bound to ${broken.length === 1 ? 'it' : 'them'} will stay enabled and keep firing`}.${dynamicNodeClause(check.dynamicNodes, true, question)}`;
     }
   }
 }

@@ -54,7 +54,7 @@ describe('nodesBrokenByKind (#1252)', () => {
 
 describe('nodeKindAdvisory (#1252)', () => {
   it('says nothing while the Kind select has not moved', () => {
-    expect(nodeKindAdvisory({ state: 'loading' }, 'ollama', 'ollama')).toBeNull();
+    expect(nodeKindAdvisory({ state: 'loading' }, 'ollama', 'ollama', false)).toBeNull();
   });
 
   it('names each broken node once, by pipeline and node, however many versions carry it', () => {
@@ -62,6 +62,7 @@ describe('nodeKindAdvisory (#1252)', () => {
       known([node(), node({ versionId: 'v2', version: 2 })]),
       'ollama',
       'fs',
+      false,
     );
     expect(text).toContain('1 pipeline node (nightly etl › summarise)');
     expect(text).toContain('fs');
@@ -69,23 +70,30 @@ describe('nodeKindAdvisory (#1252)', () => {
     expect(text).toMatch(/stay enabled/);
   });
 
+  it('does not say the triggers stay enabled when the same save switches them off', () => {
+    // The trigger note beside this one says they are disabled; both cannot hold.
+    const text = nodeKindAdvisory(known([node()]), 'ollama', 'fs', true);
+    expect(text).toContain('1 pipeline node (nightly etl › summarise)');
+    expect(text).not.toMatch(/stay enabled/);
+  });
+
   it('is an EARNED silence — only from a completed read with nothing broken', () => {
-    expect(nodeKindAdvisory(known([node()]), 'ollama', 'openai_api')).toBeNull();
-    expect(nodeKindAdvisory({ state: 'loading' }, 'ollama', 'fs')).toMatch(/Still checking/);
-    expect(nodeKindAdvisory({ state: 'unavailable', detail: 'offline' }, 'ollama', 'fs')).toMatch(
-      /Could not check.*offline/,
-    );
+    expect(nodeKindAdvisory(known([node()]), 'ollama', 'openai_api', false)).toBeNull();
+    expect(nodeKindAdvisory({ state: 'loading' }, 'ollama', 'fs', false)).toMatch(/Still checking/);
+    expect(
+      nodeKindAdvisory({ state: 'unavailable', detail: 'offline' }, 'ollama', 'fs', false),
+    ).toMatch(/Could not check.*offline/);
   });
 
   it('speaks about a ${}-dynamic node rather than reading it as silence', () => {
-    const text = nodeKindAdvisory(known([], [dynamicNode()]), 'ollama', 'fs');
+    const text = nodeKindAdvisory(known([], [dynamicNode()]), 'ollama', 'fs', false);
     expect(text).toMatch(
       /1 pipeline node \(nightly etl › router\) chooses a connection at run time/,
     );
   });
 
   it('says "other" only when a named set precedes the dynamic one', () => {
-    const text = nodeKindAdvisory(known([node()], [dynamicNode()]), 'ollama', 'fs');
+    const text = nodeKindAdvisory(known([node()], [dynamicNode()]), 'ollama', 'fs', false);
     expect(text).toMatch(/1 other pipeline node \(nightly etl › router\)/);
   });
 });

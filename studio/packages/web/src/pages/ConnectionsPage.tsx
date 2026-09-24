@@ -735,8 +735,13 @@ function ConnectionForm({
    */
   const nodeAdvisory = useMemo(() => {
     if (form.id === null || stored === undefined) return null;
-    return nodeKindAdvisory(nodeCheckOf(dependents, dependentsUnavailable), stored.kind, form.kind);
-  }, [form.id, form.kind, stored, dependents, dependentsUnavailable]);
+    return nodeKindAdvisory(
+      nodeCheckOf(dependents, dependentsUnavailable),
+      stored.kind,
+      form.kind,
+      stored.kind !== form.kind && kindChangeDisablesTriggers(stored, form.kind, form.secret),
+    );
+  }, [form.id, form.kind, form.secret, stored, dependents, dependentsUnavailable]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
