@@ -8,6 +8,7 @@ import * as datasetsApi from '../api/datasets';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import { ROW_EDIT } from '../testing/rowActions';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
@@ -75,6 +76,8 @@ const deleteMock = vi.mocked(api.deleteConnection);
 const testDraftMock = vi.mocked(api.testDraftConnection);
 const testSavedMock = vi.mocked(api.testSavedConnection);
 const dependentsMock = vi.mocked(api.listConnectionDependents);
+/** #1252 — the node buckets, empty, for the tests about the trigger buckets. */
+const NO_NODES = { nodes: [], dynamicNodes: [] };
 const listDatasetsMock = vi.mocked(datasetsApi.listDatasets);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportConnection);
@@ -104,7 +107,7 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   exportMock.mockResolvedValue('{"kind":"connection"}');
   listDatasetsMock.mockResolvedValue([]);
-  dependentsMock.mockResolvedValue({ triggers: [], dynamic: [] });
+  dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [], dynamic: [] });
 });
 
 afterEach(() => {
@@ -122,6 +125,24 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     expect(await screen.findByText('My Claude')).toBeInTheDocument();
     expect(screen.getByText('anthropic_api')).toBeInTheDocument();
+  });
+
+  /* #1253 — Edit names its row, as Export and Delete already did, so a
+     screen-reader user walking the button list hears which connection each
+     Edit opens rather than "Edit, Edit, Edit". */
+  it('names the row on every row action, Edit included', async () => {
+    listMock.mockResolvedValue([
+      conn({ id: 'conn_a', name: 'Staging' }),
+      conn({ id: 'conn_b', name: 'Prod' }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Staging');
+    for (const name of ['Staging', 'Prod']) {
+      for (const act of ['Edit', 'Export', 'Delete']) {
+        expect(screen.getByRole('button', { name: `${act} ${name}` })).toBeInTheDocument();
+      }
+    }
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {
@@ -262,7 +283,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Legacy');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.clear(within(form).getByLabelText('model (optional)'));
     await user.type(within(form).getByLabelText('model (optional)'), 'claude-opus-5');
@@ -282,7 +303,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Switched');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByText(/Carried from another kind \(model\)/)).toBeInTheDocument();
 
@@ -300,7 +321,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Odd');
 
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByText(/Saved settings this form cannot show \(model\)/)).toBeVisible();
     expect(within(form).getByLabelText('Config (JSON)')).toBeInTheDocument();
@@ -348,7 +369,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Fs one');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.click(within(form).getByRole('button', { name: 'Edit as JSON' }));
 
@@ -369,7 +390,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Fs rel');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     // The absolute-root check is the SERVER's (`node:path`), so a schema-only
     // advisory would say nothing about the one path-safety key in the catalog.
@@ -384,7 +405,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Editable');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByLabelText('Name')).toHaveValue('Editable');
     // Secret is never prefilled — it is write-only.
@@ -407,7 +428,7 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Rotatable');
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     await user.type(within(form).getByLabelText('Secret'), 'sk-new');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -588,7 +609,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Claude');
 
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
 
@@ -606,7 +627,7 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Claude');
 
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       await user.type(screen.getByLabelText('Secret'), 'sk-new');
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -683,14 +704,14 @@ describe('ConnectionsPage', () => {
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Staging');
 
-      const rows = screen.getAllByRole('button', { name: 'Edit' });
+      const rows = screen.getAllByRole('button', { name: ROW_EDIT });
       await user.click(rows[0]!);
       testSavedMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
 
       // Switch to the OTHER connection without closing the form.
-      await user.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+      await user.click(screen.getAllByRole('button', { name: ROW_EDIT })[1]!);
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
@@ -763,7 +784,7 @@ describe('ConnectionsPage', () => {
       listMock.mockResolvedValue([store]);
       renderWithRouter(<ConnectionsPage />);
       await screen.findByText('Local store');
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
     }
 
@@ -925,12 +946,13 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     listMock.mockResolvedValue([row]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText(row.name);
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     return { user, form: screen.getByRole('form', { name: 'Connection form' }) };
   }
 
   it('names them before any save, and does not gate Save on them', async () => {
     dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -950,7 +972,11 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('stays silent when the SAME edit supplies the secret — nothing gets disabled', async () => {
-    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
     const { user, form } = await openEdit();
     await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
 
@@ -976,6 +1002,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
 
   it('speaks about a ${}-dynamic dependency rather than reading it as silence', async () => {
     dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [],
       dynamic: [{ id: 't2', name: 'router', nodeIds: ['n1'] }],
     });
@@ -986,8 +1013,75 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     expect(await within(form).findByText(/router/)).toHaveTextContent(/only a run can say/);
   });
 
+  /* #1252 — the kind change that disables NOTHING: ollama → agent_cli stays
+     ready, so the trigger note is rightly silent, and a node that cannot use
+     the new kind is what has to be said. */
+  it('names the pipeline node a still-ready kind change breaks, with no trigger note', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+      nodes: [
+        {
+          pipelineId: 'p1',
+          pipelineName: 'etl',
+          versionId: 'v1',
+          version: 1,
+          nodeId: 'summarise',
+          nodeType: 'llm_call',
+          acceptedKinds: ['ollama', 'openai_api'],
+        },
+      ],
+      dynamicNodes: [],
+    });
+    const { user, form } = await openEdit();
+    await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'openai_api');
+    await waitFor(() => expect(within(form).queryByText(/Still checking/)).not.toBeInTheDocument());
+    expect(within(form).queryByText(/breaks/)).not.toBeInTheDocument();
+
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'agent_cli');
+    const note = await within(form).findByText(/Saving this breaks 1 pipeline node/);
+    expect(note).toHaveTextContent('etl › summarise');
+    expect(note).toHaveTextContent(/stay enabled/);
+    expect(within(form).queryByText(/switches off/)).not.toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  it('names the pipeline nodes in the DELETE confirm', async () => {
+    dependentsMock.mockResolvedValue({
+      triggers: [],
+      dynamic: [],
+      nodes: [
+        {
+          pipelineId: 'p1',
+          pipelineName: 'etl',
+          versionId: 'v1',
+          version: 1,
+          nodeId: 'summarise',
+          nodeType: 'llm_call',
+          acceptedKinds: ['ollama'],
+        },
+      ],
+      dynamicNodes: [],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ready]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Local');
+
+    await user.click(screen.getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]![0] as string;
+    expect(message).toContain('Delete connection "Local"?');
+    expect(message).toContain('1 pipeline node (etl › summarise) uses it');
+    confirmSpy.mockRestore();
+  });
+
   it('names them in the DELETE confirm, alongside the datasets it strands', async () => {
     dependentsMock.mockResolvedValue({
+      ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -1010,7 +1104,11 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     // The two reads are independent; `allSettled` is what keeps one failure
     // from silencing the advisory that DID succeed.
     listDatasetsMock.mockRejectedValue(new Error('datasets down'));
-    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({
+      ...NO_NODES,
+      triggers: [{ id: 't1', name: 'nightly' }],
+      dynamic: [],
+    });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);

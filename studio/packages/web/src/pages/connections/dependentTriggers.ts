@@ -46,11 +46,10 @@ import { formatNameList, type DependencyCheck } from './dependencyCheck';
  * fails at dispatch with `CONNECTION_KIND_INVALID`, and kind-validity is
  * deliberately outside readiness (`run/connection-readiness.ts`), so the reverse
  * gate never fires for it and no trigger is disabled — the schedule stays
- * enabled and fails forever instead. That is a real and arguably worse silence,
- * but answering it needs a candidate-version decision (latest only? archived?
- * every version?) that belongs with M9's walk rather than here. Filed, not
- * forgotten. The sentences below therefore speak only about triggers being
- * DISABLED, and claim nothing wider.
+ * enabled and fails forever instead. That is the worse silence, and #1252 says
+ * it in its own note (`dependentNodes.ts`) over M9's candidate versions. The
+ * sentences below therefore speak only about triggers being DISABLED, and
+ * claim nothing wider.
  */
 
 /**

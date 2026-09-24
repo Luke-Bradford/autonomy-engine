@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ConnectionKindSchema } from './connection.js';
 
 /**
  * #1211 — the connection→dependent-triggers REVERSE read behind
@@ -55,6 +56,49 @@ export const DynamicDependentTriggerSchema = z.object({
 export type DynamicDependentTrigger = z.infer<typeof DynamicDependentTriggerSchema>;
 
 /**
+ * #1252 — a pipeline NODE that names this connection outright.
+ *
+ * THE OTHER HALF OF "WHAT THIS EDIT BREAKS", and the worse silence of the two.
+ * Kind-validity is deliberately outside readiness (`run/connection-readiness.ts`),
+ * so a `kind` change that keeps the connection ready — `postgres` →
+ * `anthropic_api` with its secret present — trips no reverse gate: every
+ * dependent trigger stays ENABLED, fires on schedule, and fails every time with
+ * `CONNECTION_KIND_INVALID`. The trigger buckets above cannot see that, because
+ * nothing is being disabled. This one can, because it is a claim about nodes.
+ *
+ * `acceptedKinds` is what makes it answerable without a round-trip per Kind
+ * select: the kinds dispatch would accept FOR THIS NODE'S USE of this
+ * connection, so the form can test any candidate kind locally. It is the
+ * INTERSECTION over every end of the node that names this connection — a paired
+ * node with it on both source and sink dispatches only if BOTH ends accept the
+ * kind. That is also the one way it can be empty (a declared sink kind set is
+ * never empty, `catalog/types.ts`), meaning the node cannot dispatch against
+ * this connection under any kind.
+ */
+export const DependentNodeSchema = z.object({
+  pipelineId: z.string().min(1),
+  pipelineName: z.string().min(1),
+  versionId: z.string().min(1),
+  version: z.number().int(),
+  nodeId: z.string().min(1),
+  nodeType: z.string().min(1),
+  acceptedKinds: z.array(ConnectionKindSchema),
+});
+export type DependentNode = z.infer<typeof DependentNodeSchema>;
+
+/**
+ * #1252 — a node of a candidate version whose connection reference is a `${}`
+ * EXPRESSION, so whether it uses this connection — and therefore whether a kind
+ * change breaks it — only a run can say. Reported for the same reason
+ * `DynamicDependentTriggerSchema` is: dropping it would let the advisory answer
+ * "nothing breaks" confidently and wrongly. Its own bucket rather than a reuse
+ * of `dynamic`, because that one only walks ENABLED triggers' versions, and a
+ * pipeline's latest version with no enabled trigger is a real candidate here.
+ */
+export const DynamicDependentNodeSchema = DependentNodeSchema.omit({ acceptedKinds: true });
+export type DynamicDependentNode = z.infer<typeof DynamicDependentNodeSchema>;
+
+/**
  * OWNER-SCOPED, AND THEREFORE A LOWER BOUND — stated here because a reader will
  * otherwise assume it is exact.
  *
@@ -84,5 +128,17 @@ export const ConnectionDependentsResponseSchema = z.object({
    * (nightly)".
    */
   dynamic: z.array(DynamicDependentTriggerSchema),
+  /**
+   * #1252 — nodes naming this connection literally, over the SAME candidate
+   * versions as M9's dataset references (latest-of-each-pipeline ∪
+   * active-published ∪ trigger-pinned; `repo/candidate-versions.ts`), with
+   * ARCHIVED pipelines left out: the launcher refuses to dispatch them at all,
+   * so no kind change can be what breaks them. Deliberately NOT the trigger
+   * buckets' walk — those claim parity with a WRITE, and this has no write to be
+   * at parity with.
+   */
+  nodes: z.array(DependentNodeSchema),
+  /** #1252 — the unsettled half of `nodes`, over the same versions. */
+  dynamicNodes: z.array(DynamicDependentNodeSchema),
 });
 export type ConnectionDependentsResponse = z.infer<typeof ConnectionDependentsResponseSchema>;

@@ -42,6 +42,11 @@ import {
   triggerDisableAdvisory,
   type TriggerCheck,
 } from './connections/dependentTriggers';
+import {
+  deleteConfirmNodeClause,
+  nodeCheckOf,
+  nodeKindAdvisory,
+} from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
 import {
   assembleConfig,
@@ -405,11 +410,20 @@ export function ConnectionsPage() {
               }
             : { state: 'unavailable', detail: messageOf(dependentsResult.reason) };
 
-        const clause = deleteConfirmTriggerClause(triggerCheck);
-        const message =
-          clause === ''
-            ? deleteConfirmMessage(conn.name, check)
-            : `${deleteConfirmMessage(conn.name, check)}\n\n${clause}`;
+        // #1252 — the nodes naming it break too, whether or not a trigger is
+        // bound to them. Same read, so the same failure detail.
+        const nodeClause = deleteConfirmNodeClause(
+          dependentsResult.status === 'fulfilled'
+            ? nodeCheckOf(dependentsResult.value, null)
+            : nodeCheckOf(null, messageOf(dependentsResult.reason)),
+        );
+        const message = [
+          deleteConfirmMessage(conn.name, check),
+          deleteConfirmTriggerClause(triggerCheck),
+          nodeClause,
+        ]
+          .filter((part) => part !== '')
+          .join('\n\n');
         if (!window.confirm(message)) return;
         try {
           await deleteConnection(conn.id);
@@ -464,7 +478,11 @@ export function ConnectionsPage() {
                   <code>{conn.kind}</code>
                 </td>
                 <td>
-                  <button type="button" onClick={() => openEditForm(conn)}>
+                  <button
+                    type="button"
+                    onClick={() => openEditForm(conn)}
+                    aria-label={`Edit ${conn.name}`}
+                  >
                     Edit
                   </button>
                   <button
@@ -710,6 +728,21 @@ function ConnectionForm({
     return triggerDisableAdvisory(check);
   }, [form.id, form.kind, form.secret, stored, dependents, dependentsUnavailable]);
 
+  /**
+   * #1252 — the pipeline nodes this kind change breaks. Drawn on ANY kind move,
+   * not only a readiness-crossing one: a kind that stays ready disables no
+   * trigger, which is exactly when a broken node would otherwise go unsaid.
+   */
+  const nodeAdvisory = useMemo(() => {
+    if (form.id === null || stored === undefined) return null;
+    return nodeKindAdvisory(
+      nodeCheckOf(dependents, dependentsUnavailable),
+      stored.kind,
+      form.kind,
+      stored.kind !== form.kind && kindChangeDisablesTriggers(stored, form.kind, form.secret),
+    );
+  }, [form.id, form.kind, form.secret, stored, dependents, dependentsUnavailable]);
+
   /** Switch kinds WITHOUT discarding anything typed or stored. */
   function onKindChange(kind: ConnectionKind) {
     setError(null); // a parse/save error from the previous kind is not this one's
@@ -947,6 +980,10 @@ function ConnectionForm({
           about a write the server performs on save, and the two are drawn on
           different conditions. */}
       {triggerAdvisory !== null && <p className="contract-advisory">{triggerAdvisory}</p>}
+      {/* #1252 — its own note: the trigger one describes a write on save, this
+          one runs that fail after it, and they are drawn on different
+          conditions. */}
+      {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
 
       <label>
         Secret

@@ -9,7 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import { connections } from '../../db/schema.js';
 import { createConnection, deleteConnection, updateConnection } from '../../repo/connections.js';
-import { createPipeline } from '../../repo/pipelines.js';
+import { archivePipelineRow, createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, getTrigger, updateTrigger } from '../../repo/triggers.js';
 import type { Db } from '../../repo/types.js';
@@ -599,5 +599,107 @@ describe('connectionDependents (#1211 reverse-gate PREVIEW)', () => {
         .triggers.map((t) => t.id)
         .sort(),
     ).toEqual([a, b].sort());
+  });
+});
+
+describe('connectionDependents — the NODE buckets (#1252)', () => {
+  function versionOf(db: Db, pipelineId: string, nodes: Node[]): string {
+    return createPipelineVersion(db, {
+      pipelineId,
+      params: [{ name: 'conn', type: 'string', required: false }],
+      outputs: [],
+      nodes,
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+  }
+
+  it('names a latest-version node with no trigger bound at all, with the kinds its activity accepts', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const vId = versionRef(db, 'local', connId);
+    const preview = connectionDependents(db, 'local', connId);
+    expect(preview.triggers).toEqual([]);
+    expect(preview.nodes).toEqual([
+      expect.objectContaining({
+        versionId: vId,
+        nodeId: 'n1',
+        nodeType: 'llm_call',
+        acceptedKinds: ['anthropic_api', 'openai_api', 'ollama', 'agent_cli'],
+      }),
+    ]);
+    expect(preview.dynamicNodes).toEqual([]);
+  });
+
+  it('leaves out a node on ANOTHER connection, and one of an archived pipeline', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    versionRef(db, 'local', readyConnection(db));
+    const archived = createPipeline(db, { ownerId: 'local', name: 'Old' });
+    versionOf(db, archived.id, [llmNode('gone', connId)]);
+    archivePipelineRow(db, archived.id);
+    expect(connectionDependents(db, 'local', connId).nodes).toEqual([]);
+  });
+
+  it('reports a SINK end with the sink kinds, and a both-ends node with their intersection', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const elsewhere = readyConnection(db);
+    versionWithNodes(db, 'local', [
+      pairNode('sinkOnly', elsewhere, connId),
+      pairNode('both', connId, connId),
+    ]);
+    const byNode = Object.fromEntries(
+      connectionDependents(db, 'local', connId, pairedCatalog()).nodes.map((n) => [
+        n.nodeId,
+        n.acceptedKinds,
+      ]),
+    );
+    // pairedCatalog: source accepts ollama, sink accepts anthropic_api.
+    expect(byNode).toEqual({ sinkOnly: ['anthropic_api'], both: [] });
+  });
+
+  it('walks a trigger-pinned OLD version as well as the latest, enabled or not', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = versionOf(db, pipeline.id, [llmNode('old', connId)]);
+    const v2 = versionOf(db, pipeline.id, [llmNode('new', connId)]);
+    triggerOn(db, 'local', v1, false);
+    const seen = connectionDependents(db, 'local', connId).nodes.map((n) => [
+      n.versionId,
+      n.nodeId,
+    ]);
+    expect(seen).toEqual([
+      [v1, 'old'],
+      [v2, 'new'],
+    ]);
+  });
+
+  it('a literal end naming it WINS over a ${}-dynamic other end — settled, not unsettled', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    versionWithNodes(db, 'local', [pairNode('mixed', connId, '${params.conn}')]);
+    const preview = connectionDependents(db, 'local', connId, pairedCatalog());
+    expect(preview.nodes.map((n) => [n.nodeId, n.acceptedKinds])).toEqual([['mixed', ['ollama']]]);
+    expect(preview.dynamicNodes).toEqual([]);
+  });
+
+  it('reports a ${}-dynamic reference as UNSETTLED rather than dropping it', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const vId = versionWithNodes(db, 'local', [llmNode('router', '${params.conn}')]);
+    const preview = connectionDependents(db, 'local', connId);
+    expect(preview.nodes).toEqual([]);
+    expect(preview.dynamicNodes).toEqual([
+      expect.objectContaining({ versionId: vId, nodeId: 'router' }),
+    ]);
+  });
+
+  it('is owner-scoped — a node of another owner is not named', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    versionRef(db, 'someone-else', connId);
+    expect(connectionDependents(db, 'local', connId).nodes).toEqual([]);
   });
 });

@@ -684,21 +684,45 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
  * and a false reason invites someone to "simplify" this to `.focus()` on the
  * strength of it working — losing both real reasons above.
  *
- * The canvas sits behind the rail, pane, command bar and toolbox, so a node or
- * edge is deep in the tab order; the bound is generous on purpose, and it
- * throws rather than returning false so the caller cannot silently proceed
- * against whatever happened to hold focus instead.
+ * STARTS AT THE ACTIVITY TOOLBOX, not wherever focus happens to be. The
+ * toolbox immediately precedes the canvas in tab order, so from its filter the
+ * distance to a node or edge is fixed by this page alone.
+ *
+ * Why that matters, measured: TAB INTERMITTENTLY STEPS OVER a freshly added
+ * node (toolbox → zoom controls; #1259). The old helper survived that only by
+ * tabbing on round the whole page — through the navigation pane, which holds
+ * two tab stops per pipeline in the workspace. The e2e database is shared by
+ * every spec in a run, so that detour grew with however many pipelines earlier
+ * specs had created, and one spec adding a pipeline pushed it past the bound.
+ * A skipped pass now restarts from the filter instead: the same tolerance of
+ * the skip as before, at a cost that no longer depends on the database.
+ *
+ * Focusing the START programmatically loses neither real reason above: the
+ * element under test is still reached by TAB, which is what puts
+ * `:focus-visible` on it. It throws rather than returning false so the caller
+ * cannot silently proceed against whatever happened to hold focus instead.
  */
-export async function tabToFocus(page: Page, className: string, limit = 150): Promise<void> {
-  for (let i = 0; i < limit; i++) {
-    await page.keyboard.press('Tab');
-    const reached = await page.evaluate(
-      (cls) => Boolean(document.activeElement?.classList.contains(cls)),
-      className,
-    );
-    if (reached) return;
+export async function tabToFocus(
+  page: Page,
+  className: string,
+  passes = 3,
+  pressesPerPass = 60,
+): Promise<void> {
+  const start = page.getByRole('searchbox', { name: 'Filter activities' });
+  for (let pass = 0; pass < passes; pass++) {
+    await start.focus();
+    for (let i = 0; i < pressesPerPass; i++) {
+      await page.keyboard.press('Tab');
+      const reached = await page.evaluate(
+        (cls) => Boolean(document.activeElement?.classList.contains(cls)),
+        className,
+      );
+      if (reached) return;
+    }
   }
-  throw new Error(`TAB never reached .${className} in ${String(limit)} presses`);
+  throw new Error(
+    `TAB never reached .${className} in ${String(passes)} passes of ${String(pressesPerPass)} presses from the activity toolbox`,
+  );
 }
 
 /** Deselect everything by clicking empty canvas. */
