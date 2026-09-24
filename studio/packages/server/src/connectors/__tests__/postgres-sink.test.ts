@@ -816,6 +816,29 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
     ).resolves.toBeDefined();
   });
 
+  it('still REFUSES behind a DISABLED trigger or a DO ALSO rule — the constraint still fires (#1162)', async () => {
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_off; drop table if exists sink_also; drop table if exists sink_also_log;
+        create or replace function sink_off_b() returns trigger language plpgsql as
+          $f$ begin new.b := coalesce(new.b, 'filled'); return new; end $f$;
+        create table sink_off(a int, b text not null);
+        create trigger sink_off_t before insert on sink_off for each row execute function sink_off_b();
+        alter table sink_off disable trigger sink_off_t;
+        create table sink_also_log(a int);
+        create table sink_also(a int, b text not null);
+        create rule sink_also_r as on insert to sink_also do also insert into sink_also_log values (new.a);`);
+    });
+    for (const table of ['sink_off', 'sink_also']) {
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({ datasetConfig: { schema: 'public', table }, nullOnError: ['b'] }),
+          batchesOf([{ a: 1, b: 'x' }]),
+        ),
+      ).rejects.toThrow(/sink column 'b'.*NOT NULL/);
+    }
+  });
+
   it('really copies rows into a real table', async () => {
     await withAdminClient(async (c) => {
       await c.query('drop table if exists sink_live; create table sink_live(a int, b text)');

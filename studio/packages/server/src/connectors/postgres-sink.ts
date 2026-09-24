@@ -116,13 +116,15 @@ interface DescribedSinkTable {
    * fate of a NULL, which makes `attnotnull` evidence of nothing. Measured
    * (postgres 17): a `BEFORE INSERT … FOR EACH ROW` trigger that fills the
    * column makes an explicit NULL insert SUCCEED on an `attnotnull` column. The
-   * same holds, by construction, for an `INSERT` rule (the statement is
-   * rewritten) and a FOREIGN-table partition (postgres does not enforce NOT NULL
+   * same holds, by construction, for a `DO INSTEAD` `INSERT` rule (the statement
+   * is rewritten) and a FOREIGN-table partition (postgres does not enforce NOT NULL
    * on a foreign table). Checked on the relation AND every relation that
    * inherits from it, because a row routed into a partition fires THAT
    * partition's triggers. Deliberately broad — a plain-inheritance child is
    * never routed to, and including it only skips the gate, which is the
-   * permitted direction.
+   * permitted direction. Two shapes are NOT counted, because the constraint
+   * still certainly fires: a DISABLED trigger (`tgenabled = 'D'` never fires),
+   * and a `DO ALSO` rule (the original INSERT still runs).
    */
   readonly fillsNulls: boolean;
 }
@@ -171,9 +173,10 @@ const DESCRIBE_SINK_SQL = `
            select 1
              from tree t
             where exists (select 1 from pg_trigger g
-                           where g.tgrelid = t.relid and (g.tgtype & 7) = 7)
+                           where g.tgrelid = t.relid and (g.tgtype & 7) = 7
+                             and g.tgenabled <> 'D')
                or exists (select 1 from pg_rewrite r
-                           where r.ev_class = t.relid and r.ev_type = '3')
+                           where r.ev_class = t.relid and r.ev_type = '3' and r.is_instead)
                or exists (select 1 from pg_class f
                            where f.oid = t.relid and f.relkind = 'f')
          ) as "fillsNulls"
