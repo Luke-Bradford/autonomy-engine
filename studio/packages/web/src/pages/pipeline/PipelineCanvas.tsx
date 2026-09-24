@@ -2391,7 +2391,8 @@ export function NodePanel({
 }) {
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
-  const { outputs, ...editable } = config;
+  const outputs = config.outputs;
+  const editable = withoutOutputs(config);
 
   // U8a — the whole doc, read reactively, because which references are legal
   // here is a property of the GRAPH: adding an upstream edge changes the answer

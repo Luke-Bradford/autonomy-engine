@@ -374,6 +374,24 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
   });
 
+  it('lets a forced JSON editor hand back the form once the draft is repaired, and not before', () => {
+    // The shared toggle is offered even while an unrenderable value forces JSON,
+    // because it is the way back WITHOUT an Apply: it parses the draft and
+    // refuses — naming the field — while the value still has no control.
+    mountOver(httpNode({ url: { was: 'authored elsewhere' } }));
+
+    fireEvent.click(toFields());
+    expect(screen.getByRole('alert').textContent).toMatch(/no form control: url/);
+    expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://repaired"}' },
+    });
+    fireEvent.click(toFields());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
+  });
+
   // #1088 — the mode toggle is the shared one (`useConfigEditor`), so it COMMITS
   // the draft it leaves. Before, it only flipped a flag: a field edit was absent
   // from the JSON it opened, and Apply there then stored the config WITHOUT it —
