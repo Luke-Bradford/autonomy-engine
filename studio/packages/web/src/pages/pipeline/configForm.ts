@@ -828,7 +828,8 @@ function commitFieldDraft<K extends string, F extends ConfigDraft<K>>(
  */
 export function changeConfigKind<K extends string, F extends ConfigDraft<K>>(
   form: F,
-  kind: K,
+  // `NoInfer`: the kind set comes from `fieldsFor`, not from the one literal passed.
+  kind: NoInfer<K>,
   fieldsFor: FieldsFor<K>,
   forcedJson: ForcedJson<K> = neverForced,
 ): { form: F; error: string | null } {

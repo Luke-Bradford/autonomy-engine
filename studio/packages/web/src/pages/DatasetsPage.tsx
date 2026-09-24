@@ -31,17 +31,15 @@ import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { StoreCell } from './datasets/StoreCell';
 import { datasetDetailPath } from './datasets/datasetPath';
 import {
-  assembleConfig,
   deriveFieldsWithCarried,
-  emptyControlValue,
-  parseConfigText,
   readConfigDraft,
   seedFieldInputs,
-  unrepresentableFields,
   type ConfigField,
   type FieldInput,
 } from './pipeline/configForm';
-import { ConfigFieldControl, type FieldChoices } from './pipeline/ConfigFieldControl';
+import { type FieldChoices } from './pipeline/ConfigFieldControl';
+import { ConfigEditor } from './pipeline/ConfigEditor';
+import { useConfigEditor } from './pipeline/useConfigEditor';
 
 const KINDS = DATASET_KINDS;
 
@@ -97,6 +95,43 @@ function datasetFields(
   config: Record<string, unknown>,
 ): { fields: ConfigField[]; carried: string[] } {
   return deriveFieldsWithCarried(KINDS, datasetConfigSchema, kind, config);
+}
+
+/**
+ * A kind with NO READER forces the JSON editor, whatever the operator asked for —
+ * a different reason from an unrenderable stored value (`configEditorView`).
+ *
+ * `unimplementedDatasetConfigSchema` is a `looseObject`, so `deriveConfigFields`
+ * yields no controls for `excel` — and the empty-fields branch would then
+ * print "This kind has no settings", which is FALSE: spec §2.6 lists `path`,
+ * `sheet`, `headerRow`, `nullValue` and `dateFormat` for it. They are simply
+ * not described yet. The JSON editor is the honest surface for a shape this
+ * build cannot name, and the form's advisory says why it is showing.
+ *
+ * `delimited` stopped being such a kind on EITHER count, and the two facts
+ * arrived one slice apart. #1163 gave it §2.6's eight keys, so
+ * `deriveConfigFields` yields controls for it; #1167 then gave it a reader, so
+ * a typed form no longer presents a dataset as ready to copy while every copy
+ * naming it refuses at dispatch. That the two moved separately is exactly why
+ * this branch keys on `datasetKindIsImplemented` and not on `fields.length`.
+ *
+ * **AS OF M11 SLICE 2 (#1215) NO KIND HOLDS THIS BRANCH OPEN.** `excel` was
+ * the last one, and it now has both a schema and a reader — so `kindHasNoReader`
+ * is false for every member of the enum and this JSON fallback is
+ * unreachable through the picker.
+ *
+ * It is KEPT rather than deleted, and the reason is the paragraph above: the
+ * two facts are independent and a new kind arrives without either. Deleting
+ * this would mean the next kind's first day ships a typed form for a dataset
+ * every copy refuses at dispatch — the precise trap the branch exists for —
+ * and the code would have to be re-derived from a git log. What keeps "kept"
+ * from meaning "rotting": `dataset-config.test.ts` pins
+ * `IMPLEMENTED_DATASET_KINDS` as a LITERAL LIST, so adding a kind reds it, and
+ * `DatasetsPage.test.tsx` drives these branches through a narrow mock of the
+ * one predicate rather than deleting five real tests with their witness.
+ */
+function kindHasNoReader(kind: DatasetKind): boolean {
+  return !datasetKindIsImplemented(kind);
 }
 
 /** Read the columns draft back out, refusing an absent one. */
@@ -406,61 +441,14 @@ function DatasetForm({
   const [listing, setListing] = useState(false);
   const editing = form.id !== null;
 
-  const { fields, carried } = useMemo(
-    () => datasetFields(form.kind, form.config),
-    [form.kind, form.config],
-  );
-  // A STORED value its control cannot represent forces the JSON editor: showing
-  // a form that cannot round-trip what is already saved would corrupt the
-  // dataset on a save the operator believes touched one other key.
-  const unrenderable = useMemo(
-    () => unrepresentableFields(fields, form.config),
-    [fields, form.config],
-  );
-  /**
-   * A kind with NO READER forces it too, and that is not the same reason.
-   *
-   * `unimplementedDatasetConfigSchema` is a `looseObject`, so `deriveConfigFields`
-   * yields no controls for `excel` — and the empty-fields branch would then
-   * print "This kind has no settings", which is FALSE: spec §2.6 lists `path`,
-   * `sheet`, `headerRow`, `nullValue` and `dateFormat` for it. They are simply
-   * not described yet. The JSON editor is the honest surface for a shape this
-   * build cannot name, and the advisory below says why it is showing.
-   *
-   * `delimited` stopped being such a kind on EITHER count, and the two facts
-   * arrived one slice apart. #1163 gave it §2.6's eight keys, so
-   * `deriveConfigFields` yields controls for it; #1167 then gave it a reader, so
-   * a typed form no longer presents a dataset as ready to copy while every copy
-   * naming it refuses at dispatch. That the two moved separately is exactly why
-   * this branch keys on `datasetKindIsImplemented` and not on `fields.length`.
-   *
-   * **AS OF M11 SLICE 2 (#1215) NO KIND HOLDS THIS BRANCH OPEN.** `excel` was
-   * the last one, and it now has both a schema and a reader — so `kindHasReader`
-   * is true for every member of the enum and the JSON fallback below is
-   * unreachable through the picker.
-   *
-   * It is KEPT rather than deleted, and the reason is the paragraph above: the
-   * two facts are independent and a new kind arrives without either. Deleting
-   * this would mean the next kind's first day ships a typed form for a dataset
-   * every copy refuses at dispatch — the precise trap the branch exists for —
-   * and the code would have to be re-derived from a git log. What keeps "kept"
-   * from meaning "rotting": `dataset-config.test.ts` pins
-   * `IMPLEMENTED_DATASET_KINDS` as a LITERAL LIST, so adding a kind reds it, and
-   * `DatasetsPage.test.tsx` drives these branches through a narrow mock of the
-   * one predicate rather than deleting five real tests with their witness.
-   */
-  const kindHasReader = datasetKindIsImplemented(form.kind);
-  /*
-   * The config editor below (the mode toggle, the two advisories, the
-   * fields-vs-textarea branch) is the THIRD copy of a pattern `ConnectionForm`
-   * and `NodePanel` already carry — #1088's subject, now widened rather than
-   * paid down, which is recorded honestly in #1146 rather than left for the
-   * next reader to notice. The correctness-critical half is NOT duplicated:
-   * `parseConfigText`, `deriveFieldsWithCarried` and `readConfigDraft` all live
-   * in `configForm.ts` and are shared. What is copied is presentation plus
-   * three thin handlers, one of which (`onKindChange`) has genuinely diverged.
-   */
-  const jsonMode = form.jsonMode || unrenderable.length > 0 || !kindHasReader;
+  const editor = useConfigEditor({
+    form,
+    onChange,
+    setError,
+    fieldsFor: datasetFields,
+    forcedJson: kindHasNoReader,
+  });
+  const { fields, jsonMode } = editor;
 
   /**
    * Everything a sheet listing depends on: which store, and which file in it.
@@ -556,125 +544,6 @@ function DatasetForm({
     // while the operator types a NAME. Listing exactly what `readConfigDraft`
     // reads keeps that honest — a fourth field added to it must be added here.
   }, [jsonMode, form.config, form.jsonText, form.inputs, form.kind, fields]);
-
-  /** Switch kinds WITHOUT discarding anything typed or stored. */
-  function onKindChange(kind: DatasetKind) {
-    setError(null); // a parse/save error from the previous kind is not this one's
-
-    // In JSON mode the textarea is the ONLY draft being typed into: its
-    // `onChange` writes `jsonText` and never `config` or `inputs`. Seeding the
-    // new kind's controls from those would therefore seed them from BEFORE
-    // every keystroke — and because a kind change can CLOSE the editor (the
-    // mirror of the forced-open case below), the operator would land in a field
-    // form holding their pre-edit config, with nothing on screen to say the
-    // edit was dropped. So the parsed JSON is the whole seed here: no
-    // `form.inputs` overlay, because those values predate the editor and would
-    // otherwise win over the very edit being carried.
-    if (jsonMode) {
-      const parsed = parseConfigText(form.jsonText);
-      if (parsed.ok) {
-        onChange({
-          ...form,
-          kind,
-          config: parsed.config,
-          // `jsonText` is left exactly as typed: re-stringifying it would
-          // reformat the operator's text under their cursor when the editor
-          // stays open, and it is re-derived by `toJsonMode` when it reopens.
-          inputs: seedFieldInputs(datasetFields(kind, parsed.config).fields, parsed.config),
-        });
-        return;
-      }
-      // A draft that does not parse has no committed form to carry, so the kind
-      // change must not CLOSE the editor: `jsonMode` is derived, and a new kind
-      // that happens to render the stale `form.config` would otherwise reopen the
-      // field form on the operator's pre-edit value while their unparseable text
-      // vanished behind it. Pin the editor open instead — the same rule
-      // `toFieldMode` already applies, which refuses to leave JSON mode on a
-      // parse failure. The kind still changes, so the operator is not trapped in
-      // it, and the message names the parse failure they have to fix first.
-      setError(parsed.message);
-      onChange({ ...form, kind, jsonMode: true });
-      return;
-    }
-
-    const next = datasetFields(kind, form.config);
-    // Seed the new kind's controls from the stored config, then let anything
-    // already typed win. A plain re-seed would drop every in-progress edit; no
-    // re-seed at all would leave a key the new kind owns showing an empty
-    // control, which `assembleConfig` reads as a clearing gesture and DELETES.
-    const inputs = { ...seedFieldInputs(next.fields, form.config), ...form.inputs };
-
-    // A kind with NO READER forces `jsonMode` on (see its declaration), and that
-    // is the one mode change that does not run through `toJsonMode` — so the
-    // textarea would open on a `jsonText` last written before anything was typed
-    // into the field controls, showing the operator a config that is not the one
-    // they built, and SAVING it. Every other route into JSON mode commits the
-    // field draft first; this one has to as well.
-    //
-    // Deliberately narrow: a kind change still rewrites neither draft in the
-    // ordinary case, so an operator's JSON is never edited under them. This
-    // fires only when the switch itself takes the field form away. (No
-    // `!jsonMode` guard — the JSON-mode branch above has already returned, so
-    // reaching here IS field mode.)
-    if (!datasetKindIsImplemented(kind)) {
-      const assembled = assembleConfig(form.config, fields, form.inputs);
-      if (assembled.ok) {
-        onChange({
-          ...form,
-          kind,
-          inputs,
-          config: assembled.config,
-          jsonText: JSON.stringify(assembled.config, null, 2),
-        });
-        return;
-      }
-      // A control that will not read back (non-numeric text in a number box)
-      // has no committed form to carry over. The kind still changes — the
-      // operator is not trapped — but the message names the field rather than
-      // letting the JSON editor open on a draft that silently omits it.
-      setError(assembled.message);
-    }
-
-    onChange({ ...form, kind, inputs });
-  }
-
-  /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
-  function toJsonMode() {
-    const assembled = assembleConfig(form.config, fields, form.inputs);
-    if (!assembled.ok) {
-      setError(assembled.message);
-      return;
-    }
-    setError(null);
-    onChange({
-      ...form,
-      config: assembled.config,
-      jsonText: JSON.stringify(assembled.config, null, 2),
-      jsonMode: true,
-    });
-  }
-
-  /** JSON → fields: parse first, and refuse if the result has no form to show. */
-  function toFieldMode() {
-    const parsed = parseConfigText(form.jsonText);
-    if (!parsed.ok) {
-      setError(parsed.message);
-      return;
-    }
-    const next = datasetFields(form.kind, parsed.config);
-    const bad = unrepresentableFields(next.fields, parsed.config);
-    if (bad.length > 0) {
-      setError(`These settings have no form control: ${bad.join(', ')}.`);
-      return;
-    }
-    setError(null);
-    onChange({
-      ...form,
-      config: parsed.config,
-      inputs: seedFieldInputs(next.fields, parsed.config),
-      jsonMode: false,
-    });
-  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -811,7 +680,10 @@ function DatasetForm({
 
       <label>
         Kind
-        <select value={form.kind} onChange={(e) => onKindChange(e.target.value as DatasetKind)}>
+        <select
+          value={form.kind}
+          onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
+        >
           {KINDS.map((kind) => (
             <option key={kind} value={kind}>
               {kind}
@@ -820,94 +692,43 @@ function DatasetForm({
         </select>
       </label>
 
-      <div className="dataset-config" role="group" aria-label="Config">
-        <div className="config-header">
-          <span>Config</span>
-          {/* Hidden, not disabled, when the kind has no reader. No kind is in
-              that state as of #1215 — see `kindHasReader` above for why the
-              branch is kept anyway. The reason is the READER and never an
-              absent field form: a typed form for a kind every copy refuses at
-              dispatch would present a dataset as ready to copy. A control that
-              can only refuse is furniture either way. */}
-          {kindHasReader && (
-            <button type="button" onClick={jsonMode ? toFieldMode : toJsonMode}>
-              {jsonMode ? 'Edit as fields' : 'Edit as JSON'}
-            </button>
-          )}
-        </div>
-
-        {unrenderable.length > 0 && (
-          <p className="contract-advisory">
-            {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
-          </p>
-        )}
-
-        {jsonMode ? (
-          <label>
-            Config (JSON)
-            <textarea
-              value={form.jsonText}
-              onChange={(e) => onChange({ ...form, jsonText: e.target.value })}
-              rows={6}
-              spellCheck={false}
-            />
-          </label>
-        ) : (
-          <>
-            {fields.length === 0 && <p className="page-hint">This kind has no settings.</p>}
-            {fields.map((field) => {
-              const choices = choicesFor(field.name);
-              return (
-                <ConfigFieldControl
-                  key={field.name}
-                  field={field}
-                  value={form.inputs[field.name] ?? emptyControlValue(field)}
-                  onChange={(next) =>
-                    onChange({ ...form, inputs: { ...form.inputs, [field.name]: next } })
-                  }
-                  {...(choices === undefined ? {} : { choices })}
-                />
-              );
-            })}
-            {/* #1218 — only `excel` names a sheet, and only the field form can
-                offer one (the JSON editor has no control to attach it to). */}
-            {form.kind === 'excel' && (
-              <>
-                <button type="button" onClick={() => void onListSheets()} disabled={listing}>
-                  {listing ? 'Listing sheets…' : 'List sheets'}
-                </button>
-                {/* `role="status"`, matching the probe verdict: a refusal here is
-                    the server's ANSWER to a question that was asked — the file is
-                    not there yet, the path is outside the roots — not a failure of
-                    the form, so it does not take the page's `alert` slot. */}
-                {sheets !== null && sheets.signature === sheetSignature && !sheets.result.ok && (
-                  <p role="status" className="probe-failed">
-                    {sheets.result.error}
-                  </p>
-                )}
-                {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
-                  <p role="status" className="page-hint">
-                    This workbook reports no named sheets — name the sheet by position with
-                    <code>sheetIndex</code> instead.
-                  </p>
-                )}
-              </>
-            )}
-            {carried.length > 0 && (
-              <p className="contract-advisory">
-                {`Carried from another kind (${carried.join(', ')}) — ${form.kind} ignores these; blank a control to drop the key.`}
-              </p>
-            )}
-          </>
-        )}
-
-        {/* Outside the mode branch on purpose: the Kind select is reachable in
-            BOTH modes, and the JSON draft is exactly where a kind change can
-            leave a config shaped for the previous one. */}
-        {advisory !== null && (
-          <p className="contract-advisory">{`This ${form.kind} config is incomplete: ${advisory}`}</p>
-        )}
-
+      {/* The mode toggle is hidden, not disabled, for a kind with no reader
+          (`kindHasNoReader`): a typed form for a kind every copy refuses at
+          dispatch would present a dataset as ready to copy, and a control that
+          can only refuse is furniture. */}
+      <ConfigEditor
+        editor={editor}
+        className="dataset-config"
+        rows={6}
+        advisory={advisory}
+        choicesFor={choicesFor}
+        fieldModeExtra={
+          /* #1218 — only `excel` names a sheet, and only the field form can
+            offer one (the JSON editor has no control to attach it to). */
+          form.kind === 'excel' && (
+            <>
+              <button type="button" onClick={() => void onListSheets()} disabled={listing}>
+                {listing ? 'Listing sheets…' : 'List sheets'}
+              </button>
+              {/* `role="status"`, matching the probe verdict: a refusal here is
+                the server's ANSWER to a question that was asked — the file is
+                not there yet, the path is outside the roots — not a failure of
+                the form, so it does not take the page's `alert` slot. */}
+              {sheets !== null && sheets.signature === sheetSignature && !sheets.result.ok && (
+                <p role="status" className="probe-failed">
+                  {sheets.result.error}
+                </p>
+              )}
+              {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
+                <p role="status" className="page-hint">
+                  This workbook reports no named sheets — name the sheet by position with
+                  <code>sheetIndex</code> instead.
+                </p>
+              )}
+            </>
+          )
+        }
+      >
         {/* `query`'s config has its OWN `parameters` key — SQL bind values —
             which is a different thing from `Dataset.parameters`, the per-dispatch
             override allowlist. Said here because the two would otherwise sit on
@@ -918,7 +739,7 @@ function DatasetForm({
             per-dispatch override allowlist.
           </p>
         )}
-      </div>
+      </ConfigEditor>
 
       <label>
         Columns (JSON)
