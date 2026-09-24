@@ -633,8 +633,9 @@ describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
 
   /* The three below each report `notnull = 1` from `pragma_table_info` and yet
      ACCEPT an explicit NULL — measured, better-sqlite3. Refusing them would be
-     the over-refusal §7 forbids: work that would have succeeded. Each writes a
-     real NULL to prove the store takes it. */
+     the over-refusal §7 forbids: work that would have succeeded. Each hands the
+     store a real NULL and asserts what the store did with it, rather than just
+     that it did not raise. */
   it('ADMITS an INTEGER PRIMARY KEY NOT NULL — a rowid alias assigns a value for NULL', async () => {
     const root = tempRoot();
     const path = storeWith(root, 'CREATE TABLE sink (id INTEGER PRIMARY KEY NOT NULL, note TEXT);');
@@ -664,7 +665,9 @@ describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
     );
     await expect(
       writeInto(root, path, ['id', 'note'], ['note'], [{ id: 1, note: null }]),
-    ).resolves.toBeDefined();
+    ).resolves.toEqual({ rowsWritten: 1 });
+    // `raise(ignore)` discarded the row: the store accepted the NULL by dropping it.
+    expect(rowsOf(path)).toEqual([]);
   });
 });
 
