@@ -97,7 +97,21 @@ run_case() {
 case "$*" in
   *"pr list"*)         [ -n "${GH_OPEN_PR:-}" ] && echo "7 ${GH_OPEN_PR_REF:-fix/studio-open-pr}" || echo "" ;;
   *"pr checks"*)       echo 1 ;;
-  *"issue list"*)      echo "0" ;;
+  # #1257: the operator-signal read must tell a `gh` FAILURE apart from "0 open".
+  #   GH_ISSUE_FAIL=1          every `issue list` fails (network / auth / API down)
+  #   GH_ISSUE_FAIL_CALLS=N    only the first N `issue list` calls fail, then it recovers
+  #   GH_ISSUE_GARBAGE=1       exits 0 but prints no count (a truncated / HTML body)
+  #   GH_SIGNAL_OPEN=<title>   one issue open whose title carries <title>
+  *"issue list"*)
+    gic_f="${REPO:-/tmp}/gh_issue_calls"
+    gic="$(cat "$gic_f" 2>/dev/null || echo 0)"
+    echo $((gic + 1)) >"$gic_f"
+    [ -n "${GH_ISSUE_FAIL:-}" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
+    if [ -n "${GH_ISSUE_FAIL_CALLS:-}" ] && [ "$gic" -lt "$GH_ISSUE_FAIL_CALLS" ]; then
+      echo "error connecting to api.github.com" >&2; exit 1
+    fi
+    [ -n "${GH_ISSUE_GARBAGE:-}" ] && { echo "<html>"; exit 0; }
+    case "$*" in *"${GH_SIGNAL_OPEN:-@@none@@}"*) echo "1" ;; *) echo "0" ;; esac ;;
   *) echo "" ;;
 esac
 EOS
@@ -2779,6 +2793,44 @@ check "the fixture deadline stops the driver on its first fire" "1" "$(fires_of 
 # the assertion above is about the deadline and not about some other refusal.
 r821b="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 MAX_LOOPS=12)"
 check "an in-date deadline does not interfere" "12" "$(fires_of "$r821b")"
+
+# --- 47. #1257 the operator-signal STOP check fails CLOSED -------------------
+# Production, 2026-09-15: the operator hold (#1255) was open, `gh` could not
+# resolve github.com, `|| echo 0` turned the failure into "no signal open", and
+# the driver FIRED THROUGH the hold. A failed read is UNKNOWN, and UNKNOWN must
+# never fire: it backs off and re-checks, and a signal that stays unreadable
+# stops the run -- the same polarity as `ci_check`, where a `gh` failure is never
+# CI-green.
+r1257="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_FAIL=1)"
+check "#1257 gh failing on every signal read -> ZERO fires" "0" "$(fires_of "$r1257")"
+check "#1257 ...and the run STOPS on the unreadable signal, rather than running out MAX_LOOPS" "1" \
+  "$(grep -c 'STOP: operator signal UNREADABLE' "$(logof "$r1257")")"
+# The bound is SIGNAL_UNKNOWN_TRIES consecutive unreadable checks, not the first
+# blip: with 3 allowed, exactly 3 checks happen before the stop.
+r1257t="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_FAIL=1 SIGNAL_UNKNOWN_TRIES=3)"
+check "#1257 SIGNAL_UNKNOWN_TRIES bounds the unreadable checks before the stop" "3" \
+  "$(grep -c 'operator signal read FAILED' "$(logof "$r1257t")")"
+# A transient failure is retried, not fatal: two failed reads, then gh recovers
+# and the driver fires normally (MAX_LOOPS=12 minus the 2 iterations spent
+# backing off = 10 fires). The first call of each iteration fails, so a
+# short-circuiting read spends one gh call per failed iteration.
+r1257r="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_FAIL_CALLS=2)"
+check "#1257 a transient gh failure is retried, then the driver fires once it reads clean" "10" \
+  "$(fires_of "$r1257r")"
+# gh exiting 0 with no count on stdout is just as unknown as a non-zero exit.
+r1257g="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_GARBAGE=1)"
+check "#1257 a non-numeric signal count is UNKNOWN, never 0 -> ZERO fires" "0" "$(fires_of "$r1257g")"
+# Controls: a readable open signal still stops (each title), and a readable
+# clean read still fires -- so the zeros above are about the failure, not about
+# the stub refusing everything.
+for r1257s in '[operator-decision]' '[loop-blocked]' '[mvp-ready]'; do
+  r1257o="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_SIGNAL_OPEN="$r1257s")"
+  check "#1257 control: an open $r1257s stops with zero fires" "0" "$(fires_of "$r1257o")"
+  check "#1257 control: ...and logs it as an open signal" "1" \
+    "$(grep -c 'STOP: operator signal open' "$(logof "$r1257o")")"
+done
+r1257c="$(run_case 0.10 QUOTA_STOP_PCT=80)"
+check "#1257 control: a clean readable signal read still fires to MAX_LOOPS" "12" "$(fires_of "$r1257c")"
 
 # --- 19. #821 no fixture driver outlived its case ---------------------------
 # The leak canary. Runs LAST, before the exit trap cleans up, and asks the real
