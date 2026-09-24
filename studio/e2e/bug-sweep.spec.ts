@@ -620,3 +620,86 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1245 — every native form control takes the app's font FAMILY, and ONLY the
+ * family.
+ *
+ * The canvas header is where the mismatch was visible: `.page-back` (an anchor,
+ * so it inherits) sat first in a row of `<button>`s that rendered in the UA's
+ * own control font. Asserted against the row's PARENT, which is inside the
+ * FluentProvider root — `body` is an ancestor of it and still carries the MVP
+ * stack, so it would be the wrong reference.
+ *
+ * The SIZE half is the decision the fix made: family-only, so the buttons keep
+ * the UA control size rather than growing to their container's 1rem. The
+ * reference is a bare `<button>` probe, sized by the same engine's UA sheet, so
+ * no pixel literal is hard-coded. A `font: inherit` shorthand in place of the
+ * family reset would pass the family half and fail this one.
+ *
+ * jsdom resolves no cascade and inherits nothing, so no unit test can see
+ * either half.
+ */
+test('#1245 — form controls take the app font family, and keep the UA control size', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await openCanvas(page, `#1245 control font ${Date.now()}`);
+  await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+
+  const read = await page.evaluate(() => {
+    const row = document.querySelector('.canvas-page .page-header .form-actions');
+    if (!row) throw new Error('no canvas header .form-actions row');
+    const probe = document.createElement('button');
+    row.append(probe);
+    try {
+      const expectedFamily = getComputedStyle(row).fontFamily;
+      /* The probe is IN the row, so it is subject to the same reset. Its size
+         is what the reset left alone; its family is what the reset set. */
+      const probeSize = getComputedStyle(probe).fontSize;
+      const rowSize = getComputedStyle(row).fontSize;
+      const controls = [...row.querySelectorAll('button, a.page-back')]
+        .filter((el) => el !== probe)
+        .map((el) => ({
+          label: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? el.tagName,
+          family: getComputedStyle(el).fontFamily,
+        }));
+      const plain = row.querySelector<HTMLButtonElement>('button[aria-label="Undo"]');
+      return {
+        expectedFamily,
+        rowSize,
+        probeFamily: getComputedStyle(probe).fontFamily,
+        probeSize,
+        undoSize: plain ? getComputedStyle(plain).fontSize : null,
+        controls,
+      };
+    } finally {
+      probe.remove();
+    }
+  });
+
+  expect(
+    read.controls.length,
+    'the header row carries the back chip and its buttons',
+  ).toBeGreaterThan(2);
+  for (const c of read.controls) {
+    expect(c.family, `${c.label}: in the app's font, not the UA control font`).toBe(
+      read.expectedFamily,
+    );
+  }
+  expect(read.probeFamily, 'a bare button inherits the family').toBe(read.expectedFamily);
+  /* Family only: the size did not follow the container. */
+  expect(read.rowSize, 'the row is not itself at the UA control size').not.toBe(read.probeSize);
+  expect(read.undoSize, 'Undo keeps the UA control size').toBe(read.probeSize);
+
+  /* An input, on the list page the helper walked through. */
+  await page.getByRole('link', { name: '← Back to pipelines' }).click();
+  await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+  const input = await page.getByRole('textbox', { name: 'Name', exact: true }).evaluate((el) => ({
+    family: getComputedStyle(el).fontFamily,
+    parent: getComputedStyle(el.parentElement ?? document.body).fontFamily,
+  }));
+  expect(input.family, 'the Name input is in the app font').toBe(input.parent);
+
+  await expectQuiet(page, problems);
+});
