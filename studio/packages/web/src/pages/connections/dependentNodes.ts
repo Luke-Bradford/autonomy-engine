@@ -57,10 +57,15 @@ export function nodesBrokenByKind(
 /**
  * `nightly etl › summarise`, deduped: the candidate set can hold a pipeline's
  * latest version AND an older trigger-pinned one, and naming the same node
- * twice would read as two nodes.
+ * twice would read as two nodes. Deduped by `pipelineId`, NOT the label —
+ * pipeline names are not unique, and two pipelines sharing one are two nodes.
  */
 function nodeLabels(nodes: readonly DynamicDependentNode[]): string[] {
-  return [...new Set(nodes.map((node) => `${node.pipelineName} › ${node.nodeId}`))];
+  const byNode = new Map<string, string>();
+  for (const node of nodes) {
+    byNode.set(`${node.pipelineId}\u0000${node.nodeId}`, `${node.pipelineName} › ${node.nodeId}`);
+  }
+  return [...byNode.values()];
 }
 
 function nodePhrase(labels: readonly string[], qualifier = ''): string {

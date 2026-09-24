@@ -70,6 +70,16 @@ describe('nodeKindAdvisory (#1252)', () => {
     expect(text).toMatch(/stay enabled/);
   });
 
+  it('counts two pipelines that share a name as two nodes', () => {
+    const text = nodeKindAdvisory(
+      known([node(), node({ pipelineId: 'p2', versionId: 'v9' })]),
+      'ollama',
+      'fs',
+      false,
+    );
+    expect(text).toContain('2 pipeline nodes');
+  });
+
   it('does not say the triggers stay enabled when the same save switches them off', () => {
     // The trigger note beside this one says they are disabled; both cannot hold.
     const text = nodeKindAdvisory(known([node()]), 'ollama', 'fs', true);
