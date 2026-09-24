@@ -398,6 +398,20 @@ Board mirror (close each on phase completion via `gh issue close`, never a PR-bo
     `checkout --`/`restore`/`stash`/`reset --hard`/`clean -f`, but a committed change needs no
     protecting in the first place.
 
+4c. **NEVER END YOUR TURN WITH A BASH TASK STILL RUNNING (#1261).** You are `claude -p`. A pending
+    background *agent* keeps this session alive; a pending background *Bash* task does NOT. If you
+    end a turn to "wait for the notification" while only a Bash task is running, the CLI exits and
+    KILLS it, and the fire ends with the work thrown away. Measured 2026-09-24: fires 3 and 6 both
+    lost their unit+e2e run exactly this way ("E2E is partway through: 78 specs passed…" → `killed`),
+    and a minimal `claude -p` probe reproduced it (a backgrounded `sleep 30; echo > file` never wrote
+    the file).
+    So: run test suites, mutation passes and `test:e2e` in the **FOREGROUND** with the Bash tool's
+    `timeout` raised (up to `600000` ms). If one genuinely needs longer, background it and then block
+    in the FOREGROUND on its output (`until grep -q <done-marker> <file>; do sleep 5; done`, split
+    into successive foreground calls if needed). Running a suite in the background *while you do
+    other work in the same turn* is fine; ending the turn while it runs is not. 4b still applies —
+    commit before the wait.
+
     This extends the existing rule about committing before dispatching review subagents (a lens that
     restores its own mutation with `git checkout --` reverts to HEAD and wipes your uncommitted
     edits) to every long wait, for the same underlying reason: **anything you have not committed is
