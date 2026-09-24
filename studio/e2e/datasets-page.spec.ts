@@ -396,7 +396,7 @@ test.describe('#1115 Manage → Datasets', () => {
 
     // ADVISORY, never a gate — #1158 says so in as many words. The row keeps
     // every action it had.
-    await expect(row.getByRole('button', { name: 'Edit' })).toBeEnabled();
+    await expect(row.getByRole('button', { name: /^Edit / })).toBeEnabled();
 
     await expectQuiet(page, problems);
   });
