@@ -168,6 +168,32 @@ function failureSummary(counters: CopyCounters): string {
 }
 
 /**
+ * The prose for a store whose own count disagrees with what the copy sent it
+ * (#1273), or `null` when they agree — see `COPY_STORE_COUNT_DIFFERS`.
+ *
+ * Measured against the rows SENT, not the rows read: a row that failed coercion
+ * never reached the store, and `failureSummary` already accounts for it.
+ */
+export function storeCountAdvisory(counters: CopyCounters): string | null {
+  const sent = counters.rowsRead - counters.rowsFailed;
+  const kept = counters.rowsWritten;
+  if (kept === sent) return null;
+  if (kept < sent) {
+    const gap = sent - kept;
+    return (
+      `the store kept ${kept} of the ${sent} row(s) the copy sent; ` +
+      `${gap} ${gap === 1 ? 'was' : 'were'} discarded by the sink itself ` +
+      '(a trigger, rule or conflict clause), not by the mapping'
+    );
+  }
+  return (
+    `the store reports ${kept} row(s) written for the ${sent} the copy sent — a rule or ` +
+    "trigger on the sink rewrote the inserts, so rowsWritten is the store's count, " +
+    'not rows this copy delivered'
+  );
+}
+
+/**
  * Map a thrown copy failure onto its terminal event.
  *
  * The unwrap is the load-bearing part. `pumpCopyRows` is an async generator, so
@@ -391,6 +417,14 @@ export async function* runCopyActivity(
         type: 'warned',
         code: WARNING_CODES.COPY_ROWS_FAILED,
         reason: failureSummary(counters),
+      };
+    }
+    const discrepancy = storeCountAdvisory(counters);
+    if (discrepancy !== null) {
+      yield {
+        type: 'warned',
+        code: WARNING_CODES.COPY_STORE_COUNT_DIFFERS,
+        reason: discrepancy,
       };
     }
     yield { type: 'succeeded', outputs: copyOutputs(counters) };

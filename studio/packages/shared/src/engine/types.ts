@@ -809,6 +809,26 @@ export const WARNING_CODES = {
    */
   COPY_SOURCE_COLUMNS_UNMAPPED: 'copy_source_columns_unmapped',
   /**
+   * #1273 — a copy SUCCEEDED and the store's own count of rows kept differs
+   * from the rows the copy sent it (`rowsRead - rowsFailed`).
+   *
+   * #1270 made `rowsWritten` the store's count rather than the pump's, so the
+   * counters are already honest — a sqlite `raise(ignore)`, a postgres BEFORE
+   * trigger returning NULL, `ON CONFLICT IGNORE` or a `DO INSTEAD NOTHING` rule
+   * all show up as a shortfall. But only as arithmetic: `rowsRead 5, rowsWritten
+   * 3, rowsFailed 0` leaves the operator to notice two rows vanished and to work
+   * out that the sink, not the mapping, dropped them. This says it.
+   *
+   * The count can also EXCEED the rows sent — a postgres `DO INSTEAD` rule that
+   * redirects the INSERT reports the rule's own count — so the `reason` words the
+   * two directions separately and only the shortfall is called a discard.
+   *
+   * Success path only. On a failed copy `rowsWritten` is either a proven 0 (the
+   * transaction rolled back) or an uncommitted running total, and a gap there is
+   * the failure, not the store quietly discarding rows.
+   */
+  COPY_STORE_COUNT_DIFFERS: 'copy_store_count_differs',
+  /**
    * #996 M12 slice 2 (#1221, spec §5) — a `lookup` returned a PREFIX of its
    * source: `LOOKUP_ROW_CAP` or `LOOKUP_BYTE_CAP` bound before the source ran
    * out of rows.
