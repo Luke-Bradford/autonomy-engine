@@ -129,9 +129,7 @@ describe('#1021 publishThenDrive', () => {
 
     expect(() =>
       db.transaction(() => {
-        const { records } = foldOutOfBand(db, engine, engine.seedState(), [
-          started(run.id, pv.id),
-        ]);
+        const { records } = foldOutOfBand(db, engine, engine.seedState(), [started(run.id, pv.id)]);
         void publishThenDrive(d, records);
       }),
     ).toThrow(/transaction open/);
@@ -148,9 +146,7 @@ describe('#1021 publishThenDrive', () => {
     // A drizzle transaction handle carries no `$client` — probed naively, it would
     // read as "no transaction open".
     db.transaction((tx) => {
-      const { records } = foldOutOfBand(tx, engine, engine.seedState(), [
-        started(run.id, pv.id),
-      ]);
+      const { records } = foldOutOfBand(tx, engine, engine.seedState(), [started(run.id, pv.id)]);
       expect(() => publishThenDrive({ ...deps(db, published), db: tx }, records)).toThrow(
         /cannot say/,
       );
