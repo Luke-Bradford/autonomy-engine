@@ -56,6 +56,8 @@ export function useConfigEditor<K extends string, F extends ConfigDraft<K>>({
 }): ConfigEditorState<K> {
   // Keyed on `kind`/`config`/`jsonMode` only: `form` is a new object on every
   // keystroke, and re-deriving fields while the operator types a NAME is waste.
+  // The two drafts are stubbed because `configEditorView` reads neither — what
+  // is on screen is decided by the stored config, never by a half-typed draft.
   const { kind, config, jsonMode: askedForJson } = form;
   const view = useMemo(
     () =>
