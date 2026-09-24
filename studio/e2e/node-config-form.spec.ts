@@ -137,6 +137,42 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
+  test('switching to JSON carries an unapplied field edit, and that edit is what saves', async ({
+    page,
+  }) => {
+    // #1088 — the node panel's mode toggle is the shared one the connection and
+    // dataset forms use. Before, it flipped a flag: the JSON editor opened on
+    // the STORED config, so an edit typed into a control a moment earlier was
+    // absent from it and an Apply there silently dropped it.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u7 toggle carries draft', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: { url: 'https://before' },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://typed-in-a-field');
+    await panel(page).getByRole('button', { name: 'Edit as JSON' }).click();
+
+    const json = panel(page).getByLabel('Config (JSON)');
+    await expect(json).toHaveValue(/https:\/\/typed-in-a-field/);
+    // The toggle names the mode it goes TO, and it is reachable in the new mode.
+    await expect(panel(page).getByRole('button', { name: 'Edit as fields' })).toBeVisible();
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id)).toMatchObject({ url: 'https://typed-in-a-field' });
+
+    await expectQuiet(page, problems);
+  });
+
   test('a config the form cannot show falls back to the JSON editor, not to corruption', async ({
     page,
   }) => {

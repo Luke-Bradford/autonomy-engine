@@ -645,12 +645,9 @@ export function assembleConfig(
  * would have made it a second copy of the same eight lines. `configForm.ts` is
  * the page-agnostic home #1088 names for it.
  *
- * `PipelineCanvas`'s `applyJson` is deliberately NOT converted to this. It says
- * the same thing in different words ("Config is not valid JSON." / "Config must
- * be a JSON object."), those exact strings are asserted by
- * `e2e/node-config-form.spec.ts`, and rewording them is a user-visible change
- * that belongs to #1088's own ticket rather than riding along inside a new
- * page. Two copies, not three.
+ * Since #1088 it is the ONLY copy: the canvas node panel reads its JSON draft
+ * through `readConfigDraft` too, so all three editors refuse a bad draft in the
+ * same words.
  */
 export function parseConfigText(
   text: string,
