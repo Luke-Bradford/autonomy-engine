@@ -14,6 +14,7 @@ import {
   type RecurrenceFormState,
 } from './recurrenceForm';
 import { boundEcho } from './formFields';
+import { BoundShiftNotices } from './BoundShiftNotices';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
@@ -200,6 +201,8 @@ export function RecurrenceEditor({
           {endUtc ? ` until ${endUtc}` : ', open end'}
         </p>
       )}
+
+      <BoundShiftNotices bounds={value} />
 
       {preview && (
         <p className="page-hint" data-testid="recurrence-preview">

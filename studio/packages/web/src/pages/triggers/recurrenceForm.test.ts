@@ -11,7 +11,13 @@ import {
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
-import { localInputToUtcIso, resolveBound, utcIsoToLocalInput } from './formFields';
+import {
+  boundShift,
+  boundShiftWarnings,
+  localInputToUtcIso,
+  resolveBound,
+  utcIsoToLocalInput,
+} from './formFields';
 
 /** A form in the state the editor would be in after the operator filled it. */
 function form(over: Partial<RecurrenceFormState> = {}): RecurrenceFormState {
@@ -305,7 +311,8 @@ describe('recurrenceToForm — round trip', () => {
 describe('localInputToUtcIso / utcIsoToLocalInput', () => {
   const originalTz = process.env.TZ;
   afterEach(() => {
-    process.env.TZ = originalTz;
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
   });
 
   it('reads a datetime-local value as BROWSER-LOCAL wall clock', () => {
@@ -335,6 +342,69 @@ describe('localInputToUtcIso / utcIsoToLocalInput', () => {
   it('returns null for an unparseable value rather than an Invalid Date', () => {
     expect(localInputToUtcIso('not-a-date')).toBeNull();
     expect(localInputToUtcIso('')).toBeNull();
+  });
+});
+
+describe('boundShift — a wall clock the browser zone does not have (#855)', () => {
+  const originalTz = process.env.TZ;
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it('reports the wall clock a DST-gap value will actually be saved as', () => {
+    // BST jumps 01:00 -> 02:00 on 2026-03-29, so 01:30 does not exist in London.
+    process.env.TZ = 'Europe/London';
+    expect(boundShift('2026-03-29T01:30', '')).toBe('2026-03-29T02:30');
+  });
+
+  it('is silent for a wall clock that exists, typed with or without zero seconds', () => {
+    process.env.TZ = 'Europe/London';
+    expect(boundShift('2026-03-29T03:30', '')).toBeNull();
+    expect(boundShift('2026-03-29T03:30:00', '')).toBeNull();
+  });
+
+  it('is silent for an AMBIGUOUS fall-back wall clock, which round-trips stably', () => {
+    process.env.TZ = 'Europe/London';
+    expect(boundShift('2026-10-25T01:30', '')).toBeNull();
+  });
+
+  it('is silent for a blank or unreadable control, which has no instant to shift', () => {
+    process.env.TZ = 'Europe/London';
+    expect(boundShift('', '')).toBeNull();
+    expect(boundShift('not a date', '')).toBeNull();
+  });
+
+  it('is silent for an UNTOUCHED bound, which is written back exactly as loaded', () => {
+    process.env.TZ = 'Europe/London';
+    const stored = '2026-03-29T01:30:00.000Z';
+    expect(boundShift(utcIsoToLocalInput(stored), stored)).toBeNull();
+  });
+
+  it('also names a day past the end of its month, which Date rolls forward', () => {
+    process.env.TZ = 'UTC';
+    expect(boundShift('2026-02-30T10:00', '')).toBe('2026-03-02T10:00');
+  });
+
+  it('names each shifted bound in the warnings both editors render', () => {
+    process.env.TZ = 'Europe/London';
+    const warnings = boundShiftWarnings({
+      startTime: '2026-03-29T01:30',
+      endTime: '2026-03-29T01:45',
+      startTimeIso: '',
+      endTimeIso: '',
+    });
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toMatch(/^Start time 2026-03-29T01:30 .* saved as 2026-03-29T02:30/);
+    expect(warnings[1]).toMatch(/^End time 2026-03-29T01:45 .* saved as 2026-03-29T02:45/);
+    expect(
+      boundShiftWarnings({
+        startTime: '2026-03-30T01:30',
+        endTime: '',
+        startTimeIso: '',
+        endTimeIso: '',
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -376,7 +446,9 @@ describe('cronPreview', () => {
       startTime: '2026-08-01T09:00:00.000Z',
     });
     expect(preview.kind).toBe('summary');
-    if (preview.kind === 'summary') expect(preview.text).toContain('every 2 weeks');
+    if (preview.kind === 'summary') {
+      expect(preview.text).toBe('every 2 weeks · Mon · UTC · from 2026-08-01T09:00:00.000Z');
+    }
   });
 
   it('refuses to show a cron for a non-UTC zone, which the cron string cannot carry', () => {
@@ -388,6 +460,38 @@ describe('cronPreview', () => {
     });
     expect(preview.kind).toBe('summary');
     if (preview.kind === 'summary') expect(preview.text).toContain('Europe/London');
+  });
+
+  it('refuses to show a bare cron for a BOUNDED recurrence, and states the bounds', () => {
+    // A cron string cannot carry [startTime, endTime) any more than it can
+    // carry an interval, so on its own it would read as "fires forever".
+    const preview = cronPreview({
+      frequency: 'day',
+      interval: 1,
+      schedule: { hours: [9] },
+      startTime: '2026-08-01T09:00:00.000Z',
+      endTime: '2026-09-01T09:00:00.000Z',
+    });
+    expect(preview.kind).toBe('summary');
+    if (preview.kind === 'summary') {
+      // No zone was authored, so the summary must say the UTC it means.
+      expect(preview.text).toBe(
+        'daily · at 09:00 · UTC · from 2026-08-01T09:00:00.000Z · until 2026-09-01T09:00:00.000Z',
+      );
+      expect(preview.text).toContain('from 2026-08-01T09:00:00.000Z');
+      expect(preview.text).toContain('until 2026-09-01T09:00:00.000Z');
+    }
+    const openStart = cronPreview({
+      frequency: 'day',
+      interval: 1,
+      schedule: { hours: [9] },
+      endTime: '2026-09-01T09:00:00.000Z',
+    });
+    expect(openStart.kind).toBe('summary');
+    if (openStart.kind === 'summary') {
+      expect(openStart.text).toContain('until 2026-09-01T09:00:00.000Z');
+      expect(openStart.text).not.toContain('from');
+    }
   });
 
   it('still shows the cron for an explicit UTC zone, which the cron DOES mean', () => {

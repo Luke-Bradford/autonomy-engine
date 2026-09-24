@@ -8,6 +8,7 @@ import {
 } from '@autonomy-studio/shared';
 import { formToWindow, type WindowFormState } from './windowForm';
 import { boundEcho } from './formFields';
+import { BoundShiftNotices } from './BoundShiftNotices';
 
 const FREQUENCIES = WindowFrequencySchema.options;
 
@@ -137,6 +138,8 @@ export function WindowEditor({
           {endUtc ? `, until ${endUtc}` : ', with no end'}
         </p>
       )}
+
+      <BoundShiftNotices bounds={value} />
 
       {built && (
         <p className="page-hint" data-testid="window-preview">

@@ -244,18 +244,21 @@ export type CronPreview = { kind: 'cron'; cron: string } | { kind: 'summary'; te
 /**
  * What to show the operator as "this is the schedule you authored".
  *
- * `recurrenceToCron` is the WHOLE truth only when `interval === 1` and the zone
- * is UTC. It deliberately IGNORES `interval` — "every N periods" is not
- * cron-expressible and is computed by the server's stepping calculator — and a
- * cron string carries no zone. So showing its output for `interval > 1` would
- * read as "every week" when the operator authored "every 2 weeks", and showing
- * it for a zoned recurrence would imply UTC. Rather than print a caveated
+ * `recurrenceToCron` is the WHOLE truth only when `interval === 1`, the zone
+ * is UTC, and there are no bounds. It deliberately IGNORES `interval` — "every
+ * N periods" is not cron-expressible and is computed by the server's stepping
+ * calculator — a cron string carries no zone, and it carries no
+ * `[startTime, endTime)` either. So showing its output for `interval > 1` would
+ * read as "every week" when the operator authored "every 2 weeks", showing it
+ * for a zoned recurrence would imply UTC, and showing it for a bounded one
+ * would read as "fires forever" (#855). Rather than print a caveated
  * half-truth, the preview falls back to a plain-English summary in exactly the
  * cases where the cron would misrepresent the schedule.
  */
 export function cronPreview(recurrence: Recurrence): CronPreview {
   const zoned = recurrence.timeZone !== undefined && recurrence.timeZone !== 'UTC';
-  if (recurrence.interval === 1 && !zoned) {
+  const bounded = recurrence.startTime !== undefined || recurrence.endTime !== undefined;
+  if (recurrence.interval === 1 && !zoned && !bounded) {
     return { kind: 'cron', cron: recurrenceToCron(recurrence) };
   }
 
@@ -269,6 +272,12 @@ export function cronPreview(recurrence: Recurrence): CronPreview {
   if (s?.monthDays) parts.push(`on day ${s.monthDays.join(', ')}`);
   if (s?.hours) parts.push(`at ${s.hours.map((h) => `${pad(h)}:00`).join(', ')}`);
   if (s?.minutes) parts.push(`minute ${s.minutes.join(', ')}`);
-  if (recurrence.timeZone !== undefined) parts.push(recurrence.timeZone);
+  // Named even when absent. An unzoned recurrence only reaches this summary when
+  // it is bounded — `interval > 1` requires a `startTime` anchor — so it always
+  // sits beside bounds "entered in your browser's local time", where a bare
+  // `at 09:00` would read as local rather than as the UTC it means.
+  parts.push(recurrence.timeZone ?? 'UTC');
+  if (recurrence.startTime !== undefined) parts.push(`from ${recurrence.startTime}`);
+  if (recurrence.endTime !== undefined) parts.push(`until ${recurrence.endTime}`);
   return { kind: 'summary', text: parts.join(' · ') };
 }
