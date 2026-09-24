@@ -78,6 +78,8 @@ MAX_FIRES="${MAX_FIRES:-0}"       # 0 = UNCAPPED (operator, 2026-07-29). Was 6.
                                   # Set MAX_FIRES to a positive number to restore a per-run cap.
 QUOTA_STOP_PCT="${QUOTA_STOP_PCT:-80}"      # refuse to fire at/above this 7-day utilization %
 QUOTA_UNKNOWN_FIRES="${QUOTA_UNKNOWN_FIRES:-2}"  # fires allowed while utilization is UNREADABLE
+SIGNAL_UNKNOWN_TRIES="${SIGNAL_UNKNOWN_TRIES:-5}"  # consecutive UNREADABLE operator-signal reads
+                                  # (backed off between) before the run STOPS (#1257). Never fires.
 AUTH_LONG_BLOCK="${AUTH_LONG_BLOCK:-6}"     # ensure_auth retries that make a block "long". The
                                   # backoff is capped at 600s, so 6 retries is ~30min MINIMUM and
                                   # in practice much longer -- comfortably past a transient hang.
@@ -2076,6 +2078,27 @@ signal_blocked() {  # $1=title  $2=body
     && log "SIGNAL: filed [loop-blocked] -- $1"
 }
 
+# --- operator_signals: read the three STOP signals, failing CLOSED (#1257). ---
+# Prints "<operator-decision> <loop-blocked> <mvp-ready>" counts and returns 0
+# when ALL three read as integers; returns 1 (printing nothing) the moment any
+# read fails or answers with something that is not a count. The caller treats 1
+# as UNKNOWN, and UNKNOWN never fires.
+#
+# This used to be three `... 2>/dev/null || echo 0` reads, which turned "gh could
+# not reach GitHub" into "no signal open". On 2026-09-15 that fired the loop
+# THROUGH an open operator hold (#1255) during a DNS outage. Same polarity as
+# `ci_check`: a `gh` failure is never green. Stops at the first failure, so an
+# outage costs one call per check rather than three.
+operator_signals() {
+  os_out=""
+  for os_t in '[operator-decision]' '[loop-blocked]' '[mvp-ready]'; do
+    os_n="$(gh issue list --state open --search "in:title $os_t" --json number -q 'length' 2>>"$DLOG")" || return 1
+    case "$os_n" in "" | *[!0-9]*) return 1 ;; esac
+    os_out="$os_out $os_n"
+  done
+  echo "${os_out# }"
+}
+
 # --- auth_ok: ONE bounded auth probe (macOS has no `timeout`; a hung probe must
 # never wedge the driver). Returns 0 if auth works, 1 otherwise. ---------------
 auth_ok() {
@@ -2280,6 +2303,10 @@ stall=0
 crash=0
 loops=0
 fires=0
+# Deliberately NOT carried in the #811 handoff: a self-adopt mid-outage resets it,
+# which can only DELAY the stop (every iteration still refuses to fire on an
+# unreadable signal), and MAX_SELF_ADOPT bounds how often that can happen (#1257).
+signal_unknown=0
 auth_block_retries=0      # length of the auth block ensure_auth just cleared (set -u: must exist)
 budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGRANTS
 blind_fires=0             # fires spent while quota was UNREADABLE; bounded by QUOTA_UNKNOWN_FIRES
@@ -2300,6 +2327,10 @@ QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE
 # leave the adopt cap silently unarmed, which is an adopt LOOP.
 HANDOFF_MAX_AGE="$(quota_knob_secs HANDOFF_MAX_AGE "$HANDOFF_MAX_AGE" 300 0)"
 MAX_SELF_ADOPT="$(quota_knob_secs MAX_SELF_ADOPT "$MAX_SELF_ADOPT" 3 0 adoptions)"
+# #1257, same reason: fed to `[ "$signal_unknown" -ge "$SIGNAL_UNKNOWN_TRIES" ]`,
+# where an unparseable value takes NEITHER branch and turns the bounded stop on an
+# unreadable operator signal into an endless back-off.
+SIGNAL_UNKNOWN_TRIES="$(quota_knob_secs SIGNAL_UNKNOWN_TRIES "$SIGNAL_UNKNOWN_TRIES" 5 0 tries)"
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
@@ -2361,10 +2392,22 @@ while true; do
 
   # --- STOP: operator signal ([operator-decision]/[mvp-ready]) or a real block.
   #     [loop-paused] is deliberately NOT matched here -- it never stops. -------
-  sig="$(gh issue list --state open --search 'in:title [operator-decision]' --json number -q 'length' 2>/dev/null || echo 0)"
-  blk="$(gh issue list --state open --search 'in:title [loop-blocked]' --json number -q 'length' 2>/dev/null || echo 0)"
-  mvp="$(gh issue list --state open --search 'in:title [mvp-ready]' --json number -q 'length' 2>/dev/null || echo 0)"
-  if [ "${sig:-0}" != "0" ] || [ "${blk:-0}" != "0" ] || [ "${mvp:-0}" != "0" ]; then
+  #     An UNREADABLE signal is not "none open" (#1257): back off and re-check,
+  #     and after SIGNAL_UNKNOWN_TRIES consecutive failures STOP -- never fall
+  #     through to the quota gate and the fire. Scheduled restarts re-check.
+  if ! sigs="$(operator_signals)"; then
+    signal_unknown=$((signal_unknown + 1))
+    log "WARN: operator signal read FAILED ($signal_unknown/$SIGNAL_UNKNOWN_TRIES) -- gh unavailable or answered without a count; NOT firing (#1257)"
+    if [ "$signal_unknown" -ge "$SIGNAL_UNKNOWN_TRIES" ]; then
+      log "STOP: operator signal UNREADABLE for $signal_unknown consecutive check(s) -- refusing to fire without knowing whether a hold is open"
+      break
+    fi
+    backoff_sleep "$signal_unknown"
+    continue
+  fi
+  signal_unknown=0
+  read -r sig blk mvp <<<"$sigs"
+  if [ "$sig" != "0" ] || [ "$blk" != "0" ] || [ "$mvp" != "0" ]; then
     log "STOP: operator signal open (operator-decision=$sig loop-blocked=$blk mvp-ready=$mvp)"
     break
   fi
