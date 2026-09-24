@@ -598,6 +598,16 @@ describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
     expect(err.message).toMatch(/sink column 'id'/);
   });
 
+  it('REFUSES a member of a COMPOSITE INTEGER primary key — it is not a rowid alias', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER NOT NULL, k INTEGER, note TEXT, PRIMARY KEY (id, k));',
+    );
+    const err = await failure(writeInto(root, path, ['id', 'k'], ['id'], [{ id: 1, k: 1 }]));
+    expect(err.message).toMatch(/sink column 'id'/);
+  });
+
   it('REFUSES a mapped name that differs from the store only in case', async () => {
     const root = tempRoot();
     const path = storeWith(root, 'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL);');

@@ -199,9 +199,10 @@ function describeSinkTable(
  *  - ANY `ON CONFLICT` text in the CREATE statement skips the whole table — it
  *    also matches a `UNIQUE … ON CONFLICT` clause, or the words inside a string
  *    literal, and that is fine;
- *  - every `INTEGER` primary-key column is exempt, including the two shapes that
- *    are NOT a rowid alias and do refuse NULL (a `WITHOUT ROWID` table, and
- *    `PRIMARY KEY DESC`, which `pragma_table_info` reports identically).
+ *  - a SOLE `INTEGER` primary-key column is exempt, including the two shapes
+ *    that are NOT a rowid alias and do refuse NULL (a `WITHOUT ROWID` table, and
+ *    `PRIMARY KEY DESC`, which `pragma_table_info` reports identically). A
+ *    member of a composite key is never an alias, so it is not exempt.
  * Narrowing any of these to "fix" the under-refusal would need proof that no
  * NULL-accepting shape slips into the refused set.
  */
@@ -211,10 +212,13 @@ function certainlyNotNull(
   hasTrigger: boolean,
 ): ReadonlySet<string> {
   if (hasTrigger || /\bon\s+conflict\b/i.test(createSql)) return new Set();
+  // A rowid alias is the SOLE primary-key column. A member of a composite
+  // `INTEGER` key is an ordinary column and refuses NULL — measured.
+  const solePk = columns.filter((c) => c.pk > 0).length === 1;
   return new Set(
     columns
       .filter((c) => c.notNull === 1)
-      .filter((c) => !(c.pk > 0 && c.type.trim().toUpperCase() === 'INTEGER'))
+      .filter((c) => !(solePk && c.pk > 0 && c.type.trim().toUpperCase() === 'INTEGER'))
       .map((c) => c.name),
   );
 }
