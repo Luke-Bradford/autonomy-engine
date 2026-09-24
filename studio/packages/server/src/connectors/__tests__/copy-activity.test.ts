@@ -211,7 +211,7 @@ describe('storeCountAdvisory — rowsWritten against the rows the copy SENT', ()
     const reason = storeCountAdvisory(counters(5, 0, 7));
     expect(reason).toBe(
       'the store reports 7 row(s) written for the 5 the copy sent — a rule or trigger on the ' +
-        'sink rewrote the inserts, so rowsWritten is the store\'s count, not rows this copy delivered',
+        "sink rewrote the inserts, so rowsWritten is the store's count, not rows this copy delivered",
     );
     expect(reason).not.toMatch(/discarded/);
   });
@@ -483,7 +483,6 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
     );
     expect(terminal(events).type).toBe('failed');
   });
-
 });
 
 describe('copy activity — a tick is progress, not committed truth', () => {
@@ -534,7 +533,7 @@ describe('copy activity — a tick is progress, not committed truth', () => {
     expect(written?.type === 'output' ? written.value : null).toBe(0);
   });
 
-  it('does not read a failed copy\'s gap as the store discarding rows (#1273)', async () => {
+  it("does not read a failed copy's gap as the store discarding rows (#1273)", async () => {
     // rowsRead 1200 against a proven rowsWritten 0: that gap IS the failure, and
     // calling it the sink discarding rows would misname what happened.
     const root = tempRoot();
