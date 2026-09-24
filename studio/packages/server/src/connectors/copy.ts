@@ -4,7 +4,6 @@ import {
   CopyMappingError,
   formatZodIssues,
   newCopyCounters,
-  nocaseFold,
   pumpCopyRows,
   SOURCE_DRIFT_MESSAGES,
   WARNING_CODES,
@@ -12,10 +11,10 @@ import {
   type CoercionOptions,
   type CopyCounters,
   type CopyPumpMappingEntry,
-  type DatasetColumn,
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import { refuseNullOnNonNullable } from './sink-columns.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
@@ -102,6 +101,10 @@ export interface CopyIo extends SourceIo {
     readonly dataset: ResolvedDataset;
     readonly connection: ActivitySink;
     readonly columns: readonly string[];
+    /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
+     * against the store's own NOT NULL columns (#1162). Required, so no path
+     * can reach a store without the gate. */
+    readonly nullOnError: readonly string[];
     readonly mode: 'append' | 'overwrite';
     readonly onBatch: (rowsWritten: number) => void;
     readonly batches: AsyncIterable<readonly Record<string, CoercedValue>[]>;
@@ -162,44 +165,6 @@ function failureSummary(counters: CopyCounters): string {
       ? ''
       : ` First at row ${first.rowIndex} into '${first.sink}': ${first.reason}.`;
   return `${counters.rowsFailed} row(s) were not written (${byCode}).${where}`;
-}
-
-/**
- * §6.2's refusal, deferred out of slice 1 because it needs the RESOLVED sink.
- *
- * `onError: 'null'` writes a null where a value fails to coerce. Against a
- * `nullable: false` column that turns a coercion failure into a CONSTRAINT
- * violation raised by the store — mid-transaction, after part of the copy is
- * already written. Refusing at dispatch is what keeps the failure at the
- * boundary where nothing has been written yet.
- *
- * It checks only sink columns the dataset DECLARES. An undeclared one is not
- * this rule's business: `ResolvedDataset.columns` is the declared contract, not
- * the write column list, and whether a column exists in the actual store is §7's
- * drift gate at write time (`resolveSinkColumns`). Silently widening this rule
- * into an existence check would duplicate that gate with weaker evidence.
- */
-export function refuseNullOnNonNullable(
-  mapping: readonly { readonly sink: string; readonly onError: 'fail' | 'null' }[],
-  columns: readonly DatasetColumn[],
-): string | null {
-  // Folded the way SQLite's NOCASE folds, via the SAME helper the pump plans
-  // columns with. A case-sensitive check here would be the odd one out: a sink
-  // declaring 'ID' and a mapping naming 'id' are ONE column to the store, so an
-  // exact-match miss would let the null through to become the mid-transaction
-  // constraint violation this rung exists to move to the boundary.
-  const nonNullable = new Set(
-    columns.filter((column) => !column.nullable).map((column) => nocaseFold(column.name)),
-  );
-  const offender = mapping.find(
-    (row) => row.onError === 'null' && nonNullable.has(nocaseFold(row.sink)),
-  );
-  if (offender === undefined) return null;
-  return (
-    `mapping row for sink column '${offender.sink}' sets onError:'null', but the sink dataset ` +
-    `declares that column NOT NULL — a coercion failure would reach the store as a constraint ` +
-    `violation mid-copy, after part of the output is already written`
-  );
 }
 
 /**
@@ -287,7 +252,13 @@ export async function* runCopyActivity(
   }
   const { mapping, mode } = parsed.data;
 
-  const refusal = refuseNullOnNonNullable(mapping, sink.columns);
+  // The sink rows that may carry an injected null — computed once, because the
+  // same list goes to the sink so the store's OWN schema is checked too (#1162).
+  const nullOnError = mapping.filter((row) => row.onError === 'null').map((row) => row.sink);
+  const refusal = refuseNullOnNonNullable(nullOnError, {
+    kind: 'dataset',
+    columns: sink.columns,
+  });
   if (refusal !== null) {
     yield failed('permanent', refusal);
     return;
@@ -395,6 +366,7 @@ export async function* runCopyActivity(
   try {
     const result = await io.writeRows({
       columns,
+      nullOnError,
       mode,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;

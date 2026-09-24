@@ -62,6 +62,10 @@ export interface SinkWriteRequest {
    * rather than this seam guessing which stores are credentialled. */
   readonly sinkSecret: string | null;
   readonly columns: readonly string[];
+  /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
+   * against the store's own NOT NULL columns (#1162). Required, so no path
+   * can reach a store without the gate. */
+  readonly nullOnError: readonly string[];
   readonly mode: 'append' | 'overwrite';
   readonly onBatch: (rowsWritten: number) => void;
   readonly signal: AbortSignal | undefined;
@@ -82,7 +86,7 @@ export async function writeRowsToSink(
   request: SinkWriteRequest,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
 ): Promise<{ readonly rowsWritten: number }> {
-  const { dataset, connection, columns, mode, onBatch, signal } = request;
+  const { dataset, connection, columns, nullOnError, mode, onBatch, signal } = request;
   if (connection.kind === 'sqlite') {
     // THE TWO ARMS PARSE IN DIFFERENT PLACES, and the asymmetry is a decision
     // rather than leftover history. Here the parse is the arm's, because the
@@ -108,6 +112,7 @@ export async function writeRowsToSink(
         datasetKind: dataset.kind,
         datasetConfig: dataset.config,
         columns,
+        nullOnError,
         mode,
         onBatch,
         ...(signal === undefined ? {} : { signal }),
@@ -128,6 +133,7 @@ export async function writeRowsToSink(
         datasetKind: dataset.kind,
         datasetConfig: dataset.config,
         columns,
+        nullOnError,
         mode,
         onBatch,
         ...(signal === undefined ? {} : { signal }),

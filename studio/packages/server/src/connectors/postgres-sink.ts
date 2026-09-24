@@ -9,7 +9,7 @@ import { DatasetIoError } from './dataset-io-error.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
-import { resolveSinkColumns, type SinkColumn } from './sink-columns.js';
+import { refuseNullOnNonNullable, resolveSinkColumns, type SinkColumn } from './sink-columns.js';
 import type { SinkValue } from './sqlite-sink.js';
 import {
   notAPostgresKind,
@@ -48,6 +48,10 @@ export interface PostgresDatasetWrite {
   readonly datasetConfig: Record<string, unknown>;
   /** The sink columns this copy writes, matched case-insensitively (§7). */
   readonly columns: readonly string[];
+  /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
+   * against the store's own NOT NULL columns (#1162). Required, so no path
+   * can reach a store without the gate. */
+  readonly nullOnError: readonly string[];
   readonly mode: 'append' | 'overwrite';
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
@@ -99,12 +103,30 @@ interface SinkTableColumn {
   readonly name: string;
   readonly generated: boolean;
   readonly identityAlways: boolean;
+  /** `pg_attribute.attnotnull` — see `fillsNulls` for when it is not the whole story. */
+  readonly notNull: boolean;
 }
 
 interface DescribedSinkTable {
   readonly schema: string;
   readonly name: string;
   readonly columns: readonly SinkTableColumn[];
+  /**
+   * #1162 — true when something other than the column constraint can decide the
+   * fate of a NULL, which makes `attnotnull` evidence of nothing. Measured
+   * (postgres 17): a `BEFORE INSERT … FOR EACH ROW` trigger that fills the
+   * column makes an explicit NULL insert SUCCEED on an `attnotnull` column. The
+   * same holds, by construction, for a `DO INSTEAD` `INSERT` rule (the statement
+   * is rewritten) and a FOREIGN-table partition (postgres does not enforce NOT NULL
+   * on a foreign table). Checked on the relation AND every relation that
+   * inherits from it, because a row routed into a partition fires THAT
+   * partition's triggers. Deliberately broad — a plain-inheritance child is
+   * never routed to, and including it only skips the gate, which is the
+   * permitted direction. Two shapes are NOT counted, because the constraint
+   * still certainly fires: a DISABLED trigger (`tgenabled = 'D'` never fires),
+   * and a `DO ALSO` rule (the original INSERT still runs).
+   */
+  readonly fillsNulls: boolean;
 }
 
 /**
@@ -136,11 +158,28 @@ const DESCRIBE_SINK_SQL = `
            select json_agg(json_build_object(
                     'name', a.attname,
                     'generated', a.attgenerated <> '',
-                    'identityAlways', a.attidentity = 'a')
+                    'identityAlways', a.attidentity = 'a',
+                    'notNull', a.attnotnull)
                   order by a.attnum)
              from pg_attribute a
             where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-         ), '[]'::json) as columns
+         ), '[]'::json) as columns,
+         exists (
+           with recursive tree(relid) as (
+             select c.oid
+             union all
+             select i.inhrelid from pg_inherits i join tree t on i.inhparent = t.relid
+           )
+           select 1
+             from tree t
+            where exists (select 1 from pg_trigger g
+                           where g.tgrelid = t.relid and (g.tgtype & 7) = 7
+                             and g.tgenabled <> 'D')
+               or exists (select 1 from pg_rewrite r
+                           where r.ev_class = t.relid and r.ev_type = '3' and r.is_instead)
+               or exists (select 1 from pg_class f
+                           where f.oid = t.relid and f.relkind = 'f')
+         ) as "fillsNulls"
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
    where c.oid = to_regclass($1)`;
@@ -152,7 +191,14 @@ async function describeSinkTable(
 ): Promise<DescribedSinkTable> {
   const result = await client.query(DESCRIBE_SINK_SQL, [qualified]);
   const row = result.rows[0] as
-    { schema: string; name: string; relkind: string; columns: SinkTableColumn[] } | undefined;
+    | {
+        schema: string;
+        name: string;
+        relkind: string;
+        columns: SinkTableColumn[];
+        fillsNulls: boolean;
+      }
+    | undefined;
   if (row === undefined) {
     throw new DatasetIoError('permanent', `there is no table '${spelled}' in the store`);
   }
@@ -163,7 +209,12 @@ async function describeSinkTable(
       `'${spelled}' is ${what}, not a table, so it cannot be written to`,
     );
   }
-  return { schema: row.schema, name: row.name, columns: row.columns };
+  return {
+    schema: row.schema,
+    name: row.name,
+    columns: row.columns,
+    fillsNulls: row.fillsNulls,
+  };
 }
 
 /**
@@ -394,6 +445,18 @@ export async function writePostgresDatasetRows(
         described.columns.map((c) => c.name),
       );
       refuseUnwritableColumns(columns, described.columns);
+      // #1162 — the store's own NOT NULL, before the overwrite's DELETE and the
+      // first row: the rule the dispatch rung runs against the dataset's
+      // declaration, now against the real schema. `(tgtype & 7) = 7` above is
+      // ROW | BEFORE | INSERT.
+      const nullRefusal = refuseNullOnNonNullable(write.nullOnError, {
+        kind: 'store',
+        resolved: columns,
+        notNullActual: described.fillsNulls
+          ? new Set()
+          : new Set(described.columns.filter((c) => c.notNull).map((c) => c.name)),
+      });
+      if (nullRefusal !== null) throw new DatasetIoError('permanent', nullRefusal);
 
       // The store's own spelling from here on, so the statement reads like the
       // schema — `describeSinkTable` resolved which relation this is, so the

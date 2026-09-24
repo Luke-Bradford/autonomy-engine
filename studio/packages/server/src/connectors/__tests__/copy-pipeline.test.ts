@@ -63,6 +63,7 @@ describe('reader → pump → sink', () => {
 
     const result = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, sinkPath),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -106,6 +107,7 @@ describe('reader → pump → sink', () => {
 
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, sinkPath),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -156,6 +158,7 @@ describe('reader → pump → sink', () => {
 
     await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, sinkPath),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -189,6 +192,7 @@ describe('reader → pump → sink', () => {
 
     const err = await writeSqliteDatasetRows(
       {
+        nullOnError: [],
         connectionConfig: writableConfig(root, sinkPath),
         datasetKind: 'table',
         datasetConfig: { table: 'sink' },
@@ -253,6 +257,7 @@ describe('reader → pump → sink', () => {
     await expect(
       writeSqliteDatasetRows(
         {
+          nullOnError: [],
           connectionConfig: writableConfig(root, sinkPath),
           datasetKind: 'table',
           datasetConfig: { table: 'sink' },

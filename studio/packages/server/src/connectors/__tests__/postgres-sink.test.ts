@@ -45,11 +45,15 @@ interface SinkRecorder {
 }
 
 /** One column as `DESCRIBE_SINK_SQL` reports it. */
-function col(name: string, extra: { generated?: boolean; identityAlways?: boolean } = {}) {
+function col(
+  name: string,
+  extra: { generated?: boolean; identityAlways?: boolean; notNull?: boolean } = {},
+) {
   return {
     name,
     generated: extra.generated ?? false,
     identityAlways: extra.identityAlways ?? false,
+    notNull: extra.notNull ?? false,
   };
 }
 
@@ -67,6 +71,7 @@ function sinkFactory(
     name?: string;
     relkind?: string;
     columns?: ReturnType<typeof col>[];
+    fillsNulls?: boolean;
     missing?: boolean;
     failOn?: { prefix: string; error: unknown };
   } = {},
@@ -91,6 +96,7 @@ function sinkFactory(
                 name: fixture.name ?? 'tgt',
                 relkind: fixture.relkind ?? 'r',
                 columns: fixture.columns ?? [col('a'), col('b')],
+                fillsNulls: fixture.fillsNulls ?? false,
               },
             ],
             fields: [],
@@ -122,6 +128,7 @@ function write(
     datasetKind: 'table',
     datasetConfig: { schema: 'public', table: 'tgt' },
     columns: ['a', 'b'],
+    nullOnError: [],
     mode: 'append',
     ...overrides,
   };
@@ -312,6 +319,70 @@ describe('the postgres sink refusal ladder (#1196 M10 slice 3a)', () => {
       kind: 'permanent',
       message: expect.stringContaining("the sink has no column named 'b'"),
     });
+  });
+});
+
+describe("the postgres sink: the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
+  it('REFUSES before the overwrite DELETE and before any INSERT', async () => {
+    const { rec, factory } = sinkFactory({ columns: [col('a'), col('b', { notNull: true })] });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, mode: 'overwrite', nullOnError: ['b'] }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      message: expect.stringMatching(
+        /sink column 'b' sets onError:'null', but the sink table in the store is NOT NULL/,
+      ),
+    });
+    expect(rec.queries.some((q) => /^(DELETE|INSERT)/.test(q.sql))).toBe(false);
+  });
+
+  it('ADMITS it when a trigger, rule or foreign partition can decide the NULL instead', async () => {
+    const { factory } = sinkFactory({
+      columns: [col('a'), col('b', { notNull: true })],
+      fillsNulls: true,
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, nullOnError: ['b'] }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 1 });
+  });
+
+  it('ADMITS a NOT NULL column whose row does not set onError:null', async () => {
+    const { factory } = sinkFactory({ columns: [col('a'), col('b', { notNull: true })] });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, nullOnError: ['a'] }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 1 });
+  });
+
+  it("keys on the store's EXACT spelling — a NOT NULL case-twin does not refuse its neighbour", async () => {
+    // `id` nullable, `"ID"` NOT NULL: a fold-keyed lookup would refuse a mapping
+    // naming `id`, which postgres would have accepted.
+    const { factory } = sinkFactory({
+      columns: [col('id'), col('ID', { notNull: true }), col('b')],
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, columns: ['id', 'b'], nullOnError: ['id'] }),
+        batchesOf([{ id: 1, b: 2 }]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 1 });
+    const { factory: twin } = sinkFactory({
+      columns: [col('id'), col('ID', { notNull: true }), col('b')],
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: twin, columns: ['ID', 'b'], nullOnError: ['ID'] }),
+        batchesOf([{ ID: 1, b: 2 }]),
+      ),
+    ).rejects.toThrow(/sink column 'ID'/);
   });
 });
 
@@ -685,6 +756,88 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
       secret: password,
       ...overrides,
     });
+
+  it("REFUSES an onError:'null' row into a real NOT NULL column, and the table is untouched (#1162)", async () => {
+    await withAdminClient(async (c) => {
+      await c.query(
+        "drop table if exists sink_nn; create table sink_nn(a int, b text not null); insert into sink_nn values (1, 'kept')",
+      );
+    });
+    await expect(
+      writePostgresDatasetRows(
+        liveWrite({
+          datasetConfig: { schema: 'public', table: 'sink_nn' },
+          mode: 'overwrite',
+          nullOnError: ['b'],
+        }),
+        batchesOf([{ a: 2, b: 'x' }]),
+      ),
+    ).rejects.toThrow(/sink column 'b'.*NOT NULL/);
+    const rows = await withAdminClient((c) => c.query('select a, b from sink_nn'));
+    expect(rows.rows).toEqual([{ a: 1, b: 'kept' }]);
+  });
+
+  it('ADMITS it when a BEFORE INSERT trigger on a PARTITION fills the column (#1162)', async () => {
+    // Measured: postgres runs a BEFORE ROW trigger before the NOT NULL check, so
+    // this insert succeeds — refusing it would refuse work that succeeds.
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_fill;
+        create or replace function sink_fill_b() returns trigger language plpgsql as
+          $f$ begin new.b := coalesce(new.b, 'filled'); return new; end $f$;
+        create table sink_fill(a int, b text not null) partition by range (a);
+        create table sink_fill_p partition of sink_fill for values from (0) to (100);
+        create trigger sink_fill_t before insert on sink_fill_p
+          for each row execute function sink_fill_b();`);
+    });
+    await expect(
+      writePostgresDatasetRows(
+        liveWrite({ datasetConfig: { schema: 'public', table: 'sink_fill' }, nullOnError: ['b'] }),
+        batchesOf([{ a: 1, b: null }]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 1 });
+    const rows = await withAdminClient((c) => c.query('select a, b from sink_fill'));
+    expect(rows.rows).toEqual([{ a: 1, b: 'filled' }]);
+  });
+
+  it('ADMITS it when an INSERT rule rewrites the statement (#1162)', async () => {
+    // A `DO INSTEAD` rule means the INSERT never reaches the NOT NULL column.
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_ruled;
+        create table sink_ruled(a int, b text not null);
+        create rule sink_ruled_r as on insert to sink_ruled do instead nothing;`);
+    });
+    await expect(
+      writePostgresDatasetRows(
+        liveWrite({ datasetConfig: { schema: 'public', table: 'sink_ruled' }, nullOnError: ['b'] }),
+        batchesOf([{ a: 1, b: null }]),
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('still REFUSES behind a DISABLED trigger or a DO ALSO rule — the constraint still fires (#1162)', async () => {
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_off; drop table if exists sink_also; drop table if exists sink_also_log;
+        create or replace function sink_off_b() returns trigger language plpgsql as
+          $f$ begin new.b := coalesce(new.b, 'filled'); return new; end $f$;
+        create table sink_off(a int, b text not null);
+        create trigger sink_off_t before insert on sink_off for each row execute function sink_off_b();
+        alter table sink_off disable trigger sink_off_t;
+        create table sink_also_log(a int);
+        create table sink_also(a int, b text not null);
+        create rule sink_also_r as on insert to sink_also do also insert into sink_also_log values (new.a);`);
+    });
+    for (const table of ['sink_off', 'sink_also']) {
+      await expect(
+        writePostgresDatasetRows(
+          liveWrite({ datasetConfig: { schema: 'public', table }, nullOnError: ['b'] }),
+          batchesOf([{ a: 1, b: 'x' }]),
+        ),
+      ).rejects.toThrow(/sink column 'b'.*NOT NULL/);
+    }
+  });
 
   it('really copies rows into a real table', async () => {
     await withAdminClient(async (c) => {

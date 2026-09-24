@@ -7,7 +7,7 @@ import { yieldToEventLoop } from './scheduling.js';
 import { quoteIdentifier } from './sql-identifier.js';
 // #1196 — the mapped→actual resolver moved to a leaf when postgres became the
 // second sink; the matching rule is not store-specific.
-import { resolveSinkColumns } from './sink-columns.js';
+import { refuseNullOnNonNullable, resolveSinkColumns } from './sink-columns.js';
 import {
   confineStorePath,
   parseTableTarget,
@@ -59,6 +59,10 @@ export interface SqliteDatasetWrite {
   readonly datasetConfig: Record<string, unknown>;
   /** The sink columns this copy writes, matched case-insensitively (§7). */
   readonly columns: readonly string[];
+  /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
+   * against the store's own NOT NULL columns (#1162). Required, so no path
+   * can reach a store without the gate. */
+  readonly nullOnError: readonly string[];
   readonly mode: SqliteWriteMode;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
@@ -132,7 +136,9 @@ function describeSinkTable(
   db: Database.Database,
   schemaName: string,
   table: string,
-): { ok: true; name: string; columns: string[] } | { ok: false; reason: string } {
+):
+  | { ok: true; name: string; columns: string[]; notNull: ReadonlySet<string> }
+  | { ok: false; reason: string } {
   const qualifiedSchema = quoteIdentifier(schemaName, 'schema');
   // `COLLATE NOCASE`, for the same reason `resolveSinkColumns` lower-cases:
   // SQLite resolves identifiers case-insensitively, so `SELECT * FROM "SINK"`
@@ -143,9 +149,9 @@ function describeSinkTable(
   // back: SQLite refuses to create `SINK` alongside `sink`.
   const found = db
     .prepare(
-      `SELECT name, type FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE`,
+      `SELECT name, type, sql FROM ${qualifiedSchema}.sqlite_master WHERE name = ? COLLATE NOCASE`,
     )
-    .get(table) as { name: string; type?: unknown } | undefined;
+    .get(table) as { name: string; type?: unknown; sql?: unknown } | undefined;
   if (found === undefined) {
     return { ok: false, reason: `there is no table '${table}' in the store` };
   }
@@ -157,9 +163,64 @@ function describeSinkTable(
   }
   // The store's own spelling from here on, so the statement reads like the schema.
   const columns = db
-    .prepare('SELECT name FROM pragma_table_info(?, ?)')
-    .all(found.name, schemaName) as { name: string }[];
-  return { ok: true, name: found.name, columns: columns.map((c) => c.name) };
+    .prepare('SELECT name, type, "notnull" AS "notNull", pk FROM pragma_table_info(?, ?)')
+    .all(found.name, schemaName) as { name: string; type: string; notNull: number; pk: number }[];
+  const hasTrigger =
+    db
+      .prepare(
+        `SELECT 1 FROM ${qualifiedSchema}.sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE`,
+      )
+      .get(found.name) !== undefined;
+  return {
+    ok: true,
+    name: found.name,
+    columns: columns.map((c) => c.name),
+    notNull: certainlyNotNull(columns, typeof found.sql === 'string' ? found.sql : '', hasTrigger),
+  };
+}
+
+/**
+ * #1162 — the columns that CERTAINLY refuse an explicit NULL, for
+ * `refuseNullOnNonNullable`'s store half.
+ *
+ * `pragma_table_info.notnull` is NOT that set. Measured (better-sqlite3), each of
+ * these reports `notnull = 1` and still ACCEPTS a NULL:
+ *  - `id INTEGER PRIMARY KEY NOT NULL` — a rowid alias assigns a value;
+ *  - `NOT NULL ON CONFLICT REPLACE DEFAULT 7` — the default is substituted;
+ *  - `NOT NULL ON CONFLICT IGNORE` — the row is silently skipped;
+ *  - any table with a `BEFORE INSERT` trigger, which can `raise(ignore)` the row
+ *    or write a value itself.
+ * Refusing those would refuse work that succeeds, the one direction §7 says a
+ * gate must never fail in. So the exclusions are deliberately BROAD, and the cost
+ * is the permitted one — a column left out simply keeps the old behaviour (the
+ * store's own constraint fires at write, and the transaction rolls back):
+ *  - ANY trigger on the table skips the whole table, rather than reading the
+ *    trigger's body;
+ *  - ANY `ON CONFLICT` text in the CREATE statement skips the whole table — it
+ *    also matches a `UNIQUE … ON CONFLICT` clause, or the words inside a string
+ *    literal, and that is fine;
+ *  - a SOLE `INTEGER` primary-key column is exempt, including the two shapes
+ *    that are NOT a rowid alias and do refuse NULL (a `WITHOUT ROWID` table, and
+ *    `PRIMARY KEY DESC`, which `pragma_table_info` reports identically). A
+ *    member of a composite key is never an alias, so it is not exempt.
+ * Narrowing any of these to "fix" the under-refusal would need proof that no
+ * NULL-accepting shape slips into the refused set.
+ */
+function certainlyNotNull(
+  columns: readonly { name: string; type: string; notNull: number; pk: number }[],
+  createSql: string,
+  hasTrigger: boolean,
+): ReadonlySet<string> {
+  if (hasTrigger || /\bon\s+conflict\b/i.test(createSql)) return new Set();
+  // A rowid alias is the SOLE primary-key column. A member of a composite
+  // `INTEGER` key is an ordinary column and refuses NULL — measured.
+  const solePk = columns.filter((c) => c.pk > 0).length === 1;
+  return new Set(
+    columns
+      .filter((c) => c.notNull === 1)
+      .filter((c) => !(solePk && c.pk > 0 && c.type.trim().toUpperCase() === 'INTEGER'))
+      .map((c) => c.name),
+  );
 }
 
 /** The `table` dataset config of a SINK, or a refusal. */
@@ -283,6 +344,15 @@ export async function writeSqliteDatasetRows(
       const described = describeSinkTable(db, target.schema, target.table);
       if (!described.ok) throw new DatasetIoError('permanent', described.reason);
       const columns = resolveSinkColumns(write.columns, described.columns);
+      // #1162 — the store's own NOT NULL, under the lock, before the overwrite's
+      // DELETE and before the first row: the same rule the dispatch rung runs
+      // against the dataset's declaration, now against the real schema.
+      const nullRefusal = refuseNullOnNonNullable(write.nullOnError, {
+        kind: 'store',
+        resolved: columns,
+        notNullActual: described.notNull,
+      });
+      if (nullRefusal !== null) throw new DatasetIoError('permanent', nullRefusal);
 
       const qualified =
         target.schema === 'main'
