@@ -542,16 +542,17 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
   });
 });
 
+/** A sink store built from one DDL string (plus an optional trigger). */
+function storeWith(root: string, ddl: string, extra = ''): string {
+  const path = join(root, 'nn.db');
+  const db = new Database(path);
+  db.exec(ddl + extra);
+  db.close();
+  return path;
+}
+
 describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
   /** A store holding ONE table built from `ddl`, and whatever else `extra` adds. */
-  function storeWith(root: string, ddl: string, extra = ''): string {
-    const path = join(root, 'nn.db');
-    const db = new Database(path);
-    db.exec(ddl + extra);
-    db.close();
-    return path;
-  }
-
   function writeInto(
     root: string,
     path: string,
@@ -665,9 +666,62 @@ describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
     );
     await expect(
       writeInto(root, path, ['id', 'note'], ['note'], [{ id: 1, note: null }]),
-    ).resolves.toEqual({ rowsWritten: 1 });
-    // `raise(ignore)` discarded the row: the store accepted the NULL by dropping it.
+    ).resolves.toEqual({ rowsWritten: 0 });
+    // `raise(ignore)` discarded the row: the store accepted the NULL by dropping
+    // it, and #1270 — the count says so rather than claiming a row it never kept.
     expect(rowsOf(path)).toEqual([]);
+  });
+});
+
+describe('rowsWritten is what the store KEPT, not what was sent (#1270)', () => {
+  // Measured (better-sqlite3): `RunResult.changes` is 0 for a row a BEFORE
+  // trigger `raise(ignore)`s or an `ON CONFLICT IGNORE` clause skips, and is NOT
+  // inflated by the rows an AFTER trigger writes elsewhere.
+  async function copyCounting(path: string, root: string, rows: Record<string, SinkValue>[]) {
+    const ticks: number[] = [];
+    const result = await writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id', 'note'],
+        mode: 'append',
+        onBatch: (n) => ticks.push(n),
+      },
+      one(rows),
+    );
+    return { result, ticks };
+  }
+
+  it('does not count rows an ON CONFLICT IGNORE clause skipped', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER PRIMARY KEY ON CONFLICT IGNORE, note TEXT NOT NULL ON CONFLICT IGNORE);',
+    );
+    const { result, ticks } = await copyCounting(path, root, [
+      { id: 1, note: 'kept' },
+      { id: 1, note: 'duplicate key' },
+      { id: 2, note: null },
+      { id: 3, note: 'kept' },
+    ]);
+    expect(rowsOf(path, 'SELECT id FROM sink ORDER BY id')).toEqual([{ id: 1 }, { id: 3 }]);
+    expect(result).toEqual({ rowsWritten: 2 });
+    // The running total the pump ticks from is the same honest count.
+    expect(ticks).toEqual([2]);
+  });
+
+  it('does not count the rows an AFTER trigger writes into another table', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER, note TEXT); CREATE TABLE audit (id INTEGER);',
+      'CREATE TRIGGER a AFTER INSERT ON sink BEGIN INSERT INTO audit VALUES (new.id); INSERT INTO audit VALUES (new.id); END;',
+    );
+    const { result } = await copyCounting(path, root, [{ id: 1, note: 'x' }]);
+    expect(result).toEqual({ rowsWritten: 1 });
+    expect(rowsOf(path, 'SELECT count(*) AS n FROM audit')).toEqual([{ n: 2 }]);
   });
 });
 

@@ -116,6 +116,9 @@ describe('writeRowsToSink dispatch (#1196)', () => {
             fields: [],
           };
         }
+        // Every tuple lands — a plain table. The sink counts the INSERT's own
+        // `rowCount`, not the rows it sent (#1270).
+        if (sql.startsWith('INSERT INTO')) return { rows: [], fields: [], rowCount: 1 };
         return { rows: [], fields: [] };
       },
       async end() {},

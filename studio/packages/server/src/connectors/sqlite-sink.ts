@@ -395,8 +395,15 @@ export async function writeSqliteDatasetRows(
         first = false;
 
         for (const row of batch) {
-          insert.run(columns.map((column) => bindValue(row[column.mapped], column.mapped)));
-          rowsWritten += 1;
+          // #1270 — the store's own count, not one per statement executed. A
+          // BEFORE trigger's `raise(ignore)` or an `ON CONFLICT IGNORE` clause
+          // discards the row and reports 0 (measured); counting the statement
+          // would report a row as moved that the store never kept. `changes` is
+          // the outer INSERT's alone — an AFTER trigger's own writes do not
+          // inflate it (measured, and pinned by a test).
+          rowsWritten += insert.run(
+            columns.map((column) => bindValue(row[column.mapped], column.mapped)),
+          ).changes;
         }
         write.onBatch?.(rowsWritten);
       }
