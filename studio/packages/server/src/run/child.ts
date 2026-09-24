@@ -15,7 +15,6 @@ import {
   buildEngine,
   driveRun,
   startRun,
-  syncRunLifecycle,
   terminalizeInterrupted,
   type DriveDeps,
   type ExecutorCommand,
@@ -25,7 +24,8 @@ import type { RunDrives } from './drives.js';
 /** The one command this module answers. The executor narrows before calling in,
  * so a non-`startChild` command is not representable here. */
 export type StartChildCommand = Extract<ExecutorCommand, { type: 'startChild' }>;
-import { appendAndFold, loadEngineEvents, terminalFactFromLog } from './events.js';
+import { loadEngineEvents, terminalFactFromLog } from './events.js';
+import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
 
 /**
  * #796 (P3b) — `call_pipeline` CHILD EXECUTION: the spawn seam the reducer has
@@ -433,10 +433,9 @@ async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string):
     outputs,
   };
 
-  // The same out-of-band shape the webhook completer uses: append+fold inside a
-  // transaction with NO bus (a rolled-back event must never reach a subscriber),
-  // publish the committed record, then `driveRun` — which takes the parent's
-  // drive lock and re-projects. A duplicate delivery is absorbed by the
+  // The out-of-band append (#1021, `out-of-band.ts`): fold inside a transaction
+  // with no bus, then publish the committed record and `driveRun` — which takes
+  // the parent's drive lock and re-projects. A duplicate delivery is absorbed by the
   // reducer's own guards: `onCallReturned` ignores an event whose call node is
   // no longer `waiting` on that attempt.
   const parent = getRun(db, parentRunId);
@@ -447,11 +446,8 @@ async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string):
     const events = loadEngineEvents(db, parentRunId);
     if (terminalFactFromLog(events) !== null) return null;
     const state = engine.projectRunState(events);
-    const folded = appendAndFold(db, undefined, engine, state, event, deps.log);
-    syncRunLifecycle(db, parentRunId, folded.state.status);
-    return folded.record;
+    return foldOutOfBand(db, engine, state, [event], deps.log).records[0];
   });
   if (record === null) return;
-  deps.bus.publish(record);
-  await driveRun(deps, parentRunId);
+  await publishThenDrive(deps, [record]);
 }

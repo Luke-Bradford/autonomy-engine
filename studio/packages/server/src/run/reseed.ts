@@ -1,12 +1,8 @@
-import {
-  resolveRunParams,
-  type EngineEvent,
-  type RunEvent,
-  type RunState,
-} from '@autonomy-studio/shared';
+import { resolveRunParams, type EngineEvent } from '@autonomy-studio/shared';
 import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
-import { appendAndFold, loadEngineEvents, terminalFactFromLog } from './events.js';
-import { buildEngine, driveRun, syncRunLifecycle, type DriveDeps } from './driver.js';
+import { loadEngineEvents, terminalFactFromLog } from './events.js';
+import { buildEngine, type DriveDeps } from './driver.js';
+import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
 
 /**
  * RS2 — the LIVE rerun-from-failed PRODUCER: start a NEW run `R2` that skips the
@@ -184,35 +180,34 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           // the row projection and the event log can never disagree.
           rerunOf: sourceRunId,
         });
-        const events: EngineEvent[] = [];
-        if (sourceTctx !== undefined && sourceTctx.type === 'run.triggerContext') {
-          events.push({ ...sourceTctx, runId: r2.id });
-        }
-        events.push({
+        const tctx: [] | [EngineEvent] =
+          sourceTctx !== undefined && sourceTctx.type === 'run.triggerContext'
+            ? [{ ...sourceTctx, runId: r2.id }]
+            : [];
+        const started: EngineEvent = {
           type: 'run.started',
           runId: r2.id,
           pipelineVersionId: source.pipelineVersionId,
           startedAt: new Date(r2.startedAt).toISOString(),
           params: resolvedParams,
           rerunOf: sourceRunId,
-        });
-        events.push({
+        };
+        const reseeded: EngineEvent = {
           type: 'run.reseeded',
           runId: r2.id,
           sourceRunId,
           frontier,
           copiedOutputs,
           copiedContainers,
-        });
+        };
 
-        let state: RunState = engine.seedState();
-        const recs: RunEvent[] = [];
-        for (const event of events) {
-          const folded = appendAndFold(db, undefined, engine, state, event, deps.log);
-          state = folded.state;
-          recs.push(folded.record);
-        }
-        syncRunLifecycle(db, r2.id, state.status);
+        const { records: recs } = foldOutOfBand(
+          db,
+          engine,
+          engine.seedState(),
+          [...tctx, started, reseeded],
+          deps.log,
+        );
         return { runId: r2.id, records: recs };
       });
 
@@ -222,8 +217,7 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // settled `ready` node carries its `currentAttemptId`, so `onResumed` re-emits
       // it; copied frontier successes carry none and are skipped — no double
       // execution). `driveRun` owns its own faults, so `drive` never rejects.
-      for (const record of records) deps.bus?.publish(record);
-      const drive = driveRun(deps, runId);
+      const drive = publishThenDrive(deps, records);
       return { runId, drive };
     },
   };

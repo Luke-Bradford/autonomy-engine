@@ -9,19 +9,9 @@ import type {
 } from '@autonomy-studio/shared';
 import { getParsedRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
-import {
-  buildEngine,
-  DocUnresolvableError,
-  driveRun,
-  syncRunLifecycle,
-  type DriveDeps,
-} from '../run/driver.js';
-import {
-  appendAndFold,
-  loadEngineEvents,
-  RunLogUnparseableError,
-  terminalFactFromLog,
-} from '../run/events.js';
+import { buildEngine, DocUnresolvableError, driveRun, type DriveDeps } from '../run/driver.js';
+import { loadEngineEvents, RunLogUnparseableError, terminalFactFromLog } from '../run/events.js';
+import { foldOutOfBand } from '../run/out-of-band.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 
 /**
@@ -44,8 +34,9 @@ import type { WakeupFireResult, WakeupHandler } from './alarms.js';
  * and re-derived under the run's lock by `driveRun` in `afterCommit` — a stale
  * command may have been superseded by a concurrent drive (B1). No bus inside the
  * transaction: the clock publishes the returned envelopes AFTER commit, so a
- * rollback cannot show a subscriber an event that never existed. `appendAndFold`
- * records the fold's diagnostics against the seq it appended at, on the SAME `tx`
+ * rollback cannot show a subscriber an event that never existed. The fold goes
+ * through `foldOutOfBand` (`run/out-of-band.ts`, #1021), which records the fold's
+ * diagnostics against the seq it appended at, on the SAME `tx`
  * handle (#497) — a correctness requirement, since this transaction's rollback IS
  * the at-least-once contract.
  *
@@ -125,8 +116,8 @@ export interface DurableAlarmConfig<TRef extends WakeupRef & { runId: string }> 
    * OPTIONAL side-effect run at settle time — the ONLY variation beyond the
    * event. Today only `external_wait` uses it, to settle its correlation row
    * (`markExternalWaitExpired`) atomically with the log. Invoked at EXACTLY three
-   * points — terminal-log suppress, stale (layer-2) suppress, and on fire (between
-   * the append and the lifecycle sync) — and DELIBERATELY NOT on `run_not_found`,
+   * points — terminal-log suppress, stale (layer-2) suppress, and on fire (just
+   * before the append, in the same transaction) — and DELIBERATELY NOT on `run_not_found`,
    * `doc_unresolvable`, or the #642 corrupt-read suppressions (`ref_unparseable`/
    * `run_events_unparseable`/`run_unparseable`): the run row / version is gone or
    * unreadable; there is nothing whose correlation to settle, and those paths are
@@ -223,16 +214,15 @@ export function createDurableAlarmHandler<TRef extends WakeupRef & { runId: stri
       }
 
       // Appended INSIDE the clock's transaction, together with the settle (see the
-      // module doc). The commands are discarded and re-derived under the run's
-      // lock by `driveRun`.
-      const due = config.buildDueEvent(ref);
-      const result = appendAndFold(tx, undefined, engine, state, due);
+      // module doc), through the shared out-of-band fold (#1021) — the clock owns
+      // the publish and the `afterCommit` drive. The commands are discarded and
+      // re-derived under the run's lock by `driveRun`.
       config.settleSideEffect?.(tx, ref, deps);
-      syncRunLifecycle(tx, ref.runId, result.state.status);
+      const { records } = foldOutOfBand(tx, engine, state, [config.buildDueEvent(ref)], deps.log);
 
       return {
         status: 'fired',
-        events: [result.record],
+        events: records,
         // Spawning work is forbidden inside the transaction (this module's
         // contract): the drive may bill real LLM calls downstream, and a rollback
         // around that would erase the run's log while the detached drive appended.

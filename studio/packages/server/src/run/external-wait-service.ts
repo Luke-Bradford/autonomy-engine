@@ -7,21 +7,17 @@ import {
 import { getRun } from '../repo/runs.js';
 import { getExternalWaitByTokenHash, markExternalWaitCompleted } from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
-import { appendAndFold, loadEngineEvents, terminalFactFromLog } from './events.js';
-import {
-  buildEngine,
-  DocUnresolvableError,
-  driveRun,
-  syncRunLifecycle,
-  type DriveDeps,
-} from './driver.js';
+import { loadEngineEvents, terminalFactFromLog } from './events.js';
+import { buildEngine, DocUnresolvableError, type DriveDeps } from './driver.js';
+import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
 
 /**
  * #4 A13 — the inbound-callback COMPLETER for a parked `webhook` node: the run-side
  * of `POST /api/external-wait/:token`. The HTTP twin of the expiry alarm's
  * `fire` (`scheduler/external-wait-alarm.ts`) — same guard discipline
  * (`terminalFactFromLog` freshness, `external_wait_pending`-at-attempt check),
- * same append-inside-a-transaction + `driveRun`-after-commit shape — but resuming
+ * same append-inside-a-transaction + `driveRun`-after-commit shape (`out-of-band.ts`,
+ * #1021) — but resuming
  * the node to SUCCESS (`externalWait.completed`) instead of failing it, and
  * triggered by an HTTP request rather than a due alarm.
  *
@@ -165,7 +161,7 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
 
       // Guard + settle-row + append in ONE synchronous transaction: better-sqlite3
       // is single-threaded, but the explicit transaction makes the settle+append
-      // atomic even if `appendAndFold` throws (no half-settled row without its
+      // atomic even if `foldOutOfBand` throws (no half-settled row without its
       // event), and serializes against a concurrent expiry/duplicate-completion.
       const runId = row.runId;
       type TxResult = {
@@ -248,12 +244,10 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
           previousAttemptId: row.attemptId,
           outputs: checked.outputs,
         };
-        // Bus is `undefined` here: publishing INSIDE the tx would let a WS subscriber
-        // observe an event a rollback could erase (the discipline the alarm handlers
-        // keep by publishing via `afterCommit`). Publish the committed record below.
-        const folded = appendAndFold(deps.db, undefined, engine, state, event, deps.log);
-        syncRunLifecycle(deps.db, runId, folded.state.status);
-        return { verdict: 'completed', record: folded.record };
+        // No bus inside the tx (#1021, `out-of-band.ts`) — the committed record is
+        // published below.
+        const folded = foldOutOfBand(deps.db, engine, state, [event], deps.log);
+        return { verdict: 'completed', record: folded.records[0] };
       });
 
       if (result.record === null) {
@@ -269,15 +263,12 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         }
         return { outcome: result.verdict, reason: result.reason };
       }
-      // AFTER commit: publish the completion to the live-tail bus (never before —
-      // see above), then drive. Spawning work (the downstream drive, which may bill
-      // real LLM calls) is forbidden inside the transaction.
-      deps.bus?.publish(result.record);
+      // AFTER commit: publish, then drive (`publishThenDrive` owns that ordering).
       // STARTED here, awaited by the caller or not (see `ExternalWaitCompletion.drive`).
       // Started rather than handed over as a thunk so the resumption begins the moment
       // the settle commits, whichever caller this is — a wait is completed as soon as
       // this returns, and no caller's choice about awaiting can delay the run.
-      const drive = driveRun(deps, runId);
+      const drive = publishThenDrive(deps, [result.record]);
       return { outcome: 'completed', drive };
     },
   };
