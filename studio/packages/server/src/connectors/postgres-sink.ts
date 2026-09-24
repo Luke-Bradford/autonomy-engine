@@ -481,11 +481,24 @@ export async function writePostgresDatasetRows(
         for (let i = 0; i < pendingRows; i += 1) {
           tuples.push(`(${columns.map(() => `$${n++}`).join(', ')})`);
         }
-        await client.query(
+        const inserted = await client.query(
           `INSERT INTO ${writeTarget} (${columnList}) VALUES ${tuples.join(', ')}`,
           pending,
         );
-        rowsWritten += pendingRows;
+        // #1270 — the store's own count of what LANDED, not the tuples sent. A
+        // BEFORE trigger returning NULL skips its row; a `DO INSTEAD` rule
+        // reports its own last INSERT's count (zero for `DO INSTEAD NOTHING`,
+        // postgres §41.6) — so under a redirecting rule this counts the rows
+        // placed in the rule's target. No count at all is refused rather than
+        // guessed: the guess is exactly the overstatement this replaced, and
+        // throwing here, inside the transaction, rolls the copy back.
+        if (typeof inserted.rowCount !== 'number') {
+          throw new DatasetIoError(
+            'permanent',
+            `the store did not report a row count for the INSERT into '${spelled}'`,
+          );
+        }
+        rowsWritten += inserted.rowCount;
         pending = [];
         pendingRows = 0;
         write.onBatch?.(rowsWritten);

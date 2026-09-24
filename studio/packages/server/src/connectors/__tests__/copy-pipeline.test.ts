@@ -28,7 +28,8 @@ import {
  *
  * Each slice is thoroughly tested alone and none of that proves they fit. This
  * suite exists for the joins: that the pump's yielded batch type is what the
- * sink accepts, that `rowsRead = rowsWritten + rowsFailed` holds end to end, and
+ * sink accepts, that `rowsRead = rowsWritten + rowsFailed` holds end to end into a
+ * plain table (a store that discards rows makes it `≤` — #1270), and
  * that a copy-wide refusal raised in the MIDDLE of the sink's open transaction
  * still reaches the caller as a permanent failure with nothing written.
  *

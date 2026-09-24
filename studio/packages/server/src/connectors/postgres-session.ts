@@ -53,10 +53,13 @@ export interface PostgresClientOptions {
 
 /** What a statement hands back. Narrow on purpose: `fields` is what
  * `describeSource` reads (the source's columns, without reading a row), `rows`
- * is what the cursor yields. */
+ * is what the cursor yields, and `rowCount` is how the copy sink learns how many
+ * rows an INSERT actually kept (#1270). Optional because only that one caller
+ * needs it; `pg` sets it for every INSERT. */
 export interface PostgresQueryResult {
   readonly rows: Record<string, unknown>[];
   readonly fields: readonly { readonly name: string }[];
+  readonly rowCount?: number | null;
 }
 
 /**

@@ -125,7 +125,9 @@ export interface CopyCounters {
   /**
    * Written by the SINK half, never by the pump. A pump-side guess would be
    * wrong in the one case that matters — the sink's transaction rolling back
-   * after the pump has handed it every row.
+   * after the pump has handed it every row. It is the rows the store KEPT, by
+   * the store's own count (#1270): a trigger or conflict clause that discards a
+   * row makes `rowsWritten + rowsFailed` fall short of `rowsRead`.
    */
   rowsWritten: number;
   /** Rows NOT written because a mapped value failed coercion under `onError: 'fail'`. */

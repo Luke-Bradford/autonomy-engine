@@ -74,6 +74,9 @@ function sinkFactory(
     fillsNulls?: boolean;
     missing?: boolean;
     failOn?: { prefix: string; error: unknown };
+    /** What an INSERT reports as its `rowCount`, given how many tuples it sent.
+     * Defaults to every tuple landing — the plain-table case. */
+    insertRowCount?: (sent: number) => number | null | undefined;
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -101,6 +104,11 @@ function sinkFactory(
             ],
             fields: [],
           };
+        }
+        if (sql.startsWith('INSERT INTO')) {
+          const sent = (sql.match(/\(\$\d/g) ?? []).length;
+          const rowCount = (fixture.insertRowCount ?? ((n: number) => n))(sent);
+          return { rows: [], fields: [], rowCount };
         }
         return { rows: [], fields: [] };
       },
@@ -548,6 +556,34 @@ describe('the postgres sink’s statements (#1196 M10 slice 3a)', () => {
     );
     expect(ticks).toEqual([10, 20, 25]);
   });
+
+  it('counts what the store says LANDED, not the tuples it sent (#1270)', async () => {
+    // A BEFORE trigger returning NULL, or a DO INSTEAD rule, keeps fewer rows
+    // than the statement carried; the INSERT's own `rowCount` is the only
+    // witness to that.
+    const ticks: number[] = [];
+    const { factory } = sinkFactory({ insertRowCount: (sent) => sent - 1 });
+    const result = await writePostgresDatasetRows(
+      write({ createClient: factory, onBatch: (n) => ticks.push(n) }),
+      batchesOf([
+        { a: 1, b: 2 },
+        { a: 3, b: 4 },
+        { a: 5, b: 6 },
+      ]),
+    );
+    expect(result).toEqual({ rowsWritten: 2 });
+    expect(ticks).toEqual([2]);
+  });
+
+  it('REFUSES, and rolls back, when the INSERT reports no row count (#1270)', async () => {
+    // Guessing the tuple count here is exactly the overstatement #1270 removed.
+    const { rec, factory } = sinkFactory({ insertRowCount: () => null });
+    await expect(
+      writePostgresDatasetRows(write({ createClient: factory }), batchesOf([{ a: 1, b: 2 }])),
+    ).rejects.toMatchObject({ kind: 'permanent', message: expect.stringContaining('row count') });
+    expect(sqlOf(rec)).toContain('ROLLBACK');
+    expect(sqlOf(rec)).not.toContain('COMMIT');
+  });
 });
 
 describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
@@ -813,7 +849,8 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
         liveWrite({ datasetConfig: { schema: 'public', table: 'sink_ruled' }, nullOnError: ['b'] }),
         batchesOf([{ a: 1, b: null }]),
       ),
-    ).resolves.toBeDefined();
+      // #1270 — and it says nothing landed, because nothing did.
+    ).resolves.toEqual({ rowsWritten: 0 });
   });
 
   it('still REFUSES behind a DISABLED trigger or a DO ALSO rule — the constraint still fires (#1162)', async () => {
@@ -837,6 +874,51 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
         ),
       ).rejects.toThrow(/sink column 'b'.*NOT NULL/);
     }
+  });
+
+  it('counts only the rows the store KEPT — a BEFORE trigger returning NULL (#1270)', async () => {
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_skip;
+        create or replace function sink_skip_b() returns trigger language plpgsql as
+          $f$ begin if new.b is null then return null; end if; return new; end $f$;
+        create table sink_skip(a int, b text);
+        create trigger sink_skip_t before insert on sink_skip for each row execute function sink_skip_b();`);
+    });
+    await expect(
+      writePostgresDatasetRows(
+        liveWrite({ datasetConfig: { schema: 'public', table: 'sink_skip' } }),
+        batchesOf([
+          { a: 1, b: 'kept' },
+          { a: 2, b: null },
+          { a: 3, b: 'kept' },
+        ]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 2 });
+  });
+
+  it('reports the rows a DO INSTEAD rule redirected, per its command status (#1270)', async () => {
+    // Postgres §41.6 "Rules and Command Status": under an unconditional INSTEAD
+    // rule the status is that of the rule's last same-type query (else zero —
+    // the DO INSTEAD NOTHING case above). So the count is of rows that landed in
+    // the rule's TARGET; sqlite has no rules and never counts a row placed elsewhere.
+    await withAdminClient(async (c) => {
+      await c.query(`
+        drop table if exists sink_redirect; drop table if exists sink_redirect_to;
+        create table sink_redirect_to(a int);
+        create table sink_redirect(a int, b text);
+        create rule sink_redirect_r as on insert to sink_redirect
+          do instead insert into sink_redirect_to values (new.a);`);
+    });
+    await expect(
+      writePostgresDatasetRows(
+        liveWrite({ datasetConfig: { schema: 'public', table: 'sink_redirect' } }),
+        batchesOf([
+          { a: 1, b: 'x' },
+          { a: 2, b: 'y' },
+        ]),
+      ),
+    ).resolves.toEqual({ rowsWritten: 2 });
   });
 
   it('really copies rows into a real table', async () => {
