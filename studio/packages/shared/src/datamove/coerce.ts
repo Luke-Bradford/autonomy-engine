@@ -65,8 +65,12 @@ export type CoercionFailureCode =
  * (`catalog/dataset-config.ts` records the measured `TypeError`), so the 0/1
  * encoding is the SQLite writer's job in slice 2 — putting it here would bake
  * one store's binding rules into a matrix every store shares.
+ *
+ * `Uint8Array` is `binary`'s value (#1131), passed through untouched — both
+ * store drivers bind it as bytes (`BLOB`/`bytea`), so it needs no writer-side
+ * encoding at all.
  */
-export type CoercedValue = string | number | bigint | boolean | null;
+export type CoercedValue = string | number | bigint | boolean | Uint8Array | null;
 
 export type CoercionResult =
   { ok: true; value: CoercedValue } | { ok: false; code: CoercionFailureCode; reason: string };
@@ -510,7 +514,7 @@ function numberFromString(text: string): CoercionResult {
  * Two deliberate refusals worth stating, both cases §6.2 has no row for and both
  * resolved the same way — the spec's own principle that a conversion never
  * REINTERPRETS:
- *   - a container or a BLOB → `string` FAILS. `String({})` is `"[object
+ *   - a container or a BLOB → `string` FAILS (a BLOB's one home is `binary`). `String({})` is `"[object
  *     Object]"`, a lossy stand-in that looks like data.
  *   - a real `boolean` → `integer`/`number` FAILS, and a `Date`/`bigint` →
  *     `boolean` likewise. 1/0 and truthiness are conventions, not conversions.
@@ -553,7 +557,19 @@ export function coerceValue(
     case 'date':
     case 'timestamp':
       return toInstant(value, target, opts);
+    case 'binary':
+      return toBinary(value);
   }
+}
+
+/** #1131 — a PASSTHROUGH: the bytes, the same object, never re-encoded. A
+ * `Buffer` is a `Uint8Array`, which is what both store drivers hand back.
+ * Nothing else becomes bytes: a string has no declared encoding (base64, hex
+ * and UTF-8 are three different answers), so producing bytes from one is a
+ * guess — the corruption engine §6.2 forbids by name. */
+function toBinary(value: unknown): CoercionResult {
+  if (value instanceof Uint8Array) return ok(value);
+  return fail('unsupported_source_type', `a ${describe(value)} is not binary`);
 }
 
 function toStringValue(value: unknown): CoercionResult {

@@ -426,7 +426,18 @@
 // `lookup` node is seeded from this entry by F13b lowering at SAVE time, so a
 // pre-29 build meeting such a doc fails the node on a declared output its
 // adapter cannot yield — bump 21's shape exactly, and the same remedy.
-export const CATALOG_VERSION = 29;
+// CATALOG_VERSION 30 (#1131): the `binary` DATA TYPE. A bump, on the settled
+// precedent of bumps 8, 22 and 25 — a new closed-enum member "is not even
+// parseable by an older" schema. `DataTypeSchema` gates BOTH a dataset's
+// declared `columns[].type` and a `copy` node's `mapping[].type`, so a pre-30
+// build meets `'binary'` in two envelope kinds and parses neither: a DATASET
+// file becomes `workspace-parse`'s generic `unparseable` diagnostic and is
+// silently dropped from the apply set (bump 22's measured consequence), and a
+// PIPELINE whose copy maps a BLOB is not runnable as authored (bump 21's rule).
+// The import floor refuses both with a version message naming the real cause.
+// No `SCHEMA_VERSION` bump and no upgrader: the member only ADMITS a value no
+// older export can contain, so every pre-30 artifact parses here unchanged.
+export const CATALOG_VERSION = 30;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

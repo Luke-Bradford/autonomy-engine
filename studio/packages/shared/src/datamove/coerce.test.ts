@@ -242,9 +242,11 @@ describe('coerceValue — the input domain a SQLite source actually produces', (
     expectFail(coerceValue(1n, 'timestamp'), 'unsupported_source_type');
   });
 
-  it('a BLOB has no declared form and is refused for EVERY target, string included', () => {
+  it('a BLOB is refused for every target BUT binary, string included', () => {
     const blob = new Uint8Array([0xde, 0xad]);
-    for (const target of TARGETS) expectFail(coerceValue(blob, target), 'unsupported_source_type');
+    for (const target of TARGETS.filter((t) => t !== 'binary')) {
+      expectFail(coerceValue(blob, target), 'unsupported_source_type');
+    }
   });
 
   it('a real number renders canonically to string and never via a locale', () => {
@@ -361,7 +363,11 @@ describe('coerceValue — every (input kind x target) pair has an outcome', () =
       if (r.ok) {
         // The output domain slice 2's sink writer binds against.
         expect(['string', 'number', 'bigint', 'boolean', 'object']).toContain(typeof r.value);
-        if (typeof r.value === 'object') expect(r.value).toBeNull();
+        // An object is null or — for `binary` only (#1131) — the bytes.
+        if (typeof r.value === 'object' && r.value !== null) {
+          expect(target).toBe('binary');
+          expect(r.value).toBeInstanceOf(Uint8Array);
+        } else if (typeof r.value === 'object') expect(r.value).toBeNull();
       } else {
         expect(typeof r.code).toBe('string');
         expect(r.reason.length).toBeGreaterThan(0);
@@ -553,5 +559,38 @@ describe('#1156 — exponent form is exact, not routed through a double', () => 
 
   it('leaves `number` targets on the double path — only `integer` is exact', () => {
     expect(coerceValue('1e2', 'number')).toEqual({ ok: true, value: 100 });
+  });
+});
+
+describe('coerceValue — binary (#1131), a passthrough and nothing else', () => {
+  it('passes a BLOB through byte for byte — the SAME bytes, not a re-encoding', () => {
+    // 0x00 and an invalid UTF-8 lead byte: the two values a text round trip loses.
+    const blob = new Uint8Array([0x00, 0xff, 0xc3, 0x28, 0x00]);
+    const result = coerceValue(blob, 'binary');
+    expectOk(result, blob);
+    expect(result.ok && result.value).toBe(blob);
+  });
+
+  it('passes a Buffer through as-is — it is what both store drivers hand back', () => {
+    const buf = Buffer.from([1, 2, 3]);
+    expect(coerceValue(buf, 'binary')).toEqual({ ok: true, value: buf });
+  });
+
+  it('refuses EVERY non-bytes source — no base64/hex/utf-8 guess from a string', () => {
+    const sources: unknown[] = ['3q0=', 'dead', '', 42, 1.5, 7n, true, new Date(0), {}, [1, 2]];
+    for (const value of sources) {
+      expectFail(coerceValue(value, 'binary'), 'unsupported_source_type');
+    }
+  });
+
+  it('keeps the rows every target shares: SQL NULL, absent, and the nullValue sentinel', () => {
+    expectOk(coerceValue(null, 'binary'), null);
+    expectFail(coerceValue(undefined, 'binary'), 'absent_value');
+    expectOk(coerceValue('\\N', 'binary', { nullValue: '\\N' }), null);
+  });
+
+  it('a refusal never echoes the value, even one that looks like encoded bytes', () => {
+    const result = coerceValue('c2VjcmV0LXRva2Vu', 'binary');
+    expect(result.ok === false && result.reason).not.toContain('c2VjcmV0LXRva2Vu');
   });
 });

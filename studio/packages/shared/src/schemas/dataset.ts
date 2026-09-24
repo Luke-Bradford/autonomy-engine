@@ -28,6 +28,11 @@ import { z } from 'zod';
  * (source value → target type) pair, and every conversion either produces a
  * value or FAILS THE ROW — there is no "best effort" third outcome. A type
  * added here without a matrix row would be a silent corruption path.
+ *
+ * `binary` (#1131) is raw bytes — a sqlite `BLOB`, a postgres `bytea`. Its
+ * matrix row is a PASSTHROUGH and nothing else: bytes in, the same bytes out;
+ * every other source fails, a string included (base64? hex? UTF-8? nothing
+ * declared which), and bytes into any other type already fail.
  */
 export const DataTypeSchema = z.enum([
   'string',
@@ -36,6 +41,7 @@ export const DataTypeSchema = z.enum([
   'boolean',
   'date',
   'timestamp',
+  'binary',
 ]);
 export type DataType = z.infer<typeof DataTypeSchema>;
 
