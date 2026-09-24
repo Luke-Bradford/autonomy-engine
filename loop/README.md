@@ -399,5 +399,10 @@ Three independent bounds, checked before every fire, each with its own test in
   at most `MAX_BUDGET_REGRANTS` (1) times
   after an auth/limit block long enough that the quota window it was sized against has moved on.
 
-A usage/rate limit is always a PAUSE (back off and retry), never a stop. Only an operator signal,
-a real crash loop, nothing-to-do, or the quota guard stops the driver.
+- **Operator-signal read** — the `[operator-decision]`/`[loop-blocked]`/`[mvp-ready]` counts are
+  read every iteration, and a failed `gh` read is UNKNOWN, never "none open" (#1257: a DNS outage
+  once fired the loop through an open hold). UNKNOWN backs off and re-checks, and after
+  `SIGNAL_UNKNOWN_TRIES` (5) consecutive failures the run stops. It never fires on an unread signal.
+
+A usage/rate limit is always a PAUSE (back off and retry), never a stop. Only an operator signal
+(or one that stays unreadable), a real crash loop, nothing-to-do, or the quota guard stops the driver.
