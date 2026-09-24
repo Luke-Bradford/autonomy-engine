@@ -815,7 +815,11 @@ function commitFieldDraft<K extends string, F extends ConfigDraft<K>>(
   if (!assembled.ok) return { ok: false, error: assembled.message };
   return {
     ok: true,
-    form: { ...form, config: assembled.config, jsonText: JSON.stringify(assembled.config, null, 2) },
+    form: {
+      ...form,
+      config: assembled.config,
+      jsonText: JSON.stringify(assembled.config, null, 2),
+    },
   };
 }
 
@@ -876,7 +880,10 @@ export function changeConfigKind<K extends string, F extends ConfigDraft<K>>(
   const moved: F = {
     ...form,
     kind,
-    inputs: { ...seedFieldInputs(fieldsFor(kind, form.config).fields, form.config), ...form.inputs },
+    inputs: {
+      ...seedFieldInputs(fieldsFor(kind, form.config).fields, form.config),
+      ...form.inputs,
+    },
   };
 
   // Ordinarily a kind change rewrites NEITHER draft, so an operator's JSON is
@@ -890,7 +897,9 @@ export function changeConfigKind<K extends string, F extends ConfigDraft<K>>(
   // A control that will not read back (non-numeric text in a number box) has no
   // committed form to carry; the message names it rather than letting the
   // textarea open on a draft that silently omits it.
-  return committed.ok ? { form: committed.form, error: null } : { form: moved, error: committed.error };
+  return committed.ok
+    ? { form: committed.form, error: null }
+    : { form: moved, error: committed.error };
 }
 
 /** Fields → JSON: assemble first, so the textarea opens on what Save would write. */
