@@ -286,7 +286,7 @@ code being adopted knows nothing about the handoff.
 
 ## Safety model
 
-Three independent bounds, checked before every fire, each with its own test in
+Four independent bounds, checked before every fire, each with its own test in
 `test_quota_guard.sh` (plus a note on the three quota SOURCES those bounds read from):
 
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
