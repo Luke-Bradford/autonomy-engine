@@ -2303,6 +2303,9 @@ stall=0
 crash=0
 loops=0
 fires=0
+# Deliberately NOT carried in the #811 handoff: a self-adopt mid-outage resets it,
+# which can only DELAY the stop (every iteration still refuses to fire on an
+# unreadable signal), and MAX_SELF_ADOPT bounds how often that can happen (#1257).
 signal_unknown=0
 auth_block_retries=0      # length of the auth block ensure_auth just cleared (set -u: must exist)
 budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGRANTS
@@ -2324,6 +2327,10 @@ QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE
 # leave the adopt cap silently unarmed, which is an adopt LOOP.
 HANDOFF_MAX_AGE="$(quota_knob_secs HANDOFF_MAX_AGE "$HANDOFF_MAX_AGE" 300 0)"
 MAX_SELF_ADOPT="$(quota_knob_secs MAX_SELF_ADOPT "$MAX_SELF_ADOPT" 3 0 adoptions)"
+# #1257, same reason: fed to `[ "$signal_unknown" -ge "$SIGNAL_UNKNOWN_TRIES" ]`,
+# where an unparseable value takes NEITHER branch and turns the bounded stop on an
+# unreadable operator signal into an endless back-off.
+SIGNAL_UNKNOWN_TRIES="$(quota_knob_secs SIGNAL_UNKNOWN_TRIES "$SIGNAL_UNKNOWN_TRIES" 5 0 tries)"
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
@@ -2399,9 +2406,7 @@ while true; do
     continue
   fi
   signal_unknown=0
-  read -r sig blk mvp <<EOF
-$sigs
-EOF
+  read -r sig blk mvp <<<"$sigs"
   if [ "$sig" != "0" ] || [ "$blk" != "0" ] || [ "$mvp" != "0" ]; then
     log "STOP: operator signal open (operator-decision=$sig loop-blocked=$blk mvp-ready=$mvp)"
     break

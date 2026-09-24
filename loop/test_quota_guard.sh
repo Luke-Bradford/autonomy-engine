@@ -2810,6 +2810,12 @@ check "#1257 ...and the run STOPS on the unreadable signal, rather than running 
 r1257t="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_FAIL=1 SIGNAL_UNKNOWN_TRIES=3)"
 check "#1257 SIGNAL_UNKNOWN_TRIES bounds the unreadable checks before the stop" "3" \
   "$(grep -c 'operator signal read FAILED' "$(logof "$r1257t")")"
+# ...and a typo'd bound is normalised to the default rather than obeyed: an
+# operand `test` cannot parse takes NEITHER branch, which would back off until
+# MAX_LOOPS instead of stopping.
+r1257k="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_FAIL=1 SIGNAL_UNKNOWN_TRIES=abc)"
+check "#1257 an unparseable SIGNAL_UNKNOWN_TRIES falls back to the default 5 and still stops" "5|1" \
+  "$(grep -c 'operator signal read FAILED' "$(logof "$r1257k")")|$(grep -c 'STOP: operator signal UNREADABLE' "$(logof "$r1257k")")"
 # A transient failure is retried, not fatal: two failed reads, then gh recovers
 # and the driver fires normally (MAX_LOOPS=12 minus the 2 iterations spent
 # backing off = 10 fires). The first call of each iteration fails, so a
