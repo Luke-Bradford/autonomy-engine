@@ -128,6 +128,18 @@ class TestBuildSystemRules(unittest.TestCase):
             # NEEDS DISCUSSION must be barred as an "out of charter" escape hatch.
             self.assertIn("Never use it to mean 'this is outside my charter'", rules, scope)
 
+    def test_every_charter_makes_the_verdict_line_the_last_line(self):
+        """#1266: a scope note after the verdict fails the terminal rule, so the
+        charter must say nothing follows it and where a scope note goes instead."""
+        for scope in (
+            review_prompt.SCOPE_STUDIO,
+            review_prompt.SCOPE_ENGINE,
+            review_prompt.SCOPE_MIXED,
+        ):
+            rules = review_prompt.build_system_rules(scope)
+            self.assertIn("The verdict line is the LAST line of your response", rules, scope)
+            self.assertIn("BEFORE the `### Verdict` heading", rules, scope)
+
     def test_every_charter_keeps_the_diff_only_discipline(self):
         for scope in (
             review_prompt.SCOPE_STUDIO,
@@ -441,6 +453,20 @@ class TestExtractVerdict(unittest.TestCase):
         text = (
             "### Verdict: leaning **APPROVE**, but let me re-check the null deref first.\n\n"
             "Final answer below.\n"
+        )
+        self.assertIsNone(review_prompt.extract_verdict(text))
+
+    def test_a_SCOPE_NOTE_after_the_verdict_is_refused_by_design(self):
+        # #1266: the exact body the bot posted on PR #1265, twice. A closing
+        # "what I checked" paragraph is indistinguishable from a model still
+        # talking, so the terminal rule refuses it. This is the reader working;
+        # the fix lives in the charter (see the charter test below). Do NOT
+        # loosen the reader to make this pass.
+        text = (
+            "### Verdict\n**APPROVE** — I found no blocking or warning-level problems "
+            "in the diff.\n\n"
+            "I read `useConfigEditor.ts` and `readConfigDraft` in `configForm.ts` to "
+            "check this. I didn't run the tests."
         )
         self.assertIsNone(review_prompt.extract_verdict(text))
 
