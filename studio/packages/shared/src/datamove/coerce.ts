@@ -514,8 +514,9 @@ function numberFromString(text: string): CoercionResult {
  * Two deliberate refusals worth stating, both cases §6.2 has no row for and both
  * resolved the same way — the spec's own principle that a conversion never
  * REINTERPRETS:
- *   - a container or a BLOB → `string` FAILS (a BLOB's one home is `binary`). `String({})` is `"[object
- *     Object]"`, a lossy stand-in that looks like data.
+ *   - a container or a BLOB → `string` FAILS. `String({})` is `"[object
+ *     Object]"`, a lossy stand-in that looks like data. (A BLOB's one home is
+ *     `binary`, #1131.)
  *   - a real `boolean` → `integer`/`number` FAILS, and a `Date`/`bigint` →
  *     `boolean` likewise. 1/0 and truthiness are conventions, not conversions.
  */
