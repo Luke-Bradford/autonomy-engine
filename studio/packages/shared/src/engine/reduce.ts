@@ -33,8 +33,8 @@ import {
   composeFilterExpr,
   containerJoin,
   containerMembership,
-  forwardDescendants,
-  nodeForwardAdjacency,
+  isParallelForeach,
+  nodeDescendants,
   nodeJoin,
   partitionReadiness,
   substitute,
@@ -528,8 +528,6 @@ export function createEngine(doc: EngineDoc): Engine {
   // byte-identical — parallel is a SEPARATE derivation path
   // (`stepForeachParallel` + the item-start pass in `settle`), and every piece
   // of sequential machinery explicitly skips a parallel container.
-  const isParallelForeach = (c: Container): boolean =>
-    c.kind === 'foreach' && (c.batchCount ?? 1) >= 2;
   /** Children of parallel-mode foreach containers: NEVER seeded as bare ids. */
   const parallelChildIds = new Set<string>();
   for (const c of containers) {
@@ -724,9 +722,7 @@ export function createEngine(doc: EngineDoc): Engine {
   // endpoints are excluded — a bare back-edge's body is a node path. Built via
   // the SSOT helpers in params.ts so the reducer and `validateDoc` compute the
   // SAME reset body (they can never disagree on which nodes a bounce resets).
-  const nodeAdj = nodeForwardAdjacency(doc);
-  const descendants = new Map<string, Set<string>>();
-  for (const id of nodeIds) descendants.set(id, forwardDescendants(id, nodeAdj));
+  const descendants = nodeDescendants(doc);
 
   // Precompute each back-edge's loop body (the nodes it resets on a bounce):
   //   - target is a container → its children.

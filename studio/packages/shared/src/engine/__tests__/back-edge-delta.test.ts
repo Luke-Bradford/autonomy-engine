@@ -16,6 +16,13 @@ import { backEdgeDefect, validatePipelineDoc } from '../params.js';
  * verdict on the doc that WOULD be saved. Two definitions that must not
  * disagree are asserted against each other, not left to stay in step by
  * inspection.
+ *
+ * Since #847 the two share each RULE (`touchesParallelBody`, `reachesAncestor`,
+ * `resetsOwnSource` in `params.ts`), so disagreement on a rule is impossible
+ * by construction. These specs stay as the net for what is NOT shared: the
+ * probe edge `backEdgeDefect` judges against, its first-defect ordering, and
+ * the save gate's per-kind gating around the rules (the stray-`batchCount`
+ * loop below is a divergence of exactly that kind, which this file caught).
  */
 
 let seq = 0;
@@ -126,6 +133,52 @@ describe('backEdgeDefect — agreement with the save gate', () => {
     );
     expect(backEdgeDefect(d, d.containers ?? [], 'item', 'F')).toBe('parallel-body');
     agrees(d, 'item', 'F');
+  });
+
+  /**
+   * #847 — the TARGET arms of the parallel-body rule, each with a source
+   * OUTSIDE the body so the source arm cannot be what refuses it. Both halves
+   * must name the parallel body, not merely refuse for some other reason.
+   */
+  it.each([
+    ['targets a child of the body', 'item'],
+    ['targets the parallel container itself', 'F'],
+  ])("refuses a back-edge from outside that %s — 'parallel-body'", (_label, target) => {
+    const d = doc(
+      [node('item'), node('after')],
+      [edge('F', 'after')],
+      [
+        {
+          id: 'F',
+          kind: 'foreach',
+          items: '${params.xs}',
+          batchCount: 2,
+          children: ['item'],
+        } as Container,
+      ],
+    );
+    expect(backEdgeDefect(d, d.containers ?? [], 'after', target)).toBe('parallel-body');
+    expect(gateBackErrors(d, 'after', target)).toContainEqual(
+      expect.stringContaining('cannot combine batchCount >= 2 with back-edge'),
+    );
+  });
+
+  /**
+   * #847 — "parallel" means a parallel FOREACH, for both halves. A `batchCount`
+   * on any other kind is its own doc-wide refusal (`batchCount is only
+   * meaningful on a foreach`), not a fact about the back-edge: the save gate
+   * never runs the parallel-body rule for a loop. The connect-time predicate
+   * used to test `batchCount` on every kind, so it refused an edge the gate
+   * has no complaint about.
+   */
+  it('does not call a loop carrying a stray batchCount a parallel body', () => {
+    const d = doc(
+      [node('w'), node('after')],
+      [edge('L', 'after')],
+      [{ id: 'L', kind: 'loop', exitWhen: '${true}', batchCount: 2, children: ['w'] } as Container],
+    );
+    agrees(d, 'w', 'L');
+    expect(backEdgeDefect(d, d.containers ?? [], 'w', 'L')).toBeNull();
   });
 
   /**

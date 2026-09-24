@@ -2220,9 +2220,7 @@ export function validateDoc(
   // reset-body (no-progress) guard below — computed via the SSOT helpers so the
   // reducer and this validator agree on which nodes a bounce resets.
   const containerById = new Map<string, Container>(containers.map((c) => [c.id, c]));
-  const nodeAdj = nodeForwardAdjacency(doc);
-  const descendants = new Map<string, Set<string>>();
-  for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
+  const descendants = nodeDescendants(doc);
 
   // Container children: existence + disjointness; loop/stage exit configuration.
   // Ownership (disjointness) is resolved by the shared `containerMembership` SSOT,
@@ -2361,11 +2359,10 @@ export function validateDoc(
       //     (`parseInstanceKey` matches `<id>@<digits>`), so an event for the
       //     literal node could fold onto another node's item instance.
       // Sequential mode (absent / 1) is untouched — neither rule applies.
-      if ((c.batchCount ?? 1) >= 2) {
-        const bodySet = new Set(c.children);
+      if (isParallelForeach(c)) {
         for (const e of doc.edges) {
           if (e.back !== true) continue;
-          if (bodySet.has(e.from) || bodySet.has(e.to) || e.to === c.id) {
+          if (touchesParallelBody(c, e)) {
             errors.push(
               `container '${c.id}': cannot combine batchCount >= 2 with back-edge '${e.id}' ` +
                 `touching its body — back-edge machinery is keyed by bare node ids and would be ` +
@@ -2493,15 +2490,13 @@ export function validateDoc(
     // absent source. Both would be wrong answers about an id that is simply not
     // there, burying the one error that explains them.
     if (!endpointsExist(e)) continue;
-    const fromTarget = reach.get(e.to) ?? new Set<string>();
-    if (!fromTarget.has(e.from)) {
+    if (!reachesAncestor(reach, e)) {
       errors.push(
         `back-edge '${e.id}': its target '${e.to}' must be an ancestor of '${e.from}' ` +
           '(a loop/stage container or an upstream node that reaches it)',
       );
     }
-    const body = backEdgeResetBody(e, nodeIdList, descendants, containerById);
-    if (body.length === 0 || !body.includes(e.from)) {
+    if (!resetsOwnSource(e, nodeIdList, descendants, containerById)) {
       errors.push(
         `back-edge '${e.id}': makes no progress — its reset body must include its ` +
           `source '${e.from}' (a container-targeted back-edge whose source is outside ` +
@@ -3423,28 +3418,71 @@ export function backEdgeDefect(
   const probe: Edge = { id: '__probe__', from, to, on: 'success', back: true, maxBounces: 1 };
   const withProbe = { nodes: doc.nodes, edges: [...doc.edges, probe] };
 
-  // Read from the same `(batchCount ?? 1) >= 2` shape the save gate uses, so a
-  // change to what counts as parallel cannot leave the two disagreeing.
-  for (const c of containers) {
-    if ((c.batchCount ?? 1) < 2) continue;
-    const body = new Set(c.children);
-    if (body.has(from) || body.has(to) || to === c.id) return 'parallel-body';
-  }
-
-  const reach = forwardReach(withProbe, containers);
-  if (!(reach.get(to)?.has(from) ?? false)) return 'ancestry';
-
-  const nodeIdList = withProbe.nodes.map((n) => n.id);
-  const nodeAdj = nodeForwardAdjacency(withProbe);
-  const descendants = new Map<string, Set<string>>();
-  for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
-  const resetBody = backEdgeResetBody(
+  // Each arm is the SAME predicate `validateDoc`'s back-edge rules call (#847),
+  // so the two cannot disagree by construction rather than by inspection.
+  if (containers.some((c) => touchesParallelBody(c, probe))) return 'parallel-body';
+  if (!reachesAncestor(forwardReach(withProbe, containers), probe)) return 'ancestry';
+  return resetsOwnSource(
     probe,
-    nodeIdList,
-    descendants,
+    withProbe.nodes.map((n) => n.id),
+    nodeDescendants(withProbe),
     new Map(containers.map((c) => [c.id, c])),
+  )
+    ? null
+    : 'no-progress';
+}
+
+/**
+ * The three back-edge RULES, each stated once (#847). `validateDoc` calls them
+ * per edge and owns the messages; `backEdgeDefect` calls them for a candidate
+ * and owns the ordering. Neither re-spells a rule, so a change to one reaches
+ * the save gate and the canvas's connect-time offer together.
+ */
+
+/**
+ * A foreach in PARALLEL mode (#4 A4b): its items run as per-instance keys
+ * (`<nodeId>@<i>`). The reducer's parallel derivation, the save gate's
+ * parallel refusals and the connect-time `parallel-body` arm all read this.
+ * A `batchCount` on any other kind is not parallel — `validateDoc` refuses it
+ * separately as meaningless there.
+ */
+export function isParallelForeach(c: Container): boolean {
+  return c.kind === 'foreach' && (c.batchCount ?? 1) >= 2;
+}
+
+/**
+ * Rule 1: a back-edge must not touch a parallel foreach's body — its source or
+ * target a child, or its target the container itself — because back-edge
+ * machinery is keyed by bare node ids and would be silently dead under
+ * per-item instances. The kind gate inside `isParallelForeach` is load-bearing:
+ * the connect-time copy once tested `batchCount` on every kind and refused a
+ * loop's back-edge the save gate accepts (#847).
+ */
+function touchesParallelBody(c: Container, e: Pick<Edge, 'from' | 'to'>): boolean {
+  return (
+    isParallelForeach(c) &&
+    (c.children.includes(e.from) || c.children.includes(e.to) || e.to === c.id)
   );
-  return resetBody.length === 0 || !resetBody.includes(from) ? 'no-progress' : null;
+}
+
+/** Rule 2: a back-edge's target must forward-reach (or enclose) its source. */
+function reachesAncestor(reach: Map<string, Set<string>>, e: Pick<Edge, 'from' | 'to'>): boolean {
+  return reach.get(e.to)?.has(e.from) ?? false;
+}
+
+/**
+ * Rule 3: a back-edge must make PROGRESS — its reset body must include its own
+ * source, else a bounce resets nothing and `fireBackEdges` re-sees the same
+ * satisfied edge forever. (An empty body cannot include it, so that case needs
+ * no arm of its own.)
+ */
+function resetsOwnSource(
+  e: Edge,
+  nodeIds: string[],
+  descendants: Map<string, Set<string>>,
+  containerById: Map<string, Container>,
+): boolean {
+  return backEdgeResetBody(e, nodeIds, descendants, containerById).includes(e.from);
 }
 
 /**
@@ -4859,6 +4897,20 @@ export function forwardDescendants(start: string, adj: Map<string, string[]>): S
     for (const nxt of adj.get(cur) ?? []) stack.push(nxt);
   }
   return seen;
+}
+
+/**
+ * Every node's forward descendants, keyed by node id — the `descendants` input
+ * `backEdgeResetBody` takes. One builder for the reducer, `validateDoc` and
+ * `backEdgeDefect`, so all three hand it the same map.
+ */
+export function nodeDescendants(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+): Map<string, Set<string>> {
+  const adj = nodeForwardAdjacency(doc);
+  const descendants = new Map<string, Set<string>>();
+  for (const n of doc.nodes) descendants.set(n.id, forwardDescendants(n.id, adj));
+  return descendants;
 }
 
 /**
