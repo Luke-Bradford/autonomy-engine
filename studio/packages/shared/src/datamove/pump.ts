@@ -127,7 +127,8 @@ export interface CopyCounters {
    * wrong in the one case that matters — the sink's transaction rolling back
    * after the pump has handed it every row. It is the rows the store KEPT, by
    * the store's own count (#1270): a trigger or conflict clause that discards a
-   * row makes `rowsWritten + rowsFailed` fall short of `rowsRead`.
+   * row makes `rowsWritten + rowsFailed` fall short of `rowsRead`, and a
+   * successful copy names that gap as `COPY_STORE_COUNT_DIFFERS` (#1273).
    */
   rowsWritten: number;
   /** Rows NOT written because a mapped value failed coercion under `onError: 'fail'`. */
