@@ -284,7 +284,7 @@ test.describe('#855 recurrence bounds say what they will actually store', () => 
     await start.fill('2026-03-29T01:30');
     await expect(form.getByTestId('bound-shift')).toHaveText(
       "Start time 2026-03-29T01:30 does not exist in your browser's time zone " +
-        '(a daylight-saving jump) — it will be saved as 2026-03-29T02:30.',
+        '(a daylight-saving jump, or a day past the end of its month) — it will be saved as 2026-03-29T02:30.',
     );
     await expect(preview).toContainText('from 2026-03-29T01:30:00.000Z');
 

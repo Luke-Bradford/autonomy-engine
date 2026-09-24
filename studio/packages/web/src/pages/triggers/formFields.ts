@@ -111,12 +111,15 @@ export interface BoundFields {
  * from what the operator typed — `null` otherwise, and for a blank or
  * unreadable control (#855).
  *
- * The one case it catches is a daylight-saving GAP: under `Europe/London`,
+ * The case it exists for is a daylight-saving GAP: under `Europe/London`,
  * `2026-03-29T01:30` does not exist (01:00 jumps to 02:00), so `Date` resolves
  * it with the pre-transition offset and the stored instant reloads as `02:30`.
  * That instant is well-defined and stable, so the editors WARN rather than
  * refuse — what they must not do is let the typed value change with nothing
- * said. An ambiguous fall-back wall clock round-trips stably and is not
+ * said. It reports ANY read-back mismatch, not only a gap — `Date` also rolls a
+ * day past the end of its month forward (`02-30` becomes `03-02`), which is the
+ * same silent rewrite — so the message names both causes. An ambiguous
+ * fall-back wall clock round-trips stably and is not
  * reported. An untouched bound cannot shift: `resolveBound` hands back the
  * loaded instant, whose read-back is by definition the control's value.
  */
@@ -145,7 +148,7 @@ export function boundShiftWarnings(form: BoundFields): string[] {
     if (shifted === null) continue;
     warnings.push(
       `${label} ${form[bound].trim()} does not exist in your browser's time zone ` +
-        `(a daylight-saving jump) — it will be saved as ${shifted}.`,
+        `(a daylight-saving jump, or a day past the end of its month) — it will be saved as ${shifted}.`,
     );
   }
   return warnings;

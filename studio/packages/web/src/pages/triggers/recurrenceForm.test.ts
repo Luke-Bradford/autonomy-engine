@@ -379,6 +379,11 @@ describe('boundShift — a wall clock the browser zone does not have (#855)', ()
     expect(boundShift(utcIsoToLocalInput(stored), stored)).toBeNull();
   });
 
+  it('also names a day past the end of its month, which Date rolls forward', () => {
+    process.env.TZ = 'UTC';
+    expect(boundShift('2026-02-30T10:00', '')).toBe('2026-03-02T10:00');
+  });
+
   it('names each shifted bound in the warnings both editors render', () => {
     process.env.TZ = 'Europe/London';
     const warnings = boundShiftWarnings({
