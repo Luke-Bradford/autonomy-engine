@@ -61,20 +61,23 @@ import {
   singleSelection,
   type Selection,
 } from './canvasStore';
-import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
+import { type FieldPicker } from './ConfigFieldControl';
+import { ConfigEditor } from './ConfigEditor';
+import { useConfigEditor } from './useConfigEditor';
 import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
 import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
 import { insertModeFor } from './expressionInsert';
 import {
-  assembleConfig,
   deriveConfigFields,
   emptyControlValue,
   formatFieldValue,
   parseFieldInput,
+  readConfigDraft,
   seedFieldInputs,
-  unrepresentableFields,
+  type ConfigDraft,
+  type ConfigField,
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
@@ -2319,6 +2322,29 @@ function useExpressionPicker(
   }, [nodes, edges, containers, params, nodeId, nodeNames]);
 }
 
+/** A copy of `config` without the `outputs` key — see `NodePanel` for why neither editor holds it. */
+function withoutOutputs(config: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...config };
+  delete rest.outputs;
+  return rest;
+}
+
+/** A node's two-mode config draft, seeded from its stored config (minus `outputs`). */
+function seedNodeDraft(
+  kind: string,
+  config: Record<string, unknown>,
+  fields: readonly ConfigField[] | null,
+  jsonMode: boolean,
+): ConfigDraft<string> {
+  return {
+    kind,
+    config,
+    inputs: seedFieldInputs(fields, config),
+    jsonText: JSON.stringify(config, null, 2),
+    jsonMode,
+  };
+}
+
 /**
  * Editor for one activity node.
  *
@@ -2330,10 +2356,15 @@ function useExpressionPicker(
  * `configSchema` before committing, so an invalid blob never reaches the store —
  * a UX pre-check only; `validateDoc` on the server remains the gate.
  *
+ * The two-mode editor itself is the SHARED one the connection and dataset forms
+ * use (`useConfigEditor` + `ConfigEditor`, #1088): one toggle idiom, one parse
+ * rule, and a toggle that commits the draft it leaves rather than hiding it.
+ *
  * The internal `outputs` contract — seeded by `lowerPipelineNodes` on creation
- * AND on load since #526 — is not surfaced by either editor, and is preserved
- * across an apply by the same rule that preserves every other key no derived
- * field owns.
+ * AND on load since #526, and authored by U16 — is held by neither editor: the
+ * draft is the config WITHOUT it, and Apply puts the stored one back
+ * (`withStoredOutputs`). Every OTHER key no derived field owns is preserved by
+ * `assembleConfig`'s general rule, which `legacyExtra` in the tests exercises.
  *
  * The connection dropdown is filtered to the kinds this activity accepts.
  * Container membership (U6d) is `ContainerSection` above.
@@ -2402,36 +2433,40 @@ export function NodePanel({
   // source). `null` when the schema is not object-rooted.
   const fields = useMemo(() => (entry ? deriveConfigFields(entry.configSchema) : null), [entry]);
 
-  // Recomputed every render from the CURRENT config, deliberately: a value whose
-  // type disagrees with its control cannot round-trip, so the node falls back to
-  // the JSON editor rather than corrupting the doc on an apply the author thinks
-  // touched one other field — but the moment they REPAIR it there, the form must
-  // become available and this advisory must stop naming a field that is now fine.
-  // Memoising it on mount left both stuck saying otherwise.
-  const unrenderable = fields ? unrepresentableFields(fields, editable) : [];
-  const formAvailable = fields !== null && unrenderable.length === 0;
-
-  const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
-  const [inputs, setInputs] = useState(() => seedFieldInputs(fields, editable));
+  const [draft, setDraft] = useState(() => seedNodeDraft(nodeType, editable, fields, false));
   const [error, setError] = useState<string | null>(null);
   // Declared HERE, above the render-phase re-seed below that clears it.
   const [autoMapNotice, showAutoMapNotice, clearAutoMapNotice] =
     useTransientNotice(CANVAS_NOTICE_MS);
-  // The author's PREFERENCE, not the mode: the mode is this OR forced. Kept
-  // apart so that repairing an unrenderable value hands the form back, instead of
-  // leaving the author in an editor they never chose.
-  const [jsonPreferred, setJsonPreferred] = useState(false);
-  const jsonMode = jsonPreferred || !formAvailable;
 
-  // Re-seed both editors whenever a DIFFERENT config object arrives.
+  // A node has exactly one "kind" — its activity — so there are never carried
+  // keys. A schema that is not object-rooted derives no form at all, and the
+  // page forces JSON for it. Memoised on `fields` because `useConfigEditor`
+  // keys its view on these; `fields` is stable per catalog entry.
+  const fieldsFor = useCallback(() => ({ fields: fields ?? [], carried: [] }), [fields]);
+  const forcedJson = useCallback(() => fields === null, [fields]);
+  // Whether a value is UNRENDERABLE is judged on the draft's config, every
+  // render: a value whose type disagrees with its control cannot round-trip, so
+  // the node falls back to the JSON editor rather than corrupting the doc on an
+  // apply the author thinks touched one other field — and the moment they
+  // repair it, the form becomes available again.
+  const editor = useConfigEditor({
+    form: draft,
+    onChange: setDraft,
+    setError,
+    fieldsFor,
+    forcedJson,
+  });
+
+  // Re-seed the draft whenever a DIFFERENT config object arrives.
   //
-  // The two editors hold independent drafts of the same doc, so without this they
-  // desync the moment one of them commits: applying in JSON mode and then
-  // switching back to the form would apply the form's MOUNT-TIME values over the
-  // author's JSON edit — silently reverting work with no message. Re-seeding on
-  // identity is `ParamRow`'s precedent above, and safe for the same reason: the
-  // store's `map` preserves element identity for untouched nodes, so a new
-  // `config` object arrives exactly when this node's config was replaced.
+  // Without this, applying in JSON mode and then switching back to the form
+  // would show — and apply — the form's MOUNT-TIME values over the author's
+  // JSON edit, silently reverting work with no message. Re-seeding on identity
+  // is `ParamRow`'s precedent above, and safe for the same reason: the store's
+  // `map` preserves element identity for untouched nodes, so a new `config`
+  // object arrives exactly when this node's config was replaced. The author's
+  // mode choice survives it.
   //
   // A render-phase set-on-prop-change, not an effect — React's derived-state
   // pattern, which this repo's React 19 lint permits where `useEffect` + setState
@@ -2439,8 +2474,7 @@ export function NodePanel({
   const [syncedConfig, setSyncedConfig] = useState(config);
   if (syncedConfig !== config) {
     setSyncedConfig(config);
-    setText(JSON.stringify(editable, null, 2));
-    setInputs(seedFieldInputs(fields, editable));
+    setDraft(seedNodeDraft(nodeType, editable, fields, draft.jsonMode));
     setError(null);
     // The auto-map line describes a DRAFT. A new `config` identity means that
     // draft is gone (usually because Apply just committed it), so a notice still
@@ -2507,48 +2541,33 @@ export function NodePanel({
     return formatZodIssues(check.error.issues);
   }
 
-  function applyJson() {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      setError('Config is not valid JSON.');
-      return;
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      setError('Config must be a JSON object.');
-      return;
-    }
-    const issues = schemaIssues(parsed);
-    if (issues) {
-      setError(issues);
-      return;
-    }
-    setError(null);
-    // Preserve the seeded `outputs` contract, which is edited elsewhere.
-    store.getState().updateNodeConfig(nodeId, { ...(parsed as Record<string, unknown>), outputs });
+  /**
+   * The stored `outputs` contract put back onto what the editor produced — and
+   * any `outputs` the author typed into the JSON dropped, because U16 owns it
+   * and this editor never showed it. Omitted when the node had none.
+   */
+  function withStoredOutputs(next: Record<string, unknown>): Record<string, unknown> {
+    const rest = withoutOutputs(next);
+    return outputs === undefined ? rest : { ...rest, outputs };
   }
 
-  function applyForm() {
-    if (!fields) return;
-    // The FULL config is the original, `outputs` included — no key is re-attached
-    // afterwards. `assembleConfig` preserves everything no derived field owns, so
-    // the F13 outputs contract is carried by that ONE rule rather than by a
-    // special case beside it. Re-attaching it here would work, and would also
-    // MASK the general rule: a regression that dropped every other undeclared key
-    // would still leave `outputs` intact and look correct.
-    const assembled = assembleConfig(config, fields, inputs);
-    if (!assembled.ok) {
-      setError(assembled.message);
+  function apply() {
+    // `readConfigDraft` reads whichever draft is ON SCREEN — the one answer to
+    // "what would Apply write" that the connection and dataset forms share.
+    const read = readConfigDraft(editor.jsonMode, draft, editor.fields);
+    if (!read.ok) {
+      setError(read.message);
       return;
     }
-    const issues = schemaIssues(assembled.owned);
+    // Stripped before the pre-check too: a `.strict()` schema would otherwise
+    // refuse a typed `outputs` as an unknown key the author cannot see is dropped.
+    const issues = schemaIssues(withoutOutputs(read.owned));
     if (issues) {
       setError(issues);
       return;
     }
     setError(null);
-    store.getState().updateNodeConfig(nodeId, assembled.config);
+    store.getState().updateNodeConfig(nodeId, withStoredOutputs(read.config));
   }
 
   // A call node stores its settings in `node.call`, not `node.config`, so this
@@ -2587,11 +2606,11 @@ export function NodePanel({
    * there is not one.
    */
   // Depends on the MAPPING CELL, not on `inputs`. Every edit in the panel
-  // replaces the whole `inputs` object (`{...prev, [name]: next}`) while leaving
+  // replaces the whole `inputs` object (`editor.setInput`) while leaving
   // the other keys' identities intact, so keying on the object would recompute
   // this — and the `mappedRows`/advisory chain below it — on every keystroke in
   // an unrelated field.
-  const mappingInput = mappingField ? inputs[mappingField.name] : undefined;
+  const mappingInput = mappingField ? draft.inputs[mappingField.name] : undefined;
   const draftMapping = useMemo(() => {
     if (!mappingField) return null;
     const parsed = parseFieldInput(mappingField, mappingInput ?? emptyControlValue(mappingField));
@@ -2677,7 +2696,7 @@ export function NodePanel({
     // Into the DRAFT, never `updateNodeConfig`: the author reviews the rows and
     // commits them with Apply, which is what puts them through `schemaIssues`.
     // `ExpressionPicker` writes a computed value the same way.
-    setInputs((prev) => ({ ...prev, [mappingField.name]: rendered.value }));
+    editor.setInput(mappingField.name, rendered.value);
     showAutoMapNotice(
       `Mapped ${result.rows.length} column${result.rows.length === 1 ? '' : 's'}.` +
         `${describeSkips(result)} Apply config to save.`,
@@ -2816,129 +2835,94 @@ export function NodePanel({
       )}
       <ContainerSection store={store} nodeId={nodeId} />
 
-      {formAvailable && (
-        <label className="contract-check">
-          <input
-            type="checkbox"
-            checked={jsonPreferred}
-            onChange={(e) => setJsonPreferred(e.target.checked)}
-          />
-          Edit as JSON
-        </label>
-      )}
-
-      {/* Not a preference the author can dismiss: the form genuinely cannot
-          round-trip what is saved, so saying which fields is the only way they
-          can repair it in the JSON editor they have been given instead. */}
-      {fields !== null && unrenderable.length > 0 && (
-        <p className="contract-advisory">
-          {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
-        </p>
-      )}
-
-      {jsonMode || fields === null ? (
-        <label>
-          Config (JSON)
-          <textarea
-            value={text}
-            rows={10}
-            spellCheck={false}
-            onChange={(e) => setText(e.target.value)}
-          />
-        </label>
-      ) : (
-        <div className="contract-section">
-          {fields.length === 0 && <p className="page-hint">This activity has no settings.</p>}
-          {fields.map((field) => (
-            <ConfigFieldControl
-              key={field.name}
-              field={field}
-              value={inputs[field.name] ?? emptyControlValue(field)}
-              onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
-              picker={picker}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped* state.
-          BELOW the derived section, never inside `fields.map`: that loop is the
-          generic U7 renderer and a field-name branch inside it would be the
-          activity-specific fork U7 exists to keep out. Hidden in JSON mode
-          because it describes the FORM draft, which the author is not editing
-          there. */}
-      {!jsonMode && mappingField && (
-        <div className="contract-section">
-          <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
-            Auto-map columns
-          </button>
-          {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
-          {autoMapNotice !== null && (
-            <p className="contract-advisory" role="status">
-              {autoMapNotice}
-            </p>
-          )}
-          {/* NOT a live region, deliberately, though it sits beside one that is.
-              This is recomputed STATE rather than the outcome of a gesture, and
-              it changes on every keystroke in a mapping cell — announced, it
-              would talk over the author continuously and collide with the
-              notice above (#960's two-live-regions failure). It is plain
-              visible text, always present, read on demand. */}
-          {requiredUnwritten.length > 0 && (
-            <p className="contract-advisory">
-              The sink requires a value for {requiredUnwritten.map((c) => c.name).join(', ')}, and
-              nothing writes {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy cannot
-              succeed until every one is mapped.
-            </p>
-          )}
-          {optionalUnwritten.length > 0 && (
-            <p className="contract-advisory">
-              Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
-            </p>
-          )}
-          {sinkAdvisory !== null &&
-            sinkAdvisory.duplicateWrites.map((pair) => (
-              <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
-                {pair.first} and {pair.second} differ only by case, so both write the same sink
-                column — the store refuses that when the copy runs.
-              </p>
-            ))}
-          {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
-            <p className="contract-advisory">
-              {sinkAdvisory.undeclared.join(', ')}{' '}
-              {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by the sink
-              dataset.
-            </p>
-          )}
-          {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
-            <p className="contract-advisory">
-              Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
-            </p>
-          )}
-          {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
-            <p className="contract-advisory">
-              {sourceAdvisory.missing.join(', ')}{' '}
-              {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the source
-              dataset.
-            </p>
-          )}
-          {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
-            <p className="contract-advisory">
-              {sourceAdvisory.ambiguous.join(', ')} match more than one source column
-              case-insensitively — name the column exactly.
-            </p>
-          )}
-          {/* A declared column list is an authoring aid and can be stale, so
-              every line above is a warning and none of them is a refusal. The
-              gate reads the store's ACTUAL columns at dispatch. */}
-          {(sinkAdvisory !== null || sourceAdvisory !== null) && (
-            <p className="page-hint">
-              Read from each dataset&rsquo;s declared columns, which can be out of date — the copy
-              is checked against the store itself when it runs.
-            </p>
-          )}
-        </div>
-      )}
+      <ConfigEditor
+        editor={editor}
+        className="contract-section"
+        rows={10}
+        advisory={null}
+        picker={picker}
+        emptyHint="This activity has no settings."
+        fieldModeExtra={
+          /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
+             state. After the derived controls, never inside them: that loop is
+             the generic U7 renderer and a field-name branch inside it would be
+             the activity-specific fork U7 exists to keep out. A field-mode
+             extra because it describes the FORM draft, which the author is not
+             editing in JSON mode. */
+          mappingField && (
+            <div className="contract-section">
+              <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
+                Auto-map columns
+              </button>
+              {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
+              {autoMapNotice !== null && (
+                <p className="contract-advisory" role="status">
+                  {autoMapNotice}
+                </p>
+              )}
+              {/* NOT a live region, deliberately, though it sits beside one that is.
+                  This is recomputed STATE rather than the outcome of a gesture, and
+                  it changes on every keystroke in a mapping cell — announced, it
+                  would talk over the author continuously and collide with the
+                  notice above (#960's two-live-regions failure). It is plain
+                  visible text, always present, read on demand. */}
+              {requiredUnwritten.length > 0 && (
+                <p className="contract-advisory">
+                  The sink requires a value for {requiredUnwritten.map((c) => c.name).join(', ')},
+                  and nothing writes {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy
+                  cannot succeed until every one is mapped.
+                </p>
+              )}
+              {optionalUnwritten.length > 0 && (
+                <p className="contract-advisory">
+                  Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
+                </p>
+              )}
+              {sinkAdvisory !== null &&
+                sinkAdvisory.duplicateWrites.map((pair) => (
+                  <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
+                    {pair.first} and {pair.second} differ only by case, so both write the same sink
+                    column — the store refuses that when the copy runs.
+                  </p>
+                ))}
+              {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
+                <p className="contract-advisory">
+                  {sinkAdvisory.undeclared.join(', ')}{' '}
+                  {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by the sink
+                  dataset.
+                </p>
+              )}
+              {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
+                <p className="contract-advisory">
+                  Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
+                </p>
+              )}
+              {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
+                <p className="contract-advisory">
+                  {sourceAdvisory.missing.join(', ')}{' '}
+                  {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the source
+                  dataset.
+                </p>
+              )}
+              {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
+                <p className="contract-advisory">
+                  {sourceAdvisory.ambiguous.join(', ')} match more than one source column
+                  case-insensitively — name the column exactly.
+                </p>
+              )}
+              {/* A declared column list is an authoring aid and can be stale, so
+                  every line above is a warning and none of them is a refusal. The
+                  gate reads the store's ACTUAL columns at dispatch. */}
+              {(sinkAdvisory !== null || sourceAdvisory !== null) && (
+                <p className="page-hint">
+                  Read from each dataset&rsquo;s declared columns, which can be out of date — the
+                  copy is checked against the store itself when it runs.
+                </p>
+              )}
+            </div>
+          )
+        }
+      />
 
       {error && (
         <p className="error" role="alert">
@@ -2946,7 +2930,7 @@ export function NodePanel({
         </p>
       )}
       <div className="form-actions">
-        <button type="button" onClick={jsonMode || fields === null ? applyJson : applyForm}>
+        <button type="button" onClick={apply}>
           Apply config
         </button>
         {/* U21 — duplicate. Between Apply and Delete because that is the order

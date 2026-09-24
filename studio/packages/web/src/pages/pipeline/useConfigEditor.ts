@@ -12,17 +12,19 @@ import {
 } from './configForm';
 
 /**
- * The fields↔JSON config editor a resource form embeds (#1146, #1088).
+ * The fields↔JSON config editor a resource form or a canvas node embeds
+ * (#1146, #1088).
  *
  * `ConnectionForm` and `DatasetForm` each carried their own copy of this — the
  * derived mode, three handlers and ~35 lines of JSX — and the copies had already
  * diverged: only the dataset's kind change carried a JSON draft or committed a
- * field draft before a forced switch. The RULES live in `configForm.ts`
+ * field draft before a forced switch. `NodePanel` had a third, whose toggle
+ * committed nothing at all (#1088). The RULES live in `configForm.ts`
  * (`changeConfigKind`, `configToJson`, `configToFields`); this hook and
- * `ConfigEditor` are the thin React half both pages share.
+ * `ConfigEditor` are the thin React half all three share.
  *
- * `fieldsFor` and `forcedJson` must be STABLE (module-level) — they sit in the
- * memo's dependencies.
+ * `fieldsFor` and `forcedJson` must be STABLE (module-level, or memoised on
+ * what they close over) — they sit in the memo's dependencies.
  */
 export interface ConfigEditorState<K extends string> {
   kind: K;

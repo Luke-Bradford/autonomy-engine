@@ -67,6 +67,9 @@ const node = (id: string, type: string, config: Record<string, unknown>): Node =
 });
 
 const httpNode = (config: Record<string, unknown>): Node => node('n_http', 'http_request', config);
+/** The shared editor's mode toggle (#1088) — one button whose caption names the mode it goes TO. */
+const toJson = () => screen.getByRole('button', { name: 'Edit as JSON' });
+const toFields = () => screen.getByRole('button', { name: 'Edit as fields' });
 
 // Named for what it tests, not for the sibling that used to share the file. U5
 // replaced the flat `Palette` with `ActivityToolbox` (own file, own spec), and
@@ -320,7 +323,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(httpNode({ url: 'https://x' }));
 
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
-    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    fireEvent.click(toJson());
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
     expect(screen.queryByLabelText('url')).toBeNull();
 
@@ -338,7 +341,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // undone, with no message and nothing on screen having looked wrong.
     const panel = mountOver(httpNode({ url: 'https://x' }));
 
-    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    fireEvent.click(toJson());
     fireEvent.change(screen.getByLabelText('Config (JSON)'), {
       target: { value: '{"url":"https://from-json","method":"POST"}' },
     });
@@ -347,7 +350,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     // Back to the form: it must now show what JSON just wrote, and applying
     // unchanged must be a no-op rather than a revert.
-    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    fireEvent.click(toFields());
     expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
     expect((screen.getByLabelText('method (optional)') as HTMLTextAreaElement).value).toBe('POST');
 
@@ -367,8 +370,85 @@ describe('NodePanel (U7 per-activity config form)', () => {
     panel.apply();
 
     expect(screen.queryByText(/Saved settings this form cannot show/)).toBeNull();
-    expect(screen.getByLabelText('Edit as JSON')).toBeTruthy();
+    expect(toJson()).toBeTruthy();
     expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
+  });
+
+  // #1088 — the mode toggle is the shared one (`useConfigEditor`), so it COMMITS
+  // the draft it leaves. Before, it only flipped a flag: a field edit was absent
+  // from the JSON it opened, and Apply there then stored the config WITHOUT it —
+  // a silent drop of work the author could see a moment earlier.
+  it('carries an unapplied field edit into the JSON it opens', () => {
+    const panel = mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.change(screen.getByLabelText('url'), { target: { value: 'https://typed' } });
+    fireEvent.click(toJson());
+    expect(
+      JSON.parse((screen.getByLabelText('Config (JSON)') as HTMLTextAreaElement).value),
+    ).toEqual({ url: 'https://typed' });
+
+    panel.apply();
+    expect(panel.storedConfig()).toEqual({ url: 'https://typed' });
+  });
+
+  it('carries an unapplied JSON edit back into the form', () => {
+    const panel = mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.click(toJson());
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://from-json","method":"PUT"}' },
+    });
+    fireEvent.click(toFields());
+
+    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('method (optional)') as HTMLTextAreaElement).value).toBe('PUT');
+    panel.apply();
+    expect(panel.storedConfig()).toEqual({ url: 'https://from-json', method: 'PUT' });
+  });
+
+  it('keeps an unparseable JSON draft on screen rather than hiding it behind the form', () => {
+    mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.click(toJson());
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), { target: { value: '{"url":' } });
+    fireEvent.click(toFields());
+
+    expect(screen.getByRole('alert').textContent).toMatch(/Invalid config JSON/);
+    expect((screen.getByLabelText('Config (JSON)') as HTMLTextAreaElement).value).toBe('{"url":');
+  });
+
+  it('refuses to open JSON over a field that will not read back, and names it', () => {
+    // The textarea opens on what Apply would write, so a control that cannot be
+    // read has no such value — opening anyway would show a config silently
+    // missing the author's edit.
+    mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.change(screen.getByLabelText('headers (optional) — JSON'), {
+      target: { value: '{not json}' },
+    });
+    fireEvent.click(toJson());
+
+    expect(screen.getByRole('alert').textContent).toMatch(/headers: .*JSON/);
+    expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
+  });
+
+  it('never lets the JSON editor touch the outputs contract, which U16 owns', () => {
+    // Neither editor holds `outputs`, so Apply puts the stored one back — and a
+    // copy typed into the JSON is neither stored nor shown to a `.strict()`
+    // schema as an unknown key.
+    const outputs = [{ name: 'status', type: 'number' }];
+    const panel = mountOver(httpNode({ url: 'https://x', outputs }));
+
+    fireEvent.click(toJson());
+    expect((screen.getByLabelText('Config (JSON)') as HTMLTextAreaElement).value).not.toMatch(
+      /outputs/,
+    );
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://y","outputs":[]}' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toEqual({ url: 'https://y', outputs });
   });
 
   it('does not silently drop a stored empty value on an unrelated edit', () => {
@@ -966,7 +1046,7 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
   it('hides the aids in JSON mode, which edits a different draft', () => {
     mount({ mapping: [ROW], mode: 'append' });
 
-    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    fireEvent.click(toJson());
 
     expect(screen.queryByRole('button', { name: 'Auto-map columns' })).toBeNull();
   });
