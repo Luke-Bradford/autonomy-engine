@@ -79,8 +79,8 @@ export function publishThenDrive(
   deps: DriveDeps,
   records: readonly [RunEvent, ...RunEvent[]],
 ): Promise<void> {
-  const runId = sameRun(records);
   assertNoOpenTransaction(deps.db);
+  const runId = sameRun(records);
   for (const record of records) deps.bus?.publish(record);
   return driveRun(deps, runId);
 }

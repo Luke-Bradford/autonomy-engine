@@ -16,7 +16,8 @@ import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
  * of `POST /api/external-wait/:token`. The HTTP twin of the expiry alarm's
  * `fire` (`scheduler/external-wait-alarm.ts`) — same guard discipline
  * (`terminalFactFromLog` freshness, `external_wait_pending`-at-attempt check),
- * same append-inside-a-transaction + `driveRun`-after-commit shape — but resuming
+ * same append-inside-a-transaction + `driveRun`-after-commit shape (`out-of-band.ts`,
+ * #1021) — but resuming
  * the node to SUCCESS (`externalWait.completed`) instead of failing it, and
  * triggered by an HTTP request rather than a due alarm.
  *
@@ -160,7 +161,7 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
 
       // Guard + settle-row + append in ONE synchronous transaction: better-sqlite3
       // is single-threaded, but the explicit transaction makes the settle+append
-      // atomic even if `appendAndFold` throws (no half-settled row without its
+      // atomic even if `foldOutOfBand` throws (no half-settled row without its
       // event), and serializes against a concurrent expiry/duplicate-completion.
       const runId = row.runId;
       type TxResult = {
