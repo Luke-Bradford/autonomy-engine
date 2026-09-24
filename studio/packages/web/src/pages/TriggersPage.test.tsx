@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../testing/accessibleName';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import { ROW_EDIT } from '../testing/rowActions';
 import userEvent from '@testing-library/user-event';
 import type {
   Pipeline,
@@ -18,10 +19,6 @@ import * as runsApi from '../api/runs';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { ROUTES } from '../routes';
-
-/** A row's Edit button — named for its row since #1253, and never the form's
- *  own "Edit as JSON" / "Edit as fields" toggle. */
-const ROW_EDIT = /^Edit (?!as )/;
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.

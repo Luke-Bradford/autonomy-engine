@@ -6,10 +6,7 @@ import { DatasetsPage } from './DatasetsPage';
 import * as datasetsApi from '../api/datasets';
 import * as connectionsApi from '../api/connections';
 import { renderWithRouter } from '../testing/renderWithRouter';
-
-/** A row's Edit button — named for its row since #1253, and never the form's
- *  own "Edit as JSON" / "Edit as fields" toggle. */
-const ROW_EDIT = /^Edit (?!as )/;
+import { ROW_EDIT } from '../testing/rowActions';
 
 // Mock only the network calls; `DatasetWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
