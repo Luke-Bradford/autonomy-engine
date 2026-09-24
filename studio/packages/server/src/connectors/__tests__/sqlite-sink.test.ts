@@ -542,6 +542,122 @@ describe('the pre-flight, before the first row moves (§7, sink half)', () => {
   });
 });
 
+describe("the store's own NOT NULL, for an onError:'null' row (#1162)", () => {
+  /** A store holding ONE table built from `ddl`, and whatever else `extra` adds. */
+  function storeWith(root: string, ddl: string, extra = ''): string {
+    const path = join(root, 'nn.db');
+    const db = new Database(path);
+    db.exec(ddl + extra);
+    db.close();
+    return path;
+  }
+
+  function writeInto(
+    root: string,
+    path: string,
+    columns: string[],
+    nullOnError: string[],
+    rows: Record<string, SinkValue>[],
+    mode: SqliteWriteMode = 'append',
+  ) {
+    return writeSqliteDatasetRows(
+      {
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns,
+        nullOnError,
+        mode,
+      },
+      one(rows),
+    );
+  }
+
+  it('REFUSES before the first row moves — an overwrite leaves the existing rows alone', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL);',
+      "INSERT INTO sink VALUES (1, 'kept');",
+    );
+    const err = await failure(
+      writeInto(root, path, ['id', 'note'], ['note'], [{ id: 2, note: 'x' }], 'overwrite'),
+    );
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toMatch(
+      /sink column 'note' sets onError:'null', but the sink table in the store is NOT NULL/,
+    );
+    // Refused ahead of the overwrite's DELETE, so nothing moved at all.
+    expect(rowsOf(path)).toEqual([{ id: 1, note: 'kept' }]);
+  });
+
+  it('REFUSES an ordinary INTEGER column declared NOT NULL — only a rowid alias is exempt', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'CREATE TABLE sink (id INTEGER NOT NULL, note TEXT);');
+    const err = await failure(writeInto(root, path, ['id'], ['id'], [{ id: 1 }]));
+    expect(err.message).toMatch(/sink column 'id'/);
+  });
+
+  it('REFUSES a mapped name that differs from the store only in case', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL);');
+    const err = await failure(writeInto(root, path, ['NOTE'], ['NOTE'], [{ NOTE: 'x' }]));
+    expect(err.message).toMatch(/sink column 'NOTE'/);
+  });
+
+  it('ADMITS a NOT NULL column whose row does not set onError:null', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL);');
+    await expect(writeInto(root, path, ['note'], [], [{ note: 'x' }])).resolves.toEqual({
+      rowsWritten: 1,
+    });
+  });
+
+  it('ADMITS a nullable store column', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'CREATE TABLE sink (id INTEGER, note TEXT);');
+    await expect(writeInto(root, path, ['note'], ['note'], [{ note: null }])).resolves.toEqual({
+      rowsWritten: 1,
+    });
+  });
+
+  /* The three below each report `notnull = 1` from `pragma_table_info` and yet
+     ACCEPT an explicit NULL — measured, better-sqlite3. Refusing them would be
+     the over-refusal §7 forbids: work that would have succeeded. Each writes a
+     real NULL to prove the store takes it. */
+  it('ADMITS an INTEGER PRIMARY KEY NOT NULL — a rowid alias assigns a value for NULL', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'CREATE TABLE sink (id INTEGER PRIMARY KEY NOT NULL, note TEXT);');
+    await expect(writeInto(root, path, ['id'], ['id'], [{ id: null }])).resolves.toEqual({
+      rowsWritten: 1,
+    });
+  });
+
+  it('ADMITS NOT NULL ON CONFLICT REPLACE — the store substitutes the default', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL ON CONFLICT REPLACE DEFAULT 7);',
+    );
+    await expect(writeInto(root, path, ['note'], ['note'], [{ note: null }])).resolves.toEqual({
+      rowsWritten: 1,
+    });
+    expect(rowsOf(path)).toEqual([{ id: null, note: '7' }]);
+  });
+
+  it('ADMITS a table with a trigger — a BEFORE INSERT trigger can dispose of the NULL', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'CREATE TABLE sink (id INTEGER, note TEXT NOT NULL);',
+      'CREATE TRIGGER t BEFORE INSERT ON sink WHEN new.note IS NULL BEGIN SELECT raise(ignore); END;',
+    );
+    await expect(
+      writeInto(root, path, ['id', 'note'], ['note'], [{ id: 1, note: null }]),
+    ).resolves.toBeDefined();
+  });
+});
+
 describe('value binding', () => {
   it('binds a BOOLEAN as 1/0 — better-sqlite3 refuses a boolean outright', async () => {
     const root = tempRoot();
