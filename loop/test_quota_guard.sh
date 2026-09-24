@@ -2829,8 +2829,8 @@ check "#1257 a non-numeric signal count -> ZERO fires" "0" "$(fires_of "$r1257g"
 # ...and it is classified UNKNOWN, not read as "a signal is open". The old code
 # already refused here, but only by accident (<html> != "0" looked like an
 # open signal), and a count parsed as garbage must not depend on that.
-check "#1257 ...classified as an UNREADABLE read, not as an open signal" "0" \
-  "$(grep -c 'STOP: operator signal open' "$(logof "$r1257g")")"
+check "#1257 ...classified as an UNREADABLE read (default 5 tries, then the UNREADABLE stop), not as an open signal" "5|1|0" \
+  "$(grep -c 'operator signal read FAILED' "$(logof "$r1257g")")|$(grep -c 'STOP: operator signal UNREADABLE' "$(logof "$r1257g")")|$(grep -c 'STOP: operator signal open' "$(logof "$r1257g")")"
 # Controls: a readable open signal still stops (each title), and a readable
 # clean read still fires -- so the zeros above are about the failure, not about
 # the stub refusing everything.
