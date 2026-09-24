@@ -2819,7 +2819,12 @@ check "#1257 a transient gh failure is retried, then the driver fires once it re
   "$(fires_of "$r1257r")"
 # gh exiting 0 with no count on stdout is just as unknown as a non-zero exit.
 r1257g="$(run_case 0.10 QUOTA_STOP_PCT=80 GH_ISSUE_GARBAGE=1)"
-check "#1257 a non-numeric signal count is UNKNOWN, never 0 -> ZERO fires" "0" "$(fires_of "$r1257g")"
+check "#1257 a non-numeric signal count -> ZERO fires" "0" "$(fires_of "$r1257g")"
+# ...and it is classified UNKNOWN, not read as "a signal is open". The old code
+# already refused here, but only by accident (<html> != "0" looked like an
+# open signal), and a count parsed as garbage must not depend on that.
+check "#1257 ...classified as an UNREADABLE read, not as an open signal" "0" \
+  "$(grep -c 'STOP: operator signal open' "$(logof "$r1257g")")"
 # Controls: a readable open signal still stops (each title), and a readable
 # clean read still fires -- so the zeros above are about the failure, not about
 # the stub refusing everything.
