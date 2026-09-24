@@ -624,6 +624,14 @@ describe('connections routes', () => {
       expect(res.json()).toEqual({
         triggers: [{ id: triggerId, name: expect.any(String) }],
         dynamic: [],
+        nodes: [
+          expect.objectContaining({
+            nodeId: 'n1',
+            nodeType: 'llm_call',
+            acceptedKinds: ['anthropic_api', 'openai_api', 'ollama', 'agent_cli'],
+          }),
+        ],
+        dynamicNodes: [],
       });
 
       // And the preview was TRUE: the write it described disables exactly that.
@@ -633,6 +641,34 @@ describe('connections routes', () => {
         payload: { kind: 'anthropic_api' },
       });
       expect(getTrigger(app.db, triggerId)!.enabled).toBe(false);
+    });
+
+    /* #1252's premise, pinned: a kind change that keeps the connection READY
+       disables nothing, so the trigger buckets are rightly silent — and the
+       node it breaks is only visible through `nodes`. */
+    it('names the node a still-ready kind change breaks, while its trigger stays enabled', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Local', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const triggerId = bindEnabledTrigger(app.db, 'local', created.id);
+
+      const preview = (
+        await app.inject({ method: 'GET', url: `/api/connections/${created.id}/dependents` })
+      ).json();
+      expect(preview.nodes.map((n: { nodeId: string }) => n.nodeId)).toEqual(['n1']);
+      expect(preview.nodes[0].acceptedKinds).not.toContain('fs');
+
+      const patched = await app.inject({
+        method: 'PATCH',
+        url: `/api/connections/${created.id}`,
+        payload: { kind: 'fs', config: { roots: ['/tmp'] } },
+      });
+      expect(patched.statusCode, patched.body).toBe(200);
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(true);
     });
 
     it('returns an EARNED empty when nothing depends on the connection', async () => {
@@ -648,7 +684,7 @@ describe('connections routes', () => {
         url: `/api/connections/${created.id}/dependents`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ triggers: [], dynamic: [] });
+      expect(res.json()).toEqual({ triggers: [], dynamic: [], nodes: [], dynamicNodes: [] });
     });
 
     it('404s an unknown connection rather than answering "nothing depends on it"', async () => {

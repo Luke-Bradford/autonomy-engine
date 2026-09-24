@@ -3,8 +3,10 @@ import {
   interpolationMode,
   type ActivityCatalogEntry,
   type ConnectionDependentsResponse,
+  type ConnectionKind,
   type Node,
 } from '@autonomy-studio/shared';
+import { candidateVersions } from '../repo/candidate-versions.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getPipelineVersion, listPipelineVersions } from '../repo/pipeline-versions.js';
 import { listPipelines } from '../repo/pipelines.js';
@@ -86,12 +88,34 @@ export type CatalogOverride = typeof catalog;
  *  - otherwise ⇒ `Node.connectionId` alone, `connectionIds` inert.
  */
 function connectionRefsOfNode(node: Node, entry: ActivityCatalogEntry | undefined): string[] {
+  return connectionEndsOfNode(node, entry).map((end) => end.ref);
+}
+
+/**
+ * #1252 — the same ends `connectionRefsOfNode` yields, each with the kinds
+ * dispatch will accept AT THAT END: `connectionKinds` for a single binding or a
+ * pair's source, `sinkConnectionKinds` for a pair's sink — exactly the two lists
+ * `executor.ts` hands `resolveConnection` before it refuses
+ * `CONNECTION_KIND_INVALID`. One function, so the ref rule and the kind rule
+ * cannot drift apart.
+ */
+function connectionEndsOfNode(
+  node: Node,
+  entry: ActivityCatalogEntry | undefined,
+): { ref: string; kinds: readonly ConnectionKind[] }[] {
   if (entry === undefined || entry.connectionKinds.length === 0) return [];
   if (entry.sinkConnectionKinds !== undefined) {
     const pair = node.connectionIds;
-    return pair === undefined ? [] : [pair.source, pair.sink];
+    return pair === undefined
+      ? []
+      : [
+          { ref: pair.source, kinds: entry.connectionKinds },
+          { ref: pair.sink, kinds: entry.sinkConnectionKinds },
+        ];
   }
-  return node.connectionId === undefined ? [] : [node.connectionId];
+  return node.connectionId === undefined
+    ? []
+    : [{ ref: node.connectionId, kinds: entry.connectionKinds }];
 }
 
 /**
@@ -302,8 +326,12 @@ export function regateTriggersForConnection(
  *
  * ONE PARSE PER VERSION however many triggers pin it — `getPipelineVersion`
  * parses a whole doc, and N triggers on one version is the common shape (the
- * same cost `candidateVersions` in `datamove/dataset-references.ts` was written
+ * same cost `candidateVersions` in `repo/candidate-versions.ts` was written
  * to avoid).
+ *
+ * THE TRIGGER BUCKETS ONLY. The node buckets (#1252) DO walk
+ * `candidateVersions` — see `dependentNodes` for why the two halves answer
+ * over different sets.
  *
  * NOT `candidateVersions`, deliberately, though it also builds a
  * triggers-by-version map: its candidate set is "latest-of-each-pipeline ∪
@@ -377,5 +405,59 @@ export function connectionDependents(
       });
     }
   }
-  return { triggers, dynamic };
+  return { triggers, dynamic, ...dependentNodes(db, ownerId, connectionId, activityCatalog) };
+}
+
+/**
+ * #1252 — the NODE buckets of `connectionDependents`: which nodes a kind change
+ * could break, over `candidateVersions` (the set M9 settled for "what uses
+ * this?") rather than the trigger buckets' enabled-trigger walk. That walk
+ * exists for parity with `regateTriggersForConnection`; a kind change that keeps
+ * the connection ready performs no write, so there is nothing here to be at
+ * parity with, and a pipeline's latest version breaks whether or not a trigger
+ * is bound to it yet.
+ *
+ * ARCHIVED pipelines are skipped: the launcher refuses to dispatch them at all
+ * (#3 G5a), so no kind is what breaks them, and naming them would be a claim
+ * the product does not make.
+ */
+function dependentNodes(
+  db: Db,
+  ownerId: string,
+  connectionId: string,
+  activityCatalog: CatalogOverride,
+): Pick<ConnectionDependentsResponse, 'nodes' | 'dynamicNodes'> {
+  const nodes: ConnectionDependentsResponse['nodes'] = [];
+  const dynamicNodes: ConnectionDependentsResponse['dynamicNodes'] = [];
+  for (const { pipeline, version } of candidateVersions(db, ownerId)) {
+    if (pipeline.archived) continue;
+    for (const node of version.nodes) {
+      const where = {
+        pipelineId: pipeline.id,
+        pipelineName: pipeline.name,
+        versionId: version.id,
+        version: version.version,
+        nodeId: node.id,
+        nodeType: node.type,
+      };
+      let accepted: readonly ConnectionKind[] | null = null;
+      let dynamicEnd = false;
+      for (const end of connectionEndsOfNode(node, activityCatalog.get(node.type))) {
+        if (interpolationMode(end.ref).mode !== 'literal') {
+          dynamicEnd = true;
+          continue;
+        }
+        if (end.ref !== connectionId) continue;
+        // A pair naming this connection at BOTH ends dispatches only if both
+        // ends accept the kind — the intersection, not either list.
+        accepted = accepted === null ? end.kinds : accepted.filter((k) => end.kinds.includes(k));
+      }
+      // Literal wins, as in the trigger buckets: a node whose use of this
+      // connection is settled is not also "unsettled" because its other end
+      // is an expression.
+      if (accepted !== null) nodes.push({ ...where, acceptedKinds: [...accepted] });
+      else if (dynamicEnd) dynamicNodes.push(where);
+    }
+  }
+  return { nodes, dynamicNodes };
 }

@@ -79,6 +79,8 @@ const deleteMock = vi.mocked(api.deleteConnection);
 const testDraftMock = vi.mocked(api.testDraftConnection);
 const testSavedMock = vi.mocked(api.testSavedConnection);
 const dependentsMock = vi.mocked(api.listConnectionDependents);
+/** #1252 — the node buckets, empty, for the tests about the trigger buckets. */
+const NO_NODES = { nodes: [], dynamicNodes: [] };
 const listDatasetsMock = vi.mocked(datasetsApi.listDatasets);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportConnection);
@@ -108,7 +110,7 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   exportMock.mockResolvedValue('{"kind":"connection"}');
   listDatasetsMock.mockResolvedValue([]);
-  dependentsMock.mockResolvedValue({ triggers: [], dynamic: [] });
+  dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [], dynamic: [] });
 });
 
 afterEach(() => {
@@ -952,7 +954,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   }
 
   it('names them before any save, and does not gate Save on them', async () => {
-    dependentsMock.mockResolvedValue({
+    dependentsMock.mockResolvedValue({ ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -972,7 +974,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('stays silent when the SAME edit supplies the secret — nothing gets disabled', async () => {
-    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
     const { user, form } = await openEdit();
     await waitFor(() => expect(dependentsMock).toHaveBeenCalled());
 
@@ -997,7 +999,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('speaks about a ${}-dynamic dependency rather than reading it as silence', async () => {
-    dependentsMock.mockResolvedValue({
+    dependentsMock.mockResolvedValue({ ...NO_NODES,
       triggers: [],
       dynamic: [{ id: 't2', name: 'router', nodeIds: ['n1'] }],
     });
@@ -1009,7 +1011,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
   });
 
   it('names them in the DELETE confirm, alongside the datasets it strands', async () => {
-    dependentsMock.mockResolvedValue({
+    dependentsMock.mockResolvedValue({ ...NO_NODES,
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
@@ -1032,7 +1034,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     // The two reads are independent; `allSettled` is what keeps one failure
     // from silencing the advisory that DID succeed.
     listDatasetsMock.mockRejectedValue(new Error('datasets down'));
-    dependentsMock.mockResolvedValue({ triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
+    dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [{ id: 't1', name: 'nightly' }], dynamic: [] });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);
