@@ -181,6 +181,12 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     originally wanted (~10 tickets on the cheap executor before judging the
     swap) is moot: the operator made the call directly.
 
+    **Tier bump 2026-09-24 (operator):** canonical pins moved to
+    `claude-opus-5-5` (and the roster's fable entry to `claude-fable-5-1`),
+    each verified via the CLI's `modelUsage` key. The decision is unchanged —
+    "Opus for both halves" — only the id moved; the studio loop's `--model
+    opus` alias already resolved to 5.5 without a change.
+
 34. **SD-28 is SUPERSEDED for target-repo packs: UI config edits are local**
     (operator decision 2026-07-08, config-workstreams spec). "Config changes
     should just be local, shouldn't need constant PRs. A user downloading

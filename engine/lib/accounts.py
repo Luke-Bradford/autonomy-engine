@@ -45,7 +45,7 @@ _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"
 # silently-pickable old model. Bump on a tier release, verified against the CLI
 # (`claude -p … --model <id> --output-format json` -> modelUsage key).
 _SUBSCRIPTION_MODELS = {
-    "claude_subscription": ["claude-fable-5", "claude-opus-5",
+    "claude_subscription": ["claude-fable-5-1", "claude-opus-5-5",
                             "claude-sonnet-5", "claude-haiku-4-5"],
     "codex_subscription": [],
 }

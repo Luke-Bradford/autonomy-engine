@@ -369,7 +369,7 @@ class TestListModels(unittest.TestCase):
         self.assertEqual(acc.list_models("sub"),
                          ac._SUBSCRIPTION_MODELS["claude_subscription"])
         # the curated claude roster is non-empty and holds the shipped ids.
-        self.assertIn("claude-opus-5", acc.list_models("sub"))
+        self.assertIn("claude-opus-5-5", acc.list_models("sub"))
 
     def test_list_models_codex_subscription_is_empty_seam(self):
         # codex model ids are unverified in-repo -> the curated roster is an
@@ -406,7 +406,7 @@ class TestListModels(unittest.TestCase):
         # hand-kept duplicate. Returns a copy so no caller can mutate it.
         self.assertEqual(ac.subscription_models("claude_subscription"),
                          ac._SUBSCRIPTION_MODELS["claude_subscription"])
-        self.assertIn("claude-opus-5",
+        self.assertIn("claude-opus-5-5",
                       ac.subscription_models("claude_subscription"))
         self.assertEqual(ac.subscription_models("codex_subscription"), [])
         self.assertEqual(ac.subscription_models("openai_compatible"), [])

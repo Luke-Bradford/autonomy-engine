@@ -37,7 +37,7 @@ DST=".claude/agents/planner.md"
 r="$(mkrepo)"; cd "$r" || exit 1
 LOGMSGS=""; materialize_planner
 check "materializes when absent" "0" "$([ -f "$DST" ] && echo 0 || echo 1)"
-check "template default model kept" "0" "$(grep -q '^model: claude-opus-5' "$DST" && echo 0 || echo 1)"
+check "template default model kept" "0" "$(grep -q '^model: claude-opus-5-5' "$DST" && echo 0 || echo 1)"
 
 # --- config model applied -----------------------------------------------------
 printf 'agent:\n  type: claude\n  planner:\n    model: claude-fable-5\n' > .autonomy/config.yaml
