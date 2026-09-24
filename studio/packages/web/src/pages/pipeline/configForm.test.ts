@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { getActivity } from '@autonomy-studio/shared';
 import {
   assembleConfig,
+  changeConfigKind,
+  configEditorView,
+  configToFields,
+  configToJson,
   deriveConfigFields,
   deriveFieldsWithCarried,
   formatFieldValue,
@@ -10,6 +14,7 @@ import {
   parseFieldInput,
   readConfigDraft,
   unrepresentableFields,
+  type ConfigDraft,
   type ConfigField,
 } from './configForm';
 
@@ -730,5 +735,179 @@ describe('objectList (#1169)', () => {
         outputs: [{ name: 'rows' }],
       });
     });
+  });
+});
+
+/*
+ * #1146 — the two-mode editor's TRANSITIONS, lifted out of `ConnectionForm` and
+ * `DatasetForm` so the rule each page re-derived lives once.
+ *
+ * A synthetic kind set, because the case that matters most cannot be reached
+ * through today's real schemas: every key two real kinds share has the same
+ * control kind, so no real kind change makes a stored value unrenderable. `a`
+ * and `b` reuse `n` with DIFFERENT types to reach it; `c` stands for a kind the
+ * page forces into JSON (a dataset kind with no reader).
+ */
+type Kind = 'a' | 'b' | 'c';
+const KIND_LIST: readonly Kind[] = ['a', 'b', 'c'];
+const KIND_SCHEMA: Record<Kind, z.ZodType> = {
+  a: z.object({ n: z.number().optional(), s: z.string().optional() }),
+  b: z.object({ n: z.string().optional() }),
+  c: z.looseObject({}),
+};
+const fieldsFor = (kind: Kind, config: Record<string, unknown>) =>
+  deriveFieldsWithCarried(KIND_LIST, (k: Kind) => KIND_SCHEMA[k], kind, config);
+const forcedJson = (kind: Kind) => kind === 'c';
+
+function draft(over: Partial<ConfigDraft<Kind>> = {}): ConfigDraft<Kind> {
+  const config = over.config ?? { n: 5 };
+  return {
+    kind: 'a',
+    config,
+    inputs: { n: '5', s: '' },
+    jsonText: JSON.stringify(config, null, 2),
+    jsonMode: false,
+    ...over,
+  };
+}
+
+describe('configEditorView (#1146)', () => {
+  it('derives JSON mode from all three reasons, and only from them', () => {
+    expect(configEditorView(draft(), fieldsFor, forcedJson).jsonMode).toBe(false);
+    expect(configEditorView(draft({ jsonMode: true }), fieldsFor, forcedJson).jsonMode).toBe(true);
+    expect(configEditorView(draft({ kind: 'c' }), fieldsFor, forcedJson).jsonMode).toBe(true);
+    const unrenderable = configEditorView(draft({ kind: 'b' }), fieldsFor, forcedJson);
+    expect(unrenderable.unrenderable).toEqual(['n']);
+    expect(unrenderable.jsonMode).toBe(true);
+  });
+
+  it('never forces JSON for a page that passes no forcing rule', () => {
+    expect(configEditorView(draft({ kind: 'c' }), fieldsFor).jsonMode).toBe(false);
+  });
+});
+
+describe('changeConfigKind (#1146)', () => {
+  it('an ordinary switch rewrites NEITHER draft', () => {
+    const before = draft({ config: { s: 'stored' }, inputs: { n: '7', s: 'typed' } });
+    const { form, error } = changeConfigKind(before, 'b', fieldsFor, forcedJson);
+    expect(error).toBeNull();
+    expect(form.kind).toBe('b');
+    expect(form.config).toBe(before.config);
+    expect(form.jsonText).toBe(before.jsonText);
+    // Anything typed wins over the re-seed, so nothing in progress is dropped.
+    expect(form.inputs).toMatchObject({ n: '7', s: 'typed' });
+  });
+
+  it('a switch that FORCES JSON by kind commits the field draft first', () => {
+    const { form, error } = changeConfigKind(
+      draft({ inputs: { n: '9', s: 'typed' } }),
+      'c',
+      fieldsFor,
+      forcedJson,
+    );
+    expect(error).toBeNull();
+    expect(configEditorView(form, fieldsFor, forcedJson).jsonMode).toBe(true);
+    expect(JSON.parse(form.jsonText)).toEqual({ n: 9, s: 'typed' });
+  });
+
+  it('a switch that forces JSON through an UNRENDERABLE value commits the field draft too', () => {
+    // #1146's "other disjunct": `b` renders `n` as text, so the stored number
+    // forces the textarea — which must open on what the operator built, not on
+    // the JSON last written before they typed anything.
+    const { form, error } = changeConfigKind(
+      draft({ inputs: { n: '5', s: 'typed' } }),
+      'b',
+      fieldsFor,
+      forcedJson,
+    );
+    expect(error).toBeNull();
+    const view = configEditorView(form, fieldsFor, forcedJson);
+    expect(view.jsonMode).toBe(true);
+    expect(JSON.parse(form.jsonText)).toEqual({ n: 5, s: 'typed' });
+  });
+
+  it('a forcing switch whose field draft will not read back still changes kind, and names the field', () => {
+    const before = draft({ inputs: { n: 'not a number', s: '' } });
+    const { form, error } = changeConfigKind(before, 'c', fieldsFor, forcedJson);
+    expect(form.kind).toBe('c');
+    expect(form.jsonText).toBe(before.jsonText);
+    expect(error).toMatch(/^n: /);
+  });
+
+  it('in JSON mode the parsed text is the whole seed, and the text is left as typed', () => {
+    const jsonText = '{"s": "from json"}';
+    const { form, error } = changeConfigKind(
+      draft({ jsonMode: true, jsonText, inputs: { n: '5', s: 'stale' } }),
+      'b',
+      fieldsFor,
+      forcedJson,
+    );
+    expect(error).toBeNull();
+    expect(form.config).toEqual({ s: 'from json' });
+    expect(form.jsonText).toBe(jsonText);
+    expect(form.inputs['s']).toBe('from json');
+  });
+
+  it('leaving a FORCED-JSON kind carries the textarea into the field form', () => {
+    // JSON was on through the kind, not through the flag — `form.jsonMode` is
+    // false here, and reading it instead of the derived mode would drop the edit.
+    const { form } = changeConfigKind(
+      draft({ kind: 'c', jsonText: '{"n": 3}' }),
+      'a',
+      fieldsFor,
+      forcedJson,
+    );
+    expect(configEditorView(form, fieldsFor, forcedJson).jsonMode).toBe(false);
+    expect(form.inputs['n']).toBe('3');
+  });
+
+  it('unparseable JSON pins the editor open and reports the parse failure', () => {
+    const { form, error } = changeConfigKind(
+      draft({ kind: 'c', jsonText: '{oops' }),
+      'a',
+      fieldsFor,
+      forcedJson,
+    );
+    expect(form.kind).toBe('a');
+    expect(form.jsonMode).toBe(true);
+    expect(form.jsonText).toBe('{oops');
+    expect(error).toMatch(/^Invalid config JSON/);
+  });
+});
+
+describe('configToJson / configToFields (#1146)', () => {
+  it('fields → JSON opens the textarea on what Save would write', () => {
+    const before = draft({ inputs: { n: '4', s: 'x' } });
+    const result = configToJson(before, fieldsFor(before.kind, before.config).fields);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.form.jsonMode).toBe(true);
+    expect(result.form.config).toEqual({ n: 4, s: 'x' });
+    expect(JSON.parse(result.form.jsonText)).toEqual({ n: 4, s: 'x' });
+  });
+
+  it('fields → JSON refuses a control that will not read back', () => {
+    const before = draft({ inputs: { n: 'nope', s: '' } });
+    const result = configToJson(before, fieldsFor(before.kind, before.config).fields);
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/^n: /) });
+  });
+
+  it('JSON → fields parses first, and re-seeds the controls', () => {
+    const result = configToFields(draft({ jsonMode: true, jsonText: '{"n": 8}' }), fieldsFor);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.form.jsonMode).toBe(false);
+    expect(result.form.config).toEqual({ n: 8 });
+    expect(result.form.inputs['n']).toBe('8');
+  });
+
+  it('JSON → fields refuses bad JSON, and a value no control can show', () => {
+    expect(configToFields(draft({ jsonMode: true, jsonText: '[' }), fieldsFor)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Invalid config JSON/),
+    });
+    expect(
+      configToFields(draft({ kind: 'b', jsonMode: true, jsonText: '{"n": 1}' }), fieldsFor),
+    ).toMatchObject({ ok: false, error: 'These settings have no form control: n.' });
   });
 });
