@@ -676,6 +676,15 @@ describe('connectionDependents — the NODE buckets (#1252)', () => {
     ]);
   });
 
+  it('a literal end naming it WINS over a ${}-dynamic other end — settled, not unsettled', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    versionWithNodes(db, 'local', [pairNode('mixed', connId, '${params.conn}')]);
+    const preview = connectionDependents(db, 'local', connId, pairedCatalog());
+    expect(preview.nodes.map((n) => [n.nodeId, n.acceptedKinds])).toEqual([['mixed', ['ollama']]]);
+    expect(preview.dynamicNodes).toEqual([]);
+  });
+
   it('reports a ${}-dynamic reference as UNSETTLED rather than dropping it', () => {
     const { db } = freshDb();
     const connId = readyConnection(db);
