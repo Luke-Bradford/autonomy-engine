@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { COPY_ACTIVITY_TYPE, type DatasetColumn } from '@autonomy-studio/shared';
-import { runCopyActivity } from '../copy.js';
+import { COPY_ACTIVITY_TYPE, newCopyCounters, type DatasetColumn } from '@autonomy-studio/shared';
+import { runCopyActivity, storeCountAdvisory } from '../copy.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -111,6 +111,8 @@ describe('copy activity — the happy path contract', () => {
       bytesRead: expect.any(Number),
       truncated: false,
     });
+    // A copy whose store kept exactly what it was sent has nothing to say.
+    expect(events.filter((e) => e.type === 'warned')).toEqual([]);
   });
 
   it('actually moves the rows, into the SINK store and not the source', async () => {
@@ -147,6 +149,71 @@ describe('copy activity — the happy path contract', () => {
     expect(warning?.type === 'warned' ? warning.code : null).toBe('copy_rows_failed');
     // The tally is the point: `rowsFailed: 2` alone tells an operator nothing.
     expect(warning?.type === 'warned' ? warning.reason : '').toMatch(/2 not_a_number/);
+  });
+});
+
+describe('copy activity — a store that discards rows says so (#1273)', () => {
+  it('names the gap when a sink trigger discards a row, and still succeeds', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const db = new Database(sinkPath);
+    db.exec(
+      'CREATE TRIGGER t BEFORE INSERT ON sink WHEN new.id = 2 BEGIN SELECT raise(ignore); END;',
+    );
+    db.close();
+
+    const events = await run(copyCtx({ root, sourcePath: seedDb(root, 3, 'src.db'), sinkPath }));
+
+    const end = terminal(events);
+    expect(end.type).toBe('succeeded');
+    expect(end.type === 'succeeded' ? end.outputs : null).toMatchObject({
+      rowsRead: 3,
+      rowsWritten: 2,
+      rowsFailed: 0,
+    });
+    const warnings = events.filter((e) => e.type === 'warned');
+    expect(warnings.map((w) => (w.type === 'warned' ? w.code : null))).toEqual([
+      'copy_store_count_differs',
+    ]);
+    expect(warnings[0]?.type === 'warned' ? warnings[0].reason : '').toMatch(
+      /the store kept 2 of the 3 row\(s\) the copy sent; 1 was discarded by the sink itself/,
+    );
+  });
+});
+
+describe('storeCountAdvisory — rowsWritten against the rows the copy SENT', () => {
+  const counters = (rowsRead: number, rowsFailed: number, rowsWritten: number) => ({
+    ...newCopyCounters(),
+    rowsRead,
+    rowsFailed,
+    rowsWritten,
+  });
+
+  it('is silent when the store kept every row it was sent', () => {
+    expect(storeCountAdvisory(counters(5, 0, 5))).toBeNull();
+    expect(storeCountAdvisory(counters(0, 0, 0))).toBeNull();
+  });
+
+  it('does not count a coercion failure as a store discard', () => {
+    // 2 rows never reached the store; `COPY_ROWS_FAILED` owns saying so.
+    expect(storeCountAdvisory(counters(5, 2, 3))).toBeNull();
+  });
+
+  it('names a shortfall against the rows sent, not the rows read', () => {
+    expect(storeCountAdvisory(counters(5, 1, 2))).toBe(
+      'the store kept 2 of the 4 row(s) the copy sent; 2 were discarded by the sink itself ' +
+        '(a trigger, rule or conflict clause), not by the mapping',
+    );
+  });
+
+  it('names an EXCESS without calling it a discard', () => {
+    // A postgres `DO INSTEAD` rule reports the rule's own count (#1270).
+    const reason = storeCountAdvisory(counters(5, 0, 7));
+    expect(reason).toBe(
+      'the store reports 7 row(s) written for the 5 the copy sent — a rule or trigger on the ' +
+        "sink rewrote the inserts, so rowsWritten is the store's count, not rows this copy delivered",
+    );
+    expect(reason).not.toMatch(/discarded/);
   });
 });
 
@@ -464,6 +531,31 @@ describe('copy activity — a tick is progress, not committed truth', () => {
     expect(rowsOf(sinkPath, 'SELECT * FROM sink')).toEqual([]);
     const written = events.find((e) => e.type === 'output' && e.name === 'rowsWritten');
     expect(written?.type === 'output' ? written.value : null).toBe(0);
+  });
+
+  it("does not read a failed copy's gap as the store discarding rows (#1273)", async () => {
+    // rowsRead 1200 against a proven rowsWritten 0: that gap IS the failure, and
+    // calling it the sink discarding rows would misname what happened.
+    const root = tempRoot();
+    const { sourcePath, sinkPath } = seedLateFailure(root);
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'note', type: 'string' },
+          ],
+        },
+      }),
+    );
+
+    expect(terminal(events).type).toBe('failed');
+    const read = events.find((e) => e.type === 'output' && e.name === 'rowsRead');
+    expect(read?.type === 'output' ? read.value : null).toBe(1200);
+    expect(events.filter((e) => e.type === 'warned')).toEqual([]);
   });
 });
 
