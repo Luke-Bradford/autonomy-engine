@@ -1061,7 +1061,7 @@ rather than imported and failed at run time.
 ### 6.2 The coercion matrix
 
 Under-specifying this is how silent data corruption ships. The closed type set is
-`string | integer | number | boolean | date | timestamp`. Every conversion either produces a value or
+`string | integer | number | boolean | date | timestamp | binary`. Every conversion either produces a value or
 **fails the row** with a named reason — there is no third outcome, and in particular no
 "best effort".
 
@@ -1083,6 +1083,16 @@ Two rows carry most of the risk and are stated deliberately:
 - **dates are parsed by the declared format ONLY.** `03/04/2026` is a different day in two countries;
   a "helpful" parser is a corruption engine. No format declared and a date column mapped → save-time
   refusal, not a run-time guess.
+
+**`binary` (#1131) is a passthrough, and has no other row.** Raw bytes (a sqlite `BLOB`, a postgres
+`bytea`, both handed back as a `Buffer`) → `binary` are the same bytes, untouched. EVERY other source
+→ `binary` fails `unsupported_source_type`, a string included: base64, hex and UTF-8 are three
+different answers and none was declared, so producing bytes from text is a guess. Bytes → any other
+type already failed and still does (`String(blob)` is a lossy stand-in that looks like data). SQL
+`NULL` → `null` and the `nullValue` sentinel apply as for every type. Without this row a table with
+a BLOB column could not be copied whole: every mapped BLOB failed coercion against the six types
+above. `binary` needs no sink-side encoding — both store drivers bind a `Uint8Array` as bytes — and
+no file kind is a sink, so no text format has to represent it. `CATALOG_VERSION` 30.
 
 `onError: 'null'` is the per-column opt-out, and is **refused where the sink column is
 `nullable: false`** — accepting it would push the failure into the store as a constraint violation,
