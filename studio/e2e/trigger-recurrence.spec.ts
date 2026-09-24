@@ -273,7 +273,7 @@ test.describe('#855 recurrence bounds say what they will actually store', () => 
     await expect(form.getByTestId('bound-shift')).toHaveCount(0);
 
     // A wall clock that exists: bounded now, so no longer a bare cron — still no warning.
-    const start = form.getByLabel('Start time (optional)');
+    const start = form.getByLabel(/^Start time/);
     await start.fill('2026-03-29T03:30');
     await expect(preview).not.toContainText('cron');
     await expect(preview).toContainText('from 2026-03-29T02:30:00.000Z');

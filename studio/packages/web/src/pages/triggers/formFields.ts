@@ -46,7 +46,8 @@ export function parseWholeNumber(raw: string): WholeNumberParse {
  * The anchoring zone is the BROWSER's, because both `RecurrenceSchema` and
  * `WindowConfigSchema` pin their bounds as absolute instants. The editor labels
  * the control and echoes the resolved instant rather than silently
- * reinterpreting it.
+ * reinterpreting it — and where the browser's zone has no such wall clock (a
+ * daylight-saving gap), `boundShift` names the one it will read back as.
  *
  * Returns `null` for anything that is not a well-formed local date-time, so a
  * caller never propagates an `Invalid Date`.

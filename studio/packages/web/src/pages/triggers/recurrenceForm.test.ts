@@ -465,6 +465,10 @@ describe('cronPreview', () => {
     });
     expect(preview.kind).toBe('summary');
     if (preview.kind === 'summary') {
+      // No zone was authored, so the summary must say the UTC it means.
+      expect(preview.text).toBe(
+        'daily · at 09:00 · UTC · from 2026-08-01T09:00:00.000Z · until 2026-09-01T09:00:00.000Z',
+      );
       expect(preview.text).toContain('from 2026-08-01T09:00:00.000Z');
       expect(preview.text).toContain('until 2026-09-01T09:00:00.000Z');
     }

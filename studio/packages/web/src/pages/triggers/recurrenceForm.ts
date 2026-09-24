@@ -272,7 +272,9 @@ export function cronPreview(recurrence: Recurrence): CronPreview {
   if (s?.monthDays) parts.push(`on day ${s.monthDays.join(', ')}`);
   if (s?.hours) parts.push(`at ${s.hours.map((h) => `${pad(h)}:00`).join(', ')}`);
   if (s?.minutes) parts.push(`minute ${s.minutes.join(', ')}`);
-  if (recurrence.timeZone !== undefined) parts.push(recurrence.timeZone);
+  // Named even when absent: beside bounds "entered in your browser's local time",
+  // a bare `at 09:00` would read as local rather than as the UTC it means.
+  parts.push(recurrence.timeZone ?? 'UTC');
   if (recurrence.startTime !== undefined) parts.push(`from ${recurrence.startTime}`);
   if (recurrence.endTime !== undefined) parts.push(`until ${recurrence.endTime}`);
   return { kind: 'summary', text: parts.join(' · ') };
