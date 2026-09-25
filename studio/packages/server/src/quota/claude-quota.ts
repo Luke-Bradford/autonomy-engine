@@ -69,10 +69,12 @@ import {
  *    directions. Armed, this DOES add standing provider volume that a lazy
  *    reader does not: the TTL bounds calls per READ, not per hour, so a lazy
  *    reader called a few times per fire makes a few calls where a sampler makes
- *    ~60/hour. What makes the swap a net improvement rather than a wash is the
- *    backoff below, which the dashboard's sampler does not have: once the
- *    measured sticky 429 sets in, the geometric window caps the standing draw at
- *    ~7.5 calls/hour. And armed, the credential store IS back on the boot path —
+ *    ~12/hour at its default cadence. (It was ~60/hour until #1292 found that a
+ *    one-minute cadence overdraws the account's limit on its own; see
+ *    `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS`.) The backoff below, which the
+ *    dashboard's sampler did not have, now mainly bounds REQUEST-path reads:
+ *    the sampler's own cadence is already slower than any window short of the
+ *    cap. And armed, the credential store IS back on the boot path —
  *    bounded by `KEYCHAIN_TIMEOUT_MS`, which is what makes that safe under a
  *    `KeepAlive` service, but it is no longer "never touched unless asked".
  *
@@ -88,12 +90,9 @@ import {
  * 80% threshold on a seven-day window. The grace window's 900s was not.
  *
  * The sampler does not move that CEILING — `throttleMs === ttlMs` whenever a
- * reading is cached, so 60s remains the bound — but it does move the TYPICAL
- * age a consumer sees, from ~0 (a lazy reader samples at the moment it is asked)
- * to ~30s (it is asked about a value taken up to half a TTL ago). The argument
- * above was written for the lazy reader and survives unchanged, because it was
- * always made against the bound rather than the average; this is noted so the
- * change is not mistaken for a no-op.
+ * reading is cached, so 60s remains the bound. At its default cadence it barely
+ * moves the TYPICAL age either: most reads land after the sampled value has
+ * expired and take their own sample, aged ~0, exactly as a lazy reader's would.
  *
  * ## What is NOT a divergence: the TTL throttle
  *
@@ -143,24 +142,43 @@ const HTTP_TIMEOUT_MS = 3_000;
 const DEFAULT_TTL_MS = 60_000;
 
 /**
- * The background sampler's default cadence (#765) — deliberately HALF the TTL,
- * and defined here beside the TTL rather than in `quota-sampler.ts` because the
- * relationship between the two is the whole justification.
+ * The background sampler's default cadence: FIVE TTLs, one provider poll per
+ * five minutes. Defined here beside the TTL because the two are chosen against
+ * each other, and against the provider's limit.
  *
- * A sample landing INSIDE the TTL is a pure cache hit and touches nothing, so a
- * faster tick costs no provider calls; what it buys is that the cache is
- * refreshed promptly once it expires. At a full-TTL cadence, ordinary timer
- * drift means a tick lands just inside the window (a hit) and the next is a
- * further TTL away — halving the effective refresh rate to ~120s and leaving a
- * window in which the consumer's request-path read finds an expired cache and
- * pays for a live poll it was armed to avoid. That poll's latency is what the
- * consumer's `curl --max-time 8` budget is spent on.
+ * It was half the TTL (#765), which kept the cache warm: one poll per TTL, so
+ * the guard's read was nearly always a cache hit. That rested on an unmeasured
+ * premise, that the account tolerates one poll a minute. It does not (#1292).
+ * Studio's own service log, 2026-09-25, holds ~7,500 repetitions of one cycle:
+ * 429 at 0s, 200 at 120s, 200 at 180s, 429 at 240s. Fitted as a token bucket,
+ * the limit refills one call per 80-90s, so a 60s cadence overdraws it
+ * permanently. No backoff shape fixes that. The backoff never got past one
+ * doubling, and the issue's suggested decay (halve per success, floor at the
+ * TTL) turns 120s straight back into 60s, which is what the snap-back already
+ * does. The cadence was the defect, and the reader was behaving as specified.
  *
- * The pairing only holds for a DEFAULT-constructed reader: `ttlMs` is a caller
- * option and the sampler cannot see it through `ClaudeAccountQuotaReader`, so a
- * caller overriding one should override the other.
+ * At five TTLs the sampler draws ~12 calls an hour against a sustainable ~40,
+ * which leaves most of the bucket to the reads that matter. The cost, stated so
+ * it is not mistaken for a no-op: a read landing more than a TTL after the last
+ * sample finds the cache expired and polls LIVE on the request path, about 80%
+ * of the guard's reads. That poll is bounded by `KEYCHAIN_TIMEOUT_MS +
+ * HTTP_TIMEOUT_MS`, sized for exactly this inside the consumer's
+ * `curl --max-time 8`, and it now meets a bucket that has refilled rather than
+ * one the sampler emptied. So it returns a reading where the warm cache mostly
+ * returned UNREADABLE. It is also still ONE poller in the #770 sense. Every
+ * call is made in this process, and the reader's throttle bounds them to one per
+ * window whoever is asking.
+ *
+ * Why keep a sampler at all, rather than go back to purely lazy reads: #987's
+ * last-known display value is fed by the ticks, and with no reader traffic it
+ * would otherwise never be refreshed.
+ *
+ * The TTL itself is unchanged, and so is the one-minute bound on a reading's
+ * life. This value is a caller option (`claudeAccountQuotaSamplerIntervalMs`),
+ * and so is `ttlMs`. The sampler cannot see the reader's TTL through
+ * `ClaudeAccountQuotaReader`, so overriding one says nothing about the other.
  */
-export const DEFAULT_QUOTA_SAMPLE_INTERVAL_MS = DEFAULT_TTL_MS / 2;
+export const DEFAULT_QUOTA_SAMPLE_INTERVAL_MS = DEFAULT_TTL_MS * 5;
 
 /**
  * The ceiling on the rate-limit backoff, as a multiple of the TTL (8 × 60s = 8m).

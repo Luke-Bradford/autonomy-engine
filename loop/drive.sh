@@ -265,12 +265,18 @@ is_loop_ref() {
 #
 #   * studio (1) now samples on an `unref`'d interval inside the supervised server
 #     and answers `/api/quota` from that cache (`quota-sampler.ts`, armed by
-#     `CLAUDE_QUOTA_SAMPLER=1` in the service plist). Its REQUEST path no longer
-#     reaches the provider at all, so the guard may poll it as often as it likes.
-#     That -- not novelty -- is what earns it first place; #765 stated the
-#     condition in exactly those terms ("a sampler-backed studio can be polled
-#     freely ... that is the state in which studio actually deserves to be the
-#     primary source"), and C3 is the change that satisfies it.
+#     `CLAUDE_QUOTA_SAMPLER=1` in the service plist). However often the guard
+#     asks, the reader's TTL and 429 throttle bound studio to one provider call
+#     per window, so the guard may poll it as often as it likes. That -- not
+#     novelty -- is what earns it first place; #765 stated the condition in
+#     those terms ("a sampler-backed studio can be polled freely ... that is the
+#     state in which studio actually deserves to be the primary source").
+#     It is NOT "its request path never reaches the provider". That was true at
+#     the original one-minute sampler cadence, which overdrew the account's
+#     limit and flapped (#1292). The sampler now ticks every five minutes, so
+#     most guard reads take a live sample, bounded to 5s inside our 8s curl.
+#     A quick re-read after an UNREADABLE is therefore NOT free: it can poll
+#     upstream.
 #   * the dashboard (2) rode through a 429 the same way, on a background thread
 #     behind a warm cache. It was source 1 for that reason and is now RETIRED --
 #     C3 stops its sampler, because two standing samplers on one budget is the one
@@ -594,9 +600,10 @@ quota_pct() {
   qp_src=""
   qp_memo_hit=0      # set -u: must exist before the source-3 branch reads it
   # FIRST since C3 (#410): studio, served from the supervised `com.autonomy.studio-server`
-  # unit on 8788 with `CLAUDE_QUOTA_SAMPLER=1`. Its request path reads the sampler's cache
-  # and does NOT touch the provider, which is the whole reason it can afford to be first
-  # and be asked on every call -- see the order argument in this function's header.
+  # unit on 8788 with `CLAUDE_QUOTA_SAMPLER=1`. Its reader bounds provider calls to one per
+  # TTL/throttle window however often it is asked, which is the whole reason it can afford
+  # to be first and be asked on every call -- see the order argument in this function's
+  # header (and #1292 for why a read may still take a live sample).
   qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
   [ -n "$qp_out" ] && qp_src="studio"
   # NOTE the single exit point below: EVERY source must feed the cache. An early

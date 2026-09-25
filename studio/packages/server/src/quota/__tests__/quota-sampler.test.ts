@@ -68,7 +68,7 @@ describe('startClaudeQuotaSampler — cadence', () => {
     const read = vi.fn(async () => ({ value: null, unavailable: 'no_credential' }) as const);
     const sampler = startClaudeQuotaSampler({ read }, { intervalMs: 30_000 });
     // No timer advance at all: the warm cache exists from boot, not from the
-    // first tick a minute later. A KeepAlive restart otherwise reintroduces the
+    // first tick five minutes later. A KeepAlive restart otherwise reintroduces the
     // live request-path poll for the consumer's very next read.
     expect(read).toHaveBeenCalledTimes(1);
     sampler.stop();
@@ -253,10 +253,7 @@ describe('startClaudeQuotaSampler — the default cadence against the measured l
       now,
       log: (e) => events.push(e.event),
     });
-    const sampler = startClaudeQuotaSampler(
-      reader,
-      intervalMs === undefined ? {} : { intervalMs },
-    );
+    const sampler = startClaudeQuotaSampler(reader, intervalMs === undefined ? {} : { intervalMs });
     return { reader, sampler, tick, limiter, events };
   }
 
@@ -277,7 +274,11 @@ describe('startClaudeQuotaSampler — the default cadence against the measured l
     const { sampler, tick, limiter, events } = armed(undefined);
     for (let t = 0; t < SIX_HOURS_MS; t += 10_000) await tick(10_000);
     sampler.stop();
-    expect(limiter.fetcher).toHaveBeenCalled();
+    // Every tick a real poll (prime + one per interval), so zero refusals is the
+    // limiter keeping up, not a sampler that stopped asking.
+    expect(limiter.fetcher).toHaveBeenCalledTimes(
+      SIX_HOURS_MS / DEFAULT_QUOTA_SAMPLE_INTERVAL_MS + 1,
+    );
     expect(limiter.refused()).toBe(0);
     expect(events).not.toContain('rate_limited');
   });
