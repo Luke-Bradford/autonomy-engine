@@ -1159,8 +1159,9 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     outputs: z.record(z.string(), z.unknown()),
     // #796 — WHY a child could not be spawned, present only on a refusal (no
     // child run exists to explain itself). Operator-facing, server-authored
-    // text: never a thrown error's message, and never distinguishes a
-    // cross-owner version from a missing one (`child.ts`). Observability only —
+    // text: never an arbitrary thrown message (only the replay-safety check's,
+    // which is path-only by contract), and never distinguishes a cross-owner
+    // version from a missing one (`child.ts`). Observability only —
     // the reducer does not read it. Optional, so pre-#796 logs replay unchanged.
     reason: z.string().optional(),
   }),

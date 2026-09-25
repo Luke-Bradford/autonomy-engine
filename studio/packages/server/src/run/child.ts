@@ -236,6 +236,9 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     try {
       assertJsonReplaySafe('call_pipeline params', command.params);
     } catch (err) {
+      // The one thrown message allowed into the durable `reason`: it is
+      // PATH-ONLY by `jsonReplaySafetyErrors`'s contract (never the value), and
+      // the path is what tells the author which param to fix.
       return refuse(err instanceof Error ? err.message : String(err));
     }
 

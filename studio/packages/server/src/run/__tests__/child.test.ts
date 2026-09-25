@@ -404,6 +404,32 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     b.unsubscribe();
   });
 
+  it('names a non-replay-safe param by PATH, never by value', () => {
+    // The one refusal whose durable text comes from a thrown message — allowed
+    // because `jsonReplaySafetyErrors` is path-only by contract.
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv)]);
+    const run = seedRun(db, parentPv);
+    const b = boundary(db);
+    const out = b.childRuns.ensure(
+      {
+        type: 'startChild',
+        callNodeId: 'caller',
+        attemptId: 'caller#0',
+        childRunId: 'child_unsafe',
+        pipelineVersionId: childPv,
+        params: { ratio: -Infinity },
+      },
+      run.id,
+    );
+    expect(out.ok === false && out.reason).toBe(
+      'call_pipeline params.ratio: non-finite number refused (cannot be durably replayed)',
+    );
+    expect(listRuns(db, { parentRunId: run.id })).toHaveLength(0);
+    b.unsubscribe();
+  });
+
   it('carries the refusal REASON onto the parent’s call.returned, end to end', async () => {
     // Before this the reason reached only the server log, so the run page could
     // say a call node failed but never why. Through the REAL executor branch.

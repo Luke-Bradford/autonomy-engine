@@ -140,7 +140,10 @@ resolved within the container's scope + its visible ancestors). Lifecycle:
 A call node emits `startChild{childRunId (deterministic), pipelineVersionId, params}`;
 its state is `waiting` until a `call.returned{childRunId, childOutcome, outputs}`
 event. `childOutcome` may be failure and STILL return projected outputs (the findings
-loop). Depth ≤ N and call-cycle refusal are validated at pipeline-SAVE time
+loop). A child that could not be SPAWNED (a refusal at the `startChild` seam) returns
+`failure` with an optional `reason` — operator-facing text the run page shows, since
+no child run exists to explain itself; a cross-owner callee reads as "not found"
+(#796). Depth ≤ N and call-cycle refusal are validated at pipeline-SAVE time
 (`validateRefs`/`validateDoc`) — and, since #796, depth is ALSO bounded at run
 time, by walking the spawned child's `parentRunId` chain against the same
 `MAX_CALL_DEPTH`. The save-time DFS was never a bound on its own: it follows
