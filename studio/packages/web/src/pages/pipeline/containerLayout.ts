@@ -299,6 +299,39 @@ export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<
 }
 
 /**
+ * U21 (#935) — which newly APPEARED containers can be revealed now, and which
+ * must wait.
+ *
+ * A container that arrives together with its children (a duplicate) is, for
+ * one render, a box with nothing drawn inside it: the store holds the new nodes
+ * a render before the canvas's view nodes do, so `containerRects` puts the box
+ * at the EMPTY fallback, right of everything. Revealing then pans to where the
+ * box is not going to be. So an appeared id WAITS until its box is derived from
+ * its children, or until it is plain that it has none to wait for (no child is
+ * a node in the doc — its fallback box IS its real box).
+ *
+ * An id with no box any more (the container was deleted, or undone) is in
+ * neither list, so the caller's pending set forgets it.
+ */
+export function revealReady(
+  pending: ReadonlySet<string>,
+  boxes: ReadonlyMap<string, ContainerBox>,
+  containers: readonly Container[],
+  docNodeIds: ReadonlySet<string>,
+): { ready: string[]; waiting: string[] } {
+  const ready: string[] = [];
+  const waiting: string[] = [];
+  for (const id of pending) {
+    const box = boxes.get(id);
+    const container = containers.find((c) => c.id === id);
+    if (box === undefined || container === undefined) continue;
+    const expectsChildren = container.children.some((child) => docNodeIds.has(child));
+    (box.childCount > 0 || !expectsChildren ? ready : waiting).push(id);
+  }
+  return { ready, waiting };
+}
+
+/**
  * The minimum pan that brings every rect in `boxes` on screen — or `null` if
  * they are already visible, so "nothing to do" is a distinct answer and the
  * caller issues no viewport write at all.

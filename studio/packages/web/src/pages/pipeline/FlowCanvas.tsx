@@ -59,6 +59,7 @@ import {
 } from './connectRules';
 import {
   appearedIds,
+  revealReady,
   containerAriaLabel,
   containerHandles,
   containerRects,
@@ -1201,15 +1202,19 @@ export function FlowCanvas({
    * measurement (membership does not depend on either), so the identity churn in
    * `containerBoxes` as React Flow measures produces no `appeared` and no write.
    *
-   * U21 (#935) — a container that has just APPEARED is revealed the same way,
-   * over the same diff of container ids. A duplicate lands clear of everything in
-   * its row, which is off-screen whenever that row is wider than the pane — and
-   * the copy is the selected subject of the property panel, so leaving it culled
-   * would put the operator's current subject somewhere they cannot see. The first
-   * run records only, for the mount reason above.
+   * U21 (#935) — a container that has just APPEARED is revealed the same way.
+   * A duplicate lands clear of everything in its row, which is off-screen
+   * whenever that row is wider than the pane — and the copy is the selected
+   * subject of the property panel, so leaving it culled would put the operator's
+   * current subject somewhere they cannot see. It is held PENDING until its box
+   * is derived from its children (`revealReady` says why), and while it waits it
+   * is kept out of the empty diff above: its one-render "empty" is a transient
+   * of the view lagging the store, not an emptying. The first run records only,
+   * for the mount reason above.
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
   const knownContainers = useRef<Set<string> | null>(null);
+  const pendingReveal = useRef<Set<string>>(new Set());
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
     const present = new Set(containerBoxes.keys());
@@ -1238,8 +1243,18 @@ export function FlowCanvas({
     knownEmptyContainers.current = empty;
     const knownPresent = knownContainers.current;
     knownContainers.current = present;
+    const { ready, waiting } = revealReady(
+      new Set([...pendingReveal.current, ...appearedIds(knownPresent, present)]),
+      containerBoxes,
+      containers,
+      new Set(nodes.map((n) => n.id)),
+    );
+    pendingReveal.current = new Set(waiting);
     const appeared = [
-      ...new Set([...appearedIds(known, empty), ...appearedIds(knownPresent, present)]),
+      ...new Set([
+        ...appearedIds(known, empty).filter((id) => !pendingReveal.current.has(id)),
+        ...ready,
+      ]),
     ];
     if (appeared.length === 0) return;
 
@@ -1255,7 +1270,7 @@ export function FlowCanvas({
     const usable = usableExtent(paneWidth, paneHeight);
     const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
-  }, [containerBoxes, paneWidth, paneHeight, reactFlowStore, setViewport]);
+  }, [containerBoxes, containers, nodes, paneWidth, paneHeight, reactFlowStore, setViewport]);
 
   /**
    * U9 (#1004) — fit the content when Arrange asks for it.
