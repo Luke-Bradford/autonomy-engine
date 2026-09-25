@@ -372,3 +372,106 @@ describe('availableRefs — the container field catalog (#864)', () => {
     expect(containerRefs(LOOP, 'ghost', 'exitWhen')).toEqual([]);
   });
 });
+
+// --- a filter's per-FIELD `${item}` scope (#864) -----------------------------
+
+/**
+ * `src → pick`, a `filter` outside any foreach. Its `predicate` is the lambda
+ * position of the composed `filter(items, predicate)`, so `${item}` is bound
+ * there whatever the node's membership — and its `items` is not.
+ */
+const FILTER = doc({
+  nodes: [
+    producer('src', [
+      { name: 'rows', type: 'json' },
+      { name: 'label', type: 'string' },
+    ]),
+    node('pick', {
+      type: 'filter',
+      config: { items: '${nodes.src.output.rows}', predicate: '${item}' },
+    }),
+  ],
+  edges: [edge('src', 'pick')],
+});
+
+/** The same filter as a foreach body child, where `items` binds `${item}` too. */
+const FILTER_IN_FOREACH = doc({
+  nodes: [
+    producer('src', [{ name: 'rows', type: 'json' }]),
+    node('pick', { type: 'filter', config: { items: '${item}', predicate: '${item}' } }),
+  ],
+  edges: [edge('src', 'fe')],
+  containers: [
+    {
+      id: 'fe',
+      kind: 'foreach',
+      children: ['pick'],
+      join: 'all',
+      items: '${nodes.src.output.rows}',
+    },
+  ],
+});
+
+const FILTER_FIELDS = ['items', 'predicate'] as const;
+
+const fieldRefs = (d: Doc, nodeId: string, field: string) =>
+  availableRefs(d, { kind: 'node', nodeId, field }).map((s) => s.ref);
+
+/** `d` with a node's config field set WHOLE to `text` — both filter fields are whole-value. */
+function withConfig(d: Doc, nodeId: string, field: string, text: string): Doc {
+  return {
+    ...d,
+    nodes: d.nodes.map((n) =>
+      n.id === nodeId ? { ...n, config: { ...n.config, [field]: text } } : n,
+    ),
+  };
+}
+
+/** A filter's own TYPE refusals — `items` wants an array, `predicate` a boolean. */
+const FILTER_TYPE_REFUSAL = /function 'filter': argument \d+ must be a/;
+
+describe('availableRefs — a filter binds ${item} per FIELD (#864)', () => {
+  for (const [name, d] of [
+    ['a filter', FILTER],
+    ['a filter in a foreach body', FILTER_IN_FOREACH],
+  ] as const) {
+    it(`${name}: every offer at a field site is in scope for that field`, () => {
+      const before = validatePipelineDoc(d);
+      expect(before, 'the fixture is clean').toEqual([]);
+      let offered = 0;
+      for (const field of FILTER_FIELDS) {
+        for (const s of availableRefs(d, { kind: 'node', nodeId: 'pick', field })) {
+          offered += 1;
+          const after = validatePipelineDoc(withConfig(d, 'pick', field, s.insert)).filter(
+            (issue) => !FILTER_TYPE_REFUSAL.test(issue),
+          );
+          expect(after, `pick.${field} ← ${s.insert}`).toEqual(before);
+        }
+      }
+      expect(offered).toBeGreaterThan(0);
+    });
+  }
+
+  it('offers ${item} in a filter predicate outside any foreach', () => {
+    expect(fieldRefs(FILTER, 'pick', 'predicate')).toContain('item');
+    // …and the offer really is legal there: `${item}` is the fixture's own
+    // predicate, which the clean-fixture assertion above already saves.
+  });
+
+  it('does NOT offer ${item} in its items, nor at the node-level site', () => {
+    expect(fieldRefs(FILTER, 'pick', 'items')).not.toContain('item');
+    expect(refsFor(FILTER, 'pick')).not.toContain('item');
+    // Refused at save, so this is the offer the per-field site must not make.
+    expect(validatePipelineDoc(withConfig(FILTER, 'pick', 'items', '${item}'))).not.toEqual([]);
+  });
+
+  it('inside a foreach body, both fields bind ${item}', () => {
+    expect(fieldRefs(FILTER_IN_FOREACH, 'pick', 'items')).toContain('item');
+    expect(fieldRefs(FILTER_IN_FOREACH, 'pick', 'predicate')).toContain('item');
+  });
+
+  it('a predicate-named field on any OTHER activity binds nothing', () => {
+    const other = withConfig(CHAIN, 'c', 'predicate', 'x');
+    expect(fieldRefs(other, 'c', 'predicate')).not.toContain('item');
+  });
+});

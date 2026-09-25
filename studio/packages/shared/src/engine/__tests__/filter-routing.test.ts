@@ -308,6 +308,16 @@ describe('filter save-time validation (#4 A8)', () => {
     );
     expect(validateRefs(d).join(' ')).toMatch(/ghost/);
   });
+
+  it('keeps the per-FIELD ${item} scope on the fallback scan — predicate yes, items no', () => {
+    // An EMPTY items makes the pair uncomposable, so each raw field is scanned on
+    // its own. The predicate is still the lambda position and binds `${item}`;
+    // items, outside a foreach, still does not.
+    const bound = doc([filterNode('f', '', '${greater(item, 2)}')]);
+    expect(validateRefs(bound)).toEqual([]);
+    const unbound = doc([filterNode('f', 'x${item}', '${greater(item, 2)}')]);
+    expect(validateRefs(unbound).join(' ')).toMatch(/config\.items.*item/);
+  });
 });
 
 describe('filter catalog entry (#4 A8)', () => {
