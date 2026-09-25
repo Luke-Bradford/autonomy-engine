@@ -992,6 +992,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // `failure` child may still carry projected `outputs` (the findings
         // loop), and gating would silently drop exactly that documented case.
         n.outputValues = e.outputs;
+        /* #796 — a REFUSED spawn says why; a child that ran and failed carries
+           none (its own run page does). `clearResult` above already dropped an
+           earlier attempt's reason, so a reason-less retry cannot inherit it. */
+        if (e.reason !== undefined) n.error = e.reason;
         n.instanceId = instanceOf(e.callNodeId);
         /* Still a no-op: #796 landed `call.started` but deliberately does NOT
            open a span there (a restart can re-announce one child, which would

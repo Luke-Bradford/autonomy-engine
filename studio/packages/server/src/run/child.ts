@@ -84,12 +84,17 @@ export interface ChildRuns {
     command: StartChildCommand,
     parentRunId: string,
   ): ChildEnsured | { ok: false; reason: string };
+  // `reason` above is operator-facing: the executor puts it on the parent's
+  // durable `call.returned` (#796). See `ensureOrThrow`'s `refuse`.
   /** Start (or resume) the child's drive in the BACKGROUND. Never awaited by the
    * parent — see the module doc. */
   kick(run: Run): void;
   /** The `call.returned` payload for a child that has already terminalized. */
   result(childRunId: string): { outcome: RunOutcome; outputs: Record<string, unknown> };
 }
+
+/** The refusal text for a spawn that THREW rather than refused. */
+const SPAWN_THREW_REASON = 'the child run could not be created — the server log has the cause';
 
 export interface ChildRunsDeps extends DriveDeps {
   db: Db;
@@ -138,12 +143,13 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     try {
       return ensureOrThrow(command, parentRunId);
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
       deps.log?.error?.(
         { err, runId: parentRunId, childRunId: command.childRunId },
         'call_pipeline child spawn threw — refusing the call node rather than the run',
       );
-      return { ok: false, reason };
+      // A thrown message is arbitrary internal text; the durable event gets a
+      // fixed one and the log above keeps the cause.
+      return { ok: false, reason: SPAWN_THREW_REASON };
     }
   }
 
@@ -151,18 +157,23 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     command: StartChildCommand,
     parentRunId: string,
   ): ChildEnsured | { ok: false; reason: string } {
-    // Every refusal is LOGGED here rather than carried into the event: the
-    // executor turns it into a bare `call.returned{failure}` because that
-    // schema has no error field, so this log line is the only place an operator
-    // can learn WHY a call node failed. Losing it would make a refused spawn
-    // indistinguishable from a child that ran and failed.
-    const refuse = (reason: string): { ok: false; reason: string } => {
+    // Every refusal is LOGGED here AND carried into the event: the executor puts
+    // `reason` on `call.returned{failure}` (#796), which is how the run page can
+    // say WHY a call node failed rather than only that it did. So `reason` is
+    // OPERATOR-FACING, durable text; `detail`, when given, is the precise cause
+    // and goes to the log only.
+    const refuse = (reason: string, detail?: string): { ok: false; reason: string } => {
       deps.log?.warn?.(
-        { runId: parentRunId, childRunId: command.childRunId, reason },
+        { runId: parentRunId, childRunId: command.childRunId, reason, detail },
         'call_pipeline child refused',
       );
       return { ok: false, reason };
     };
+    // SECURITY. A missing version, an orphaned one and ANOTHER OWNER'S one all
+    // read the same in the durable log, so a parent run is not an existence
+    // oracle for version ids its owner cannot see.
+    const notFound = (detail: string) =>
+      refuse(`child pipeline version '${command.pipelineVersionId}' was not found`, detail);
     const parent = getRun(db, parentRunId);
     if (parent === null) return refuse('parent run row is gone');
 
@@ -197,12 +208,12 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     try {
       deps.resolveDoc(command.pipelineVersionId);
     } catch {
-      return refuse(`child pipeline version '${command.pipelineVersionId}' cannot be resolved`);
+      return notFound('the version cannot be resolved');
     }
 
     const pipelineId = getPipelineIdForVersion(db, command.pipelineVersionId);
     if (pipelineId === null) {
-      return refuse(`child pipeline version '${command.pipelineVersionId}' has no pipeline`);
+      return notFound('the version has no pipeline');
     }
     // SECURITY. `validateCallGraph` resolves callees through an OWNER-SCOPED
     // resolver and silently SKIPS one it cannot see, so a cross-owner target
@@ -211,7 +222,7 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     // caller's identity — and with the caller's connections' secrets in scope.
     const pipeline = getPipeline(db, pipelineId);
     if (pipeline === null || pipeline.ownerId !== parent.ownerId) {
-      return refuse('child pipeline belongs to a different owner');
+      return notFound('the child pipeline belongs to a different owner');
     }
     // #3 G5a — the same dispatch guard `fire()` applies. An archived pipeline
     // must not become runnable through the back door of a call node.
