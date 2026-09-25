@@ -259,7 +259,10 @@ function remapNodeToDb(
   // for the same reason: this is the resourceId→dbId boundary, and a pair
   // carried through on `rest` would land resourceIds in the DB as though they
   // were dataset ids — an address that resolves to nothing, written silently.
-  const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
+  // #1144 — `datasetParams` is destructured out too, and re-attached only when
+  // the dataset pair survives below: bindings for a dropped pair would make the
+  // whole apply refuse at the write gate ("datasetParams need datasetIds").
+  const { connectionId, connectionIds, datasetIds, datasetParams, call, ...rest } = node;
   const base = rest as Node;
 
   /** One ref: `null` → unbound, `${}` → verbatim, literal → mapped or refused.
@@ -327,6 +330,9 @@ function remapNodeToDb(
       if (rawSink === undefined) dbNode = { ...dbNode, datasetIds: { source } };
       else if (sink !== undefined) dbNode = { ...dbNode, datasetIds: { source, sink } };
     }
+  }
+  if (datasetParams !== undefined && dbNode.datasetIds !== undefined) {
+    dbNode = { ...dbNode, datasetParams };
   }
 
   if (call) {

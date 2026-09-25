@@ -475,6 +475,29 @@ export const NodeSchema = z.object({
     .object({ source: z.string().min(1), sink: z.string().min(1).optional() })
     .optional(),
   /**
+   * #1144 — per-dispatch bindings for each bound DATASET's declared
+   * `parameters` allowlist (`DatasetSchema.parameters`), per END, because a
+   * `copy` binds two datasets and a flat record would name no side (the reason
+   * `connectionParams` is refused on a paired node). Same mechanism as
+   * `connectionParams` below, one layer down: string values may be `${}`
+   * expressions the reducer resolves at dispatch (`resolveDatasetParams`), and
+   * the EXECUTOR gates each end against its dataset's allowlist and
+   * shallow-merges it over that dataset's stored `config`. The allowlist check
+   * is dispatch-time for the same reason as the connection one: datasets are
+   * mutable rows and `datasetIds` may itself be `${}`.
+   *
+   * Save-time rules (`engine/params.ts`): refs are scanned, an authored
+   * `{$secret}` is refused, and an end with no matching `datasetIds` end — or
+   * any binding on a `call` node — is refused as silently-inert config.
+   * Adding this field bumped `CATALOG_VERSION` 31→32 (`schemas/version.ts`).
+   */
+  datasetParams: z
+    .object({
+      source: z.record(z.string(), z.unknown()).optional(),
+      sink: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
+  /**
    * #2 L13b — per-dispatch bindings for the bound connection's declared
    * `parameters` allowlist (`ConnectionSchema.parameters`). String values may
    * be `${}` expressions; the reducer resolves them at dispatch (same env as

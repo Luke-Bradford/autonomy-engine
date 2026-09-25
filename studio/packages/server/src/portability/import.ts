@@ -29,7 +29,10 @@ function toDbNode(node: NodeExport): Node {
   // fields: `rest` is spread straight into a live `Node`, and an export-shaped
   // pair (ends `string | null`) riding through would put a `null` where
   // `NodeSchema.datasetIds` requires a string. It is rebuilt below.
-  const { connectionId, connectionIds, datasetIds, ...rest } = node;
+  // #1144 — `datasetParams` rides with the dataset pair: re-attached below only
+  // when the pair survives, because bindings for a dropped pair are refused by
+  // the write gate and would roll the whole import back.
+  const { connectionId, connectionIds, datasetIds, datasetParams, ...rest } = node;
   const base = connectionId === null ? rest : { ...rest, connectionId };
   // M1 (#1104) — the paired binding's inverse. An end nulled by export is
   // UNBOUND on import, and `NodeSchema.connectionIds` requires BOTH ends, so a
@@ -70,6 +73,7 @@ function toDbNode(node: NodeExport): Node {
   return {
     ...withConn,
     datasetIds: { source, ...(sink === undefined ? {} : { sink }) },
+    ...(datasetParams === undefined ? {} : { datasetParams }),
   };
 }
 

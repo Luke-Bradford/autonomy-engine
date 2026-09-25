@@ -376,6 +376,10 @@ type PreparedDispatch = {
   resolvedConnectionIds: { source: string; sink: string } | undefined;
   /** M12 slice 1 (#1220) — `sink` optional: a source-only reader binds one address. */
   resolvedDatasetIds: { source: string; sink?: string } | undefined;
+  /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
+  resolvedDatasetParams:
+    | { source?: Record<string, unknown>; sink?: Record<string, unknown> }
+    | undefined;
 };
 
 /**
@@ -1232,6 +1236,30 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #1144 — `resolveConnectionParams` per END of a node's `datasetParams`: the
+   * same type-preserving `substitute` in the same env. An absent end stays
+   * ABSENT (never `{}`), so the executor can tell "no binding" from "an empty
+   * one". The allowlist check is the executor's; this reducer has no dataset
+   * rows.
+   */
+  function resolveDatasetParams(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined {
+    if (node.datasetParams === undefined) return undefined;
+    const ctx = buildCtx(state);
+    const resolved: { source?: Record<string, unknown>; sink?: Record<string, unknown> } = {};
+    for (const side of ['source', 'sink'] as const) {
+      const binding = node.datasetParams[side];
+      if (binding !== undefined) {
+        resolved[side] = substitute(binding, ctx, 0, item) as Record<string, unknown>;
+      }
+    }
+    return resolved;
+  }
+
+  /**
    * Bundle the two dispatch-prep resolutions so every `dispatchNode` emission
    * site threads a resolved `connectionId` alongside the substituted config with
    * NO drift — both run against the SAME `(state, node)` the site passes. Kept as
@@ -1255,6 +1283,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionParams: resolveConnectionParams(es, node, item),
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
+      resolvedDatasetParams: resolveDatasetParams(es, node, item),
     };
   }
 
@@ -1280,6 +1309,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedConnectionParams: prepared.resolvedConnectionParams,
       resolvedConnectionIds: prepared.resolvedConnectionIds,
       resolvedDatasetIds: prepared.resolvedDatasetIds,
+      resolvedDatasetParams: prepared.resolvedDatasetParams,
     };
   }
 

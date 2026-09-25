@@ -1429,6 +1429,19 @@ export function validateRefs(
       // resolve run-supplied json this gate never sees.
       scanSecretSinks(`nodes.${node.id}.connectionParams`, node.connectionParams, [], errors);
     }
+    // #1144 — per-end dataset-parameter bindings, on `connectionParams`'
+    // argument exactly: validated against the env the reducer resolves them in
+    // (`resolveDatasetParams`), and never secret sinks, so an authored
+    // `{$secret}` is refused here and a resolved one at dispatch.
+    if (node.datasetParams !== undefined) {
+      for (const side of ['source', 'sink'] as const) {
+        const binding = node.datasetParams[side];
+        if (binding === undefined) continue;
+        const path = `nodes.${node.id}.datasetParams.${side}`;
+        scan(path, binding, scope, errors, 0, undefined, foreachChildIds.has(node.id));
+        scanSecretSinks(path, binding, [], errors);
+      }
+    }
     // #952 — a call node's `call` refs. `call` sits BESIDE `config`, not inside
     // it (`schemas/pipeline.ts`), so neither the config scan above nor
     // `scanSecretSinks` below has ever reached it: a `${}` target id or param
@@ -1973,6 +1986,41 @@ export function containsSecretMarker(value: unknown): boolean {
   return found;
 }
 
+/** Why `firstParamOverrideViolation` refused a per-dispatch override. */
+export type ParamOverrideViolation = {
+  reason: 'non_overridable' | 'undeclared' | 'secret_marker';
+  key: string;
+};
+
+/**
+ * #1144 — the ONE per-dispatch override gate, shared by a connection's
+ * `connectionParams` (#2 L13b) and a dataset's `datasetParams`. Both resources
+ * carry an owner-declared `parameters` allowlist, and the order of the three
+ * refusals is the contract, so it lives here once instead of in two loops that
+ * could drift:
+ *
+ *   1. a SECURITY-BOUNDARY key is refused first — the allowlist cannot bless it,
+ *      so asking the allowlist would be the wrong question;
+ *   2. then a key the owner did not declare;
+ *   3. then a VALUE that is (or embeds) a `{$secret}` marker — parameters are
+ *      non-secret by design, and a `${}` binding can resolve run-supplied json
+ *      the save gate never saw.
+ *
+ * Pure: each caller maps the verdict onto its own failure codes and messages.
+ * `null` means every key passed.
+ */
+export function firstParamOverrideViolation(
+  params: Record<string, unknown>,
+  gate: { isNonOverridable: (key: string) => boolean; allowlist: readonly string[] },
+): ParamOverrideViolation | null {
+  for (const [key, value] of Object.entries(params)) {
+    if (gate.isNonOverridable(key)) return { reason: 'non_overridable', key };
+    if (!gate.allowlist.includes(key)) return { reason: 'undeclared', key };
+    if (containsSecretMarker(value)) return { reason: 'secret_marker', key };
+  }
+  return null;
+}
+
 /** Shape-validate a marker at a declared sink: strict schema + literal name (§2). */
 function validateSecretMarker(where: string, value: unknown, errors: string[]): void {
   const parsed = SecretRefSchema.safeParse(value);
@@ -2316,6 +2364,29 @@ export function validateDoc(
         `node.${node.id}: datasetIds have no effect on a call node ` +
           "(its dispatch and refs are the child pipeline's) — remove them",
       );
+    }
+    // #1144 — `datasetParams`' shape rules, the silently-inert-config idiom of
+    // the blocks above, and `connectionParams`' polarity for an empty record:
+    // `{}` is harmless beside a binding it could apply to and refused where it
+    // could never apply. Each END binds against the matching `datasetIds` end.
+    if (node.datasetParams !== undefined) {
+      if (node.call !== undefined) {
+        errors.push(
+          `node.${node.id}: datasetParams have no effect on a call node ` +
+            "(its dispatch and refs are the child pipeline's) — remove them",
+        );
+      } else if (node.datasetIds === undefined) {
+        errors.push(
+          `node.${node.id}: datasetParams need datasetIds to bind against ` +
+            '(without a dataset the bindings are silently inert) — bind a dataset or remove them',
+        );
+      } else if (node.datasetParams.sink !== undefined && node.datasetIds.sink === undefined) {
+        // `source` is required on `datasetIds`, so only the sink end can dangle.
+        errors.push(
+          `node.${node.id}: datasetParams.sink needs a sink dataset to bind against ` +
+            '(without one the bindings are silently inert) — bind a sink dataset or remove them',
+        );
+      }
     }
     // #796 item 2 — a `wait: false` call never receives its child's result, so
     // declared outputs could never be produced. Same idiom as above: refused,

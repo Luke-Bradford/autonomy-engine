@@ -373,6 +373,38 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
 };
 
 /**
+ * #1144 — dataset config keys a node may NEVER override per dispatch, whatever
+ * the dataset's `parameters` allowlist says. The dataset twin of
+ * `CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS`, consulted by the executor's merge.
+ *
+ * - `table`: `schema` and `table` are SQL IDENTIFIERS. §8 of the data-movement
+ *   spec makes them literal-only at save, because by the time a value reaches
+ *   the adapter an interpolated name is an ordinary string and nothing can tell
+ *   it came from an expression. An override is exactly that `${}`, one layer
+ *   down — and even a well-formed identifier would let a trigger-influenced
+ *   value re-point an overwriting sink at any table the store can reach.
+ * - `query`: `sql` is the statement TEXT, and §8's whole guarantee is that no
+ *   `${}` reaches SQL as text. Its `parameters` (the BIND values) stay
+ *   overridable: they bind as parameters, which is what they are for.
+ * - `delimited`/`excel`: nothing. `path` resolves inside the connection's
+ *   `roots`, and `roots` is non-overridable on the CONNECTION, so the
+ *   confinement does not rest on the dataset at all.
+ *
+ * An exhaustive `Record`, so a new kind without a decision is a compile error.
+ */
+export const DATASET_NON_OVERRIDABLE_CONFIG_KEYS: Record<DatasetKind, readonly string[]> = {
+  delimited: [],
+  excel: [],
+  table: ['schema', 'table'],
+  query: ['sql'],
+};
+
+/** Whether `key` is one no per-dispatch override may set on a `kind` dataset. */
+export function isNonOverridableDatasetConfigKey(kind: DatasetKind, key: string): boolean {
+  return DATASET_NON_OVERRIDABLE_CONFIG_KEYS[kind].includes(key);
+}
+
+/**
  * The dataset kinds a reader exists for — M4's `table` and `query`, and M7's
  * `delimited` (#1167, the slice that wired the `fs` copy arm).
  *

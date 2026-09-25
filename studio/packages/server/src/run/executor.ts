@@ -1,10 +1,13 @@
+import { isDeepStrictEqual } from 'node:util';
 import pLimit from 'p-limit';
 import {
   AGENT_CLI_CONNECTION_KIND,
   catalog as sharedCatalog,
   collectSecretSinkMarkers,
   computeCostEstimate,
-  containsSecretMarker,
+  firstParamOverrideViolation,
+  datasetConfigSchema,
+  isNonOverridableDatasetConfigKey,
   describeDatasetAddress,
   sameDatasetAddress,
   resolveDocNode,
@@ -558,35 +561,39 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // boundary, unchanged.
     let connectionConfig = connection.config;
     if (resolvedParams !== undefined) {
-      for (const [key, value] of Object.entries(resolvedParams)) {
-        // #1119 M4 — refused BEFORE the allowlist check, because this refusal
-        // is not about what the owner opted into: a key on this list may never
-        // be overridden even if the allowlist names it. Enforced at the MERGE
-        // rather than only at the allowlist write path, because a connection
-        // row authored before this rule existed can already carry one.
-        if (isNonOverridableConnectionConfigKey(connection.kind, key)) {
-          return {
-            error:
-              `connection parameter '${key}' may never be overridden per dispatch on a ` +
-              `'${connection.kind}' connection — it is a security boundary, not a setting`,
-            code: FAILURE_CODES.CONNECTION_PARAM_NON_OVERRIDABLE,
-          };
-        }
-        if (!connection.parameters.includes(key)) {
-          return {
-            error:
-              `connection '${connectionId}' does not declare parameter '${key}' ` +
-              '(its parameters allowlist is the owner’s opt-in for per-dispatch overrides)',
-            code: FAILURE_CODES.CONNECTION_PARAM_UNDECLARED,
-          };
-        }
-        if (containsSecretMarker(value)) {
-          return {
-            error:
-              `connection parameter '${key}' resolved to a value containing a ` +
-              'secret marker — parameters are non-secret; use a declared secret sink',
-            code: FAILURE_CODES.CONNECTION_PARAM_SECRET_MARKER,
-          };
+      // #1144 — the refusal ORDER is `firstParamOverrideViolation`'s, shared with
+      // the dataset gate below. #1119 M4's rule still holds: a non-overridable
+      // key is refused BEFORE the allowlist is asked, and at the MERGE rather
+      // than only at the allowlist write path, because a connection row authored
+      // before this rule existed can already carry one.
+      const violation = firstParamOverrideViolation(resolvedParams, {
+        isNonOverridable: (key) => isNonOverridableConnectionConfigKey(connection.kind, key),
+        allowlist: connection.parameters,
+      });
+      if (violation !== null) {
+        const { key } = violation;
+        switch (violation.reason) {
+          case 'non_overridable':
+            return {
+              error:
+                `connection parameter '${key}' may never be overridden per dispatch on a ` +
+                `'${connection.kind}' connection — it is a security boundary, not a setting`,
+              code: FAILURE_CODES.CONNECTION_PARAM_NON_OVERRIDABLE,
+            };
+          case 'undeclared':
+            return {
+              error:
+                `connection '${connectionId}' does not declare parameter '${key}' ` +
+                '(its parameters allowlist is the owner’s opt-in for per-dispatch overrides)',
+              code: FAILURE_CODES.CONNECTION_PARAM_UNDECLARED,
+            };
+          case 'secret_marker':
+            return {
+              error:
+                `connection parameter '${key}' resolved to a value containing a ` +
+                'secret marker — parameters are non-secret; use a declared secret sink',
+              code: FAILURE_CODES.CONNECTION_PARAM_SECRET_MARKER,
+            };
         }
       }
       connectionConfig = { ...connection.config, ...resolvedParams };
@@ -667,6 +674,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     activityType: string,
     ownerId: string | null,
     boundConnectionId: string | undefined,
+    resolvedParams: Record<string, unknown> | undefined,
   ): { error: string; code: string } | { dataset: ResolvedDataset } {
     if (datasetId === undefined) {
       return {
@@ -721,12 +729,77 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.DATASET_CONNECTION_MISMATCH,
       };
     }
+    // #1144 — the node's per-dispatch overrides for THIS end, gated by the
+    // dataset's own allowlist and merged over its stored config. After the
+    // agreement check, so a dataset that is wrong in itself reports that first.
+    // The merge is SHALLOW, as the connection one is: an allowlisted binding
+    // replaces a key whole (a `query`'s `parameters` record included).
+    let config = dataset.config;
+    if (resolvedParams !== undefined) {
+      const kindSchema = datasetConfigSchema(dataset.kind);
+      const violation = firstParamOverrideViolation(resolvedParams, {
+        isNonOverridable: (key) => isNonOverridableDatasetConfigKey(dataset.kind, key),
+        allowlist: dataset.parameters,
+      });
+      if (violation !== null) {
+        const { key } = violation;
+        switch (violation.reason) {
+          case 'non_overridable':
+            return {
+              error:
+                `dataset parameter '${key}' may never be overridden per dispatch on a ` +
+                `'${dataset.kind}' dataset — it reaches SQL as text or as an identifier, which §8 keeps literal`,
+              code: FAILURE_CODES.DATASET_PARAM_NON_OVERRIDABLE,
+            };
+          case 'undeclared':
+            return {
+              error:
+                `dataset '${datasetId}' does not declare parameter '${key}' ` +
+                '(its parameters allowlist is the owner’s opt-in for per-dispatch overrides)',
+              code: FAILURE_CODES.DATASET_PARAM_UNDECLARED,
+            };
+          case 'secret_marker':
+            return {
+              error:
+                `dataset parameter '${key}' resolved to a value containing a ` +
+                'secret marker — parameters are non-secret; use a declared secret sink',
+              code: FAILURE_CODES.DATASET_PARAM_SECRET_MARKER,
+            };
+        }
+      }
+      // A key the kind's config does not have is refused rather than merged:
+      // the kind schema STRIPS unknown keys, so the override would pass the
+      // re-parse below and then do nothing — an allowlisted typo, silently.
+      const unknownKey = Object.keys(resolvedParams).find((key) => !(key in kindSchema.shape));
+      if (unknownKey !== undefined) {
+        return {
+          error: `dataset parameter '${unknownKey}' is not a '${dataset.kind}' dataset setting`,
+          code: FAILURE_CODES.DATASET_PARAM_INVALID,
+        };
+      }
+      const merged = { ...dataset.config, ...resolvedParams };
+      // The stored config was validated at write; a per-dispatch value was not.
+      // Judged here, where both halves exist, and the RAW merge is what flows
+      // on — not `parsed.data`, whose filled defaults and stripped keys would
+      // make an overridden dispatch see a differently-shaped config from an
+      // un-overridden one.
+      const parsed = kindSchema.safeParse(merged);
+      if (!parsed.success) {
+        return {
+          error:
+            `dataset '${datasetId}' is not a valid '${dataset.kind}' dataset once its parameters ` +
+            `are applied: ${parsed.error.issues.map((i) => `${i.path.join('.') || '(config)'}: ${i.message}`).join('; ')}`,
+          code: FAILURE_CODES.DATASET_PARAM_INVALID,
+        };
+      }
+      config = merged;
+    }
     return {
       dataset: {
         id: dataset.id,
         name: dataset.name,
         kind: dataset.kind,
-        config: dataset.config,
+        config,
         columns: dataset.columns,
       },
     };
@@ -1322,6 +1395,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         node.type,
         ownerId,
         connectionPaired ? command.resolvedConnectionIds?.source : command.resolvedConnectionId,
+        command.resolvedDatasetParams?.source,
       );
       if ('error' in resolvedSourceDs) {
         // Labelled ONLY when the dataset binding is genuinely a pair — M1's rule
@@ -1352,6 +1426,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           node.type,
           ownerId,
           command.resolvedConnectionIds?.sink,
+          command.resolvedDatasetParams?.sink,
         );
         if ('error' in resolvedSinkDs) {
           yield preflightFailure(runId, nodeId, attemptId, resolvedSinkDs, 'sink', 'dataset');
@@ -1363,7 +1438,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // streaming the same table, so a self-copy destroys the rows it was asked
         // to move. Unlabelled by side deliberately — neither end is at fault, the
         // PAIR is, and labelling one would send an operator to fix the wrong ref.
-        if (resolvedSinkDs.dataset.id === resolvedSourceDs.dataset.id) {
+        //
+        // #1144 — ONE dataset used as a template on both ends is legitimate once
+        // parameters make the two ends different addresses (one `path` read,
+        // another written). So the id check fires only when the EFFECTIVE
+        // configs agree too; a pair that differs by parameters falls through to
+        // the address check below, which still refuses a genuine collision.
+        if (
+          resolvedSinkDs.dataset.id === resolvedSourceDs.dataset.id &&
+          isDeepStrictEqual(resolvedSinkDs.dataset.config, resolvedSourceDs.dataset.config)
+        ) {
           yield preflightFailure(
             runId,
             nodeId,

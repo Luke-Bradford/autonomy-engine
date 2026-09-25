@@ -446,7 +446,15 @@
 // than run it wrong. No `SCHEMA_VERSION` bump and no upgrader: the field's
 // shape is unchanged, and absent still means wait, so every pre-31 artifact
 // runs here exactly as it did.
-export const CATALOG_VERSION = 31;
+// CATALOG_VERSION 32 (#1144): DATASET PARAMETERS. A node may carry top-level
+// `datasetParams` — per-end, `${}`-bound overrides the executor merges over each
+// bound dataset's stored `config`, gated by that dataset's `parameters`
+// allowlist. Bump 18's argument exactly, one layer down: `NodeSchema` is a plain
+// `z.object`, so a pre-32 build importing such a doc silently DROPS the field
+// and copies from the dataset's UNMODIFIED path/sheet/bind values — the
+// silent-WRONG shape that mandates a bump on its own. No `SCHEMA_VERSION` bump
+// and no upgrader: a doc without the key is byte-identical across the bump.
+export const CATALOG_VERSION = 32;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
