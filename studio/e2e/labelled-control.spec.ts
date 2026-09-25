@@ -101,10 +101,18 @@ test.describe('#1227 — a label names its control and nothing else', () => {
       return {
         text: label.textContent,
         labelLeftOfControl: l.right <= c.left,
+        // The wrapped form had a literal space between "Window" and the select;
+        // the wrapper's flex `gap` is what replaces it, so they must not touch.
+        spaced: c.left - l.right >= 2,
         sameRow: l.top < c.bottom && c.top < l.bottom,
       };
     });
-    expect(geo).toEqual({ text: 'Window', labelLeftOfControl: true, sameRow: true });
+    expect(geo).toEqual({
+      text: 'Window',
+      labelLeftOfControl: true,
+      spaced: true,
+      sameRow: true,
+    });
     await expectQuiet(page, problems);
   });
 
