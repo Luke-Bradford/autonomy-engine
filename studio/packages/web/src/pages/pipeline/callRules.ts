@@ -1,4 +1,4 @@
-import type { CallConfig, Node, Param } from '@autonomy-studio/shared';
+import { interpolationMode, type CallConfig, type Node, type Param } from '@autonomy-studio/shared';
 import type { PickerTarget } from './ConfigFieldControl';
 import { listAllPipelineVersions } from '../../api/pipelines';
 import { coerceDefaultInput, formatDefaultInput } from './paramRules';
@@ -179,8 +179,10 @@ export function storedBlankKeys(call: CallConfig | undefined): Set<string> {
  * surface's interpolation, and this panel makes no claim that it is.
  */
 export function isExpressionText(raw: string): boolean {
-  const t = raw.trim();
-  return t.startsWith('${') && t.endsWith('}');
+  // The engine's own classifier, which `substitute` uses to decide whether a
+  // field keeps its type. A starts-with/ends-with test would also accept a
+  // splice like `${a}5${b}`, which resolves to a STRING (#1307 review).
+  return interpolationMode(raw.trim()).mode === 'whole';
 }
 
 type ParamsParse = { ok: true; value: Record<string, unknown> } | { ok: false; error: string };

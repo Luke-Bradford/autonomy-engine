@@ -2294,30 +2294,6 @@ function seedNodeDraft(
 }
 
 /**
- * Editor for one activity node.
- *
- * Settings are authored through a FORM derived from the activity's own
- * `configSchema` (U7 — `configForm.ts` owns the derivation and the apply
- * semantics). The whole-config JSON editor it replaced remains reachable two
- * ways: as an opt-in toggle, and as the automatic surface when a value already
- * saved cannot round-trip through its control. Either path validates against
- * `configSchema` before committing, so an invalid blob never reaches the store —
- * a UX pre-check only; `validateDoc` on the server remains the gate.
- *
- * The two-mode editor itself is the SHARED one the connection and dataset forms
- * use (`useConfigEditor` + `ConfigEditor`, #1088): one toggle idiom, one parse
- * rule, and a toggle that commits the draft it leaves rather than hiding it.
- *
- * The internal `outputs` contract — seeded by `lowerPipelineNodes` on creation
- * AND on load since #526, and authored by U16 — is held by neither editor: the
- * draft is the config WITHOUT it, and Apply puts the stored one back
- * (`withStoredOutputs`). Every OTHER key no derived field owns is preserved by
- * `assembleConfig`'s general rule, which `legacyExtra` in the tests exercises.
- *
- * The connection dropdown is filtered to the kinds this activity accepts.
- * Container membership (U6d) is `ContainerSection` above.
- */
-/**
  * #1304 — the overridable view of the bound row, or `null` when this workspace
  * does not list it (see `ParamOverridesEditor.resource`).
  */
@@ -2371,6 +2347,30 @@ function DatasetOverrides({
   );
 }
 
+/**
+ * Editor for one activity node.
+ *
+ * Settings are authored through a FORM derived from the activity's own
+ * `configSchema` (U7 — `configForm.ts` owns the derivation and the apply
+ * semantics). The whole-config JSON editor it replaced remains reachable two
+ * ways: as an opt-in toggle, and as the automatic surface when a value already
+ * saved cannot round-trip through its control. Either path validates against
+ * `configSchema` before committing, so an invalid blob never reaches the store —
+ * a UX pre-check only; `validateDoc` on the server remains the gate.
+ *
+ * The two-mode editor itself is the SHARED one the connection and dataset forms
+ * use (`useConfigEditor` + `ConfigEditor`, #1088): one toggle idiom, one parse
+ * rule, and a toggle that commits the draft it leaves rather than hiding it.
+ *
+ * The internal `outputs` contract — seeded by `lowerPipelineNodes` on creation
+ * AND on load since #526, and authored by U16 — is held by neither editor: the
+ * draft is the config WITHOUT it, and Apply puts the stored one back
+ * (`withStoredOutputs`). Every OTHER key no derived field owns is preserved by
+ * `assembleConfig`'s general rule, which `legacyExtra` in the tests exercises.
+ *
+ * The connection dropdown is filtered to the kinds this activity accepts.
+ * Container membership (U6d) is `ContainerSection` above.
+ */
 export function NodePanel({
   store,
   connections,

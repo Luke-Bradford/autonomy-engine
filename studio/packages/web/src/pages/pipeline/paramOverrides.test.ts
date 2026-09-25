@@ -78,6 +78,8 @@ describe('paramOverrides (#1304)', () => {
     const r = connectionOverrideResource(fsConnection(['maxBytes']));
     expect(overrideRowProblem(r, 'maxBytes', 5)).toBeNull();
     expect(overrideRowProblem(r, 'maxBytes', '${params.n}')).toBeNull();
+    // A SPLICE of two refs resolves to a string, so it is not a whole value (#1307 review).
+    expect(overrideRowProblem(r, 'maxBytes', '${a}5${b}')).toMatch(/number/);
     expect(overrideRowProblem(r, 'maxBytes', '4x')).toMatch(/number/);
     expect(overrideRowProblem(r, 'maxEntries', 5)).toMatch(/does not declare/);
     expect(overrideRowProblem(r, 'roots', ['/x'])).toMatch(/can never be overridden/);
