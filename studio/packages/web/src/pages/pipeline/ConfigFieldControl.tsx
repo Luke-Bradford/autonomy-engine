@@ -70,12 +70,21 @@ export type PickerTarget = {
    * so the panel that owns the coercion declares the constraint.
    */
   wholeValue?: true;
+  /**
+   * The top-level config key this target writes, when it is one — the FIELD
+   * half of the reference site (#864). A `filter`'s `predicate` binds `${item}`
+   * where its `items` does not, so which references exist depends on the field,
+   * not only the node. Unset for a position INSIDE a field (a mapping cell, a
+   * call argument), which reads the node-level scope.
+   */
+  field?: string;
 };
 
 /** A top-level config field's position: the one shape the flyout knew before #1178. */
 const topLevelTarget = (name: string): PickerTarget => ({
   place: (node, value) => ({ ...node, config: { ...node.config, [name]: value } }),
   baseline: 'stored',
+  field: name,
 });
 
 /**

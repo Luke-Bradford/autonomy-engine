@@ -192,6 +192,55 @@ test.describe('U8a — expression insert flyout', () => {
     await expectQuiet(page, problems);
   });
 
+  test("a filter's predicate offers ${item} outside any foreach, and it saves (#864)", async ({
+    page,
+  }) => {
+    // `${item}` is bound in a filter's PREDICATE by the filter itself — the
+    // lambda position of `filter(items, predicate)` — and in its `items` only
+    // inside a foreach body. This filter is in no foreach, so the two fields of
+    // ONE node must get different lists, and the chosen `${item}` must save.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u8a filter item scope', {
+      nodes: [
+        {
+          id: 'src',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: {
+            url: 'https://seed.test',
+            method: 'GET',
+            outputs: [{ name: 'rows', type: 'json' }],
+          },
+        },
+        {
+          id: 'pick',
+          type: 'filter',
+          position: { x: 260, y: 0 },
+          config: { items: '${nodes.src.output.rows}', predicate: '${greater(2, 1)}' },
+        },
+      ],
+      edges: [{ id: 'e1', from: 'src', to: 'pick', on: 'success' }],
+    });
+
+    await nodeById(page, 'pick').click();
+    const item = panel(page).getByRole('button', { name: /^item — / });
+
+    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
+    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeVisible();
+    await expect(item).toHaveCount(0);
+
+    await panel(page).getByRole('button', { name: 'Insert reference into predicate' }).click();
+    await item.click();
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+
+    await expect(page.locator('.badge-list')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id, 'pick')).toMatchObject({ predicate: '${item}' });
+
+    await expectQuiet(page, problems);
+  });
+
   test('a whole-value field is REPLACED, so the doc it produces still saves', async ({ page }) => {
     const problems = collectPageProblems(page);
     const id = await openSeededCanvas(page, 'u8a whole value field', {

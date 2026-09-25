@@ -238,6 +238,38 @@ describe('ExpressionPicker in NodePanel', () => {
     expect(screen.queryByRole('button', { name: /^runId/ })).toBeNull();
   });
 
+  it("offers ${item} in a filter's PREDICATE, and not in its items (#864)", () => {
+    // Outside a foreach, `${item}` is bound only in the predicate — the lambda
+    // position of the composed `filter(items, predicate)`. One node, two
+    // fields, two different answers: the site is per FIELD.
+    const src: Node = {
+      id: 'src',
+      type: 'http_request',
+      config: { method: 'GET', url: 'https://a.test', outputs: [{ name: 'rows', type: 'json' }] },
+      position: at,
+    };
+    const pick: Node = {
+      id: 'pick',
+      type: 'filter',
+      config: { items: '${nodes.src.output.rows}', predicate: '${default(params.flag, true)}' },
+      position: at,
+    };
+    const ui = mount(
+      [src, pick],
+      [{ id: 'e1', from: 'src', to: 'pick', on: 'success' }],
+      [{ name: 'flag', type: 'boolean', required: false }],
+      'pick',
+    );
+    ui.open('predicate');
+    fireEvent.click(screen.getByRole('button', { name: /^item — / }));
+    ui.apply();
+    expect(ui.storedConfig()['predicate']).toBe('${item}');
+
+    ui.open('items');
+    expect(screen.queryByRole('button', { name: /^item — / })).toBeNull();
+    expect(screen.getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeTruthy();
+  });
+
   it('withholds the control on a JSON field, which could not apply the insert', () => {
     // A `json` control parses its text with `JSON.parse` on apply, so a bare
     // `${...}` is not applicable there at all — offering the picker would be a

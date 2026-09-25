@@ -909,9 +909,30 @@ export function evalToolExpression(expression: string, args: Record<string, unkn
  * resolved data (that would re-read output as template, breaking no-injection).
  */
 export function composeFilterExpr(config: Record<string, unknown>): string {
-  const items = filterFieldBody(config['items'], 'items');
-  const predicate = filterFieldBody(config['predicate'], 'predicate');
-  return `\${filter(${items}, ${predicate})}`;
+  const args = FILTER_FIELDS.map((noun) => filterFieldBody(config[noun], noun));
+  return `\${filter(${args.join(', ')})}`;
+}
+
+/**
+ * A `filter` node's two config fields, IN ARGUMENT ORDER of the `filter(items,
+ * predicate)` call `composeFilterExpr` builds. The order is load-bearing: it is
+ * what maps a FIELD onto the catalog's `lambdaArgs`, and so onto `${item}` scope
+ * (`filterFieldBindsItem`).
+ */
+const FILTER_FIELDS = ['items', 'predicate'] as const;
+
+/**
+ * Whether a `filter` node's config `field` binds `${item}` on its own — i.e. it
+ * is a LAMBDA argument of the composed call, as the predicate is. Derived from
+ * the catalog's `FUNCTIONS.filter.lambdaArgs` through {@link FILTER_FIELDS}
+ * rather than naming `'predicate'`, so the save gate (`scanFilterRefs`) and the
+ * picker (`availableRefs`) read one answer that cannot drift from the evaluator.
+ * `items` binds `${item}` only through foreach membership, which is the
+ * caller's separate half.
+ */
+function filterFieldBindsItem(field: string): boolean {
+  const index = (FILTER_FIELDS as readonly string[]).indexOf(field);
+  return index >= 0 && (FUNCTIONS['filter']?.lambdaArgs ?? []).includes(index);
 }
 
 /** Extract a filter field's whole-value `${}` body, or throw (run-time policy). */
@@ -1517,11 +1538,18 @@ export type RefSuggestion = {
  * Where a `${}` reference is being written — the question `availableRefs`
  * answers per site (U8a; the container variant is #864).
  *
- * `field` is the container's expression field, typed off the SAME
+ * A container `field` is the container's expression field, typed off the SAME
  * `ContainerConfigField` list the panel derives its controls from.
+ *
+ * A node `field` is the TOP-LEVEL config key being authored, when there is one
+ * (#864). Absent, the site is the whole node — the scope every one of its
+ * fields shares. It is a plain `string` because config keys are the activity's
+ * own schema, not a closed list here; a key no rule singles out simply gets the
+ * node-level answer, which is only ever an under-offer. Today the one rule that
+ * reads it is a `filter`'s predicate binding `${item}` (`filterFieldBindsItem`).
  */
 export type RefSite =
-  | { kind: 'node'; nodeId: string }
+  | { kind: 'node'; nodeId: string; field?: string }
   | {
       kind: 'container';
       containerId: string;
@@ -1555,8 +1583,9 @@ export type RefSite =
  * (#864). A container field needs its own site because its scope is not any
  * node's: `exitWhen` reads the loop's own children, `items` the container's
  * OUTER upstream — and each reads the very `ScanScope` its validator builds
- * (`exitWhenScope` / `foreachItemsScope`). A node site is still one scope for
- * every field of that node, which is the `filter.predicate` gap below.
+ * (`exitWhenScope` / `foreachItemsScope`). A node site may name one config
+ * FIELD, for the one scope that differs per field: a `filter`'s `predicate`
+ * binds `${item}` where its `items` does not (`scanFilterRefs`).
  *
  * It errs toward UNDER-offering wherever the answer is unknowable rather than
  * illegal:
@@ -1564,10 +1593,8 @@ export type RefSite =
  *    NAMES (the validator accepts any name there, but this cannot invent one);
  *  - `${tool.args.*}` and the tumbling-window trigger fields are context-scoped
  *    to sites this function does not describe, so they are never offered;
- *  - a `filter`'s `predicate` binds `${item}` per FIELD rather than per node
- *    (`scanFilterRefs`), which a node-level site cannot express — so a filter
- *    outside a foreach body is not offered `${item}` even though its predicate
- *    would accept it. A missed offer, never a false one (#864).
+ *  - a node site that names no field is not offered a filter predicate's
+ *    `${item}`: without the field, that binding cannot be told from `items`'.
  */
 export function availableRefs(
   doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
@@ -1600,8 +1627,9 @@ export function availableRefs(
     });
   }
 
-  const { nodeId } = site;
-  if (!doc.nodes.some((n) => n.id === nodeId)) return [];
+  const { nodeId, field } = site;
+  const subject = doc.nodes.find((n) => n.id === nodeId);
+  if (subject === undefined) return [];
   const graph = computeGraph(doc);
   return refsInScope(
     doc,
@@ -1615,9 +1643,14 @@ export function availableRefs(
     },
     {
       selfId: nodeId,
-      // The same binding `validateRefs` computes for its `itemInScope` flag: a
-      // child of a foreach body, and nothing else at node granularity.
-      itemInScope: containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)),
+      // The same binding `validateRefs` computes for its `itemInScope` flag — a
+      // child of a foreach body — plus the one FIELD that binds it on its own,
+      // exactly as `scanFilterRefs` scopes it.
+      itemInScope:
+        containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) ||
+        (subject.type === FILTER_ACTIVITY_TYPE &&
+          field !== undefined &&
+          filterFieldBindsItem(field)),
       offerRescued: true,
     },
   );
@@ -2828,7 +2861,7 @@ function validateFailConfig(node: Node, errors: string[]): void {
  * `validateRefs`' job, which scans the SAME composed expression.
  */
 function validateFilterConfig(node: Node, errors: string[]): void {
-  for (const noun of ['items', 'predicate'] as const) {
+  for (const noun of FILTER_FIELDS) {
     const where = `node.${node.id}.${noun}`;
     const raw = node.config[noun];
     if (typeof raw !== 'string' || raw.trim() === '') {
@@ -3144,13 +3177,11 @@ function scanFilterRefs(
     // is still badged at SAVE, not deferred to a run-time `invalid_event`. Field-
     // aware `${item}` scope even here: the predicate is a lambda position (`${item}`
     // always bound), `items` only under foreach membership (`itemInScope`).
-    const rawItems = node.config['items'];
-    const rawPredicate = node.config['predicate'];
-    if (typeof rawItems === 'string') {
-      scan(`nodes.${node.id}.config.items`, rawItems, scope, errors, 0, undefined, itemInScope);
-    }
-    if (typeof rawPredicate === 'string') {
-      scan(`nodes.${node.id}.config.predicate`, rawPredicate, scope, errors, 0, undefined, true);
+    for (const noun of FILTER_FIELDS) {
+      const raw = node.config[noun];
+      if (typeof raw !== 'string') continue;
+      const bound = itemInScope || filterFieldBindsItem(noun);
+      scan(`nodes.${node.id}.config.${noun}`, raw, scope, errors, 0, undefined, bound);
     }
     return;
   }
