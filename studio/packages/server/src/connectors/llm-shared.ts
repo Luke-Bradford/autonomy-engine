@@ -6,11 +6,14 @@ import {
   normalizeLlmRequest,
   parseAndValidateStructured,
   structuredOutputInstruction,
+  surrogateSafeCut,
   toolWireParameters,
   validateStructuredOutput,
 } from '@autonomy-studio/shared';
 import type {
+  CapturedContent,
   LlmCallConfig,
+  LlmCaptureMode,
   LlmOutputSchema,
   LlmSampling,
   LlmToolChoice,
@@ -1395,12 +1398,18 @@ export function meterUsage(
  * shared `LlmCapture` shape (→ the executor's `activity.captured` event). ONE per
  * provider response, mirroring `meterUsage`/`activity.metered`.
  *
- * REDACTED BY CONSTRUCTION — carries NO raw text: each message/system/completion
- * yields `{ chars, contentHash }` (length + `sha256` fingerprint), the spec's
- * "log hash/length/token-count, not text" default. `chars` is UTF-16 string
- * length (a length metric, not a grapheme count); the token-count half lives on
+ * METADATA BY DEFAULT — each message/system/completion yields `{ chars,
+ * contentHash }` (length + `sha256` fingerprint), the spec's "log
+ * hash/length/token-count, not text" default. `chars` is UTF-16 string length (a
+ * length metric, not a grapheme count); the token-count half lives on
  * `activity.metered`. `contentHash` is a drift/reproducibility fingerprint, NOT a
  * redaction guarantee (see `sha256Hex`).
+ *
+ * #605 L9b — `captureMode: 'full'` adds each field's `text`, under
+ * `allocateCaptureText`'s budget. `chars`/`contentHash` always describe the WHOLE
+ * text, so a cut is visible as `text.length < chars` as well as `truncated`. The
+ * text is NOT withheld here for a secure node: that is the emit-time seam's job
+ * (`redactSecureEvent`), which no append path can skip.
  *
  * FAIL-CLOSED on absence: `system` is omitted when no system instruction was sent,
  * and `completion` is omitted when `completionText` is undefined (a failure before
@@ -1414,28 +1423,77 @@ export function buildCapture(args: {
   turns: LlmTurn[];
   system?: string;
   completionText?: string;
+  captureMode?: LlmCaptureMode;
 }): LlmCapture {
-  const { provider, model, latencyMs, turns, system, completionText } = args;
+  const { provider, model, latencyMs, turns, system, completionText, captureMode } = args;
+  // The budget is spent in PRIORITY order — completion, system, then the turns
+  // NEWEST-first (see `allocateCaptureText`) — so each field reads its slot back
+  // by position in that order.
+  const priority = [
+    ...(completionText !== undefined ? [completionText] : []),
+    ...(system !== undefined ? [system] : []),
+    ...turns.map((t) => t.content).reverse(),
+  ];
+  const texts = captureMode === 'full' ? allocateCaptureText(priority) : undefined;
+  const field = (text: string, slot: number): CapturedContent => ({
+    chars: text.length,
+    contentHash: sha256Hex(text),
+    ...(texts !== undefined ? texts[slot] : {}),
+  });
+  const systemSlot = completionText !== undefined ? 1 : 0;
+  const firstTurnSlot = systemSlot + (system !== undefined ? 1 : 0);
   const capture: LlmCapture = {
     provider,
     model,
     latencyMs,
     request: {
       messageCount: turns.length,
-      messages: turns.map((t) => ({
+      messages: turns.map((t, i) => ({
         role: t.role,
-        chars: t.content.length,
-        contentHash: sha256Hex(t.content),
+        ...field(t.content, firstTurnSlot + (turns.length - 1 - i)),
       })),
     },
   };
-  if (system !== undefined) {
-    capture.request.system = { chars: system.length, contentHash: sha256Hex(system) };
-  }
-  if (completionText !== undefined) {
-    capture.completion = { chars: completionText.length, contentHash: sha256Hex(completionText) };
-  }
+  if (system !== undefined) capture.request.system = field(system, systemSlot);
+  if (completionText !== undefined) capture.completion = field(completionText, 0);
   return capture;
+}
+
+/**
+ * #605 L9b — the most text ONE captured field keeps. A completion is usually
+ * the field worth reading, and 16k UTF-16 units is several pages of it.
+ */
+export const LLM_CAPTURE_FIELD_MAX_CHARS = 16_000;
+
+/**
+ * #605 L9b — the most text ONE `activity.captured` event keeps across all its
+ * fields. The per-field cap alone does not bound the event: an L12 `history` can
+ * thread an arbitrarily long conversation into one call, and every turn of it
+ * would get its own 16k.
+ */
+export const LLM_CAPTURE_BUDGET_CHARS = 64_000;
+
+/**
+ * Spend the capture budget over `texts`, which arrive in PRIORITY order —
+ * completion, system, then turns newest-first, because the answer and the
+ * instruction explain a call better than the oldest turn of a long history
+ * does. Each field gets at most the per-field cap and at most what is left; a
+ * field cut short (down to `''` once the budget is gone) says so with
+ * `truncated: true` rather than passing for the whole text. Cuts are
+ * surrogate-safe, so a kept text never ends in half a character.
+ */
+function allocateCaptureText(texts: string[]): { text: string; truncated?: true }[] {
+  let left = LLM_CAPTURE_BUDGET_CHARS;
+  return texts.map((text) => {
+    const allowed = Math.min(LLM_CAPTURE_FIELD_MAX_CHARS, left);
+    if (text.length <= allowed) {
+      left -= text.length;
+      return { text };
+    }
+    const cut = allowed > 0 ? surrogateSafeCut(text, allowed) : 0;
+    left -= cut;
+    return { text: text.slice(0, cut), truncated: true };
+  });
 }
 
 /**

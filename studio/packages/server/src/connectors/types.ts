@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type {
+  CapturedContent,
   ConnectionKind,
   ConnectionProbeResult,
   DatasetAddress,
@@ -164,8 +165,9 @@ export interface LlmUsage {
 
 /**
  * A debugging CAPTURE fact for ONE `llm_call` provider response (#2 L9a): the
- * prompt/completion SHAPE (hash + length, NO raw text) + provider-call latency.
- * The "redacted" default the spec's telemetry-vs-content hardening prescribes.
+ * prompt/completion SHAPE (hash + length) + provider-call latency — the
+ * "redacted" default the spec's telemetry-vs-content hardening prescribes — and,
+ * for a `capture: 'full'` node (#605 L9b), the budgeted TEXT as well.
  * The executor stamps `runId`/`nodeId`/`attemptId` onto the durable
  * `activity.captured` event; the adapter supplies the rest. `completion` is
  * OMITTED (not null) when no completion text was extracted — fail-closed.
@@ -176,10 +178,10 @@ export interface LlmCapture {
   latencyMs: number;
   request: {
     messageCount: number;
-    system?: { chars: number; contentHash: string };
-    messages: { role: 'user' | 'assistant'; chars: number; contentHash: string }[];
+    system?: CapturedContent;
+    messages: (CapturedContent & { role: 'user' | 'assistant' })[];
   };
-  completion?: { chars: number; contentHash: string };
+  completion?: CapturedContent;
 }
 
 /**

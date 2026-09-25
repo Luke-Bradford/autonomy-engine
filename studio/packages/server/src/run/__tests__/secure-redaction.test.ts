@@ -100,6 +100,63 @@ describe('#1 F4 — emit-time redaction reaches the stored log', () => {
     expect(stored).toContain(SECURE_ERROR_WITHHELD);
   });
 
+  // #605 L9b — a `capture: 'full'` node's prompt/completion TEXT. The stored
+  // row keeps the lengths and the marker, never the text or a `truncated`.
+  const capturedText = (at: { runId: string; nodeId: string; attemptId: string }) => [
+    {
+      type: 'activity.captured' as const,
+      ...at,
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      request: {
+        messageCount: 1,
+        messages: [
+          {
+            role: 'user' as const,
+            chars: PLAINTEXT.length,
+            contentHash: 'h',
+            text: PLAINTEXT,
+            truncated: true as const,
+          },
+        ],
+      },
+      completion: { chars: 3, contentHash: 'h2', text: `${PLAINTEXT}-out` },
+    },
+  ];
+
+  it("a secure node's captured prompt/completion text is stored only as the marker", async () => {
+    const { stored, streamed } = await drive([node('a', { policy: { secureInput: true } })], {
+      nodes: { a: { activityEvents: capturedText } },
+    });
+    expect(stored).not.toContain(PLAINTEXT);
+    expect(streamed).not.toContain(PLAINTEXT);
+    const row = stored.split('\n').find((l) => l.includes('activity.captured'));
+    expect(row).toBeDefined();
+    const payload = JSON.parse(row!) as {
+      request: { messages: Record<string, unknown>[] };
+      completion: Record<string, unknown>;
+    };
+    expect(payload.request.messages[0]).toEqual({
+      role: 'user',
+      chars: PLAINTEXT.length,
+      contentHash: SECURE_REDACTED,
+      text: SECURE_REDACTED,
+    });
+    expect(payload.completion).toEqual({
+      chars: 3,
+      contentHash: SECURE_REDACTED,
+      text: SECURE_REDACTED,
+    });
+  });
+
+  it('a node WITHOUT the flag stores its captured text as-is', async () => {
+    const { stored } = await drive([node('a')], {
+      nodes: { a: { activityEvents: capturedText } },
+    });
+    expect(stored).toContain(`${PLAINTEXT}-out`);
+  });
+
   // The control: without the flag the same run stores the plaintext, so the two
   // assertions above are about the flag and not about the fixture.
   it('a node WITHOUT the flag stores its output as-is', async () => {

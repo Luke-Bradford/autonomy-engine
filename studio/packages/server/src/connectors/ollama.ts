@@ -94,6 +94,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       sampling,
       reasoningEffort,
       structuredOutput,
+      captureMode,
     } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/api/chat`;
@@ -241,6 +242,7 @@ export const ollamaAdapter: ConnectorAdapter = {
               turns,
               system,
               completionText,
+              captureMode,
             });
           if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
@@ -331,6 +333,7 @@ export const ollamaAdapter: ConnectorAdapter = {
         turns,
         system,
         completionText,
+        captureMode,
       }),
     });
     if (!result.ok) {

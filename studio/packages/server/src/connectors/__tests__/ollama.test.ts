@@ -537,3 +537,47 @@ describe('ollamaAdapter timeout → NO spend fact (#725)', () => {
     expect(failed(events).spendFact).toBeUndefined();
   });
 });
+
+// #605 L9b — `capture: 'full'` reaches BOTH capture sites: the plain text path
+// and the tool loop's round-0 capture. Metadata stays the default.
+describe('ollamaAdapter — full capture (#605 L9b)', () => {
+  const TOOL = {
+    name: 'noop',
+    description: 'Unused: the model answers directly.',
+    parameters: { type: 'object', properties: { x: { type: 'number' } } },
+    expression: '${1}',
+  };
+
+  it('stores no text by default', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect('text' in captured(events).capture.completion!).toBe(false);
+    expect('text' in captured(events).capture.request.messages[0]!).toBe(false);
+  });
+
+  it('stores the prompt and completion text on the text path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      ollamaAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'llama3', capture: 'full' } }),
+        null,
+      ),
+    );
+    const { capture } = captured(events);
+    expect(capture.request.messages[0]).toMatchObject({ role: 'user', text: 'hi' });
+    expect(capture.completion).toMatchObject({ text: 'local answer' });
+  });
+
+  it("stores the text on the tool loop's round-0 capture too", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      ollamaAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'llama3', tools: [TOOL], capture: 'full' } }),
+        null,
+      ),
+    );
+    const { capture } = captured(events);
+    expect(capture.request.messages[0]).toMatchObject({ text: 'hi' });
+    expect(capture.completion).toMatchObject({ text: 'local answer' });
+  });
+});
