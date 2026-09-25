@@ -4,8 +4,10 @@ import {
   firstParamOverrideViolation,
   isNonOverridableConnectionConfigKey,
   isNonOverridableDatasetConfigKey,
+  type ConnectionKind,
   type ConnectionPublic,
   type Dataset,
+  type DatasetKind,
   type ParamOverrideViolation,
   type ParamType,
 } from '@autonomy-studio/shared';
@@ -41,6 +43,29 @@ export type OverrideResource = {
   isNonOverridable: (key: string) => boolean;
 };
 
+/** What a KIND alone decides about overrides: its schema's keys and its security-boundary keys. */
+export type KindOverrideRules = Pick<OverrideResource, 'fields' | 'isNonOverridable'>;
+
+/**
+ * The kind half of an override resource, shared with the resource pages'
+ * allowlist editor (#1305) so both read one derivation. It is the KIND's own
+ * schema, never a form's field list, which also carries keys left from another
+ * kind (`deriveFieldsWithCarried`).
+ */
+export function connectionKindOverrideRules(kind: ConnectionKind): KindOverrideRules {
+  return {
+    fields: deriveConfigFields(connectionConfigSchema(kind)) ?? [],
+    isNonOverridable: (key) => isNonOverridableConnectionConfigKey(kind, key),
+  };
+}
+
+export function datasetKindOverrideRules(kind: DatasetKind): KindOverrideRules {
+  return {
+    fields: deriveConfigFields(datasetConfigSchema(kind)) ?? [],
+    isNonOverridable: (key) => isNonOverridableDatasetConfigKey(kind, key),
+  };
+}
+
 export function connectionOverrideResource(c: ConnectionPublic): OverrideResource {
   return {
     noun: 'connection',
@@ -48,8 +73,7 @@ export function connectionOverrideResource(c: ConnectionPublic): OverrideResourc
     kind: c.kind,
     allowlist: c.parameters,
     config: c.config,
-    fields: deriveConfigFields(connectionConfigSchema(c.kind)) ?? [],
-    isNonOverridable: (key) => isNonOverridableConnectionConfigKey(c.kind, key),
+    ...connectionKindOverrideRules(c.kind),
   };
 }
 
@@ -60,8 +84,7 @@ export function datasetOverrideResource(d: Dataset): OverrideResource {
     kind: d.kind,
     allowlist: d.parameters,
     config: d.config,
-    fields: deriveConfigFields(datasetConfigSchema(d.kind)) ?? [],
-    isNonOverridable: (key) => isNonOverridableDatasetConfigKey(d.kind, key),
+    ...datasetKindOverrideRules(d.kind),
   };
 }
 

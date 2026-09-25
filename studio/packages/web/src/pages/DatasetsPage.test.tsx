@@ -794,6 +794,20 @@ describe('DatasetsPage', () => {
       expect(updateMock.mock.calls[0]![1].parameters).toEqual(['path', 'header']);
     });
 
+    it('does not write a stored duplicate back when the allowlist is edited', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([delimited(['path', 'path'])]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(allowlist()).getByLabelText('Overridable: header'));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(updateMock.mock.calls[0]![1].parameters).toEqual(['path', 'header']);
+    });
+
     it('shows a stored key the kind cannot use, and keeps it visible once unticked', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([delimited(['bogus'])]);

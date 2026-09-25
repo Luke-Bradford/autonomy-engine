@@ -120,7 +120,9 @@ function formFor(
     jsonText: JSON.stringify(config, null, 2),
     jsonMode: false,
     secret: '', // never prefilled — secrets are write-only, blank = keep existing
-    parameters: [...parameters],
+    // Deduped: the server stores the list as written, so a stored `['a', 'a']`
+    // is possible, and an edit should not write the duplicate back.
+    parameters: [...new Set(parameters)],
     parametersSeed: parameters,
   };
 }

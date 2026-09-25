@@ -42,6 +42,19 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     await openEdit(page, '/#/manage/connections', 'Connections', name);
     // `roots` is the confinement boundary: never offered.
     await expect(allowlist.getByRole('checkbox')).toHaveCount(2);
+    // Laid out as the app's other checkbox sets are: a bordered card of inline
+    // rows, not a browser-default fieldset of stacked label/control pairs.
+    const layout = await allowlist.evaluate((set) => {
+      const row = set.querySelector('label.checkbox')!;
+      return {
+        border: getComputedStyle(set).borderTopStyle,
+        row: getComputedStyle(row).flexDirection,
+        box: getComputedStyle(row.querySelector('input')!).width,
+      };
+    });
+    expect(layout.border).toBe('solid');
+    expect(layout.row).toBe('row');
+    expect(parseFloat(layout.box)).toBeLessThan(40);
     await allowlist.getByLabel('Overridable: maxBytes', { exact: true }).check();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();

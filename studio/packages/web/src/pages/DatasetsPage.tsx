@@ -191,7 +191,9 @@ function formFor(
     jsonText: JSON.stringify(config, null, 2),
     jsonMode: false,
     columnsText,
-    parameters: [...parameters],
+    // Deduped: the server stores the list as written, so a stored `['a', 'a']`
+    // is possible, and an edit should not write the duplicate back.
+    parameters: [...new Set(parameters)],
     parametersSeed: parameters,
   };
 }

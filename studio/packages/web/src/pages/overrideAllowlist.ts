@@ -1,13 +1,11 @@
+import type { ConnectionKind, DatasetKind } from '@autonomy-studio/shared';
 import {
-  connectionConfigSchema,
-  datasetConfigSchema,
-  isNonOverridableConnectionConfigKey,
-  isNonOverridableDatasetConfigKey,
-  type ConnectionKind,
-  type DatasetKind,
-} from '@autonomy-studio/shared';
-import { deriveConfigFields } from './pipeline/configForm';
-import { overridableKeys, type OverrideResource } from './pipeline/paramOverrides';
+  connectionKindOverrideRules,
+  datasetKindOverrideRules,
+  overridableKeys,
+  type KindOverrideRules,
+  type OverrideResource,
+} from './pipeline/paramOverrides';
 
 /**
  * #1305 — the rules behind a connection's or dataset's own `parameters`
@@ -15,10 +13,9 @@ import { overridableKeys, type OverrideResource } from './pipeline/paramOverride
  * canvas the NODE half (the overrides themselves); this is the OWNER half, kept
  * pure so the pages' checkbox set only renders it.
  *
- * The offered keys come from the KIND's own schema, never the form's field list:
- * that list also carries keys left over from another kind (`configForm.ts`,
- * `deriveFieldsWithCarried`), and a carried key is exactly one this kind does
- * not have.
+ * The offered keys come from the same kind rules the canvas Add control reads
+ * (`connectionKindOverrideRules` / `datasetKindOverrideRules`), so the two halves
+ * cannot disagree about what a kind can take.
  */
 export type AllowlistSubject = {
   noun: OverrideResource['noun'];
@@ -28,27 +25,20 @@ export type AllowlistSubject = {
   isNonOverridable: (key: string) => boolean;
 };
 
+function subjectOf(
+  noun: OverrideResource['noun'],
+  kind: string,
+  { fields, isNonOverridable }: KindOverrideRules,
+): AllowlistSubject {
+  return { noun, kind, offered: overridableKeys(fields, isNonOverridable), isNonOverridable };
+}
+
 export function connectionAllowlistSubject(kind: ConnectionKind): AllowlistSubject {
-  const isNonOverridable = (key: string) => isNonOverridableConnectionConfigKey(kind, key);
-  return {
-    noun: 'connection',
-    kind,
-    offered: overridableKeys(
-      deriveConfigFields(connectionConfigSchema(kind)) ?? [],
-      isNonOverridable,
-    ),
-    isNonOverridable,
-  };
+  return subjectOf('connection', kind, connectionKindOverrideRules(kind));
 }
 
 export function datasetAllowlistSubject(kind: DatasetKind): AllowlistSubject {
-  const isNonOverridable = (key: string) => isNonOverridableDatasetConfigKey(kind, key);
-  return {
-    noun: 'dataset',
-    kind,
-    offered: overridableKeys(deriveConfigFields(datasetConfigSchema(kind)) ?? [], isNonOverridable),
-    isNonOverridable,
-  };
+  return subjectOf('dataset', kind, datasetKindOverrideRules(kind));
 }
 
 /**
