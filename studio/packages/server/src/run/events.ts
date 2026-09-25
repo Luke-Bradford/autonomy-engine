@@ -88,12 +88,16 @@ export function appendEngineEvent(
 export function appendAndFold(
   db: Db,
   bus: RunEventBus | undefined,
-  engine: Pick<Engine, 'reduce'>,
+  engine: Pick<Engine, 'reduce' | 'redact'>,
   state: RunState,
   event: EngineEvent,
   log?: DiagnosticLog,
 ): ReduceResult & { record: RunEvent } {
-  const appended = appendEngineEvent(db, event, bus);
+  // #1 F4 — a secure node's values never reach the log, the stream or the fold:
+  // every value-carrying event crosses THIS seam (the pump's fold and
+  // `foldOutOfBand`), so redacting here is redacting everywhere. `redact` is
+  // part of the `Pick` so no caller can hand in an engine that skips it.
+  const appended = appendEngineEvent(db, engine.redact(event), bus);
   const result = engine.reduce(state, appended.event);
   recordRunDiagnostics(
     db,

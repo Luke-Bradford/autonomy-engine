@@ -39,6 +39,8 @@ export { checkInboundOutputs, type InboundOutputsResult } from './outputs.js';
 // enforces is to derive it from the same contract reader. Still named, still not
 // `export *` — `validateOutputs`/`storeOutputs` remain reducer-internal.
 export { outputContract, type OutputContract } from './outputs.js';
+// #1 F4 — emit-time redaction for secure nodes (markers + the pure helper).
+export * from './secure.js';
 export * from './params.js';
 // #4 A4b — the parallel-foreach instance-key grammar (`<nodeId>@<i>`), shared
 // by the reducer, the server's doc-node lookups and the web run view.

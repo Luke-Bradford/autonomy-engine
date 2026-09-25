@@ -12,6 +12,7 @@ import type { OutputType, ParamType } from '../schemas/pipeline.js';
 import { callDetaches } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
+import { hasSecureOutput } from './secure.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
@@ -1269,6 +1270,8 @@ export function validateRefs(
   // name static validation accepts is exactly one the run would keep at
   // `succeeded`, and the TYPE it infers is the one the reducer enforces there.
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
+  // #1 F4 — producers whose outputs the log holds only as markers.
+  const secureOutputIds = secureOutputIdsOf(doc.nodes, doc.containers ?? []);
 
   // #4 A4 — nodes that are children of a `foreach` body may reference `${item}`.
   // `scan` refuses `${item}` by default (it is "only bound inside a filter/map/
@@ -1287,7 +1290,15 @@ export function validateRefs(
     const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
     const soft = graph.soft.get(node.id) ?? new Set<string>();
-    const scope: ScanScope = { declared, guaranteed, settled, reachable, soft, outputsById };
+    const scope: ScanScope = {
+      declared,
+      guaranteed,
+      settled,
+      reachable,
+      soft,
+      outputsById,
+      secureOutputIds,
+    };
     if (node.type === FILTER_ACTIVITY_TYPE) {
       // #4 A8 — a `filter`'s two `${}` fields must be scanned as ONE composed
       // `filter(items, predicate)` expression, NOT field-by-field: only then does
@@ -1616,6 +1627,7 @@ export function availableRefs(
 ): RefSuggestion[] {
   const containers = doc.containers ?? [];
   const outputsById = outputsByIdOf(doc.nodes, containers);
+  const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
 
   if (site.kind === 'container') {
@@ -1625,8 +1637,8 @@ export function availableRefs(
     if (c === undefined || !CONTAINER_CONFIG_FIELDS[c.kind].includes(site.field)) return [];
     const scope =
       site.field === 'exitWhen'
-        ? exitWhenScope(c, declared, outputsById)
-        : foreachItemsScope(c, declared, outputsById, computeGraph(doc));
+        ? exitWhenScope(c, declared, outputsById, secureOutputIds)
+        : foreachItemsScope(c, declared, outputsById, secureOutputIds, computeGraph(doc));
     return refsInScope(doc, scope, {
       selfId: c.id,
       // Neither field binds `${item}`: `exitWhen` is not a foreach field, and
@@ -1650,6 +1662,7 @@ export function availableRefs(
     {
       declared,
       outputsById,
+      secureOutputIds,
       guaranteed: graph.guaranteed.get(nodeId) ?? new Set<string>(),
       settled: graph.settled.get(nodeId) ?? new Set<string>(),
       reachable: graph.reachable.get(nodeId) ?? new Set<string>(),
@@ -1716,6 +1729,8 @@ function refsInScope(
 
   for (const id of producerIds) {
     if (id === site.selfId) continue;
+    // #1 F4 — `checkRefRoot` refuses a secure producer's output, so it is never offered.
+    if (scope.secureOutputIds.has(id)) continue;
     const contract = outputsById?.get(id);
     if (contract?.kind !== 'declared') continue;
     const dominates = guaranteed.has(id);
@@ -2197,6 +2212,7 @@ export function validateDoc(
     }
   }
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
+  const secureOutputIds = secureOutputIdsOf(doc.nodes, doc.containers ?? []);
   // #567 — a `foreach`'s `items` is validated against the container ENDPOINT's real
   // OUTER dominance (see `validateForeachItems`). Built lazily: only a foreach with
   // an `items` expression needs it, so a foreach-free doc pays nothing.
@@ -2268,6 +2284,9 @@ export function validateDoc(
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
     }
+    // #1 F4 — where a secure flag cannot be honoured, refuse it rather than accept
+    // a promise the run would break.
+    validateSecurePolicy(node, errors);
     // #4 A1 — an `if`'s boolean condition must be WHOLE-VALUE (save-time half).
     if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
     // #4 A2 — a `switch`'s `on` + `cases` shape (save-time half).
@@ -2541,7 +2560,7 @@ export function validateDoc(
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }
       if (c.items !== undefined)
-        validateForeachItems(c, declared, outputsById, itemsGraph(), errors);
+        validateForeachItems(c, declared, outputsById, secureOutputIds, itemsGraph(), errors);
       // #4 A4b (#566 slice 2) — PARALLEL mode (`batchCount >= 2`) refusals. Both
       // rules exist because parallel items are namespaced per instance key
       // (`<nodeId>@<i>`) while two pieces of machinery stay keyed by BARE doc ids:
@@ -2574,7 +2593,9 @@ export function validateDoc(
         }
       }
     }
-    if (c.exitWhen !== undefined) validateExitWhen(c, declared, outputsById, errors);
+    if (c.exitWhen !== undefined) {
+      validateExitWhen(c, declared, outputsById, secureOutputIds, errors);
+    }
   }
 
   // A child's FORWARD edges must stay WITHIN its container: a cross-boundary
@@ -3311,6 +3332,7 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
       settled: new Set(),
       reachable: new Set(),
       soft: new Set(),
+      secureOutputIds: new Set(), // a tool expression reads only its own args
       toolArgTypes: argTypes,
     };
     validateWholeValue(where, parsed.data.expression, errors, 'tool expression');
@@ -3328,9 +3350,11 @@ function exitWhenScope(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
+  secureOutputIds: ReadonlySet<string>,
 ): ScanScope {
   return {
     declared,
+    secureOutputIds,
     // E6 needs the child producers' declared output types to type the exitWhen
     // expression — without them `${nodes.check.output.done}` is `any` and the
     // boolean check never fires on the shape every real loop uses.
@@ -3363,11 +3387,12 @@ function validateExitWhen(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
+  secureOutputIds: ReadonlySet<string>,
   errors: string[],
 ): void {
   if (c.exitWhen === undefined) return;
   const where = `container.${c.id}.exitWhen`;
-  const scope = exitWhenScope(c, declared, outputsById);
+  const scope = exitWhenScope(c, declared, outputsById, secureOutputIds);
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
 
@@ -3439,12 +3464,13 @@ function validateForeachItems(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
+  secureOutputIds: ReadonlySet<string>,
   graph: Graph,
   errors: string[],
 ): void {
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
-  const scope = foreachItemsScope(c, declared, outputsById, graph);
+  const scope = foreachItemsScope(c, declared, outputsById, secureOutputIds, graph);
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
   scan(where, c.items, scope, errors);
 
@@ -3483,11 +3509,13 @@ function foreachItemsScope(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
+  secureOutputIds: ReadonlySet<string>,
   graph: Graph,
 ): ScanScope {
   return {
     declared,
     outputsById,
+    secureOutputIds,
     guaranteed: graph.guaranteed.get(c.id) ?? new Set<string>(),
     settled: graph.settled.get(c.id) ?? new Set<string>(),
     reachable: graph.reachable.get(c.id) ?? new Set<string>(),
@@ -3895,6 +3923,15 @@ interface ScanScope {
    */
   outputsById?: Map<string, OutputContract>;
   /**
+   * #1 F4 — producers (nodes with `policy.secureOutput`, and containers with such
+   * a child) whose outputs reach the log only as redaction markers. A
+   * `${nodes.<id>.output…}` naming one is refused, `default()` included — there
+   * is no value to read, and a fallback that always fires is a silent lie.
+   * REQUIRED, not optional: an omitted set would read as "nothing is secure",
+   * which is the fail-open polarity, so the typechecker makes every scope say.
+   */
+  secureOutputIds: ReadonlySet<string>;
+  /**
    * #5 S11b — whether `${trigger.windowStart/End}` (`TRIGGER_WINDOW_FIELDS`)
    * are legal in this scan. TRUE only for a trigger's param-binding scan
    * (`validateTriggerBindings` with `windowFields: true` — the field-level
@@ -4054,6 +4091,7 @@ export function validateTriggerBindings(
     settled: new Set(),
     reachable: new Set(),
     soft: new Set(),
+    secureOutputIds: new Set(), // a trigger binding cannot name a node
     windowFieldsInScope: opts?.windowFields === true,
   };
   for (const [name, value] of Object.entries(params)) {
@@ -4125,6 +4163,73 @@ function outputsByIdOf(
   // `results`; loop/stage carry an `absent` (dynamic) contract (name-unchecked).
   for (const c of containers) m.set(c.id, containerOutputContract(c));
   return m;
+}
+
+/**
+ * #1 F4 — the nodes on which `policy.secureInput`/`secureOutput` CANNOT hold,
+ * refused at save (an accepted-but-broken redaction promise is a fail-open):
+ *  - a CALL node (`execute_pipeline`, legacy `call_pipeline`): its resolved
+ *    `call.params` are the child run's durable `run.started.params` and `runs.
+ *    params` column — the child needs them to run — and its outputs are the
+ *    child's, already logged in plaintext in the CHILD's own log. Mark the
+ *    child pipeline's own nodes secure instead.
+ *  - `if` / `switch`: their only result is the branch the REDUCER routes on
+ *    (`condition.evaluated` / `switch.evaluated`), which cannot be withheld —
+ *    and it reveals which way the input fell.
+ *  - `secureInput` without `secureOutput` where the output ECHOES the input by
+ *    construction: a `filter` (its result is a subset of its input) and an
+ *    `llm_call` with `emitMessages: true` (the `messages` transcript carries the
+ *    prompt). Setting `secureOutput` too makes those honest.
+ */
+function validateSecurePolicy(node: Node, errors: string[]): void {
+  const secureIn = node.policy?.secureInput === true;
+  const secureOut = node.policy?.secureOutput === true;
+  if (!secureIn && !secureOut) return;
+  const flags = [secureIn ? 'secureInput' : null, secureOut ? 'secureOutput' : null]
+    .filter((f) => f !== null)
+    .join('/');
+  if (node.call !== undefined) {
+    errors.push(
+      `node '${node.id}': policy.${flags} is not supported on a pipeline call — the child ` +
+        "run's params are its durable input and its outputs are already in the child's log; " +
+        "mark the child pipeline's nodes secure instead",
+    );
+    return;
+  }
+  if (node.type === IF_ACTIVITY_TYPE || node.type === SWITCH_ACTIVITY_TYPE) {
+    errors.push(
+      `node '${node.id}': policy.${flags} is not supported on '${node.type}' — its result is ` +
+        'the branch the run routes on, which is recorded and cannot be withheld',
+    );
+    return;
+  }
+  const echoesInput =
+    node.type === FILTER_ACTIVITY_TYPE ||
+    (node.type === LLM_CALL_ACTIVITY_TYPE && node.config['emitMessages'] === true);
+  if (secureIn && !secureOut && echoesInput) {
+    errors.push(
+      `node '${node.id}': policy.secureInput needs policy.secureOutput here — this node's ` +
+        (node.type === FILTER_ACTIVITY_TYPE
+          ? 'result is a subset of its input'
+          : "'messages' transcript output carries its prompt") +
+        ', so an unredacted output would log the input anyway',
+    );
+  }
+}
+
+/**
+ * #1 F4 — every producer whose outputs are redacted at emit time: a node with
+ * `policy.secureOutput`, and a container any child of which has it (a
+ * container's outputs are merged from its children's, foreach `results`
+ * included). Containers do not nest, so direct children are the whole subtree.
+ */
+function secureOutputIdsOf(
+  nodes: readonly Node[],
+  containers: readonly Container[] = [],
+): Set<string> {
+  const ids = new Set(nodes.filter((n) => hasSecureOutput(n)).map((n) => n.id));
+  for (const c of containers) if (c.children.some((ch) => ids.has(ch))) ids.add(c.id);
+  return ids;
 }
 
 /**
@@ -4447,6 +4552,17 @@ function checkRefRoot(
   if (root.kind === 'nodeOutput') {
     const id = root.id;
     const name = root.name;
+    // #1 F4 — checked FIRST and regardless of `softOk`: a secure producer's
+    // value is never in the log, so the ref could only ever read a marker (or,
+    // inside `default()`, silently take the fallback every time).
+    if (scope.secureOutputIds.has(id)) {
+      errors.push(
+        `${where}: \${nodes.${id}.output.${name}} — node '${id}' has secure outputs ` +
+          '(policy.secureOutput, or a secure child): they are redacted before they reach ' +
+          'the run log, so nothing downstream can read them',
+      );
+      return;
+    }
     // req (c): reject an output NAME the producer does not declare. A bare ref
     // to an absent output can only throw at run time (dispatch-prep fails), so
     // it is invalid regardless of dominance. EXCLUDED inside `default()`'s

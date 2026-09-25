@@ -28,6 +28,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
+import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
 import { callDetaches } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
@@ -123,6 +124,15 @@ export interface Engine {
    * See {@link ReseedFrontier} for the inclusion rule and the RS3/RS4/RS5 boundary.
    */
   reseedFrontier(sourceState: RunState): ReseedFrontier;
+  /**
+   * #1 F4 — PURE: the event as it may be PERSISTED. A secure node's (policy
+   * `secureOutput`/`secureInput`) values, failure prose and content hashes are
+   * replaced by markers; every other event is returned as-is. The server's
+   * `appendAndFold` applies this before every append — the one seam every
+   * value-carrying event crosses — and the reducer folds the result. See
+   * `engine/secure.ts`.
+   */
+  redact(event: EngineEvent): EngineEvent;
 }
 
 /**
@@ -162,8 +172,11 @@ export interface Engine {
  *    child). RS4's `childLinks` name the child that produced it — provenance for the
  *    monitor only. A call node INSIDE a copied container gets no link: the container
  *    is copied as one unit and its children are not on the frontier.
- *  - `secureOutput` exclusion (RS5) is a NO-OP today: the field ships with F4 and
- *    does not exist yet, so no frontier node can carry a redacted output.
+ *  - RS5 — a `secureOutput` node is NEVER copied: its log holds only markers
+ *    (#1 F4 emit-time redaction), so there is no value to reseed. It re-runs, and
+ *    so does everything downstream of it (its satisfied out-edge gates them). A
+ *    CONTAINER with a `secureOutput` child is excluded for the same reason — it
+ *    is copied as one unit, children's outputs included.
  */
 export interface ReseedFrontier {
   /** Top-level node ids copied as terminal-`success` (sorted, deterministic). */
@@ -3226,7 +3239,12 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       }
       const node = docNodeFor(event.nodeId)!;
-      const { errs, checked } = validateOutputs(outputContract(node), event.outputs);
+      // #1 F4 — a secure node's values reached the log as markers carrying the
+      // emit-time verdict; secure mode reads that verdict instead of type-checking
+      // the marker string itself (which would fail every non-string output).
+      const { errs, checked } = validateOutputs(outputContract(node), event.outputs, {
+        secure: hasSecureOutput(node),
+      });
       if (checked === null || errs.length > 0) {
         // `checked === null` ⇒ a corrupt CONFIG, not a bad result: say so rather
         // than blaming the node for producing what its author mis-declared.
@@ -4444,9 +4462,12 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const body of backBodyByKey.values()) for (const id of body) backEdgeLoopNodes.add(id);
 
     const isSuccessNode = (id: string): boolean =>
-      sourceState.nodes[id]?.status === 'success' && !backEdgeLoopNodes.has(id);
+      sourceState.nodes[id]?.status === 'success' &&
+      !backEdgeLoopNodes.has(id) &&
+      !hasSecureOutput(nodeById.get(id)); // RS5
     const isSuccessContainer = (id: string): boolean =>
-      sourceState.containers[id]?.status === 'success';
+      sourceState.containers[id]?.status === 'success' &&
+      !containerById.get(id)!.children.some((c) => hasSecureOutput(nodeById.get(c))); // RS5
     const eligible = (id: string): boolean =>
       containerById.has(id) ? isSuccessContainer(id) : isSuccessNode(id);
 
@@ -4512,6 +4533,10 @@ export function createEngine(doc: EngineDoc): Engine {
     // points, so the boot path and the drive path cannot drift apart.
     resume: (state) => onResumed(state, []),
     reseedFrontier,
+    redact: (event) => {
+      const id = secureEventNodeId(event);
+      return id === undefined ? event : redactSecureEvent(docNodeFor(id), event);
+    },
   };
 }
 

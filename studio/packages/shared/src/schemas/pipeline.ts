@@ -226,17 +226,12 @@ export function callDetaches(call: CallConfig): boolean {
  * shipped `ActivityDefinition.kind` as honest metadata with a ZERO production
  * delta rather than guessing its consumer's shape.
  *
- * `secureInput`/`secureOutput` — which spec #1 D4 lists in this object — are
- * deliberately NOT declared here; they ship with **F4**, whose ticket row owns
- * "emit-time redaction + downstream-ref rule" (see also spec #1's
- * resolved-question 2, which sequences the prohibit-first behaviour F4 builds).
- * Note the specs say F4 makes those fields TRUE; that F2a must therefore not
- * DECLARE them is this ticket's own inference, and it rests on the security
- * argument alone: a `secureOutput: true` accepted but not honoured is a fail-open
- * — the operator marks an output secret and it is still written to the event log
- * in plaintext, whereas an absent field fails loudly at save. That is why the
- * secure fields wait and the retry knobs do not: a dropped retry costs
- * availability, a dropped redaction discloses a secret.
+ * `secureInput`/`secureOutput` — which spec #1 D4 lists in this object — were
+ * held back by F2a and shipped with **F4**, together with the emit-time
+ * redaction that makes them true (`engine/secure.ts`). The ordering was the
+ * point: a `secureOutput: true` accepted but not honoured is a fail-open — the
+ * operator marks an output secret and it is still written to the event log in
+ * plaintext — whereas an absent field fails loudly at save.
  */
 
 /**
@@ -291,6 +286,26 @@ export const NodePolicySchema = z.object({
    * `DEFAULT_RETRY_INTERVAL_SECONDS` below.
    */
   retryIntervalSeconds: z.number().int().min(30).max(MAX_RETRY_INTERVAL_SECONDS).optional(),
+  /**
+   * #1 F4 (D8) — this node's resolved input must never be persisted. Prepared
+   * input is a command, not a durable event, so what this withholds is the
+   * places input ECHOES into the log: an adapter's failure text and warning
+   * reason. Refused at save where the input IS durable (a `call_pipeline`'s
+   * child params) or is echoed by an output (an llm transcript without
+   * `secureOutput`) — see `validateDoc`.
+   */
+  secureInput: z.boolean().optional(),
+  /**
+   * #1 F4 (D8) — this node's outputs are redacted at EMIT time: every value is
+   * replaced by a marker before the event reaches `run_events` —
+   * `SECURE_REDACTED`, or `SECURE_REDACTED_INVALID` when it did not match its
+   * declared type, so the reducer's contract check still fails it — and the
+   * plaintext is never persisted, streamed or copied by a rerun (RS5). Because
+   * the log holds only the marker, nothing downstream may read the value —
+   * `validateRefs` refuses `${nodes.<id>.output…}` for such a node (resolved
+   * question 2, the MVP half; an opaque secret handle is the later TARGET).
+   */
+  secureOutput: z.boolean().optional(),
 });
 export type NodePolicy = z.infer<typeof NodePolicySchema>;
 
@@ -320,9 +335,9 @@ export const DEFAULT_RETRY_INTERVAL_SECONDS = 30;
  * via `StrictNodeSchema` below (write path); `NodeSchema` stays read-tolerant.
  *
  * WHY `.strict()` is on the write path and not the read path: an unknown key is
- * silently STRIPPED by default, so a `{ secureOutput: true }` posted before F4
- * lands would be accepted, dropped, and the operator would believe redaction was
- * on — the whole point of the F4 deferral above. But the READ path must keep
+ * silently STRIPPED by default, so a misspelt `{ secureOutputs: true }` would be
+ * accepted, dropped, and the operator would believe redaction was on — the
+ * reason F4's flags were held back until their redaction shipped. But the READ path must keep
  * stripping rather than throwing, or a row this version cannot parse is a
  * pipeline that cannot be opened in the UI to be repaired. Since every write is
  * gated here, such a row arises only from a version DOWNGRADE against an
