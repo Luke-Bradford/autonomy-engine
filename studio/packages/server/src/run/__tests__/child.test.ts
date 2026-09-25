@@ -416,7 +416,10 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const state = await b.drives.serialize(run.id, () => startRun(b, run));
     expect(state.nodes.caller!.status).toBe('failure');
     const returned = loadEngineEvents(db, run.id).find((e) => e.type === 'call.returned');
-    expect(returned).toMatchObject({ childOutcome: 'failure', reason: 'child pipeline is archived' });
+    expect(returned).toMatchObject({
+      childOutcome: 'failure',
+      reason: 'child pipeline is archived',
+    });
     b.unsubscribe();
   });
 

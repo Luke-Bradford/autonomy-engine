@@ -1567,7 +1567,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // throwing executor makes boot reconcile throw on every restart. Every
         // refusal below is a typed `call.returned{failure}` instead (A9/#516).
         if (deps.childRuns === undefined) {
-          yield callFailed(runId, command, 'call_pipeline execution is not available in this server');
+          yield callFailed(
+            runId,
+            command,
+            'call_pipeline execution is not available in this server',
+          );
           return;
         }
         const ensured = deps.childRuns.ensure(command, runId);
