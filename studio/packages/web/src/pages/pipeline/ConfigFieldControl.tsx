@@ -1,9 +1,8 @@
-import { useEffect, useRef } from 'react';
-import type { RefSuggestion } from '@autonomy-studio/shared';
+import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowList, parseRowCells } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions } from './ExpressionPicker';
-import { applyInsert } from './expressionInsert';
+import { useCaretInsert } from './useCaretInsert';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
@@ -18,13 +17,17 @@ export type FieldPicker = {
 };
 
 /**
- * Where ONE control's text sits in its node's config — the question the flyout
- * has to ask the whole-doc validator about every candidate (#1178).
+ * Where ONE control's text sits in its node — the question the flyout has to
+ * ask the whole-doc validator about every candidate (#1178).
  *
  * It used to be a top-level field NAME, and the candidate was built as
  * `{ ...config, [name]: value }`. A cell inside a row list has no such name —
  * `mapping[1].expression` is not a config key — so the control that knows the
  * position builds the candidate, and the owning panel only runs the validator.
+ *
+ * It places into the whole NODE, not its config, because a call node's fields
+ * are not config at all: `call.pipelineVersionId` and `call.params[name]` live
+ * on `Node.call` (#1012). A config position simply rebuilds `config`.
  *
  * `baseline` says what a candidate is compared against. A top-level field's
  * position always exists in the STORED config, so the stored doc is the answer.
@@ -44,13 +47,26 @@ export type FieldPicker = {
  *    whatever it holds, so again the refusal cancels.
  */
 export type PickerTarget = {
-  place: (config: Readonly<Record<string, unknown>>, value: string) => Record<string, unknown>;
+  place: (node: Readonly<Node>, value: string) => Node;
   baseline: 'stored' | 'probed';
+  /**
+   * The field takes a WHOLE `${}` or a literal, never a splice — for a reason
+   * the doc validator cannot see, so `insertModeFor`'s probe would answer
+   * "insert" and the flyout would build text the owning panel then refuses.
+   *
+   * The one case today is a call node's typed argument (#1012): `buildParams`
+   * coerces any text that is not a whole-span `${}` against the child's declared
+   * type, so `42${x}` in a `number` row saves clean as far as the validator is
+   * concerned and is refused by Apply. The child's declarations are a property
+   * of another pipeline's version — nothing the whole-doc validator is given —
+   * so the panel that owns the coercion declares the constraint.
+   */
+  wholeValue?: true;
 };
 
 /** A top-level config field's position: the one shape the flyout knew before #1178. */
 const topLevelTarget = (name: string): PickerTarget => ({
-  place: (config, value) => ({ ...config, [name]: value }),
+  place: (node, value) => ({ ...node, config: { ...node.config, [name]: value } }),
   baseline: 'stored',
 });
 
@@ -128,27 +144,7 @@ export function ConfigFieldControl({
 }) {
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Where the caret must land after an insert. The textarea is CONTROLLED, so
-  // the new value has to round-trip through the owner's state before the DOM
-  // selection can be moved — setting it inline would be overwritten by the
-  // re-render. Held in a ref rather than state so restoring it does not itself
-  // cause one.
-  const caret = useRef<number | null>(null);
-  // Whether the author has ever put the caret in THIS field. A textarea nobody
-  // has focused reports `selectionStart === 0`, which is indistinguishable from
-  // a deliberate caret at the start — so without this, the commonest flow of all
-  // (select a node, click Insert reference without clicking into the field
-  // first) PREPENDS the reference to the value already there. Untouched means
-  // "append", which is what an author who never placed a caret means.
-  const touched = useRef(false);
-  useEffect(() => {
-    const at = caret.current;
-    if (at === null || textareaRef.current === null) return;
-    caret.current = null;
-    textareaRef.current.focus();
-    textareaRef.current.setSelectionRange(at, at);
-  });
+  const caret = useCaretInsert<HTMLTextAreaElement>();
 
   if (field.kind === 'objectList') {
     return (
@@ -221,11 +217,9 @@ export function ConfigFieldControl({
       <label>
         {hint === null ? label : `${label} — ${hint}`}
         <textarea
-          ref={textareaRef}
+          ref={caret.ref}
           value={text}
-          onSelect={() => {
-            touched.current = true;
-          }}
+          onSelect={caret.onSelect}
           rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
           spellCheck={false}
           placeholder={field.defaultText}
@@ -305,17 +299,7 @@ export function ConfigFieldControl({
           fieldName={shown}
           describe={picker.describe}
           resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
-          onSelect={(insert, mode) => {
-            // The selection survives the toggle click (focus moves, the caret
-            // does not), so a mid-string insert lands where the author left it —
-            // but only if they ever placed one. See `touched`.
-            const el = textareaRef.current;
-            const at = touched.current && el !== null ? el.selectionStart : text.length;
-            const to = touched.current && el !== null ? el.selectionEnd : text.length;
-            const next = applyInsert(text, at, to, insert, mode);
-            caret.current = next.caret;
-            onChange(next.value);
-          }}
+          onSelect={(insert, mode) => onChange(caret.insert(text, insert, mode))}
         />
       )}
     </div>
@@ -385,11 +369,14 @@ export function ObjectListControl({
   // values would not do: a raw row is DENSE, every cell present as `''`, and the
   // XOR rule reads `source !== undefined` as "set".
   const cellTarget = (index: number, cell: string): PickerTarget => ({
-    place: (config, value) => ({
-      ...config,
-      [field.name]: rows.map(
-        (row, i) => parseRowCells(cells, i === index ? { ...row, [cell]: value } : row).value,
-      ),
+    place: (node, value) => ({
+      ...node,
+      config: {
+        ...node.config,
+        [field.name]: rows.map(
+          (row, i) => parseRowCells(cells, i === index ? { ...row, [cell]: value } : row).value,
+        ),
+      },
     }),
     baseline: 'probed',
   });

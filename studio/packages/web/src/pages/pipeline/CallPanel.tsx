@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 // The depth the hint quotes is the ENGINE's bound, not a number this panel gets
 // to pick — restating it as a literal here is exactly the drift this whole
 // docblock is about. Same pattern as `edgeCondition.ts` deferring to
 // `MaxBouncesSchema` rather than repeating its constraint.
-import { MAX_CALL_DEPTH, type CallConfig } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type CallConfig, type Node } from '@autonomy-studio/shared';
 import {
   buildParams,
   loadCallTargets,
@@ -17,6 +17,9 @@ import {
   type Seed,
 } from './callRules';
 import type { createCanvasStore } from './canvasStore';
+import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
+import { ExpressionPicker } from './ExpressionPicker';
+import { useCaretInsert } from './useCaretInsert';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -90,26 +93,43 @@ import type { createCanvasStore } from './canvasStore';
  * number of nested runs in. Saying otherwise was the precise failure the top
  * of this docblock warns about, one layer down (#1011).
  *
- * ## Why the ExpressionPicker is still not wired in here (#952 fix sketch, 2)
+ * ## The expression picker (#1012)
  *
- * The blocker was `availableRefs`' NO FALSE OFFER contract: it must not offer a
- * ref that `validateRefs` never checks, and until #952 these sites were exactly
- * that. That constraint is now SATISFIED and needs no code — `availableRefs` is
- * node-scoped and derives the same `guaranteed`/`settled`/`reachable`/`soft`
- * sets and `${item}` binding that the new call scan uses, so what it would
- * offer at a call site is precisely what is now checked there. Wiring the
- * picker into this panel is therefore unblocked, and is left as its own UI
- * change rather than folded into a validator fix.
+ * The U8a flyout sits on the expression-mode TARGET and on each typed argument
+ * row. `availableRefs`' NO FALSE OFFER contract was the old blocker and #952
+ * satisfied it: `validateRefs` scans these two sites in the same node scope
+ * `availableRefs` derives, so what is offered is what is checked.
+ *
+ * Each candidate is still probed through the whole-doc validator, placed into
+ * `Node.call` rather than `config` (`PickerTarget.place`). The placement starts
+ * from the STORED call, not this draft: the draft is not a doc until Apply, and
+ * the baseline is PROBED at the same position, so an issue the stored call
+ * already carries cancels rather than refusing every candidate.
+ *
+ * Two places deliberately have no flyout, or a narrower one:
+ *
+ *  - A typed row whose declared type is not `string` REPLACES rather than
+ *    splices (`wholeValue`). `buildParams` stores only a whole-span `${}`
+ *    verbatim and coerces anything else against the declared type, so a splice
+ *    into `42` would build `42${…}`, which Apply refuses for a `number`. An
+ *    UNDECLARED key is carried as text, so it splices like a `string`.
+ *  - The params-JSON box gets none, for `ConfigFieldControl`'s `json` reason: a
+ *    bare `${…}` is not valid JSON, so the insert would make the box unparseable
+ *    and Apply would refuse it. Arguments to an unlistable target are therefore
+ *    still typed by hand.
  */
 
 export function CallPanel({
   store,
   nodeId,
   call,
+  picker,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   nodeId: string;
   call: CallConfig | undefined;
+  /** The U8a flyout's context for this node — absent, the panel offers none. */
+  picker?: FieldPicker;
 }) {
   const [targets, setTargets] = useState<CallTarget[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -141,7 +161,7 @@ export function CallPanel({
       ) : targets === null ? (
         <p className="page-hint">Loading pipelines…</p>
       ) : (
-        <CallEditor store={store} nodeId={nodeId} call={call} targets={targets} />
+        <CallEditor store={store} nodeId={nodeId} call={call} targets={targets} picker={picker} />
       )}
     </section>
   );
@@ -152,11 +172,13 @@ function CallEditor({
   nodeId,
   call,
   targets,
+  picker,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   nodeId: string;
   call: CallConfig | undefined;
   targets: CallTarget[];
+  picker: FieldPicker | undefined;
 }) {
   const seeded = useMemo(() => seedCall(call, targets), [call, targets]);
   const [draft, setDraft] = useState<Seed>(seeded);
@@ -333,20 +355,24 @@ function CallEditor({
           </label>
         </>
       ) : (
-        <label>
+        <PickableInput
+          value={draft.expression}
+          onChange={(expression) => setDraft((d) => ({ ...d, expression }))}
+          placeholder="${params.target}"
+          picker={picker}
+          pickerName="call target"
+          target={targetPosition}
+          after={
+            <span className="page-hint">
+              A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
+              checked when you save, but the save-time self-call and depth guards only see literal
+              targets. Recursion through one is stopped only at run time, {MAX_CALL_DEPTH} nested
+              runs deep, where the next call is refused and that node fails.
+            </span>
+          }
+        >
           Version id or expression
-          <input
-            value={draft.expression}
-            onChange={(e) => setDraft((d) => ({ ...d, expression: e.target.value }))}
-            placeholder="${params.target}"
-          />
-          <span className="page-hint">
-            A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
-            checked when you save, but the save-time self-call and depth guards only see literal
-            targets. Recursion through one is stopped only at run time, {MAX_CALL_DEPTH} nested runs
-            deep, where the next call is refused and that node fails.
-          </span>
-        </label>
+        </PickableInput>
       )}
 
       <label className="contract-check">
@@ -374,7 +400,15 @@ function CallEditor({
               const decl = declared.get(name);
               return (
                 <li key={name}>
-                  <label>
+                  <PickableInput
+                    value={draft.params[name] ?? ''}
+                    onChange={(value) =>
+                      setDraft((d) => ({ ...d, params: { ...d.params, [name]: value } }))
+                    }
+                    picker={picker}
+                    pickerName={`parameter ${name}`}
+                    target={paramPosition(name, decl !== undefined && decl.type !== 'string')}
+                  >
                     {name}
                     {decl ? (
                       <span className="page-hint">
@@ -386,13 +420,7 @@ function CallEditor({
                         not declared by this version — will be sent anyway
                       </span>
                     )}
-                    <input
-                      value={draft.params[name] ?? ''}
-                      onChange={(e) =>
-                        setDraft((d) => ({ ...d, params: { ...d.params, [name]: e.target.value } }))
-                      }
-                    />
-                  </label>
+                  </PickableInput>
                 </li>
               );
             })}
@@ -419,5 +447,82 @@ function CallEditor({
         Apply call
       </button>
     </>
+  );
+}
+
+/** The call a candidate is placed into: the stored one, or an empty shell for a node that has none. */
+function storedCall(node: Readonly<Node>): CallConfig {
+  return node.call ?? { pipelineVersionId: '', params: {} };
+}
+
+/** The expression-mode target's position in the node. */
+const targetPosition: PickerTarget = {
+  place: (node, value) => ({ ...node, call: { ...storedCall(node), pipelineVersionId: value } }),
+  baseline: 'probed',
+};
+
+/** One argument's position in the node; `wholeValue` for a declared non-`string` type. */
+function paramPosition(name: string, wholeValue: boolean): PickerTarget {
+  return {
+    place: (node, value) => {
+      const call = storedCall(node);
+      return { ...node, call: { ...call, params: { ...call.params, [name]: value } } };
+    },
+    baseline: 'probed',
+    ...(wholeValue ? { wholeValue: true as const } : {}),
+  };
+}
+
+/**
+ * One text input that can take the U8a flyout. A component rather than inline
+ * markup because the caret state is a hook, and the argument rows are a list.
+ *
+ * The flyout is a SIBLING of the `<label>`, not a child: a button inside the
+ * label would join the input's accessible name (see `ConfigFieldControl`).
+ */
+function PickableInput({
+  value,
+  onChange,
+  placeholder,
+  picker,
+  pickerName,
+  target,
+  after,
+  children,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  picker: FieldPicker | undefined;
+  /** Completes the toggle's name, "Insert reference into …". */
+  pickerName: string;
+  target: PickerTarget;
+  /** Content after the input, still inside the label (a hint that names it). */
+  after?: ReactNode;
+  children: ReactNode;
+}) {
+  const caret = useCaretInsert<HTMLInputElement>();
+  return (
+    <div className="config-field">
+      <label>
+        {children}
+        <input
+          ref={caret.ref}
+          value={value}
+          onSelect={caret.onSelect}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+        {after}
+      </label>
+      {picker && (
+        <ExpressionPicker
+          fieldName={pickerName}
+          describe={picker.describe}
+          resolve={() => picker.resolve(target)}
+          onSelect={(insert, mode) => onChange(caret.insert(value, insert, mode))}
+        />
+      )}
+    </div>
   );
 }

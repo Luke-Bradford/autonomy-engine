@@ -2296,7 +2296,7 @@ function useExpressionPicker(
 
     const issuesWith = (target: PickerTarget, value: string) =>
       validateCanvas(
-        nodes.map((n) => (n.id === nodeId ? { ...n, config: target.place(n.config, value) } : n)),
+        nodes.map((n) => (n.id === nodeId ? target.place(n, value) : n)),
         edges,
         containers,
         params,
@@ -2312,7 +2312,9 @@ function useExpressionPicker(
       // Run only when a flyout OPENS, never per render: this validates the whole
       // doc once for the mode and once more per candidate.
       resolve: (target: PickerTarget) => {
-        const mode = insertModeFor((value) => issuesWith(target, value));
+        const mode = target.wholeValue
+          ? 'replace'
+          : insertModeFor((value) => issuesWith(target, value));
         const baseline =
           target.baseline === 'stored'
             ? validateCanvas(nodes, edges, containers, params)
@@ -2737,7 +2739,7 @@ export function NodePanel({
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
-        <CallPanel store={store} nodeId={nodeId} call={call} />
+        <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
         {/* Membership is orthogonal to the call blob, so this early return must
             not swallow it: a container is exactly the construct that puts a call
             node in one, and this is the only panel such a node ever gets. */}
