@@ -10,6 +10,7 @@ import { RunDetailPage } from './RunDetailPage';
 import { projectRun } from './runProjection';
 import { deriveRunLifecycle } from './runSummary';
 import * as runsApi from '../../api/runs';
+import { ApiError } from '../../api/client';
 import * as hook from './useRunStream';
 import type { RunStreamState } from './useRunStream';
 
@@ -27,19 +28,22 @@ vi.mock('../../api/runs', async (importActual) => ({
      left to fall through to the real module. An un-mocked member of this module
      reaches `fetch`, which jsdom cannot serve; the rejection lands inside an
      effect and vitest reports it as an unhandled error that fails the file
-     BEFORE its assertions run — the failure mode filed as #897. A resolved
+     BEFORE its assertions run. #897 was filed on a symptom that looked like
+     this, but its cause was the rerun block's `beforeEach`; see there. A resolved
      default also means every existing test in this file keeps describing a run
      that owes no callback, which is what they all are. */
   listExternalWaits: vi.fn().mockResolvedValue([]),
-  /* #1065, and the #897 reason above applies verbatim — `RunDiagnostics` reads
-     this from a mount effect. `[]` is also the honest default for every existing
-     test in this file: they all describe runs the reducer neutralized nothing
-     on, so the section renders its "nothing to explain" hint and adds no
-     `role="alert"` for their error assertions to trip over. */
+  /* #1065, and the mount-effect reason above applies verbatim —
+     `RunDiagnostics` reads this from a mount effect. `[]` is also the honest
+     default for every existing test in this file: they all describe runs the
+     reducer neutralized nothing on, so the section renders its "nothing to
+     explain" hint and adds no `role="alert"` for their error assertions to trip
+     over. */
   getRunDiagnostics: vi.fn().mockResolvedValue([]),
-  /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the #897 reason
-     above, which is specific to a member called from a MOUNT EFFECT: this one is
-     only reachable from a click, so no other test in this file can trigger it. */
+  /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the mount-effect
+     reason above, which is specific to a member called from a MOUNT EFFECT:
+     this one is only reachable from a click, so no other test in this file can
+     trigger it. */
   completeExternalWait: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./useRunStream', async (importActual) => ({
@@ -1794,7 +1798,14 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
     await screen.findByText('pv_1');
   }
 
-  beforeEach(() => rerunFromFailedMock.mockResolvedValue({ runId: 'run_2' }));
+  /* A BLOCK body, not `() => mock.mockResolvedValue(…)`: that returns the mock,
+       and vitest runs a function returned from `beforeEach` as the test's
+       TEARDOWN. So it called `rerunFromFailed` once more after every test, and in
+       a test that armed it to reject, the rejection failed the test after its
+       assertions had passed (#897). Lint now refuses the expression form. */
+  beforeEach(() => {
+    rerunFromFailedMock.mockResolvedValue({ runId: 'run_2' });
+  });
 
   it.each(['failure', 'interrupted'] as const)('offers the action on a %s run', async (s) => {
     await mountWithStatus(s);
@@ -1819,6 +1830,18 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
     await mountWithStatus('failure');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
     expect(rerunFromFailedMock).toHaveBeenCalledWith('run_1');
+  });
+
+  /* #897 — the refusal arm. The server refuses an ineligible run with its own
+       sentence (a 409 and a reason), and repeating that sentence is the whole
+       point of the error surface; the button must come back so the operator is
+       not stranded on "Starting rerun…". */
+  it('says why the server refused, and gives the button back', async () => {
+    rerunFromFailedMock.mockRejectedValue(new ApiError(409, 'run_1 is not eligible for rerun'));
+    await mountWithStatus('failure');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('run_1 is not eligible for rerun');
+    expect(screen.getByRole('button', { name: ACTION })).toBeEnabled();
   });
 
   /* A rerun is NOT idempotent — a second in-flight click would start a second

@@ -952,3 +952,26 @@ test slightly SLOWER (429ms vs 396ms). It was kept because the claim is about
 which BUDGET the wait falls under, not about speed — but that null result is
 recorded in the code comment rather than quietly omitted, because the obvious
 check for "is this a no-op?" returns the wrong answer here.
+
+## 36. A `beforeEach` that RETURNS something has written a teardown
+
+**Where it bit.** #897. `RunDetailPage`'s rerun-refusal arm sat untested for
+eight weeks because every test that armed `rerunFromFailed` to reject failed,
+and nobody could say why. Five fixes were tried at the promise boundary (lazy
+rejection, deferred rejection, `.catch` at the mock, an `unhandledrejection`
+listener, `act`), and none held. The cause was one line above the tests:
+`beforeEach(() => rerunFromFailedMock.mockResolvedValue(...))`.
+`mockResolvedValue` returns the mock, and vitest runs a function returned from
+`beforeEach`/`beforeAll` as that hook's teardown. So the runner called the mock
+once more after every test. In a test that had just armed it to reject, that
+extra call failed the test after its assertions passed. A stack trace printed
+from inside the mock showed the second caller was `runWithTimeout`, the runner
+itself.
+
+**The rule.**
+- Hooks get block bodies. `studio/eslint.config.js` now refuses an
+  expression-bodied `beforeEach`/`beforeAll`, and a block body's `return` of
+  anything other than a function literal.
+- When a mock misbehaves and fixes at the promise boundary don't take, log a
+  stack from INSIDE the mock implementation and count its callers before
+  theorising. It is one line and names the second caller outright.

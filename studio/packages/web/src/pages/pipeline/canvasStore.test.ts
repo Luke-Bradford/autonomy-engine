@@ -2316,7 +2316,9 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
 
   const promptOf = (n: Node): string => (n.config as { prompt?: string }).prompt ?? '';
 
-  beforeEach(() => clearClipboard());
+  beforeEach(() => {
+    clearClipboard();
+  });
 
   it('a ref BETWEEN two copied nodes follows the copies, not the originals', () => {
     // The whole reason this slice exists: copy `n_b` and `n_c` together and

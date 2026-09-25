@@ -5,6 +5,34 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
 
+// #897 — vitest runs a function RETURNED from `beforeEach`/`beforeAll` as that
+// hook's teardown. An expression-bodied arrow returns whatever its expression
+// does, and `mock.mockResolvedValue(…)` returns the MOCK: so vitest called the
+// mocked API once more after every test, and a test that had armed it to reject
+// failed after its assertions passed. The second selector closes the same hole
+// through a block body's explicit `return`, while still admitting a returned
+// function LITERAL, which is vitest's documented teardown idiom. It sees only a
+// `return` at the top of the hook's body: one nested under an `if` or a loop
+// passes, because esquery cannot say "a descendant, but not inside a nested
+// function", and a plain descendant selector would flag every callback's own
+// `return`. Shared by the web block and the rest-of-studio block below, because
+// a later block's `no-restricted-syntax` REPLACES an earlier one's rather than
+// adding to it.
+const HOOK_RETURNS_TEARDOWN = [
+  {
+    selector:
+      "CallExpression[callee.name=/^(beforeEach|beforeAll)$/] > ArrowFunctionExpression[body.type!='BlockStatement']",
+    message:
+      'Give this hook a block body. vitest runs a function returned from beforeEach/beforeAll as its teardown, and `() => mock.mockResolvedValue(…)` returns the mock (#897).',
+  },
+  {
+    selector:
+      'CallExpression[callee.name=/^(beforeEach|beforeAll)$/] > :matches(ArrowFunctionExpression, FunctionExpression) > BlockStatement > ReturnStatement[argument][argument.type!=/^(ArrowFunctionExpression|FunctionExpression)$/]',
+    message:
+      'Return only a function literal from beforeEach/beforeAll: vitest runs whatever function the hook returns as its teardown, so returning a call result (a mock, say) runs it again after the test (#897).',
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -80,7 +108,15 @@ export default tseslint.config(
           message:
             "Use LabelledControl (src/lib/LabelledControl.tsx) rather than wrapping this control in a <label>: a wrapping label absorbs the control's option text / value (#1227).",
         },
+        ...HOOK_RETURNS_TEARDOWN,
       ],
+    },
+  },
+  {
+    files: ['**/*.{ts,tsx}'],
+    ignores: ['packages/web/**'],
+    rules: {
+      'no-restricted-syntax': ['error', ...HOOK_RETURNS_TEARDOWN],
     },
   },
   {
