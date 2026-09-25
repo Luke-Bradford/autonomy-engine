@@ -1014,8 +1014,12 @@ td button + button {
   color: var(--muted);
 }
 
-/* A checkbox reads as a single inline row, not a stacked label/control. */
-.trigger-form label.checkbox {
+/* A checkbox reads as a single inline row, not a stacked label/control.
+   #1305 — the override allowlist puts checkboxes on the connection and dataset
+   forms too. */
+.trigger-form label.checkbox,
+.connection-form label.checkbox,
+.dataset-form label.checkbox {
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
@@ -1087,7 +1091,9 @@ td button + button {
   font: inherit;
 }
 
-.trigger-form label.checkbox input {
+.trigger-form label.checkbox input,
+.connection-form label.checkbox input,
+.dataset-form label.checkbox input {
   width: auto;
 }
 
@@ -1348,10 +1354,12 @@ td button + button {
    visually separates "which container is this activity in" from "make a new
    one", two different acts reached through one control. */
 /* #1304 — a bound end's parameter overrides share the card idiom, so each
-   end's overrides read as belonging to the picker above them. */
+   end's overrides read as belonging to the picker above them. #1305 — so does
+   the owner-side allowlist those overrides are drawn from. */
 .container-create,
 .contract-row,
-.param-overrides {
+.param-overrides,
+.overridable-keys {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -1361,7 +1369,8 @@ td button + button {
   margin: 0;
 }
 
-.container-create legend {
+.container-create legend,
+.overridable-keys legend {
   font-size: 0.8rem;
   color: var(--muted);
   padding: 0 0.3rem;

@@ -4,8 +4,10 @@ import {
   firstParamOverrideViolation,
   isNonOverridableConnectionConfigKey,
   isNonOverridableDatasetConfigKey,
+  type ConnectionKind,
   type ConnectionPublic,
   type Dataset,
+  type DatasetKind,
   type ParamOverrideViolation,
   type ParamType,
 } from '@autonomy-studio/shared';
@@ -41,6 +43,29 @@ export type OverrideResource = {
   isNonOverridable: (key: string) => boolean;
 };
 
+/** What a KIND alone decides about overrides: its schema's keys and its security-boundary keys. */
+export type KindOverrideRules = Pick<OverrideResource, 'fields' | 'isNonOverridable'>;
+
+/**
+ * The kind half of an override resource, shared with the resource pages'
+ * allowlist editor (#1305) so both read one derivation. It is the KIND's own
+ * schema, never a form's field list, which also carries keys left from another
+ * kind (`deriveFieldsWithCarried`).
+ */
+export function connectionKindOverrideRules(kind: ConnectionKind): KindOverrideRules {
+  return {
+    fields: deriveConfigFields(connectionConfigSchema(kind)) ?? [],
+    isNonOverridable: (key) => isNonOverridableConnectionConfigKey(kind, key),
+  };
+}
+
+export function datasetKindOverrideRules(kind: DatasetKind): KindOverrideRules {
+  return {
+    fields: deriveConfigFields(datasetConfigSchema(kind)) ?? [],
+    isNonOverridable: (key) => isNonOverridableDatasetConfigKey(kind, key),
+  };
+}
+
 export function connectionOverrideResource(c: ConnectionPublic): OverrideResource {
   return {
     noun: 'connection',
@@ -48,8 +73,7 @@ export function connectionOverrideResource(c: ConnectionPublic): OverrideResourc
     kind: c.kind,
     allowlist: c.parameters,
     config: c.config,
-    fields: deriveConfigFields(connectionConfigSchema(c.kind)) ?? [],
-    isNonOverridable: (key) => isNonOverridableConnectionConfigKey(c.kind, key),
+    ...connectionKindOverrideRules(c.kind),
   };
 }
 
@@ -60,14 +84,30 @@ export function datasetOverrideResource(d: Dataset): OverrideResource {
     kind: d.kind,
     allowlist: d.parameters,
     config: d.config,
-    fields: deriveConfigFields(datasetConfigSchema(d.kind)) ?? [],
-    isNonOverridable: (key) => isNonOverridableDatasetConfigKey(d.kind, key),
+    ...datasetKindOverrideRules(d.kind),
   };
 }
 
-/** Keys the kind has that no dispatch refuses by construction. */
+/**
+ * Keys a kind has that no dispatch refuses by construction: its schema-derived
+ * fields minus its security-boundary keys. The ONE rule behind both the canvas
+ * Add control and the resource pages' allowlist editor (#1305), so the pages can
+ * never offer a key the canvas would then refuse to add.
+ */
+export function overridableKeys(
+  fields: readonly ConfigField[],
+  isNonOverridable: (key: string) => boolean,
+): string[] {
+  return fields.map((f) => f.name).filter((k) => !isNonOverridable(k));
+}
+
 function usableKeys(r: OverrideResource): string[] {
-  return r.fields.map((f) => f.name).filter((k) => !r.isNonOverridable(k));
+  return overridableKeys(r.fields, r.isNonOverridable);
+}
+
+/** The note for a KIND with no overridable settings at all — which no allowlist edit can change. */
+export function noOverridableSettingsNote(kind: string, noun: OverrideResource['noun']): string {
+  return `A ${kind} ${noun} has no settings a node can override.`;
 }
 
 /**
@@ -103,7 +143,7 @@ export function overrideNote(
   if (addableKeys(r, current).length > 0) return null;
   const usable = usableKeys(r);
   if (usable.length === 0) {
-    return `A ${r.kind} ${r.noun} has no settings a node can override.`;
+    return noOverridableSettingsNote(r.kind, r.noun);
   }
   if (r.allowlist.length === 0) {
     return `${r.name} declares no overridable settings, so there is nothing to override here.`;

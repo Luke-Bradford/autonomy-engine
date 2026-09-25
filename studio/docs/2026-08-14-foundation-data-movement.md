@@ -1360,7 +1360,13 @@ exists — save time.
   `firstParamOverrideViolation`'s verdict, because the SAVE gate never reads the allowlist and a
   refused key would otherwise surface only when a run dispatches. A row's text is coerced to the
   key's type (a number setting stores `4096`, not `"4096"`), and a whole `${}` is stored verbatim.
-  The resources' own allowlist has no editor yet (#1305).
+  **AS BUILT (#1305) — the resources' own allowlist is edited on their pages.** The Connection and
+  Dataset forms carry an "Overridable per node" checkbox set: the kind's schema keys minus the
+  non-overridable ones (the same `overridableKeys` rule the canvas Add uses), plus any stored key
+  outside that set, shown with why a run cannot use it so it can be unticked. A kind with nothing
+  overridable (`table`, `sqlite`) says so. Save sends `parameters` only when the ticked set differs
+  from the one the form opened on, because an explicit list REPLACES the stored one; a rename
+  therefore never touches it, and unticking every key is sent as a deliberate `[]`.
 - **Paths: EXTRACT and share `fs`'s guard — do not mirror it.** `resolveWithinRoots`
   (`connectors/fs.ts:186`) is a hardened single implementation — lexical `..` collapse, `realpath` on
   roots _and_ the target's parent, `lstat` + `O_NOFOLLOW` at the target, atomic temp+`rename` writes.

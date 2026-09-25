@@ -41,8 +41,9 @@ export const DatasetWriteSchema = NewDatasetSchema.omit({
    * reason: were the default inherited, `safeParse` would manufacture
    * `parameters: []` on every submit, so an EDIT of any other field would PATCH
    * an explicit `[]` and silently clear the stored override allowlist (the
-   * server treats an explicit `[]` as a deliberate clear — correctly). No
-   * editor exists for it yet; omitting the key preserves the stored value.
+   * server treats an explicit `[]` as a deliberate clear — correctly).
+   * Omitting the key preserves the stored value, so the form sends it only when
+   * the operator changed it (#1305, `allowlistChanged`).
    */
   parameters: z.array(z.string().min(1)).optional(),
 });

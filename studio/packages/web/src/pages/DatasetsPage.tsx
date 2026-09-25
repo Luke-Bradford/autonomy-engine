@@ -41,6 +41,8 @@ import { type FieldChoices } from './pipeline/ConfigFieldControl';
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
+import { OverridableKeysField } from './OverridableKeysField';
+import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = DATASET_KINDS;
 
@@ -86,6 +88,14 @@ type FormState = {
    * stored value, so a rename can never wipe a declaration.
    */
   columnsText: string;
+  /** #1305 — the `parameters` override allowlist being edited. */
+  parameters: string[];
+  /**
+   * The allowlist as the form opened on it. Save sends `parameters` only when
+   * the edit differs from this (`allowlistChanged`), because an explicit list
+   * REPLACES the stored one — a rename must never touch it.
+   */
+  parametersSeed: readonly string[];
 };
 
 /** The controls for this kind's config, plus any key carried from another kind.
@@ -168,6 +178,7 @@ function formFor(
   kind: DatasetKind,
   config: Record<string, unknown>,
   columnsText: string,
+  parameters: readonly string[],
 ): FormState {
   const { fields } = datasetFields(kind, config);
   return {
@@ -180,6 +191,10 @@ function formFor(
     jsonText: JSON.stringify(config, null, 2),
     jsonMode: false,
     columnsText,
+    // Deduped: the server stores the list as written, so a stored `['a', 'a']`
+    // is possible, and an edit should not write the duplicate back.
+    parameters: [...new Set(parameters)],
+    parametersSeed: parameters,
   };
 }
 
@@ -226,7 +241,7 @@ function blankForm(connections: readonly ConnectionPublic[]): FormState {
   // The store is left UNSET when there are no connections rather than
   // defaulting to a store that does not exist; the form's own hint says what to
   // do about it.
-  return formFor(null, '', connections[0]?.id ?? '', defaultKindFor(connections[0]), {}, '');
+  return formFor(null, '', connections[0]?.id ?? '', defaultKindFor(connections[0]), {}, '', []);
 }
 
 function formForEdit(dataset: Dataset): FormState {
@@ -237,6 +252,7 @@ function formForEdit(dataset: Dataset): FormState {
     dataset.kind,
     dataset.config,
     JSON.stringify(dataset.columns, null, 2),
+    dataset.parameters,
   );
 }
 
@@ -572,6 +588,9 @@ function DatasetForm({
       kind: form.kind,
       config: draft.config,
       columns: columns.columns,
+      ...(allowlistChanged(form.parametersSeed, form.parameters)
+        ? { parameters: form.parameters }
+        : {}),
     };
 
     const parsed = DatasetWriteSchema.safeParse(body);
@@ -740,11 +759,18 @@ function DatasetForm({
             one form under one word. */}
         {form.kind === 'query' && (
           <p className="page-hint">
-            These <code>parameters</code> are SQL bind values for the statement, not the dataset’s
-            per-dispatch override allowlist.
+            These <code>parameters</code> are SQL bind values for the statement. Whether a node may
+            override them per run is the “Overridable per node” setting below.
           </p>
         )}
       </ConfigEditor>
+
+      <OverridableKeysField
+        subject={datasetAllowlistSubject(form.kind)}
+        seed={form.parametersSeed}
+        value={form.parameters}
+        onChange={(parameters) => onChange({ ...form, parameters })}
+      />
 
       <LabelledControl label="Columns (JSON)">
         {(id) => (

@@ -58,6 +58,8 @@ import {
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
+import { OverridableKeysField } from './OverridableKeysField';
+import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -78,6 +80,14 @@ type FormState = {
   /** Whether the operator ASKED for JSON. An unrenderable value forces it too. */
   jsonMode: boolean;
   secret: string;
+  /** #1305 — the `parameters` override allowlist being edited. */
+  parameters: string[];
+  /**
+   * The allowlist as the form opened on it. Save sends `parameters` only when
+   * the edit differs from this (`allowlistChanged`), because an explicit list
+   * REPLACES the stored one — a rename must never touch it.
+   */
+  parametersSeed: readonly string[];
 };
 
 /**
@@ -98,6 +108,7 @@ function formFor(
   name: string,
   kind: ConnectionKind,
   config: Record<string, unknown>,
+  parameters: readonly string[],
 ): FormState {
   const { fields } = connectionFields(kind, config);
   return {
@@ -109,16 +120,20 @@ function formFor(
     jsonText: JSON.stringify(config, null, 2),
     jsonMode: false,
     secret: '', // never prefilled — secrets are write-only, blank = keep existing
+    // Deduped: the server stores the list as written, so a stored `['a', 'a']`
+    // is possible, and an edit should not write the duplicate back.
+    parameters: [...new Set(parameters)],
+    parametersSeed: parameters,
   };
 }
 
 function blankForm(): FormState {
   // KINDS is the connection-kind enum's option list — statically non-empty.
-  return formFor(null, '', KINDS[0]!, {});
+  return formFor(null, '', KINDS[0]!, {}, []);
 }
 
 function formForEdit(conn: ConnectionPublic): FormState {
-  return formFor(conn.id, conn.name, conn.kind, conn.config);
+  return formFor(conn.id, conn.name, conn.kind, conn.config, conn.parameters);
 }
 
 /**
@@ -787,6 +802,9 @@ function ConnectionForm({
       kind: form.kind,
       config,
       ...(form.secret !== '' ? { secret: form.secret } : {}),
+      ...(allowlistChanged(form.parametersSeed, form.parameters)
+        ? { parameters: form.parameters }
+        : {}),
     };
 
     const parsed = ConnectionWriteSchema.safeParse(body);
@@ -845,6 +863,13 @@ function ConnectionForm({
       </LabelledControl>
 
       <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
+
+      <OverridableKeysField
+        subject={connectionAllowlistSubject(form.kind)}
+        seed={form.parametersSeed}
+        value={form.parameters}
+        onChange={(parameters) => onChange({ ...form, parameters })}
+      />
 
       {/* #1174 — outside the Config group, because it is a fact about OTHER
           resources rather than about this config, and outside the mode branch
