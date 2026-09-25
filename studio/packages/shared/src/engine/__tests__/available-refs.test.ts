@@ -206,3 +206,169 @@ describe('availableRefs — the catalog', () => {
     expect(availableRefs(CHAIN, { kind: 'node', nodeId: 'ghost' })).toEqual([]);
   });
 });
+
+// --- container expression fields (#864) --------------------------------------
+
+/**
+ * `src → lp → after`, where `lp` is a loop whose one child `check` declares the
+ * boolean an exit condition actually reads. `src` is UPSTREAM of the loop — its
+ * output is readable by `check`, but not by `exitWhen`, whose scope is the
+ * loop's own children.
+ */
+const LOOP = doc({
+  params: [
+    { name: 'flag', type: 'boolean', required: true },
+    { name: 'topic', type: 'string', required: true },
+    { name: 'apiKey', type: 'secret', required: true },
+  ],
+  nodes: [
+    producer('src', [{ name: 'body', type: 'string' }]),
+    producer('check', [
+      { name: 'done', type: 'boolean' },
+      { name: 'count', type: 'number' },
+    ]),
+    node('after'),
+  ],
+  edges: [edge('src', 'lp'), edge('lp', 'after')],
+  containers: [
+    {
+      id: 'lp',
+      kind: 'loop',
+      children: ['check'],
+      join: 'all',
+      exitWhen: '${nodes.check.output.done}',
+      maxRounds: 3,
+    },
+  ],
+});
+
+/** `src` reaches the foreach only on FAILURE, so its rows are reachable, not guaranteed. */
+const FOREACH_ON_FAILURE = doc({
+  params: [{ name: 'list', type: 'json', required: true }],
+  nodes: [producer('src', [{ name: 'rows', type: 'json' }]), node('body')],
+  edges: [edge('src', 'fe', 'failure')],
+  containers: [
+    { id: 'fe', kind: 'foreach', children: ['body'], join: 'all', items: '${params.list}' },
+  ],
+});
+
+const CONTAINER_FIXTURES: [string, Doc][] = [
+  ['a loop', LOOP],
+  ['a foreach body', FOREACH],
+  ['a foreach reached on failure', FOREACH_ON_FAILURE],
+];
+
+const FIELDS = ['exitWhen', 'items'] as const;
+
+/** Every offer at every container field site of `d`. */
+function containerOffers(d: Doc): [string, (typeof FIELDS)[number], RefSuggestion][] {
+  return d.containers.flatMap((c) =>
+    FIELDS.flatMap((field) =>
+      availableRefs(d, { kind: 'container', containerId: c.id, field }).map(
+        (s) => [c.id, field, s] as [string, (typeof FIELDS)[number], RefSuggestion],
+      ),
+    ),
+  );
+}
+
+/** `d` with a container's field set WHOLE to `text` — both fields are whole-value-only. */
+function withField(d: Doc, containerId: string, field: string, text: string): Doc {
+  return {
+    ...d,
+    containers: d.containers.map((c) => (c.id === containerId ? { ...c, [field]: text } : c)),
+  };
+}
+
+/**
+ * The per-field TYPE refusals — the half of the save gate `availableRefs` does
+ * not claim to answer (a site names a field's SCOPE, not its type). The web
+ * picker drops those offers by probing this same validator, which the
+ * `survivors` tests below pin end to end.
+ */
+const TYPE_REFUSAL = /must be (a boolean|an array) expression/;
+
+describe('availableRefs — no false offer at a container field (#864)', () => {
+  for (const [name, d] of CONTAINER_FIXTURES) {
+    it(`${name}: every offer is in scope for the field it is offered to`, () => {
+      const offers = containerOffers(d);
+      expect(offers.length).toBeGreaterThan(0);
+      const before = validatePipelineDoc(d);
+      for (const [id, field, suggestion] of offers) {
+        const after = validatePipelineDoc(withField(d, id, field, suggestion.insert)).filter(
+          (issue) => !TYPE_REFUSAL.test(issue),
+        );
+        expect(after, `${id}.${field} ← ${suggestion.insert}`).toEqual(before);
+      }
+    });
+  }
+
+  it('the container fixtures are themselves clean', () => {
+    for (const [name, d] of CONTAINER_FIXTURES) expect(validatePipelineDoc(d), name).toEqual([]);
+  });
+});
+
+const containerRefs = (d: Doc, containerId: string, field: (typeof FIELDS)[number]) =>
+  availableRefs(d, { kind: 'container', containerId, field }).map((s) => s.ref);
+
+/** What survives the save gate's own per-field check — what the picker ends up listing. */
+const survivors = (d: Doc, containerId: string, field: (typeof FIELDS)[number]) =>
+  availableRefs(d, { kind: 'container', containerId, field })
+    .filter((s) => validatePipelineDoc(withField(d, containerId, field, s.insert)).length === 0)
+    .map((s) => s.ref);
+
+describe('availableRefs — the container field catalog (#864)', () => {
+  it("exitWhen reads the loop's OWN children — never an upstream node, nor the loop", () => {
+    const refs = containerRefs(LOOP, 'lp', 'exitWhen');
+    expect(refs).toContain('nodes.check.output.done');
+    expect(refs).toContain('nodes.check.status');
+    expect(refs).not.toContain('nodes.src.output.body');
+    expect(refs.some((r) => r.startsWith('nodes.lp.'))).toBe(false);
+    expect(refs).not.toContain('item');
+    expect(refs).not.toContain('params.apiKey');
+  });
+
+  it('exitWhen, after the save gate’s boolean check, is left with what could be a boolean', () => {
+    // `trigger.body` is `any` (E7's deep-address escape hatch), so the check
+    // cannot refuse it — the run-time `evalExitWhen` binds for that one.
+    expect(survivors(LOOP, 'lp', 'exitWhen').sort()).toEqual([
+      'nodes.check.output.done',
+      'params.flag',
+      'trigger.body',
+    ]);
+  });
+
+  it('items reads the OUTER scope — upstream yes, its own body and ${item} never', () => {
+    const refs = containerRefs(FOREACH, 'loop', 'items');
+    expect(refs).toContain('nodes.src.output.rows');
+    expect(refs.some((r) => r.startsWith('nodes.body.'))).toBe(false);
+    expect(refs.some((r) => r.startsWith('nodes.loop.'))).toBe(false);
+    expect(refs).not.toContain('item');
+  });
+
+  it('items, after the save gate’s array check, is left with what could be an array', () => {
+    expect(survivors(FOREACH, 'loop', 'items').sort()).toEqual([
+      'nodes.src.output.rows',
+      'trigger.body',
+    ]);
+  });
+
+  it('items offers NO default()-wrapped reference — its "" fallback is never an array', () => {
+    const offered = availableRefs(FOREACH_ON_FAILURE, {
+      kind: 'container',
+      containerId: 'fe',
+      field: 'items',
+    });
+    // `src` is reachable only on failure, so the node-site rule would offer it
+    // wrapped. Here that wrapping saves clean and then fails the very run it
+    // was meant to rescue: `evalForeachItems` refuses the string fallback.
+    expect(offered.some((s) => s.availability === 'needs-default')).toBe(false);
+    expect(offered.map((s) => s.ref)).not.toContain('nodes.src.output.rows');
+    expect(offered.map((s) => s.ref)).toContain('params.list');
+  });
+
+  it('offers nothing for a field the container kind does not carry, or an unknown id', () => {
+    expect(containerRefs(LOOP, 'lp', 'items')).toEqual([]);
+    expect(containerRefs(FOREACH, 'loop', 'exitWhen')).toEqual([]);
+    expect(containerRefs(LOOP, 'ghost', 'exitWhen')).toEqual([]);
+  });
+});

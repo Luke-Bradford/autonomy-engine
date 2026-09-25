@@ -1514,7 +1514,23 @@ export type RefSuggestion = {
 };
 
 /**
- * Every `${}` reference legally writable in one node's config (U8a).
+ * Where a `${}` reference is being written — the question `availableRefs`
+ * answers per site (U8a; the container variant is #864).
+ *
+ * `field` is the container's expression field, typed off the SAME
+ * `ContainerConfigField` list the panel derives its controls from.
+ */
+export type RefSite =
+  | { kind: 'node'; nodeId: string }
+  | {
+      kind: 'container';
+      containerId: string;
+      field: Extract<ContainerConfigField, 'exitWhen' | 'items'>;
+    };
+
+/**
+ * Every `${}` reference legally writable at one site — a node's config, or one
+ * container expression field (U8a, #864).
  *
  * The governing property is NO FALSE OFFER: a picker that hands the author a
  * reference the save-gate then refuses is worse than no picker at all, because
@@ -1529,14 +1545,18 @@ export type RefSuggestion = {
  * THE PROPERTY IS SCOPED, and the scope is load-bearing: it covers ROOT LEGALITY
  * and AVAILABILITY (is this reference resolvable, and is its producer guaranteed
  * to have run) — the questions that depend on the graph. It does NOT cover the
- * per-field TYPE checks the save gate also runs, because the site here is a
- * NODE, not a field, and a type answer needs the field. A `filter`'s `items`
- * wants an array and its `predicate` a boolean, so most of what this offers is
- * type-refused there; `available-refs.test.ts` pins that gap as a
- * characterization test rather than leaving it invisible, and #864 closes it by
- * widening the site to `{ nodeId, field }`. The UI mitigates it in the meantime
- * the way it mitigates every other bad edit: the badge list names the refusal
- * and Save stays gated.
+ * per-field TYPE checks the save gate also runs: a `filter`'s `items` wants an
+ * array and its `predicate` a boolean, a loop's `exitWhen` a boolean, and a
+ * foreach's `items` an array. The web picker closes that half by probing every
+ * candidate through the same whole-doc validator and dropping what it refuses
+ * (`useExpressionPicker`), so no type rule is restated here.
+ *
+ * A {@link RefSite} is a NODE's config, or ONE container expression field
+ * (#864). A container field needs its own site because its scope is not any
+ * node's: `exitWhen` reads the loop's own children, `items` the container's
+ * OUTER upstream — and each reads the very `ScanScope` its validator builds
+ * (`exitWhenScope` / `foreachItemsScope`). A node site is still one scope for
+ * every field of that node, which is the `filter.predicate` gap below.
  *
  * It errs toward UNDER-offering wherever the answer is unknowable rather than
  * illegal:
@@ -1551,24 +1571,73 @@ export type RefSuggestion = {
  */
 export function availableRefs(
   doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
-  site: { kind: 'node'; nodeId: string },
+  site: RefSite,
 ): RefSuggestion[] {
+  const containers = doc.containers ?? [];
+  const outputsById = outputsByIdOf(doc.nodes, containers);
+  const declared = new Map(doc.params.map((p) => [p.name, p]));
+
+  if (site.kind === 'container') {
+    const c = containers.find((x) => x.id === site.containerId);
+    // A field the kind does not carry is a clear-only repair path in the panel
+    // (`validateDoc` refuses it whatever it holds), so nothing is offered there.
+    if (c === undefined || !CONTAINER_CONFIG_FIELDS[c.kind].includes(site.field)) return [];
+    const scope =
+      site.field === 'exitWhen'
+        ? exitWhenScope(c, declared, outputsById)
+        : foreachItemsScope(c, declared, outputsById, computeGraph(doc));
+    return refsInScope(doc, scope, {
+      selfId: c.id,
+      // Neither field binds `${item}`: `exitWhen` is not a foreach field, and
+      // `items` is evaluated BEFORE any item exists — both scanned with the
+      // default `itemInScope = false`.
+      itemInScope: false,
+      // `items` must resolve to an ARRAY, and `default()`'s fallback here is `""`:
+      // a wrapped offer would save clean and then fail at `evalForeachItems` on
+      // exactly the path it exists to rescue. `exitWhen`'s scope has no
+      // rescuable producer anyway (reachable = soft = ∅), so this is `items`'.
+      offerRescued: false,
+    });
+  }
+
   const { nodeId } = site;
   if (!doc.nodes.some((n) => n.id === nodeId)) return [];
-
-  const containers = doc.containers ?? [];
   const graph = computeGraph(doc);
-  const guaranteed = graph.guaranteed.get(nodeId) ?? new Set<string>();
-  const settled = graph.settled.get(nodeId) ?? new Set<string>();
-  const reachable = graph.reachable.get(nodeId) ?? new Set<string>();
-  const soft = graph.soft.get(nodeId) ?? new Set<string>();
-  const outputsById = outputsByIdOf(doc.nodes, containers);
+  return refsInScope(
+    doc,
+    {
+      declared,
+      outputsById,
+      guaranteed: graph.guaranteed.get(nodeId) ?? new Set<string>(),
+      settled: graph.settled.get(nodeId) ?? new Set<string>(),
+      reachable: graph.reachable.get(nodeId) ?? new Set<string>(),
+      soft: graph.soft.get(nodeId) ?? new Set<string>(),
+    },
+    {
+      selfId: nodeId,
+      // The same binding `validateRefs` computes for its `itemInScope` flag: a
+      // child of a foreach body, and nothing else at node granularity.
+      itemInScope: containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)),
+      offerRescued: true,
+    },
+  );
+}
 
+/**
+ * The enumeration behind every {@link RefSite}: each reference legal in `scope`
+ * — the same `ScanScope` the save gate scans that site with, which is the whole
+ * of the NO FALSE OFFER argument.
+ */
+function refsInScope(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'containers'>,
+  scope: ScanScope,
+  site: { selfId: string; itemInScope: boolean; offerRescued: boolean },
+): RefSuggestion[] {
+  const containers = doc.containers ?? [];
+  const { guaranteed, settled, reachable, soft, outputsById } = scope;
   const out: RefSuggestion[] = [];
 
-  // `${item}` — the same binding `validateRefs` computes for its `itemInScope`
-  // flag: a child of a foreach body, and nothing else at node granularity.
-  if (containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId))) {
+  if (site.itemInScope) {
     out.push({
       ref: 'item',
       insert: '${item}',
@@ -1599,11 +1668,12 @@ export function availableRefs(
   const producerIds = [...doc.nodes.map((n) => n.id), ...containers.map((c) => c.id)];
 
   for (const id of producerIds) {
-    if (id === nodeId) continue;
-    const contract = outputsById.get(id);
+    if (id === site.selfId) continue;
+    const contract = outputsById?.get(id);
     if (contract?.kind !== 'declared') continue;
     const dominates = guaranteed.has(id);
-    const rescuable = !dominates && (reachable.has(id) || soft.has(id));
+    const rescuable =
+      site.offerRescued && !dominates && (reachable.has(id) || soft.has(id));
     if (!dominates && !rescuable) continue;
     for (const declared of contract.outputs) {
       const ref = `nodes.${id}.output.${declared.name}`;
@@ -1623,7 +1693,7 @@ export function availableRefs(
   }
 
   for (const id of producerIds) {
-    if (id === nodeId) continue;
+    if (id === site.selfId) continue;
     // Availability for a STATUS is `settled` ("guaranteed terminal"), not
     // `guaranteed` ("succeeded") — and `default()` cannot rescue an unsettled
     // one, so there is no wrapped variant to offer.
@@ -3115,15 +3185,18 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
   });
 }
 
-function validateExitWhen(
+/**
+ * The scope an `exitWhen` is checked in — ONE derivation, read by both the save
+ * gate (`validateExitWhen`) and the expression flyout (`availableRefs`' container
+ * site, #864), so the picker cannot offer a reference this gate would refuse on
+ * scope grounds. A second copy of these sets is exactly how the two would drift.
+ */
+function exitWhenScope(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
-  errors: string[],
-): void {
-  if (c.exitWhen === undefined) return;
-  const where = `container.${c.id}.exitWhen`;
-  const scope: ScanScope = {
+): ScanScope {
+  return {
     declared,
     // E6 needs the child producers' declared output types to type the exitWhen
     // expression — without them `${nodes.check.output.done}` is `any` and the
@@ -3144,13 +3217,24 @@ function validateExitWhen(
     // AVAILABILITY only. It does NOT make a bare `${nodes.check.status}` a usable
     // exitWhen: the field needs a BOOLEAN, and a status resolves to the string
     // `'success'`. The usable form is `${equals(nodes.check.status, 'success')}`.
-    // That refusal is the TYPE check at the foot of this function (#6 E6), per
+    // That refusal is the TYPE check at the foot of `validateExitWhen` (#6 E6), per
     // E2's split (E2 owns the MODE check, E6 the TYPE check) — refusing
     // availability HERE instead would misattribute a type defect to a scope rule.
     settled: new Set(c.children),
     reachable: new Set<string>(),
     soft: new Set<string>(),
   };
+}
+
+function validateExitWhen(
+  c: Container,
+  declared: Map<string, Param>,
+  outputsById: Map<string, OutputContract>,
+  errors: string[],
+): void {
+  if (c.exitWhen === undefined) return;
+  const where = `container.${c.id}.exitWhen`;
+  const scope = exitWhenScope(c, declared, outputsById);
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
 
@@ -3231,10 +3315,54 @@ function validateForeachItems(
 ): void {
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
-  // The container endpoint's real OUTER dominance sets (#567). `soft` is node-only,
-  // so a container id has no soft entry (`?? ∅`) — `items` has no default()-round
-  // semantics anyway.
-  const scope: ScanScope = {
+  const scope = foreachItemsScope(c, declared, outputsById, graph);
+  // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
+  scan(where, c.items, scope, errors);
+
+  // `items` is whole-value-REQUIRED, mirroring `exitWhen`: an embedded expression
+  // resolves to a STRING, so the body would iterate the string's characters (or
+  // `evalForeachItems` throws) — never the intended array.
+  const whole = validateWholeValue(where, c.items, errors, 'items');
+  if (whole === null) return;
+
+  // THE FIELD TYPE (#864) — `exitWhen`'s E6 check, for an array. A reference the
+  // checker can PROVE is a scalar (a string/number/boolean param or output, a
+  // `run.*` field) saved clean and then failed every run at `evalForeachItems`'
+  // "items must resolve to an array". Only a PROVABLE scalar is refused: `json`
+  // and a deep address infer `any`, which may well be an array at run, and that
+  // run-time check stays the binding one for them.
+  //
+  // Refusing here cannot brick a stored version (immutable versions are never
+  // re-validated), and any doc it newly refuses was one whose foreach could not
+  // run once. It exists now because the expression flyout (#864) offers
+  // references into this field and filters them through this validator — with
+  // no type rule, every `run.*` field would have been offered and accepted.
+  let parsed: Expr;
+  try {
+    parsed = parseExpr(whole.body);
+  } catch {
+    return; // malformed — already reported by `scan` above
+  }
+  const type = inferExprType(parsed, scope);
+  if (!assignableTo(type, 'array')) {
+    errors.push(`${where}: items must be an array expression, got ${type}`);
+  }
+}
+
+/**
+ * The scope a foreach's `items` is checked in — the container endpoint's real
+ * OUTER dominance sets (#567). ONE derivation, read by the save gate
+ * (`validateForeachItems`) and the expression flyout (`availableRefs`' container
+ * site, #864). `soft` is node-only, so a container id has no soft entry (`?? ∅`)
+ * — `items` has no default()-round semantics anyway.
+ */
+function foreachItemsScope(
+  c: Container,
+  declared: Map<string, Param>,
+  outputsById: Map<string, OutputContract>,
+  graph: Graph,
+): ScanScope {
+  return {
     declared,
     outputsById,
     guaranteed: graph.guaranteed.get(c.id) ?? new Set<string>(),
@@ -3242,13 +3370,6 @@ function validateForeachItems(
     reachable: graph.reachable.get(c.id) ?? new Set<string>(),
     soft: graph.soft.get(c.id) ?? new Set<string>(),
   };
-  // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
-  scan(where, c.items, scope, errors);
-
-  // `items` is whole-value-REQUIRED, mirroring `exitWhen`: an embedded expression
-  // resolves to a STRING, so the body would iterate the string's characters (or
-  // `evalForeachItems` throws) — never the intended array.
-  validateWholeValue(where, c.items, errors, 'items');
 }
 
 /**
