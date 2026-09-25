@@ -13,8 +13,10 @@ import { DEFAULT_QUOTA_SAMPLE_INTERVAL_MS, type ClaudeAccountQuotaReader } from 
  *   - the TTL, so a tick landing inside the window is a pure cache hit and does
  *     no I/O at all;
  *   - the geometric 429 backoff, which the ticks therefore inherit for free: a
- *     widened throttle window silently converts most ticks into cache hits, so a
- *     rate-limited account is polled LESS, not once per tick;
+ *     throttle window wider than the cadence turns a tick into a cache hit, so a
+ *     rate-limited account is polled LESS, not once per tick. At the default
+ *     five-minute cadence (#1292) only the capped window is that wide; the
+ *     narrower ones bound the request-path reads between ticks instead;
  *   - the in-flight de-dupe, so a slow sample overlapping the next tick is one
  *     provider call rather than two;
  *   - and the no-grace / no-last-good property. This module serves nothing and
@@ -24,9 +26,14 @@ import { DEFAULT_QUOTA_SAMPLE_INTERVAL_MS, type ClaudeAccountQuotaReader } from 
  *
  * ## Why it exists — and why it is OFF by default
  *
- * Without it every read is a request-path poll of an endpoint measured to be
- * tightly, stickily rate-limited, so the consumer (`loop/drive.sh`, on a
- * `curl --max-time 8` budget) pays that latency and often gets UNREADABLE.
+ * It was built to make every read a cache hit, so that the consumer
+ * (`loop/drive.sh`, on a `curl --max-time 8` budget) never paid a request-path
+ * poll. At the one-minute cadence that took, it overdrew the account's limit and
+ * made the guard UNREADABLE about half the time (#1292). It now ticks every five
+ * minutes, and what it buys is narrower: a reading taken with nobody asking,
+ * which feeds #987's last-known display value and the rate-limit transition
+ * log. Most guard reads now take their own live sample, against a bucket this
+ * sampler no longer keeps empty. See `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS`.
  *
  * It is nevertheless dormant unless `CLAUDE_QUOTA_SAMPLER=1`, because #770's
  * invariant is that *exactly one process may poll `/api/oauth/usage` directly*
@@ -80,7 +87,7 @@ export interface QuotaSampler {
 }
 
 export interface QuotaSamplerOptions {
-  /** Cadence. Defaults to `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS` (half the reader TTL). */
+  /** Cadence. Defaults to `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS` (five reader TTLs, #1292). */
   intervalMs?: number;
   /**
    * Where a broken reader is reported. `read()` is typed as never-rejecting, so

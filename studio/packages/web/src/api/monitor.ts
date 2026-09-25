@@ -54,8 +54,10 @@ export function fetchAiActivity(
  * ONE process may poll the provider's usage endpoint. Since the C3 cutover that
  * process is STUDIO'S OWN background sampler (`CLAUDE_QUOTA_SAMPLER=1` on the
  * supervised server) — it used to be the prototype dashboard's, and that has now
- * been retired. The sampler ticks at half the reader's 60s TTL, so a request
- * landing in the window is a pure cache hit that touches nothing.
+ * been retired. A request landing within the reader's 60s TTL of a sample is a
+ * pure cache hit, but the sampler ticks only every five minutes (#1292: the
+ * account's limit will not sustain more), so most requests poll the provider
+ * live. The reader's throttle still bounds them to one per window.
  *
  * What that changed is the COST of a poll, not the rule. A tab refreshing on an
  * interval would still hit the request path whenever the cache had just expired,

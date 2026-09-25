@@ -171,8 +171,8 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
                 {reading.lastKnown.ageMs > QUOTA_STALE_AFTER_MS && (
                   <>
                     {' '}
-                    The reader refreshes far more often than that, so it has been failing for a
-                    while and this number may have moved.
+                    The latest read failed and this is older than two cache lifetimes, so treat it
+                    as out of date: the number may have moved.
                   </>
                 )}
               </p>

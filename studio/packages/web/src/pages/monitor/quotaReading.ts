@@ -113,9 +113,13 @@ export type QuotaReading =
  * When a last-known reading stops being merely old and starts being EVIDENCE
  * that the provider is refusing.
  *
- * Derived from the reader, not chosen: the server's TTL is 60s and the
- * background sampler ticks at half of that, so anything past ~2 TTLs means
- * several sample attempts in a row have failed. A threshold picked for how old
+ * Two reader TTLs (the server's is 60s). This was derived when the background
+ * sampler ticked at half the TTL, so an age past ~2 TTLs meant several sample
+ * attempts in a row had failed. At the five-minute cadence #1292 set, it no
+ * longer counts failures: one quiet tick can pass it. It is kept anyway,
+ * because the error runs in the safe direction. This value only shows beside a
+ * live read that has just failed, so it gets marked stale SOONER, never later.
+ * A threshold picked for how old
  * a number "feels" (15 minutes, say) would show a quarter of an hour of stale
  * data unmarked — and 900s is also, exactly, the prototype grace window this
  * whole surface exists to have rejected, so it is the one number not to reuse.

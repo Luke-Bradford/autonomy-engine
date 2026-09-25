@@ -237,8 +237,10 @@ and the loop exists to build it — not to build the loop.
   Keep the 60s TTL and the **no-grace / no-last-good** property: a stale-but-low reading PERMITS a
   fire, and fail-open is the one polarity forbidden here (`drive.sh`'s cache holds the fail-SAFE
   staleness logic and may only ever REFUSE). A sampler-backed studio can then be polled freely,
-  because the request path no longer touches the provider — the state in which it deserves to be
-  primary.
+  because its reader bounds provider calls to one per TTL/throttle window however often it is
+  asked — the state in which it deserves to be primary. (The request path DOES still take a live
+  sample when the cache has expired: the sampler ticks every five minutes, because a one-minute
+  cadence overdrew the account's limit and flapped — #1292.)
 
   **ORDERING LIVES IN "THE QUEUE" UNDER CURRENT PRIORITY — deliberately not restated here.** Six
   review rounds on this file were all the same defect: the order written in two places, drifting

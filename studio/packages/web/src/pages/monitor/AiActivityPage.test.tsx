@@ -437,7 +437,7 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      await waitFor(() => expect(panel).toHaveTextContent('has been failing for a while'));
+      await waitFor(() => expect(panel).toHaveTextContent('treat it as out of date'));
     });
 
     it('says nothing of the sort for a reading taken seconds ago', async () => {
@@ -453,7 +453,7 @@ describe('AiActivityPage', () => {
       const panel = await screen.findByRole('region', { name: 'Account quota' });
       await waitFor(() => expect(panel).toHaveTextContent('Last known reading'));
       expect(panel).toHaveTextContent('30s ago');
-      expect(panel.textContent ?? '').not.toContain('has been failing for a while');
+      expect(panel.textContent ?? '').not.toContain('treat it as out of date');
     });
 
     it('shows no number at all when nothing has ever been read', async () => {

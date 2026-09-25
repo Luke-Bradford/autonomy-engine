@@ -68,7 +68,7 @@ describe('startClaudeQuotaSampler — cadence', () => {
     const read = vi.fn(async () => ({ value: null, unavailable: 'no_credential' }) as const);
     const sampler = startClaudeQuotaSampler({ read }, { intervalMs: 30_000 });
     // No timer advance at all: the warm cache exists from boot, not from the
-    // first tick a minute later. A KeepAlive restart otherwise reintroduces the
+    // first tick one interval later. A KeepAlive restart otherwise reintroduces the
     // live request-path poll for the consumer's very next read.
     expect(read).toHaveBeenCalledTimes(1);
     sampler.stop();
@@ -93,16 +93,6 @@ describe('startClaudeQuotaSampler — cadence', () => {
     sampler.stop();
     await vi.advanceTimersByTimeAsync(300_000);
     expect(read).toHaveBeenCalledTimes(2);
-  });
-
-  it('defaults to HALF the reader TTL, so a drifting tick cannot leave the cache cold', async () => {
-    vi.useFakeTimers();
-    const read = vi.fn(async () => ({ value: null, unavailable: 'no_credential' }) as const);
-    const sampler = startClaudeQuotaSampler({ read });
-    await vi.advanceTimersByTimeAsync(DEFAULT_QUOTA_SAMPLE_INTERVAL_MS);
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(DEFAULT_QUOTA_SAMPLE_INTERVAL_MS * 2).toBe(TTL_MS);
-    sampler.stop();
   });
 });
 
@@ -214,5 +204,112 @@ describe('startClaudeQuotaSampler — lifecycle safety', () => {
         { intervalMs: Number.NaN },
       ),
     ).toThrow(/interval/i);
+  });
+});
+
+/**
+ * #1292 — a fake of the account-level limiter the live endpoint was MEASURED to
+ * have, so the default cadence is tested against the thing it has to live with.
+ *
+ * A token bucket fitted to studio's own service log (2026-09-25, ~7,500 cycles
+ * of the flap): the dominant cycle was 429 at 0s, 200 at 120s, 200 at 180s, 429
+ * at 240s. Two polls answered inside 180s of an empty bucket, so it refills at
+ * least one token per 90s; a third was refused at 240s, so it refills fewer than
+ * three per 240s, i.e. slower than one per 80s. This uses the PESSIMISTIC end
+ * (90s). Capacity 3 is the #765 burst measurement: 200, 200, 200, then 429 at
+ * 15s spacing.
+ *
+ * The model is only worth trusting if it reproduces the flap it was fitted to.
+ * The first test below checks exactly that before any claim rests on it.
+ */
+function measuredLimiter(now: () => number, { refillMs = 90_000, capacity = 3 } = {}) {
+  let tokens = capacity;
+  let last = now();
+  let refused = 0;
+  const fetcher = vi.fn(async () => {
+    const at = now();
+    tokens = Math.min(capacity, tokens + (at - last) / refillMs);
+    last = at;
+    if (tokens < 1) {
+      refused += 1;
+      return RATE_LIMITED;
+    }
+    tokens -= 1;
+    return LIVE_PAYLOAD;
+  });
+  return { fetcher, refused: () => refused };
+}
+
+describe('startClaudeQuotaSampler — the default cadence against the measured limiter (#1292)', () => {
+  const SIX_HOURS_MS = 6 * 60 * 60_000;
+
+  function armed(intervalMs: number | undefined) {
+    const { now, tick } = clockPair();
+    const limiter = measuredLimiter(now);
+    const events: string[] = [];
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: limiter.fetcher,
+      now,
+      log: (e) => events.push(e.event),
+    });
+    const sampler = startClaudeQuotaSampler(reader, intervalMs === undefined ? {} : { intervalMs });
+    return { reader, sampler, tick, limiter, events };
+  }
+
+  it('the model reproduces the production flap at the OLD half-TTL cadence', async () => {
+    vi.useFakeTimers();
+    const { sampler, tick, limiter, events } = armed(TTL_MS / 2);
+    for (let t = 0; t < SIX_HOURS_MS; t += TTL_MS / 2) await tick(TTL_MS / 2);
+    sampler.stop();
+    // Not a handful: a standing cycle, entered and left over and over, which is
+    // what the service log showed for hours.
+    expect(limiter.refused()).toBeGreaterThan(50);
+    expect(events.filter((e) => e === 'rate_limited').length).toBeGreaterThan(50);
+    expect(events.filter((e) => e === 'rate_limit_cleared').length).toBeGreaterThan(50);
+  });
+
+  it('never trips the limiter at the DEFAULT cadence: six hours, zero 429s', async () => {
+    vi.useFakeTimers();
+    const { sampler, tick, limiter, events } = armed(undefined);
+    for (let t = 0; t < SIX_HOURS_MS; t += 10_000) await tick(10_000);
+    sampler.stop();
+    // Every tick a real poll (prime + one per interval), so zero refusals is the
+    // limiter keeping up, not a sampler that stopped asking.
+    expect(limiter.fetcher).toHaveBeenCalledTimes(
+      SIX_HOURS_MS / DEFAULT_QUOTA_SAMPLE_INTERVAL_MS + 1,
+    );
+    expect(limiter.refused()).toBe(0);
+    expect(events).not.toContain('rate_limited');
+  });
+
+  it("answers every one of the guard's reads with a value at the DEFAULT cadence", async () => {
+    vi.useFakeTimers();
+    const { reader, sampler, tick } = armed(undefined);
+    // The guard's shape in the service log: sparse reads, typically ~13 min
+    // apart, each gate a short burst. Offset so reads land at every phase of
+    // the sampler's cycle rather than only on its ticks.
+    //
+    // Advanced in 10s steps, never one long `tick`: `tick` moves the reader's
+    // clock the whole distance BEFORE the timers inside it fire, so every
+    // sampler tick in a long step would read one instant, hit its own cache,
+    // and never reach the limiter — a test that passes at any cadence.
+    const STEP_MS = 10_000;
+    const unreadable: number[] = [];
+    let elapsed = 0;
+    const idle = async (ms: number) => {
+      for (let t = 0; t < ms; t += STEP_MS) await tick(STEP_MS);
+      elapsed += ms;
+    };
+    for (let gate = 0; gate < 30; gate += 1) {
+      await idle(13 * 60_000 + 10_000 * (gate % 7));
+      for (let burst = 0; burst < 3; burst += 1) {
+        const reading = await reader.read();
+        if (reading.value === null) unreadable.push(elapsed);
+        await idle(20_000);
+      }
+    }
+    sampler.stop();
+    expect(unreadable).toEqual([]);
   });
 });
