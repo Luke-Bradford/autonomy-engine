@@ -702,6 +702,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // signer too, or `armExternalWait` would throw mid-reconcile. Same closure as
     // the driver boundary above.
     signExternalWaitToken,
+    // #796 item 2 — the sweep STARTS a detached child that never ran instead of
+    // burying it; its parent's call node is terminal and will never re-emit.
+    kickChild: (run) => childRuns.kick(run),
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
   // #646 — corruption is a needs-attention verdict, not routine boot noise: an
