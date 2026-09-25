@@ -3143,7 +3143,10 @@ export function createEngine(doc: EngineDoc): Engine {
         continue;
       }
       linked.add(link.callNodeId);
-      nodes[link.callNodeId] = { ...nodes[link.callNodeId]!, sourceChildRunId: link.sourceChildRunId };
+      nodes[link.callNodeId] = {
+        ...nodes[link.callNodeId]!,
+        sourceChildRunId: link.sourceChildRunId,
+      };
     }
 
     const containers: Record<string, ContainerRunState> = { ...state.containers };

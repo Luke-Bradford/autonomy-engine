@@ -332,7 +332,7 @@ describe('RS4 — reseedFrontier: a copied call node links the child run that pr
     expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: childRunId }]);
   });
 
-  it('a RETRIED call node links its LATEST attempt\'s child, and a live attempt outranks a carried link', () => {
+  it("a RETRIED call node links its LATEST attempt's child, and a live attempt outranks a carried link", () => {
     const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
     const { childRunId: first } = mintedChildRunId(eng, 'call');
     const link = (currentAttemptId: string): string | undefined => {

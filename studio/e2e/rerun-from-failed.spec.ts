@@ -191,7 +191,7 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
  * follows `child-run-drill.spec.ts`, and for the same reason: nothing here is
  * billable or egress-adjacent.
  */
-test('RS4 — a rerun reuses a copied call node\'s child, and links to it', async ({ page }) => {
+test("RS4 — a rerun reuses a copied call node's child, and links to it", async ({ page }) => {
   const problems = collectPageProblems(page);
 
   const childDoc: SeedDoc = {
