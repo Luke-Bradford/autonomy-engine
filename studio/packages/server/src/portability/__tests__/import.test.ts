@@ -158,6 +158,46 @@ describe('importEnvelope: pipeline', () => {
 
   // M3 (#1117) — driven through the REAL `exportPipeline` rather than a
   // hand-built envelope, so a stubbed-out export arm cannot let this pass.
+  // #1144 — `datasetParams` rides WITH the dataset pair: bindings for a pair
+  // the import dropped are refused by the write gate, and would roll the whole
+  // import back if they survived on their own.
+  it('#1144 — datasetParams survive with a portable pair and drop with a stripped one', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Params' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'dynamic',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: '${params.target}', sink: '${params.target}' },
+          datasetParams: { source: { path: 'in.csv' } },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'stripped',
+          type: 'llm_call',
+          config: {},
+          datasetIds: { source: '${params.target}', sink: 'ds_local_id' },
+          datasetParams: { sink: { path: 'out.csv' } },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const byId = (id: string) => result.versions[0]!.nodes.find((n) => n.id === id)!;
+    expect(byId('dynamic').datasetParams).toEqual({ source: { path: 'in.csv' } });
+    expect(byId('stripped').datasetIds).toBeUndefined();
+    expect(byId('stripped').datasetParams).toBeUndefined();
+  });
+
   it('M3 (#1117) — a datasetIds pair round-trips: all-dynamic survives, a stripped end drops the pair WHOLE', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copies' });

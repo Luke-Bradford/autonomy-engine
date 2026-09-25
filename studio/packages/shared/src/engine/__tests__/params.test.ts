@@ -15,6 +15,7 @@ import {
   TRIGGER_FIELDS,
   assertJsonReplaySafe,
   containsSecretMarker,
+  firstParamOverrideViolation,
   jsonReplaySafetyErrors,
   resolveRunParams,
   resolveTriggerBindings,
@@ -958,6 +959,58 @@ describe('M3 (#1117) — datasetIds ${} refs at SAVE time', () => {
     expect(errors).toHaveLength(2);
     expect(errors.join(' ')).toMatch(/nodes\.n\.connectionIds\.source/);
     expect(errors.join(' ')).toMatch(/nodes\.n\.datasetIds\.sink/);
+  });
+});
+
+describe('#1144 — firstParamOverrideViolation (the shared override gate)', () => {
+  const gate = { isNonOverridable: (k: string) => k === 'roots', allowlist: ['roots', 'model'] };
+
+  it('refuses a boundary key BEFORE asking the allowlist, even when the allowlist names it', () => {
+    expect(firstParamOverrideViolation({ roots: ['/'] }, gate)).toEqual({
+      reason: 'non_overridable',
+      key: 'roots',
+    });
+  });
+
+  it('refuses an undeclared key, then a secret-marker value, and passes a clean record', () => {
+    expect(firstParamOverrideViolation({ baseUrl: 'x' }, gate)).toEqual({
+      reason: 'undeclared',
+      key: 'baseUrl',
+    });
+    expect(firstParamOverrideViolation({ model: { $secret: 'k' } }, gate)).toEqual({
+      reason: 'secret_marker',
+      key: 'model',
+    });
+    expect(firstParamOverrideViolation({ model: 'claude' }, gate)).toBeNull();
+  });
+});
+
+describe('#1144 — datasetParams ${} refs and secrets at SAVE time', () => {
+  function dsNode(id: string, datasetParams: Node['datasetParams']): Node {
+    return { ...node(id, {}), datasetIds: { source: 'ds_a', sink: 'ds_b' }, datasetParams };
+  }
+
+  it('ACCEPTS a ${} binding on either end whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [dsNode('n', { source: { path: '${params.day}' }, sink: { path: 'out.csv' } })],
+        [],
+        [{ name: 'day', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS an undeclared ref, naming the END it sits on', () => {
+    const errors = validateRefs(doc([dsNode('n', { sink: { path: '${params.nope}' } })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/nodes\.n\.datasetParams\.sink/);
+    expect(errors[0]).toMatch(/not a declared param/);
+  });
+
+  it('REJECTS an authored {$secret} marker — parameters are never secret sinks', () => {
+    const errors = validateRefs(doc([dsNode('n', { source: { path: { $secret: 'k' } } })], []));
+    expect(errors.join(' ')).toMatch(/datasetParams\.source/);
   });
 });
 

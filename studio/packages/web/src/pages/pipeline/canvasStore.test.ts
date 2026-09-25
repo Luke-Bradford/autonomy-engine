@@ -3128,6 +3128,32 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect('sink' in (bound as object)).toBe(false);
   });
 
+  it('#1144 — unbinding a dataset end takes that end\'s datasetParams with it', () => {
+    // No control renders `datasetParams`, so a binding left behind for an end
+    // the node no longer addresses would make it unsaveable with nothing on
+    // screen to explain or clear it.
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'l',
+          type: 'lookup',
+          config: {},
+          datasetIds: { source: 'ds_old', sink: 'ds_stale' },
+          datasetParams: { source: { path: 'a.csv' }, sink: { path: 'b.csv' } },
+          position: { x: 0, y: 0 },
+        },
+      ] as never,
+    });
+    // Re-binding the source of a source-only activity drops the inherited sink,
+    // and with it the sink's bindings — the source's survive the re-point.
+    store.getState().setNodeBindingEnd('l', 'datasets', 'source', 'ds_new');
+    expect(store.getState().nodes[0]!.datasetParams).toEqual({ source: { path: 'a.csv' } });
+    // Clearing the last end removes the key outright, never an empty record.
+    store.getState().setNodeBindingEnd('l', 'datasets', 'source', undefined);
+    expect('datasetParams' in store.getState().nodes[0]!).toBe(false);
+  });
+
   it('still requires BOTH ends for a paired activity, and for an UNKNOWN type', () => {
     // The other half of the same rule. The unknown-type case is the fail-safe
     // direction: requiring both ends of something that needs one leaves a node

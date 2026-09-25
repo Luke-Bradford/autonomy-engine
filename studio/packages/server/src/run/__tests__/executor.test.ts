@@ -1834,6 +1834,8 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       // M6 slice B (#1149) — `stubAddress` reads `table` out of this, so a test
       // says "these two rows name one physical object" by seeding it.
       config?: Record<string, unknown>;
+      // #1144 — the per-dispatch override allowlist.
+      parameters?: string[];
     } = {},
   ): string {
     return createDataset(db, {
@@ -1843,7 +1845,7 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       kind: over.kind ?? 'table',
       config: over.config ?? { table: 'rows' },
       columns: [{ name: 'id', type: 'integer', nullable: false }],
-      parameters: [],
+      parameters: over.parameters ?? [],
     }).id;
   }
 
@@ -2215,6 +2217,182 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       error: expect.stringContaining(oneDs),
     });
     expect(failure).not.toHaveProperty('side');
+  });
+
+  // -------------------------------------------------------------------------
+  // #1144 — per-dispatch dataset parameters: gated by the dataset's own
+  // allowlist and merged over its stored config, per end. `delimited` datasets,
+  // because their `path` is the overridable key an operator actually reaches
+  // for; the address stub reads `path` so the dispatch record shows the merge.
+  // -------------------------------------------------------------------------
+
+  const pathAddress: NonNullable<ConnectorAdapter['resolveDatasetAddress']> = ({
+    connectionConfig,
+    dataset,
+  }) =>
+    Promise.resolve({
+      kind: 'http',
+      store: typeof connectionConfig.store === 'string' ? connectionConfig.store : 'store',
+      storeIdentity: null,
+      object: typeof dataset.config.path === 'string' ? dataset.config.path : null,
+    });
+
+  const delimitedCatalog = () =>
+    datasetCatalog({
+      sinkConnectionKinds: ['http'],
+      datasetKinds: { source: ['delimited'], sink: ['delimited'] },
+    });
+
+  /** One store, a source and a sink dataset in it, and a copy node over them. */
+  async function seedParamCopy(
+    datasetParams: Node['datasetParams'],
+    over: { sameDataset?: boolean; parameters?: string[]; kind?: 'table' | 'delimited' } = {},
+  ) {
+    const db = freshDb().db;
+    const conn = await seedConnection(db, 'http', { store: 'S' }, null);
+    const kind = over.kind ?? 'delimited';
+    const config = (path: string) =>
+      kind === 'delimited' ? { path, header: true } : { table: path.replace('.csv', '') };
+    const seed = (path: string) =>
+      seedDataset(db, conn, {
+        kind,
+        config: config(path),
+        parameters: over.parameters ?? ['path'],
+      });
+    const sourceDs = seed('in.csv');
+    const sinkDs = over.sameDataset === true ? sourceDs : seed('out.csv');
+    const pvId = seedVersion(db, [
+      {
+        ...pairedNode('test_copy', conn, conn, { source: sourceDs, sink: sinkDs }),
+        ...(datasetParams === undefined ? {} : { datasetParams }),
+      },
+    ]);
+    return { db, run: seedRun(db, pvId), sourceDs };
+  }
+
+  it('#1144 MERGES an allowlisted override: the adapter and the dispatch record see the effective path', async () => {
+    const { db, run } = await seedParamCopy({ source: { path: 'in/2026-09-25.csv' } });
+    let seenSource: unknown = null;
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* (ctx) {
+          seenSource = ctx.datasets?.source.config;
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    expect(state.status).toBe('success');
+    // The RAW merge: the stored keys the override did not touch are unchanged,
+    // and no schema default was filled in on the way.
+    expect(seenSource).toEqual({ path: 'in/2026-09-25.csv', header: true });
+    expect(dispatchesOf(db, run.id)).toEqual([
+      expect.objectContaining({
+        datasetAddresses: {
+          source: expect.objectContaining({ object: 'in/2026-09-25.csv' }),
+          sink: expect.objectContaining({ object: 'out.csv' }),
+        },
+      }),
+    ]);
+  });
+
+  it('#1144 REFUSES a key the dataset does not declare, labelled with its end', async () => {
+    const { db, run } = await seedParamCopy({ sink: { header: false } });
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_param_undeclared',
+      kind: 'permanent',
+      side: 'sink',
+      error: expect.stringContaining("'header'"),
+    });
+  });
+
+  it('#1144 REFUSES a table identifier override even when the owner allowlisted it (§8)', async () => {
+    const { db, run } = await seedParamCopy(
+      { source: { table: 'other_owners_table' } },
+      { kind: 'table', parameters: ['table'] },
+    );
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        catalog: datasetCatalog({ sinkConnectionKinds: ['http'] }),
+      }),
+      run,
+    );
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_param_non_overridable',
+      kind: 'permanent',
+      side: 'source',
+    });
+  });
+
+  it('#1144 REFUSES an override that leaves the config invalid for its kind, or names no setting', async () => {
+    const run1 = await seedParamCopy({ source: { delimiter: ';;' } }, { parameters: ['delimiter'] });
+    const run2 = await seedParamCopy({ source: { paht: 'x.csv' } }, { parameters: ['paht'] });
+    for (const { db, run } of [run1, run2]) {
+      const state = await startRun(
+        deps(db, {
+          adapters: pairedRegistry(async function* () {
+            yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+          }, pathAddress),
+          catalog: delimitedCatalog(),
+        }),
+        run,
+      );
+      expect(state.status).toBe('failure');
+      expect(failureOf(db, run.id)).toMatchObject({ code: 'dataset_param_invalid', side: 'source' });
+    }
+  });
+
+  it('#1144 ONE dataset on both ends is a legitimate template once parameters make the addresses differ', async () => {
+    const { db, run } = await seedParamCopy(
+      { source: { path: 'a.csv' }, sink: { path: 'b.csv' } },
+      { sameDataset: true },
+    );
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    expect(state.status).toBe('success');
+  });
+
+  it('#1144 ...but still refuses the self-copy when both ends resolve to the same config', async () => {
+    const { db, run, sourceDs } = await seedParamCopy(
+      { source: { path: 'a.csv' }, sink: { path: 'a.csv' } },
+      { sameDataset: true },
+    );
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    expect(state.status).toBe('failure');
+    expect(failureOf(db, run.id)).toMatchObject({
+      code: 'dataset_self_copy',
+      error: expect.stringContaining(sourceDs),
+    });
   });
 
   // -------------------------------------------------------------------------
