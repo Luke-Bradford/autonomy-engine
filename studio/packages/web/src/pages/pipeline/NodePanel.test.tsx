@@ -1221,7 +1221,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     expect(screen.getByText(/No reference in this pipeline fits mapping row 3 sink/)).toBeTruthy();
   });
 
-  it("offers nothing to the expression of a row that already reads a source column", () => {
+  it('offers nothing to the expression of a row that already reads a source column', () => {
     // `source` XOR `expression`: any reference here is refused at save.
     mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
 
