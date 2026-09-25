@@ -351,3 +351,108 @@ test.describe('U23 — container config editing', () => {
   // versions minted BEFORE the refusal, is covered by `ContainerPanel.test.tsx`.
   // Getting it back into a browser needs a gate-bypassing seed — that is #939.
 });
+
+/**
+ * #864 — the expression flyout on a container's two `${}` fields.
+ *
+ * Neither field is in any NODE's scope, which is what this pins end to end: a
+ * loop's `exitWhen` reads its own children and not the node feeding the loop,
+ * and a foreach's `items` reads that upstream node and not its own body. Saving
+ * is the assertion that matters — both fields are whole-value, so a pick that
+ * spliced rather than replaced would leave the doc refused.
+ */
+test.describe('#864 — the expression flyout on container fields', () => {
+  const SRC = {
+    id: 'n_src',
+    position: AT,
+    config: {
+      url: 'https://seed.test',
+      method: 'GET',
+      outputs: [{ name: 'rows', type: 'json' }],
+    },
+  };
+  const BODY = {
+    id: 'n_body',
+    position: AT2,
+    config: {
+      url: 'https://seed.test',
+      method: 'GET',
+      outputs: [
+        { name: 'done', type: 'boolean' },
+        { name: 'note', type: 'string' },
+      ],
+    },
+  };
+  const panel = (page: Page) => page.getByRole('complementary', { name: 'Properties' });
+
+  test("a loop's exitWhen is offered its child's boolean, and the pick is saved", async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, '864 exitWhen picker', {
+      nodes: [SRC, BODY],
+      edges: [{ from: 'n_src', to: 'loop_1', on: 'success' }],
+      containers: [
+        { id: 'loop_1', kind: 'loop', children: ['n_body'], exitWhen: '${equals(1, 2)}' },
+      ],
+    });
+
+    await configure(page, 'loop 1');
+    await panel(page).getByRole('button', { name: 'Insert reference into exitWhen' }).click();
+    // The save gate's boolean check is what filters `note` out, and the scope
+    // rule is what keeps the upstream `rows` out — neither restated in the UI.
+    await expect(panel(page).getByRole('button', { name: /→ note/ })).toHaveCount(0);
+    await expect(panel(page).getByRole('button', { name: /→ rows/ })).toHaveCount(0);
+    await panel(page)
+      .getByRole('button', { name: /→ done/ })
+      .click();
+    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${nodes.n_body.output.done}');
+    await page.getByRole('button', { name: 'Apply container settings' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await savedContainers(page, pipelineId)).toEqual([
+      {
+        id: 'loop_1',
+        kind: 'loop',
+        children: ['n_body'],
+        exitWhen: '${nodes.n_body.output.done}',
+      },
+    ]);
+    await expectQuiet(page, problems);
+  });
+
+  test("a foreach's items is offered its upstream output, and the pick is saved", async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, '864 items picker', {
+      nodes: [SRC, BODY],
+      edges: [{ from: 'n_src', to: 'foreach_1', on: 'success' }],
+      containers: [
+        { id: 'foreach_1', kind: 'foreach', children: ['n_body'], items: '${createArray(1)}' },
+      ],
+    });
+
+    await configure(page, 'foreach 1');
+    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
+    await expect(panel(page).getByRole('button', { name: /→ done/ })).toHaveCount(0);
+    await panel(page)
+      .getByRole('button', { name: /→ rows/ })
+      .click();
+    await expect(page.getByLabel(/^items/)).toHaveValue('${nodes.n_src.output.rows}');
+    await page.getByRole('button', { name: 'Apply container settings' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await savedContainers(page, pipelineId)).toEqual([
+      {
+        id: 'foreach_1',
+        kind: 'foreach',
+        children: ['n_body'],
+        items: '${nodes.n_src.output.rows}',
+      },
+    ]);
+    await expectQuiet(page, problems);
+  });
+});

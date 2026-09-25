@@ -6,9 +6,9 @@ import { useCaretInsert } from './useCaretInsert';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
- * references legal at this node, how to name them, and how to probe a field's
- * shape. Passed as one optional object so a panel with no expression context
- * (`ContainerPanel`, whose container fields are #864) simply omits it.
+ * references legal at this site, how to name them, and how to probe a field's
+ * shape. Passed as one optional object so a control with no expression context
+ * simply omits it. `ContainerPanel` passes one per expression field (#864).
  */
 export type FieldPicker = {
   describe: (suggestion: RefSuggestion) => string;

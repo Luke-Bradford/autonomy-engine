@@ -1725,8 +1725,8 @@ decides which cells are offered anything; the validator does. The same holds for
 list, `llm_call.tools`, whose three text cells all refuse a pipeline reference.
 
 Nothing offered is a per-ROW value. Substitution stays in the reducer (§8), so an `expression` is
-one constant per dispatch. The rest of the picker's gaps (container fields, a filter's `${item}`,
-the FUNCTIONS half) are #864.
+one constant per dispatch. The rest of the picker's gaps (a filter's `${item}`, the FUNCTIONS
+half) are #864; container fields shipped under it.
 
 ---
 

@@ -578,6 +578,37 @@ describe('validateDoc — foreach container (#4 A4)', () => {
     expect(validateDoc(d).join(' ')).toContain('whole-value');
   });
 
+  // #864 — the TYPE half of `items`, mirroring exitWhen's boolean check. Before
+  // it, a scalar-typed reference saved clean and failed every run at
+  // `evalForeachItems` ("items must resolve to an array").
+  it('rejects items whose expression is a SCALAR type — it can never be an array', () => {
+    const NAME: Param = { name: 'name', type: 'string', required: true };
+    for (const items of ['${params.name}', '${run.runId}', '${nodes.src.output.n}']) {
+      const d = doc(
+        [node('src', { outputs: [{ name: 'n', type: 'number' }] }), node('w')],
+        [edge('src', 'fe', 'success')],
+        [{ id: 'fe', kind: 'foreach', children: ['w'], items }],
+        [NAME],
+      );
+      expect(validateDoc(d).join(' '), items).toContain(
+        'container.fe.items: items must be an array expression, got',
+      );
+    }
+  });
+
+  it('accepts items whose type COULD be an array — json, any, an array-returning fn', () => {
+    const CSV: Param = { name: 'csv', type: 'string', required: true };
+    for (const items of ['${params.list}', '${trigger.body}', "${split(params.csv, ',')}"]) {
+      const d = doc(
+        [node('w')],
+        [],
+        [{ id: 'fe', kind: 'foreach', children: ['w'], items }],
+        [LIST, CSV],
+      );
+      expect(validateDoc(d), items).toEqual([]);
+    }
+  });
+
   it('rejects a literal items with no ${} at all', () => {
     const d = doc(
       [node('w')],
