@@ -876,7 +876,15 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   // parent-terminal test, because in this crash window the parent is as likely
   // to be still `running`, where the sweep would otherwise just walk away.
   const parentEvents = parentLog(deps, report, parentRunId);
-  if (parentEvents !== null && parentDetached(deps, parentEvents, parentRunId, run.id)) {
+  const detached =
+    parentEvents === null
+      ? false
+      : parentDetached(deps, parentEvents, parent.pipelineVersionId, run.id);
+  if (detached === null) {
+    report.deferred.push(run.id); // undecidable: never bury it (see `parentDetached`)
+    return;
+  }
+  if (detached) {
     if (deps.kickChild === undefined) {
       report.deferred.push(run.id);
       return;
@@ -1052,23 +1060,34 @@ function parentLog(
 
 /**
  * #796 item 2 — did the parent DETACH from `childRunId`? See `isDetachedChild`
- * for why the bound doc is consulted and not only the log. A parent version that
- * cannot be resolved degrades to the log's `call.detached` alone; resolving it is
- * not this function's job to report, since the parent's own reconcile meets the
- * same failure and files it there.
+ * for why the bound doc is consulted and not only the log.
+ *
+ * `null` is UNDECIDABLE: the parent announced this child, its log has no
+ * `call.detached`, and its version cannot be resolved to ask the doc. Both
+ * callers resolve that the way #1053's asymmetry does — toward the reversible
+ * act. The running scan resumes rather than freezes, and the sweep leaves a
+ * never-started child `pending` rather than burying work that may have been
+ * asked for. The resolve failure itself is not reported here: the parent's own
+ * reconcile meets it and files it there.
  */
 function parentDetached(
   deps: ReconcileDeps,
   parentEvents: readonly EngineEvent[],
-  parentRunId: string,
+  parentPipelineVersionId: string | null,
   childRunId: string,
-): boolean {
+): boolean | null {
+  if (isDetachedChild(parentEvents, null, childRunId)) return true; // the log says so
   let doc: PipelineVersion | null = null;
   try {
-    const parent = getRun(deps.db, parentRunId);
-    if (parent !== null) doc = deps.resolveDoc(parent.pipelineVersionId);
+    if (parentPipelineVersionId !== null) doc = deps.resolveDoc(parentPipelineVersionId);
   } catch {
     doc = null;
+  }
+  if (doc === null) {
+    const announced = parentEvents.some(
+      (e) => e.type === 'call.started' && e.childRunId === childRunId,
+    );
+    return announced ? null : false;
   }
   return isDetachedChild(parentEvents, doc, childRunId);
 }
@@ -1203,7 +1222,12 @@ export async function reconcileOne(
     if (
       parentEvents !== null &&
       terminalFactFromLog(parentEvents) !== null &&
-      !parentDetached(deps, parentEvents, run.parentRunId, run.id)
+      parentDetached(
+        deps,
+        parentEvents,
+        getRun(deps.db, run.parentRunId)?.pipelineVersionId ?? null,
+        run.id,
+      ) === false
     ) {
       interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
       report.interrupted.push(run.id);

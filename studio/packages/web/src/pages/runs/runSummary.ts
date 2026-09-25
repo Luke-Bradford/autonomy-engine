@@ -113,7 +113,8 @@ export interface NodeActivity {
    *    so one event is one attempt exactly;
    *  - a TERMINAL event for a node with no attempts yet is itself the start
    *    (`fail`/`filter`, whose only event is their `node.failed`/`node.succeeded`,
-   *    and a call node, whose only event is `call.returned`). A dispatched node
+   *    and a call node, whose only event is `call.returned` or — adopting an
+   *    already-announced child — `call.detached`). A dispatched node
    *    already has attempts ≥ 1 by then, so this never double-counts.
    */
   attempts: number;

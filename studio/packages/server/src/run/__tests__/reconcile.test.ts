@@ -2631,4 +2631,30 @@ describe("reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not 
     expect(report.deferred).toContain(child.id);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
+  it('leaves an UNDECIDABLE child pending — announced, no detach in the log, parent version unresolvable', async () => {
+    const { db } = freshDb();
+    const { parent, child } = seedDetachedFamily(db, 'started');
+    appendEngineEvent(db, { type: 'run.finished', runId: parent.id, outcome: 'success' });
+    updateRun(db, parent.id, { status: 'success', finishedAt: Date.now() });
+    const real = resolveDocFor(db);
+    const kicked: string[] = [];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: (id) => {
+        if (id === parent.pipelineVersionId) throw new Error('version gone');
+        return real(id);
+      },
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      kickChild: (run) => kicked.push(run.id),
+    });
+
+    // Neither buried (irreversible) nor started (it may be an undeliverable
+    // WAITING child): left for a later boot, and said so.
+    expect(report.sweptOrphans).toEqual([]);
+    expect(kicked).toEqual([]);
+    expect(report.deferred).toContain(child.id);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
 });

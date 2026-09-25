@@ -204,7 +204,8 @@ const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
  * only a comment as non-empty):
  *   - `ready`         — `dispatchNode` was emitted; the driver owes `node.dispatched`.
  *   - `dispatched`    — the executor owes a `node.succeeded` / `node.failed`.
- *   - `waiting`       — a `call_pipeline` child owes a `call.returned`.
+ *   - `waiting`       — a `call_pipeline` child owes a `call.returned` (or, for a
+ *     `wait: false` node, the executor owes its `call.detached`).
  *   - `retry_pending` — S1's DURABLE ALARM row owes a `node.retryDue`. NOTHING is
  *     in flight here, which is exactly why a naive "converged and idle" test
  *     would tear down every retrying run.
@@ -3426,8 +3427,14 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics,
       };
     }
-    if (ns.status !== 'waiting' || event.attemptId !== ns.currentAttemptId) {
-      return { state, commands: [], diagnostics }; // stale, or already resolved
+    if (event.attemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics }; // STALE → ignored
+    }
+    if (ns.status !== 'waiting') {
+      diagnostics.push(
+        `duplicate call.detached for already-terminal call node '${event.callNodeId}'`,
+      );
+      return { state, commands: [], diagnostics };
     }
     const node = docNodeFor(event.callNodeId)!;
     if (node.call === undefined || !callDetaches(node.call)) {

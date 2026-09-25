@@ -1,5 +1,5 @@
 import type { EngineEvent, PipelineVersion, Run, RunOutcome } from '@autonomy-studio/shared';
-import { callDetaches, docNodeIdOf } from '@autonomy-studio/shared';
+import { callDetaches, resolveDocNode } from '@autonomy-studio/shared';
 import {
   assertJsonReplaySafe,
   MAX_CALL_DEPTH,
@@ -449,8 +449,7 @@ export function isDetachedChild(
     if (e.type === 'call.started' && e.childRunId === childRunId) callNodeId = e.callNodeId;
   }
   if (callNodeId === undefined || parentDoc === null) return false;
-  const docId = docNodeIdOf(callNodeId);
-  const node = parentDoc.nodes.find((n) => n.id === docId);
+  const node = resolveDocNode(parentDoc.nodes, callNodeId);
   return node?.call !== undefined && callDetaches(node.call);
 }
 
