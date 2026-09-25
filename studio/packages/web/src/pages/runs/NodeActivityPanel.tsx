@@ -130,6 +130,25 @@ export function NodeActivityPanel({
         <p className="page-hint">
           This node did not run in this run. The rerun reused its result from run{' '}
           <code>{node.copiedFromRunId}</code>, so the outputs below were computed there.
+          {/* RS4 — a copied call node did not start a child either; say which
+              child it is standing on, and give the way down to it. Worded to
+              stay true in two cases: after a rerun OF a rerun the child's parent
+              is an EARLIER run than the one named above, so the sentence never
+              says whose child it is; and a `wait: false` child may still be
+              running, so nothing here speaks of it as finished. */}
+          {node.copiedChildRunId !== undefined && (
+            <>
+              {' '}
+              The child run behind that result is{' '}
+              <Link
+                to={runDetailPath(node.copiedChildRunId)}
+                aria-label={runLinkLabel('Reused child', node.copiedChildRunId)}
+              >
+                <code>{node.copiedChildRunId}</code>
+              </Link>
+              , and this rerun did not start another.
+            </>
+          )}
         </p>
       )}
 

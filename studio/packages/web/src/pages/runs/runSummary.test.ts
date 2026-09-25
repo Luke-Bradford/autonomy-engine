@@ -1515,6 +1515,22 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
     ]);
   });
 
+  it('RS4 — a copied call node names the child it reused, and does NOT count it as spawned here', () => {
+    const [a, b] = deriveNodeActivity(
+      reseededLog({
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: {}, b: {} },
+        childLinks: [{ callNodeId: 'b', sourceChildRunId: 'child_r1' }],
+      }),
+    );
+
+    expect(b?.copiedChildRunId).toBe('child_r1');
+    /* `childRunIds` is what `RunCostSummary` reads as spend this run excludes;
+       the reused child spent nothing in this run. */
+    expect(b?.childRunIds).toEqual([]);
+    expect(a?.copiedChildRunId).toBeUndefined();
+  });
+
   it('records an empty copied result as `{}` — the reducer\'s own fallback, not "no result"', () => {
     /* Not a live producer case: `reseedFrontier` writes `copiedOutputs[id]` for
        EVERY frontier id (`{...(outputs[id] ?? {})}`), so a missing key cannot
@@ -1686,6 +1702,7 @@ describe('reconcileNodeActivity', () => {
       failureCode: undefined,
       outputValues: undefined,
       copiedFromRunId: undefined,
+      copiedChildRunId: undefined,
       instanceId: undefined,
       startedAtMs: undefined,
       endedAtMs: undefined,

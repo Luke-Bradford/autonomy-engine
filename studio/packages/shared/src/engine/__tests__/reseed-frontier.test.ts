@@ -332,6 +332,25 @@ describe('RS4 — reseedFrontier: a copied call node links the child run that pr
     expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: childRunId }]);
   });
 
+  it('a RETRIED call node links its LATEST attempt\'s child, and a live attempt outranks a carried link', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const { childRunId: first } = mintedChildRunId(eng, 'call');
+    const link = (currentAttemptId: string): string | undefined => {
+      const s = state({ nodes: { call: 'success', b: 'failure' } });
+      s.nodes.call = {
+        status: 'success',
+        attempts: 2,
+        retries: 1,
+        currentAttemptId,
+        sourceChildRunId: 'child_carried',
+      };
+      return eng.reseedFrontier(s).childLinks[0]?.sourceChildRunId;
+    };
+    expect(link('call#0')).toBe(first);
+    expect(link('call#1')).not.toBe(first);
+    expect(link('call#1')).not.toBe('child_carried');
+  });
+
   it('a call node that was itself COPIED (a rerun of a rerun) carries its link forward', () => {
     const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
     const s = state({ nodes: { call: 'success', b: 'failure' } });

@@ -316,6 +316,27 @@ describe('RS4 — run.reseeded childLinks fold', () => {
     expect(state.nodes.call!.sourceChildRunId).toBeUndefined();
   });
 
+  it('a link on a non-call node, or a second link for one node, is refused', () => {
+    const eng = engine([node('a'), callNode('call')]);
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({
+        frontier: ['a', 'call'],
+        childLinks: [
+          { callNodeId: 'a', sourceChildRunId: 'child_x' },
+          { callNodeId: 'call', sourceChildRunId: 'child_1' },
+          { callNodeId: 'call', sourceChildRunId: 'child_2' },
+        ],
+      }),
+    ]);
+    expect(allDiagnostics).toEqual([
+      "impossible run.reseeded: child link for 'a', which is not a call_pipeline node",
+      "impossible run.reseeded: child link for 'call', which is already linked",
+    ]);
+    expect(state.nodes.a!.sourceChildRunId).toBeUndefined();
+    expect(state.nodes.call!.sourceChildRunId).toBe('child_1');
+  });
+
   it('a NON-frontier call node re-runs with a FRESH child id minted from the new run', () => {
     const eng = engine([node('a'), callNode('call')], [edge('a', 'call', 'success')]);
     const r1Child = fold(eng, [

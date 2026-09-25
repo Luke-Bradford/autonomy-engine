@@ -13,7 +13,7 @@ import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
  *   `run.triggerContext?` (R1's, replayed verbatim so `${trigger.*}` reuses R1's
  *   fire-time facts — the single SSOT, spec §"The reseed event") →
  *   `run.started{rerunOf: R1}` (defers start-time dispatch) →
- *   `run.reseeded{sourceRunId: R1, frontier, copiedOutputs, copiedContainers}`
+ *   `run.reseeded{sourceRunId: R1, frontier, copiedOutputs, copiedContainers, childLinks?}`
  * (the frontier computed by the PURE `engine.reseedFrontier`).
  *
  * CRASH-SAFETY (RS1's load-bearing invariant): the deferred `run.started{rerunOf}`
@@ -152,7 +152,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       const sourceState = engine.projectRunState(sourceEvents);
 
       // 3. The PURE frontier over R1's projection (strict successful prefix).
-      const { frontier, copiedOutputs, copiedContainers } = engine.reseedFrontier(sourceState);
+      const { frontier, copiedOutputs, copiedContainers, childLinks } =
+        engine.reseedFrontier(sourceState);
 
       // 4. `resolveRunParams` reproduces R1's resolved params (same version, same
       // raw params) for the `run.started` payload — computed BEFORE the tx (pure).
@@ -199,6 +200,9 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           frontier,
           copiedOutputs,
           copiedContainers,
+          // RS4 — omitted when no call node was copied, so a reseed with none
+          // logs exactly the shape it did before the field existed.
+          ...(childLinks.length > 0 ? { childLinks } : {}),
         };
 
         const { records: recs } = foldOutOfBand(

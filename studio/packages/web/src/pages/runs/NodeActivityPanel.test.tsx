@@ -37,6 +37,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     datasetAddresses: undefined,
     outputValues: undefined,
     copiedFromRunId: undefined,
+    copiedChildRunId: undefined,
     instanceId: undefined,
     startedAtMs: undefined,
     endedAtMs: undefined,
@@ -98,6 +99,29 @@ describe('NodeActivityPanel — why there is no duration', () => {
     );
     expect(panel.textContent).toMatch(/not executed in this run/);
     expect(panel.textContent).not.toMatch(/has not started/);
+  });
+
+  it('RS4 — a copied call node links the child run behind its result', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'success',
+        attempts: 0,
+        copiedFromRunId: 'run_0',
+        copiedChildRunId: 'child_0',
+      }),
+    );
+    const link = panel.querySelector('a[aria-label="Reused child run child_0"]');
+    expect(link?.getAttribute('href')).toMatch(/\/monitor\/runs\/child_0$/);
+    expect(panel.textContent).toMatch(/this rerun did not start another/);
+  });
+
+  it('RS4 — a copied node with no child names none', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'success', attempts: 0, copiedFromRunId: 'run_0' }),
+    );
+    expect(panel.querySelector('a[aria-label^="Reused child"]')).toBeNull();
+    expect(panel.textContent).not.toMatch(/child run behind/);
   });
 });
 

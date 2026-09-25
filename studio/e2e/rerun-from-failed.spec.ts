@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -177,6 +177,80 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
   await expect(panel.getByText('{"result":[4,5]}')).toBeVisible();
   await expect(panel.getByText(/reused its result from run/)).toBeVisible();
   await expect(panel.getByText(/not executed in this run/)).toBeVisible();
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * RS4 — a rerun that COPIES a call node reuses that node's child run rather
+ * than starting a new one, and the copied node says which child that was.
+ *
+ * Walked in a browser because the link is followed for real: the child id
+ * is derived by the engine rather than read off a row, so the one failure
+ * that matters is a link to a run that does not exist. The `wait ${0}` child
+ * follows `child-run-drill.spec.ts`, and for the same reason: nothing here is
+ * billable or egress-adjacent.
+ */
+test('RS4 — a rerun reuses a copied call node\'s child, and links to it', async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const childDoc: SeedDoc = {
+    nodes: [
+      { id: 'childWork', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } },
+    ],
+  };
+  const { pipelineVersionId: childPv } = await seedVersion(page, 'RS4 child', childDoc);
+  const parentDoc: SeedDoc = {
+    nodes: [
+      {
+        id: 'callChild',
+        type: 'call_pipeline',
+        config: {},
+        call: { pipelineVersionId: childPv, params: {} },
+        position: { x: 0, y: 0 },
+      },
+      { id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 240, y: 0 } },
+    ],
+    edges: [{ from: 'callChild', to: 'stop', on: 'success' as const }],
+  };
+  const { pipelineVersionId: parentPv } = await seedVersion(page, 'RS4 parent', parentDoc);
+  const sourceRunId = await fireAndSettle(page, parentPv, 'RS4 rerun');
+
+  const childrenOf = async (runId: string) => {
+    const res = await page.request.get(`/api/runs?parentRunId=${encodeURIComponent(runId)}`);
+    expect(res.status()).toBe(200);
+    return ((await res.json()) as { items: { id: string; status: string }[] }).items;
+  };
+  /* PREMISE: R1's call node really spawned one child, and it succeeded, so
+     the call node is on the frontier and `stop` is what failed. */
+  const sourceChildren = await childrenOf(sourceRunId);
+  expect(sourceChildren).toHaveLength(1);
+  expect(sourceChildren[0]!.status).toBe('success');
+  const childRunId = sourceChildren[0]!.id;
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(sourceRunId)}`);
+  await fluentRootReady(page);
+  await expect(page.locator('.run-status')).toHaveText('failure');
+  await page.getByRole('button', { name: 'Rerun from failed' }).click();
+  await expect(page.getByText('Rerun of')).toBeVisible();
+  const rerunId = decodeURIComponent(page.url().split('/monitor/runs/')[1]!);
+  expect(rerunId).not.toBe(sourceRunId);
+  await expect(page.locator('.run-status')).toHaveText('failure');
+
+  /* The call node was COPIED, so the rerun started no child of its own. */
+  expect(await childrenOf(rerunId)).toHaveLength(0);
+
+  const callRow = page.getByRole('row').filter({ hasText: 'callChild' });
+  await callRow.getByRole('button').first().click();
+  const panel = page.getByRole('complementary', { name: /^Node / });
+  await expect(panel.getByText(/reused its result from run/)).toBeVisible();
+  await expect(panel.getByText(/this rerun did not start another/)).toBeVisible();
+
+  /* Followed for real: an href assertion alone would pass against a run that
+     does not exist. */
+  await panel.getByRole('link', { name: `Reused child run ${childRunId}` }).click();
+  await expect(page).toHaveURL(new RegExp(`/monitor/runs/${childRunId}$`));
+  await expect(page.getByRole('link', { name: `Parent run ${sourceRunId}` })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

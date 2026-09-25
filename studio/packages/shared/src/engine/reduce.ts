@@ -126,9 +126,9 @@ export interface Engine {
 }
 
 /**
- * RS2 — the reseed manifest computed from a source run's projection: the exact
- * three fields RS1's `run.reseeded` event carries (minus `sourceRunId`, which the
- * producer stamps). See {@link Engine.reseedFrontier}.
+ * RS2 — the reseed manifest computed from a source run's projection: the fields
+ * RS1's `run.reseeded` event carries (minus `sourceRunId`, which the producer
+ * stamps; RS4's `childLinks` rides as the optional field). See {@link Engine.reseedFrontier}.
  *
  * INCLUSION RULE (strict successful prefix, Open-Q1 settled — "copy only what the
  * resume needs"): a top-level entity (node OR container) is INCLUDED iff
@@ -3129,13 +3129,20 @@ export function createEngine(doc: EngineDoc): Engine {
     // `reseedFrontier` (a copied node has no attempt to derive its child from). A
     // link for a node this fold did not copy is a malformed manifest: report and
     // skip, never attach provenance to a node that will execute here.
+    const linked = new Set<string>();
     for (const link of event.childLinks ?? []) {
-      if (!applied.has(link.callNodeId)) {
-        diagnostics.push(
-          `impossible run.reseeded: child link for '${link.callNodeId}', which is not a copied frontier node`,
-        );
+      const why = !applied.has(link.callNodeId)
+        ? 'which is not a copied frontier node'
+        : docNodeFor(link.callNodeId)?.call === undefined
+          ? 'which is not a call_pipeline node'
+          : linked.has(link.callNodeId)
+            ? 'which is already linked'
+            : null;
+      if (why !== null) {
+        diagnostics.push(`impossible run.reseeded: child link for '${link.callNodeId}', ${why}`);
         continue;
       }
+      linked.add(link.callNodeId);
       nodes[link.callNodeId] = { ...nodes[link.callNodeId]!, sourceChildRunId: link.sourceChildRunId };
     }
 

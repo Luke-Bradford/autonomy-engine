@@ -217,6 +217,8 @@ export const NodeRunStateSchema = z.object({
    * run (in the source run's lineage) that produced its copied outputs. A copied
    * node has no `currentAttemptId` to derive its child from, so this is what lets
    * a rerun OF a rerun carry the link forward instead of losing it.
+   * `reseedFrontier` reads a live `currentAttemptId` FIRST, so this can never
+   * outrank a child the node spawned itself — which is why nothing clears it.
    */
   sourceChildRunId: z.string().optional(),
   /**
