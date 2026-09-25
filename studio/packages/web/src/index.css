@@ -1347,8 +1347,11 @@ td button + button {
    the membership `<select>` wants, so only this fieldset needs a rule: it is what
    visually separates "which container is this activity in" from "make a new
    one", two different acts reached through one control. */
+/* #1304 — a bound end's parameter overrides share the card idiom, so each
+   end's overrides read as belonging to the picker above them. */
 .container-create,
-.contract-row {
+.contract-row,
+.param-overrides {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -2923,6 +2926,18 @@ td button + button {
    to space them and name the group the way a `<label>` would name a control. */
 .object-list {
   gap: 0.5rem;
+}
+
+/* #1304 — Remove sits under its input, and the flag under that. */
+.param-override-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.param-override-row > .config-field {
+  align-self: stretch;
 }
 
 .object-list-label {
