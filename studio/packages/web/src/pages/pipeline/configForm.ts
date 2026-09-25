@@ -475,6 +475,35 @@ export function unrepresentableFields(
  */
 const NUMERIC_INPUT = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
+/**
+ * One row of a row list read back as config values, cell by cell.
+ *
+ * The ONE reader of a row, shared by the apply (`parseFieldInput`, which refuses
+ * the list on `failure`) and the expression picker's candidate placement
+ * (`ObjectListControl`, which keeps `value` and ignores it — a draft row is
+ * routinely incomplete while the author is still filling it in). A cell that
+ * fails is OMITTED from `value`, the same as a cleared optional cell, so the
+ * shape a validator reads keeps "not set" meaning absent.
+ */
+export function parseRowCells(
+  cells: readonly ConfigField[],
+  row: ObjectListRow,
+): { value: Record<string, unknown>; failure: { cell: string; message: string } | null } {
+  const value: Record<string, unknown> = {};
+  let failure: { cell: string; message: string } | null = null;
+  for (const cell of cells) {
+    const parsed = parseFieldInput(cell, row[cell.name] ?? emptyControlValue(cell));
+    if (!parsed.ok) {
+      failure ??= { cell: cell.name, message: parsed.message };
+      continue;
+    }
+    // A cleared OPTIONAL cell omits its key from the row, exactly as a
+    // cleared optional field omits its key from the config.
+    if (!parsed.omit) value[cell.name] = parsed.value;
+  }
+  return { value, failure };
+}
+
 /** Read one control's input back out as a config value. */
 export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse {
   // FIRST, before every scalar guard below: a row list is neither a string nor a
@@ -485,17 +514,11 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
     const cells = field.elementFields ?? [];
     const rows: Record<string, unknown>[] = [];
     for (const [index, row] of raw.entries()) {
-      const built: Record<string, unknown> = {};
-      for (const cell of cells) {
-        const parsed = parseFieldInput(cell, row[cell.name] ?? emptyControlValue(cell));
-        if (!parsed.ok) {
-          return { ok: false, message: `row ${index + 1} ${cell.name}: ${parsed.message}` };
-        }
-        // A cleared OPTIONAL cell omits its key from the row, exactly as a
-        // cleared optional field omits its key from the config.
-        if (!parsed.omit) built[cell.name] = parsed.value;
+      const { value, failure } = parseRowCells(cells, row);
+      if (failure !== null) {
+        return { ok: false, message: `row ${index + 1} ${failure.cell}: ${failure.message}` };
       }
-      rows.push(built);
+      rows.push(value);
     }
     // No rows on an OPTIONAL field is "not set". On a REQUIRED one it must be
     // written as `[]`, following `stringList`'s rule below: omitting it would

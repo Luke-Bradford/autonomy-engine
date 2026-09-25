@@ -193,8 +193,12 @@ test.describe('#1139 — copy-node authoring', () => {
       [2, 'label', 'full_name', 'string'],
     ] as const) {
       await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-      await panel(page).getByLabel(`mapping row ${row} source (optional)`).fill(source);
-      await panel(page).getByLabel(`mapping row ${row} sink`).fill(sink);
+      await panel(page)
+        .getByRole('textbox', { name: `mapping row ${row} source (optional)` })
+        .fill(source);
+      await panel(page)
+        .getByRole('textbox', { name: `mapping row ${row} sink` })
+        .fill(sink);
       await panel(page).getByLabel(`mapping row ${row} type`).selectOption(type);
     }
 
@@ -225,7 +229,9 @@ test.describe('#1139 — copy-node authoring', () => {
     // And it comes BACK into the same controls, one row per stored mapping.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('full_name');
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+      'full_name',
+    );
     await expect(panel(page).getByLabel('mapping row 2 type')).toHaveValue('string');
 
     await expectQuiet(page, problems);
@@ -292,8 +298,12 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     ).toBeVisible();
 
     // The rows landed in the real row controls, not in a JSON box.
-    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
-    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('label');
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+      'id',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+      'label',
+    );
     await expect(panel(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
     await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
@@ -324,8 +334,82 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     await canvasNodes(page).first().click();
     await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
     await expect(panel(page).getByText(/No new columns matched\./)).toBeVisible();
-    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
-    await expect(panel(page).getByLabel('mapping row 3 sink')).toHaveCount(0);
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+      'id',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 3 sink' })).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+});
+
+test.describe('#1178 — the expression picker on a mapping cell', () => {
+  /**
+   * §13's per-column escape hatch. A mapping row's `expression` is a VALUE and
+   * may be `${}` (§8); its `source`/`sink` are column names and may not. The
+   * flyout used to probe by top-level field name, so a cell had no picker at
+   * all. Proven here against the real save gate: the reference the flyout
+   * inserts survives Save into the immutable version, and the column-name cell
+   * beside it offers nothing, rather than references Save would refuse.
+   */
+  test('a reference picked into a row expression reaches the saved version', async ({ page }) => {
+    const problems = collectPageProblems(page);
+
+    const srcConn = await seedConnection(page, 'e2e 1178 source store', 'e2e-1178-src.db');
+    const sinkConn = await seedConnection(page, 'e2e 1178 sink store', 'e2e-1178-sink.db');
+    const srcSet = await seedDataset(page, 'e2e 1178 people', srcConn, 'people');
+    const sinkSet = await seedDataset(page, 'e2e 1178 people copy', sinkConn, 'people_copy');
+
+    const pipelineId = await openSeededCanvas(page, 'e2e 1178 mapping expression', {
+      nodes: [],
+      params: [{ name: 'batch', type: 'string', required: true }],
+    });
+    await addActivity(page, 'Copy Data');
+    await canvasNodes(page).first().click();
+
+    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
+    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
+    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+
+    await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
+    await panel(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
+    await panel(page).getByLabel('mapping row 1 type').selectOption('string');
+
+    // The column-name cell: held to a literal, so nothing is offered.
+    await panel(page)
+      .getByRole('button', { name: 'Insert reference into mapping row 1 sink' })
+      .click();
+    await expect(
+      panel(page).getByText('No reference in this pipeline fits mapping row 1 sink'),
+    ).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: /^batch/ })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    // The value cell: the param is offered, and lands in THIS row's expression.
+    await panel(page)
+      .getByRole('button', { name: 'Insert reference into mapping row 1 expression' })
+      .click();
+    await panel(page)
+      .getByRole('button', { name: /^batch/ })
+      .click();
+    await expect(
+      panel(page).getByRole('textbox', { name: 'mapping row 1 expression (optional)' }),
+    ).toHaveValue('${params.batch}');
+
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const res = await page.request.get(`/api/pipelines/${pipelineId}/versions`);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { type: string; config?: { mapping?: unknown } }[];
+    }[];
+    const latest = versions.reduce((a, b) => (b.version > a.version ? b : a));
+    expect(latest.nodes.find((n) => n.type === 'copy')?.config?.mapping).toEqual([
+      { expression: '${params.batch}', sink: 'label', type: 'string' },
+    ]);
 
     await expectQuiet(page, problems);
   });
