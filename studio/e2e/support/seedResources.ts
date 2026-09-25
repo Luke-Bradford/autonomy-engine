@@ -33,7 +33,13 @@ async function createResource(page: Page, path: string, body: unknown): Promise<
  */
 export function seedConnection(
   page: Page,
-  connection: { name: string; kind: string; config: Record<string, unknown> },
+  connection: {
+    name: string;
+    kind: string;
+    config: Record<string, unknown>;
+    /** The per-node override allowlist (#1304). Omitted means `[]`. */
+    parameters?: string[];
+  },
 ): Promise<string> {
   return createResource(page, '/api/connections', connection);
 }
@@ -51,6 +57,8 @@ export function seedDataset(
     connectionId: string;
     config: Record<string, unknown>;
     columns: { name: string; type: string; nullable: boolean }[];
+    /** The per-node override allowlist (#1304). Omitted means `[]`. */
+    parameters?: string[];
   },
 ): Promise<string> {
   return createResource(page, '/api/datasets', dataset);

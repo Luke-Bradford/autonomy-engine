@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import {
   getActivity,
   isStructuralCallActivity,
@@ -1282,5 +1282,160 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // …while a plain field on the same node is still offered it.
     open('prompt');
     expect(offered()).toBeTruthy();
+  });
+});
+
+/**
+ * #1304 — per-dispatch overrides get an editor. The assertions read the DOC, as
+ * the binding suite's do. The gate that refuses a bad override runs only at
+ * dispatch, so the rows' flags are the author's only warning before a run.
+ */
+describe('parameter override editor (#1304)', () => {
+  const fsConn = (parameters: string[]) =>
+    ({
+      id: 'c_fs',
+      name: 'Files',
+      kind: 'fs',
+      config: { roots: ['/data'], maxBytes: 1000 },
+      parameters,
+      secretStatus: 'not_required',
+      ownerId: null,
+      resourceId: 'r_c_fs',
+      secretRef: null,
+      createdAt: 0,
+      updatedAt: 0,
+    }) as unknown as Parameters<typeof NodePanel>[0]['connections'][number];
+  const csv = (parameters: string[]) =>
+    ({
+      id: 'd_csv',
+      name: 'people.csv',
+      kind: 'delimited',
+      connectionId: 'c_fs',
+      config: { path: 'in.csv' },
+      columns: [],
+      parameters,
+      ownerId: null,
+      resourceId: 'r_d_csv',
+      createdAt: 0,
+      updatedAt: 0,
+    }) as unknown as Parameters<typeof NodePanel>[0]['datasets'][number];
+  const lookup = (extra: Partial<Node> = {}): Node =>
+    ({
+      ...node('n_look', 'lookup', {}),
+      connectionId: 'c_fs',
+      datasetIds: { source: 'd_csv' },
+      ...extra,
+    }) as Node;
+  const docNode = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+  const addOverride = (group: string, key: string) => {
+    const fieldset = screen.getByRole('group', { name: group });
+    fireEvent.change(within(fieldset).getByRole('combobox', { name: /Add .* override/ }), {
+      target: { value: key },
+    });
+    fireEvent.click(within(fieldset).getByRole('button', { name: 'Add override' }));
+  };
+
+  it('adds a connection override from the allowlist, starting at the stored value', () => {
+    const { store } = mountOver(lookup(), [fsConn(['maxBytes'])], [csv(['path'])]);
+    addOverride('Connection overrides', 'maxBytes');
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 1000 });
+    // A number field's text is COERCED as it is written, so dispatch's re-validation sees a number.
+    fireEvent.change(screen.getByRole('textbox', { name: 'maxBytes' }), {
+      target: { value: '2048' },
+    });
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 2048 });
+  });
+
+  it('writes a dataset end’s override, and keeps a whole ${} verbatim', () => {
+    const { store } = mountOver(lookup(), [fsConn([])], [csv(['path'])]);
+    addOverride('Source dataset overrides', 'path');
+    fireEvent.change(screen.getByRole('textbox', { name: 'path' }), {
+      target: { value: '${params.file}' },
+    });
+    expect(docNode(store).datasetParams).toEqual({ source: { path: '${params.file}' } });
+  });
+
+  it('removing the last row clears the field outright', () => {
+    const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
+      fsConn(['maxBytes']),
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove override maxBytes' }));
+    expect('connectionParams' in docNode(store)).toBe(false);
+  });
+
+  it('keeps a half-typed number on screen and flags it, rather than snapping it back', () => {
+    const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
+      fsConn(['maxBytes']),
+    ]);
+    const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    // `12.50` already stores the number 12.5. Rendering the STORED value back
+    // would snap the input to `12.5` while the operator is still typing.
+    fireEvent.change(input, { target: { value: '12.50' } });
+    expect((input as HTMLInputElement).value).toBe('12.50');
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 12.5 });
+    fireEvent.change(input, { target: { value: '12x' } });
+    expect((input as HTMLInputElement).value).toBe('12x');
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: '12x' });
+    expect(screen.getByText(/must be a number/)).toBeTruthy();
+  });
+
+  it('undo restores the ROW, not only the doc — the draft follows a store change it did not make', () => {
+    const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
+      fsConn(['maxBytes']),
+    ]);
+    const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    fireEvent.change(input, { target: { value: '6' } });
+    fireEvent.change(input, { target: { value: '64' } });
+    act(() => store.getState().undo());
+    // One burst, one undo step, and the input shows the value undo restored.
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 5 });
+    expect((input as HTMLInputElement).value).toBe('5');
+  });
+
+  it('flags a stored override the connection does not declare — a run would refuse it', () => {
+    mountOver(lookup({ connectionParams: { maxEntries: 5 } }), [fsConn(['maxBytes'])]);
+    expect(screen.getByText(/Files does not declare `maxEntries`/)).toBeTruthy();
+  });
+
+  it('says why nothing can be added when the allowlist is empty', () => {
+    mountOver(lookup(), [fsConn([])], [csv([])]);
+    const group = screen.getByRole('group', { name: 'Connection overrides' });
+    expect(within(group).getByText(/Files declares no overridable settings/)).toBeTruthy();
+    expect(within(group).queryByRole('button', { name: 'Add override' })).toBeNull();
+  });
+
+  it('a bound resource this workspace does not list gets no false flags and no Add', () => {
+    mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [], [csv(['path'])]);
+    const group = screen.getByRole('group', { name: 'Connection overrides' });
+    expect(within(group).getByText(/not one this workspace lists/)).toBeTruthy();
+    expect(within(group).queryByText(/does not declare/)).toBeNull();
+    expect(within(group).queryByRole('button', { name: 'Add override' })).toBeNull();
+  });
+
+  it('shows no editor for an end the node does not bind', () => {
+    mountOver(lookup({ connectionId: undefined, datasetIds: undefined }), [fsConn(['maxBytes'])]);
+    expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Source dataset overrides' })).toBeNull();
+  });
+
+  it('no editor on an activity that takes no connection, even with a stray one', () => {
+    // An import or API seed can leave a `connectionId` on a `wait`. Its picker is
+    // hidden, so an overrides card under it would offer edits to a binding the
+    // panel gives no way to see or clear.
+    mountOver({ ...node('n_wait', 'wait', {}), connectionId: 'c_fs' } as Node, [
+      fsConn(['maxBytes']),
+    ]);
+    expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
+  });
+
+  it('unbinding the connection in the panel takes its overrides with it', () => {
+    const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
+      fsConn(['maxBytes']),
+    ]);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Connection' }), {
+      target: { value: '' },
+    });
+    expect('connectionParams' in docNode(store)).toBe(false);
+    expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
   });
 });

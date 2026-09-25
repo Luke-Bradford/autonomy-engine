@@ -32,6 +32,16 @@ const SEED: Seed = {
 };
 
 describe('buildParams', () => {
+  it('stores only a WHOLE ${} verbatim — a splice of two refs is coerced, and a number refuses it', () => {
+    // `substitute` resolves `${a}5${b}` to a STRING, so storing it verbatim in a
+    // number argument would let Apply pass what the child then refuses (#1307 review).
+    expect(buildParams({ limit: '${params.n}' }, DECLARED)).toEqual({
+      ok: true,
+      value: { limit: '${params.n}' },
+    });
+    expect(buildParams({ limit: '${params.a}5${params.b}' }, DECLARED).ok).toBe(false);
+  });
+
   it('omits a blank row so the child default applies', () => {
     const built = buildParams({ query: '', limit: '25' }, DECLARED);
     expect(built).toEqual({ ok: true, value: { limit: 25 } });

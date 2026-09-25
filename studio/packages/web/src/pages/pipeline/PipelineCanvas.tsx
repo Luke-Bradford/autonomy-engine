@@ -64,6 +64,13 @@ import { ConfigEditor } from './ConfigEditor';
 import { useConfigEditor } from './useConfigEditor';
 import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
+import type { FieldPicker } from './ConfigFieldControl';
+import { ParamOverridesEditor } from './ParamOverridesEditor';
+import {
+  connectionOverrideResource,
+  datasetOverrideResource,
+  type OverrideResource,
+} from './paramOverrides';
 import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
 import {
@@ -2287,6 +2294,60 @@ function seedNodeDraft(
 }
 
 /**
+ * #1304 — the overridable view of the bound row, or `null` when this workspace
+ * does not list it (see `ParamOverridesEditor.resource`).
+ */
+function overrideResourceFor<T extends { id: string }>(
+  rows: readonly T[],
+  id: string,
+  view: (row: T) => OverrideResource,
+): OverrideResource | null {
+  const row = rows.find((r) => r.id === id);
+  return row === undefined ? null : view(row);
+}
+
+/**
+ * #1304 — one dataset end's overrides. Rendered only for an end the DOC binds.
+ * A half-picked pending end is not in `datasetIds`, and `validateDoc` refuses
+ * `datasetParams` for an end with no binding.
+ */
+function DatasetOverrides({
+  store,
+  node,
+  side,
+  datasets,
+  picker,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  /** The DOC's node, never a pending half-pick. */
+  node: Node | undefined;
+  side: 'source' | 'sink';
+  datasets: readonly Dataset[];
+  picker: FieldPicker | undefined;
+}) {
+  const bound = node?.datasetIds?.[side];
+  if (node === undefined || bound === undefined) return null;
+  const nodeId = node.id;
+  return (
+    <ParamOverridesEditor
+      legend={side === 'source' ? 'Source dataset overrides' : 'Sink dataset overrides'}
+      noun="dataset"
+      resource={overrideResourceFor(datasets, bound, datasetOverrideResource)}
+      value={node.datasetParams?.[side]}
+      onChange={(next, key) => store.getState().setNodeParamOverrides(nodeId, side, next, key)}
+      picker={picker}
+      place={(n, key, v) => ({
+        ...n,
+        datasetParams: {
+          ...n.datasetParams,
+          [side]: { ...n.datasetParams?.[side], [key]: v },
+        },
+      })}
+    />
+  );
+}
+
+/**
  * Editor for one activity node.
  *
  * Settings are authored through a FORM derived from the activity's own
@@ -2689,6 +2750,26 @@ export function NodePanel({
           )}
         </LabelledControl>
       )}
+      {entry &&
+        !paired &&
+        entry.connectionKinds.length > 0 &&
+        thisNode?.connectionId !== undefined && (
+          <ParamOverridesEditor
+            legend="Connection overrides"
+            noun="connection"
+            resource={overrideResourceFor(
+              connections,
+              thisNode.connectionId,
+              connectionOverrideResource,
+            )}
+            value={thisNode.connectionParams}
+            onChange={(next, key) =>
+              store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
+            }
+            picker={picker}
+            place={(n, key, v) => ({ ...n, connectionParams: { ...n.connectionParams, [key]: v } })}
+          />
+        )}
 
       {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
           picker above is hidden rather than shown alongside, because
@@ -2738,6 +2819,13 @@ export function NodePanel({
             ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
             onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
           />
+          <DatasetOverrides
+            store={store}
+            node={thisNode}
+            side="source"
+            datasets={datasets}
+            picker={picker}
+          />
           {datasetKinds.sink !== undefined && (
             <BindingSelect
               label="Sink dataset"
@@ -2751,6 +2839,15 @@ export function NodePanel({
                 boundDatasets?.sink,
               ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
               onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)}
+            />
+          )}
+          {datasetKinds.sink !== undefined && (
+            <DatasetOverrides
+              store={store}
+              node={thisNode}
+              side="sink"
+              datasets={datasets}
+              picker={picker}
             />
           )}
         </>

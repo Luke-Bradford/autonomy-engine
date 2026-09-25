@@ -1108,6 +1108,27 @@ export interface CanvasState {
     value: string | undefined,
   ): void;
   /**
+   * #1304 — replace one end's per-dispatch overrides WHOLE: the singular
+   * connection's `connectionParams`, or one dataset end's `datasetParams`.
+   *
+   * An empty record or `undefined` removes the end, and a `datasetParams` with no
+   * end left is removed too. `{}` is never written.
+   *
+   * REFUSED for an end the node does not bind, before `edit()`, so a refusal
+   * takes no undo slot. `validateDoc` refuses overrides without their binding, so
+   * the write would only make the node unsaveable.
+   *
+   * `coalesceKey` names the row being typed into. Typing into one row writes
+   * through on every keystroke, and the key folds that burst into ONE undo step,
+   * as the param rows' keys do.
+   */
+  setNodeParamOverrides(
+    id: string,
+    end: 'connection' | 'source' | 'sink',
+    params: Record<string, unknown> | undefined,
+    coalesceKey?: string,
+  ): void;
+  /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
    * whole `Container`: `default` is an absent-or-present key (not a nullable
@@ -1840,10 +1861,50 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             if (n.id !== id) return n;
             const next = { ...n };
             if (connectionId) next.connectionId = connectionId;
-            else delete next.connectionId;
+            else {
+              delete next.connectionId;
+              // #1304 — the overrides go with the binding. `validateDoc` refuses
+              // `connectionParams` without a `connectionId`, so keeping them
+              // made the node unsaveable, with no row left on screen to clear
+              // them. A SWITCH keeps them, as `setNodeBindingEnd` keeps a
+              // re-pointed dataset end's: the editor flags any key the new
+              // connection does not declare, and the row can be removed.
+              delete next.connectionParams;
+            }
             return next;
           }),
         }));
+      },
+
+      setNodeParamOverrides(id, end, params, coalesceKey) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined) return;
+        const bound =
+          end === 'connection'
+            ? node.connectionId !== undefined
+            : node.datasetIds?.[end] !== undefined;
+        if (!bound) return;
+        const value = params !== undefined && Object.keys(params).length > 0 ? params : undefined;
+        edit(
+          (s) => ({
+            nodes: s.nodes.map((n) => {
+              if (n.id !== id) return n;
+              const next = { ...n };
+              if (end === 'connection') {
+                if (value) next.connectionParams = value;
+                else delete next.connectionParams;
+                return next;
+              }
+              const ends = { ...next.datasetParams };
+              if (value) ends[end] = value;
+              else delete ends[end];
+              if (ends.source === undefined && ends.sink === undefined) delete next.datasetParams;
+              else next.datasetParams = ends;
+              return next;
+            }),
+          }),
+          coalesceKey === undefined ? undefined : `params:${id}:${end}:${coalesceKey}`,
+        );
       },
 
       setNodeBindingEnd(id, kind, side, value) {

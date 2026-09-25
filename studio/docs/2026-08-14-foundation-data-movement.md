@@ -1353,6 +1353,14 @@ exists — save time.
   since that schema strips unknown keys and the override would otherwise do nothing, silently.
   The id-level self-copy refusal now fires only when both ends' EFFECTIVE configs agree too, so one
   dataset can serve as a template for both ends; the address check still refuses a real collision.
+
+  **AS BUILT (#1304) — the canvas authors both override fields.** The node panel has an overrides
+  card under the singular Connection picker and under each bound dataset end. Add offers only the
+  allowlist ∩ the kind's schema keys, minus the non-overridable ones. Each row is flagged with
+  `firstParamOverrideViolation`'s verdict, because the SAVE gate never reads the allowlist and a
+  refused key would otherwise surface only when a run dispatches. A row's text is coerced to the
+  key's type (a number setting stores `4096`, not `"4096"`), and a whole `${}` is stored verbatim.
+  The resources' own allowlist has no editor yet (#1305).
 - **Paths: EXTRACT and share `fs`'s guard — do not mirror it.** `resolveWithinRoots`
   (`connectors/fs.ts:186`) is a hardened single implementation — lexical `..` collapse, `realpath` on
   roots _and_ the target's parent, `lstat` + `O_NOFOLLOW` at the target, atomic temp+`rename` writes.
