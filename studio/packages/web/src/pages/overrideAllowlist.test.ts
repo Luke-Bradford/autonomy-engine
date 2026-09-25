@@ -21,7 +21,11 @@ describe('override allowlist rules (#1305)', () => {
   });
 
   it('shows a stored key the kind does not offer, with the reason', () => {
-    const rows = allowlistRows(connectionAllowlistSubject('fs'), ['roots', 'model'], ['roots', 'model']);
+    const rows = allowlistRows(
+      connectionAllowlistSubject('fs'),
+      ['roots', 'model'],
+      ['roots', 'model'],
+    );
     expect(rows).toEqual([
       { key: 'maxBytes', checked: false, stray: null },
       { key: 'maxEntries', checked: false, stray: null },
@@ -36,7 +40,11 @@ describe('override allowlist rules (#1305)', () => {
   });
 
   it('draws a duplicated stored key once', () => {
-    const rows = allowlistRows(connectionAllowlistSubject('fs'), ['maxBytes', 'maxBytes', 'x', 'x'], []);
+    const rows = allowlistRows(
+      connectionAllowlistSubject('fs'),
+      ['maxBytes', 'maxBytes', 'x', 'x'],
+      [],
+    );
     expect(rows.map((r) => r.key)).toEqual(['maxBytes', 'maxEntries', 'x']);
   });
 

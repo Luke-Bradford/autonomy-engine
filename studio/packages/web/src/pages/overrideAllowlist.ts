@@ -33,7 +33,10 @@ export function connectionAllowlistSubject(kind: ConnectionKind): AllowlistSubje
   return {
     noun: 'connection',
     kind,
-    offered: overridableKeys(deriveConfigFields(connectionConfigSchema(kind)) ?? [], isNonOverridable),
+    offered: overridableKeys(
+      deriveConfigFields(connectionConfigSchema(kind)) ?? [],
+      isNonOverridable,
+    ),
     isNonOverridable,
   };
 }

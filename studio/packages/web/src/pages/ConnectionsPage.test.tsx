@@ -1143,4 +1143,65 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
     expect(message).toContain('1 enabled trigger (nightly)');
     confirmSpy.mockRestore();
   });
+
+  describe('the override allowlist (#1305)', () => {
+    const allowlist = () =>
+      within(screen.getByRole('form', { name: 'Connection form' })).getByRole('group', {
+        name: 'Overridable per node',
+      });
+
+    it('leaves a stored allowlist alone on a save that did not touch it', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([conn({ parameters: ['model'] })]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Claude');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      expect(within(allowlist()).getByLabelText('Overridable: model')).toBeChecked();
+      const form = screen.getByRole('form', { name: 'Connection form' });
+      await user.clear(within(form).getByLabelText('Name'));
+      await user.type(within(form).getByLabelText('Name'), 'Claude v2');
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      const [, body] = updateMock.mock.calls[0]!;
+      // ABSENT, not the seeded copy: an explicit list replaces the stored one,
+      // and a rename is not a statement about the allowlist.
+      expect(Object.keys(body)).not.toContain('parameters');
+    });
+
+    it('sends the ticked keys, and an explicit [] when every key is unticked', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([conn({ parameters: ['model'] })]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Claude');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(allowlist()).getByLabelText('Overridable: timeoutMs'));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(updateMock.mock.calls[0]![1].parameters).toEqual(['model', 'timeoutMs']);
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(allowlist()).getByLabelText('Overridable: model'));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(2));
+      expect(updateMock.mock.calls[1]![1].parameters).toEqual([]);
+    });
+
+    it('says a kind has nothing overridable instead of drawing an empty list', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([
+        conn({ kind: 'sqlite', config: { roots: ['/data'], path: 'a.db' } }),
+      ]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Claude');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      expect(allowlist()).toHaveTextContent(
+        'A sqlite connection has no settings a node can override.',
+      );
+      expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
+    });
+  });
 });

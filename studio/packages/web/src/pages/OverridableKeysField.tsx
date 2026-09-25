@@ -40,28 +40,26 @@ export function OverridableKeysField({
   return (
     <fieldset className="overridable-keys">
       <legend>Overridable per node</legend>
-      {rows.length === 0 ? (
-        <p className="page-hint">{noOverridableSettingsNote(subject.kind, subject.noun)}</p>
-      ) : (
-        <>
-          <p className="page-hint">
-            A pipeline node that uses this {subject.noun} may set the ticked settings for each run.
-            Nothing else can be overridden.
-          </p>
-          {rows.map((row) => (
-            <label key={row.key} className="checkbox">
-              <input
-                type="checkbox"
-                checked={row.checked}
-                onChange={(e) => onChange(toggleAllowlistKey(value, row.key, e.target.checked))}
-              />
-              <span className="visually-hidden">Overridable: </span>
-              <code>{row.key}</code>
-              {row.stray !== null && <span className="page-hint"> — {STRAY_NOTE[row.stray]}</span>}
-            </label>
-          ))}
-        </>
-      )}
+      {/* Keyed on what the KIND offers, not on the row count: a kind with nothing
+          overridable still draws the stray rows an old allowlist left behind, so
+          they can be unticked, and the note is still the true thing to say. */}
+      <p className="page-hint">
+        {subject.offered.length === 0
+          ? noOverridableSettingsNote(subject.kind, subject.noun)
+          : `A pipeline node that uses this ${subject.noun} may set the ticked settings for each run. Nothing else can be overridden.`}
+      </p>
+      {rows.map((row) => (
+        <label key={row.key} className="checkbox">
+          <input
+            type="checkbox"
+            checked={row.checked}
+            onChange={(e) => onChange(toggleAllowlistKey(value, row.key, e.target.checked))}
+          />
+          <span className="visually-hidden">Overridable: </span>
+          <code>{row.key}</code>
+          {row.stray !== null && <span className="page-hint"> — {STRAY_NOTE[row.stray]}</span>}
+        </label>
+      ))}
     </fieldset>
   );
 }

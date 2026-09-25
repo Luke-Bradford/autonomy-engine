@@ -178,14 +178,14 @@ test.describe('U13b per-kind connection config', () => {
     await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
 
     await form(page).getByLabel('Kind').selectOption('agent_cli');
-    await expect(form(page).getByLabel('command')).toBeVisible();
+    await expect(form(page).getByLabel('command', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('anthropicVersion (optional)')).toBeHidden();
     // An agent_cli DOES use a secret without requiring one — "optional" alone
     // would not say where it goes.
     await expect(form(page).getByText(/environment variable named by/)).toBeVisible();
 
     // The JSON escape hatch is still reachable, and opens on the same config.
-    await form(page).getByLabel('command').fill('claude');
+    await form(page).getByLabel('command', { exact: true }).fill('claude');
     await form(page).getByRole('button', { name: 'Edit as JSON' }).click();
     await expect(form(page).getByLabel('Config (JSON)')).toHaveValue(
       JSON.stringify({ command: 'claude' }, null, 2),

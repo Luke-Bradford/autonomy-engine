@@ -757,4 +757,83 @@ describe('DatasetsPage', () => {
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
     });
   });
+
+  describe('the override allowlist (#1305)', () => {
+    const allowlist = () => within(form()).getByRole('group', { name: 'Overridable per node' });
+    const delimited = (parameters: string[]) =>
+      dataset({ kind: 'delimited', config: { path: 'in.csv' }, parameters });
+
+    it('leaves a stored allowlist alone on a rename', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([delimited(['path'])]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      expect(within(allowlist()).getByLabelText('Overridable: path')).toBeChecked();
+      await user.clear(within(form()).getByLabelText('Name'));
+      await user.type(within(form()).getByLabelText('Name'), 'Orders v2');
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(Object.keys(updateMock.mock.calls[0]![1])).not.toContain('parameters');
+    });
+
+    it('sends the ticked keys when the allowlist changed', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([delimited([])]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      await user.click(within(allowlist()).getByLabelText('Overridable: path'));
+      await user.click(within(allowlist()).getByLabelText('Overridable: header'));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(updateMock.mock.calls[0]![1].parameters).toEqual(['path', 'header']);
+    });
+
+    it('shows a stored key the kind cannot use, and keeps it visible once unticked', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([delimited(['bogus'])]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      const stray = within(allowlist()).getByLabelText(/^Overridable: bogus/);
+      expect(stray).toBeChecked();
+      expect(allowlist()).toHaveTextContent('not a setting of this kind');
+
+      await user.click(stray);
+      expect(within(allowlist()).getByLabelText(/^Overridable: bogus/)).not.toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      // Unticking the last key is a deliberate clear, so it is sent as [].
+      expect(updateMock.mock.calls[0]![1].parameters).toEqual([]);
+    });
+
+    it('marks a stored security-boundary key as one a run refuses', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([dataset({ parameters: ['table'] })]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      expect(within(allowlist()).getByLabelText(/^Overridable: table/)).toBeChecked();
+      expect(allowlist()).toHaveTextContent('never overridable, so a run refuses it');
+      expect(allowlist()).toHaveTextContent('A table dataset has no settings a node can override.');
+    });
+
+    it('says a table dataset has nothing overridable instead of drawing an empty list', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([dataset()]);
+      renderWithRouter(<DatasetsPage />);
+      await screen.findByText('Orders');
+
+      await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+      expect(allowlist()).toHaveTextContent('A table dataset has no settings a node can override.');
+      expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
+    });
+  });
 });
