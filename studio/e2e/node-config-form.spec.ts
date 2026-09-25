@@ -26,7 +26,9 @@ import { openSeededCanvas } from './support/seedDoc';
  * U8a's expression-picker toggle sits beside each text field and carries that
  * field's name in its accessible name ("Insert reference into url"), so a
  * `getByLabel('url')` now matches the textarea AND the button. Naming the role
- * is the precise question this spec was always asking.
+ * is the precise question this spec was always asking. (A second, separate
+ * trap — the label reading the field's VALUE — is closed at source by #1227 and
+ * pinned by the exact-label test below.)
  */
 function panel(page: Page) {
   return page.getByRole('complementary', { name: 'Properties' });

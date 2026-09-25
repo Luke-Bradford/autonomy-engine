@@ -125,7 +125,8 @@ export type FieldChoices = {
  * silently stops matching the moment it holds anything, and the non-exact form
  * starts matching on VALUES. The accessible name is unaffected either way; it is
  * the label's TEXT that a wrap contaminates. An `<input>` has no text content,
- * which is why the checkbox and the number field may keep the wrap.
+ * which is why the checkbox and the number field may keep the wrap. Same idiom,
+ * for the same reason, as the trigger editors' selects (#857).
  */
 export function ConfigFieldControl({
   field,

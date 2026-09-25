@@ -47,21 +47,13 @@ import { fluentRootReady } from './support/theme';
 const form = (page: Page) => page.getByRole('form', { name: 'Dataset form' });
 
 /**
- * A text control by its ACCESSIBLE NAME, and deliberately not by `getByLabel`.
+ * A text control by its ACCESSIBLE NAME.
  *
- * `ConfigFieldControl` wraps its `<textarea>` in the `<label>` rather than
- * pairing them by `for`/`id`, and React renders a controlled textarea's value as
- * a CHILD TEXT NODE — so the label's text content is `path` while the box is
- * empty and `path/data/book.xlsx` the moment anything is typed. `getByLabel`
- * reads that text, so an `exact` match silently stops resolving as soon as the
- * field has content, and a non-exact one starts matching on the VALUE. The
- * accessible name is computed from the label without the embedded control's
- * value, so it stays `path` throughout.
- *
- * This is the second instance of one trap: `ConfigFieldControl`'s own docblock
- * records `e2e/node-config-form.spec.ts` moving off `getByLabel` because a
- * BUTTON inside the label contaminated the same string. #1215's test never hit
- * it only because it fills each control once and never re-reads one afterwards.
+ * Written when `ConfigFieldControl` still WRAPPED its `<textarea>` in the
+ * `<label>`, so the label's text read `path/data/book.xlsx` once typed into and
+ * an exact `getByLabel` silently stopped resolving (#1227). The control is now
+ * paired by `for`/`id`, so `getByLabel` is stable too; the role query stays
+ * because it asks the precise question and cannot regress with the markup.
  */
 const box = (page: Page, name: string) => form(page).getByRole('textbox', { name, exact: true });
 
