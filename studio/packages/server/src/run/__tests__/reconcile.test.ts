@@ -2528,7 +2528,7 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
   });
 });
 
-describe('reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not its parent\'s', () => {
+describe("reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not its parent's", () => {
   /**
    * A `call.wait: false` parent never wanted its child's result, so neither
    * reconcile rule that keys on "the parent can no longer consume this" applies:
@@ -2552,8 +2552,18 @@ describe('reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not 
       parentRunId: parent.id,
       params: {},
     });
-    const ids = { runId: parent.id, callNodeId: 'caller', attemptId: 'caller#0', childRunId: child.id };
-    appendEngineEvent(db, { type: 'run.started', runId: parent.id, pipelineVersionId: parentPvId, params: {} });
+    const ids = {
+      runId: parent.id,
+      callNodeId: 'caller',
+      attemptId: 'caller#0',
+      childRunId: child.id,
+    };
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: parent.id,
+      pipelineVersionId: parentPvId,
+      params: {},
+    });
     appendEngineEvent(db, { type: 'call.started', ...ids });
     if (parentLog === 'detached') appendEngineEvent(db, { type: 'call.detached', ...ids });
     return { parent, child, childPvId };

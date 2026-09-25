@@ -1641,11 +1641,15 @@ describe('#796 item 2 — a detached call (wait: false) returns nothing', () => 
     expect(validatePipelineDoc(docOf([detached('c', { outputs })])).join(' ')).toContain(
       'node.c: a call that does not wait for its child returns no outputs',
     );
-    const waiting = node('c', { outputs }, {
-      type: 'call_pipeline',
-      call: { pipelineVersionId: 'pv_child', params: {} },
-    });
-    expect(validatePipelineDoc(docOf([waiting])).join(' ')).not.toContain('does not wait');    // An empty declaration declares nothing, so it is not refused.
+    const waiting = node(
+      'c',
+      { outputs },
+      {
+        type: 'call_pipeline',
+        call: { pipelineVersionId: 'pv_child', params: {} },
+      },
+    );
+    expect(validatePipelineDoc(docOf([waiting])).join(' ')).not.toContain('does not wait'); // An empty declaration declares nothing, so it is not refused.
     expect(validatePipelineDoc(docOf([detached('c', { outputs: [] })]))).toEqual([]);
   });
 

@@ -395,8 +395,8 @@ function CallEditor({
       </label>
       {!draft.wait && (
         <p className="page-hint">
-          This node succeeds as soon as the child run starts. The child runs on by itself, and
-          its outcome and outputs never come back here.
+          This node succeeds as soon as the child run starts. The child runs on by itself, and its
+          outcome and outputs never come back here.
         </p>
       )}
 

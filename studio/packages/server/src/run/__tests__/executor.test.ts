@@ -3040,9 +3040,8 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
       const db = freshDb().db;
       const { runId, childPvId, child } = seedCall(db);
       const kick = vi.fn();
-      const it = exec(db, { ok: true, run: child, terminal: false, announced: false }, kick)
-        .perform(detachedStart(childPvId), runId)
-        [Symbol.asyncIterator]();
+      const executor = exec(db, { ok: true, run: child, terminal: false, announced: false }, kick);
+      const it = executor.perform(detachedStart(childPvId), runId)[Symbol.asyncIterator]();
       const first = await it.next();
       expect(first.value).toMatchObject({ type: 'call.started', childRunId: 'child-1' });
       expect(kick).not.toHaveBeenCalled();
@@ -3065,8 +3064,11 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
       const { runId, childPvId, child } = seedCall(db);
       const kick = vi.fn();
       const seen: EngineEvent[] = [];
-      for await (const e of exec(db, { ok: true, run: child, terminal: true, announced: true }, kick)
-        .perform(detachedStart(childPvId), runId))
+      for await (const e of exec(
+        db,
+        { ok: true, run: child, terminal: true, announced: true },
+        kick,
+      ).perform(detachedStart(childPvId), runId))
         seen.push(e);
       expect(seen.map((e) => e.type)).toEqual(['call.detached']);
       expect(kick).not.toHaveBeenCalled();
