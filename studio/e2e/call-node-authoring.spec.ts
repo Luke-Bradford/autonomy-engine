@@ -28,6 +28,15 @@ function panel(page: Page) {
   return page.getByRole('complementary', { name: 'Properties' });
 }
 
+/**
+ * One argument row's input. By ROLE, not `getByLabel`: since #1012 each row has
+ * an "Insert reference into parameter <name>" toggle, and a label lookup
+ * matches that aria-label too.
+ */
+function arg(page: Page, name: string) {
+  return panel(page).getByRole('textbox', { name: new RegExp(`^${name}`) });
+}
+
 async function validationIssues(page: Page): Promise<string[]> {
   const list = page.locator('.badge-list li');
   return (await list.count()) === 0 ? [] : list.allTextContents();
@@ -67,7 +76,7 @@ test.describe('#425 — call-node authoring', () => {
     // The child's params are UNKNOWN until a version is chosen — they are a
     // property of the target, not of the node — and the panel says so rather
     // than offering an empty form or a raw JSON box.
-    await expect(panel(page).getByLabel('query')).toHaveCount(0);
+    await expect(arg(page, 'query')).toHaveCount(0);
     await expect(
       panel(page).getByText('Choose a version to see the parameters it declares.'),
     ).toBeVisible();
@@ -76,9 +85,9 @@ test.describe('#425 — call-node authoring', () => {
     await panel(page).getByRole('combobox', { name: 'Version' }).selectOption({ label: 'v1' });
 
     // Now they are on screen, straight from the version the picker resolved.
-    await expect(panel(page).getByLabel('query')).toBeVisible();
-    await panel(page).getByLabel('query').fill('ships');
-    await panel(page).getByLabel('limit').fill('25');
+    await expect(arg(page, 'query')).toBeVisible();
+    await arg(page, 'query').fill('ships');
+    await arg(page, 'limit').fill('25');
     await panel(page).getByLabel('Wait for the child run').check();
     await panel(page).getByRole('button', { name: 'Apply call' }).click();
 
@@ -96,8 +105,8 @@ test.describe('#425 — call-node authoring', () => {
     // the picker is showing what the doc says, not a remembered selection.
     await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toHaveValue(/.+/);
     await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
-    await expect(panel(page).getByLabel('query')).toHaveValue('ships');
-    await expect(panel(page).getByLabel('limit')).toHaveValue('25');
+    await expect(arg(page, 'query')).toHaveValue('ships');
+    await expect(arg(page, 'limit')).toHaveValue('25');
     await expect(panel(page).getByLabel('Wait for the child run')).toBeChecked();
 
     // The contract that would otherwise be destroyed silently: a call node's
@@ -218,13 +227,13 @@ test.describe('#425 — call-node authoring', () => {
     await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(
       'e2e 953 child',
     );
-    await expect(panel(page).getByLabel('query')).toHaveValue('seeded');
+    await expect(arg(page, 'query')).toHaveValue('seeded');
 
     // EDITABLE is the actual ticket — a panel that renders read-only would pass
     // every assertion above. The write goes through `updateNodeCall`, whose guard
     // was keyed on the same type check, so this arm is the one that proves both
     // halves moved together.
-    await panel(page).getByLabel('query').fill('edited');
+    await arg(page, 'query').fill('edited');
     await panel(page).getByRole('button', { name: 'Apply call' }).click();
     expect(await validationIssues(page)).toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -240,6 +249,62 @@ test.describe('#425 — call-node authoring', () => {
     const saved = versions.find((v) => v.version === 2)!;
     const node = saved.nodes.find((n) => n.type === 'call_pipeline')!;
     expect(node.call?.params).toMatchObject({ query: 'edited' });
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1012 — the U8a flyout on the call editor. A reference goes into a string
+   * argument by SPLICING (at the end, since no caret was placed) and into a
+   * number argument by REPLACING, because Apply coerces anything but a whole
+   * `${}` against the declared type and would refuse `25${…}`. Read back from
+   * the persisted version, so it proves the choice reached the doc.
+   */
+  test('the expression picker fills call arguments, and they persist', async ({ page }) => {
+    const problems = collectPageProblems(page);
+
+    const { pipelineVersionId } = await seedVersion(page, 'e2e 1012 child', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      params: [
+        { name: 'query', type: 'string', required: true },
+        { name: 'limit', type: 'number', required: false },
+      ],
+    });
+    const parentId = await openSeededCanvas(page, 'e2e 1012 parent', {
+      params: [{ name: 'topic', type: 'string', required: true }],
+      nodes: [
+        {
+          id: 'caller',
+          type: 'execute_pipeline',
+          call: { pipelineVersionId, params: { query: 'about ', limit: 25 } },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    await expect(arg(page, 'query')).toHaveValue('about ');
+
+    await panel(page).getByRole('button', { name: 'Insert reference into parameter query' }).click();
+    await panel(page).getByRole('button', { name: /^topic/ }).click();
+    await expect(arg(page, 'query')).toHaveValue('about ${params.topic}');
+
+    await panel(page).getByRole('button', { name: 'Insert reference into parameter limit' }).click();
+    await panel(page).getByRole('button', { name: /^topic/ }).click();
+    await expect(arg(page, 'limit')).toHaveValue('${params.topic}');
+
+    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    expect(await validationIssues(page)).toEqual([]);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const persisted = await page.request.get(`/api/pipelines/${parentId}/versions`);
+    const versions = (await persisted.json()) as {
+      version: number;
+      nodes: { id: string; call?: { params?: Record<string, unknown> } }[];
+    }[];
+    const node = versions.find((v) => v.version === 2)!.nodes.find((n) => n.id === 'caller')!;
+    expect(node.call?.params).toEqual({ query: 'about ${params.topic}', limit: '${params.topic}' });
 
     await expectQuiet(page, problems);
   });
