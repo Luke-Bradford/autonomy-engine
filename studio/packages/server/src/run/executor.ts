@@ -869,9 +869,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /**
    * Consume an adapter's `ActivityEvent` stream (INSIDE the worker-pool limit)
-   * and map it to the terminal + observability engine events. Any throw, or a
-   * stream that ends without a terminal, becomes a `node.failed` — one bad node
-   * fails its node, never the whole pump.
+   * and map it to the terminal + observability engine events, handing each to
+   * `emit` as it arrives. Any throw, or a stream that ends without a terminal,
+   * becomes a `node.failed` — one bad node fails its node, never the whole pump.
    */
   async function runAdapter(
     adapter: ConnectorAdapter,
@@ -889,8 +889,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
      * every single-connection activity.
      */
     sinkSecret: string | null | undefined,
-  ): Promise<EngineEvent[]> {
-    const events: EngineEvent[] = [];
+    /**
+     * #1135 — where each mapped event goes, the moment the adapter produces it.
+     * Nothing is held back until the terminal, so a long activity's progress
+     * reaches the log while it runs.
+     */
+    emit: (event: EngineEvent) => void,
+  ): Promise<void> {
     // #2 L5 — the per-connection price-table override, parsed ONCE per dispatch
     // (fail-safe: a malformed override → null → the built-in table is used, and
     // a bad price config never fails the node — pricing is best-effort).
@@ -956,9 +961,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
-          events.push({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
+          emit({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
         } else if (ev.type === 'metered') {
-          events.push(meteredEvent(ev.usage));
+          emit(meteredEvent(ev.usage));
         } else if (ev.type === 'captured') {
           // #2 L9a — a per-response prompt/completion CAPTURE fact (non-terminal,
           // like `metered`): stamp the shape + latency into the durable log as
@@ -967,7 +972,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // construction) — it carries no plaintext, so it needs no scrubbing (the
           // capture is hash/length only). The executor adds the run/node/attempt ids.
           const { capture } = ev;
-          events.push({
+          emit({
             type: 'activity.captured',
             runId,
             nodeId,
@@ -985,7 +990,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // The reducer folds it inert. Carries only shape/classification (no raw
           // text), so it needs no scrubbing. The executor adds the run/node/attempt ids.
           const { telemetry } = ev;
-          events.push({
+          emit({
             type: 'activity.agentTelemetry',
             runId,
             nodeId,
@@ -1006,7 +1011,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // run/node/attempt ids; optional fields stay OMITTED when absent
           // (fail-closed — never manufactured).
           const { call } = ev;
-          events.push({
+          emit({
             type: 'activity.toolCalled',
             runId,
             nodeId,
@@ -1029,7 +1034,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // Non-terminal like `activity.toolCalled`, folded inert, and — unlike
           // the #750 warning below — NOT tied to a success: it is emitted while
           // the outcome is still undecided, so it rides failing attempts too.
-          events.push({
+          emit({
             type: 'activity.warned',
             runId,
             nodeId,
@@ -1047,7 +1052,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // identifier" is enforced.
           const warning = emptyTruncationWarning(ev.outputs);
           if (warning !== null) {
-            events.push({
+            emit({
               type: 'activity.warned',
               runId,
               nodeId,
@@ -1056,14 +1061,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
               reason: warning,
             });
           }
-          events.push({
+          emit({
             type: 'node.succeeded',
             runId,
             nodeId,
             attemptId,
             outputs: withTranscript(ctx, ev.outputs),
           });
-          return events;
+          return;
         } else {
           // F0: map the adapter's PROVIDER kind onto the engine's retry axis and
           // carry the message through RAW. This used to be `${ev.kind}: ${ev.error}`
@@ -1080,8 +1085,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // `costUnknown` gap. Without this the provider billed, `usageOf` was never
           // reached, and L6 summed a run cost that silently omitted the exchange —
           // the same silent-loss shape #708 closed at the price-table door.
-          if (ev.spendFact !== undefined) events.push(meteredEvent(ev.spendFact));
-          events.push(
+          if (ev.spendFact !== undefined) emit(meteredEvent(ev.spendFact));
+          emit(
             nodeFailed(runId, nodeId, attemptId, {
               error: ev.error,
               ...toEngineFailure(ev.kind),
@@ -1097,18 +1102,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
               ...(connectionId !== undefined ? { connectionId } : {}),
             }),
           );
-          return events;
+          return;
         }
       }
       // Stream ended with no terminal — an adapter contract violation.
-      events.push(
+      emit(
         nodeFailed(runId, nodeId, attemptId, {
           error: 'adapter produced no terminal event',
           kind: 'permanent',
           code: FAILURE_CODES.ADAPTER_NO_TERMINAL,
         }),
       );
-      return events;
+      return;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // An unexpected throw is an adapter BUG of unknown cause, not a classified
@@ -1116,18 +1121,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // `failed` themselves. `permanent` is the safe read: it never retries, so a
       // broken adapter cannot retry-loop, and (no MVP activity being idempotent)
       // a blind retry could repeat a side effect that already happened.
-      events.push(
+      emit(
         nodeFailed(runId, nodeId, attemptId, {
           error: message,
           kind: 'permanent',
           code: FAILURE_CODES.ADAPTER_THREW,
         }),
       );
-      return events;
+      return;
     } finally {
       controller.abort();
     }
   }
+
+  /** The two events that end an attempt — the only ones `runAdapter` holds. */
+  const isNodeTerminal = (ev: EngineEvent): boolean =>
+    ev.type === 'node.succeeded' || ev.type === 'node.failed';
 
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
@@ -1520,20 +1529,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasets !== undefined ? { datasets } : {}),
       signal: controller.signal,
     };
-    const events = await limit(() =>
-      runAdapter(
-        adapter,
-        ctx,
-        secret,
-        secretFields,
-        controller,
-        runId,
-        nodeId,
-        attemptId,
-        dispatchedConnectionId,
-        sinkSecret,
-      ),
-    );
     // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
     // point that switches ON only for a node that resolved a config-sink secret
     // — the NEW plaintext class S3 introduces, which no adapter is guaranteed to
@@ -1563,8 +1558,92 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       Object.keys(secretFields).length > 0 || sinkPlaintexts.length > 0
         ? [secret, ...Object.values(secretFields), ...sinkPlaintexts]
         : [];
-    for (const ev of events)
-      yield plaintexts.length > 0 ? redactEventPlaintexts(ev, plaintexts) : ev;
+    //
+    // #1135 — the scrub runs PER EVENT, as each one leaves. That is the same
+    // transformation the old trailing pass applied, because every plaintext in
+    // the set was resolved above, before the adapter started: an adapter cannot
+    // hold a credential this node has not already listed.
+    const redact = (ev: EngineEvent): EngineEvent =>
+      plaintexts.length > 0 ? redactEventPlaintexts(ev, plaintexts) : ev;
+
+    // #1135 — STREAM, don't batch. The adapter runs inside the global limit and
+    // hands each mapped event to a FIFO; this generator yields them as they
+    // arrive, so a long copy's progress or an LLM's tool rounds reach the log
+    // while the node runs rather than all at once beside its terminal.
+    //
+    // The adapter is not paced by the fold: `emit` only enqueues, so a slow
+    // append never stalls a side effect or holds the limit slot longer. Per-node
+    // order is unchanged — it is the order `runAdapter` emitted in.
+    //
+    // Only the TERMINAL is held back, until `runAdapter` has returned. Folding it
+    // can dispatch a successor (or re-dispatch this node in a loop), so it must
+    // not land before the adapter's own cleanup, the abort and the limit slot's
+    // release — the guarantee the batching version gave by construction.
+    //
+    // A consequence worth knowing: an attempt cut off mid-activity (a crash, or
+    // the pump dropping a run that went terminal elsewhere) now leaves the
+    // events it streamed in the log with no terminal beside them. They are all
+    // inert, and a streamed `activity.metered` is spend that really happened.
+    const pending: EngineEvent[] = [];
+    let wake: (() => void) | null = null;
+    let settled = false;
+    let adapterError: { error: unknown } | undefined;
+    const signal = (): void => {
+      const w = wake;
+      wake = null;
+      w?.();
+    };
+    const adapterDone = limit(() =>
+      runAdapter(
+        adapter,
+        ctx,
+        secret,
+        secretFields,
+        controller,
+        runId,
+        nodeId,
+        attemptId,
+        dispatchedConnectionId,
+        sinkSecret,
+        (ev) => {
+          pending.push(ev);
+          signal();
+        },
+      ),
+    )
+      // Captured rather than left rejecting: nothing awaits this promise until
+      // the queue drains, and a rejection with no handler attached by then is
+      // an unhandled one.
+      .catch((error: unknown) => {
+        adapterError = { error };
+      })
+      .finally(() => {
+        settled = true;
+        signal();
+      });
+    try {
+      while (true) {
+        const next = pending[0];
+        if (next === undefined) {
+          if (settled) break;
+        } else if (settled || !isNodeTerminal(next)) {
+          pending.shift();
+          yield redact(next);
+          continue;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+      if (adapterError !== undefined) throw adapterError.error;
+    } finally {
+      // The pump closes a stream whose events it will only drop (`pump`'s
+      // teardown), and then awaits it so that no adapter work outlives the
+      // drive lock. Closing mid-activity must therefore WAIT for the adapter,
+      // as it did when this generator could only be closed after it: the
+      // in-flight side effect completes and its remaining events are dropped.
+      await adapterDone;
+    }
   }
 
   return {

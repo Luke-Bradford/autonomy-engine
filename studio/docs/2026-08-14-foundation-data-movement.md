@@ -1015,6 +1015,10 @@ _"Observability/streaming ONLY — never enters `outputs` or substitution"_), wh
 channel and needs no new event. Ticks are **per batch, never per row** — one event per row would
 reproduce the log-volume problem this section forbids.
 
+_As built (#1135):_ the executor now streams an activity's events into the log as they are yielded;
+until then it buffered them until the terminal, so a tick could not arrive before the copy finished.
+The per-batch ticks themselves are not emitted yet — #1299.
+
 ---
 
 ## §6 — mapping and coercion **[SETTLED]**

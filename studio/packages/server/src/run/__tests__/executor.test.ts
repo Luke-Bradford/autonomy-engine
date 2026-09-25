@@ -27,6 +27,7 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
+import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
 import type { ChildRuns } from '../child.js';
@@ -179,6 +180,15 @@ function eventTypes(db: Db, runId: string): string[] {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A promise a test opens by hand — holds an adapter mid-stream (#1135). */
+function gate(): { held: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const held = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { held, open };
+}
 
 // --- tests -----------------------------------------------------------------
 
@@ -1662,6 +1672,36 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     const serialized = JSON.stringify(loadEngineEvents(db, run.id));
     expect(serialized).not.toContain('SINK-KEY-XYZ');
     expect(serialized).toContain('leaked');
+  });
+
+  it('REDACTS the sink secret out of an event streamed BEFORE the terminal (#1135)', async () => {
+    // Events now reach the log while the adapter is still running, so the scrub
+    // has to happen per event. A pre-terminal event is the one a trailing pass
+    // would have caught and a naive streaming rewrite would not.
+    const g = gate();
+    const adapters = pairedRegistry(async function* (_ctx, _secret, _fields, sinkSecret) {
+      yield { type: 'output', name: 'progress', value: `wrote with ${String(sinkSecret)}` };
+      await g.held;
+      yield { type: 'succeeded', outputs: {} };
+    });
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'http', {}, null);
+    const sinkId = await seedConnection(db, 'anthropic_api', {}, 'SINK-KEY-XYZ');
+    const run = seedRun(db, seedVersion(db, [pairedNode('test_paired', sourceId, sinkId)]));
+
+    const driving = startRun(deps(db, { adapters, catalog: pairedCatalog() }), run);
+    try {
+      await until(
+        () => eventTypes(db, run.id).includes('node.output'),
+        'the output while the adapter is held',
+      );
+      const serialized = JSON.stringify(loadEngineEvents(db, run.id));
+      expect(serialized).not.toContain('SINK-KEY-XYZ');
+      expect(serialized).toContain('wrote with');
+    } finally {
+      g.open();
+    }
+    expect((await driving).status).toBe('success');
   });
 
   it('labels a SINK-end failure with side:sink, without inventing a SINK_ code', async () => {
@@ -4255,5 +4295,136 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
 
     expect(state.status).toBe('success');
     expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('activity.warned');
+  });
+});
+
+describe('createExecutor — events stream while the activity runs (#1135)', () => {
+  const url = 'https://x/y';
+
+  // `http_request` declares its outputs, so a success must carry them.
+  const httpOutputs = { status: 200, body: '', headers: {} };
+
+  it('a non-terminal event is durable while its node is still running', async () => {
+    const g = gate();
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'output', name: 'progress', value: 1 };
+      await g.held;
+      yield { type: 'succeeded', outputs: httpOutputs };
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
+
+    const driving = startRun(deps(db, { adapters }), run);
+    try {
+      await until(
+        () => eventTypes(db, run.id).includes('node.output'),
+        'the output while the adapter is held',
+      );
+      expect(eventTypes(db, run.id)).not.toContain('node.succeeded');
+    } finally {
+      g.open();
+    }
+
+    expect((await driving).status).toBe('success');
+    const nodeEvents = eventTypes(db, run.id).filter((t) => t.startsWith('node.'));
+    expect(nodeEvents).toEqual(['node.dispatched', 'node.output', 'node.succeeded']);
+  });
+
+  it('the terminal is held until the adapter has finished cleaning up', async () => {
+    // Folding a terminal can dispatch the next node, so it must not reach the
+    // log while this adapter is still inside its own `finally`.
+    let runId = '';
+    let terminalSeenDuringCleanup: boolean | undefined;
+    const adapters = fakeHttpAdapter(async function* () {
+      try {
+        yield { type: 'succeeded', outputs: httpOutputs };
+      } finally {
+        await sleep(20);
+        terminalSeenDuringCleanup = eventTypes(db, runId).includes('node.succeeded');
+      }
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
+    runId = run.id;
+
+    expect((await startRun(deps(db, { adapters }), run)).status).toBe('success');
+    expect(terminalSeenDuringCleanup).toBe(false);
+  });
+
+  it('a streamed event survives an adapter that then throws', async () => {
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'output', name: 'progress', value: 1 };
+      throw new Error('adapter bug');
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
+
+    expect((await startRun(deps(db, { adapters }), run)).status).toBe('failure');
+    const nodeEvents = loadEngineEvents(db, run.id).filter((e) => e.type.startsWith('node.'));
+    expect(nodeEvents.map((e) => e.type)).toEqual([
+      'node.dispatched',
+      'node.output',
+      'node.failed',
+    ]);
+    expect(nodeEvents[2]).toMatchObject({ code: 'adapter_threw', error: 'adapter bug' });
+  });
+
+  it('a stream closed mid-activity still waits for the adapter to finish', async () => {
+    // The pump closes a stream whose events it will only drop (a run that went
+    // terminal elsewhere), then awaits it, so that no adapter work outlives the
+    // drive lock. Closing must therefore wait for the adapter, not abandon it.
+    const g = gate();
+    let adapterFinished = false;
+    const adapters = fakeHttpAdapter(async function* () {
+      try {
+        yield { type: 'output', name: 'progress', value: 1 };
+        await g.held;
+        yield { type: 'succeeded', outputs: httpOutputs };
+      } finally {
+        adapterFinished = true;
+      }
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
+    const { executor } = deps(db, { adapters });
+
+    const stream = executor.perform(
+      {
+        type: 'dispatchNode',
+        nodeId: 'n1',
+        attemptId: 'n1-a1',
+        preparedInput: { url },
+        resolvedConnectionId: connId,
+      },
+      run.id,
+    ) as AsyncGenerator<EngineEvent>;
+    try {
+      expect((await stream.next()).value).toMatchObject({ type: 'node.dispatched' });
+      // Reaches the output while the adapter is still held at the gate.
+      let second: IteratorResult<EngineEvent> | undefined;
+      void stream.next().then((r) => {
+        second = r;
+      });
+      await until(() => second !== undefined, 'the output while the adapter is held');
+      expect(second).toMatchObject({ value: { type: 'node.output', name: 'progress' } });
+
+      let closed = false;
+      const closing = stream.return(undefined).then(() => {
+        closed = true;
+      });
+      await sleep(30);
+      expect(closed).toBe(false);
+      expect(adapterFinished).toBe(false);
+
+      g.open();
+      await closing;
+      expect(adapterFinished).toBe(true);
+    } finally {
+      g.open();
+    }
   });
 });
