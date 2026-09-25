@@ -3621,3 +3621,46 @@ describe('setNodeParamOverrides + the connection unbind prune (#1304)', () => {
     expect(node(store).connectionParams).toEqual({ maxBytes: 5 });
   });
 });
+
+describe('setNodePolicy (#1312)', () => {
+  const setup = (policy?: Node['policy']) => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        { id: 'n', type: 'http_request', config: {}, position: { x: 0, y: 0 }, policy } as Node,
+      ],
+    });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it('writes the policy, dirties the doc, and is one undo step', () => {
+    const store = setup();
+    store.getState().setNodePolicy('n', { retry: 2 });
+    expect(node(store).policy).toEqual({ retry: 2 });
+    expect(store.getState().dirty).toBe(true);
+    store.getState().undo();
+    expect(node(store).policy).toBeUndefined();
+  });
+
+  it('drops undefined keys, and removes the field entirely when nothing is left', () => {
+    const store = setup({ retry: 2, secureOutput: true });
+    store.getState().setNodePolicy('n', { retry: undefined, secureOutput: true });
+    expect(node(store).policy).toEqual({ secureOutput: true });
+    expect('retry' in node(store).policy!).toBe(false);
+    store.getState().setNodePolicy('n', { secureOutput: undefined });
+    expect('policy' in node(store)).toBe(false);
+  });
+
+  it('an explicit 0 and an explicit false survive — they are facts, not absences', () => {
+    const store = setup();
+    store.getState().setNodePolicy('n', { retry: 0, secureInput: false });
+    expect(node(store).policy).toEqual({ retry: 0, secureInput: false });
+  });
+
+  it('is a no-op for an unknown node', () => {
+    const store = setup();
+    store.getState().setNodePolicy('missing', { retry: 1 });
+    expect(store.getState().dirty).toBe(false);
+  });
+});

@@ -2651,3 +2651,44 @@ describe('RunDetailPage — a running node shows its latest streamed value (#129
     expect(screen.queryByText(/rowsInFlight/)).not.toBeInTheDocument();
   });
 });
+
+describe('RunDetailPage — a secure node says its output is withheld (#1312)', () => {
+  const events = (terminal: boolean) => [
+    envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    }),
+    // What `redactSecureEvent` leaves of a secure node's tick: name AND value.
+    envelope({
+      type: 'node.output',
+      runId: 'run_1',
+      nodeId: 'greet',
+      name: '[redacted: secure]',
+      value: '[redacted: secure]',
+    }),
+    ...(terminal
+      ? [
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            outputs: {},
+          }),
+        ]
+      : []),
+  ];
+
+  it.each([false, true])('in the node table, running or settled (terminal=%s)', async (t) => {
+    useRunStreamMock.mockReturnValue(stream({ events: events(t) }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('output withheld: this node is secure')).toBeInTheDocument();
+    // The node table's cell, not the raw event log below it, which shows the
+    // recorded event verbatim by design.
+    expect(screen.queryByText('output: [redacted: secure]')).not.toBeInTheDocument();
+    expect(screen.queryByText('[redacted: secure]: [redacted: secure]')).not.toBeInTheDocument();
+  });
+});

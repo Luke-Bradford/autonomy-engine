@@ -11,6 +11,7 @@ import {
   type ContainerKind,
   type Edge,
   type Node,
+  type NodePolicy,
   type Output,
   type Param,
   type PipelineVersion,
@@ -1129,6 +1130,16 @@ export interface CanvasState {
     coalesceKey?: string,
   ): void;
   /**
+   * #1312 — replace a node's run `policy` (retry, retry interval, secure flags).
+   *
+   * Whole-value, like the other node setters: the caller merges. Undefined keys
+   * are dropped and an empty policy removes the field, so clearing the last
+   * setting leaves the node exactly as it was before any was set. An explicit
+   * `0` or `false` is KEPT — `retry: 0` pins "never retry", which is a different
+   * fact from saying nothing (`NodePolicySchema.retry`).
+   */
+  setNodePolicy(id: string, policy: NodePolicy | undefined): void;
+  /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
    * whole `Container`: `default` is an absent-or-present key (not a nullable
@@ -1871,6 +1882,22 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               // connection does not declare, and the row can be removed.
               delete next.connectionParams;
             }
+            return next;
+          }),
+        }));
+      },
+
+      setNodePolicy(id, policy) {
+        if (!get().nodes.some((n) => n.id === id)) return;
+        const kept = Object.fromEntries(
+          Object.entries(policy ?? {}).filter(([, v]) => v !== undefined),
+        ) as NodePolicy;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => {
+            if (n.id !== id) return n;
+            const next = { ...n };
+            if (Object.keys(kept).length > 0) next.policy = kept;
+            else delete next.policy;
             return next;
           }),
         }));

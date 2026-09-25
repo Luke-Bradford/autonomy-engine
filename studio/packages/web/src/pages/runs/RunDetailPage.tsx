@@ -36,6 +36,7 @@ import { RunCostSummary } from './RunCostSummary';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
+import { isSecureMarker } from './secureMarker';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -668,16 +669,21 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         ? cls === ''
                           ? n.error
                           : `${n.error} (${cls})`
-                        : n.status === 'dispatched' && n.lastOutput !== undefined
-                          ? /* #1299 — a RUNNING node shows its latest streamed
+                        : isSecureMarker(n.lastOutputName)
+                          ? /* #1312 — a secure node's stream is redacted name
+                               AND value; say so rather than print the marker
+                               twice. The drill-in explains the setting. */
+                            'output withheld: this node is secure'
+                          : n.status === 'dispatched' && n.lastOutput !== undefined
+                            ? /* #1299 — a RUNNING node shows its latest streamed
                                value, so a long copy's per-batch progress reads
                                as progress rather than a hang. Once it settles the
                                outputs are the truth, and the cell goes back to
                                naming the stream. */
-                            `${n.lastOutput.name}: ${formatOutputValue(n.lastOutput.value)}`
-                          : n.lastOutputName
-                            ? `output: ${n.lastOutputName}`
-                            : ''}
+                              `${n.lastOutput.name}: ${formatOutputValue(n.lastOutput.value)}`
+                            : n.lastOutputName
+                              ? `output: ${n.lastOutputName}`
+                              : ''}
                   </td>
                 </tr>
               );

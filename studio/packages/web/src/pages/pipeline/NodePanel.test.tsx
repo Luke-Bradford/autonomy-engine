@@ -103,6 +103,9 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
     );
     expect(isStructuralCallActivity('execute_pipeline')).toBe(true);
     expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
+    // #1312 — the early return keeps the run policy section: retry applies to a
+    // call, and a secure flag refused on one must be explained where it is set.
+    expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
     // The generic config-JSON editor + Apply are NOT offered.
     expect(screen.queryByLabelText(/Config \(JSON\)/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
@@ -1437,5 +1440,16 @@ describe('parameter override editor (#1304)', () => {
     });
     expect('connectionParams' in docNode(store)).toBe(false);
     expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
+  });
+});
+
+describe('NodePanel — run policy (#1312)', () => {
+  it('offers the run policy section on an ordinary activity, writing to node.policy', () => {
+    const { store } = mountOver(httpNode({ url: 'https://example.test' }));
+    const section = screen.getByRole('group', { name: 'Run policy' });
+    fireEvent.click(within(section).getByLabelText('Secure output'));
+    expect(store.getState().nodes[0]?.policy).toEqual({ secureOutput: true });
+    // Straight to the store: the config form's Apply is not involved.
+    expect(store.getState().nodes[0]?.config).toEqual({ url: 'https://example.test' });
   });
 });

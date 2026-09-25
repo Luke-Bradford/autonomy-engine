@@ -1,4 +1,5 @@
 import {
+  StrictNodeSchema,
   validatePipelineDoc,
   type Container,
   type Edge,
@@ -67,6 +68,68 @@ export function validateCanvas(
   params: Param[],
 ): string[] {
   return validatePipelineDoc({ params, nodes, edges, containers });
+}
+
+/**
+ * #1312 — the write SCHEMA's refusals of a node's `policy`, as save badges.
+ *
+ * Kept OUT of `validateCanvas` for the reason `nameIssues` is: that function is
+ * exactly `validatePipelineDoc`, the server's doc gate, and these rules belong to
+ * a different gate — `StrictNodeSchema` on the write body (an interval with no
+ * retry, the timeout typo ceiling, unknown keys). Without them a policy the
+ * editor let through would reach the save's client-side parse and surface as a
+ * raw ZodError instead of a badge that names the node.
+ *
+ * Read through `StrictNodeSchema.shape.policy`, so the rules are the schema's
+ * own and nothing here restates a bound.
+ */
+export function policyIssues(nodes: Node[]): string[] {
+  const schema = StrictNodeSchema.shape.policy;
+  return nodes.flatMap((n) => {
+    if (n.policy === undefined) return [];
+    const check = schema.safeParse(n.policy);
+    if (check.success) return [];
+    // An unknown key has an empty path; `policy.: …` would be noise.
+    return check.error.issues.map((issue) =>
+      issue.path.length === 0
+        ? `node '${n.id}': policy: ${issue.message}`
+        : `node '${n.id}': policy.${issue.path.join('.')}: ${issue.message}`,
+    );
+  });
+}
+
+/**
+ * #1312 — the issues the node panel's policy section explains: this node's own
+ * policy refusals, and every downstream ref refused because this node's outputs
+ * are secure — or those of a container it sits in, which a secure child makes
+ * secure (`secureOutputIdsOf`).
+ *
+ * COUPLING: this reads the validators' MESSAGE FORMAT on the UNREWRITTEN strings
+ * (`readableIssue` swaps the quoted ids for names, after which nothing here can
+ * match). `canvasDoc.test.ts` runs the real validator against these prefixes, so
+ * a reworded `validateSecurePolicy` or ref refusal fails there, not silently here.
+ */
+export function nodePolicyIssues(
+  issues: string[],
+  nodeId: string,
+  containerIds: string[],
+): string[] {
+  const secureOwners = [nodeId, ...containerIds];
+  return issues.filter(
+    (issue) =>
+      issue.startsWith(`node '${nodeId}': policy`) ||
+      secureOwners.some((id) => issue.includes(`node '${id}' has secure outputs`)),
+  );
+}
+
+/**
+ * The containers `nodeId` sits in. A secure child makes its container secure
+ * (`secureOutputIdsOf`), so a ref refused against the container is this node's
+ * policy at work. One level only, because containers do not nest: a container's
+ * `children` are node ids, and `validateDoc` refuses any that is not a node.
+ */
+export function enclosingContainers(nodeId: string, containers: Container[]): string[] {
+  return containers.filter((c) => c.children.includes(nodeId)).map((c) => c.id);
 }
 
 /** What can stand between the canvas and a save. */
