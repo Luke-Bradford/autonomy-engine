@@ -100,6 +100,7 @@ export function ContainerPanel({
   containers,
   params,
   onApply,
+  onDuplicate,
 }: {
   container: Container;
   nodes: Node[];
@@ -107,6 +108,8 @@ export function ContainerPanel({
   containers: Container[];
   params: Param[];
   onApply: (next: Container) => void;
+  /** U21 (#935) — copy this container and its body; the store owns every rule. */
+  onDuplicate: () => void;
 }) {
   const label = containerLabels(containers).get(container.id) ?? container.kind;
   const stored = container as unknown as Record<string, unknown>;
@@ -361,6 +364,13 @@ export function ContainerPanel({
           </button>
         </div>
       )}
+      {/* U21 (#935). Outside the form on purpose: it copies the container as
+          STORED, not the unapplied drafts above — the same rule as `Duplicate
+          node` — and a container this form cannot render is still one a verbatim
+          copy can carry. */}
+      <button type="button" onClick={onDuplicate}>
+        Duplicate container
+      </button>
     </aside>
   );
 }

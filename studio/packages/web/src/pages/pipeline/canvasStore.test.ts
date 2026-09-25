@@ -3454,14 +3454,40 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     const st = s.getState();
     const copy = st.containers.find((c) => c.id === newId)!;
     const pos = (id: string) => st.nodes.find((n) => n.id === id)!.position;
-    const srcRight = Math.max(pos('n_x').x, pos('n_y').x);
     const copyLeft = Math.min(...copy.children.map((id) => pos(id).x));
-    // Clear of the rightmost source child by at least a node's width, so the
-    // two derived boxes cannot overlap and membership is never ambiguous.
-    expect(copyLeft).toBeGreaterThan(srcRight + 150);
+    // Clear of everything in its row — the source body AND `n_down` beyond it
+    // (x 800) — by more than a node's width, so no derived box overlaps another
+    // and membership is never ambiguous.
+    expect(copyLeft).toBeGreaterThan(pos('n_down').x + 168);
     // The body's internal layout survives: same relative offset between copies.
     const [cx, cy] = copy.children.map((id) => pos(id));
     expect({ dx: cy!.x - cx!.x, dy: cy!.y - cx!.y }).toEqual({ dx: 200, dy: 100 });
+  });
+
+  it('a SECOND duplicate lands clear of the first, never on top of it', () => {
+    // Without this a repeated ⌘D stacks box on box, and the hidden copy is a
+    // whole container the operator cannot see is there.
+    const s = loaded();
+    const first = s.getState().duplicateContainer('c_loop')!;
+    const second = s.getState().duplicateContainer('c_loop')!;
+    const st = s.getState();
+    const xsOf = (cid: string) =>
+      st.containers
+        .find((c) => c.id === cid)!
+        .children.map((id) => st.nodes.find((n) => n.id === id)!.position.x);
+    expect(Math.min(...xsOf(second))).toBeGreaterThan(Math.max(...xsOf(first)) + 168);
+  });
+
+  it('an EMPTY container copies to an empty copy', () => {
+    const s = loaded({ containers: [{ id: 'c_stage', kind: 'stage', children: [] }], edges: [] });
+    const newId = s.getState().duplicateContainer('c_stage')!;
+    const st = s.getState();
+    expect(st.containers.find((c) => c.id === newId)).toEqual({
+      id: newId,
+      kind: 'stage',
+      children: [],
+    });
+    expect(st.nodes).toHaveLength(4);
   });
 
   it('selects the copy, and ONE undo takes the whole duplicate back', () => {

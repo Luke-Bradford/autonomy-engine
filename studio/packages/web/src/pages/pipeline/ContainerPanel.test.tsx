@@ -38,6 +38,7 @@ function mount(container: Container, before: Container[] = []) {
       containers={containers}
       params={[]}
       onApply={onApply}
+      onDuplicate={() => {}}
     />,
   );
   return onApply;
@@ -274,6 +275,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
         containers={[container]}
         params={[]}
         onApply={onApply}
+        onDuplicate={() => {}}
       />,
     );
     return (next: Container) =>
@@ -285,6 +287,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
           containers={[next]}
           params={[]}
           onApply={onApply}
+          onDuplicate={() => {}}
         />,
       );
   }
@@ -348,6 +351,7 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
         containers={[container]}
         params={PARAMS}
         onApply={onApply}
+        onDuplicate={() => {}}
       />,
     );
     return onApply;
@@ -402,5 +406,26 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
     });
     expect(screen.getByRole('button', { name: 'Insert reference into exitWhen' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Insert reference into items' })).toBeNull();
+  });
+});
+
+describe('ContainerPanel — Duplicate container (U21 #935)', () => {
+  it('hands the duplicate to the store and applies nothing', () => {
+    const onApply = vi.fn();
+    const onDuplicate = vi.fn();
+    render(
+      <ContainerPanel
+        container={LOOP}
+        nodes={NODES}
+        edges={[]}
+        containers={[LOOP]}
+        params={[]}
+        onApply={onApply}
+        onDuplicate={onDuplicate}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate container' }));
+    expect(onDuplicate).toHaveBeenCalledTimes(1);
+    expect(onApply).not.toHaveBeenCalled();
   });
 });

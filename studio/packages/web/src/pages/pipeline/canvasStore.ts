@@ -28,7 +28,12 @@ import {
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
 import { readClipboard, writeClipboard } from './clipboard';
-import { CONTAINER_GAP, CONTAINER_PADDING, UNMEASURED_NODE_SIZE } from './containerLayout';
+import {
+  CONTAINER_GAP,
+  CONTAINER_HEADER_HEIGHT,
+  CONTAINER_PADDING,
+  UNMEASURED_NODE_SIZE,
+} from './containerLayout';
 
 /** How a connection differs from an ordinary forward edge (U6e). */
 export interface ConnectOptions {
@@ -517,6 +522,34 @@ function cloneNodesInto(
     newIds: copies.map((n) => n.id),
     newContainerIds: containerCopies.map((c) => c.id),
   };
+}
+
+/**
+ * U21 (#935) — how far right a container's copy goes: clear of EVERY node in the
+ * horizontal band the copied box will occupy, not just of the original box.
+ *
+ * Clearing only the original would stack a second duplicate exactly on the
+ * first — a whole container hidden under another — and could land the copy on
+ * whatever already sits beside the source. Staying in the source's band (no
+ * vertical shift) keeps the copy where the operator is already looking.
+ *
+ * Sizes are the store's estimates (`UNMEASURED_NODE_SIZE`): the store holds no
+ * measurements, so the gap on each side is a padding plus a box gap, which
+ * absorbs the difference between the estimate and a rendered node. An empty
+ * body has nothing to place — its copy is positioned by the empty-box fallback
+ * like any other empty container — so it shifts by nothing.
+ */
+function duplicateContainerShift(body: Node[], nodes: Node[]): number {
+  if (body.length === 0) return 0;
+  const { width, height } = UNMEASURED_NODE_SIZE;
+  const margin = CONTAINER_PADDING + CONTAINER_GAP;
+  const ys = body.map((n) => n.position.y);
+  const top = Math.min(...ys) - CONTAINER_HEADER_HEIGHT - margin;
+  const bottom = Math.max(...ys) + height + margin;
+  const band = nodes.filter((n) => n.position.y + height > top && n.position.y < bottom);
+  const rightmost = Math.max(...band.map((n) => n.position.x));
+  const left = Math.min(...body.map((n) => n.position.x));
+  return rightmost + width + 2 * margin - left;
 }
 
 /**
@@ -1367,17 +1400,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const body = live.nodes.filter((n) => source.children.includes(n.id));
         const members = new Set([id, ...body.map((n) => n.id)]);
         const internal = live.edges.filter((e) => members.has(e.from) && members.has(e.to));
-        const xs = body.map((n) => n.position.x);
-        const span = xs.length === 0 ? 0 : Math.max(...xs) - Math.min(...xs);
-        // One node width plus both boxes' padding and a box-to-box gap on each
-        // side: the copy's derived box starts clear of the original's.
-        const dx =
-          span + UNMEASURED_NODE_SIZE.width + 2 * (CONTAINER_PADDING + CONTAINER_GAP);
         let made: string | null = null;
         edit((s) => {
           const cloned = cloneNodesInto(s, body, internal, {
             containers: [source],
-            offset: { x: dx, y: 0 },
+            offset: { x: duplicateContainerShift(body, s.nodes), y: 0 },
           });
           made = cloned.newContainerIds[0] ?? null;
           return {
