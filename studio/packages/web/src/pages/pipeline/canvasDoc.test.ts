@@ -7,7 +7,14 @@ import {
   type Param,
 } from '@autonomy-studio/shared';
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
-import { canSave, saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
+import {
+  canSave,
+  nodePolicyIssues,
+  policyIssues,
+  saveDisabledReason,
+  toVersionBody,
+  validateCanvas,
+} from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
@@ -211,5 +218,65 @@ describe('saveDisabledReason (#1141)', () => {
     expect(
       saveDisabledReason({ saving: false, ready: false, issues: ['x'], previewing: null }),
     ).toBe('Wait for the pipeline to load.');
+  });
+});
+
+describe('policyIssues + nodePolicyIssues (#1312)', () => {
+  const withPolicy = (id: string, policy: Node['policy'], type = 'http_request'): Node => ({
+    ...node(id),
+    type,
+    policy,
+  });
+
+  it('reports the write schema refusals the server would 400 on, attributed to the node', () => {
+    expect(policyIssues([withPolicy('a', { retry: 2, retryIntervalSeconds: 60 })])).toEqual([]);
+    const issues = policyIssues([
+      withPolicy('a', { retryIntervalSeconds: 60 }),
+      withPolicy('b', { retry: -1 }),
+      withPolicy('c', { timeoutSeconds: 40_000_000 }),
+      node('d'),
+    ]);
+    expect(issues).toHaveLength(3);
+    expect(issues[0]).toMatch(/^node 'a': policy\.retryIntervalSeconds: .*has no effect without retry/);
+    expect(issues[1]).toMatch(/^node 'b': policy\.retry: /);
+    expect(issues[2]).toMatch(/^node 'c': policy\.timeoutSeconds: .*one year/);
+  });
+
+  it('a pathless issue (an unknown key) reads `policy:` rather than `policy.:`', () => {
+    const [issue] = policyIssues([withPolicy('a', { bogus: 1 } as Node['policy'])]);
+    expect(issue).toMatch(/^node 'a': policy: /);
+  });
+
+  // COUPLING: `nodePolicyIssues` keys on the validator's MESSAGE FORMAT. These
+  // cases run the REAL validator, so a reworded `validateSecurePolicy` or ref
+  // refusal fails here instead of silently emptying the panel's list.
+  it('picks out the secure-policy refusal validateDoc raises for this node', () => {
+    const nodes = [withPolicy('i', { secureOutput: true }, 'if'), node('x')];
+    const issues = validateCanvas(nodes, [], [], []);
+    expect(nodePolicyIssues(issues, 'i', [])).toEqual([
+      expect.stringMatching(/^node 'i': policy\.secureOutput is not supported on 'if'/),
+    ]);
+    expect(nodePolicyIssues(issues, 'x', [])).toEqual([]);
+  });
+
+  it('picks out a downstream ref refused because this node (or its container) is secure', () => {
+    const producer = withPolicy('p', { secureOutput: true });
+    const consumer = node('c', { url: '${nodes.p.output.body}' });
+    const issues = validateCanvas([producer, consumer], [edge('e', 'p', 'c')], [], []);
+    expect(nodePolicyIssues(issues, 'p', [])).toEqual([
+      expect.stringContaining("node 'p' has secure outputs"),
+    ]);
+    // The consumer's own panel is not where a producer's policy is explained.
+    expect(nodePolicyIssues(issues, 'c', [])).toEqual([]);
+    // A secure child makes its container secure; the child's panel owns that.
+    const viaBox = ["node 'c': ${nodes.box.output.x} — node 'box' has secure outputs (…)"];
+    expect(nodePolicyIssues(viaBox, 'p', ['box'])).toEqual(viaBox);
+    expect(nodePolicyIssues(viaBox, 'p', [])).toEqual([]);
+  });
+
+  it('includes this node\'s own write-schema policy issues', () => {
+    const issues = policyIssues([withPolicy('a', { retryIntervalSeconds: 60 })]);
+    expect(nodePolicyIssues(issues, 'a', [])).toEqual(issues);
+    expect(nodePolicyIssues(issues, 'ab', [])).toEqual([]);
   });
 });
