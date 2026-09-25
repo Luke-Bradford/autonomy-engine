@@ -378,8 +378,7 @@ type PreparedDispatch = {
   resolvedDatasetIds: { source: string; sink?: string } | undefined;
   /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
   resolvedDatasetParams:
-    | { source?: Record<string, unknown>; sink?: Record<string, unknown> }
-    | undefined;
+    { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined;
 };
 
 /**

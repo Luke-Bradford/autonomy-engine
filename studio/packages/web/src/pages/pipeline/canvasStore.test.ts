@@ -3128,7 +3128,7 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     expect('sink' in (bound as object)).toBe(false);
   });
 
-  it('#1144 — unbinding a dataset end takes that end\'s datasetParams with it', () => {
+  it("#1144 — unbinding a dataset end takes that end's datasetParams with it", () => {
     // No control renders `datasetParams`, so a binding left behind for an end
     // the node no longer addresses would make it unsaveable with nothing on
     // screen to explain or clear it.

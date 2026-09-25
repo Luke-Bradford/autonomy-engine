@@ -2340,7 +2340,10 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
   });
 
   it('#1144 REFUSES an override that leaves the config invalid for its kind, or names no setting', async () => {
-    const run1 = await seedParamCopy({ source: { delimiter: ';;' } }, { parameters: ['delimiter'] });
+    const run1 = await seedParamCopy(
+      { source: { delimiter: ';;' } },
+      { parameters: ['delimiter'] },
+    );
     const run2 = await seedParamCopy({ source: { paht: 'x.csv' } }, { parameters: ['paht'] });
     for (const { db, run } of [run1, run2]) {
       const state = await startRun(
@@ -2353,7 +2356,10 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
         run,
       );
       expect(state.status).toBe('failure');
-      expect(failureOf(db, run.id)).toMatchObject({ code: 'dataset_param_invalid', side: 'source' });
+      expect(failureOf(db, run.id)).toMatchObject({
+        code: 'dataset_param_invalid',
+        side: 'source',
+      });
     }
   });
 

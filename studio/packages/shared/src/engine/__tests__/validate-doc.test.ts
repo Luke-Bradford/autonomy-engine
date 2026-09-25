@@ -1431,9 +1431,7 @@ describe('validateDoc — datasetParams shape (#1144)', () => {
 
   it('rejects datasetParams on a call node (child pipeline owns dispatch)', () => {
     const withParams = { ...callNode('c', 'ver_1'), datasetParams: { source: { path: 'a' } } };
-    expect(validateDoc(doc([withParams])).join(' ')).toMatch(
-      /node\.c: datasetParams .*call node/,
-    );
+    expect(validateDoc(doc([withParams])).join(' ')).toMatch(/node\.c: datasetParams .*call node/);
   });
 });
 
