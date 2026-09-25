@@ -6,7 +6,7 @@
  * a canvas — the same split `configForm.ts` / `containerRules.ts` already use.
  */
 
-import { refAt } from '@autonomy-studio/shared';
+import { inQuotedText, refAt } from '@autonomy-studio/shared';
 
 /**
  * How an insert must be applied to a field.
@@ -98,7 +98,8 @@ export type WrapSpan = { start: number; end: number };
  * is the author's SELECTION when it sits inside one expression's body, so a
  * sub-expression can be wrapped in place; otherwise it is that expression's
  * whole body. A selection that reaches past the body — over the braces, say —
- * means the expression itself.
+ * means the expression itself. A selection with an end inside quoted text is
+ * refused (`null`), since the wrap would land inside a string literal.
  */
 export function wrapTarget(
   value: string,
@@ -109,6 +110,15 @@ export function wrapTarget(
   if (ref === null) return null;
   const bodyStart = ref.start + 2;
   if (selectionStart < selectionEnd && selectionStart >= bodyStart && selectionEnd <= ref.end) {
+    // A selection with an end inside a string literal would put the call INTO
+    // the string: the save accepts `"toUpper(a)bc"` as plain characters, so no
+    // validator can refuse it. Nothing is offered instead.
+    if (
+      inQuotedText(ref.body, selectionStart - bodyStart) ||
+      inQuotedText(ref.body, selectionEnd - bodyStart)
+    ) {
+      return null;
+    }
     return { start: selectionStart, end: selectionEnd };
   }
   return { start: bodyStart, end: ref.end };

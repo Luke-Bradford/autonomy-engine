@@ -90,8 +90,12 @@ export function ExpressionPicker({
   const fnListId = useId();
   const fnToggleId = useId();
   const options = open?.kind === 'refs' ? open.options : null;
-  const functions =
-    open?.kind === 'functions' && open.against === wrap?.value ? open.wrap : undefined;
+  // An edit while the function list is open CLOSES it — the state is cleared,
+  // not just hidden, or editing back to the same text (an undo) would revive a
+  // list resolved against a span from before. Set during render, React's
+  // pattern for state derived from a changed prop: it re-renders at once.
+  if (open?.kind === 'functions' && open.against !== wrap?.value) setOpen(null);
+  const functions = open?.kind === 'functions' ? open.wrap : undefined;
   const functionsOpen = functions !== undefined;
 
   // Focus returns to the toggle that OPENED the list, which is where the
@@ -153,8 +157,8 @@ export function ExpressionPicker({
         >
           {functions === null ? (
             <p className="page-hint">
-              Put the cursor inside a {'${…}'} expression in {fieldName}, or select part of one, to
-              wrap it in a function.
+              Put the cursor inside a {'${…}'} expression in {fieldName}, or select part of one
+              outside its quoted text, to wrap it in a function.
             </p>
           ) : functions.functions.length === 0 ? (
             // Reachable: a field with a narrow type, or an expression that is

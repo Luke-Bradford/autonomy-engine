@@ -103,6 +103,17 @@ describe('wrapTarget', () => {
     expect(wrapTarget('${params.a}', 0, 11)).toEqual({ start: 2, end: 10 });
   });
 
+  it('refuses a selection with an end in QUOTED text — the call would land inside the string', () => {
+    const v = '${concat("abc", params.a)}';
+    expect(wrapTarget(v, v.indexOf('abc'), v.indexOf('abc') + 1)).toBeNull();
+    expect(wrapTarget(v, v.indexOf('bc'), v.indexOf('params'))).toBeNull();
+    // The whole literal, quotes included, is an expression and wraps.
+    expect(wrapTarget(v, v.indexOf('"'), v.indexOf(','))).toEqual({
+      start: v.indexOf('"'),
+      end: v.indexOf(','),
+    });
+  });
+
   it('answers null outside every expression, so nothing is offered', () => {
     expect(wrapTarget('plain text', 3, 3)).toBeNull();
     expect(wrapTarget('${params.a} and ${params.b}', 3, 20)).toBeNull();

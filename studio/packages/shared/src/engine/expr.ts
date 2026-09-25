@@ -407,6 +407,26 @@ export function refAt(s: string, from: number, to: number = from): RefMatch | nu
   return null;
 }
 
+/**
+ * Whether offset `at` of an expression BODY falls inside a quoted string — the
+ * interior of `"abc"`, where a caret before the opening quote or after the
+ * closing one is outside. An unterminated quote runs to the end.
+ *
+ * For the flyout's function wrap (#864): a selection with an end in quoted text
+ * would put `toUpper(` INSIDE a string literal, which the save gate accepts as
+ * literal characters — a wrap nothing downstream can tell went wrong. Read with
+ * the one quoting rule (`isQuote`/`quotedSpanEnd`) every scanner here shares.
+ */
+export function inQuotedText(body: string, at: number): boolean {
+  for (let i = 0; i < body.length && i < at; i += 1) {
+    if (!isQuote(body[i])) continue;
+    const close = quotedSpanEnd(body, i);
+    if (close === -1 || at <= close) return true;
+    i = close;
+  }
+  return false;
+}
+
 // --- #6 E2: the interpolation MODE classifier (SSOT) -------------------------
 
 /**

@@ -4,6 +4,7 @@ import {
   interpolationMode,
   MAX_EXPR_DEPTH,
   parseExpr,
+  inQuotedText,
   protectEscapes,
   refAt,
   restoreEscapes,
@@ -528,5 +529,21 @@ describe('refAt', () => {
     const s = '${params.a} ${params.b';
     expect(refAt(s, 3)?.body).toBe('params.a');
     expect(refAt(s, 16)).toBeNull();
+  });
+});
+
+describe('inQuotedText', () => {
+  it('is true only strictly between a quote and its closer', () => {
+    const body = 'concat("abc", x)';
+    expect(inQuotedText(body, 7)).toBe(false); // before the opening quote
+    expect(inQuotedText(body, 8)).toBe(true); // just inside it
+    expect(inQuotedText(body, 11)).toBe(true); // just before the closer
+    expect(inQuotedText(body, 12)).toBe(false); // after the closer
+    expect(inQuotedText(body, 14)).toBe(false);
+  });
+
+  it('treats either quote character alike, and runs an unterminated one to the end', () => {
+    expect(inQuotedText("f('a\"b')", 4)).toBe(true);
+    expect(inQuotedText('f("ab', 5)).toBe(true);
   });
 });

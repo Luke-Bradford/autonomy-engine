@@ -381,6 +381,10 @@ describe('ExpressionPicker — wrap in a function', () => {
         .getAttribute('aria-expanded'),
     ).toBe('false');
     expect(ui.field('url').value).toBe(edited);
+
+    // Editing BACK to the text it opened on (an undo) must not revive it.
+    fireEvent.change(ui.field('url'), { target: { value: READS.config['url'] } });
+    expect(ui.offered()).toEqual([]);
   });
 
   it('keeps ONE list open at a time', () => {
