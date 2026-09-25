@@ -2389,9 +2389,11 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
       run,
     );
     expect(state.status).toBe('failure');
+    // Refused by the cheap ID check, before any store I/O — not merely caught
+    // later by the address check, which would say the same code less usefully.
     expect(failureOf(db, run.id)).toMatchObject({
       code: 'dataset_self_copy',
-      error: expect.stringContaining(sourceDs),
+      error: expect.stringContaining(`name the same dataset '${sourceDs}'`),
     });
   });
 
