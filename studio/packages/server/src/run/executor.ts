@@ -770,7 +770,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // A key the kind's config does not have is refused rather than merged:
       // the kind schema STRIPS unknown keys, so the override would pass the
       // re-parse below and then do nothing — an allowlisted typo, silently.
-      const unknownKey = Object.keys(resolvedParams).find((key) => !(key in kindSchema.shape));
+      // OWN properties only: `in` would let an `Object.prototype` name through.
+      const unknownKey = Object.keys(resolvedParams).find(
+        (key) => !Object.hasOwn(kindSchema.shape, key),
+      );
       if (unknownKey !== undefined) {
         return {
           error: `dataset parameter '${unknownKey}' is not a '${dataset.kind}' dataset setting`,

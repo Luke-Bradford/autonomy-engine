@@ -214,6 +214,43 @@ describe('exportPipeline', () => {
   // COMPOSED over the connection rule's result rather than added to one of its
   // three branches. Bolt it into a branch and it silently disappears on the
   // other two — which is exactly what these four nodes measure.
+  it('#1144 — datasetParams leave with a portable pair and are dropped with a stripped one', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Params' });
+    const params = { source: { path: 'secret-looking/plan.csv' } };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'target', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'portable',
+          type: 'llm_call',
+          config: {},
+          position: { x: 0, y: 0 },
+          datasetIds: { source: '${params.target}' },
+          datasetParams: params,
+        },
+        {
+          id: 'stripped',
+          type: 'llm_call',
+          config: {},
+          position: { x: 1, y: 1 },
+          datasetIds: { source: '${params.target}', sink: 'ds_local_primary_key' },
+          datasetParams: params,
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    const byId = (id: string) => envelope.data.versions[0]!.nodes.find((n) => n.id === id)!;
+    expect(byId('portable').datasetParams).toEqual(params);
+    expect(byId('stripped').datasetIds).toEqual({ source: '${params.target}', sink: null });
+    expect('datasetParams' in byId('stripped')).toBe(false);
+  });
+
   it('M3 (#1117) — nulls each LITERAL dataset end independently, on every connection shape', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'Copies' });
