@@ -253,7 +253,6 @@ describe('DatasetsPage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  /* #1253 — Edit names its row, as Delete already did. */
   // #1143 — the export half, wired as Connections' is (#959).
   it('exports a dataset as the server bytes, under a name carrying its id', async () => {
     const user = userEvent.setup();
@@ -295,12 +294,14 @@ describe('DatasetsPage', () => {
     );
   });
 
+  /* #1253 — Edit names its row, as Delete already did; #1143's Export does too. */
   it('names the row on every row action, Edit included', async () => {
     listMock.mockResolvedValue([dataset()]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     expect(screen.getByRole('button', { name: 'Edit Orders' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Orders' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export Orders' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 
