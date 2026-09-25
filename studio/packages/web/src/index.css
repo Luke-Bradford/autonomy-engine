@@ -941,10 +941,12 @@ th {
    buttons, the canvas toolbar, the node panel forms) that were laid out against
    the UA's ~13.33px. With the size untouched, the metric-dependent rules —
    `.icon-button`'s fixed box, `td button + button`'s spacing — see the same
-   size they were written for; only the glyph shapes change. The rules that already opt in to `font: inherit` (the flat
-   icon buttons, `.factory-resources__filter`, `.page-back`) are unaffected: a
-   class selector outranks this element one. Fluent's own controls set their
-   family from a class too, so they keep Fluent's stack.
+   size they were written for; only the glyph shapes change.
+
+   The rules that already opt in to `font: inherit` (the flat icon buttons,
+   `.factory-resources__filter`, `.page-back`) are unaffected: a class selector
+   outranks this element one. Fluent's own controls set their family from a
+   class too, so they keep Fluent's stack.
 
    `button` carries it in its own rule below rather than in this list, so the
    element keeps exactly ONE rule — `ruleBody` (`testing/cssSource.ts`) refuses a

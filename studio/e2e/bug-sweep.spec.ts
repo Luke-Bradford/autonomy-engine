@@ -627,15 +627,14 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
  *
  * The canvas header is where the mismatch was visible: `.page-back` (an anchor,
  * so it inherits) sat first in a row of `<button>`s that rendered in the UA's
- * own control font. Asserted against the row's PARENT, which is inside the
+ * own control font. Asserted against the row itself, which is inside the
  * FluentProvider root — `body` is an ancestor of it and still carries the MVP
  * stack, so it would be the wrong reference.
  *
  * The SIZE half is the decision the fix made: family-only, so the buttons keep
  * the UA control size rather than growing to their container's (14px inside
- * the Fluent root). The
- * reference is a bare `<button>` probe, sized by the same engine's UA sheet, so
- * no pixel literal is hard-coded. A `font: inherit` shorthand in place of the
+ * the Fluent root). The reference is a bare `<button>` probe, sized by the
+ * same engine's UA sheet, so no pixel literal is hard-coded. A `font: inherit` shorthand in place of the
  * family reset would pass the family half and fail this one.
  *
  * jsdom resolves no cascade and inherits nothing, so no unit test can see
