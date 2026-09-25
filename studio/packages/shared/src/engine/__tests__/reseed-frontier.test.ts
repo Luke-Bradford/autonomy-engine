@@ -383,6 +383,22 @@ describe('RS4 — reseedFrontier: a copied call node links the child run that pr
     expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: cmd.childRunId }]);
   });
 
+  it('a call node INSIDE a copied container gets no link — the container is copied as one unit', () => {
+    const eng = engine(
+      [callNode('inner'), node('z')],
+      [edge('loop', 'z', 'success')],
+      [{ id: 'loop', kind: 'foreach', children: ['inner'], items: '[1]' } as Container],
+    );
+    const s = state({
+      nodes: { inner: 'success', z: 'failure' },
+      containers: { loop: cs('success') },
+    });
+    s.nodes.inner = { status: 'success', attempts: 1, retries: 0, currentAttemptId: 'inner#0' };
+    const r = eng.reseedFrontier(s);
+    expect(r.copiedContainers).toEqual({ loop: cs('success') });
+    expect(r.childLinks).toEqual([]);
+  });
+
   it('a call node that was itself COPIED (a rerun of a rerun) carries its link forward', () => {
     const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
     const s = state({ nodes: { call: 'success', b: 'failure' } });
