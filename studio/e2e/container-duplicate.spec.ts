@@ -80,10 +80,13 @@ test.describe('duplicate a container (U21)', () => {
     const sameBand = a!.y < b!.y + b!.height && b!.y < a!.y + a!.height;
     expect(overlap && sameBand, 'the copy box overlaps the original').toBe(false);
 
-    // ⌘D on a selected container duplicates it too.
+    // ⌘D on a selected container duplicates it too. The third box lands clear
+    // of both others, past the pane's right edge, so it is only DRAWN at all
+    // (`onlyRenderVisibleElements`) because a container that appears is panned
+    // into view — the canvas's current subject is never left culled.
     await page.keyboard.press('Meta+d');
     await expect(page.getByText('Duplicated loop 2.')).toBeVisible();
-    await expect(boxes).toHaveCount(3);
+    await expect(page.getByRole('group', { name: /^loop 3 container/ })).toBeInViewport();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     // The server runs `validatePipelineDoc` on the write; an exitWhen still
