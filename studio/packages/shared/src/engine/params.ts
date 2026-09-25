@@ -1648,7 +1648,9 @@ export function availableRefs(
       // exactly as `scanFilterRefs` scopes it.
       itemInScope:
         containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) ||
-        (subject.type === 'filter' && field !== undefined && filterFieldBindsItem(field)),
+        (subject.type === FILTER_ACTIVITY_TYPE &&
+          field !== undefined &&
+          filterFieldBindsItem(field)),
       offerRescued: true,
     },
   );
