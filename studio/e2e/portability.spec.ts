@@ -219,7 +219,9 @@ test.describe('#959 portability', () => {
     await expect(rows.filter({ hasText: destStore })).toHaveCount(1);
 
     // 2. With no choice — resolved by identity to the store it came from.
-    await page.getByLabel('Store it in').selectOption({ label: 'The connection it was exported from' });
+    await page
+      .getByLabel('Store it in')
+      .selectOption({ label: 'The connection it was exported from' });
     await page.getByLabel('Export file').setInputFiles(file as string);
     await expect(rows).toHaveCount(3);
     await expect(rows.filter({ hasText: srcStore })).toHaveCount(2);

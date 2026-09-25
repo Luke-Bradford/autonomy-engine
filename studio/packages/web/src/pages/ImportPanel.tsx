@@ -184,8 +184,7 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
       <p className="page-hint">
         Bring in a pipeline, connection, trigger or dataset from an export file. Secrets are never
         exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s binding to anything else, so
-        an imported resource usually needs something rebound — whatever that is will be listed
-        here.
+        an imported resource usually needs something rebound — whatever that is will be listed here.
       </p>
       {stores !== undefined && (
         <>
@@ -240,10 +239,9 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
       {foreign && (
         <p className="error" role="alert">
           “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
-          list.{' '}
-          Import it from <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>
-          .{' '}
-          Nothing was created.
+          list. Import it from{' '}
+          <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
+          created.
         </p>
       )}
       {outcome && <ImportOutcome outcome={outcome} />}

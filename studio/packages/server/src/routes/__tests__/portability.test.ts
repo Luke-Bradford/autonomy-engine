@@ -630,8 +630,7 @@ describe('portability routes (export + import)', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.body).toContain('no such connection');
-      const after = (await app.inject({ method: 'GET', url: '/api/datasets' })).json().items
-        .length;
+      const after = (await app.inject({ method: 'GET', url: '/api/datasets' })).json().items.length;
       expect(after).toBe(before);
     });
 

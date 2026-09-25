@@ -146,9 +146,7 @@ export function importEnvelope(
   opts: { connectionId?: string } = {},
 ): Promise<ImportResult> {
   const query =
-    opts.connectionId === undefined
-      ? ''
-      : `?connectionId=${encodeURIComponent(opts.connectionId)}`;
+    opts.connectionId === undefined ? '' : `?connectionId=${encodeURIComponent(opts.connectionId)}`;
   return apiFetch(`/api/import${query}`, {
     method: 'POST',
     body: envelope,

@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  ConnectionPublicSchema,
-  DatasetSchema,
-  type ImportResult,
-} from '@autonomy-studio/shared';
+import { ConnectionPublicSchema, DatasetSchema, type ImportResult } from '@autonomy-studio/shared';
 import { ImportPanel } from './ImportPanel';
 import { ApiError } from '../api/client';
 import { renderWithRouter } from '../testing/renderWithRouter';
