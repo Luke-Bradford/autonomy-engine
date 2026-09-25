@@ -35,6 +35,7 @@ import {
   RUN_TABS,
   type RunTab,
 } from './runOrigin';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -404,80 +405,88 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           pane that renders only when rows exist would vanish exactly when the
           operator needs it to undo the filter that emptied the list. */}
       <div className="run-filters" role="group" aria-label="Filter runs">
-        <label>
-          Status
-          <select
-            value={statusFilter ?? ''}
-            onChange={(e) => setFilter(RUN_FILTER_PARAMS.status, e.target.value)}
-          >
-            <option value="">All statuses</option>
-            {RunStatusSchema.options.map((s) => (
-              <option key={s} value={s}>
-                {runStatusLabel(s)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Status">
+          {(id) => (
+            <select
+              id={id}
+              value={statusFilter ?? ''}
+              onChange={(e) => setFilter(RUN_FILTER_PARAMS.status, e.target.value)}
+            >
+              <option value="">All statuses</option>
+              {RunStatusSchema.options.map((s) => (
+                <option key={s} value={s}>
+                  {runStatusLabel(s)}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
 
-        <label>
-          Pipeline
-          <select
-            value={pipelineId ?? ''}
-            onChange={(e) => setFilter(RUN_FILTER_PARAMS.pipelineId, e.target.value)}
-          >
-            <option value="">All pipelines</option>
-            {pipelines.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-            {/* The orphan guard. A `<select>` whose value matches no option
+        <LabelledControl label="Pipeline">
+          {(id) => (
+            <select
+              id={id}
+              value={pipelineId ?? ''}
+              onChange={(e) => setFilter(RUN_FILTER_PARAMS.pipelineId, e.target.value)}
+            >
+              <option value="">All pipelines</option>
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+              {/* The orphan guard. A `<select>` whose value matches no option
                 renders the FIRST one — so a link to a deleted pipeline (or a
                 render before the list has loaded) would say "All pipelines"
                 while the list stayed filtered: the control lying about what is
                 applied. A disabled option makes the mismatch visible instead. */}
-            {pipelineId !== undefined && !pipelines.some((p) => p.id === pipelineId) && (
-              <option value={pipelineId} disabled>
-                {pipelineId} (unavailable)
-              </option>
-            )}
-          </select>
-        </label>
+              {pipelineId !== undefined && !pipelines.some((p) => p.id === pipelineId) && (
+                <option value={pipelineId} disabled>
+                  {pipelineId} (unavailable)
+                </option>
+              )}
+            </select>
+          )}
+        </LabelledControl>
 
-        <label>
-          Trigger
-          <select
-            value={triggerId ?? ''}
-            onChange={(e) => setFilter(RUN_FILTER_PARAMS.triggerId, e.target.value)}
-          >
-            <option value="">All triggers</option>
-            {triggers.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-            {triggerId !== undefined && !triggers.some((t) => t.id === triggerId) && (
-              <option value={triggerId} disabled>
-                {triggerId} (unavailable)
-              </option>
-            )}
-          </select>
-        </label>
+        <LabelledControl label="Trigger">
+          {(id) => (
+            <select
+              id={id}
+              value={triggerId ?? ''}
+              onChange={(e) => setFilter(RUN_FILTER_PARAMS.triggerId, e.target.value)}
+            >
+              <option value="">All triggers</option>
+              {triggers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+              {triggerId !== undefined && !triggers.some((t) => t.id === triggerId) && (
+                <option value={triggerId} disabled>
+                  {triggerId} (unavailable)
+                </option>
+              )}
+            </select>
+          )}
+        </LabelledControl>
 
-        <label>
-          Started
-          <select
-            value={since ?? ''}
-            onChange={(e) => setFilter(RUN_FILTER_PARAMS.since, e.target.value)}
-          >
-            <option value="">Any time</option>
-            {RUN_SINCE_OPTIONS.map((w) => (
-              <option key={w} value={w}>
-                {RUN_SINCE_LABEL[w]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Started">
+          {(id) => (
+            <select
+              id={id}
+              value={since ?? ''}
+              onChange={(e) => setFilter(RUN_FILTER_PARAMS.since, e.target.value)}
+            >
+              <option value="">Any time</option>
+              {RUN_SINCE_OPTIONS.map((w) => (
+                <option key={w} value={w}>
+                  {RUN_SINCE_LABEL[w]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
 
         {filtered && (
           <button type="button" onClick={clearFilters}>
