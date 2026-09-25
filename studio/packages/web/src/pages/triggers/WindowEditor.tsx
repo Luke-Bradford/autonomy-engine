@@ -236,5 +236,5 @@ function dependencySentence(
   const from = -dependency.offsetInSeconds;
   const to = from - (dependency.sizeInSeconds ?? windowSeconds);
   const end = to === 0 ? 'its own start' : `${to}s before its start`;
-  return `Each window waits until every window overlapping ${from}s before its start to ${end} has succeeded (or was skipped)`;
+  return `Each window waits until every window overlapping ${from}s before its start to ${end} has succeeded (or was skipped or superseded by the trigger itself)`;
 }
