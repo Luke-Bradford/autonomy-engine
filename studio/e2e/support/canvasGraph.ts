@@ -703,6 +703,15 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
  * `disabled` there.) The previous helper's three passes only absorbed the race.
  * Waiting for it is what lets this assert a single pass.
  *
+ * The one poll covers both element kinds, by different halves. An EDGE is never
+ * mounted hidden: React Flow's `EdgeWrapper` returns `null` until both endpoints
+ * resolve, so for edges the count is the wait and the visibility check is
+ * trivially true. A NODE is mounted hidden, so for nodes the visibility check is
+ * the wait. It requires EVERY match rather than any, because TAB stops at the
+ * first match in DOM order. Nothing on this canvas keeps a node hidden on
+ * purpose, so a node that never shows up here is a real failure worth the
+ * timeout.
+ *
  * Focusing the START programmatically loses neither real reason above: the
  * element under test is still reached by TAB, which is what puts
  * `:focus-visible` on it. It throws rather than returning false so the caller
