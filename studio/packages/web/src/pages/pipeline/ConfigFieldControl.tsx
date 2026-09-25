@@ -135,8 +135,9 @@ export type FieldChoices = {
  * connecting the form, the doc and the error message.
  *
  * A `<textarea>` or `<select>` is paired with its label by `htmlFor`/`id` through
- * `LabelledControl`, never WRAPPED by it (#1227). A wrapping label's text includes the control's own
- * text — a textarea's value, every option of a select — so Playwright's
+ * `LabelledControl`, never WRAPPED by it (#1227). A wrapping label's text
+ * includes the control's own text — a textarea's value, every option of a
+ * select — so Playwright's
  * `getByLabel('path', { exact: true })` resolves while the field is empty and
  * silently stops matching the moment it holds anything, and the non-exact form
  * starts matching on VALUES. The accessible name is unaffected either way; it is
