@@ -429,6 +429,19 @@ describe('the reveal trigger', () => {
       ).toEqual({ ready: ['c'], waiting: [] });
     });
 
+    it('does not wait on a child an EARLIER container draws', () => {
+      // First-declared wins, so `n` is never drawn in `c` — waiting on it would
+      // hold `c` pending for good.
+      expect(
+        revealReady(
+          new Set(['c']),
+          new Map([['c', box(0)]]),
+          [loop('first', ['n']), loop('c', ['n'])],
+          new Set(['n']),
+        ),
+      ).toEqual({ ready: ['c'], waiting: [] });
+    });
+
     it('forgets an id whose container is gone', () => {
       expect(revealReady(new Set(['c']), new Map(), [], new Set())).toEqual({
         ready: [],

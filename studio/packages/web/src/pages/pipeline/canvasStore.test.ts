@@ -3504,6 +3504,13 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     expect(st.containers).toBe(before.containers);
   });
 
+  it('does not spend a stagger slot — the copy is not placed by the stagger', () => {
+    const s = loaded();
+    const before = s.getState().addCount;
+    s.getState().duplicateContainer('c_loop');
+    expect(s.getState().addCount).toBe(before);
+  });
+
   it('an unknown id is a no-op that records no history', () => {
     const s = loaded();
     const before = s.getState();

@@ -308,7 +308,7 @@ export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<
  * at the EMPTY fallback, right of everything. Revealing then pans to where the
  * box is not going to be. So an appeared id WAITS until its box is derived from
  * its children, or until it is plain that it has none to wait for (no child is
- * a node in the doc — its fallback box IS its real box).
+ * a node in the doc that this box will draw — its fallback box IS its real box).
  *
  * An id with no box any more (the container was deleted, or undone) is in
  * neither list, so the caller's pending set forgets it.
@@ -319,13 +319,19 @@ export function revealReady(
   containers: readonly Container[],
   docNodeIds: ReadonlySet<string>,
 ): { ready: string[]; waiting: string[] } {
+  const { owner } = containerMembership(containers);
   const ready: string[] = [];
   const waiting: string[] = [];
   for (const id of pending) {
     const box = boxes.get(id);
     const container = containers.find((c) => c.id === id);
     if (box === undefined || container === undefined) continue;
-    const expectsChildren = container.children.some((child) => docNodeIds.has(child));
+    // By RESOLVED owner, as `containerRects` draws: a child an earlier container
+    // already claimed is never drawn in this box, and waiting on it would hold
+    // the id pending — and out of the empty diff — for good.
+    const expectsChildren = container.children.some(
+      (child) => docNodeIds.has(child) && owner.get(child) === id,
+    );
     (box.childCount > 0 || !expectsChildren ? ready : waiting).push(id);
   }
   return { ready, waiting };

@@ -67,13 +67,18 @@ test.describe('duplicate a container (U21)', () => {
     await page.getByRole('button', { name: 'Configure loop 1' }).click();
     await page.getByRole('button', { name: 'Duplicate container' }).click();
     await expect(page.getByText('Duplicated loop 1.')).toBeVisible();
-    await expect(boxes).toHaveCount(2);
+    // The copy lands clear of its row, often past the pane's edge, and is
+    // panned into view: it is the panel's subject.
+    await expect(page.getByRole('group', { name: /^loop 2 container/ })).toBeInViewport();
     // The copy is the panel's subject now — "another one of these, but different".
     const panel = page.getByRole('complementary', { name: 'Properties' });
     await expect(panel.getByRole('heading', { name: 'loop 2' })).toBeVisible();
 
-    // Beside the original, not over it: the two drawn boxes do not intersect.
+    // Beside the original, not over it. Fit first: after the reveal the original
+    // may be culled (`onlyRenderVisibleElements`), and this is about the boxes.
+    await page.getByRole('button', { name: /fit view/i }).click();
     await viewportSettled(page);
+    await expect(boxes).toHaveCount(2);
     const [a, b] = await Promise.all([boxes.nth(0).boundingBox(), boxes.nth(1).boundingBox()]);
     expect(a && b, 'both boxes are drawn').toBeTruthy();
     const overlap = a!.x < b!.x + b!.width && b!.x < a!.x + a!.width;

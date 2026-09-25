@@ -386,6 +386,7 @@ interface CloneResult {
   nodes: Node[];
   edges: Edge[];
   containers: Container[];
+  /** The NODE copies' ids — what a node copy selects. */
   newIds: string[];
   /** The ids of the container copies, in the order the sources were given. */
   newContainerIds: string[];
@@ -1412,7 +1413,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             edges: cloned.edges,
             containers: cloned.containers,
             selected: made === null ? s.selected : [{ kind: 'container' as const, id: made }],
-            addCount: s.addCount + 1,
+            // No `addCount`: the copy is placed by `duplicateContainerShift`, not
+            // the stagger, and the counter advances only when the stagger is used.
           };
         });
         return made;
