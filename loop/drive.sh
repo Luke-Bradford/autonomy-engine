@@ -15,7 +15,8 @@
 #       ("you specify" / the milestone), or a real [loop-blocked];
 #     * nothing more to do: MAX_STALL consecutive no-progress fires;
 #     * QUOTA: 7-day utilization >= QUOTA_STOP_PCT (or unreadable for more than
-#       QUOTA_UNKNOWN_FIRES fires) -- checked BEFORE the auth probe so a
+#       QUOTA_UNKNOWN_FIRES CONSECUTIVE fires; a readable read resets it, #1285)
+#       -- checked BEFORE the auth probe so a
 #       quota-blocked scheduled start costs ZERO tokens;
 #     * MAX_FIRES fires in one driver run (scheduled starts resume it);
 #     * `launchctl unload` (operator).
@@ -77,7 +78,7 @@ MAX_FIRES="${MAX_FIRES:-0}"       # 0 = UNCAPPED (operator, 2026-07-29). Was 6.
                                   #
                                   # Set MAX_FIRES to a positive number to restore a per-run cap.
 QUOTA_STOP_PCT="${QUOTA_STOP_PCT:-80}"      # refuse to fire at/above this 7-day utilization %
-QUOTA_UNKNOWN_FIRES="${QUOTA_UNKNOWN_FIRES:-2}"  # fires allowed while utilization is UNREADABLE
+QUOTA_UNKNOWN_FIRES="${QUOTA_UNKNOWN_FIRES:-2}"  # CONSECUTIVE fires allowed while utilization is UNREADABLE (#1285)
 SIGNAL_UNKNOWN_TRIES="${SIGNAL_UNKNOWN_TRIES:-5}"  # consecutive UNREADABLE operator-signal reads
                                   # (backed off between) before the run STOPS (#1257). Never fires.
 AUTH_LONG_BLOCK="${AUTH_LONG_BLOCK:-6}"     # ensure_auth retries that make a block "long". The
@@ -2593,7 +2594,19 @@ EOF
   # --- fire one headless piece ------------------------------------------------
   fires=$((fires + 1))
   # Charge the blind allowance HERE, once, for the fire it actually authorised.
-  [ "$gate_blind" = "1" ] && blind_fires=$((blind_fires + 1))
+  # A fire authorised by a READABLE reading resets it (#1285): the cap bounds
+  # CONSECUTIVE blind fires, because what it guards is firing into an UNKNOWN
+  # window, and a successful reading ends the unknown. Counting a run's total
+  # instead let isolated, self-healing 429s -- each followed by a good reading --
+  # add up across a 12h uncapped run and stop it at 26%. Not fail-open: every
+  # blind fire still passes the refuse-only cache (last known >= QUOTA_STOP_PCT
+  # refuses), and two blind fires in a row with no readable read between them
+  # still stop the run. Same site as the charge, so there is one writer.
+  if [ "$gate_blind" = "1" ]; then
+    blind_fires=$((blind_fires + 1))
+  else
+    blind_fires=0
+  fi
   log "=== FIRE $fires (main=$(echo "$head" | cut -c1-7) openPR=$openpr) ==="
   bash "$INFRA/run.sh"
   rc=$?
