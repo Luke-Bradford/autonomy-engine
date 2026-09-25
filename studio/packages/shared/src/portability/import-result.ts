@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
+import { DatasetSchema } from '../schemas/dataset.js';
 import { PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 
@@ -72,6 +73,15 @@ export const ImportResultSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('trigger'),
     trigger: TriggerPublicSchema,
+    attention: z.array(ImportAttentionItemSchema),
+  }),
+  /** #1143 — a dataset lands already BOUND to a store (its `connectionId` is
+   * NOT NULL, so there is no unbound state to report): the import either
+   * resolved one or refused. Its `attention` is therefore always empty today;
+   * the field stays for the uniform shape every caller reads. */
+  z.object({
+    kind: z.literal('dataset'),
+    dataset: DatasetSchema,
     attention: z.array(ImportAttentionItemSchema),
   }),
 ]);

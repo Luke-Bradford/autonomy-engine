@@ -15,8 +15,15 @@ import {
   type PipelineVersionExport,
   type TriggerExportData,
 } from '@autonomy-studio/shared';
-import { getConnection, getPipeline, getTrigger, listPipelineVersions } from '../repo/index.js';
-import { NotFoundError } from '../errors.js';
+import {
+  getConnection,
+  getDataset,
+  getPipeline,
+  getTrigger,
+  listPipelineVersions,
+} from '../repo/index.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
+import { serializeDataset } from './workspace-serialize.js';
 import type { Db } from '../repo/types.js';
 
 /** A LITERAL `connectionId` is nulled on export — a concrete connection id from
@@ -245,4 +252,41 @@ export function exportTrigger(db: Db, id: string, ownerId: string): ExportEnvelo
     exportedAt: Date.now(),
     data,
   });
+}
+
+/**
+ * #1143 — exports a dataset as a version-stamped envelope.
+ *
+ * The ONE single-file export that carries a cross-entity ref instead of nulling
+ * it. Every other kind here nulls its refs because its import can land them
+ * null and let the importer rebind afterwards; `Dataset.connectionId` is NOT
+ * NULL, so there is no such state to land in. The store is written as the
+ * connection's stable `resourceId` — the portable address, never this
+ * workspace's local key — by REUSING `serializeDataset`, the git form's
+ * serializer, so the two paths cannot drift. `importDatasetEnvelope` resolves
+ * it back (or takes the importer's explicit choice).
+ *
+ * The store is looked up and owner-checked FIRST, and a missing or foreign one
+ * is a 400 naming it: `serializeDataset` would otherwise throw an unmapped
+ * `UnserializableRefError` (a 500), and a foreign connection's resourceId must
+ * never be written into this owner's file.
+ */
+export function exportDataset(db: Db, id: string, ownerId: string): ExportEnvelope {
+  const dataset = getDataset(db, id);
+  if (!dataset || dataset.ownerId !== ownerId) throw new NotFoundError('dataset', id);
+
+  const connection = getConnection(db, dataset.connectionId);
+  if (!connection || connection.ownerId !== ownerId) {
+    throw new BadRequestError(
+      `dataset "${dataset.name}" cannot be exported: its store connection ` +
+        `"${dataset.connectionId}" no longer exists — pick a store for it, then export it`,
+    );
+  }
+
+  const envelope = serializeDataset(dataset, {
+    versionResourceId: new Map(),
+    connectionResourceId: new Map([[connection.id, connection.resourceId]]),
+    datasetResourceId: new Map(),
+  });
+  return ExportEnvelopeSchema.parse({ ...envelope, exportedAt: Date.now() });
 }

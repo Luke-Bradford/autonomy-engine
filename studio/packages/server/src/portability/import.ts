@@ -4,6 +4,7 @@ import {
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
   windowBindingErrors,
+  type Connection,
   type ExportEnvelope,
   type ImportAttentionItem,
   type ImportResult,
@@ -13,9 +14,11 @@ import {
 } from '@autonomy-studio/shared';
 import {
   createConnection,
+  createDataset,
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  getConnectionByResourceId,
 } from '../repo/index.js';
 import type { Db } from '../repo/types.js';
 
@@ -291,18 +294,96 @@ function importTriggerEnvelope(
 }
 
 /**
+ * #1143 — a dataset from a single file. `Dataset.connectionId` is NOT NULL (a
+ * dataset with no store is not a dataset), so this is the one kind with no
+ * "import now, rebind later" state: the store is resolved HERE or the import is
+ * refused, and nothing is created on a refusal.
+ *
+ * Resolution, in order:
+ *  1. `store` — the connection the caller CHOSE. The route resolved and
+ *     owner-checked it (`requireOwnedConnection`) before calling in.
+ *  2. IDENTITY — the importer's own connection whose `resourceId` is the one the
+ *     export wrote (`exportDataset` remaps the store to its resourceId, exactly
+ *     as the git form does). Owner-scoped by `getConnectionByResourceId`, so a
+ *     resourceId in the file can never reach another owner's connection. This
+ *     hits in the exporting workspace and in one synced from the same git repo.
+ *  3. otherwise REFUSE. Never guess by name or kind.
+ *
+ * Why both 1 and 2 rather than #1114's resolve-or-refuse alone: a portable
+ * import MINTS a fresh resourceId (#3 G1), so a connection that arrived by file
+ * never shares identity with its datasets' files, and identity alone would
+ * refuse every cross-workspace move. The explicit choice is what makes that
+ * move possible; identity keeps the same-workspace case one click.
+ *
+ * Kind compatibility is ADVISORY, exactly as on `POST /api/datasets` (the
+ * list's "kind mismatch" marker), so it is not enforced here either.
+ */
+function importDatasetEnvelope(
+  db: Db,
+  ownerId: string,
+  envelope: Extract<ExportEnvelope, { kind: 'dataset' }>,
+  store: Connection | undefined,
+): ImportResult {
+  const {
+    id,
+    resourceId,
+    createdAt,
+    updatedAt,
+    ownerId: exportedOwnerId,
+    connectionId: exportedStore,
+    ...rest
+  } = envelope.data;
+  void id;
+  void resourceId;
+  void createdAt;
+  void updatedAt;
+  void exportedOwnerId;
+
+  const connection = store ?? getConnectionByResourceId(db, ownerId, exportedStore);
+  if (connection === null) {
+    throw new ImportError(
+      `dataset "${rest.name}" names a store connection (${exportedStore}) that is not in this ` +
+        'workspace — choose the connection to store it in, and import it again',
+    );
+  }
+
+  const created = createDataset(db, { ...rest, ownerId, connectionId: connection.id });
+  return { kind: 'dataset', dataset: created, attention: [] };
+}
+
+/** #1143 — what the caller of `importEnvelope` may decide for the file. */
+export interface ImportOptions {
+  /** The store a DATASET lands in, already owner-checked by the caller. Only a
+   * dataset has a store; passing one with any other kind is refused rather
+   * than silently ignored. */
+  store?: Connection;
+}
+
+/**
  * The one import entry point: `parseAndUpgradeEnvelope`s `raw` (throws
  * `ImportError` — mapped to a 400 by the global error handler — on anything
  * it refuses), then creates the entity/entities it describes with BRAND-NEW
  * ids, owned by `ownerId`, via the same repo functions every CRUD route uses
  * (so every repo invariant + Zod parse applies exactly as it would for a
  * hand-authored create). Never reuses an exported id, never imports a
- * secret, and always leaves cross-entity refs (a pipeline node's
- * `connectionId`, a trigger's `pipelineVersionId`) null for the importer to
- * rebind afterward via the normal routes.
+ * secret, and leaves cross-entity refs (a pipeline node's `connectionId`, a
+ * trigger's `pipelineVersionId`) null for the importer to rebind afterward via
+ * the normal routes — with ONE exception, a dataset's store, which cannot be
+ * null and is resolved or refused here (see `importDatasetEnvelope`).
  */
-export function importEnvelope(db: Db, ownerId: string, raw: unknown): ImportResult {
+export function importEnvelope(
+  db: Db,
+  ownerId: string,
+  raw: unknown,
+  opts: ImportOptions = {},
+): ImportResult {
   const envelope = parseAndUpgradeEnvelope(raw);
+  if (opts.store !== undefined && envelope.kind !== 'dataset') {
+    throw new ImportError(
+      `a store connection was chosen, but this is a ${envelope.kind} export — only a dataset ` +
+        'lives in a store',
+    );
+  }
   switch (envelope.kind) {
     case 'pipeline':
       return importPipelineEnvelope(db, ownerId, envelope);
@@ -311,27 +392,6 @@ export function importEnvelope(db: Db, ownerId: string, raw: unknown): ImportRes
     case 'trigger':
       return importTriggerEnvelope(db, ownerId, envelope);
     case 'dataset':
-      // #1114 (M2) — REFUSED on this route, and the refusal is the honest
-      // answer rather than a gap.
-      //
-      // This function's contract (see its docstring) is that a cross-entity ref
-      // is left NULL for the importer to rebind afterwards. `Dataset.connectionId`
-      // cannot be null — a dataset with no store is not a dataset — so there is
-      // no "import it now, bind it later" state to land in. The alternatives are
-      // both worse: inventing a nullable column would weaken the schema for
-      // every other reader, and silently resolving the ref by `resourceId` would
-      // make a single-file import succeed or fail depending on what else happens
-      // to be in the workspace, with no way for the caller to know which.
-      //
-      // Datasets round-trip through workspace-git instead, where the apply
-      // resolves `connectionId` against connections created in the SAME import
-      // (which is why `APPLY_RANK` puts datasets after connections). A
-      // single-file path can be added alongside the Manage → Datasets page that
-      // would give it somewhere to land.
-      throw new ImportError(
-        'a dataset cannot be imported from a single file: it names the connection it lives in, ' +
-          'and that reference only resolves against a whole workspace — import it with the ' +
-          'workspace from git',
-      );
+      return importDatasetEnvelope(db, ownerId, envelope, opts.store);
   }
 }

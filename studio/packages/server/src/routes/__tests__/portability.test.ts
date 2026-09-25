@@ -552,4 +552,105 @@ describe('portability routes (export + import)', () => {
       expect(stripStamp(first.body)).toBe(stripStamp(second.body));
     });
   });
+
+  // #1143 — the single-file dataset path over HTTP: an export carrying the
+  // store's resourceId, and an import that takes the store from `?connectionId=`.
+  describe('dataset export + import', () => {
+    async function seed(name: string) {
+      const conn = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: `${name} store`, kind: 'fs', config: {} },
+        })
+      ).json();
+      const dataset = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/datasets',
+          payload: {
+            name,
+            connectionId: conn.id,
+            kind: 'delimited',
+            config: { path: 'x.csv' },
+            columns: [{ name: 'id', type: 'integer', nullable: false }],
+          },
+        })
+      ).json();
+      return { conn, dataset };
+    }
+
+    it('exports canonical bytes and re-imports into the CHOSEN store', async () => {
+      const { conn, dataset } = await seed('RoundTrip');
+      const res = await app.inject({ method: 'GET', url: `/api/datasets/${dataset.id}/export` });
+      expect(res.statusCode).toBe(200);
+      expect(canonicalStringify(res.json())).toBe(res.body);
+      expect(res.json().data.connectionId).toBe(conn.resourceId);
+
+      const { conn: other } = await seed('Elsewhere');
+      const imported = await app.inject({
+        method: 'POST',
+        url: `/api/import?connectionId=${other.id}`,
+        payload: res.json(),
+      });
+      expect(imported.statusCode).toBe(201);
+      expect(imported.json().kind).toBe('dataset');
+      expect(imported.json().dataset.connectionId).toBe(other.id);
+      expect(imported.json().dataset.id).not.toBe(dataset.id);
+    });
+
+    it('with no ?connectionId= resolves the store by identity', async () => {
+      const { conn, dataset } = await seed('ByIdentity');
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/datasets/${dataset.id}/export` })
+      ).json();
+      const imported = await app.inject({ method: 'POST', url: '/api/import', payload: envelope });
+      expect(imported.statusCode).toBe(201);
+      expect(imported.json().dataset.connectionId).toBe(conn.id);
+    });
+
+    it('refuses a store that belongs to another owner, creating nothing', async () => {
+      const { dataset } = await seed('Foreign');
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/datasets/${dataset.id}/export` })
+      ).json();
+      const theirs = createConnection(app.db, {
+        ownerId: 'someone-else',
+        name: 'Theirs',
+        kind: 'fs',
+        config: {},
+        secretRef: null,
+      });
+      const before = (await app.inject({ method: 'GET', url: '/api/datasets' })).json().items
+        .length;
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/import?connectionId=${theirs.id}`,
+        payload: envelope,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('no such connection');
+      const after = (await app.inject({ method: 'GET', url: '/api/datasets' })).json().items
+        .length;
+      expect(after).toBe(before);
+    });
+
+    it('refuses a repeated ?connectionId= rather than picking one', async () => {
+      const { conn, dataset } = await seed('Repeated');
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/datasets/${dataset.id}/export` })
+      ).json();
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/import?connectionId=${conn.id}&connectionId=${conn.id}`,
+        payload: envelope,
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('404s the export of an unknown dataset', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/datasets/ds_nope/export' });
+      expect(res.statusCode).toBe(404);
+    });
+  });
 });
