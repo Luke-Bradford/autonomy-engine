@@ -2621,6 +2621,22 @@ td button + button {
   overflow-y: auto;
 }
 
+/* #605 — a captured prompt/completion. Pre-wrapped, because a prompt's line
+   breaks are part of what it said, and capped + scrolled like
+   `.node-detail-outputs`: the server's capture budget stops the text entering
+   the log unbounded, this stops one exchange taking over the PANEL. */
+.node-capture-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14rem;
+  overflow-y: auto;
+  margin: 0.25rem 0;
+}
+
+.node-capture-field h5 {
+  margin: 0.5rem 0 0;
+}
+
 /* #866 — the per-node tool-call list. Dense by design: it is a log, and an
    agent loop routinely runs dozens of calls, so it must stay scannable inside a
    panel rather than dominate it. Capped and scrolled for the same reason

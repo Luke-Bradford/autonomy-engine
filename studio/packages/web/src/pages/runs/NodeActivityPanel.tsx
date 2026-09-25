@@ -9,6 +9,7 @@ import { formatNodeDuration, formatOutputValue } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
+import { CaptureSection } from './CaptureSection';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -48,9 +49,6 @@ import { SecureMarkerHint } from './SecureMarkerHint';
  *  - the node's INPUT — no event captures the resolved config a node ran with,
  *    so there is nothing truthful to render (the authored template is in the
  *    doc, but that is the un-substituted text, not what executed) — #890;
- *  - prompt/completion — `activity.captured` holds only redacted SHAPE (message
- *    counts, char counts, content hashes) until L9b/F4 lands raw capture, and a
- *    sha256 on screen is not worth a section (#605).
  *
  * COST and TOOL CALLS were on that list and no longer are: #866 shipped both.
  * Neither needed new data — `activity.metered` already carried the money and
@@ -61,6 +59,11 @@ import { SecureMarkerHint } from './SecureMarkerHint';
  * a dollar sign is drawn, so a run of unpriceable exchanges never renders as
  * `$0.00`, a subscription call's known zero never renders as a measurement gap,
  * and an `agent_cli` node's token sums never render as `0` when nobody counted.
+ *
+ * PROMPT/COMPLETION was on that list and no longer is: #605 (L9b) shipped it
+ * for a node whose `capture` setting is `full` (`CaptureSection`). A default
+ * (metadata) node still shows nothing, on purpose: its capture is lengths and
+ * content hashes, and a sha256 on screen is not worth a section.
  *
  * The per-attempt DURATION was on that list and no longer is: #867 shipped it.
  * Both objections that kept it off were answered rather than waived — the span
@@ -302,6 +305,8 @@ export function NodeActivityPanel({
       {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && <CostSection node={node} />}
 
       {node.toolCalls.length > 0 && <ToolCallSection calls={node.toolCalls} />}
+
+      {node.captures.length > 0 && <CaptureSection captures={node.captures} />}
 
       <section className="contract-section">
         <h4>Streamed output</h4>

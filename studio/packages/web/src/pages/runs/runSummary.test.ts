@@ -21,6 +21,7 @@ const NO_LLM_ACTIVITY = {
   cost: emptyNodeCost(),
   costSpansInstances: false,
   toolCalls: [],
+  captures: [],
   /* #932 — not LLM activity despite the constant's name, but the same role: the
      value every row carries when nothing of this sort happened. An ordinary node
      spawns no child run, and a row that claimed one would be the bug. */
@@ -3035,5 +3036,102 @@ describe('deriveNodeActivity — the latest streamed value (#1299)', () => {
     const [c] = deriveNodeActivity([dispatched('c#0', 1_000), tick(undefined, 1_100)]);
     expect(c?.lastOutput).toEqual({ name: 'progress', value: undefined });
     expect(c?.lastOutput).not.toBeUndefined();
+  });
+});
+
+describe('deriveNodeActivity — captured prompt/completion text (#605)', () => {
+  const started: EngineEvent = {
+    type: 'run.started',
+    runId: 'r',
+    pipelineVersionId: 'pv',
+    params: {},
+  };
+  const dispatch = (attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId: 'n1',
+    attemptId,
+    idempotent: true,
+  });
+  const captured = (
+    request: Extract<EngineEvent, { type: 'activity.captured' }>['request'],
+    completion?: Extract<EngineEvent, { type: 'activity.captured' }>['completion'],
+  ): EngineEvent => ({
+    type: 'activity.captured',
+    runId: 'r',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    provider: 'ollama',
+    model: 'llama3',
+    latencyMs: 5,
+    request,
+    ...(completion !== undefined ? { completion } : {}),
+  });
+  const rowOf = (events: EngineEvent[]): NodeActivity => {
+    const row = deriveNodeActivity(events.map((e) => envelope(e))).find((r) => r.nodeId === 'n1');
+    if (row === undefined) throw new Error('no row');
+    return row;
+  };
+
+  it('folds a full capture into the row, attempt-stamped, with its cut stated', () => {
+    const row = rowOf([
+      started,
+      dispatch('n1#0'),
+      captured(
+        {
+          messageCount: 1,
+          system: { chars: 4, contentHash: 'h', text: 'be k' },
+          messages: [{ role: 'user', chars: 20, contentHash: 'h', text: 'hello', truncated: true }],
+        },
+        { chars: 3, contentHash: 'h', text: 'yes' },
+      ),
+    ]);
+    expect(row.captures).toEqual([
+      {
+        model: 'llama3',
+        system: { text: 'be k', chars: 4, truncated: false },
+        messages: [{ role: 'user', text: 'hello', chars: 20, truncated: true }],
+        completion: { text: 'yes', chars: 3, truncated: false },
+        attempt: 1,
+        instanceId: undefined,
+      },
+    ]);
+  });
+
+  it('adds nothing for a metadata-only capture', () => {
+    const row = rowOf([
+      started,
+      dispatch('n1#0'),
+      captured(
+        { messageCount: 1, messages: [{ role: 'user', chars: 5, contentHash: 'h' }] },
+        { chars: 3, contentHash: 'h' },
+      ),
+    ]);
+    expect(row.captures).toEqual([]);
+  });
+
+  it('keeps an absent completion absent (the exchange failed)', () => {
+    const row = rowOf([
+      started,
+      dispatch('n1#0'),
+      captured({
+        messageCount: 1,
+        messages: [{ role: 'user', chars: 2, contentHash: 'h', text: 'hi' }],
+      }),
+    ]);
+    expect(row.captures[0]?.completion).toBeUndefined();
+  });
+
+  it('never creates a row for a node nothing dispatched', () => {
+    const rows = deriveNodeActivity(
+      [
+        started,
+        captured({
+          messageCount: 1,
+          messages: [{ role: 'user', chars: 2, contentHash: 'h', text: 'hi' }],
+        }),
+      ].map((e) => envelope(e)),
+    );
+    expect(rows.find((r) => r.nodeId === 'n1')).toBeUndefined();
   });
 });
