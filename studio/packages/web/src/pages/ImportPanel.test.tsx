@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ImportResult } from '@autonomy-studio/shared';
+import { MemoryRouter } from 'react-router';
+import { ConnectionPublicSchema, DatasetSchema, type ImportResult } from '@autonomy-studio/shared';
 import { ImportPanel } from './ImportPanel';
 import { ApiError } from '../api/client';
 import { renderWithRouter } from '../testing/renderWithRouter';
@@ -57,23 +58,112 @@ async function pick(file: File) {
 }
 
 describe('ImportPanel', () => {
-  // #1114 (M2) — the crash this test exists for is NOT type-visible. `dataset`
-  // joined `ExportEnvelopeSchema`, so `foreignEnvelopeKind` started returning
-  // it, while `SECTION` was still keyed by the narrower import type — making
-  // `SECTION[foreign.kind].label` a read on `undefined`. The panel rendered a
-  // blank error boundary instead of a refusal.
-  it('refuses a dataset export without crashing, and offers no destination', async () => {
+  // #1114 (M2) — the crash this test exists for is NOT type-visible: a kind in
+  // `ExportEnvelopeSchema` but missing from `SECTION` read `.label` off
+  // `undefined` and rendered a blank error boundary instead of a refusal.
+  // #1143 — a dataset file now has a page that imports it, so the refusal names
+  // it rather than stopping short.
+  it('refuses a dataset export on another list, and points at Manage → Datasets', async () => {
     renderWithRouter(<ImportPanel listKind="connection" onImported={vi.fn()} />);
 
     await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /is a dataset export.*this panel cannot import it.*nothing was created/i,
+      /is a dataset export.*import it from manage → datasets.*nothing was created/i,
     );
     // Nothing was SENT — the refusal is local, before any request.
     expect(importMock).not.toHaveBeenCalled();
-    // ...and no link is offered, because every page on offer would refuse it too.
-    expect(screen.queryByRole('link', { name: /dataset/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage → Datasets' })).toHaveAttribute(
+      'href',
+      '/manage/datasets',
+    );
+  });
+
+  describe('#1143 — a dataset file’s store', () => {
+    // Parsed through the real schemas, so a fixture that drifts from the wire
+    // shape fails here rather than passing a shape the server never sends.
+    const stores = [
+      ConnectionPublicSchema.parse({
+        id: 'conn_files',
+        resourceId: 'res_files',
+        ownerId: 'own_1',
+        name: 'Files',
+        kind: 'fs',
+        config: {},
+        secretStatus: 'not_required',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    ];
+
+    function datasetResult(): ImportResult {
+      return {
+        kind: 'dataset',
+        dataset: DatasetSchema.parse({
+          id: 'ds_new',
+          resourceId: 'res_ds',
+          ownerId: 'own_1',
+          name: 'Customers',
+          connectionId: 'conn_files',
+          kind: 'delimited',
+          config: {},
+          columns: [],
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+        attention: [],
+      };
+    }
+
+    it('sends the CHOSEN store with the file, and names the imported dataset', async () => {
+      importMock.mockResolvedValue(datasetResult());
+      renderWithRouter(<ImportPanel listKind="dataset" stores={stores} onImported={vi.fn()} />);
+
+      await userEvent.selectOptions(screen.getByLabelText('Store it in'), 'conn_files');
+      await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
+
+      await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));
+      expect(importMock.mock.calls[0]![1]).toEqual({ connectionId: 'conn_files' });
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        /imported dataset “customers” as ds_new/i,
+      );
+    });
+
+    it('sends NO store when left on "exported from", so the server resolves it', async () => {
+      importMock.mockResolvedValue(datasetResult());
+      renderWithRouter(<ImportPanel listKind="dataset" stores={stores} onImported={vi.fn()} />);
+
+      await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
+
+      await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));
+      expect(importMock.mock.calls[0]).toEqual([{ kind: 'dataset' }]);
+    });
+
+    it('drops a chosen store that has left the list, rather than sending its id', async () => {
+      importMock.mockResolvedValue(datasetResult());
+      const onImported = vi.fn();
+      const { rerender } = renderWithRouter(
+        <ImportPanel listKind="dataset" stores={stores} onImported={onImported} />,
+      );
+      await userEvent.selectOptions(screen.getByLabelText('Store it in'), 'conn_files');
+
+      rerender(
+        <MemoryRouter>
+          <ImportPanel listKind="dataset" stores={[]} onImported={onImported} />
+        </MemoryRouter>,
+      );
+      expect(screen.getByLabelText('Store it in')).toHaveValue('');
+      await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
+
+      await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));
+      expect(importMock.mock.calls[0]).toEqual([{ kind: 'dataset' }]);
+    });
+
+    it('shows no store picker on a list that holds no datasets', () => {
+      renderWithRouter(<ImportPanel listKind="connection" onImported={vi.fn()} />);
+      expect(screen.queryByLabelText('Store it in')).not.toBeInTheDocument();
+    });
   });
 
   it('imports a picked file, refreshes the list, and names the NEW id', async () => {

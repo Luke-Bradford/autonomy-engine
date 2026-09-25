@@ -5,6 +5,8 @@ import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
 import { DatasetsPage } from './DatasetsPage';
 import * as datasetsApi from '../api/datasets';
 import * as connectionsApi from '../api/connections';
+import * as downloadApi from '../api/download';
+import * as portabilityApi from '../api/portability';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
 
@@ -25,6 +27,20 @@ vi.mock('../api/connections', async (importActual) => ({
   ...(await importActual<typeof import('../api/connections')>()),
   listConnections: vi.fn(),
 }));
+// #1143 — as in `ConnectionsPage.test.tsx`: the real `downloadTextFile` clicks
+// an anchor jsdom cannot follow, and only the network half of portability is
+// mocked so the panel's sentences stay real.
+vi.mock('../api/download', async (importActual) => ({
+  ...(await importActual<typeof import('../api/download')>()),
+  downloadTextFile: vi.fn(),
+}));
+vi.mock('../api/portability', async (importActual) => ({
+  ...(await importActual<typeof import('../api/portability')>()),
+  exportDataset: vi.fn(),
+  importEnvelope: vi.fn(),
+}));
+const downloadMock = vi.mocked(downloadApi.downloadTextFile);
+const exportMock = vi.mocked(portabilityApi.exportDataset);
 
 /**
  * #1215 — the no-reader seam, made TESTABLE after the last real witness went.
@@ -116,6 +132,8 @@ async function pasteInto(
 const COLUMNS_JSON = JSON.stringify([{ name: 'id', type: 'integer', nullable: false }]);
 
 beforeEach(() => {
+  downloadMock.mockReset();
+  exportMock.mockReset();
   listMock.mockResolvedValue([]);
   listConnectionsMock.mockResolvedValue([store()]);
   createMock.mockResolvedValue(dataset());
@@ -235,13 +253,55 @@ describe('DatasetsPage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  /* #1253 — Edit names its row, as Delete already did. */
+  // #1143 — the export half, wired as Connections' is (#959).
+  it('exports a dataset as the server bytes, under a name carrying its id', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dataset()]);
+    exportMock.mockResolvedValue('{"kind":"dataset","canonical":true}');
+    renderWithRouter(<DatasetsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
+
+    expect(exportMock).toHaveBeenCalledWith(dataset().id);
+    expect(downloadMock).toHaveBeenCalledWith(
+      `dataset-orders-${dataset().id}.json`,
+      '{"kind":"dataset","canonical":true}',
+    );
+  });
+
+  it('reports a refused export (a store that is gone) instead of writing it to disk', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dataset()]);
+    exportMock.mockRejectedValue(new Error('its store connection "conn_1" no longer exists'));
+    renderWithRouter(<DatasetsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Could not export .*Orders.*no longer exists/,
+    );
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
+  it('offers the page’s connections as the store for an imported file', async () => {
+    listMock.mockResolvedValue([]);
+    renderWithRouter(<DatasetsPage />);
+    const picker = await screen.findByLabelText('Store it in');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Warehouse (sqlite)' }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  /* #1253 — Edit names its row, as Delete already did; #1143's Export does too. */
   it('names the row on every row action, Edit included', async () => {
     listMock.mockResolvedValue([dataset()]);
     renderWithRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     expect(screen.getByRole('button', { name: 'Edit Orders' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Orders' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export Orders' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 

@@ -795,6 +795,16 @@ copy. It branches on `interpolationMode`:
 Dynamic dataset routing therefore works exactly as dynamic connection routing already does. This is
 not a new capability; it is refusing to make datasets the one ref that behaves differently.
 
+**As built, one layer up (#1143) — a DATASET's own store ref is REMAPPED on single-file export, not
+nulled.** The rule above is about a NODE's ref to a dataset, which import can land null for the
+importer to rebind. A dataset's ref to its STORE cannot be landed null: `Dataset.connectionId` is NOT
+NULL, because a dataset with no store is not a dataset. So `GET /api/datasets/:id/export` writes the
+store as the connection's `resourceId` through the git form's own `serializeDataset`, and
+`POST /api/import` lands it in the store the importer chose (`?connectionId=`, owner-checked), else the
+importer's own connection with that `resourceId`, else refuses and creates nothing. The explicit
+choice exists because a portable import mints fresh `resourceId`s (#3 G1), so identity alone would
+refuse every cross-workspace move.
+
 ### 3.1 Where the ref is CHECKED — dispatch, with one optional save-time arm
 
 `ActivityCatalogEntry` has **no declarative slot** for "this field is a reference to resource X"

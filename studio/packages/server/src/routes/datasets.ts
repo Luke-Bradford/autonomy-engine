@@ -1,20 +1,18 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { NewDatasetSchema } from '@autonomy-studio/shared';
+import { NewDatasetSchema, canonicalStringify } from '@autonomy-studio/shared';
 import {
   createDataset,
   deleteDataset,
-  getConnection,
   getDataset,
   listDatasetsPage,
   updateDataset,
 } from '../repo/index.js';
-import { BadRequestError, NotFoundError } from '../errors.js';
+import { NotFoundError } from '../errors.js';
 import { datasetReferences } from '../datamove/dataset-references.js';
+import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
-import { pageArgsFromQuery, requireOwned } from './util.js';
-import type { Db } from '../repo/types.js';
-import type { Principal } from '../auth/principal.js';
+import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
 
 /**
  * #1114 (M2, data-movement spec §2) — the `datasets` REST surface, mirroring
@@ -25,11 +23,9 @@ import type { Principal } from '../auth/principal.js';
  * connection it names (§2.6), and `config` is declared non-secret, so the stored
  * row IS the client-facing row.
  *
- * There is also no `/export` route in this slice. A dataset's `connectionId` is
- * a LOCAL db id that has to be remapped to the connection's stable `resourceId`
- * before it can leave this workspace, and the workspace-git path is what does
- * that. Single-resource dataset export/import is deliberately deferred with the
- * Manage → Datasets page it would belong beside (see the PR body).
+ * #1143 — `/export` writes the store as the connection's stable `resourceId`
+ * (never this workspace's local id) through the git form's own serializer; see
+ * `exportDataset`. Its import half is `POST /api/import?connectionId=`.
  */
 
 /**
@@ -52,40 +48,6 @@ const DatasetWriteBodySchema = NewDatasetSchema.omit({
    */
   parameters: z.array(z.string().min(1)).optional(),
 });
-
-/**
- * A dataset's `connectionId` names the store it lives in, and it arrives as raw
- * HTTP input — so being logged in is not evidence the caller may bind to it.
- * Authentication is not authorisation, and the check is HERE (the untrusted
- * boundary) rather than in the repo, which the workspace-git apply also calls
- * with an id it has already resolved owner-scoped through `connById`.
- *
- * This is deliberately an OWNERSHIP + existence check at write time, not a
- * standing guarantee — the connection can still be deleted afterwards, which is
- * the dangling case the serializer discloses and a dispatch will refuse (§3.1's
- * "refs to mutable rows are checked at dispatch" holds unchanged). What it stops
- * is a caller pointing a dataset at a store belonging to someone else in the
- * first place.
- *
- * A 400, not a 404: the dataset in the URL (on PATCH) is real and owned, so 404
- * would be a lie about the wrong resource. The message deliberately does not
- * distinguish "no such connection" from "not yours" — that difference is exactly
- * the existence oracle an unauthorised caller would be probing for.
- */
-function requireOwnedConnection(
-  db: Db,
-  principal: Principal,
-  connectionId: string,
-): NonNullable<ReturnType<typeof getConnection>> {
-  const connection = getConnection(db, connectionId);
-  if (!connection || connection.ownerId !== principal.ownerId) {
-    throw new BadRequestError(`no such connection "${connectionId}"`);
-  }
-  // Returns the ROW (#1218) rather than only asserting: the sheet-listing route
-  // needs the very config this has just proved the caller owns, and re-fetching
-  // it would be a second lookup that could disagree with the one that authorised.
-  return connection;
-}
 
 /**
  * #1218 — the body of `POST /api/datasets/sheets`.
@@ -127,7 +89,7 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * THE ONLY ROUTE IN THIS PLUGIN THAT TOUCHES NO DATASET ROW, and it lives here
    * anyway: the caller is the dataset form, `path` is a dataset config field, and
-   * the non-disclosing `requireOwnedConnection` above is already the right gate.
+   * the non-disclosing `requireOwnedConnection` (`./util.ts`) is already the right gate.
    * `routes/connections.ts` would have used `requireOwned`, which 404s and would
    * therefore tell an unauthorised caller which connection ids exist.
    *
@@ -196,6 +158,14 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     return datasetReferences(db, request.principal.ownerId, dataset);
+  });
+
+  // #1143 — `exportDataset` does its own owner-check (404 if not owned) and
+  // refuses (400) a dataset whose store is gone. Canonical-JSON body, as every
+  // other export route (#3 G1).
+  fastify.get<{ Params: { id: string } }>('/api/datasets/:id/export', async (request, reply) => {
+    const envelope = exportDataset(db, request.params.id, request.principal.ownerId);
+    return reply.type('application/json').send(canonicalStringify(envelope));
   });
 
   fastify.patch<{ Params: { id: string } }>('/api/datasets/:id', async (request) => {
