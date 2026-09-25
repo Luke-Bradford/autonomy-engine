@@ -1,8 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MAX_CALL_DEPTH, type Param, type PipelineVersion } from '@autonomy-studio/shared';
+import { useStore } from 'zustand';
+import {
+  MAX_CALL_DEPTH,
+  type CallConfig,
+  type Node,
+  type Param,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
 import { CallPanel } from './CallPanel';
-import { buildParams, parseJsonParams, seedCall, type CallTarget } from './callRules';
+import { NodePanel } from './PipelineCanvas';
+import {
+  buildParams,
+  paramPosition,
+  parseJsonParams,
+  seedCall,
+  targetPosition,
+  type CallTarget,
+} from './callRules';
 import { createCanvasStore } from './canvasStore';
 
 /**
@@ -124,6 +139,49 @@ describe('parseJsonParams (#425 unresolved-target fallback)', () => {
     expect(parseJsonParams('[1,2]').ok).toBe(false);
     expect(parseJsonParams('null').ok).toBe(false);
     expect(parseJsonParams('{oops').ok).toBe(false);
+  });
+});
+
+describe('call-site picker positions (#1012)', () => {
+  const node: Node = {
+    id: 'caller',
+    type: 'execute_pipeline',
+    config: { untouched: true },
+    position: { x: 0, y: 0 },
+    call: { pipelineVersionId: 'pv_a2', params: { query: 'q', limit: 25 }, wait: true },
+  };
+
+  it('places into Node.call, never into config', () => {
+    expect(targetPosition.place(node, '${params.t}')).toEqual({
+      ...node,
+      call: { ...node.call, pipelineVersionId: '${params.t}' },
+    });
+    expect(paramPosition('limit', undefined).place(node, 'v')).toEqual({
+      ...node,
+      call: { ...node.call, params: { query: 'q', limit: 'v' } },
+    });
+  });
+
+  it('gives a node with no call yet an empty shell to place into', () => {
+    const bare: Node = { ...node, call: undefined };
+    expect(paramPosition('query', undefined).place(bare, 'v').call).toEqual({
+      pipelineVersionId: '',
+      params: { query: 'v' },
+    });
+  });
+
+  it('is whole-value for every declared type but string, and for no undeclared key', () => {
+    const whole = (type: Param['type'] | null) =>
+      paramPosition('p', type === null ? undefined : { name: 'p', type, required: false })
+        .wholeValue === true;
+    expect(whole('string')).toBe(false);
+    expect(whole(null)).toBe(false);
+    expect(['number', 'boolean', 'json', 'secret'].map((t) => whole(t as Param['type']))).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 });
 
@@ -299,5 +357,101 @@ describe('CallPanel (component)', () => {
     expect(screen.getByText('Loading pipelines…')).toBeTruthy();
     expect(store.getState().nodes[0]!.call).toBeUndefined();
     expect(store.getState().past).toHaveLength(1); // the addNode, and nothing else
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1012 — the U8a flyout, mounted through `NodePanel` so the picker is the REAL
+// canvas one (`useExpressionPicker`) and a choice has to survive the draft and
+// reach `Node.call` on Apply. The shared `mount()` above passes no picker on
+// purpose: its `getByLabelText(/query/)` lookups would also match the toggle.
+
+/** The calling pipeline's own param — a reference legal at every node. */
+const PARENT_PARAMS: Param[] = [{ name: 'topic', type: 'string', required: true }];
+
+function mountInCanvas(call: CallConfig | undefined) {
+  listAllPipelineVersions.mockResolvedValue([
+    { pipeline: { id: 'p_a', name: 'Alpha' }, version: version('pv_a2', 2, CHILD_PARAMS) },
+  ]);
+  const node: Node = {
+    id: 'caller',
+    type: 'execute_pipeline',
+    config: {},
+    position: { x: 0, y: 0 },
+    ...(call ? { call } : {}),
+  };
+  const store = createCanvasStore();
+  store.setState({ nodes: [node], edges: [], params: PARENT_PARAMS });
+
+  function Harness() {
+    const n = useStore(store, (s) => s.nodes.find((x) => x.id === 'caller'));
+    if (!n) return null;
+    return (
+      <NodePanel
+        store={store}
+        connections={[]}
+        datasets={[]}
+        nodeId={n.id}
+        nodeType={n.type}
+        config={n.config}
+        connectionId={n.connectionId}
+        call={n.call}
+      />
+    );
+  }
+  render(<Harness />);
+  return {
+    storedCall: () => store.getState().nodes.find((x) => x.id === 'caller')?.call,
+    pick: (field: string, option: RegExp) => {
+      fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` }));
+      fireEvent.click(screen.getByRole('button', { name: option }));
+    },
+    box: (label: RegExp) => screen.getByRole('textbox', { name: label }) as HTMLInputElement,
+    apply: () => fireEvent.click(screen.getByRole('button', { name: 'Apply call' })),
+  };
+}
+
+describe('CallPanel expression picker (#1012)', () => {
+  it('puts a reference into an EXPRESSION target, and Apply writes it to Node.call', async () => {
+    const ui = mountInCanvas({ pipelineVersionId: '${params.old}', params: {} });
+    await waitFor(() => expect(ui.box(/Version id or expression/)).toBeTruthy());
+    fireEvent.change(ui.box(/Version id or expression/), { target: { value: '' } });
+
+    ui.pick('call target', /^topic/);
+    expect(ui.box(/Version id or expression/).value).toBe('${params.topic}');
+    ui.apply();
+    expect(ui.storedCall()?.pipelineVersionId).toBe('${params.topic}');
+  });
+
+  it('SPLICES into a string argument, at the end when no caret was placed', async () => {
+    const ui = mountInCanvas({ pipelineVersionId: 'pv_a2', params: { query: 'about ' } });
+    await waitFor(() => expect(ui.box(/^query/)).toBeTruthy());
+
+    ui.pick('parameter query', /^topic/);
+    expect(ui.box(/^query/).value).toBe('about ${params.topic}');
+    ui.apply();
+    expect(ui.storedCall()?.params).toMatchObject({ query: 'about ${params.topic}' });
+  });
+
+  it('REPLACES a non-string argument, since Apply refuses a spliced number', async () => {
+    const ui = mountInCanvas({ pipelineVersionId: 'pv_a2', params: { query: 'q', limit: 25 } });
+    await waitFor(() => expect(ui.box(/^limit/)).toBeTruthy());
+
+    ui.pick('parameter limit', /^topic/);
+    // `25${params.topic}` is what a splice builds, and `buildParams` coerces it
+    // against `number` and refuses — so the flyout must not build it.
+    expect(ui.box(/^limit/).value).toBe('${params.topic}');
+    ui.apply();
+    expect(screen.queryByText(/limit:/)).toBeNull();
+    expect(ui.storedCall()?.params).toMatchObject({ limit: '${params.topic}' });
+  });
+
+  it('offers no flyout on the params-JSON box, where a bare ${} is not JSON', async () => {
+    const ui = mountInCanvas({ pipelineVersionId: '${params.old}', params: {} });
+    await waitFor(() => expect(ui.box(/Parameters \(JSON object\)/)).toBeTruthy());
+    const toggles = screen
+      .getAllByRole('button', { name: /^Insert reference into / })
+      .map((b) => b.getAttribute('aria-label'));
+    expect(toggles).toEqual(['Insert reference into call target']);
   });
 });

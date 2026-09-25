@@ -1,4 +1,5 @@
-import type { CallConfig, Param } from '@autonomy-studio/shared';
+import type { CallConfig, Node, Param } from '@autonomy-studio/shared';
+import type { PickerTarget } from './ConfigFieldControl';
 import { listAllPipelineVersions } from '../../api/pipelines';
 import { coerceDefaultInput, formatDefaultInput } from './paramRules';
 
@@ -247,4 +248,40 @@ export function parseJsonParams(raw: string): ParamsParse {
     return { ok: false, error: 'Parameters: expected a JSON object.' };
   }
   return { ok: true, value: parsed as Record<string, unknown> };
+}
+
+/**
+ * The call a flyout candidate is placed into (#1012): the STORED one, or an
+ * empty shell for a node that has none. Not the panel's draft — that is not a
+ * doc until Apply — and the baseline is probed at the same position, so an
+ * issue the stored call already carries (an empty shell's missing target
+ * included) cancels rather than refusing every candidate.
+ */
+function storedCall(node: Readonly<Node>): CallConfig {
+  return node.call ?? { pipelineVersionId: '', params: {} };
+}
+
+/** The expression-mode target's position: `Node.call.pipelineVersionId`. */
+export const targetPosition: PickerTarget = {
+  place: (node, value) => ({ ...node, call: { ...storedCall(node), pipelineVersionId: value } }),
+  baseline: 'probed',
+};
+
+/**
+ * One argument's position: `Node.call.params[name]`.
+ *
+ * `wholeValue` for every declared type but `string`, because `buildParams`
+ * stores only a whole-span `${}` verbatim and coerces the rest — a splice into
+ * a `number` builds text Apply refuses. An UNDECLARED key is carried as text,
+ * so it splices like a `string`.
+ */
+export function paramPosition(name: string, decl: Param | undefined): PickerTarget {
+  return {
+    place: (node, value) => {
+      const call = storedCall(node);
+      return { ...node, call: { ...call, params: { ...call.params, [name]: value } } };
+    },
+    baseline: 'probed',
+    ...(decl !== undefined && decl.type !== 'string' ? { wholeValue: true as const } : {}),
+  };
 }

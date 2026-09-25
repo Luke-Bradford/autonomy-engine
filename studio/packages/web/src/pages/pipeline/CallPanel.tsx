@@ -3,15 +3,17 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 // to pick — restating it as a literal here is exactly the drift this whole
 // docblock is about. Same pattern as `edgeCondition.ts` deferring to
 // `MaxBouncesSchema` rather than repeating its constraint.
-import { MAX_CALL_DEPTH, type CallConfig, type Node } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type CallConfig } from '@autonomy-studio/shared';
 import {
   buildParams,
   loadCallTargets,
+  paramPosition,
   parseJsonParams,
   rowsFrom,
   sameSeed,
   seedCall,
   storedBlankKeys,
+  targetPosition,
   type CallTarget,
   type Mode,
   type Seed,
@@ -407,7 +409,7 @@ function CallEditor({
                     }
                     picker={picker}
                     pickerName={`parameter ${name}`}
-                    target={paramPosition(name, decl !== undefined && decl.type !== 'string')}
+                    target={paramPosition(name, decl)}
                   >
                     {name}
                     {decl ? (
@@ -448,29 +450,6 @@ function CallEditor({
       </button>
     </>
   );
-}
-
-/** The call a candidate is placed into: the stored one, or an empty shell for a node that has none. */
-function storedCall(node: Readonly<Node>): CallConfig {
-  return node.call ?? { pipelineVersionId: '', params: {} };
-}
-
-/** The expression-mode target's position in the node. */
-const targetPosition: PickerTarget = {
-  place: (node, value) => ({ ...node, call: { ...storedCall(node), pipelineVersionId: value } }),
-  baseline: 'probed',
-};
-
-/** One argument's position in the node; `wholeValue` for a declared non-`string` type. */
-function paramPosition(name: string, wholeValue: boolean): PickerTarget {
-  return {
-    place: (node, value) => {
-      const call = storedCall(node);
-      return { ...node, call: { ...call, params: { ...call.params, [name]: value } } };
-    },
-    baseline: 'probed',
-    ...(wholeValue ? { wholeValue: true as const } : {}),
-  };
 }
 
 /**
