@@ -1,5 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { applyInsert, type InsertMode } from './expressionInsert';
+import type { FunctionOption, WrapOptions } from './ExpressionPicker';
+import {
+  applyInsert,
+  applyWrap,
+  wrapTarget,
+  type InsertMode,
+  type WrapSpan,
+} from './expressionInsert';
 
 /**
  * The caret half of the U8a flyout: where a chosen reference lands in a
@@ -33,6 +40,15 @@ export function useCaretInsert<E extends HTMLInputElement | HTMLTextAreaElement>
     ref.current.setSelectionRange(at, at);
   });
 
+  // The selection survives the toggle click (focus moves, the caret does not),
+  // so a mid-string insert lands where the author left it — but only if they
+  // ever placed one. See `touched`.
+  const selection = (text: string): [number, number] => {
+    const el = ref.current;
+    if (!touched.current || el === null) return [text.length, text.length];
+    return [el.selectionStart ?? text.length, el.selectionEnd ?? text.length];
+  };
+
   return {
     ref,
     onSelect: () => {
@@ -40,15 +56,32 @@ export function useCaretInsert<E extends HTMLInputElement | HTMLTextAreaElement>
     },
     /** `text` spliced with `insertText` at the author's selection (or replaced, per `mode`). */
     insert: (text: string, insertText: string, mode: InsertMode): string => {
-      // The selection survives the toggle click (focus moves, the caret does
-      // not), so a mid-string insert lands where the author left it — but only
-      // if they ever placed one. See `touched`.
-      const el = ref.current;
-      const at = touched.current && el !== null ? (el.selectionStart ?? text.length) : text.length;
-      const to = touched.current && el !== null ? (el.selectionEnd ?? text.length) : text.length;
+      const [at, to] = selection(text);
       const next = applyInsert(text, at, to, insertText, mode);
       caret.current = next.caret;
       return next.value;
+    },
+    /**
+     * The functions half of the flyout for `text` (#864): the span the caret
+     * is in, fixed NOW (when the list opens), the functions it may be wrapped
+     * in, and an `apply` that wraps that span and leaves the caret after the
+     * closing paren. `null` when the caret is in no `${}`.
+     */
+    wrapOptions: (
+      text: string,
+      functionsFor: (span: WrapSpan) => FunctionOption[],
+      onChange: (next: string) => void,
+    ): WrapOptions => {
+      const span = wrapTarget(text, ...selection(text));
+      if (span === null) return null;
+      return {
+        functions: functionsFor(span),
+        apply: (name) => {
+          const next = applyWrap(text, span, name);
+          caret.current = next.caret;
+          onChange(next.value);
+        },
+      };
     },
   };
 }

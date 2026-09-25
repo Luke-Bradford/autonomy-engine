@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, EdgeOn, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
 import { SubstituteError } from '../types.js';
-import { MAX_ARRAY_ELEMENTS, listFunctions } from '../functions.js';
+import { MAX_ARRAY_ELEMENTS, fnSignature, listFunctions } from '../functions.js';
 import { substitute, validateRefs } from '../params.js';
 
 // ---------------------------------------------------------------------------
@@ -775,5 +775,19 @@ describe('catalog families', () => {
 
   it('div() by zero is a loud error, never Infinity', () => {
     expect(() => substitute('${div(1, 0)}', ctx())).toThrow(SubstituteError);
+  });
+});
+
+// #864 — how the flyout NAMES a catalog function to an author.
+describe('fnSignature', () => {
+  it('prints fixed, optional and repeating arguments from the spec itself', () => {
+    expect(fnSignature('toUpper')).toBe('toUpper(string) → string');
+    expect(fnSignature('concat')).toBe('concat(any, ...any) → string');
+    expect(fnSignature('substring')).toBe('substring(string, number, number?) → string');
+  });
+
+  it('prints every catalog function without throwing', () => {
+    for (const name of listFunctions())
+      expect(fnSignature(name)).toMatch(new RegExp(`^${name}\\(`));
   });
 });

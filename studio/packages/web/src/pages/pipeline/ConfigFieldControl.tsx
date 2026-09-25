@@ -2,7 +2,8 @@ import { useId } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowList, parseRowCells } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
-import { ExpressionPicker, type FieldOptions } from './ExpressionPicker';
+import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
+import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
 
 /**
@@ -15,6 +16,12 @@ export type FieldPicker = {
   describe: (suggestion: RefSuggestion) => string;
   /** Resolved lazily, per OPENING — it runs the whole-doc validator repeatedly. */
   resolve: (target: PickerTarget) => FieldOptions;
+  /**
+   * The catalog functions `span` of `text` can be wrapped in without the field
+   * earning a refusal it does not already have (#864). Per OPENING, like
+   * `resolve`: it validates the whole doc once per catalog function.
+   */
+  wraps: (target: PickerTarget, text: string, span: WrapSpan) => FunctionOption[];
 };
 
 /**
@@ -155,7 +162,12 @@ export function ConfigFieldControl({
 }) {
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
-  const { ref: inputRef, onSelect, insert: insertAtCaret } = useCaretInsert<HTMLTextAreaElement>();
+  const {
+    ref: inputRef,
+    onSelect,
+    insert: insertAtCaret,
+    wrapOptions,
+  } = useCaretInsert<HTMLTextAreaElement>();
   const controlId = useId();
   const choicesId = `${controlId}-choices`;
 
@@ -314,6 +326,15 @@ export function ConfigFieldControl({
           describe={picker.describe}
           resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
           onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
+          wrap={{
+            value: text,
+            resolve: () =>
+              wrapOptions(
+                text,
+                (span) => picker.wraps(target ?? topLevelTarget(field.name), text, span),
+                onChange,
+              ),
+          }}
         />
       )}
     </div>

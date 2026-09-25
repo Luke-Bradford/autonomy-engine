@@ -11,6 +11,22 @@ import type { InsertMode } from './expressionInsert';
  */
 export type FieldOptions = { mode: InsertMode; suggestions: RefSuggestion[] };
 
+/** One catalog function as the flyout lists it (#864). */
+export type FunctionOption = { name: string; signature: string };
+
+/**
+ * The functions half, resolved per OPENING like {@link FieldOptions}: what the
+ * expression at the caret can be wrapped in, and how a choice is applied. The
+ * wrap target is fixed when the list opens and `apply` closes over it, so the
+ * choice lands around what the author was pointing at, whatever focus did
+ * since. `null` means the caret is in no `${}` — there is nothing to wrap.
+ */
+export type WrapOptions = { functions: FunctionOption[]; apply: (name: string) => void } | null;
+
+type Open =
+  | { kind: 'refs'; options: FieldOptions }
+  | { kind: 'functions'; wrap: WrapOptions; against: string };
+
 /**
  * The U8a expression-insert flyout: pick a `${}` reference instead of knowing
  * the syntax and the surrounding graph by heart.
@@ -32,12 +48,20 @@ export type FieldOptions = { mode: InsertMode; suggestions: RefSuggestion[] };
  * third — so this is a plain disclosure: the toggle owns `aria-expanded`, the
  * list is `aria-labelledby` it, and Escape (handled on the WRAPPER, so it works
  * from the toggle where focus actually sits after opening) closes and returns.
+ *
+ * FUNCTIONS (#864) are a second disclosure beside the first, not rows in it,
+ * because they are a different act: a reference is INSERTED at the caret, a
+ * function is put AROUND the expression the caret is in (`toUpper(X)`). A bare
+ * `${name()}` would be refused at save the moment it landed, so a function is
+ * never inserted on its own. The two lists share one open state — opening one
+ * closes the other, so the panel never carries both.
  */
 export function ExpressionPicker({
   fieldName,
   describe,
   resolve,
   onSelect,
+  wrap,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -49,23 +73,44 @@ export function ExpressionPicker({
    */
   resolve: () => FieldOptions;
   onSelect: (text: string, mode: InsertMode) => void;
+  /**
+   * The functions half; omitted, the control offers references only. `value`
+   * is the field's text NOW: the list is resolved against the text it opened
+   * on, and its `apply` rewrites exactly that text — so an edit made while it
+   * is open CLOSES it, rather than letting a choice put back what the author
+   * had since changed.
+   */
+  wrap?: { value: string; resolve: () => WrapOptions };
 }) {
-  const [options, setOptions] = useState<FieldOptions | null>(null);
+  const [open, setOpen] = useState<Open | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const fnToggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
   const toggleId = useId();
-  const open = options !== null;
+  const fnListId = useId();
+  const fnToggleId = useId();
+  const options = open?.kind === 'refs' ? open.options : null;
+  // An edit while the function list is open CLOSES it — the state is cleared,
+  // not just hidden, or editing back to the same text (an undo) would revive a
+  // list resolved against a span from before. Set during render, React's
+  // pattern for state derived from a changed prop: it re-renders at once.
+  if (open?.kind === 'functions' && open.against !== wrap?.value) setOpen(null);
+  const functions = open?.kind === 'functions' ? open.wrap : undefined;
+  const functionsOpen = functions !== undefined;
 
+  // Focus returns to the toggle that OPENED the list, which is where the
+  // author's next keystroke is expected.
   const close = () => {
-    setOptions(null);
-    toggleRef.current?.focus();
+    const from = functionsOpen ? fnToggleRef : toggleRef;
+    setOpen(null);
+    from.current?.focus();
   };
 
   return (
     <div
       className="expression-picker"
       onKeyDown={(e) => {
-        if (e.key === 'Escape' && open) close();
+        if (e.key === 'Escape' && (options !== null || functionsOpen)) close();
       }}
     >
       <button
@@ -73,15 +118,83 @@ export function ExpressionPicker({
         id={toggleId}
         ref={toggleRef}
         className="expression-picker-toggle"
-        aria-expanded={open}
+        aria-expanded={options !== null}
         // Only while the list EXISTS: `aria-controls` naming an absent element
         // is an invalid attribute value, which axe reports.
-        aria-controls={open ? listId : undefined}
+        aria-controls={options !== null ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
-        onClick={() => setOptions(open ? null : resolve())}
+        onClick={() => setOpen(options !== null ? null : { kind: 'refs', options: resolve() })}
       >
         Insert reference
       </button>
+      {wrap && (
+        <button
+          type="button"
+          id={fnToggleId}
+          ref={fnToggleRef}
+          className="expression-picker-toggle"
+          aria-expanded={functionsOpen}
+          aria-controls={functionsOpen ? fnListId : undefined}
+          aria-label={`Wrap an expression in ${fieldName} in a function`}
+          onClick={() =>
+            setOpen(
+              functionsOpen
+                ? null
+                : { kind: 'functions', wrap: wrap.resolve(), against: wrap.value },
+            )
+          }
+        >
+          Wrap in function
+        </button>
+      )}
+
+      {functions !== undefined && (
+        <div
+          id={fnListId}
+          className="expression-picker-list"
+          role="group"
+          aria-labelledby={fnToggleId}
+        >
+          {functions === null ? (
+            <p className="page-hint">
+              Put the cursor inside a {'${…}'} expression in {fieldName}, or select part of one
+              outside its quoted text, to wrap it in a function.
+            </p>
+          ) : functions.functions.length === 0 ? (
+            // Reachable: a field with a narrow type, or an expression that is
+            // already refused, can leave no function that adds nothing new.
+            <p className="page-hint">
+              No function takes this expression without being refused at save.
+            </p>
+          ) : (
+            <>
+              <p className="page-hint">
+                Wraps the expression at the cursor in {fieldName} — or the part of it you selected.
+              </p>
+              <ul>
+                {functions.functions.map(({ name, signature }) => (
+                  <li key={name}>
+                    <button
+                      type="button"
+                      // The signature already begins with the name, so it is
+                      // the whole accessible name — the two spans read back to
+                      // back would say the name twice.
+                      aria-label={signature}
+                      onClick={() => {
+                        functions.apply(name);
+                        close();
+                      }}
+                    >
+                      <span className="expression-picker-name">{name}</span>
+                      <span className="expression-picker-type">{signature}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
 
       {options !== null && (
         <div id={listId} className="expression-picker-list" role="group" aria-labelledby={toggleId}>

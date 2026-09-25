@@ -4,7 +4,9 @@ import {
   interpolationMode,
   MAX_EXPR_DEPTH,
   parseExpr,
+  inQuotedText,
   protectEscapes,
+  refAt,
   restoreEscapes,
   scanTemplateRefs,
 } from '../expr.js';
@@ -476,3 +478,72 @@ describe('parseExpr — MAX_EXPR_DEPTH bounds expression NESTING (#6 #453)', () 
 function field(name: string): { kind: 'field'; name: string } {
   return { kind: 'field', name };
 }
+
+// #864 — the `${}` a caret or selection sits in, for the flyout's function wrap.
+describe('refAt', () => {
+  it('finds the expression around a caret, in RAW coordinates', () => {
+    const s = 'hi ${params.a} and ${params.b}';
+    expect(refAt(s, 7)).toEqual({ start: 3, end: 13, body: 'params.a' });
+    expect(refAt(s, 22)).toEqual({ start: 19, end: 29, body: 'params.b' });
+  });
+
+  it('counts a caret on either EDGE as inside — the untouched caret sits past the closing brace', () => {
+    const s = '${params.a}';
+    expect(refAt(s, 0)?.body).toBe('params.a');
+    expect(refAt(s, s.length)?.body).toBe('params.a');
+  });
+
+  it('gives a caret between two TOUCHING refs to the first — where an insert leaves it', () => {
+    // Inserting a reference leaves the caret just past its `}`; "insert, then
+    // wrap" must wrap what was just inserted, even with another ref after it.
+    expect(refAt('${params.a}${params.b}', 11)?.body).toBe('params.a');
+    expect(refAt('${params.a}${params.b}', 12)?.body).toBe('params.b');
+  });
+
+  it('answers null outside every expression, and for a selection that spans two', () => {
+    const s = 'x ${params.a} y ${params.b}';
+    expect(refAt(s, 1)).toBeNull();
+    expect(refAt(s, 14)).toBeNull();
+    expect(refAt(s, 5, 20)).toBeNull();
+  });
+
+  it('maps back through a `$${` escape, whose sentinel is not the same length', () => {
+    const s = '$${lit} ${params.a} $${x}';
+    const hit = refAt(s, 12);
+    expect(hit).toEqual({ start: 8, end: 18, body: 'params.a' });
+    expect(s.slice(hit!.start, hit!.end + 1)).toBe('${params.a}');
+    // The escape is literal text, never an expression.
+    expect(refAt(s, 3)).toBeNull();
+  });
+
+  it('keeps an escape INSIDE a body as written, and does not close on a quoted brace', () => {
+    const s = '${concat("$${", "}", params.a)}';
+    expect(refAt(s, 5)).toEqual({
+      start: 0,
+      end: s.length - 1,
+      body: 'concat("$${", "}", params.a)',
+    });
+  });
+
+  it('finds nothing after an unterminated opener, and still finds what closed before it', () => {
+    const s = '${params.a} ${params.b';
+    expect(refAt(s, 3)?.body).toBe('params.a');
+    expect(refAt(s, 16)).toBeNull();
+  });
+});
+
+describe('inQuotedText', () => {
+  it('is true only strictly between a quote and its closer', () => {
+    const body = 'concat("abc", x)';
+    expect(inQuotedText(body, 7)).toBe(false); // before the opening quote
+    expect(inQuotedText(body, 8)).toBe(true); // just inside it
+    expect(inQuotedText(body, 11)).toBe(true); // just before the closer
+    expect(inQuotedText(body, 12)).toBe(false); // after the closer
+    expect(inQuotedText(body, 14)).toBe(false);
+  });
+
+  it('treats either quote character alike, and runs an unterminated one to the end', () => {
+    expect(inQuotedText("f('a\"b')", 4)).toBe(true);
+    expect(inQuotedText('f("ab', 5)).toBe(true);
+  });
+});

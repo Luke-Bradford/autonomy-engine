@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import {
   availableRefs,
+  fnSignature,
+  listFunctions,
   type Container,
   type Edge,
   type Node,
@@ -11,7 +13,7 @@ import {
 import { validateCanvas } from './canvasDoc';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { containerLabels } from './containerRules';
-import { insertModeFor, LITERAL_PROBE } from './expressionInsert';
+import { applyWrap, insertModeFor, LITERAL_PROBE } from './expressionInsert';
 
 /**
  * The U8a flyout's context for one SITE — a node, or one container expression
@@ -96,6 +98,17 @@ export function useExpressionPicker(
             params,
           );
 
+    // What a candidate is compared against — see `PickerTarget.baseline`. ONE
+    // answer for references and functions alike: a candidate may carry only
+    // what the field's position raises whatever it holds.
+    const baselineFor = (target: PickerTarget) =>
+      target.baseline === 'stored'
+        ? validateCanvas(nodes, edges, containers, params)
+        : (() => {
+            const literal = issuesWith(target, LITERAL_PROBE);
+            return issuesWith(target, '').filter((issue) => literal.includes(issue));
+          })();
+
     return {
       describe: (s: RefSuggestion) => {
         if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
@@ -109,13 +122,7 @@ export function useExpressionPicker(
         const mode = target.wholeValue
           ? 'replace'
           : insertModeFor((value) => issuesWith(target, value));
-        const baseline =
-          target.baseline === 'stored'
-            ? validateCanvas(nodes, edges, containers, params)
-            : (() => {
-                const literal = issuesWith(target, LITERAL_PROBE);
-                return issuesWith(target, '').filter((issue) => literal.includes(issue));
-              })();
+        const baseline = baselineFor(target);
         // Filtered in BOTH modes. REPLACE makes the field become the reference,
         // which is where a field's own type check rejects one. INSERT used to
         // skip the filter on the argument that a template always resolves to a
@@ -134,6 +141,30 @@ export function useExpressionPicker(
             return !after.some((issue) => !baseline.includes(issue));
           }),
         };
+      },
+      // #864 — the FUNCTIONS half, under the same no-false-offer rule and by the
+      // same mechanism: every catalog function is tried AROUND the target and
+      // kept only if the whole-doc validator raises nothing the field's CURRENT
+      // text does not already raise. Nothing about arity or argument types is
+      // restated here — `default` (two args), `utcNow`-shaped zero-arg calls and
+      // the lambda functions fall out because the save gate refuses them.
+      //
+      // The baseline is the SAME one references are judged by, not the field's
+      // current text: a wrap cannot repair a refusal the expression already
+      // earns (it only goes around it), so measuring against the current text
+      // would cancel that refusal out and offer every function on a field the
+      // save still refuses. Against the position's own baseline such a field is
+      // offered nothing, which is what is true. An issue whose message quotes
+      // the expression changes with the wrap and reads as new, so the error
+      // only ever runs towards offering less.
+      wraps: (target: PickerTarget, text: string, span) => {
+        const baseline = baselineFor(target);
+        return listFunctions()
+          .filter((name) => {
+            const after = issuesWith(target, applyWrap(text, span, name).value);
+            return !after.some((issue) => !baseline.includes(issue));
+          })
+          .map((name) => ({ name, signature: fnSignature(name) }));
       },
     };
   }, [nodes, edges, containers, params, subjectId, field, nodeNames]);

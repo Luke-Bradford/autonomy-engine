@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@autonomy-studio/shared';
-import { applyInsert, insertModeFor } from './expressionInsert';
+import { applyInsert, applyWrap, insertModeFor, wrapTarget } from './expressionInsert';
 import { validateCanvas } from './canvasDoc';
 
 describe('applyInsert', () => {
@@ -81,5 +81,51 @@ describe('insertModeFor', () => {
     // gets right by construction.
     const node: Node = { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };
     expect(insertModeFor(issuesWithField(node, 'task'))).toBe('insert');
+  });
+});
+
+// #864 — what "Wrap in function" wraps, and the text wrapping it produces.
+describe('wrapTarget', () => {
+  it('wraps the WHOLE body of the expression the caret sits in', () => {
+    const v = 'Hi ${params.name}!';
+    expect(wrapTarget(v, 8, 8)).toEqual({ start: 5, end: 16 });
+    expect(v.slice(5, 16)).toBe('params.name');
+  });
+
+  it('wraps only the SELECTION when it lies inside one body', () => {
+    const v = '${concat(params.a, "x")}';
+    const t = wrapTarget(v, 9, 17);
+    expect(t).toEqual({ start: 9, end: 17 });
+    expect(v.slice(t!.start, t!.end)).toBe('params.a');
+  });
+
+  it('wraps the whole body when the selection covers the braces too', () => {
+    expect(wrapTarget('${params.a}', 0, 11)).toEqual({ start: 2, end: 10 });
+  });
+
+  it('refuses a selection with an end in QUOTED text — the call would land inside the string', () => {
+    const v = '${concat("abc", params.a)}';
+    expect(wrapTarget(v, v.indexOf('abc'), v.indexOf('abc') + 1)).toBeNull();
+    expect(wrapTarget(v, v.indexOf('bc'), v.indexOf('params'))).toBeNull();
+    // The whole literal, quotes included, is an expression and wraps.
+    expect(wrapTarget(v, v.indexOf('"'), v.indexOf(','))).toEqual({
+      start: v.indexOf('"'),
+      end: v.indexOf(','),
+    });
+  });
+
+  it('answers null outside every expression, so nothing is offered', () => {
+    expect(wrapTarget('plain text', 3, 3)).toBeNull();
+    expect(wrapTarget('${params.a} and ${params.b}', 3, 20)).toBeNull();
+  });
+});
+
+describe('applyWrap', () => {
+  it('puts the function around the target and the caret after its closing paren', () => {
+    const v = 'Hi ${params.name}!';
+    expect(applyWrap(v, { start: 5, end: 16 }, 'toUpper')).toEqual({
+      value: 'Hi ${toUpper(params.name)}!',
+      caret: 25,
+    });
   });
 });
