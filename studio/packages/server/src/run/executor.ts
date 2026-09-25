@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from 'node:util';
 import pLimit from 'p-limit';
+import type { z } from 'zod';
 import {
   AGENT_CLI_CONNECTION_KIND,
   catalog as sharedCatalog,
   collectSecretSinkMarkers,
   computeCostEstimate,
   firstParamOverrideViolation,
+  connectionConfigSchema,
   datasetConfigSchema,
   isNonOverridableDatasetConfigKey,
   describeDatasetAddress,
@@ -349,6 +351,42 @@ export const PREFLIGHT_STORE_CONCURRENCY = 4;
 
 const storeLimit = pLimit(PREFLIGHT_STORE_CONCURRENCY);
 
+/**
+ * Merge a resource's resolved per-dispatch overrides over its stored config and
+ * judge the result against the kind's schema — the step the connection and
+ * dataset gates share once `firstParamOverrideViolation` has passed (#1306).
+ *
+ * A key the kind's schema does not have is refused rather than merged: the kind
+ * schemas STRIP unknown keys, so the override would pass the re-parse and then
+ * do nothing — an allowlisted typo, silently. OWN properties only: `in` would
+ * let an `Object.prototype` name through.
+ *
+ * The stored config was validated at write; a per-dispatch value was not. It is
+ * judged here, where both halves exist, and the RAW merge is what flows on —
+ * not `parsed.data`, whose filled defaults and stripped keys would make an
+ * overridden dispatch see a differently-shaped config from an un-overridden one.
+ */
+function mergeParamOverrides(
+  kindSchema: z.ZodObject,
+  stored: Record<string, unknown>,
+  resolvedParams: Record<string, unknown>,
+): { merged: Record<string, unknown> } | { unknownKey: string } | { issues: string } {
+  const unknownKey = Object.keys(resolvedParams).find(
+    (key) => !Object.hasOwn(kindSchema.shape, key),
+  );
+  if (unknownKey !== undefined) return { unknownKey };
+  const merged = { ...stored, ...resolvedParams };
+  const parsed = kindSchema.safeParse(merged);
+  if (!parsed.success) {
+    return {
+      issues: parsed.error.issues
+        .map((i) => `${i.path.join('.') || '(config)'}: ${i.message}`)
+        .join('; '),
+    };
+  }
+  return { merged };
+}
+
 export function createExecutor(deps: ExecutorDeps): Executor {
   const limit = pLimit(deps.concurrency ?? 4);
   const catalog = deps.catalog ?? sharedCatalog;
@@ -556,9 +594,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     //       parameters are non-secret by design, and a `${}` binding can
     //       resolve run-supplied json the save gate never saw.
     // The merge is SHALLOW ({...config, ...params}): the static value is the
-    // default, an allowlisted binding replaces it whole. The adapter's own
-    // `configSchema` then validates the EFFECTIVE config — the existing
-    // boundary, unchanged.
+    // default, an allowlisted binding replaces it whole. #1306 — the merged
+    // config is then judged against the kind's schema HERE, as the dataset gate
+    // does (`mergeParamOverrides`): a key the kind lacks is refused rather than
+    // stripped by the connector, and a wrongly-typed value fails at the gate
+    // rather than inside the adapter. The adapter's own `configSchema` still
+    // validates the effective config it receives.
     let connectionConfig = connection.config;
     if (resolvedParams !== undefined) {
       // #1144 — the refusal ORDER is `firstParamOverrideViolation`'s, shared with
@@ -596,7 +637,26 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             };
         }
       }
-      connectionConfig = { ...connection.config, ...resolvedParams };
+      const result = mergeParamOverrides(
+        connectionConfigSchema(connection.kind),
+        connection.config,
+        resolvedParams,
+      );
+      if ('unknownKey' in result) {
+        return {
+          error: `connection parameter '${result.unknownKey}' is not a '${connection.kind}' connection setting`,
+          code: FAILURE_CODES.CONNECTION_PARAM_INVALID,
+        };
+      }
+      if ('issues' in result) {
+        return {
+          error:
+            `connection '${connectionId}' is not a valid '${connection.kind}' connection once its ` +
+            `parameters are applied: ${result.issues}`,
+          code: FAILURE_CODES.CONNECTION_PARAM_INVALID,
+        };
+      }
+      connectionConfig = result.merged;
     }
     // #2 L14c — the quota ADMISSION GATE. A subscription CLI (`agent_cli`) shares
     // ONE rolling usage quota across every run that binds it. When an earlier
@@ -767,35 +827,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             };
         }
       }
-      // A key the kind's config does not have is refused rather than merged:
-      // the kind schema STRIPS unknown keys, so the override would pass the
-      // re-parse below and then do nothing — an allowlisted typo, silently.
-      // OWN properties only: `in` would let an `Object.prototype` name through.
-      const unknownKey = Object.keys(resolvedParams).find(
-        (key) => !Object.hasOwn(kindSchema.shape, key),
-      );
-      if (unknownKey !== undefined) {
+      const result = mergeParamOverrides(kindSchema, dataset.config, resolvedParams);
+      if ('unknownKey' in result) {
         return {
-          error: `dataset parameter '${unknownKey}' is not a '${dataset.kind}' dataset setting`,
+          error: `dataset parameter '${result.unknownKey}' is not a '${dataset.kind}' dataset setting`,
           code: FAILURE_CODES.DATASET_PARAM_INVALID,
         };
       }
-      const merged = { ...dataset.config, ...resolvedParams };
-      // The stored config was validated at write; a per-dispatch value was not.
-      // Judged here, where both halves exist, and the RAW merge is what flows
-      // on — not `parsed.data`, whose filled defaults and stripped keys would
-      // make an overridden dispatch see a differently-shaped config from an
-      // un-overridden one.
-      const parsed = kindSchema.safeParse(merged);
-      if (!parsed.success) {
+      if ('issues' in result) {
         return {
           error:
             `dataset '${datasetId}' is not a valid '${dataset.kind}' dataset once its parameters ` +
-            `are applied: ${parsed.error.issues.map((i) => `${i.path.join('.') || '(config)'}: ${i.message}`).join('; ')}`,
+            `are applied: ${result.issues}`,
           code: FAILURE_CODES.DATASET_PARAM_INVALID,
         };
       }
-      config = merged;
+      config = result.merged;
     }
     return {
       dataset: {
