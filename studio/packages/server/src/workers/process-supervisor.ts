@@ -48,6 +48,7 @@
  */
 
 import { execa } from 'execa';
+import { AsyncEventQueue } from '../util/async-event-queue.js';
 
 export interface SpawnSupervisedOptions {
   command: string;
@@ -104,55 +105,6 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 /** Grace period between SIGTERM and the SIGKILL escalation. */
 const KILL_GRACE_MS = 500;
-
-/**
- * A minimal async push/pull queue used to expose the line-framed output as
- * an `AsyncIterable`. Consumers pull with `for await`; producers `push` as
- * data arrives and `close` once the process has exited.
- */
-class AsyncEventQueue<T> implements AsyncIterable<T> {
-  private readonly buffered: T[] = [];
-  private readonly waiting: Array<(result: IteratorResult<T>) => void> = [];
-  private closed = false;
-
-  push(item: T): void {
-    if (this.closed) return;
-    const waiter = this.waiting.shift();
-    if (waiter) {
-      waiter({ value: item, done: false });
-    } else {
-      this.buffered.push(item);
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    while (this.waiting.length > 0) {
-      const waiter = this.waiting.shift();
-      waiter?.({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return {
-      next: (): Promise<IteratorResult<T>> => {
-        if (this.buffered.length > 0) {
-          // Non-null assertion is safe: length check above guarantees an
-          // element is present.
-          const value = this.buffered.shift()!;
-          return Promise.resolve({ value, done: false });
-        }
-        if (this.closed) {
-          return Promise.resolve({ value: undefined as unknown as T, done: true });
-        }
-        return new Promise((resolve) => {
-          this.waiting.push(resolve);
-        });
-      },
-    };
-  }
-}
 
 /**
  * A byte budget shared across two (or more) `LineFramer`s so that a combined

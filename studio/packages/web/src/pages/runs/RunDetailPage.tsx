@@ -19,7 +19,14 @@ import {
   reconcileNodeActivity,
   type RunLifecycle,
 } from './runSummary';
-import { eventGloss, failureClass, formatClock, formatNodeDuration, formatWhen } from './format';
+import {
+  eventGloss,
+  failureClass,
+  formatClock,
+  formatNodeDuration,
+  formatOutputValue,
+  formatWhen,
+} from './format';
 import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
@@ -661,9 +668,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         ? cls === ''
                           ? n.error
                           : `${n.error} (${cls})`
-                        : n.lastOutputName
-                          ? `output: ${n.lastOutputName}`
-                          : ''}
+                        : n.status === 'dispatched' && n.lastOutput !== undefined
+                          ? /* #1299 — a RUNNING node shows its latest streamed
+                               value, so a long copy's per-batch progress reads
+                               as progress rather than a hang. Once it settles the
+                               outputs are the truth, and the cell goes back to
+                               naming the stream. */
+                            `${n.lastOutput.name}: ${formatOutputValue(n.lastOutput.value)}`
+                          : n.lastOutputName
+                            ? `output: ${n.lastOutputName}`
+                            : ''}
                   </td>
                 </tr>
               );

@@ -2583,3 +2583,48 @@ describe('RunDetailPage — the parent a child run was called by', () => {
     expect(await screen.findByRole('link', { name: 'Parent run run_parent' })).toBeInTheDocument();
   });
 });
+
+describe('RunDetailPage — a running node shows its latest streamed value (#1299)', () => {
+  const events = (terminal: boolean) => [
+    envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    }),
+    envelope({
+      type: 'node.output',
+      runId: 'run_1',
+      nodeId: 'greet',
+      name: 'progress',
+      value: { rowsRead: 1000, rowsInFlight: 1000, rowsFailed: 0 },
+    }),
+    ...(terminal
+      ? [
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            outputs: {},
+          }),
+        ]
+      : []),
+  ];
+
+  it('reads the tick in the node table while the node is running', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: events(false) }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(
+      await screen.findByText('progress: {"rowsRead":1000,"rowsInFlight":1000,"rowsFailed":0}'),
+    ).toBeInTheDocument();
+  });
+
+  it('goes back to naming the stream once the node settles — the outputs are the truth', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: events(true) }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('output: progress')).toBeInTheDocument();
+    expect(screen.queryByText(/rowsInFlight/)).not.toBeInTheDocument();
+  });
+});

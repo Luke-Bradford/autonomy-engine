@@ -122,6 +122,20 @@ export interface NodeActivity {
   outputs: number;
   /** Name of the most recent `node.output`, if any (a live progress hint). */
   lastOutputName: string | undefined;
+  /**
+   * #1299 — the most recent `node.output` of the CURRENT attempt, name and value
+   * together: a copy's per-batch progress tick is only useful once the running
+   * node shows its latest value. One object rather than a sibling `value` field,
+   * because `node.output.value` is `z.unknown()` — a tick whose value is
+   * `undefined` must still read as a tick.
+   *
+   * Cleared on every dispatch and retry re-open, unlike `lastOutputName`: this is attempt-scoped
+   * progress, and attempt 1's "1,000 rows in flight" shown while attempt 2 runs
+   * would be a live reading of a copy that has already rolled back. Shared by a
+   * parallel foreach's item instances like the rest of the row, so there it is
+   * whichever item ticked last.
+   */
+  lastOutput: { name: string; value: unknown } | undefined;
   /** The failure message, once the node has failed. */
   error: string | undefined;
   /**
@@ -574,6 +588,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         attempts: 0,
         outputs: 0,
         lastOutputName: undefined,
+        lastOutput: undefined,
         error: undefined,
         failureKind: undefined,
         failureCode: undefined,
@@ -775,6 +790,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'dispatched';
         n.attempts += 1;
         clearResult(n);
+        n.lastOutput = undefined;
         /* #1162 — assigned UNCONDITIONALLY, absence included. A dataset-bound
            activity resolves its address per dispatch, so reading the previous
            attempt's value through a dispatch that recorded none would keep a
@@ -789,6 +805,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.outputs += 1;
         n.lastOutputName = e.name;
+        n.lastOutput = { name: e.name, value: e.value };
         break;
       }
       case 'node.succeeded': {
@@ -846,6 +863,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            last attempt's target standing would name a destination over a node
            that is being sent somewhere else. The re-dispatch sets it again. */
         n.datasetAddresses = undefined;
+        /* #1299 — and the last progress tick, for the same argument again: the
+           status is `dispatched` from here, so the table would show the failed
+           attempt's "rows in flight" as live progress of a node that has not
+           started its next attempt — and would keep showing it if the process
+           dies before the re-dispatch. */
+        n.lastOutput = undefined;
         break;
       }
       case 'node.retryScheduled': {
@@ -1308,6 +1331,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       attempts: engine.status === 'waiting' ? engine.attempts : 0,
       outputs: 0,
       lastOutputName: undefined,
+      lastOutput: undefined,
       error: undefined,
       failureKind: undefined,
       failureCode: undefined,

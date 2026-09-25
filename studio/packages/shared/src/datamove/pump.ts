@@ -159,6 +159,23 @@ export interface CopyCounters {
   firstFailure?: CopyRowFailure;
 }
 
+/**
+ * #1299 — the name of the `node.output` tick a running copy emits once per
+ * batch (§5), carrying `{ rowsRead, rowsInFlight, rowsFailed }`.
+ *
+ * `rowsInFlight`, not `rowsWritten`: those rows sit in the sink's still-OPEN
+ * transaction, so a later failure rolls every one of them back. A tick is
+ * progress, never committed truth — the terminal's outputs are that.
+ */
+export const COPY_PROGRESS_OUTPUT = 'progress';
+
+/** The value of one {@link COPY_PROGRESS_OUTPUT} tick. */
+export interface CopyProgress {
+  readonly rowsRead: number;
+  readonly rowsInFlight: number;
+  readonly rowsFailed: number;
+}
+
 export function newCopyCounters(): CopyCounters {
   return {
     rowsRead: 0,

@@ -1,8 +1,13 @@
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { COPY_ACTIVITY_TYPE, newCopyCounters, type DatasetColumn } from '@autonomy-studio/shared';
-import { runCopyActivity, storeCountAdvisory } from '../copy.js';
+import {
+  COPY_ACTIVITY_TYPE,
+  COPY_PROGRESS_OUTPUT,
+  newCopyCounters,
+  type DatasetColumn,
+} from '@autonomy-studio/shared';
+import { runCopyActivity, storeCountAdvisory, type CopyIo } from '../copy.js';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -770,5 +775,209 @@ describe('copy activity — §7 the source-side drift gate runs before the first
     const end = terminal(events);
     expect(end.type).toBe('failed');
     expect(end.type === 'failed' ? end.kind : '').toBe('transient');
+  });
+});
+
+describe('copy activity — §5 progress ticks stream while the copy runs (#1299)', () => {
+  const MAPPING = {
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      { source: 'name', sink: 'name', type: 'string' },
+    ],
+  };
+
+  /**
+   * A hand-driven `CopyIo` whose write stops after taking EVERY batch, until the
+   * test releases it — so "did the tick arrive while the write was still open"
+   * is a question the test can ask, rather than one the event order implies.
+   */
+  function gatedIo(
+    batches: readonly Record<string, unknown>[][],
+    fail?: DatasetIoError,
+  ): { io: CopyIo; release: () => void } {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: async function* () {
+        for (const batch of batches) yield batch;
+      },
+      writeRows: async ({ batches: incoming, onBatch }) => {
+        let written = 0;
+        for await (const batch of incoming) {
+          written += batch.length;
+          onBatch(written);
+        }
+        await gate;
+        if (fail !== undefined) throw fail;
+        return { rowsWritten: written };
+      },
+    };
+    return { io, release };
+  }
+
+  const ctxFor = (): ActivityContext => {
+    const root = tempRoot();
+    return copyCtx({ root, sourcePath: 'unused.db', sinkPath: 'unused-dst.db', input: MAPPING });
+  };
+
+  const progressOf = (events: ActivityEvent[]): unknown[] =>
+    events.flatMap((e) =>
+      e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT ? [e.value] : [],
+    );
+
+  it('yields a tick BEFORE the write has finished — progress, not a batch at the end', async () => {
+    const { io, release } = gatedIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]);
+    const gen = runCopyActivity(ctxFor(), io);
+
+    // The write is held open at its gate; a tick must still reach the consumer.
+    const first = await gen.next();
+    expect(first.value).toEqual({
+      type: 'output',
+      name: COPY_PROGRESS_OUTPUT,
+      value: { rowsRead: 1, rowsInFlight: 1, rowsFailed: 0 },
+    });
+
+    release();
+    const rest: ActivityEvent[] = [];
+    for (let r = await gen.next(); r.done !== true; r = await gen.next()) rest.push(r.value);
+    expect(progressOf(rest)).toEqual([{ rowsRead: 2, rowsInFlight: 2, rowsFailed: 0 }]);
+    // Every tick lands before the terminal, and the terminal is unchanged by them.
+    expect(terminal(rest).type).toBe('succeeded');
+    const end = terminal(rest);
+    expect(end.type === 'succeeded' ? end.outputs.rowsWritten : null).toBe(2);
+  });
+
+  it('ticks for a batch whose rows ALL failed — the copy that must not look hung', async () => {
+    // `name` into an integer column: every row fails coercion, so no row ever
+    // reaches the sink and the sink's own per-batch callback never fires.
+    const { io, release } = gatedIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]);
+    release();
+    const ctx = ctxFor();
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(
+      {
+        ...ctx,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'flag', type: 'integer' },
+          ],
+        },
+      },
+      io,
+    )) {
+      events.push(e);
+    }
+    expect(progressOf(events)).toEqual([
+      { rowsRead: 1, rowsInFlight: 0, rowsFailed: 1 },
+      { rowsRead: 2, rowsInFlight: 0, rowsFailed: 2 },
+    ]);
+  });
+
+  it('never lets a closed generator leave the write running under it', async () => {
+    const { io, release } = gatedIo([[{ id: 1, name: 'a' }]]);
+    const gen = runCopyActivity(ctxFor(), io);
+    // Started first: `return()` on an unstarted generator never runs the body.
+    expect((await gen.next()).value).toMatchObject({ name: COPY_PROGRESS_OUTPUT });
+
+    let closed = false;
+    const closing = gen.return(undefined).then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The write is still open behind its gate, so closing must still be waiting.
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it('maps a writeRows that throws SYNCHRONOUSLY onto the failed path, counters included', async () => {
+    const { io } = gatedIo([]);
+    const throwing: CopyIo = {
+      ...io,
+      writeRows: () => {
+        throw new DatasetIoError('permanent', 'refused before any promise existed');
+      },
+    };
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(ctxFor(), throwing)) events.push(e);
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toMatch(/refused before any promise existed/);
+    expect(events.some((e) => e.type === 'output' && e.name === 'rowsWritten')).toBe(true);
+  });
+
+  it('keeps the running total as rowsWritten when the sink cannot prove a rollback', async () => {
+    const { io, release } = gatedIo(
+      [[{ id: 1, name: 'a' }]],
+      new DatasetIoError('transient', 'connection lost mid-commit', { partialWritePossible: true }),
+    );
+    release();
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(ctxFor(), io)) events.push(e);
+    expect(terminal(events).type).toBe('failed');
+    const written = events.find((e) => e.type === 'output' && e.name === 'rowsWritten');
+    expect(written?.type === 'output' ? written.value : null).toBe(1);
+  });
+
+  it('ticks per batch over a real store, ascending, and all before the terminal', async () => {
+    const root = tempRoot();
+    // COPY_BATCH_ROWS is 1000, so 2500 rows is three batches.
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 2500, 'src.db'),
+        sinkPath: seedSink(root, 'dst.db'),
+      }),
+    );
+    expect(progressOf(events)).toEqual([
+      { rowsRead: 1000, rowsInFlight: 1000, rowsFailed: 0 },
+      { rowsRead: 2000, rowsInFlight: 2000, rowsFailed: 0 },
+      { rowsRead: 2500, rowsInFlight: 2500, rowsFailed: 0 },
+    ]);
+    expect(terminal(events).type).toBe('succeeded');
+  });
+
+  it('a tick is not the final count — a rolled-back copy still reports rowsWritten 0', async () => {
+    const root = tempRoot();
+    const sourcePath = join(root, 'late-src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
+    const insert = src.prepare('INSERT INTO t (id, name) VALUES (?, ?)');
+    src.transaction(() => {
+      for (let i = 1; i <= 1200; i += 1) insert.run(i, i === 1100 ? null : `row-${i}`);
+    })();
+    src.close();
+    const sinkPath = join(root, 'late-dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER, note TEXT NOT NULL)');
+    dst.close();
+
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath,
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'note', type: 'string' },
+          ],
+        },
+      }),
+    );
+    // Batch one reached the open transaction and ticked; batch two rolled it back.
+    expect(progressOf(events)).toEqual([{ rowsRead: 1000, rowsInFlight: 1000, rowsFailed: 0 }]);
+    const tickAt = events.findIndex((e) => e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT);
+    const writtenAt = events.findIndex((e) => e.type === 'output' && e.name === 'rowsWritten');
+    expect(tickAt).toBeLessThan(writtenAt);
+    const written = events[writtenAt];
+    expect(written?.type === 'output' ? written.value : null).toBe(0);
+    expect(terminal(events).type).toBe('failed');
   });
 });

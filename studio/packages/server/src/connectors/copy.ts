@@ -1,6 +1,7 @@
 import {
   checkSourceDrift,
   copyDispatchInputSchema,
+  COPY_PROGRESS_OUTPUT,
   CopyMappingError,
   formatZodIssues,
   newCopyCounters,
@@ -10,8 +11,10 @@ import {
   type CoercedValue,
   type CoercionOptions,
   type CopyCounters,
+  type CopyProgress,
   type CopyPumpMappingEntry,
 } from '@autonomy-studio/shared';
+import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { refuseNullOnNonNullable } from './sink-columns.js';
@@ -255,7 +258,10 @@ export async function* runCopyActivity(
     yield failed('permanent', 'copy requires a sink connection — the store it writes into');
     return;
   }
-  const sinkRefusal = io.refuseSink?.(ctx.sink) ?? null;
+  // Bound once, narrowed: the write below runs inside a closure, where the
+  // `ctx.sink` check above no longer narrows the property.
+  const sinkConnection = ctx.sink;
+  const sinkRefusal = io.refuseSink?.(sinkConnection) ?? null;
   if (sinkRefusal !== null) {
     yield failed('permanent', sinkRefusal);
     return;
@@ -389,8 +395,22 @@ export async function* runCopyActivity(
     };
   }
 
-  try {
-    const result = await io.writeRows({
+  // §5 — "a long copy must not look hung". One tick per batch, off the PUMP's
+  // `onBatch` rather than the sink's: the pump fires it after the sink has taken
+  // the batch (so `counters.rowsWritten` is that batch's number), AND for a batch
+  // whose rows all failed coercion, which never reaches the sink at all — the
+  // copy that most needs to show it is still moving.
+  //
+  // The write runs as a promise while this generator drains the queue, because
+  // both callbacks are synchronous and fire inside the driven writer, where a
+  // generator cannot `yield`. The executor streams what this yields into the log
+  // as it arrives (#1135), so a tick reaches the run page while the copy runs.
+  const ticks = new AsyncEventQueue<CopyProgress>();
+  // An async IIFE rather than a bare call: a `writeRows` that throws
+  // SYNCHRONOUSLY must still land in the catch below, as it did when the call
+  // sat inside that `try`.
+  const write = (async () =>
+    io.writeRows({
       columns,
       nullOnError,
       mode,
@@ -398,7 +418,7 @@ export async function* runCopyActivity(
         counters.rowsWritten = rowsWritten;
       },
       dataset: sink,
-      connection: ctx.sink,
+      connection: sinkConnection,
       batches: pumpCopyRows(io.readBatches({ dataset: source, signal: ctx.signal }), {
         mapping: mapping as readonly CopyPumpMappingEntry[],
         counters,
@@ -408,9 +428,37 @@ export async function* runCopyActivity(
         // describe rung above rather than inline here — see the note there for
         // why the empty-mapping guard has to cover both.
         coercion,
+        onBatch: () => {
+          ticks.push({
+            rowsRead: counters.rowsRead,
+            rowsInFlight: counters.rowsWritten,
+            rowsFailed: counters.rowsFailed,
+          });
+        },
       }),
       signal: ctx.signal,
-    });
+    }))()
+    .then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    .finally(() => ticks.close());
+  let outcome: Awaited<typeof write>;
+  try {
+    for await (const progress of ticks) {
+      yield { type: 'output', name: COPY_PROGRESS_OUTPUT, value: progress };
+    }
+  } finally {
+    // In `finally`, not after the loop: a consumer that closes this generator
+    // mid-copy must not leave the write — an open transaction on the operator's
+    // store — running under nobody. Closing waits for it, as the executor waits
+    // for its adapter; only a normal exit goes on to read the outcome.
+    outcome = await write;
+  }
+
+  try {
+    if (!outcome.ok) throw outcome.error;
+    const { result } = outcome;
     counters.rowsWritten = result.rowsWritten;
     if (counters.rowsFailed > 0) {
       yield {
@@ -436,9 +484,8 @@ export async function* runCopyActivity(
     // every event it was handed regardless of which terminal follows.
     //
     // On the SUCCESS path they would be redundant with `succeeded.outputs`, so
-    // they are emitted here only. §5 also asks for per-batch ticks during a long
-    // copy. Since #1135 the executor streams, so a tick would now reach the log
-    // while the copy runs; they are not emitted yet, and #1299 owns building them.
+    // they are emitted here only. The per-batch `COPY_PROGRESS_OUTPUT` ticks
+    // (#1299) are a different thing and already streamed above. The sink's
     // `onBatch` ticks the RUNNING TOTAL of rows inserted into the still-OPEN
     // transaction, and the sink's own docblock is explicit that "a tick is
     // progress, not committed truth … an operator can legitimately see '500
