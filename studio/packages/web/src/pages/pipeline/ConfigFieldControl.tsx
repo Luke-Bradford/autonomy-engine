@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowList, parseRowCells } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -116,6 +117,15 @@ export type FieldChoices = {
  * author writes in a `${nodes.x.config…}` reference and what the server's
  * validation errors cite, so renaming it for display would break the one thread
  * connecting the form, the doc and the error message.
+ *
+ * A `<textarea>` or `<select>` is paired with its label by `htmlFor`/`id`, never
+ * WRAPPED by it (#1227). A wrapping label's text includes the control's own
+ * text — a textarea's value, every option of a select — so Playwright's
+ * `getByLabel('path', { exact: true })` resolves while the field is empty and
+ * silently stops matching the moment it holds anything, and the non-exact form
+ * starts matching on VALUES. The accessible name is unaffected either way; it is
+ * the label's TEXT that a wrap contaminates. An `<input>` has no text content,
+ * which is why the checkbox and the number field may keep the wrap.
  */
 export function ConfigFieldControl({
   field,
@@ -145,6 +155,8 @@ export function ConfigFieldControl({
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
   const { ref: inputRef, onSelect, insert: insertAtCaret } = useCaretInsert<HTMLTextAreaElement>();
+  const controlId = useId();
+  const choicesId = `${controlId}-choices`;
 
   if (field.kind === 'objectList') {
     return (
@@ -173,9 +185,10 @@ export function ConfigFieldControl({
 
   if (field.kind === 'enum') {
     return (
-      <label>
-        {label}
+      <div className="config-field">
+        <label htmlFor={controlId}>{label}</label>
         <select
+          id={controlId}
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
         >
@@ -186,7 +199,7 @@ export function ConfigFieldControl({
             </option>
           ))}
         </select>
-      </label>
+      </div>
     );
   }
 
@@ -214,18 +227,17 @@ export function ConfigFieldControl({
 
   return (
     <div className="config-field">
-      <label>
-        {hint === null ? label : `${label} — ${hint}`}
-        <textarea
-          ref={inputRef}
-          value={text}
-          onSelect={onSelect}
-          rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
-          spellCheck={false}
-          placeholder={field.defaultText}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
+      <label htmlFor={controlId}>{hint === null ? label : `${label} — ${hint}`}</label>
+      <textarea
+        id={controlId}
+        ref={inputRef}
+        value={text}
+        onSelect={onSelect}
+        rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+        spellCheck={false}
+        placeholder={field.defaultText}
+        onChange={(e) => onChange(e.target.value)}
+      />
       {/* A SIBLING of the label, not a child, because a button INSIDE the label
           contaminates the textarea's accessible name — which is exactly why
           `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
@@ -277,9 +289,10 @@ export function ConfigFieldControl({
           a hand-typed value the list does not contain, which is a legitimate
           state and not an error. */}
       {choices && field.kind === 'text' && choices.values.length > 0 && (
-        <label className="config-field-choices">
-          {choices.label}
+        <div className="config-field config-field-choices">
+          <label htmlFor={choicesId}>{choices.label}</label>
           <select
+            id={choicesId}
             value={choices.values.includes(text) ? text : ''}
             onChange={(e) => {
               if (e.target.value !== '') choices.onChoose(e.target.value);
@@ -292,7 +305,7 @@ export function ConfigFieldControl({
               </option>
             ))}
           </select>
-        </label>
+        </div>
       )}
       {picker && field.kind === 'text' && (
         <ExpressionPicker
