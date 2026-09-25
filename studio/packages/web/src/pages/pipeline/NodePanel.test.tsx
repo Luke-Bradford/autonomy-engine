@@ -1229,4 +1229,45 @@ describe('the expression picker on a mapping cell (#1178)', () => {
 
     expect(offered()).toBeNull();
   });
+
+  it("offers nothing to an llm_call tool's cells, none of which take a pipeline reference", () => {
+    // `llm_call.tools` is the other row list, so its text cells gained the picker
+    // too. Every one refuses a pipeline reference at save — `name` must be an
+    // identifier, `description` refuses templates, and `expression` is scoped to
+    // `${tool.args.*}` — so an unfiltered list here would be all false offers.
+    mountOver(
+      node('n_llm', 'llm_call', {
+        prompt: 'hi',
+        tools: [
+          {
+            name: 'lookup',
+            description: 'Look a word up',
+            parameters: {
+              type: 'object',
+              properties: { q: { type: 'string' } },
+              required: ['q'],
+            },
+            expression: '${tool.args.q}',
+          },
+        ],
+      }),
+      [],
+      [],
+      params,
+    );
+
+    for (const cell of ['name', 'description', 'expression']) {
+      open(`tools row 1 ${cell}`);
+      expect(offered(), cell).toBeNull();
+      fireEvent.keyDown(
+        screen.getByRole('button', { name: `Insert reference into tools row 1 ${cell}` }),
+        {
+          key: 'Escape',
+        },
+      );
+    }
+    // …while a plain field on the same node is still offered it.
+    open('prompt');
+    expect(offered()).toBeTruthy();
+  });
 });

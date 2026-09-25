@@ -193,8 +193,12 @@ test.describe('#1139 — copy-node authoring', () => {
       [2, 'label', 'full_name', 'string'],
     ] as const) {
       await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-      await panel(page).getByLabel(`mapping row ${row} source (optional)`).fill(source);
-      await panel(page).getByLabel(`mapping row ${row} sink`).fill(sink);
+      await panel(page)
+        .getByRole('textbox', { name: `mapping row ${row} source (optional)` })
+        .fill(source);
+      await panel(page)
+        .getByRole('textbox', { name: `mapping row ${row} sink` })
+        .fill(sink);
       await panel(page).getByLabel(`mapping row ${row} type`).selectOption(type);
     }
 
@@ -225,7 +229,9 @@ test.describe('#1139 — copy-node authoring', () => {
     // And it comes BACK into the same controls, one row per stored mapping.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('full_name');
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+      'full_name',
+    );
     await expect(panel(page).getByLabel('mapping row 2 type')).toHaveValue('string');
 
     await expectQuiet(page, problems);
@@ -292,8 +298,12 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     ).toBeVisible();
 
     // The rows landed in the real row controls, not in a JSON box.
-    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
-    await expect(panel(page).getByLabel('mapping row 2 sink')).toHaveValue('label');
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+      'id',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+      'label',
+    );
     await expect(panel(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
     await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
@@ -324,8 +334,10 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     await canvasNodes(page).first().click();
     await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
     await expect(panel(page).getByText(/No new columns matched\./)).toBeVisible();
-    await expect(panel(page).getByLabel('mapping row 1 sink')).toHaveValue('id');
-    await expect(panel(page).getByLabel('mapping row 3 sink')).toHaveCount(0);
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+      'id',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'mapping row 3 sink' })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -361,7 +373,7 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-    await panel(page).getByLabel('mapping row 1 sink').fill('label');
+    await panel(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
     await panel(page).getByLabel('mapping row 1 type').selectOption('string');
 
     // The column-name cell: held to a literal, so nothing is offered.
@@ -381,9 +393,9 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await panel(page)
       .getByRole('button', { name: /^batch/ })
       .click();
-    await expect(panel(page).getByLabel('mapping row 1 expression (optional)')).toHaveValue(
-      '${params.batch}',
-    );
+    await expect(
+      panel(page).getByRole('textbox', { name: 'mapping row 1 expression (optional)' }),
+    ).toHaveValue('${params.batch}');
 
     await panel(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();

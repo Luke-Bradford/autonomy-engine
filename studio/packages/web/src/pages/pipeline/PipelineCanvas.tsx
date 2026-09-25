@@ -68,7 +68,7 @@ import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
 import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
-import { insertModeFor } from './expressionInsert';
+import { insertModeFor, LITERAL_PROBE } from './expressionInsert';
 import {
   deriveConfigFields,
   emptyControlValue,
@@ -2316,7 +2316,10 @@ function useExpressionPicker(
         const baseline =
           target.baseline === 'stored'
             ? validateCanvas(nodes, edges, containers, params)
-            : issuesWith(target, '');
+            : (() => {
+                const literal = issuesWith(target, LITERAL_PROBE);
+                return issuesWith(target, '').filter((issue) => literal.includes(issue));
+              })();
         // Filtered in BOTH modes. REPLACE makes the field become the reference,
         // which is where a field's own type check rejects one. INSERT used to
         // skip the filter on the argument that a template always resolves to a
@@ -2325,8 +2328,9 @@ function useExpressionPicker(
         // mode probes carry that refusal equally, so such a field reads as a
         // template and an unfiltered list offered references that were ALL
         // refused at save (#1178). An insert candidate is probed in the shape a
-        // splice makes — the same `x…` prefix `INTERPOLATED_PROBE` uses.
-        const shaped = (insert: string) => (mode === 'replace' ? insert : `x${insert}`);
+        // splice makes — the same prefix `INTERPOLATED_PROBE` uses.
+        const shaped = (insert: string) =>
+          mode === 'replace' ? insert : `${LITERAL_PROBE}${insert}`;
         return {
           mode,
           suggestions: suggestions.filter((s) => {

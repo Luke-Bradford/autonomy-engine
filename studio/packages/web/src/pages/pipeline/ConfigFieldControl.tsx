@@ -30,14 +30,22 @@ export type FieldPicker = {
  * position always exists in the STORED config, so the stored doc is the answer.
  * A cell's row may exist only in the draft (added, not yet applied), and then
  * the stored doc lacks the row the candidate sits on: every candidate would
- * carry the draft row's own issues and be refused for them. So a cell compares
- * against its draft with the cell EMPTIED — not with its current text, which in
- * a literal-only cell (`sink`) is itself a refused `${}` and would put that very
- * refusal into the baseline, letting every candidate through.
+ * carry the draft row's own complaints and be refused for them. So a cell's
+ * baseline is PROBED from its draft: the issues present both with the cell
+ * EMPTY and with it holding a plain LITERAL. An issue present for both is not
+ * about the cell's content, so a candidate may share it. Neither probe alone
+ * is enough, and each fails on a real cell:
+ *
+ *  - the cell's CURRENT text: in a literal-only cell (`sink`) holding a `${}`
+ *    it is the very refusal a candidate earns, so every candidate would pass;
+ *  - EMPTY alone: `llm_call.tools[].name` refuses `''` with the same
+ *    identifier message it gives `x${…}`, so the refusal cancels;
+ *  - a LITERAL alone: an `expression` beside a `source` is refused by the XOR
+ *    whatever it holds, so again the refusal cancels.
  */
 export type PickerTarget = {
   place: (config: Readonly<Record<string, unknown>>, value: string) => Record<string, unknown>;
-  baseline: 'stored' | 'placedEmpty';
+  baseline: 'stored' | 'probed';
 };
 
 /** A top-level config field's position: the one shape the flyout knew before #1178. */
@@ -361,16 +369,29 @@ export function ObjectListControl({
 }) {
   const cells = field.elementFields ?? [];
 
+  // Each row is read back cell by cell, as an apply would, EXCEPT that a cell
+  // which cannot parse yet is omitted rather than failing the whole list. A
+  // freshly added row is the common case: its `type` is `''`, which no enum
+  // accepts, so an all-or-nothing `parseFieldInput(field, rows)` would refuse
+  // every draft row until it was complete. Omitting keeps the shape the
+  // validator reads (`source === undefined` means "not set" to the XOR rule),
+  // where placing the raw control values would not — a raw row is DENSE, every
+  // cell present as `''`.
   const cellTarget = (index: number, cell: string): PickerTarget => ({
-    place: (config, value) => {
-      const next = rows.map((r, i) => (i === index ? { ...r, [cell]: value } : r));
-      // A row list the form cannot read back yet (a cell mid-edit that fails its
-      // own parse) is placed RAW: the baseline is placed the same way, so the
-      // shape complaints it causes appear on both sides and cancel.
-      const parsed = parseFieldInput(field, next);
-      return { ...config, [field.name]: parsed.ok && !parsed.omit ? parsed.value : next };
-    },
-    baseline: 'placedEmpty',
+    place: (config, value) => ({
+      ...config,
+      [field.name]: rows.map((row, i) => {
+        const read: Record<string, unknown> = {};
+        for (const c of cells) {
+          const raw =
+            i === index && c.name === cell ? value : (row[c.name] ?? emptyControlValue(c));
+          const parsed = parseFieldInput(c, raw);
+          if (parsed.ok && !parsed.omit) read[c.name] = parsed.value;
+        }
+        return read;
+      }),
+    }),
+    baseline: 'probed',
   });
 
   return (

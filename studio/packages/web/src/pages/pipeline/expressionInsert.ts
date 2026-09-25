@@ -47,8 +47,13 @@ export function applyInsert(
  * can fail for a reason other than the one being measured.
  */
 export const WHOLE_VALUE_PROBE = '${run.runId}';
+/**
+ * A plain literal: no `${}`, and a valid identifier, so it satisfies every
+ * literal-only field (a column name, a tool name) that any value could.
+ */
+export const LITERAL_PROBE = 'x';
 /** The same reference as an interpolated TEMPLATE — the shape a splice makes. */
-export const INTERPOLATED_PROBE = `x${WHOLE_VALUE_PROBE}`;
+export const INTERPOLATED_PROBE = `${LITERAL_PROBE}${WHOLE_VALUE_PROBE}`;
 
 /**
  * Whether inserting into this field must replace it — i.e. whether the field is
