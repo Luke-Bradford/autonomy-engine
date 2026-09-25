@@ -30,6 +30,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     attempts: 0,
     outputs: 0,
     lastOutputName: undefined,
+    lastOutput: undefined,
     error: undefined,
     failureKind: undefined,
     failureCode: undefined,
@@ -572,5 +573,28 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
     const panel = screen.getByRole('complementary');
     expect(outputsCode(panel).textContent).toHaveLength(CAP);
     expect(panel.textContent).not.toContain(TAIL);
+  });
+});
+
+describe('NodeActivityPanel — the latest streamed value (#1299)', () => {
+  it("shows the current attempt's latest tick, name and value", () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        outputs: 2,
+        lastOutputName: 'progress',
+        lastOutput: { name: 'progress', value: { rowsRead: 2000, rowsInFlight: 1500 } },
+      }),
+    );
+    expect(panel.textContent).toContain(
+      '2 events (latest: progress = {"rowsRead":2000,"rowsInFlight":1500})',
+    );
+  });
+
+  it('falls back to the name alone once a re-dispatch cleared the value', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', outputs: 1, lastOutputName: 'progress', lastOutput: undefined }),
+    );
+    expect(panel.textContent).toContain('1 event (latest: progress)');
   });
 });

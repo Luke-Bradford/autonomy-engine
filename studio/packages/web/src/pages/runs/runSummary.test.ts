@@ -119,6 +119,7 @@ describe('deriveNodeActivity', () => {
         attempts: 1,
         outputs: 2,
         lastOutputName: 'text',
+        lastOutput: { name: 'text', value: 'there' },
         error: undefined,
         failureKind: undefined,
         failureCode: undefined,
@@ -1679,6 +1680,7 @@ describe('reconcileNodeActivity', () => {
       attempts: 1,
       outputs: 0,
       lastOutputName: undefined,
+      lastOutput: undefined,
       error: undefined,
       failureKind: undefined,
       failureCode: undefined,
@@ -2950,5 +2952,53 @@ describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
     const [row] = reconcileNodeActivity([], projection.state);
     expect(row?.nodeId).toBe('c');
     expect(row?.datasetAddresses).toBeUndefined();
+  });
+});
+
+describe('deriveNodeActivity — the latest streamed value (#1299)', () => {
+  const dispatched = (attemptId: string, at: number) =>
+    envelope(
+      { type: 'node.dispatched', runId: 'r', nodeId: 'c', attemptId, idempotent: true },
+      at,
+    );
+  const tick = (value: unknown, at: number) =>
+    envelope({ type: 'node.output', runId: 'r', nodeId: 'c', name: 'progress', value }, at);
+
+  it('holds the latest tick, name and value together, while the node runs', () => {
+    const [c] = deriveNodeActivity([
+      dispatched('c#0', 1_000),
+      tick({ rowsInFlight: 1000 }, 1_100),
+      tick({ rowsInFlight: 2000 }, 1_200),
+    ]);
+    expect(c?.status).toBe('dispatched');
+    expect(c?.lastOutput).toEqual({ name: 'progress', value: { rowsInFlight: 2000 } });
+  });
+
+  it("clears it on a re-dispatch — attempt 1's progress is not attempt 2's", () => {
+    const [c] = deriveNodeActivity([
+      dispatched('c#0', 1_000),
+      tick({ rowsInFlight: 1000 }, 1_100),
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          error: 'busy',
+          kind: 'transient',
+        },
+        1_200,
+      ),
+      dispatched('c#1', 1_300),
+    ]);
+    expect(c?.lastOutput).toBeUndefined();
+    // The stream's NAME is not attempt-scoped and is kept, as before.
+    expect(c?.lastOutputName).toBe('progress');
+  });
+
+  it('keeps a tick whose value is undefined as a tick', () => {
+    const [c] = deriveNodeActivity([dispatched('c#0', 1_000), tick(undefined, 1_100)]);
+    expect(c?.lastOutput).toEqual({ name: 'progress', value: undefined });
+    expect(c?.lastOutput).not.toBeUndefined();
   });
 });

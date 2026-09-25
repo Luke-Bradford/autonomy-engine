@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { RunEvent } from '@autonomy-studio/shared';
-import { eventGloss, failureClass, formatNodeDuration, formatRunDuration } from './format';
+import {
+  eventGloss,
+  failureClass,
+  formatNodeDuration,
+  formatOutputValue,
+  formatRunDuration,
+  MAX_INLINE_OUTPUT_CHARS,
+} from './format';
 
 function evt(payload: unknown): RunEvent {
   return { id: 'e', runId: 'r', seq: 1, type: 'x', payload, ts: 0 } as RunEvent;
@@ -224,5 +231,33 @@ describe('formatNodeDuration (#867)', () => {
     // node. `0ms` would print exactly the measurement-nobody-took this function
     // exists to refuse, and would hide the corruption behind a plausible number.
     expect(formatNodeDuration(node({ startedAtMs: 4_000, endedAtMs: 1_000 }))).toBe('—');
+  });
+});
+
+describe('formatOutputValue (#1299)', () => {
+  it('renders a progress tick as compact JSON', () => {
+    expect(formatOutputValue({ rowsRead: 1000, rowsInFlight: 1000, rowsFailed: 0 })).toBe(
+      '{"rowsRead":1000,"rowsInFlight":1000,"rowsFailed":0}',
+    );
+  });
+
+  it('renders a string bare, not JSON-quoted', () => {
+    expect(formatOutputValue('hello')).toBe('hello');
+  });
+
+  it('renders a value JSON cannot, rather than rendering nothing', () => {
+    expect(formatOutputValue(undefined)).toBe('undefined');
+  });
+
+  it('bounds a long value and says it was cut', () => {
+    const out = formatOutputValue('x'.repeat(500));
+    expect(out).toBe(`${'x'.repeat(MAX_INLINE_OUTPUT_CHARS)}…`);
+  });
+
+  it('never cuts an astral character in half', () => {
+    // The pair straddles the cap: its HIGH half is the last unit kept.
+    const text = `${'x'.repeat(MAX_INLINE_OUTPUT_CHARS - 1)}😀tail`;
+    const out = formatOutputValue(text);
+    expect(out).toBe(`${'x'.repeat(MAX_INLINE_OUTPUT_CHARS - 1)}…`);
   });
 });

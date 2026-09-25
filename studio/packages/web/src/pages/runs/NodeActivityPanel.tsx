@@ -5,7 +5,7 @@ import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatNodeDuration } from './format';
+import { formatNodeDuration, formatOutputValue, isHighSurrogate } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 
@@ -287,7 +287,16 @@ export function NodeActivityPanel({
         <h4>Streamed output</h4>
         <p>
           {node.outputs} event{node.outputs === 1 ? '' : 's'}
-          {node.lastOutputName !== undefined && <> (latest: {node.lastOutputName})</>}
+          {/* #1299 — the value only for the CURRENT attempt (`lastOutput` is
+              cleared on dispatch); the name alone otherwise, as before. */}
+          {node.lastOutput !== undefined ? (
+            <>
+              {' '}
+              (latest: {node.lastOutput.name} = {formatOutputValue(node.lastOutput.value)})
+            </>
+          ) : (
+            node.lastOutputName !== undefined && <> (latest: {node.lastOutputName})</>
+          )}
         </p>
       </section>
     </aside>
@@ -560,11 +569,6 @@ function CostSection({ node }: { node: NodeActivity }) {
       )}
     </section>
   );
-}
-
-/** A UTF-16 high surrogate — the FIRST half of an astral character's pair. */
-function isHighSurrogate(unit: number): boolean {
-  return unit >= 0xd800 && unit <= 0xdbff;
 }
 
 /** The element the disclosure toggle owns, named so it can be `aria-controls`. */

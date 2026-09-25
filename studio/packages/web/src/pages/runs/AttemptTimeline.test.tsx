@@ -18,6 +18,7 @@ const node = (over: Partial<NodeActivity> & { nodeId: string }): NodeActivity =>
   attempts: 1,
   outputs: 0,
   lastOutputName: undefined,
+  lastOutput: undefined,
   error: undefined,
   failureKind: undefined,
   failureCode: undefined,
