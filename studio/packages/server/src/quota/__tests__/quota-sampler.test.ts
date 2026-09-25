@@ -68,7 +68,7 @@ describe('startClaudeQuotaSampler — cadence', () => {
     const read = vi.fn(async () => ({ value: null, unavailable: 'no_credential' }) as const);
     const sampler = startClaudeQuotaSampler({ read }, { intervalMs: 30_000 });
     // No timer advance at all: the warm cache exists from boot, not from the
-    // first tick five minutes later. A KeepAlive restart otherwise reintroduces the
+    // first tick one interval later. A KeepAlive restart otherwise reintroduces the
     // live request-path poll for the consumer's very next read.
     expect(read).toHaveBeenCalledTimes(1);
     sampler.stop();
