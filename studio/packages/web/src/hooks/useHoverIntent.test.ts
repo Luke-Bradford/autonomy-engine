@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLOSE_DELAY_MS, OPEN_DELAY_MS, useHoverIntent } from './useHoverIntent';
 
 describe('useHoverIntent', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
   afterEach(() => vi.useRealTimers());
 
   it('starts closed', () => {
