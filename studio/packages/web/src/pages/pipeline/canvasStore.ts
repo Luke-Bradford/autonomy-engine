@@ -28,6 +28,7 @@ import {
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
 import { readClipboard, writeClipboard } from './clipboard';
+import { CONTAINER_GAP, CONTAINER_PADDING, UNMEASURED_NODE_SIZE } from './containerLayout';
 
 /** How a connection differs from an ordinary forward edge (U6e). */
 export interface ConnectOptions {
@@ -381,6 +382,21 @@ interface CloneResult {
   edges: Edge[];
   containers: Container[];
   newIds: string[];
+  /** The ids of the container copies, in the order the sources were given. */
+  newContainerIds: string[];
+}
+
+/** What a clone copies besides the nodes, and where it puts them. */
+interface CloneOptions {
+  /**
+   * Containers to copy in the same gesture. Each copy's `children` are the
+   * copies of whichever of its source's children are among `sources`, and its
+   * `${}` fields go through the SAME id map as the nodes' configs — so a loop's
+   * `exitWhen`, scoped to its own children, names the copied children.
+   */
+  containers?: Container[];
+  /** Replaces the per-gesture stagger — see `duplicateContainer`. */
+  offset?: { x: number; y: number };
 }
 
 /**
@@ -417,23 +433,53 @@ interface CloneResult {
  *
  * 4. **Container membership is re-derived from the LIVE containers** by SOURCE
  *    id, for the same reason: a clipboard written before the container was
- *    deleted must not put its copies back into a container that is gone.
+ *    deleted must not put its copies back into a container that is gone. The
+ *    one exception is a node whose container is being copied WITH it: that copy
+ *    belongs to the container's copy, and re-deriving would put it back into
+ *    the original.
+ *
+ * A copied CONTAINER is an endpoint like any node, so it rides the same rules
+ * rather than a second set: its id is in the one id map, so rule 2 copies an
+ * edge between it and a member, and rule 3 re-derives its incoming edges — which
+ * is what keeps a foreach copy's `items` upstream in scope. Its outgoing edges
+ * are not copied, for the reason a node's are not.
  *
  * The stagger is computed ONCE per gesture, not per node, so a copied subgraph
  * keeps its internal layout — the one thing a group paste has to preserve.
  */
-function cloneNodesInto(target: CloneTarget, sources: Node[], internalEdges: Edge[]): CloneResult {
-  const idMap = new Map(sources.map((n) => [n.id, newLocalId('n')]));
-  const offset = 40 + (target.addCount % 5) * 40;
+function cloneNodesInto(
+  target: CloneTarget,
+  sources: Node[],
+  internalEdges: Edge[],
+  options: CloneOptions = {},
+): CloneResult {
+  const sourceContainers = options.containers ?? [];
+  const idMap = new Map<string, string>([
+    ...sources.map((n): [string, string] => [n.id, newLocalId('n')]),
+    ...sourceContainers.map((c): [string, string] => [c.id, newLocalId(c.kind)]),
+  ]);
+  const stagger = 40 + (target.addCount % 5) * 40;
+  const offset = options.offset ?? { x: stagger, y: stagger };
 
   const copies: Node[] = sources.map((source) => ({
     ...remapNodeRefs(source, idMap),
     id: idMap.get(source.id) as string,
-    position: { x: source.position.x + offset, y: source.position.y + offset },
+    position: { x: source.position.x + offset.x, y: source.position.y + offset.y },
   }));
 
-  let containers = target.containers;
+  const containerCopies: Container[] = sourceContainers.map((source) => ({
+    ...remapNodeRefs(source, idMap),
+    id: idMap.get(source.id) as string,
+    children: source.children.flatMap((child) => {
+      const copy = idMap.get(child);
+      return copy === undefined ? [] : [copy];
+    }),
+  }));
+  const claimed = new Set(sourceContainers.flatMap((c) => c.children));
+
+  let containers = [...target.containers, ...containerCopies];
   for (const source of sources) {
+    if (claimed.has(source.id)) continue;
     const owner = containers.find((c) => c.children.includes(source.id))?.id ?? null;
     containers = assignContainerChild(containers, idMap.get(source.id) as string, owner);
   }
@@ -464,7 +510,13 @@ function cloneNodesInto(target: CloneTarget, sources: Node[], internalEdges: Edg
     edges.push({ ...e, id: newLocalId('e'), to });
   }
 
-  return { nodes, edges, containers, newIds: [...idMap.values()] };
+  return {
+    nodes,
+    edges,
+    containers,
+    newIds: copies.map((n) => n.id),
+    newContainerIds: containerCopies.map((c) => c.id),
+  };
 }
 
 /**
@@ -780,6 +832,19 @@ export interface CanvasState {
    * which returns before `edit` so a refused press consumes no undo slot.
    */
   duplicateNodes(ids: string[]): number;
+  /**
+   * U21 (#935) — copy a container, its whole body and the edges inside it, in
+   * ONE undo entry, and select the copy. Returns the copy's id, or `null` when
+   * `id` names no current container (before `edit`, so no undo slot is spent).
+   *
+   * Every rule is `cloneNodesInto`'s: the body's refs and the box's own `${}`
+   * fields follow the copies, edges into the box are re-derived onto the copy,
+   * edges out of it are not copied. The only thing this action decides is WHERE
+   * the copy goes: beside the original rather than on the 40px stagger, because
+   * a box is derived from its children and two overlapping boxes make it
+   * unreadable which activity belongs to which.
+   */
+  duplicateContainer(id: string): string | null;
   /**
    * U21 — put the selected nodes (and every edge BETWEEN them) on the canvas
    * clipboard. Returns how many nodes were copied; 0 means nothing was selected.
@@ -1293,6 +1358,37 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           };
         });
         return sources.length;
+      },
+
+      duplicateContainer(id) {
+        const live = get();
+        const source = live.containers.find((c) => c.id === id);
+        if (source === undefined) return null;
+        const body = live.nodes.filter((n) => source.children.includes(n.id));
+        const members = new Set([id, ...body.map((n) => n.id)]);
+        const internal = live.edges.filter((e) => members.has(e.from) && members.has(e.to));
+        const xs = body.map((n) => n.position.x);
+        const span = xs.length === 0 ? 0 : Math.max(...xs) - Math.min(...xs);
+        // One node width plus both boxes' padding and a box-to-box gap on each
+        // side: the copy's derived box starts clear of the original's.
+        const dx =
+          span + UNMEASURED_NODE_SIZE.width + 2 * (CONTAINER_PADDING + CONTAINER_GAP);
+        let made: string | null = null;
+        edit((s) => {
+          const cloned = cloneNodesInto(s, body, internal, {
+            containers: [source],
+            offset: { x: dx, y: 0 },
+          });
+          made = cloned.newContainerIds[0] ?? null;
+          return {
+            nodes: cloned.nodes,
+            edges: cloned.edges,
+            containers: cloned.containers,
+            selected: made === null ? s.selected : [{ kind: 'container' as const, id: made }],
+            addCount: s.addCount + 1,
+          };
+        });
+        return made;
       },
 
       duplicateSelection() {
