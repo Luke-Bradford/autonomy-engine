@@ -99,7 +99,7 @@ same walk as a normal run.
 | RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link + live producer — **SHIPPED 2026-07-24** (`Engine.reseedFrontier` satisfied-edge strict prefix + `createReseedService` atomic reseed-pair producer + `POST /api/runs/:id/rerun-from-failed`; built-block below) |
 | RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) — **SHIPPED 2026-07-24** (rule delivered by RS1+RS2; RS3 = the end-to-end copy-vs-re-run SOUNDNESS proof across container kinds + a `driveRun` reseed seam; built-block below) |
 | RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier — **SHIPPED 2026-09-25** (built-block below; a call node INSIDE a copied container is not linked) |
-| RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream |
+| RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream — **SHIPPED 2026-09-25 with #1 F4** (`reseedFrontier` excludes a secure node and a container with a secure child) |
 | RS6 | Monitor copied-vs-executed render + rerun-history grouping (T13) — **copied-vs-executed SHIPPED 2026-08-05** (#918: `deriveNodeActivity` folds `run.reseeded`, so a copied node carries its copied outputs and a `copiedFromRunId`; the node table's Detail cell reads `reused from run <id>` and the drill-in names the source run and drops the "has not started" sentence). The run GRAPH is deliberately exempt — the reducer writes a copied node `{status:'success', attempts:0}`, identical to an executed success, so `RunState` carries no marker for it to read. **Rerun-history grouping + the Run-type column are still open.** |
 
 ## Open questions (for Codex)
@@ -209,8 +209,9 @@ that carries the reseed pair.
   the resumed work twice. **Known residual:** the reconciler's `corrupt` bucket leaves an unreadable
   run `running` indefinitely and there is no cancel/delete route, so a corrupt R2 blocks further reruns
   of R1 until the row is repaired — the same operator-repair dependency that bucket already carries.
-- **`secureOutput` (RS5) is a NO-OP today:** the field ships with F4 and does not exist yet, so no
-  frontier node can carry a redacted output — there is nothing to exclude or leak.
+- **`secureOutput` (RS5) — SHIPPED with #1 F4 (2026-09-25):** a secure node's log holds only
+  redaction markers, so `reseedFrontier` never copies it (nor a container with a secure child); it
+  and its downstream re-run, and the rerun's cost reflects that.
 
 ## RS3 built-block (2026-07-24) — container/loop reseed rules (completed=copy, mid-flight=re-run)
 

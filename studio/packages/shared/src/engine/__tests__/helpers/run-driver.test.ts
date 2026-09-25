@@ -135,6 +135,7 @@ describe('driveRun — the shared run-driver mechanic', () => {
       }),
       projectRunState: () => seed,
       resume: () => ({ state: seed, commands: [], diagnostics: [] }),
+      redact: (event) => event,
       reseedFrontier: () => ({
         frontier: [],
         copiedOutputs: {},

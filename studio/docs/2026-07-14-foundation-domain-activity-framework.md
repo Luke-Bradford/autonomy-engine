@@ -388,7 +388,7 @@ rerun (gated).**
 | F2b | reducer retry-eligibility decision (keyed off `kind`). **Fully specced in [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)** (#472 settled HOLD): the `retry_pending` status, the full command/event triple, and why **F2b must ship WITH F2c, never alone**. Depends on F1b. **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
 | F3 | `policy.timeout` → `node.failed{code:timeout}` event |
-| F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule |
+| F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule — **SHIPPED 2026-09-25** (MVP half of resolved-q2: prohibit, not the opaque handle; built-block below). The catalog-level `secure*Fields` of the D1 contract are NOT part of it — still unowned. No canvas editor for `policy` exists yet (retry/timeout have none either) |
 | F5a | Variables schema + `RunState.variables` state |
 | F5b | `${vars}` substitution namespace + validateRefs |
 | F5c | parallel-mutation hard-reject (determinism guard) |
@@ -409,6 +409,38 @@ rerun (gated).**
 | **F13** | **`Node.config.outputs: OutputSpec[]` (T6)** — node-level typed output override (the home for #2's lowered structured schema + `foreach`/webhook outputs) + validation + canonicalization + `${nodes.x.status}` read. **Prerequisite — #2/#4/#6 depend on it.** **SPLIT 2026-07-15** (the F9a minimal/migrations precedent). **F13a SHIPPED:** the FIELD + its validation. `config.outputs` existed but was an untyped escape hatch read through a permissive `safeParse` whose `null` conflated **absent** with **malformed** — a silent FAIL-OPEN (one typo, e.g. `type: 'strng'`, disabled output type-checking, key-filtering AND ref-name-checking for that node, with no diagnostic anywhere). `outputContract` (`engine/outputs.ts`) is now three-state (`absent`/`invalid`/`declared`) and the reducer FAILS a node whose contract is `invalid`; `NodeOutputsSchema` (`schemas/pipeline.ts`) is the ONE definition of valid (unique + identifier-shaped names — `refRoot` addresses a single segment, so `a.b` was undeclarable-but-unaddressable), read by BOTH the write-path `StrictNodeSchema` and the run-time reader. **Strict on WRITE (`NewPipelineVersionSchema`), tolerant on READ, fail-safe at RUN** — deliberate: `PipelineVersionSchema` parses every stored row, so refusing there would brick a corrupt row out of the UI that must REPAIR it. `${nodes.x.status}` → shipped at #6 E3; deep `[]` → E7; canonicalization → **#3 G1** (canonical JSON is G1's, not this ticket's). See the F13a block below. **F13b FILED as #456:** the catalog-default/override RESOLUTION (the word "override" presupposes a default that does not exist yet — the catalog's `outputs` is inert metadata and the only lowering is `canvasStore.ts`'s CLIENT-SIDE palette seed, so any node made via API/import/CLI carries no contract at all). Was blocked behind adapter truth: **#457** (`stopReason ?? null` vs declared `string`) — **#457 SHIPPED 2026-07-15**: all three LLM adapters now route `stopReason` through one `coerceStopReason` (`connectors/llm-shared.ts`), whose sentinel is `'unknown'` and NOT `'stop'` (a real OpenAI `finish_reason`, which would make an unreadable response indistinguishable from a normal completion). The catalog's three declaring entries are now adapter-true (`http_request`/`agent_task` were already), so F13b is UNBLOCKED. |
 | ~~**F14**~~ | **BUILT** (with F1) — multi-incoming-edge JOIN semantics (T7): AND across predecessors, OR among conditions on one predecessor (ADF `dependsOn`). The OR is what makes `skipped` usable: `computeReadiness` previously ANDed across every EDGE, so two conditions on one predecessor could never both satisfy and the target always skipped. `join:'any'` is unchanged by the grouping (OR distributes over OR). |
 | **F15** | **`SecretRef` config-field sink (T10):** a node-config secure field carries a `SecretRef`, resolved at dispatch, never logged — a secret reaches a non-connection activity (e.g. an `http_request` auth header); `validateRefs` rejects a secure ref anywhere but a declared sink. **SPECCED — the whole item-7 unified secret model (SOURCE → sink → dispatch/redaction → consumer + A10) is settled in [`2026-07-16-foundation-unified-secret-model.md`](./2026-07-16-foundation-unified-secret-model.md).** The finding: F15's SOURCE (a standalone name-addressable secret, not a connection credential) did not exist; the marker is `{$secret:"<name>"}` (structured, out of the `${}` language); F4 output redaction is a co-requisite. Build order S1–S4 there. See D8. |
+
+## F4 built-block (2026-09-25) — secure input/output
+
+- **Schema:** `Node.policy.secureInput?` / `secureOutput?` (booleans; strict on write as before).
+- **Emit-time redaction:** `Engine.redact(event)` (pure, `engine/secure.ts`), applied by the
+  server's `appendAndFold` before every append — the one seam every value-carrying event crosses
+  (pump fold + `foldOutOfBand`), so the log, the websocket stream and the fold all see the redacted
+  event. The other direct appenders carry no node values (`run.finished`, `run.interrupted`,
+  retry bookkeeping). What is scrubbed for a secure node: output VALUES on `node.succeeded` /
+  `externalWait.completed` and the streamed `node.output` name+value (secureOutput); failure prose
+  (`node.failed.error`, `activity.warned.reason`) and the unsalted content hashes on
+  `activity.captured` / `agentTelemetry` / `toolCalled` (either flag). `kind`/`code`, lengths and
+  counts stay.
+- **The contract check survives redaction:** the marker encodes the verdict taken against the real
+  value (`[redacted: secure]` valid, `[redacted: secure, invalid]` not), and the reducer's
+  `validateOutputs` reads it in secure mode, so a mistyped secure output still fails with the usual
+  diagnostic and the event type never changes.
+- **Downstream-ref rule (resolved-q2, MVP):** `validateRefs` refuses `${nodes.<id>.output…}` for a
+  secure producer — inside `default()` too — and for a container with a secure child; the ref
+  picker never offers one. `${nodes.<id>.status}` stays legal.
+- **Refused at save** (a promise the run would break): either flag on a pipeline CALL node (the
+  child's params are its durable input, its outputs are in the child's own log — mark the child's
+  nodes instead); either flag on `if`/`switch` (the branch is the routing fact); `secureInput`
+  without `secureOutput` on a `filter` or an `llm_call` with `emitMessages` (the output echoes the
+  input).
+- **RS5:** `reseedFrontier` never copies a secure node or a container with a secure child; it and
+  its downstream re-run.
+- **Known residual:** dispatch-prep diagnostics can echo resolved values into `run_diagnostics`.
+  A `${}` source there is a param, trigger context or an upstream output — logged already, and refs
+  to secure outputs are refused — or a LITERAL in the node's own config, which is pipeline-doc
+  content (a secret belongs in a connection or a `SecretRef`, never a config literal). `secureInput`
+  does not scrub diagnostics.
 
 ## Non-goals
 

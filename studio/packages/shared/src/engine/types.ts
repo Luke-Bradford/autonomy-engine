@@ -919,6 +919,12 @@ export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];
  * new attempt), kept distinct from the driver-accepted `node.dispatched`.
  * `call.returned` (P2c) resolves a `waiting` `call_pipeline` node, and
  * `call.detached` (#796 item 2) resolves a `wait: false` one.
+ *
+ * #1 F4 — ADDING A VARIANT that carries a node's values, free text an adapter
+ * builds, or a content hash? Give it a case in `engine/secure.ts`
+ * (`redactSecureEvent` + `secureEventNodeId`), or a secure node's plaintext
+ * reaches the log through it. Nothing type-level can tell a value-carrying
+ * field from a structural one, so this note is the enforcement.
  */
 export const EngineEventSchema = z.discriminatedUnion('type', [
   z.object({

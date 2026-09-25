@@ -167,7 +167,11 @@ export function storeOutputs(
 export function validateOutputs(
   contract: OutputContract,
   outputs: Record<string, unknown>,
+  opts: { secure?: boolean } = {},
 ): { errs: string[]; checked: CheckedContract | null } {
+  // #1 F4 — `secure`: the node's values were redacted at emit time and the
+  // marker carries the verdict (see `isSecureOutputValue`, `engine/secure.ts`).
+  const typeOk = opts.secure === true ? isSecureOutputValue : matchesType;
   // A corrupt contract is a CONFIG defect, not a bad result — the node produced
   // nothing wrong. Worded to match `validateDoc`'s `config.outputs is
   // malformed` so both paths are greppable together, and kept distinct from the
@@ -197,11 +201,30 @@ export function validateOutputs(
     // `matchesType(undefined,'json')` is `true` — silently passes. A required
     // output must still match its type.
     if (d.optional && (value === null || value === undefined)) continue;
-    if (!matchesType(value, d.type)) {
+    if (!typeOk(value, d.type)) {
       errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
   }
   return { errs, checked: contract };
+}
+
+/** #1 F4 — see `engine/secure.ts`. Defined HERE (not there) so the two modules
+ * do not import each other: `secure.ts` needs `outputContract` from this one. */
+export const SECURE_REDACTED = '[redacted: secure]';
+export const SECURE_REDACTED_INVALID = '[redacted: secure, invalid]';
+
+/**
+ * #1 F4 — the type check for a SECURE node's output, whose value the log holds
+ * only as a marker. Redaction decided validity against the real value and wrote
+ * the verdict as the marker, so `SECURE_REDACTED` passes whatever the declared
+ * type and `SECURE_REDACTED_INVALID` fails it (even a declared `string`, which
+ * the marker would otherwise satisfy). Anything else is a plaintext value — a
+ * legacy log, or redaction's own first look — and is checked as normal.
+ */
+export function isSecureOutputValue(value: unknown, type: OutputType): boolean {
+  if (value === SECURE_REDACTED) return true;
+  if (value === SECURE_REDACTED_INVALID) return false;
+  return matchesType(value, type);
 }
 
 function matchesType(value: unknown, type: OutputType): boolean {

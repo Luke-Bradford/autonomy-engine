@@ -802,12 +802,24 @@ describe('NewPipelineVersionSchema — policy is refused on write (#1 F2a)', () 
     ).not.toThrow();
   });
 
-  // The motivating case: `secureOutput` ships with F4, the ticket that adds the
-  // redaction making it true. Zod strips unknown keys by default, so without
-  // `.strict()` this would be accepted and dropped — the operator would believe
-  // the output was redacted while it still hit the event log in plaintext.
-  it('refuses an unknown policy key such as an F4-era secureOutput', () => {
-    expect(() => NewPipelineVersionSchema.parse(withNodePolicy({ secureOutput: true }))).toThrow();
+  // Zod strips unknown keys by default, so without `.strict()` a misspelt flag
+  // would be accepted and dropped — the operator would believe the output was
+  // redacted while it still hit the event log in plaintext.
+  it('refuses an unknown policy key such as a misspelt secureOutputs', () => {
+    expect(() => NewPipelineVersionSchema.parse(withNodePolicy({ secureOutputs: true }))).toThrow();
+  });
+
+  // #1 F4 — the flags exist now, because the redaction that makes them true
+  // ships with them.
+  it('accepts secureInput and secureOutput, and keeps them on the parsed node', () => {
+    const parsed = NewPipelineVersionSchema.parse(
+      withNodePolicy({ secureInput: true, secureOutput: true }),
+    );
+    expect(parsed.nodes[0]!.policy).toEqual({ secureInput: true, secureOutput: true });
+  });
+
+  it('refuses a non-boolean secureOutput', () => {
+    expect(() => NewPipelineVersionSchema.parse(withNodePolicy({ secureOutput: 'yes' }))).toThrow();
   });
 
   // A fat-finger guard (review nitpick on #474), deliberately write-path-only:
@@ -869,7 +881,7 @@ describe('NewPipelineVersionSchema — policy is refused on write (#1 F2a)', () 
           type: 'llm_call',
           config: {},
           position: { x: 0, y: 0 },
-          policy: { retry: 1, secureOutput: true },
+          policy: { retry: 1, fromALaterStudio: true },
         },
       ],
     };
