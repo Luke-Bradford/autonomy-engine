@@ -18,6 +18,8 @@ import {
 import { z } from 'zod';
 import { ApiError, messageOf } from '../api/client';
 import { listConnections } from '../api/connections';
+import { downloadTextFile, exportFileName } from '../api/download';
+import { exportDataset } from '../api/portability';
 import {
   DatasetWriteSchema,
   createDataset,
@@ -27,7 +29,9 @@ import {
   updateDataset,
   type DatasetWrite,
 } from '../api/datasets';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import { ImportPanel } from './ImportPanel';
 import { StoreCell } from './datasets/StoreCell';
 import { datasetDetailPath } from './datasets/datasetPath';
 import {
@@ -304,6 +308,29 @@ export function DatasetsPage() {
     void refresh();
   }, [refresh]);
 
+  /**
+   * #1143 — save the dataset's export file, exactly as Connections does (#959).
+   * The file names its store by the connection's `resourceId`; a dataset whose
+   * store is gone is refused by the server with a message naming it, which
+   * lands in this page's error slot.
+   */
+  const { active: exporting, run: runExport } = useBusyAction();
+  const onExport = useCallback(
+    (dataset: Dataset) =>
+      runExport(dataset.id, async () => {
+        setLoadError(null);
+        try {
+          downloadTextFile(
+            exportFileName('dataset', dataset.name, dataset.id),
+            await exportDataset(dataset.id),
+          );
+        } catch (err) {
+          setLoadError(`Could not export “${dataset.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
+
   const onDelete = useCallback(
     async (dataset: Dataset) => {
       // Names the consequence rather than only the row: nothing scans for
@@ -391,6 +418,15 @@ export function DatasetsPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => void onExport(dataset)}
+                    aria-label={`Export ${dataset.name}`}
+                    disabled={exporting.has(dataset.id)}
+                    aria-busy={exporting.has(dataset.id)}
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void onDelete(dataset)}
                     aria-label={`Delete ${dataset.name}`}
                   >
@@ -416,11 +452,7 @@ export function DatasetsPage() {
         />
       )}
 
-      {/* No import panel. `POST /api/import` refuses a `kind: 'dataset'`
-          envelope outright — a dataset names a connection that only resolves
-          against a whole workspace — so datasets round-trip through Manage →
-          Git instead. Wiring a single-file path (and the `ImportPanel` link
-          that would then point here) is tracked separately. */}
+      <ImportPanel listKind="dataset" stores={connections} onImported={refresh} />
     </section>
   );
 }

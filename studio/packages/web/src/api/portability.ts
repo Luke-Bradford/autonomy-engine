@@ -59,6 +59,11 @@ export function exportTrigger(id: string, signal?: AbortSignal): Promise<string>
   return apiFetchText(exportPath('triggers', id), { signal });
 }
 
+/** #1143 — the store travels as its connection's `resourceId`, never a local id. */
+export function exportDataset(id: string, signal?: AbortSignal): Promise<string> {
+  return apiFetchText(exportPath('datasets', id), { signal });
+}
+
 /**
  * Read a picked file's text as the value `POST /api/import` expects.
  *
@@ -122,18 +127,29 @@ export function foreignEnvelopeKind(
 ): ExportKind | null {
   const kind: unknown = (envelope as { kind?: unknown }).kind;
   if (typeof kind !== 'string' || !ENVELOPE_KINDS.has(kind)) return null;
-  // #1114 — `ExportKind`, NOT `ImportResult['kind']`. `ENVELOPE_KINDS` derives
-  // from `ExportEnvelopeSchema`, which since M2 declares a kind the import route
-  // refuses (`dataset`). The old narrower cast was a LIE the compiler accepted:
-  // it returned a value outside the type it claimed, and the caller's lookup
-  // table then handed back `undefined`. Widening it makes that case a real,
-  // typed possibility every consumer has to handle.
+  // #1114 — `ExportKind`, NOT `ImportResult['kind']`: `ENVELOPE_KINDS` derives
+  // from `ExportEnvelopeSchema`, and a narrower cast would be a LIE the compiler
+  // accepts the day the two sets differ (they did, for `dataset`, until #1143),
+  // leaving the caller's lookup table handing back `undefined`.
   return kind === listKind ? null : (kind as ExportKind);
 }
 
-/** `POST /api/import` — the one entry point for every envelope kind. */
-export function importEnvelope(envelope: unknown): Promise<ImportResult> {
-  return apiFetch('/api/import', {
+/**
+ * `POST /api/import` — the one entry point for every envelope kind.
+ *
+ * #1143 — `connectionId` is the store a DATASET file lands in. Omitted, the
+ * server resolves the store by identity or refuses; sent with any other kind,
+ * the server refuses rather than ignoring it.
+ */
+export function importEnvelope(
+  envelope: unknown,
+  opts: { connectionId?: string } = {},
+): Promise<ImportResult> {
+  const query =
+    opts.connectionId === undefined
+      ? ''
+      : `?connectionId=${encodeURIComponent(opts.connectionId)}`;
+  return apiFetch(`/api/import${query}`, {
     method: 'POST',
     body: envelope,
     schema: ImportResultSchema,
@@ -190,6 +206,8 @@ export function describeImported(result: ImportResult): ImportedResource {
         name: result.trigger.name,
         note: 'Imported triggers arrive disabled — enable it once it is bound.',
       };
+    case 'dataset':
+      return { kind: 'dataset', id: result.dataset.id, name: result.dataset.name };
   }
 }
 

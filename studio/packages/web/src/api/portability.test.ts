@@ -113,15 +113,13 @@ describe('foreignEnvelopeKind', () => {
     expect(foreignEnvelopeKind({ kind: 'pipeline' }, 'pipeline')).toBeNull();
   });
 
-  // #1114 (M2) — `dataset` is a DECLARED envelope kind that `POST /api/import`
-  // refuses. It must still be recognised HERE, because the alternative is that
-  // a dataset file gets sent and comes back as a server error the operator has
-  // to interpret. The return type widened to `ExportKind` for exactly this: the
-  // old `ImportResult['kind']` cast returned a value outside the type it
-  // claimed, and `ImportPanel`'s lookup table then produced `undefined`.
-  it('recognises a declared kind the import route refuses (dataset)', () => {
+  // #1114 (M2) — every DECLARED envelope kind is recognised here, `dataset`
+  // included, so a file for another page is refused unsent rather than coming
+  // back as a server error (or, worse, imported onto a page that cannot show it).
+  it('recognises the dataset kind as belonging to its own page', () => {
     expect(foreignEnvelopeKind({ kind: 'dataset' }, 'connection')).toBe('dataset');
     expect(foreignEnvelopeKind({ kind: 'dataset' }, 'pipeline')).toBe('dataset');
+    expect(foreignEnvelopeKind({ kind: 'dataset' }, 'dataset')).toBeNull();
   });
 
   it('passes an UNRECOGNISED kind to the server rather than judging it', () => {

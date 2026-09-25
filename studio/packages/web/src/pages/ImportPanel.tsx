@@ -9,15 +9,16 @@ import {
   parseEnvelopeText,
   type ImportedResource,
 } from '../api/portability';
-import type { ExportKind, ImportAttentionItem } from '@autonomy-studio/shared';
+import type { ConnectionPublic, ExportKind, ImportAttentionItem } from '@autonomy-studio/shared';
+import { LabelledControl } from '../lib/LabelledControl';
 import { pipelinePath } from './author/pipelinePath';
 
 /**
  * Bring a resource into this workspace from an export file (#959).
  *
- * ONE component, used by all three list pages, because `POST /api/import` is
- * ONE route that switches on the envelope's own `kind` — three hand-written
- * copies of this panel would drift.
+ * ONE component, used by every list page that holds an exportable kind, because `POST /api/import` is
+ * ONE route that switches on the envelope's own `kind` — hand-written copies of
+ * this panel would drift.
  *
  * A file whose kind is not this page's is REFUSED before any request, with a
  * pointer to the section that owns it. That check is `foreignEnvelopeKind`,
@@ -37,32 +38,21 @@ import { pipelinePath } from './author/pipelinePath';
 /**
  * Where each kind lives — both this page's own name and the refusal pointer.
  *
- * Keyed by `ExportKind`, NOT by `ImportedResource['kind']`, and the difference
- * is load-bearing (#1114). `foreignEnvelopeKind` recognises every kind
- * `ExportEnvelopeSchema` declares, which since M2 includes `dataset` — a kind
- * `POST /api/import` deliberately refuses. Keying this by the narrower import
- * type would leave `SECTION[foreign.kind]` UNDEFINED for a dataset file and
- * crash the panel on `.label`, which no type error would have caught.
+ * Keyed by `ExportKind`, NOT by `ImportedResource['kind']` (#1114): the table
+ * must cover every kind `foreignEnvelopeKind` can return, which derives from
+ * `ExportEnvelopeSchema`. Keyed by the narrower type, a kind the two disagreed
+ * on would read `SECTION[foreign.kind]` as UNDEFINED and crash the panel on
+ * `.label`, which no type error would catch.
  *
- * `path` is nullable for exactly that case: a kind with nowhere to send the
- * operator renders its name as plain text. Pointing a dataset at any existing
- * page would be worse than saying nothing — the single-file route refuses
- * datasets outright (they name a connection that only resolves against a whole
- * workspace), so every destination on offer would reject the file too.
- *
- * The Manage → Datasets page HAS since landed (#1115), and this deliberately
- * stayed `null` anyway: that page carries no `<ImportPanel>` because the import
- * route still refuses the kind, so linking to it would send the operator to a
- * second surface that also cannot take the file — the plausible-looking link
- * this comment already argues against. It becomes a path like the others when
- * single-file dataset import lands (#1143), not before.
+ * #1143 — every kind now has a page that imports it, so every entry is a path.
+ * `dataset` was `null` until single-file dataset import existed: pointing at a
+ * page that would refuse the file too is worse than saying nothing.
  */
-const SECTION: Record<ExportKind, { label: string; path: string | null }> = {
+const SECTION: Record<ExportKind, { label: string; path: string }> = {
   pipeline: { label: 'Author → Pipelines', path: '/author/pipelines' },
   connection: { label: 'Manage → Connections', path: '/manage/connections' },
   trigger: { label: 'Manage → Triggers', path: '/manage/triggers' },
-  // See the note above: the page exists, the import path does not (#1143).
-  dataset: { label: 'a dataset', path: null },
+  dataset: { label: 'Manage → Datasets', path: '/manage/datasets' },
 };
 
 interface Outcome {
@@ -70,19 +60,14 @@ interface Outcome {
   attention: ImportAttentionItem[];
 }
 
-export interface ImportPanelProps {
-  /**
-   * The list this panel sits beside. An import of THIS kind lands in it and
-   * refreshes it; a file of any OTHER known kind is refused before any request.
-   */
-  listKind: ImportedResource['kind'];
+interface ImportPanelBaseProps {
   /**
    * Reload the surrounding list. Awaited, so the imported row is on screen
    * before the outcome names it — but its failure is reported SEPARATELY from
    * the import's, because by then the resource already exists.
    *
-   * "Awaited" is weaker than it reads, and deliberately so. All three current
-   * callers hand over a `useGuardedLoad` refresh, whose promise resolves the
+   * "Awaited" is weaker than it reads, and deliberately so. Every current
+   * caller hands over a `useGuardedLoad` refresh, whose promise resolves the
    * same way whether the answer was written, dropped as superseded, or never
    * requested because the page unmounted; failures go to that page's own error
    * slot, not to this promise. So a resolved `onImported` is evidence the
@@ -93,8 +78,27 @@ export interface ImportPanelProps {
   onImported: () => Promise<void> | void;
 }
 
-export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
+/**
+ * The list this panel sits beside (`listKind`). An import of THIS kind lands in
+ * it and refreshes it; a file of any OTHER known kind is refused before any
+ * request.
+ *
+ * #1143 — a dataset's list also hands over `stores`, the connections a dataset
+ * file may be landed in. A dataset cannot exist without a store, so its import
+ * must be told one or resolve it; a discriminated prop rather than an optional
+ * one, so no other list can be handed a picker it would never render. A prop and
+ * not a fetch, because this panel performs no I/O on mount (see above).
+ */
+export type ImportPanelProps = ImportPanelBaseProps &
+  (
+    | { listKind: Exclude<ImportedResource['kind'], 'dataset'>; stores?: never }
+    | { listKind: 'dataset'; stores: readonly ConnectionPublic[] }
+  );
+
+export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) {
   const [busy, setBusy] = useState(false);
+  /** #1143 — the chosen store for a dataset file; `''` = resolve it by identity. */
+  const [store, setStore] = useState('');
   const [error, setError] = useState<string | null>(null);
   /** A file that belongs to another section: refused locally, nothing sent.
    * `ExportKind`, not `ImportedResource['kind']` — this can be a kind the import
@@ -136,7 +140,10 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
           setForeign({ kind: elsewhere, name: file.name });
           return;
         }
-        const result = await importEnvelope(envelope);
+        const result =
+          listKind === 'dataset' && store !== ''
+            ? await importEnvelope(envelope, { connectionId: store })
+            : await importEnvelope(envelope);
         const resource = describeImported(result);
         // Refresh BEFORE reporting, so the row is on screen when the message
         // names it — as strongly as an awaited refresh can promise that, which
@@ -146,7 +153,7 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         // failed import would be a false negative, and `/api/import` does not
         // dedupe, so the operator's natural retry would mint a duplicate.
         //
-        // No CURRENT caller can reach this catch — all three route their
+        // No CURRENT caller can reach this catch — every one routes its
         // failures into their own error slot (see the prop's docblock) — but the
         // prop's contract permits a rejecting `onImported`, so the guard stays
         // rather than becoming a trap for the next caller to write one.
@@ -168,17 +175,45 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         if (mounted.current) setBusy(false);
       }
     },
-    [listKind, onImported],
+    [listKind, onImported, store],
   );
 
   return (
     <section className="connection-form" aria-labelledby="import-heading">
       <h3 id="import-heading">Import</h3>
       <p className="page-hint">
-        Bring in a pipeline, connection or trigger from an export file. Secrets and connection
-        bindings are never exported, so an imported resource usually needs something rebound —
-        whatever that is will be listed here.
+        Bring in a pipeline, connection, trigger or dataset from an export file. Secrets are never
+        exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s binding to anything else, so
+        an imported resource usually needs something rebound — whatever that is will be listed
+        here.
       </p>
+      {stores !== undefined && (
+        <>
+          {/* #1143 — chosen BEFORE the file: picking the file IS the import. */}
+          <LabelledControl label="Store it in">
+            {(id) => (
+              <select
+                id={id}
+                value={store}
+                disabled={busy}
+                onChange={(e) => setStore(e.target.value)}
+              >
+                <option value="">The connection it was exported from</option>
+                {stores.map((conn) => (
+                  <option key={conn.id} value={conn.id}>
+                    {conn.name} ({conn.kind})
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
+          <p className="page-hint">
+            {stores.length === 0
+              ? 'A dataset lives in a store, and there are no connections here yet — add one under Manage → Connections first.'
+              : 'A dataset file names the connection it was exported from, which is only here if this is that workspace (or one synced from the same git repo). From anywhere else, choose the connection it should live in.'}
+          </p>
+        </>
+      )}
       <label>
         Export file
         <input
@@ -206,16 +241,8 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         <p className="error" role="alert">
           “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
           list.{' '}
-          {SECTION[foreign.kind].path !== null ? (
-            <>
-              Import it from{' '}
-              <Link to={SECTION[foreign.kind].path!}>{SECTION[foreign.kind].label}</Link>.{' '}
-            </>
-          ) : (
-            // No page to send them to, so the sentence stops rather than
-            // offering a destination that would refuse the file as well.
-            <>This panel cannot import it. </>
-          )}
+          Import it from <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>
+          .{' '}
           Nothing was created.
         </p>
       )}
