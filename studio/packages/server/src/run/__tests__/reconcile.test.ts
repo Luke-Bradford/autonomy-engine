@@ -2631,6 +2631,31 @@ describe("reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not 
     expect(report.deferred).toContain(child.id);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
+  it('a never-started child of a RUNNING parent whose version is unresolvable is left alone, not reported', async () => {
+    // Its parent is not terminal, so the parent's own reconcile re-emits
+    // `startChild` for a still-waiting node; only a TERMINAL parent can leave a
+    // child with nobody to start it, so only there is "undecidable" a verdict.
+    const { db } = freshDb();
+    const { parent, child } = seedDetachedFamily(db, 'started');
+    const real = resolveDocFor(db);
+    const kicked: string[] = [];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: (id) => {
+        if (id === parent.pipelineVersionId) throw new Error('version gone');
+        return real(id);
+      },
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      kickChild: (run) => kicked.push(run.id),
+    });
+
+    expect(kicked).toEqual([]);
+    expect(report.deferred).not.toContain(child.id);
+    expect(report.sweptOrphans).not.toContain(child.id);
+  });
+
   it('leaves an UNDECIDABLE child pending — announced, no detach in the log, parent version unresolvable', async () => {
     const { db } = freshDb();
     const { parent, child } = seedDetachedFamily(db, 'started');
