@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -163,6 +164,65 @@ test.describe('#959 portability', () => {
     // Two rows with the same name now — the import minted a fresh id and does
     // not dedupe by name, which is why the panel reports the id.
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toHaveCount(2);
+
+    await expectQuiet(page, problems);
+  });
+
+  // #1143 — a dataset cannot exist without a store, so its import is the one
+  // that must be TOLD where to land (or resolve it by identity). Both paths,
+  // through the real file the Export button saved.
+  test('exports a dataset, and re-imports it into a chosen store and by identity', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const stamp = Date.now();
+    const name = `Portable ds ${stamp}`;
+    const srcStore = `Src store ${stamp}`;
+    const destStore = `Dest store ${stamp}`;
+
+    await page.goto('/#/manage/datasets');
+    const srcId = await seedConnection(page, { name: srcStore, kind: 'fs', config: {} });
+    await seedConnection(page, { name: destStore, kind: 'fs', config: {} });
+    await seedDataset(page, {
+      name,
+      kind: 'delimited',
+      connectionId: srcId,
+      config: { path: 'customers.csv' },
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+    });
+    await page.reload();
+    await page.getByRole('heading', { name: 'Datasets' }).waitFor();
+    await fluentRootReady(page);
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: `Export ${name}`, exact: true }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^dataset-portable-ds-\d+-[\w-]+\.json$/);
+    const file = await download.path();
+    expect(file).not.toBeNull();
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of await download.createReadStream()) chunks.push(Buffer.from(chunk));
+    const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    expect(envelope).toMatchObject({ kind: 'dataset', data: { name } });
+    // The store travels as its portable identity, never this workspace's key.
+    expect(envelope.data.connectionId).not.toBe(srcId);
+    expect(envelope.data.connectionId).toMatch(/^res_/);
+
+    const rows = page.getByRole('row').filter({ hasText: name });
+
+    // 1. Into a CHOSEN store — the cross-workspace path.
+    await page.getByLabel('Store it in').selectOption({ label: `${destStore} (fs)` });
+    await page.getByLabel('Export file').setInputFiles(file as string);
+    await expect(page.getByRole('status')).toContainText(`Imported dataset “${name}”`);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: destStore })).toHaveCount(1);
+
+    // 2. With no choice — resolved by identity to the store it came from.
+    await page.getByLabel('Store it in').selectOption({ label: 'The connection it was exported from' });
+    await page.getByLabel('Export file').setInputFiles(file as string);
+    await expect(rows).toHaveCount(3);
+    await expect(rows.filter({ hasText: srcStore })).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });
