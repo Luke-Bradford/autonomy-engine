@@ -2337,26 +2337,27 @@ function overrideResourceFor<T extends { id: string }>(
  */
 function DatasetOverrides({
   store,
-  nodeId,
+  node,
   side,
   datasets,
   picker,
 }: {
   store: ReturnType<typeof createCanvasStore>;
-  nodeId: string;
+  /** The DOC's node, never a pending half-pick. */
+  node: Node | undefined;
   side: 'source' | 'sink';
   datasets: readonly Dataset[];
   picker: FieldPicker | undefined;
 }) {
-  const node = useStore(store, (s) => s.nodes.find((n) => n.id === nodeId));
   const bound = node?.datasetIds?.[side];
-  if (bound === undefined) return null;
+  if (node === undefined || bound === undefined) return null;
+  const nodeId = node.id;
   return (
     <ParamOverridesEditor
       legend={side === 'source' ? 'Source dataset overrides' : 'Sink dataset overrides'}
       noun="dataset"
       resource={overrideResourceFor(datasets, bound, datasetOverrideResource)}
-      value={node?.datasetParams?.[side]}
+      value={node.datasetParams?.[side]}
       onChange={(next, key) => store.getState().setNodeParamOverrides(nodeId, side, next, key)}
       picker={picker}
       place={(n, key, v) => ({
@@ -2749,23 +2750,26 @@ export function NodePanel({
           )}
         </LabelledControl>
       )}
-      {entry && !paired && thisNode?.connectionId !== undefined && (
-        <ParamOverridesEditor
-          legend="Connection overrides"
-          noun="connection"
-          resource={overrideResourceFor(
-            connections,
-            thisNode.connectionId,
-            connectionOverrideResource,
-          )}
-          value={thisNode.connectionParams}
-          onChange={(next, key) =>
-            store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
-          }
-          picker={picker}
-          place={(n, key, v) => ({ ...n, connectionParams: { ...n.connectionParams, [key]: v } })}
-        />
-      )}
+      {entry &&
+        !paired &&
+        entry.connectionKinds.length > 0 &&
+        thisNode?.connectionId !== undefined && (
+          <ParamOverridesEditor
+            legend="Connection overrides"
+            noun="connection"
+            resource={overrideResourceFor(
+              connections,
+              thisNode.connectionId,
+              connectionOverrideResource,
+            )}
+            value={thisNode.connectionParams}
+            onChange={(next, key) =>
+              store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
+            }
+            picker={picker}
+            place={(n, key, v) => ({ ...n, connectionParams: { ...n.connectionParams, [key]: v } })}
+          />
+        )}
 
       {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
           picker above is hidden rather than shown alongside, because
@@ -2817,7 +2821,7 @@ export function NodePanel({
           />
           <DatasetOverrides
             store={store}
-            nodeId={nodeId}
+            node={thisNode}
             side="source"
             datasets={datasets}
             picker={picker}
@@ -2840,7 +2844,7 @@ export function NodePanel({
           {datasetKinds.sink !== undefined && (
             <DatasetOverrides
               store={store}
-              nodeId={nodeId}
+              node={thisNode}
               side="sink"
               datasets={datasets}
               picker={picker}

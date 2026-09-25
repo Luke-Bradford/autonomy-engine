@@ -62,7 +62,9 @@ export type PickerTarget = {
    * the doc validator cannot see, so `insertModeFor`'s probe would answer
    * "insert" and the flyout would build text the owning panel then refuses.
    *
-   * The one case today is a call node's typed argument (#1012): `buildParams`
+   * One case is a call node's typed argument (#1012). The other is a node's
+   * number/boolean/JSON parameter override (#1304), which `coerceOverride` coerces
+   * the same way. For the call argument, `buildParams`
    * coerces any text that is not a whole-span `${}` against the child's declared
    * type, so `42${x}` in a `number` row saves clean as far as the validator is
    * concerned and is refused by Apply. The child's declarations are a property

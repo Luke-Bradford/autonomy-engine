@@ -154,6 +154,8 @@ function OverrideRow({
     // The row is written through on every keystroke, so the stored doc always
     // holds this position.
     baseline: 'stored',
+    // No `field`: that names a top-level CONFIG key whose scope differs
+    // (a filter's `${item}`), and an override is read in the node's scope.
     // A number/boolean/JSON setting takes one value: a whole `${}` or a
     // literal. A splice like `5${x}` would be a string, which dispatch refuses.
     ...(takesWholeValue(field) ? { wholeValue: true as const } : {}),

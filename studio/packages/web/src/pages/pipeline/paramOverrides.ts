@@ -208,10 +208,17 @@ export function overrideRowProblem(
   if (violation !== null) return violationMessage(r, violation);
   const field = r.fields.find((f) => f.name === key);
   if (field === undefined) {
-    return `A ${r.kind} ${r.noun} has no \`${key}\` setting, so a run will refuse it.`;
+    // The two dispatch paths differ here. A dataset refuses a key its kind lacks,
+    // while a connection merges it in and the connector's schema strips it, so
+    // the override silently does nothing (#1306).
+    return r.noun === 'dataset'
+      ? `A ${r.kind} dataset has no \`${key}\` setting, so a run will refuse it.`
+      : `A ${r.kind} connection has no \`${key}\` setting, so a run ignores this override.`;
   }
   const typed = typeProblem(field, value);
   if (typed !== null) return `\`${key}\` ${typed}.`;
+  // Reached only by a text/enum key: `typeProblem` has already refused `''` for
+  // every other kind, with the more specific message.
   if (value === '') {
     return `An empty value replaces the ${r.noun}'s \`${key}\` with nothing. Remove the row to keep the ${r.noun}'s own setting.`;
   }

@@ -85,7 +85,11 @@ describe('paramOverrides (#1304)', () => {
     const t = datasetOverrideResource(dataset('table', { table: 't' }, ['table']));
     expect(overrideRowProblem(t, 'table', 'x')).toMatch(/can never be overridden/);
     const u = connectionOverrideResource(fsConnection(['ghost']));
-    expect(overrideRowProblem(u, 'ghost', 'x')).toMatch(/has no `ghost` setting/);
+    expect(overrideRowProblem(u, 'ghost', 'x')).toMatch(/has no `ghost` setting, so a run ignores/);
+    const d = datasetOverrideResource(dataset('delimited', { path: 'a' }, ['ghost']));
+    expect(overrideRowProblem(d, 'ghost', 'x')).toMatch(
+      /has no `ghost` setting, so a run will refuse/,
+    );
   });
 
   it('flags an empty text override, which replaces the setting rather than unsetting it', () => {

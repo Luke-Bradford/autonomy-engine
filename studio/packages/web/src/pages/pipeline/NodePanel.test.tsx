@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import {
   getActivity,
   isStructuralCallActivity,
@@ -1379,6 +1379,19 @@ describe('parameter override editor (#1304)', () => {
     expect(screen.getByText(/must be a number/)).toBeTruthy();
   });
 
+  it('undo restores the ROW, not only the doc — the draft follows a store change it did not make', () => {
+    const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
+      fsConn(['maxBytes']),
+    ]);
+    const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    fireEvent.change(input, { target: { value: '6' } });
+    fireEvent.change(input, { target: { value: '64' } });
+    act(() => store.getState().undo());
+    // One burst, one undo step, and the input shows the value undo restored.
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 5 });
+    expect((input as HTMLInputElement).value).toBe('5');
+  });
+
   it('flags a stored override the connection does not declare — a run would refuse it', () => {
     mountOver(lookup({ connectionParams: { maxEntries: 5 } }), [fsConn(['maxBytes'])]);
     expect(screen.getByText(/Files does not declare `maxEntries`/)).toBeTruthy();
@@ -1403,6 +1416,16 @@ describe('parameter override editor (#1304)', () => {
     mountOver(lookup({ connectionId: undefined, datasetIds: undefined }), [fsConn(['maxBytes'])]);
     expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
     expect(screen.queryByRole('group', { name: 'Source dataset overrides' })).toBeNull();
+  });
+
+  it('no editor on an activity that takes no connection, even with a stray one', () => {
+    // An import or API seed can leave a `connectionId` on a `wait`. Its picker is
+    // hidden, so an overrides card under it would offer edits to a binding the
+    // panel gives no way to see or clear.
+    mountOver({ ...node('n_wait', 'wait', {}), connectionId: 'c_fs' } as Node, [
+      fsConn(['maxBytes']),
+    ]);
+    expect(screen.queryByRole('group', { name: 'Connection overrides' })).toBeNull();
   });
 
   it('unbinding the connection in the panel takes its overrides with it', () => {
