@@ -60,7 +60,7 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/connections/${id}`)).toEqual([]);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('a dataset’s allowlist is ticked, and a table dataset says it has none', async ({
@@ -107,6 +107,6 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     await expect(allowlist).toContainText('A table dataset has no settings a node can override.');
     await expect(allowlist.getByRole('checkbox')).toHaveCount(0);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 });
