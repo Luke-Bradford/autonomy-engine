@@ -85,7 +85,8 @@ import {
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
-import { saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
+import { policyIssues, saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
+import { PolicyEditor } from './PolicyEditor';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
   completionSibling,
@@ -536,8 +537,10 @@ export function PipelineCanvas({
   // `ContainerPanel` reads those same strings structurally (see `readableIssue`).
   const issues = useMemo(
     () => [
-      ...validateCanvas(nodes, edges, containers, params).map((issue) =>
-        readableIssue(issue, nodes, edges, containers),
+      // #1312 — `policyIssues` mirrors a THIRD gate, the write schema's
+      // `StrictNodeSchema.policy`, and names nodes, so it is rewritten too.
+      ...[...validateCanvas(nodes, edges, containers, params), ...policyIssues(nodes)].map(
+        (issue) => readableIssue(issue, nodes, edges, containers),
       ),
       ...nameIssues(params, outputs),
     ],
@@ -2723,6 +2726,9 @@ export function NodePanel({
             not swallow it: a container is exactly the construct that puts a call
             node in one, and this is the only panel such a node ever gets. */}
         <ContainerSection store={store} nodeId={nodeId} />
+        {/* #1312 — likewise policy: retry applies to a call, and a secure flag
+            is refused on one, which is explained only if the section is here. */}
+        <PolicyEditor store={store} nodeId={nodeId} />
       </aside>
     );
   }
@@ -2989,6 +2995,9 @@ export function NodePanel({
           Delete node
         </button>
       </div>
+      {/* #1312 — after the config form's actions, not between the form and its
+          Apply: policy writes straight to the store and is not part of that draft. */}
+      <PolicyEditor store={store} nodeId={nodeId} />
     </aside>
   );
 }
