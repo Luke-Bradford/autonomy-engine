@@ -1,4 +1,3 @@
-import { useId } from 'react';
 import {
   HONOURED_FIELDS,
   MAX_RECURRENCE_INTERVAL,
@@ -15,6 +14,7 @@ import {
 } from './recurrenceForm';
 import { boundEcho } from './formFields';
 import { BoundShiftNotices } from './BoundShiftNotices';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
@@ -46,7 +46,6 @@ export function RecurrenceEditor({
   value: RecurrenceFormState;
   onChange: (next: RecurrenceFormState) => void;
 }) {
-  const frequencyId = useId();
   const honoured = HONOURED_FIELDS[value.frequency];
   const required = REQUIRED_FIELDS[value.frequency];
   const set = (patch: Partial<RecurrenceFormState>) => onChange({ ...value, ...patch });
@@ -77,20 +76,25 @@ export function RecurrenceEditor({
     <fieldset className="recurrence-editor">
       <legend>Recurrence</legend>
 
-      {/* The select is labelled by `htmlFor`/`id` rather than wrapped: wrapping
-       * folds every option's text into the control's accessible name (#857). */}
-      <label htmlFor={frequencyId}>Frequency</label>
-      <select
-        id={frequencyId}
-        value={value.frequency}
-        onChange={(e) => onChange(pruneForFrequency(value, e.target.value as RecurrenceFrequency))}
-      >
-        {FREQUENCIES.map((f) => (
-          <option key={f} value={f}>
-            {f}
-          </option>
-        ))}
-      </select>
+      {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
+       * option's text into the control's accessible name (#857, #1227). */}
+      <LabelledControl label="Frequency">
+        {(id) => (
+          <select
+            id={id}
+            value={value.frequency}
+            onChange={(e) =>
+              onChange(pruneForFrequency(value, e.target.value as RecurrenceFrequency))
+            }
+          >
+            {FREQUENCIES.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       <label>
         {`Repeat every N ${PERIOD_NOUN[value.frequency]}`}

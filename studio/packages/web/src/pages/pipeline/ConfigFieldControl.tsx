@@ -1,10 +1,10 @@
-import { useId } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowList, parseRowCells } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
@@ -134,9 +134,10 @@ export type FieldChoices = {
  * validation errors cite, so renaming it for display would break the one thread
  * connecting the form, the doc and the error message.
  *
- * A `<textarea>` or `<select>` is paired with its label by `htmlFor`/`id`, never
- * WRAPPED by it (#1227). A wrapping label's text includes the control's own
- * text — a textarea's value, every option of a select — so Playwright's
+ * A `<textarea>` or `<select>` is paired with its label by `htmlFor`/`id` through
+ * `LabelledControl`, never WRAPPED by it (#1227). A wrapping label's text
+ * includes the control's own text — a textarea's value, every option of a
+ * select — so Playwright's
  * `getByLabel('path', { exact: true })` resolves while the field is empty and
  * silently stops matching the moment it holds anything, and the non-exact form
  * starts matching on VALUES. The accessible name is unaffected either way; it is
@@ -177,8 +178,6 @@ export function ConfigFieldControl({
     insert: insertAtCaret,
     wrapOptions,
   } = useCaretInsert<HTMLTextAreaElement>();
-  const controlId = useId();
-  const choicesId = `${controlId}-choices`;
 
   if (field.kind === 'objectList') {
     return (
@@ -207,21 +206,22 @@ export function ConfigFieldControl({
 
   if (field.kind === 'enum') {
     return (
-      <div className="config-field">
-        <label htmlFor={controlId}>{label}</label>
-        <select
-          id={controlId}
-          value={typeof value === 'string' ? value : ''}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">— none —</option>
-          {(field.enumOptions ?? []).map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </div>
+      <LabelledControl className="config-field" label={label}>
+        {(id) => (
+          <select
+            id={id}
+            value={typeof value === 'string' ? value : ''}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            <option value="">— none —</option>
+            {(field.enumOptions ?? []).map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
     );
   }
 
@@ -248,19 +248,20 @@ export function ConfigFieldControl({
   const text = typeof value === 'string' ? value : '';
 
   return (
-    <div className="config-field">
-      <label htmlFor={controlId}>{hint === null ? label : `${label} — ${hint}`}</label>
-      <textarea
-        id={controlId}
-        ref={inputRef}
-        value={text}
-        onSelect={onSelect}
-        rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
-        spellCheck={false}
-        placeholder={field.defaultText}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {/* A SIBLING of the label, not a child, because a button INSIDE the label
+    <LabelledControl className="config-field" label={hint === null ? label : `${label} — ${hint}`}>
+      {(id) => (
+        <>
+          <textarea
+            id={id}
+            ref={inputRef}
+            value={text}
+            onSelect={onSelect}
+            rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+            spellCheck={false}
+            placeholder={field.defaultText}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {/* A SIBLING of the label, not a child, because a button INSIDE the label
           contaminates the textarea's accessible name — which is exactly why
           `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
           NOT steal focus: per the HTML standard a label's activation behaviour
@@ -293,7 +294,7 @@ export function ConfigFieldControl({
             run looking like a benign fallthrough.
 
           Both are recorded on #864. */}
-      {/* #1218 — a chooser BESIDE the textarea, never instead of it.
+          {/* #1218 — a chooser BESIDE the textarea, never instead of it.
           The free-text box always survives: a workbook whose path is not
           readable yet has no list to offer, and a control that replaced the box
           would make such a dataset unauthorable. So this is purely additive, and
@@ -310,43 +311,46 @@ export function ConfigFieldControl({
           permanently on the placeholder — and falls back to the placeholder for
           a hand-typed value the list does not contain, which is a legitimate
           state and not an error. */}
-      {choices && field.kind === 'text' && choices.values.length > 0 && (
-        <div className="config-field config-field-choices">
-          <label htmlFor={choicesId}>{choices.label}</label>
-          <select
-            id={choicesId}
-            value={choices.values.includes(text) ? text : ''}
-            onChange={(e) => {
-              if (e.target.value !== '') choices.onChoose(e.target.value);
-            }}
-          >
-            <option value="">— choose —</option>
-            {choices.values.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </div>
+          {choices && field.kind === 'text' && choices.values.length > 0 && (
+            <LabelledControl className="config-field config-field-choices" label={choices.label}>
+              {(choicesId) => (
+                <select
+                  id={choicesId}
+                  value={choices.values.includes(text) ? text : ''}
+                  onChange={(e) => {
+                    if (e.target.value !== '') choices.onChoose(e.target.value);
+                  }}
+                >
+                  <option value="">— choose —</option>
+                  {choices.values.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          )}
+          {picker && field.kind === 'text' && (
+            <ExpressionPicker
+              fieldName={shown}
+              describe={picker.describe}
+              resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
+              onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
+              wrap={{
+                value: text,
+                resolve: () =>
+                  wrapOptions(
+                    text,
+                    (span) => picker.wraps(target ?? topLevelTarget(field.name), text, span),
+                    onChange,
+                  ),
+              }}
+            />
+          )}
+        </>
       )}
-      {picker && field.kind === 'text' && (
-        <ExpressionPicker
-          fieldName={shown}
-          describe={picker.describe}
-          resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
-          onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
-          wrap={{
-            value: text,
-            resolve: () =>
-              wrapOptions(
-                text,
-                (span) => picker.wraps(target ?? topLevelTarget(field.name), text, span),
-                onChange,
-              ),
-          }}
-        />
-      )}
-    </div>
+    </LabelledControl>
   );
 }
 

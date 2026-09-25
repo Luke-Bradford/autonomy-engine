@@ -22,6 +22,7 @@ import type { createCanvasStore } from './canvasStore';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { ExpressionPicker } from './ExpressionPicker';
 import { useCaretInsert } from './useCaretInsert';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -329,32 +330,39 @@ function CallEditor({
 
       {draft.mode === 'pick' ? (
         <>
-          <label>
-            Pipeline
-            <select value={draft.pipelineId} onChange={(e) => setPipeline(e.target.value)}>
-              <option value="">— choose —</option>
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Version
-            <select
-              value={draft.versionId}
-              onChange={(e) => setDraft((d) => ({ ...d, versionId: e.target.value }))}
-              disabled={draft.pipelineId === ''}
-            >
-              <option value="">— choose —</option>
-              {versions.map((v) => (
-                <option key={v.versionId} value={v.versionId}>
-                  v{v.version}
-                </option>
-              ))}
-            </select>
-          </label>
+          <LabelledControl label="Pipeline">
+            {(id) => (
+              <select
+                id={id}
+                value={draft.pipelineId}
+                onChange={(e) => setPipeline(e.target.value)}
+              >
+                <option value="">— choose —</option>
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
+          <LabelledControl label="Version">
+            {(id) => (
+              <select
+                id={id}
+                value={draft.versionId}
+                onChange={(e) => setDraft((d) => ({ ...d, versionId: e.target.value }))}
+                disabled={draft.pipelineId === ''}
+              >
+                <option value="">— choose —</option>
+                {versions.map((v) => (
+                  <option key={v.versionId} value={v.versionId}>
+                    v{v.version}
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
         </>
       ) : (
         <PickableInput
@@ -429,19 +437,24 @@ function CallEditor({
           </ul>
         )
       ) : (
-        <label>
-          Parameters (JSON object)
-          <textarea
-            value={draft.paramsJson}
-            onChange={(e) => setDraft((d) => ({ ...d, paramsJson: e.target.value }))}
-            rows={4}
-            placeholder="{}"
-          />
-          <span className="page-hint">
-            The target is not a version this workspace can list, so its declared parameters are
-            unknown — enter the arguments directly.
-          </span>
-        </label>
+        <LabelledControl label="Parameters (JSON object)">
+          {(id) => (
+            <>
+              <textarea
+                id={id}
+                value={draft.paramsJson}
+                onChange={(e) => setDraft((d) => ({ ...d, paramsJson: e.target.value }))}
+                rows={4}
+                placeholder="{}"
+                aria-describedby={`${id}-hint`}
+              />
+              <span id={`${id}-hint`} className="page-hint">
+                The target is not a version this workspace can list, so its declared parameters are
+                unknown — enter the arguments directly.
+              </span>
+            </>
+          )}
+        </LabelledControl>
       )}
 
       {error !== null && <p className="form-error">{error}</p>}

@@ -57,6 +57,7 @@ import {
 } from './pipeline/configForm';
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
+import { LabelledControl } from '../lib/LabelledControl';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -827,19 +828,21 @@ function ConnectionForm({
         />
       </label>
 
-      <label>
-        Kind
-        <select
-          value={form.kind}
-          onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
-        >
-          {KINDS.map((kind) => (
-            <option key={kind} value={kind}>
-              {kind}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Kind">
+        {(id) => (
+          <select
+            id={id}
+            value={form.kind}
+            onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+          >
+            {KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
 

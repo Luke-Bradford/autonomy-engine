@@ -113,6 +113,7 @@ import {
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { readPublishState } from './publishState';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
@@ -1286,17 +1287,18 @@ function BindingSelect({
   onPick: (id: string | undefined) => void;
 }) {
   return (
-    <label>
-      {label}
-      <select value={value ?? ''} onChange={(e) => onPick(e.target.value || undefined)}>
-        <option value="">— none —</option>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <LabelledControl label={label}>
+      {(id) => (
+        <select id={id} value={value ?? ''} onChange={(e) => onPick(e.target.value || undefined)}>
+          <option value="">— none —</option>
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </LabelledControl>
   );
 }
 
@@ -1544,28 +1546,30 @@ function ParamRow({
           onChange={(e) => store.getState().updateParam(index, { ...param, name: e.target.value })}
         />
       </label>
-      <label>
-        Type
-        <select
-          aria-label={`param ${index + 1} type`}
-          value={param.type}
-          onChange={(e) => {
-            const parsed = ParamTypeSchema.safeParse(e.target.value);
-            if (!parsed.success) return;
-            // The stored default is deliberately KEPT across a type change, even
-            // when it no longer fits: dropping it would destroy authored data on
-            // a mis-click, and the save gate below names the mismatch in the
-            // author's own words. Repair beats silent deletion.
-            store.getState().updateParam(index, { ...param, type: parsed.data });
-          }}
-        >
-          {ParamTypeSchema.options.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Type">
+        {(id) => (
+          <select
+            id={id}
+            aria-label={`param ${index + 1} type`}
+            value={param.type}
+            onChange={(e) => {
+              const parsed = ParamTypeSchema.safeParse(e.target.value);
+              if (!parsed.success) return;
+              // The stored default is deliberately KEPT across a type change, even
+              // when it no longer fits: dropping it would destroy authored data on
+              // a mis-click, and the save gate below names the mismatch in the
+              // author's own words. Repair beats silent deletion.
+              store.getState().updateParam(index, { ...param, type: parsed.data });
+            }}
+          >
+            {ParamTypeSchema.options.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
       <label className="contract-check">
         <input
           type="checkbox"
@@ -1681,27 +1685,29 @@ function OutputRow({
           }
         />
       </label>
-      <label>
-        Type
-        <select
-          aria-label={`output ${index + 1} type`}
-          value={output.type}
-          onChange={(e) => {
-            // `OutputTypeSchema` excludes `secret` — a declared secret output
-            // would be a leak channel. Parsing rather than casting means the
-            // exclusion is enforced here, not merely reflected by the options.
-            const parsed = OutputTypeSchema.safeParse(e.target.value);
-            if (!parsed.success) return;
-            store.getState().updateOutput(index, { ...output, type: parsed.data as OutputType });
-          }}
-        >
-          {OutputTypeSchema.options.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Type">
+        {(id) => (
+          <select
+            id={id}
+            aria-label={`output ${index + 1} type`}
+            value={output.type}
+            onChange={(e) => {
+              // `OutputTypeSchema` excludes `secret` — a declared secret output
+              // would be a leak channel. Parsing rather than casting means the
+              // exclusion is enforced here, not merely reflected by the options.
+              const parsed = OutputTypeSchema.safeParse(e.target.value);
+              if (!parsed.success) return;
+              store.getState().updateOutput(index, { ...output, type: parsed.data as OutputType });
+            }}
+          >
+            {OutputTypeSchema.options.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
       <label className="contract-check">
         <input
           type="checkbox"
@@ -2157,40 +2163,44 @@ function ContainerSection({
   // same thing — two declarations that have to agree about one rhythm.
   return (
     <>
-      <label>
-        Container
-        <select
-          value={ownerId}
-          aria-label="Container membership"
-          onChange={(e) => changeOwner(e.target.value)}
-        >
-          <option value="">— none —</option>
-          {containers.map((c) => (
-            <option key={c.id} value={c.id}>
-              {labels.get(c.id)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <fieldset className="container-create">
-        <legend>New container</legend>
-        <label>
-          Kind
+      <LabelledControl label="Container">
+        {(id) => (
           <select
-            value={kind}
-            aria-label="New container kind"
-            onChange={(e) => {
-              const parsed = ContainerKindSchema.safeParse(e.target.value);
-              if (parsed.success) setKind(parsed.data);
-            }}
+            id={id}
+            value={ownerId}
+            aria-label="Container membership"
+            onChange={(e) => changeOwner(e.target.value)}
           >
-            {ContainerKindSchema.options.map((k) => (
-              <option key={k} value={k}>
-                {k}
+            <option value="">— none —</option>
+            {containers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {labels.get(c.id)}
               </option>
             ))}
           </select>
-        </label>
+        )}
+      </LabelledControl>
+      <fieldset className="container-create">
+        <legend>New container</legend>
+        <LabelledControl label="Kind">
+          {(id) => (
+            <select
+              id={id}
+              value={kind}
+              aria-label="New container kind"
+              onChange={(e) => {
+                const parsed = ContainerKindSchema.safeParse(e.target.value);
+                if (parsed.success) setKind(parsed.data);
+              }}
+            >
+              {ContainerKindSchema.options.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
         {kind === 'loop' && (
           <>
             <label>
@@ -2643,22 +2653,24 @@ export function NodePanel({
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
       {entry && !paired && entry.connectionKinds.length > 0 && (
-        <label>
-          Connection
-          <select
-            value={connectionId ?? ''}
-            onChange={(e) =>
-              store.getState().setNodeConnection(nodeId, e.target.value || undefined)
-            }
-          >
-            <option value="">— none —</option>
-            {eligible.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.kind})
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Connection">
+          {(id) => (
+            <select
+              id={id}
+              value={connectionId ?? ''}
+              onChange={(e) =>
+                store.getState().setNodeConnection(nodeId, e.target.value || undefined)
+              }
+            >
+              <option value="">— none —</option>
+              {eligible.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.kind})
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       )}
 
       {/* #1139 — a PAIRED activity binds a source and a sink store. The singular

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ConfigFieldControl, type FieldChoices, type FieldPicker } from './ConfigFieldControl';
 import { emptyControlValue } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * The Config group a resource form or a canvas node embeds (#1146, #1088) — the
@@ -54,15 +55,17 @@ export function ConfigEditor<K extends string>({
       )}
 
       {jsonMode ? (
-        <label>
-          Config (JSON)
-          <textarea
-            value={editor.jsonText}
-            onChange={(e) => editor.setJsonText(e.target.value)}
-            rows={rows}
-            spellCheck={false}
-          />
-        </label>
+        <LabelledControl label="Config (JSON)">
+          {(id) => (
+            <textarea
+              id={id}
+              value={editor.jsonText}
+              onChange={(e) => editor.setJsonText(e.target.value)}
+              rows={rows}
+              spellCheck={false}
+            />
+          )}
+        </LabelledControl>
       ) : (
         <>
           {fields.length === 0 && <p className="page-hint">{emptyHint}</p>}

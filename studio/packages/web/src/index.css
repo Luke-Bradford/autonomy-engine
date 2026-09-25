@@ -996,9 +996,17 @@ td button + button {
   max-width: 480px;
 }
 
+/* `.labelled-control` (#1227) is the wrapper `LabelledControl` puts where a
+   wrapping `<label>` used to be, so it takes that label's layout here and below.
+   A `.config-field` is excluded in every context: it is a `LabelledControl` too,
+   but it had its own rhythm (`.config-field`, below) before the fold, and these
+   rules would otherwise outrank that bare class. */
 .connection-form label,
 .dataset-form label,
-.trigger-form label {
+.trigger-form label,
+.connection-form .labelled-control:not(.config-field),
+.dataset-form .labelled-control:not(.config-field),
+.trigger-form .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -1326,7 +1334,8 @@ td button + button {
   color: var(--muted);
 }
 
-.property-panel label {
+.property-panel label,
+.property-panel .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -3010,7 +3019,8 @@ td button + button {
   margin-bottom: 1rem;
 }
 
-.run-filters label {
+.run-filters label,
+.run-filters .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
@@ -3268,6 +3278,9 @@ td button + button {
 }
 
 .ai-window-picker {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
   color: var(--muted);
   font-size: 0.9rem;
 }

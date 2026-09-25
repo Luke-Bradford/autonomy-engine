@@ -20,6 +20,7 @@ import {
   type ProviderQuotaReading,
   type QuotaWindowReading,
 } from './quotaReading';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -461,30 +462,33 @@ export function AiActivityPage() {
     <section aria-labelledby="ai-activity-heading">
       <div className="page-header">
         <h2 id="ai-activity-heading">AI activity</h2>
-        <label className="ai-window-picker">
-          Window{' '}
-          {/* `onChange` VALIDATES rather than casts. `e.target.value` is a
-              `string`, and `as RunSince` would assert instead of check — so any
-              off-vocabulary value that ever reached the DOM would sail through
-              to the request and come back a 400 with nothing to explain it.
-              `isRunSince` is the same guard `RunsPage`'s since-picker uses. */}
-          <select
-            value={since}
-            onChange={(e) => {
-              if (isRunSince(e.target.value)) setSince(e.target.value);
-            }}
-            aria-label="Activity window"
-          >
-            {/* The SAME vocabulary and prose the run list's own since-picker
-                uses — two monitoring surfaces should not disagree about what
-                "24h" is called, and a raw enum token is not a label. */}
-            {RUN_SINCE_OPTIONS.map((w) => (
-              <option key={w} value={w}>
-                {RUN_SINCE_LABEL[w]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Window" className="ai-window-picker">
+          {(id) => (
+            <select
+              id={id}
+              value={since}
+              // `onChange` VALIDATES rather than casts. `e.target.value` is a
+              // `string`, and `as RunSince` would assert instead of check — so
+              // any off-vocabulary value that ever reached the DOM would sail
+              // through to the request and come back a 400 with nothing to
+              // explain it. `isRunSince` is the same guard `RunsPage`'s
+              // since-picker uses.
+              onChange={(e) => {
+                if (isRunSince(e.target.value)) setSince(e.target.value);
+              }}
+              aria-label="Activity window"
+            >
+              {/* The SAME vocabulary and prose the run list's own since-picker
+                  uses — two monitoring surfaces should not disagree about what
+                  "24h" is called, and a raw enum token is not a label. */}
+              {RUN_SINCE_OPTIONS.map((w) => (
+                <option key={w} value={w}>
+                  {RUN_SINCE_LABEL[w]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       </div>
 
       {/* #988 — the scope is now STATED. This page read "AI activity" and meant

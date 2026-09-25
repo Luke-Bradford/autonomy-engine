@@ -65,6 +65,22 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // #1227 — a `<label>` must not WRAP a `<select>`/`<textarea>`. Both render
+      // their content (option text, the controlled value) as child text nodes,
+      // so a wrapping label's text is `name + content`: Playwright's `getByLabel`
+      // stops matching the moment a textarea is typed into, and a non-exact
+      // match can resolve on another field's VALUE. Pair by `htmlFor`/`id`
+      // (`useId`) instead — the idiom `ConfigFieldControl` and the trigger
+      // editors already use. `<input>` is exempt: its value is an attribute.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "JSXElement[openingElement.name.name='label'] JSXElement[openingElement.name.name=/^(select|textarea)$/]",
+          message:
+            "Use LabelledControl (src/lib/LabelledControl.tsx) rather than wrapping this control in a <label>: a wrapping label absorbs the control's option text / value (#1227).",
+        },
+      ],
     },
   },
   {

@@ -40,6 +40,7 @@ import {
 import { type FieldChoices } from './pipeline/ConfigFieldControl';
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
+import { LabelledControl } from '../lib/LabelledControl';
 
 const KINDS = DATASET_KINDS;
 
@@ -644,24 +645,26 @@ function DatasetForm({
         />
       </label>
 
-      <label>
-        Store
-        <select
-          value={form.connectionId}
-          onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
-          required
-        >
-          {connections.length === 0 && <option value="">— no connections —</option>}
-          {boundIsUnresolved && (
-            <option value={form.connectionId}>{form.connectionId} (missing)</option>
-          )}
-          {connections.map((conn) => (
-            <option key={conn.id} value={conn.id}>
-              {conn.name} ({conn.kind})
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Store">
+        {(id) => (
+          <select
+            id={id}
+            value={form.connectionId}
+            onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
+            required
+          >
+            {connections.length === 0 && <option value="">— no connections —</option>}
+            {boundIsUnresolved && (
+              <option value={form.connectionId}>{form.connectionId} (missing)</option>
+            )}
+            {connections.map((conn) => (
+              <option key={conn.id} value={conn.id}>
+                {conn.name} ({conn.kind})
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
       {connections.length === 0 && (
         <p className="page-hint">
           A dataset lives in a store, so it needs a connection first — add one under Manage →
@@ -678,19 +681,21 @@ function DatasetForm({
         <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
       )}
 
-      <label>
-        Kind
-        <select
-          value={form.kind}
-          onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
-        >
-          {KINDS.map((kind) => (
-            <option key={kind} value={kind}>
-              {kind}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Kind">
+        {(id) => (
+          <select
+            id={id}
+            value={form.kind}
+            onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
+          >
+            {KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       {/* The mode toggle is hidden, not disabled, for a kind with no reader
           (`kindHasNoReader`): a typed form for a kind every copy refuses at
@@ -741,16 +746,18 @@ function DatasetForm({
         )}
       </ConfigEditor>
 
-      <label>
-        Columns (JSON)
-        <textarea
-          value={form.columnsText}
-          onChange={(e) => onChange({ ...form, columnsText: e.target.value })}
-          rows={6}
-          spellCheck={false}
-          placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
-        />
-      </label>
+      <LabelledControl label="Columns (JSON)">
+        {(id) => (
+          <textarea
+            id={id}
+            value={form.columnsText}
+            onChange={(e) => onChange({ ...form, columnsText: e.target.value })}
+            rows={6}
+            spellCheck={false}
+            placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
+          />
+        )}
+      </LabelledControl>
       <p className="page-hint">
         The schema this dataset DECLARES — an authoring aid that auto-map matches against, never a
         run input. A copy is gated against the store’s actual columns, not this list. Required:

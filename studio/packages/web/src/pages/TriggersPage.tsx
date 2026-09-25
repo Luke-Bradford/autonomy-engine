@@ -73,6 +73,7 @@ import {
   type TriggerCreateWrite,
   type TriggerWrite,
 } from '../api/triggers';
+import { LabelledControl } from '../lib/LabelledControl';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -696,7 +697,6 @@ function TriggerForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const scheduleKindId = useId();
   const bindingKindId = useId();
   const editing = form.id !== null;
   /* The version last chosen on the concrete side, so switching to bind-to-active
@@ -1032,45 +1032,51 @@ function TriggerForm({
       )}
 
       {form.binding.kind === 'active' ? (
-        <label>
-          Pipeline
-          <select
-            value={form.binding.pipelineId}
-            onChange={(e) =>
-              onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
-            }
-          >
-            {pipelines.map((p) => (
-              <option key={p.pipelineId} value={p.pipelineId}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Pipeline">
+          {(id) => (
+            <select
+              id={id}
+              // Re-narrowed: the render-prop is a closure, which the ternary's
+              // narrowing of `form.binding` does not reach.
+              value={form.binding.kind === 'active' ? form.binding.pipelineId : ''}
+              onChange={(e) =>
+                onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
+              }
+            >
+              {pipelines.map((p) => (
+                <option key={p.pipelineId} value={p.pipelineId}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       ) : (
-        <label>
-          Pipeline version
-          <select
-            value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
-            onChange={(e) => {
-              setLastConcrete(e.target.value === '' ? null : e.target.value);
-              onChange({
-                ...form,
-                binding:
-                  e.target.value === ''
-                    ? { kind: 'unbound' }
-                    : { kind: 'concrete', pipelineVersionId: e.target.value },
-              });
-            }}
-          >
-            <option value="">— unbound —</option>
-            {bindings.map((b) => (
-              <option key={b.value} value={b.value}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <LabelledControl label="Pipeline version">
+          {(id) => (
+            <select
+              id={id}
+              value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
+              onChange={(e) => {
+                setLastConcrete(e.target.value === '' ? null : e.target.value);
+                onChange({
+                  ...form,
+                  binding:
+                    e.target.value === ''
+                      ? { kind: 'unbound' }
+                      : { kind: 'concrete', pipelineVersionId: e.target.value },
+                });
+              }}
+            >
+              <option value="">— unbound —</option>
+              {bindings.map((b) => (
+                <option key={b.value} value={b.value}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
       )}
 
       {advice && activePipeline && (
@@ -1097,33 +1103,40 @@ function TriggerForm({
         </p>
       )}
 
-      <label>
-        Mode
-        <select
-          value={form.mode}
-          onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
-        >
-          {MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Mode">
+        {(id) => (
+          <select
+            id={id}
+            value={form.mode}
+            onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
+          >
+            {MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {mode}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       {form.mode === 'schedule' && (
         <>
           {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
-           * option's text into the control's accessible name (#857). */}
-          <label htmlFor={scheduleKindId}>Schedule authored as</label>
-          <select
-            id={scheduleKindId}
-            value={form.scheduleKind}
-            onChange={(e) => onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })}
-          >
-            <option value="recurrence">Recurrence</option>
-            <option value="cron">Cron expression</option>
-          </select>
+           * option's text into the control's accessible name (#857, #1227). */}
+          <LabelledControl label="Schedule authored as">
+            {(id) => (
+              <select
+                id={id}
+                value={form.scheduleKind}
+                onChange={(e) =>
+                  onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })
+                }
+              >
+                <option value="recurrence">Recurrence</option>
+                <option value="cron">Cron expression</option>
+              </select>
+            )}
+          </LabelledControl>
 
           {form.scheduleKind === 'recurrence' ? (
             <RecurrenceEditor
@@ -1195,22 +1208,24 @@ function TriggerForm({
         </p>
       )}
 
-      <label>
-        Concurrency
-        <select
-          value={form.concurrencyPolicy}
-          disabled={form.mode === 'tumbling'}
-          onChange={(e) =>
-            onChange({ ...form, concurrencyPolicy: e.target.value as ConcurrencyPolicy })
-          }
-        >
-          {POLICIES.map((policy) => (
-            <option key={policy} value={policy}>
-              {policy}
-            </option>
-          ))}
-        </select>
-      </label>
+      <LabelledControl label="Concurrency">
+        {(id) => (
+          <select
+            id={id}
+            value={form.concurrencyPolicy}
+            disabled={form.mode === 'tumbling'}
+            onChange={(e) =>
+              onChange({ ...form, concurrencyPolicy: e.target.value as ConcurrencyPolicy })
+            }
+          >
+            {POLICIES.map((policy) => (
+              <option key={policy} value={policy}>
+                {policy}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       {form.mode === 'tumbling' && (
         <p className="page-hint">
@@ -1243,15 +1258,17 @@ function TriggerForm({
         Enabled (fires automatically per its mode)
       </label>
 
-      <label>
-        Params (JSON)
-        <textarea
-          value={form.paramsText}
-          onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
-          rows={4}
-          spellCheck={false}
-        />
-      </label>
+      <LabelledControl label="Params (JSON)">
+        {(id) => (
+          <textarea
+            id={id}
+            value={form.paramsText}
+            onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
+            rows={4}
+            spellCheck={false}
+          />
+        )}
+      </LabelledControl>
 
       <RunWindowsEditor
         value={form.runWindows}
