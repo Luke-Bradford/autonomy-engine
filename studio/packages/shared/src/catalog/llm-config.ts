@@ -580,6 +580,10 @@ function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['ty
   }
 }
 
+/** #605 L9b — the `llm_call` capture modes. Absent means `metadata`. */
+export const llmCaptureModeSchema = z.enum(['metadata', 'full']);
+export type LlmCaptureMode = z.infer<typeof llmCaptureModeSchema>;
+
 /**
  * The canonical `llm_call` config.
  *
@@ -605,10 +609,6 @@ function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['ty
  * off so nothing inert/unreachable ships): `mcpServers` (L10c).
  * `reasoningEffort` landed in L3 (below).
  */
-/** #605 L9b — the `llm_call` capture modes. Absent means `metadata`. */
-export const llmCaptureModeSchema = z.enum(['metadata', 'full']);
-export type LlmCaptureMode = z.infer<typeof llmCaptureModeSchema>;
-
 export const llmCallConfigSchema = z
   .object({
     /** v1 shorthand: a single user message. Mutually exclusive with `messages`. */
