@@ -42,6 +42,9 @@ export { outputContract, type OutputContract } from './outputs.js';
 // #1 F4 — emit-time redaction for secure nodes (markers + the pure helper).
 export * from './secure.js';
 export * from './params.js';
+// #605 — the surrogate-safe UTF-16 cut, shared by the server's capture budget
+// and the web run view's display caps.
+export * from './surrogate.js';
 // #4 A4b — the parallel-foreach instance-key grammar (`<nodeId>@<i>`), shared
 // by the reducer, the server's doc-node lookups and the web run view.
 export * from './instance-key.js';

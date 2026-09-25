@@ -1091,9 +1091,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // #2 L9a — a per-response prompt/completion CAPTURE fact (non-terminal,
           // like `metered`): stamp the shape + latency into the durable log as
           // `activity.captured`, ordered BEFORE the terminal. The reducer folds it
-          // inert. Built from the adapter's `ActivityContext.input` (secret-free by
-          // construction) — it carries no plaintext, so it needs no scrubbing (the
-          // capture is hash/length only). The executor adds the run/node/attempt ids.
+          // inert. The executor adds the run/node/attempt ids.
+          //
+          // #605 L9b — a `capture: 'full'` node's event carries prompt/completion
+          // TEXT, and it still needs no `redactEventPlaintexts` pass: that scrub
+          // exists for config-sink and sink secrets, and `llm_call` can hold
+          // neither (it declares no `secretSinkFields`, so a `{$secret}` in its
+          // config is refused at save, and secret params never substitute into
+          // `${}`). The text is built from `ActivityContext.input`, secret-free by
+          // construction. A SECURE node's text is withheld downstream, at the one
+          // emit-time seam every append passes through (`Engine.redact`).
           const { capture } = ev;
           emit({
             type: 'activity.captured',

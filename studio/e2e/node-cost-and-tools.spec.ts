@@ -23,9 +23,10 @@ import { fluentRootReady } from './support/theme';
  *     never taken — the manufactured-zero failure this whole surface exists to
  *     avoid.
  *
- * The tool-call table has no egress-free producer (`activity.toolCalled` comes
- * only from the `llm_call` tool loop, which needs an HTTP provider), so it is
- * covered by the unit/component tests instead — see #892.
+ * The tool-call table is covered by the unit/component tests instead — see
+ * #892. `activity.toolCalled` comes only from the `llm_call` tool loop, which
+ * needs an HTTP provider; `llm-capture.spec.ts` (#605) has since shown a local
+ * Ollama stub on 127.0.0.1 is an egress-free one, so #892 can build on it.
  */
 test('#866 — a node drill-in states its spend, and never invents a figure', async ({ page }) => {
   const problems = collectPageProblems(page);

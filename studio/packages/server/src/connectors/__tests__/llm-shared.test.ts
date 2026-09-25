@@ -4,6 +4,8 @@ import {
   MAX_RETRY_AFTER_SECONDS,
   MAX_TOOL_RESULT_CHARS,
   buildCapture,
+  LLM_CAPTURE_BUDGET_CHARS,
+  LLM_CAPTURE_FIELD_MAX_CHARS,
   buildRepairTurns,
   coerceStopReason,
   emptyTruncationWarning,
@@ -253,6 +255,98 @@ describe('buildCapture', () => {
       completionText: '',
     });
     expect(cap.completion).toEqual({ chars: 0, contentHash: sha256Hex('') });
+  });
+
+  // #605 L9b — `captureMode: 'full'` keeps the TEXT too, under a budget.
+  describe("captureMode 'full'", () => {
+    const base = { provider: 'ollama' as const, model: 'm', latencyMs: 1 };
+
+    it('metadata (explicit or absent) carries NO text key anywhere', () => {
+      for (const captureMode of [undefined, 'metadata'] as const) {
+        const cap = buildCapture({ ...base, turns, system: 's', completionText: 'c', captureMode });
+        expect('text' in cap.request.messages[0]!).toBe(false);
+        expect('text' in cap.request.system!).toBe(false);
+        expect('text' in cap.completion!).toBe(false);
+      }
+    });
+
+    it("stores each field's text beside its length and hash", () => {
+      const cap = buildCapture({
+        ...base,
+        turns,
+        system: 'be terse',
+        completionText: 'the answer',
+        captureMode: 'full',
+      });
+      expect(cap.request).toStrictEqual({
+        messageCount: 2,
+        system: { chars: 8, contentHash: sha256Hex('be terse'), text: 'be terse' },
+        messages: [
+          { role: 'user', chars: 11, contentHash: sha256Hex('hello world'), text: 'hello world' },
+          { role: 'assistant', chars: 2, contentHash: sha256Hex('hi'), text: 'hi' },
+        ],
+      });
+      expect(cap.completion).toStrictEqual({
+        chars: 10,
+        contentHash: sha256Hex('the answer'),
+        text: 'the answer',
+      });
+    });
+
+    it('keeps an absent completion ABSENT (a failure is not an empty answer)', () => {
+      const cap = buildCapture({ ...base, turns, captureMode: 'full' });
+      expect('completion' in cap).toBe(false);
+    });
+
+    it('cuts a field at the per-field cap, marks it, and still measures the whole', () => {
+      const long = 'x'.repeat(LLM_CAPTURE_FIELD_MAX_CHARS + 5);
+      const cap = buildCapture({ ...base, turns, completionText: long, captureMode: 'full' });
+      expect(cap.completion).toStrictEqual({
+        chars: long.length,
+        contentHash: sha256Hex(long),
+        text: long.slice(0, LLM_CAPTURE_FIELD_MAX_CHARS),
+        truncated: true,
+      });
+    });
+
+    it('never splits a surrogate pair at the cut', () => {
+      const text = 'a'.repeat(LLM_CAPTURE_FIELD_MAX_CHARS - 1) + '\u{1F600}';
+      const cap = buildCapture({ ...base, turns, completionText: text, captureMode: 'full' });
+      expect(cap.completion?.text).toBe('a'.repeat(LLM_CAPTURE_FIELD_MAX_CHARS - 1));
+      expect(cap.completion?.truncated).toBe(true);
+    });
+
+    it('spends the event budget completion → system → newest message first', () => {
+      const f = LLM_CAPTURE_FIELD_MAX_CHARS;
+      const n = Math.ceil(LLM_CAPTURE_BUDGET_CHARS / f) + 1; // more messages than fit
+      const many: LlmTurn[] = Array.from({ length: n }, (_, i) => ({
+        role: 'user' as const,
+        content: String(i % 10).repeat(f),
+      }));
+      const cap = buildCapture({
+        ...base,
+        turns: many,
+        system: 's'.repeat(f),
+        completionText: 'c'.repeat(f),
+        captureMode: 'full',
+      });
+      expect(cap.completion?.text).toHaveLength(f);
+      expect(cap.request.system?.text).toHaveLength(f);
+      const kept = LLM_CAPTURE_BUDGET_CHARS / f - 2; // what is left after those two
+      const msgs = cap.request.messages;
+      msgs.slice(n - kept).forEach((m) => {
+        expect(m.text).toHaveLength(f);
+        expect('truncated' in m).toBe(false);
+      });
+      msgs.slice(0, n - kept).forEach((m) => {
+        expect(m).toMatchObject({ text: '', truncated: true, chars: f });
+      });
+      const stored = [cap.completion, cap.request.system, ...msgs].reduce(
+        (sum, x) => sum + (x?.text?.length ?? 0),
+        0,
+      );
+      expect(stored).toBe(LLM_CAPTURE_BUDGET_CHARS);
+    });
   });
 });
 

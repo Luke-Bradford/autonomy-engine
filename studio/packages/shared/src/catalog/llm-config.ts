@@ -580,6 +580,10 @@ function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['ty
   }
 }
 
+/** #605 L9b — the `llm_call` capture modes. Absent means `metadata`. */
+export const llmCaptureModeSchema = z.enum(['metadata', 'full']);
+export type LlmCaptureMode = z.infer<typeof llmCaptureModeSchema>;
+
 /**
  * The canonical `llm_call` config.
  *
@@ -677,6 +681,23 @@ export const llmCallConfigSchema = z
     // only (`z.boolean()` refuses a `${...}` string), so the save-time lowering
     // gate and the dispatch-time emission gate can never disagree about opt-in.
     emitMessages: z.boolean().optional(),
+    // #605 L9b — what the debugging capture (`activity.captured`) keeps of this
+    // node's prompt/completion. Absent = `metadata`, the L9a default: lengths and
+    // content hashes, no text. `full` also stores the TEXT, bounded by the
+    // adapter's capture budget (`llm-shared.ts`) and withheld as a marker on a
+    // secure node (`engine/secure.ts`, the one emit-time seam).
+    //
+    // OBSERVABILITY ONLY — it changes nothing the node sends, returns or
+    // outputs. That is also why it carries NO `CATALOG_VERSION` bump (see the
+    // NO-BUMP note beside `CATALOG_VERSION`): an older build strips the key and
+    // captures LESS, the safe polarity.
+    //
+    // Where it is knowingly INERT (a capture it cannot reach, not a refusal):
+    // an `llm_call` bound to an `agent_cli` connection (that adapter emits no
+    // `captured` event — `agent.ts` SHAPE LIMITS), a `structured` node (its
+    // capture is still deferred with #605), and every tool-loop round after the
+    // first (only round 0 is captured, #605).
+    capture: llmCaptureModeSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
@@ -722,6 +743,11 @@ export interface NormalizedLlmRequest {
   // JSON/tool mode; the runtime strict validate/parse of the RESPONSE lives in
   // `llm-structured.ts`. `undefined` = a text-mode node (byte-identical to pre-L4b).
   structuredOutput?: LlmOutputSchema;
+  // #605 L9b — the node's capture mode, threaded here as the SSOT like
+  // `reasoningEffort` so the adapters' `buildCapture` calls read it uniformly.
+  // Named `captureMode`, not `capture`, because the adapters already use
+  // `capture` for the built `LlmCapture` object. `undefined` = metadata.
+  captureMode?: LlmCaptureMode;
 }
 
 /**
@@ -786,5 +812,6 @@ export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
     // rule makes `outputSchema` present whenever `outputMode` is `structured`, so
     // the ternary never yields `structured`-without-schema.
     structuredOutput: cfg.outputMode === 'structured' ? cfg.outputSchema : undefined,
+    captureMode: cfg.capture,
   };
 }

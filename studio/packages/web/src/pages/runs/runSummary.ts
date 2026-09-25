@@ -460,6 +460,36 @@ export interface NodeActivity {
    * is the fold that makes it so.
    */
   toolCalls: NodeToolCall[];
+  /**
+   * #605 L9b — the prompt/completion TEXT a `capture: 'full'` node stored, one
+   * entry per captured provider exchange, in LOG ORDER. Only captures carrying
+   * text are folded: a metadata-mode capture holds lengths and hashes, and a
+   * sha256 on screen is not worth a section. A secure node's texts arrive as
+   * `SECURE_REDACTED` and are kept, so the panel can say they were withheld.
+   */
+  captures: NodeCapture[];
+}
+
+/** #605 L9b — one captured field's text, as stored. */
+export interface CapturedText {
+  /** What was kept — the whole text unless `truncated`. */
+  text: string;
+  /** The WHOLE text's length, so a cut can say how much it kept. */
+  chars: number;
+  truncated: boolean;
+}
+
+/** #605 L9b — one captured provider exchange of an `llm_call` node. */
+export interface NodeCapture {
+  model: string;
+  /** The system instruction, when one was sent AND its text stored. */
+  system: CapturedText | undefined;
+  messages: (CapturedText & { role: 'user' | 'assistant' })[];
+  /** ABSENT when the exchange produced no readable completion (a failure). */
+  completion: CapturedText | undefined;
+  /** 1-based, as `NodeToolCall.attempt`: a retry captures again. */
+  attempt: number;
+  instanceId: string | undefined;
 }
 
 /**
@@ -542,7 +572,7 @@ export function emptyNodeCost(): NodeCost {
 /** The row shape the fold BUILDS. The three #866 fields are projected once at
  * the end (from accumulators kept beside the map) rather than mutated in place,
  * so no caller can be handed a live accumulator. */
-type FoldingNode = Omit<NodeActivity, 'cost' | 'costSpansInstances' | 'toolCalls'>;
+type FoldingNode = Omit<NodeActivity, 'cost' | 'costSpansInstances' | 'toolCalls' | 'captures'>;
 
 /**
  * Fold the node-bearing events into per-node activity, in first-seen order
@@ -560,6 +590,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const costByNode = new Map<string, MeteredTotals>();
   const instanceSpannedCost = new Set<string>();
   const toolCallsByNode = new Map<string, NodeToolCall[]>();
+  const capturesByNode = new Map<string, NodeCapture[]>();
   /* Dispatches per RAW node id — `w@1` counted apart from `w@2`, unlike the
      row's own `attempts`, which folds every item's dispatch onto one number.
      A tool call belongs to ONE item's attempt, and saying `w@2`'s first exchange
@@ -1155,8 +1186,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       //     `outputs` count and the `lastOutputName` progress hint), and since
       //     #866 `activity.metered`/`activity.toolCalled` are folded too — into
       //     the cost/tool accumulators only, and ONLY onto a row that already
-      //     exists. `captured`/`agentTelemetry`/`warned` remain wholly inert
-      //     (#750 pins `warned`'s inertness).
+      //     exists — as, since #605, is `activity.captured`'s text.
+      //     `agentTelemetry`/`warned` remain wholly inert (#750 pins `warned`'s
+      //     inertness).
       case 'run.started':
       case 'run.finished':
       case 'run.resumed':
@@ -1165,7 +1197,6 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'run.triggerContext':
       case 'container.timeoutScheduled':
       case 'container.timedOut':
-      case 'activity.captured':
       case 'activity.agentTelemetry':
       case 'activity.warned':
         break;
@@ -1186,6 +1217,32 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         }
         accumulateMetered(totals, e);
         if (instanceOf(e.nodeId) !== undefined) instanceSpannedCost.add(target.nodeId);
+        break;
+      }
+
+      /* #605 L9b — the captured prompt/completion TEXT. Like the tool calls: onto
+         an EXISTING row only, and a capture with no text at all (metadata mode)
+         adds nothing. */
+      case 'activity.captured': {
+        const target = byNode.get(docNodeIdOf(e.nodeId));
+        if (target === undefined) break;
+        const system = capturedText(e.request.system);
+        const completion = capturedText(e.completion);
+        const messages = e.request.messages.flatMap((m) => {
+          const t = capturedText(m);
+          return t === undefined ? [] : [{ role: m.role, ...t }];
+        });
+        if (system === undefined && completion === undefined && messages.length === 0) break;
+        const list = capturesByNode.get(target.nodeId) ?? [];
+        list.push({
+          model: e.model,
+          system,
+          messages,
+          completion,
+          attempt: dispatchesByRawNode.get(e.nodeId) ?? target.attempts,
+          instanceId: instanceOf(e.nodeId),
+        });
+        capturesByNode.set(target.nodeId, list);
         break;
       }
 
@@ -1234,8 +1291,17 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       cost: totals === undefined ? emptyNodeCost() : nodeCostFromTotals(totals),
       costSpansInstances: instanceSpannedCost.has(n.nodeId),
       toolCalls: toolCallsByNode.get(n.nodeId) ?? [],
+      captures: capturesByNode.get(n.nodeId) ?? [],
     };
   });
+}
+
+/** #605 L9b — a captured field's text, or `undefined` when none was stored. */
+function capturedText(
+  field: { chars: number; text?: string; truncated?: true } | undefined,
+): CapturedText | undefined {
+  if (field?.text === undefined) return undefined;
+  return { text: field.text, chars: field.chars, truncated: field.truncated === true };
 }
 
 /**
@@ -1390,6 +1456,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       cost: emptyNodeCost(),
       costSpansInstances: false,
       toolCalls: [],
+      captures: [],
     });
   }
   return reconciled;

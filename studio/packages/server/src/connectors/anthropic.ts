@@ -274,9 +274,8 @@ export const anthropicAdapter: ConnectorAdapter = {
     // narrows the `string | null` return to `string` for `meterUsage` (which
     // needs a resolved model) without changing behaviour.
     const model = resolveModel(input.data, config.data, DEFAULT_MODEL) ?? DEFAULT_MODEL;
-    const { system, messages, sampling, reasoningEffort, structuredOutput } = normalizeLlmRequest(
-      input.data,
-    );
+    const { system, messages, sampling, reasoningEffort, structuredOutput, captureMode } =
+      normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/v1/messages`;
     const headers = {
@@ -582,6 +581,7 @@ export const anthropicAdapter: ConnectorAdapter = {
               turns: messages,
               system,
               completionText,
+              captureMode,
             });
           if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
@@ -688,6 +688,7 @@ export const anthropicAdapter: ConnectorAdapter = {
         turns: messages,
         system,
         completionText,
+        captureMode,
       }),
     });
     if (!result.ok) {

@@ -145,6 +145,7 @@ export const openaiAdapter: ConnectorAdapter = {
       sampling,
       reasoningEffort,
       structuredOutput,
+      captureMode,
     } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/chat/completions`;
@@ -376,6 +377,7 @@ export const openaiAdapter: ConnectorAdapter = {
               turns,
               system,
               completionText,
+              captureMode,
             });
           if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
@@ -493,6 +495,7 @@ export const openaiAdapter: ConnectorAdapter = {
         turns,
         system,
         completionText,
+        captureMode,
       }),
     });
     if (!result.ok) {

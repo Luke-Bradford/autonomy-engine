@@ -120,6 +120,15 @@ describe('llmCallConfigSchema', () => {
     expect(llmCallConfigSchema.safeParse({ prompt: 'hi' }).success).toBe(true);
   });
 
+  // #605 L9b — the capture-mode knob: absent = metadata (the L9a default).
+  it('accepts `capture` metadata|full and refuses any other mode', () => {
+    for (const mode of ['metadata', 'full']) {
+      expect(llmCallConfigSchema.safeParse({ prompt: 'hi', capture: mode }).success).toBe(true);
+    }
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', capture: 'verbose' }).success).toBe(false);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', capture: true }).success).toBe(false);
+  });
+
   // SSOT: the catalog entry and the adapter validation are ONE schema object.
   it('IS the llm_call catalog configSchema (single source of truth)', () => {
     expect(getActivity('llm_call')!.configSchema).toBe(llmCallConfigSchema);
@@ -127,6 +136,11 @@ describe('llmCallConfigSchema', () => {
 });
 
 describe('normalizeLlmRequest', () => {
+  it('threads `capture` through as `captureMode` (absent stays absent)', () => {
+    expect(normalizeLlmRequest({ prompt: 'hi', capture: 'full' }).captureMode).toBe('full');
+    expect(normalizeLlmRequest({ prompt: 'hi' }).captureMode).toBeUndefined();
+  });
+
   it('lowers the v1 `prompt` to a single user message', () => {
     const n = normalizeLlmRequest({ prompt: 'hi' });
     expect(n.messages).toEqual([{ role: 'user', content: 'hi' }]);

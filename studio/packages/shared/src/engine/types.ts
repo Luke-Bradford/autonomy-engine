@@ -911,6 +911,19 @@ export const WARNING_CODES = {
 export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];
 
 /**
+ * #605 L9b — one captured prompt/completion field on `activity.captured`: its
+ * length and fingerprint always, its `text` only in `capture: 'full'` mode.
+ * `truncated` is present only when the capture budget cut `text` short.
+ */
+export const CapturedContentSchema = z.object({
+  chars: z.number().int().nonnegative(),
+  contentHash: z.string(),
+  text: z.string().optional(),
+  truncated: z.literal(true).optional(),
+});
+export type CapturedContent = z.infer<typeof CapturedContentSchema>;
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -1353,25 +1366,33 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * non-terminal `captured` ActivityEvent (mirroring `metered`) which the
      * executor maps here, ordered BEFORE the terminal `node.succeeded`/`node.failed`.
      * ONE per provider response — a text call emits one; a structured-repair call's
-     * per-response capture is deferred to L9b (see below).
+     * per-response capture is still deferred (#605, see below).
      *
      * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered` /
      * `node.output`): capture is telemetry, not a typed `${}`-addressable output,
      * so it never enters `outputs` and cannot change run semantics. NOT in
      * `TERMINAL_RUN_EVENT_TYPES`.
      *
-     * SECURE / F4 SPLIT — this is the "redacted" default the spec's telemetry-vs-
-     * content hardening prescribes: "log hash/length/token-count, not text". It
-     * carries NO raw prompt/completion text. `chars` is the LENGTH half; the
-     * TOKEN-COUNT half lives on `activity.metered` (`inputTokens`/`outputTokens`).
-     * `contentHash` is a `sha256` FINGERPRINT for drift/reproducibility, NOT a
-     * redaction guarantee (a short/low-entropy input is a brute-forceable oracle) —
-     * safe here only because no field is D8-secure yet. RAW-content ('full' mode)
-     * capture + verbose reasoning-trace capture BOTH require F4's field-secure model
-     * (`secureInputFields`/`secureOutputFields`, redacted-when-set) and are DEFERRED
-     * to L9b; structured-mode per-response capture defers there too (its completion
-     * IS raw structured content, F4-gated; its request half is F4-independent but
-     * deferred with it for plumbing cohesion). See L9b (#605).
+     * CONTENT — the default (`capture` absent or `metadata`) is the spec's
+     * telemetry-vs-content "log hash/length/token-count, not text": each field is
+     * `{chars, contentHash}`. `chars` is the LENGTH half; the TOKEN-COUNT half
+     * lives on `activity.metered`. `contentHash` is an unsalted `sha256`
+     * FINGERPRINT for drift/reproducibility, NOT a redaction guarantee.
+     *
+     * #605 L9b — `capture: 'full'` adds each field's `text`, bounded by the
+     * adapter's capture budget; a field cut short carries `truncated: true`, and
+     * `chars`/`contentHash` still describe the WHOLE text. An ABSENT `text` means
+     * "not captured" (metadata mode), never "empty".
+     *
+     * SECURE (F4) — on a node with `secureInput` or `secureOutput`, the emit-time
+     * seam (`engine/secure.ts`) replaces every hash AND every text with
+     * `SECURE_REDACTED` before the event is stored. The keyed-HMAC hash the spec
+     * names is DEFERRED (#605): the unsalted hash is a guessing oracle only for
+     * content the author marked secret, and on exactly those nodes it is already
+     * scrubbed.
+     *
+     * Still deferred to #605: structured-mode per-response capture, the verbose
+     * reasoning trace, and tool-loop rounds after the first.
      */
     type: z.literal('activity.captured'),
     runId: z.string(),
@@ -1383,21 +1404,13 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     model: z.string(),
     /** Provider-call wall time in ms (the spec's always-on `latency` telemetry). */
     latencyMs: z.number().int().nonnegative(),
-    /** The prompt SHAPE (fingerprints + lengths, no text). */
+    /** The prompt: fingerprints + lengths, plus the text in `full` mode. */
     request: z.object({
       /** Number of user/assistant turns (the `system` instruction is separate). */
       messageCount: z.number().int().nonnegative(),
       /** Present IFF a system instruction was sent. */
-      system: z
-        .object({ chars: z.number().int().nonnegative(), contentHash: z.string() })
-        .optional(),
-      messages: z.array(
-        z.object({
-          role: z.enum(['user', 'assistant']),
-          chars: z.number().int().nonnegative(),
-          contentHash: z.string(),
-        }),
-      ),
+      system: CapturedContentSchema.optional(),
+      messages: z.array(CapturedContentSchema.extend({ role: z.enum(['user', 'assistant']) })),
     }),
     /**
      * The completion SHAPE. ABSENT when no completion text was extracted (a
@@ -1405,9 +1418,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * absent, NEVER a hash of `''` (which would manufacture a benign fact, the
      * `#473`/fail-open lesson).
      */
-    completion: z
-      .object({ chars: z.number().int().nonnegative(), contentHash: z.string() })
-      .optional(),
+    completion: CapturedContentSchema.optional(),
   }),
   z.object({
     /**

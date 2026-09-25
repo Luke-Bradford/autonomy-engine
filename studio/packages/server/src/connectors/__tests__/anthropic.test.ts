@@ -1534,3 +1534,47 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     expect(events.map((e) => e.type)).toEqual(['failed']);
   });
 });
+
+// #605 L9b — `capture: 'full'` reaches BOTH capture sites: the plain text path
+// and the tool loop's round-0 capture. Metadata stays the default.
+describe('anthropicAdapter — full capture (#605 L9b)', () => {
+  const TOOL = {
+    name: 'noop',
+    description: 'Unused: the model answers directly.',
+    parameters: { type: 'object', properties: { x: { type: 'number' } } },
+    expression: '${1}',
+  };
+
+  it('stores no text by default', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
+    expect('text' in captured(events).capture.completion!).toBe(false);
+    expect('text' in captured(events).capture.request.messages[0]!).toBe(false);
+  });
+
+  it('stores the prompt and completion text on the text path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hello there', capture: 'full' } }),
+        'sk-ant-key',
+      ),
+    );
+    const { capture } = captured(events);
+    expect(capture.request.messages[0]).toMatchObject({ role: 'user', text: 'hello there' });
+    expect(capture.completion).toMatchObject({ text: 'Hi there!' });
+  });
+
+  it("stores the text on the tool loop's round-0 capture too", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hello there', tools: [TOOL], capture: 'full' } }),
+        'sk-ant-key',
+      ),
+    );
+    const { capture } = captured(events);
+    expect(capture.request.messages[0]).toMatchObject({ text: 'hello there' });
+    expect(capture.completion).toMatchObject({ text: 'Hi there!' });
+  });
+});

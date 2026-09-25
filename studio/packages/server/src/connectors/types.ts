@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type {
+  CapturedContent,
   ConnectionKind,
   ConnectionProbeResult,
   DatasetAddress,
@@ -164,8 +165,9 @@ export interface LlmUsage {
 
 /**
  * A debugging CAPTURE fact for ONE `llm_call` provider response (#2 L9a): the
- * prompt/completion SHAPE (hash + length, NO raw text) + provider-call latency.
- * The "redacted" default the spec's telemetry-vs-content hardening prescribes.
+ * prompt/completion SHAPE (hash + length) + provider-call latency — the
+ * "redacted" default the spec's telemetry-vs-content hardening prescribes — and,
+ * for a `capture: 'full'` node (#605 L9b), the budgeted TEXT as well.
  * The executor stamps `runId`/`nodeId`/`attemptId` onto the durable
  * `activity.captured` event; the adapter supplies the rest. `completion` is
  * OMITTED (not null) when no completion text was extracted — fail-closed.
@@ -176,17 +178,17 @@ export interface LlmCapture {
   latencyMs: number;
   request: {
     messageCount: number;
-    system?: { chars: number; contentHash: string };
-    messages: { role: 'user' | 'assistant'; chars: number; contentHash: string }[];
+    system?: CapturedContent;
+    messages: (CapturedContent & { role: 'user' | 'assistant' })[];
   };
-  completion?: { chars: number; contentHash: string };
+  completion?: CapturedContent;
 }
 
 /**
  * A subprocess TELEMETRY fact for ONE `agent_task` attempt (#2 L11a): the agent-
  * CLI child's exit code + a `summary` outcome classification + wall-clock latency
  * + the stdout SHAPE (chars + `sha256` fingerprint, NO raw text — the same
- * telemetry-vs-content discipline as `LlmCapture`). The executor stamps
+ * telemetry-vs-content discipline as a metadata-mode `LlmCapture`). The executor stamps
  * `runId`/`nodeId`/`attemptId` onto the durable `activity.agentTelemetry` event;
  * the adapter supplies the rest. `signal` is OMITTED (not null) when the child was
  * not signalled; `outputHash` is OMITTED when `outputChars === 0` — fail-closed,
@@ -206,7 +208,7 @@ export interface AgentTelemetry {
  * loop (#2 L10b): the 0-based provider-exchange `round` that requested it, the
  * EXECUTED tool name (`''` for a nameless malformed call), the provider call id
  * (absent where the provider has none — Ollama), the args/result SHAPE (chars +
- * `sha256`, NO raw text — the `LlmCapture` telemetry-vs-content discipline;
+ * `sha256`, NO raw text — a metadata-mode `LlmCapture`'s discipline;
  * hashes ABSENT at 0 chars, never `hash('')`), and whether the fed-back result
  * was an ERROR tool_result. The executor stamps `runId`/`nodeId`/`attemptId`
  * onto the durable `activity.toolCalled` event; the loop supplies the rest.

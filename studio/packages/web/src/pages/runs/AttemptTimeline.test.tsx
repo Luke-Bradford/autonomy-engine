@@ -34,6 +34,7 @@ const node = (over: Partial<NodeActivity> & { nodeId: string }): NodeActivity =>
   cost: emptyNodeCost(),
   costSpansInstances: false,
   toolCalls: [],
+  captures: [],
   ...over,
 });
 

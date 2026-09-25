@@ -26,6 +26,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     cost: emptyNodeCost(),
     costSpansInstances: false,
     toolCalls: [],
+    captures: [],
     status: 'pending',
     attempts: 0,
     outputs: 0,

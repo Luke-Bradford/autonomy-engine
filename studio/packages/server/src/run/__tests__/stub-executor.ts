@@ -29,6 +29,12 @@ export interface NodePlan {
    */
   delayMs?: number;
   /**
+   * #605 — non-terminal activity events (an `activity.captured`, say) the stub
+   * yields in the adapter phase, before the terminal, stamped with this
+   * dispatch's ids — the slot the real executor's mapped adapter events use.
+   */
+  activityEvents?: (at: { runId: string; nodeId: string; attemptId: string }) => EngineEvent[];
+  /**
    * #4 A4b slice 1 — concurrency probe: called the moment the stub's
    * "adapter phase" begins, i.e. AFTER `node.dispatched` is yielded (and so
    * folded + durable) and before `gate`/`delayMs`/the terminal event. Lets a
@@ -106,6 +112,11 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
         if (plan.delayMs !== undefined) {
           await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
         }
+        yield* plan.activityEvents?.({
+          runId,
+          nodeId: command.nodeId,
+          attemptId: command.attemptId,
+        }) ?? [];
         yield (plan.outcome ?? 'success') === 'success'
           ? {
               type: 'node.succeeded',
