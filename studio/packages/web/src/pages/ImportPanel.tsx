@@ -99,6 +99,10 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
   const [busy, setBusy] = useState(false);
   /** #1143 — the chosen store for a dataset file; `''` = resolve it by identity. */
   const [store, setStore] = useState('');
+  /** The choice as it stands NOW: a store that left the list (deleted, or the
+   * list reloaded without it) falls back to identity rather than being sent as
+   * an id the select no longer shows. */
+  const chosen = stores?.some((conn) => conn.id === store) ? store : '';
   const [error, setError] = useState<string | null>(null);
   /** A file that belongs to another section: refused locally, nothing sent.
    * `ExportKind`, not `ImportedResource['kind']` — this can be a kind the import
@@ -141,8 +145,8 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
           return;
         }
         const result =
-          listKind === 'dataset' && store !== ''
-            ? await importEnvelope(envelope, { connectionId: store })
+          listKind === 'dataset' && chosen !== ''
+            ? await importEnvelope(envelope, { connectionId: chosen })
             : await importEnvelope(envelope);
         const resource = describeImported(result);
         // Refresh BEFORE reporting, so the row is on screen when the message
@@ -175,7 +179,7 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
         if (mounted.current) setBusy(false);
       }
     },
-    [listKind, onImported, store],
+    [listKind, onImported, chosen],
   );
 
   return (
@@ -193,7 +197,7 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
             {(id) => (
               <select
                 id={id}
-                value={store}
+                value={chosen}
                 disabled={busy}
                 onChange={(e) => setStore(e.target.value)}
               >

@@ -300,8 +300,8 @@ function importTriggerEnvelope(
  * refused, and nothing is created on a refusal.
  *
  * Resolution, in order:
- *  1. `store` — the connection the caller CHOSE. The route resolved and
- *     owner-checked it (`requireOwnedConnection`) before calling in.
+ *  1. `store` — the connection the caller CHOSE, resolved and owner-checked
+ *     by the route (`requireOwnedConnection`) through `resolveStore`.
  *  2. IDENTITY — the importer's own connection whose `resourceId` is the one the
  *     export wrote (`exportDataset` remaps the store to its resourceId, exactly
  *     as the git form does). Owner-scoped by `getConnectionByResourceId`, so a
@@ -353,10 +353,12 @@ function importDatasetEnvelope(
 
 /** #1143 — what the caller of `importEnvelope` may decide for the file. */
 export interface ImportOptions {
-  /** The store a DATASET lands in, already owner-checked by the caller. Only a
-   * dataset has a store; passing one with any other kind is refused rather
-   * than silently ignored. */
-  store?: Connection;
+  /** The store a DATASET lands in, resolved AND owner-checked by the caller.
+   * A thunk, so it runs only once the envelope is known to be a dataset: only a
+   * dataset has a store, and a store chosen for any other kind is refused as
+   * such rather than silently ignored — or answered with a lookup error about a
+   * connection that was never going to be used. */
+  resolveStore?: () => Connection;
 }
 
 /**
@@ -378,7 +380,7 @@ export function importEnvelope(
   opts: ImportOptions = {},
 ): ImportResult {
   const envelope = parseAndUpgradeEnvelope(raw);
-  if (opts.store !== undefined && envelope.kind !== 'dataset') {
+  if (opts.resolveStore !== undefined && envelope.kind !== 'dataset') {
     throw new ImportError(
       `a store connection was chosen, but this is a ${envelope.kind} export — only a dataset ` +
         'lives in a store',
@@ -392,6 +394,6 @@ export function importEnvelope(
     case 'trigger':
       return importTriggerEnvelope(db, ownerId, envelope);
     case 'dataset':
-      return importDatasetEnvelope(db, ownerId, envelope, opts.store);
+      return importDatasetEnvelope(db, ownerId, envelope, opts.resolveStore?.());
   }
 }

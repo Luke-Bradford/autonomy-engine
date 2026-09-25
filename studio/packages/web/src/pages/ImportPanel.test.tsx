@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { ConnectionPublicSchema, DatasetSchema, type ImportResult } from '@autonomy-studio/shared';
 import { ImportPanel } from './ImportPanel';
 import { ApiError } from '../api/client';
@@ -133,6 +134,26 @@ describe('ImportPanel', () => {
       importMock.mockResolvedValue(datasetResult());
       renderWithRouter(<ImportPanel listKind="dataset" stores={stores} onImported={vi.fn()} />);
 
+      await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
+
+      await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));
+      expect(importMock.mock.calls[0]).toEqual([{ kind: 'dataset' }]);
+    });
+
+    it('drops a chosen store that has left the list, rather than sending its id', async () => {
+      importMock.mockResolvedValue(datasetResult());
+      const onImported = vi.fn();
+      const { rerender } = renderWithRouter(
+        <ImportPanel listKind="dataset" stores={stores} onImported={onImported} />,
+      );
+      await userEvent.selectOptions(screen.getByLabelText('Store it in'), 'conn_files');
+
+      rerender(
+        <MemoryRouter>
+          <ImportPanel listKind="dataset" stores={[]} onImported={onImported} />
+        </MemoryRouter>,
+      );
+      expect(screen.getByLabelText('Store it in')).toHaveValue('');
       await pick(envelopeFile('{"kind":"dataset"}', 'customers.json'));
 
       await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));

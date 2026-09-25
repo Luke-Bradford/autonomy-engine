@@ -85,7 +85,7 @@ describe('importEnvelope: dataset', () => {
     const envelope = exportDataset(db, ds.id, 'owner-a');
     const chosen = store(db, 'owner-b', 'Chosen');
 
-    const result = importEnvelope(db, 'owner-b', envelope, { store: chosen });
+    const result = importEnvelope(db, 'owner-b', envelope, { resolveStore: () => chosen });
     if (result.kind !== 'dataset') throw new Error('unreachable');
     expect(result.attention).toEqual([]);
     const stored = getDataset(db, result.dataset.id)!;
@@ -136,8 +136,16 @@ describe('importEnvelope: dataset', () => {
       catalogVersion: CATALOG_VERSION,
     });
     const envelope = exportPipeline(db, pipeline.id, 'local');
-    expect(() => importEnvelope(db, 'local', envelope, { store: store(db, 'local') })).toThrow(
-      ImportError,
+    const conn = store(db, 'local');
+    let resolved = false;
+    const resolveStore = () => {
+      resolved = true;
+      return conn;
+    };
+    expect(() => importEnvelope(db, 'local', envelope, { resolveStore })).toThrow(
+      /only a dataset lives in a store/,
     );
+    // Refused on the KIND, before the store was ever looked up.
+    expect(resolved).toBe(false);
   });
 });

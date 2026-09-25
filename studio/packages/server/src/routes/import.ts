@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { importEnvelope } from '../portability/index.js';
-import { requireOwnedConnection } from './datasets.js';
+import { requireOwnedConnection } from './util.js';
 
 /**
  * #1143 — the one thing a caller may decide for the file: which of ITS
@@ -28,15 +28,13 @@ export const importRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/api/import', async (request, reply) => {
     const { connectionId } = ImportQuerySchema.parse(request.query);
-    const store =
-      connectionId === undefined
-        ? undefined
-        : requireOwnedConnection(db, request.principal, connectionId);
     const result = importEnvelope(
       db,
       request.principal.ownerId,
       request.body,
-      store === undefined ? {} : { store },
+      connectionId === undefined
+        ? {}
+        : { resolveStore: () => requireOwnedConnection(db, request.principal, connectionId) },
     );
     reply.status(201).send(result);
   });

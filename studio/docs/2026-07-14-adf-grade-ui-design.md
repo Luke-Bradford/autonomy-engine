@@ -355,9 +355,11 @@ Four decisions worth keeping:
 `datasetConfigAdvisory` (#1120) landed with it: the `connectionConfigAdvisory`
 shape one layer down, advisory and never a gate, because every shape it reports
 is one the server stores today. Single-file dataset export/import and the
-`ImportPanel` link that needs it are **deferred to #1143**; the panel's
-`SECTION.dataset.path` stays `null` deliberately, because the new page carries
-no import panel either and a link would be a second dead end.
+`ImportPanel` link that needs it were deferred to #1143, and **landed there**:
+each row has an Export button, the page carries an `<ImportPanel>` with a
+"Store it in" picker (a dataset cannot exist without a store, so its import is
+told one or resolves it by identity, else refuses), and `SECTION.dataset` now
+points at this page.
 
 ### U3r — legacy MVP-path compatibility (AS BUILT, 2026-07-24)
 
