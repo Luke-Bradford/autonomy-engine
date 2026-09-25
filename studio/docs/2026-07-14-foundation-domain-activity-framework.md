@@ -341,8 +341,9 @@ ticket must not re-litigate:
   history view over the existing immutable chain.
 - **Rerun (simple):** a NEW run, same version, same/overridden params. `runs.rerunOf?` link.
 - **Rerun-from-failed (GATED — needs its own sub-spec before build):** a NEW run whose log
-  begins with a durable **`run.reseeded{sourceRunId, frontier, copiedNodeStates,
-  copiedOutputs, copiedVariables, copiedContainers, childLinks?}`** event that the reducer
+  begins with a durable **`run.reseeded{sourceRunId, frontier, copiedOutputs,
+  copiedContainers, childLinks?}`** event (as BUILT — RS1 dropped the drafted
+  `copiedNodeStates`/`copiedVariables`; see the RS spec) that the reducer
   folds (marking frontier nodes terminal). Log stays self-deriving. **Frontier defined in
   engine terms, not UI terms** — specify: which node/container statuses copy, outputs copy,
   attempts reset-vs-inherit, and `call_pipeline` provenance: a non-frontier call node either

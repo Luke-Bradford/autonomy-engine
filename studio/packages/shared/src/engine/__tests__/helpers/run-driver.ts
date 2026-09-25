@@ -71,6 +71,7 @@ export interface DriveOptions {
     frontier: string[];
     copiedOutputs: Record<string, Record<string, unknown>>;
     copiedContainers: Record<string, ContainerRunState>;
+    childLinks?: { callNodeId: string; sourceChildRunId: string }[];
   };
 }
 
@@ -151,6 +152,7 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       frontier: opts.reseed.frontier,
       copiedOutputs: opts.reseed.copiedOutputs,
       copiedContainers: opts.reseed.copiedContainers,
+      ...(opts.reseed.childLinks !== undefined ? { childLinks: opts.reseed.childLinks } : {}),
     });
   } else {
     apply({ type: 'run.started', runId, pipelineVersionId, params });

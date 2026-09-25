@@ -250,6 +250,74 @@ describe('RS2 producer — end-to-end rerun-from-failed', () => {
   });
 });
 
+describe('RS4 producer — a copied call node links its child; a re-run one gets a fresh child', () => {
+  function callNode(id: string): Node {
+    seq += 1;
+    return {
+      id,
+      type: 'call_pipeline',
+      config: {},
+      call: { pipelineVersionId: 'childPv', params: {} },
+      position: { x: seq, y: 0 },
+    };
+  }
+  type CallReturned = Extract<EngineEvent, { type: 'call.returned' }>;
+  const returned = (events: EngineEvent[], id: string): CallReturned[] =>
+    events.filter((e): e is CallReturned => e.type === 'call.returned' && e.callNodeId === id);
+
+  it('the reseed names the child R1 really spawned, and R2 spawns no child for it', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [callNode('call'), node('b')], [edge('call', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+    expect(getRun(db, r1)!.status).toBe('failure');
+    const [r1Call] = returned(loadEngineEvents(db, r1), 'call');
+    expect(r1Call!.childOutcome).toBe('success');
+
+    // R2: `b` fails AGAIN, so R2 is itself rerunnable.
+    const failB = { nodes: { b: { outcome: 'failure' as const } } };
+    const second = await createReseedService(deps(db, failB)).rerunFromFailed(r1);
+    await second.drive;
+    const r2Events = loadEngineEvents(db, second.runId);
+    const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+    expect(reseeded.frontier).toEqual(['call']);
+    expect(reseeded.childLinks).toEqual([
+      { callNodeId: 'call', sourceChildRunId: r1Call!.childRunId },
+    ]);
+    expect(returned(r2Events, 'call')).toEqual([]);
+    expect(getRun(db, second.runId)!.status).toBe('failure');
+
+    // R3, a rerun OF the rerun, still names R1's child: the copied node in R2 has
+    // no attempt of its own, so the link is carried forward, not re-derived.
+    const third = await createReseedService(deps(db, {})).rerunFromFailed(second.runId);
+    await third.drive;
+    const r3Events = loadEngineEvents(db, third.runId);
+    const r3Reseeded = r3Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+    expect(r3Reseeded.childLinks).toEqual([
+      { callNodeId: 'call', sourceChildRunId: r1Call!.childRunId },
+    ]);
+    expect(returned(r3Events, 'call')).toEqual([]);
+    expect(getRun(db, third.runId)!.status).toBe('success');
+  });
+
+  it('a call node that FAILED in R1 re-runs in R2 under a fresh child id', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), callNode('call')], [edge('a', 'call')]);
+    const r1 = await seedRun(db, pvId, { child: { childOutcome: 'failure' } });
+    expect(getRun(db, r1)!.status).toBe('failure');
+    const [r1Call] = returned(loadEngineEvents(db, r1), 'call');
+
+    const { runId: r2, drive } = await createReseedService(deps(db, {})).rerunFromFailed(r1);
+    await drive;
+    const r2Events = loadEngineEvents(db, r2);
+    const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+    expect(reseeded.frontier).toEqual(['a']);
+    expect('childLinks' in reseeded).toBe(false);
+    const [r2Call] = returned(r2Events, 'call');
+    expect(r2Call!.childOutcome).toBe('success');
+    expect(r2Call!.childRunId).not.toBe(r1Call!.childRunId);
+  });
+});
+
 describe('RS2 producer — eligibility guards', () => {
   it('rejects a MISSING source run (no event log)', async () => {
     const { db } = freshDb();

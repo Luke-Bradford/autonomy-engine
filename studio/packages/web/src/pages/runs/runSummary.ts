@@ -251,6 +251,24 @@ export interface NodeActivity {
    */
   copiedFromRunId: string | undefined;
   /**
+   * RS4 — the child run a COPIED `call_pipeline` node's result came from, off
+   * `run.reseeded.childLinks`. Set only alongside `copiedFromRunId` and cleared
+   * with it: the two are one fact (this result was computed elsewhere, and here
+   * is where).
+   *
+   * A SEPARATE FIELD, never folded into `childRunIds`, and the difference is a
+   * claim about money. `childRunIds` are the children THIS run spawned, and
+   * `RunCostSummary` reads them as spend this run's total excludes. A reused
+   * child spent nothing in this run — its cost belongs to the run it was
+   * spawned in — so listing it there would state an exclusion that never
+   * happened.
+   *
+   * It can only name a run that exists: the producer derives it from a call
+   * node that reached `success`, which the reducer allows only for the child
+   * id it minted and the executor reports only for a child it really created.
+   */
+  copiedChildRunId: string | undefined;
+  /**
    * The RAW node id the result on show came from, when it differed from the
    * canvas node id this row folds onto (`w@1` → `w`) — set by EVERY terminal
    * branch, so a parked or evaluated instance is attributed like a dispatched
@@ -595,6 +613,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         datasetAddresses: undefined,
         outputValues: undefined,
         copiedFromRunId: undefined,
+        copiedChildRunId: undefined,
         instanceId: undefined,
         startedAtMs: undefined,
         endedAtMs: undefined,
@@ -643,6 +662,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     n.failureCode = undefined;
     n.outputValues = undefined;
     n.copiedFromRunId = undefined;
+    n.copiedChildRunId = undefined;
     n.instanceId = undefined;
   };
 
@@ -1086,6 +1106,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
              result — it is on the event. */
           n.outputValues = e.copiedOutputs[nodeId] ?? {};
           n.copiedFromRunId = e.sourceRunId;
+          /* RS4 — see `copiedChildRunId`. */
+          n.copiedChildRunId = e.childLinks?.find((l) => l.callNodeId === nodeId)?.sourceChildRunId;
           /* Dead for every frontier RS2 can produce (its contract is top-level
              ids only) and kept for symmetry with every other terminal branch —
              a doc may legitimately carry a literal `x@2` id, which `ensure`
@@ -1347,6 +1369,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          be inventing provenance. Since #918 a rerun's copied nodes arrive from
          the fold instead, which is what fixed them showing no Outputs. */
       copiedFromRunId: undefined,
+      copiedChildRunId: undefined,
       instanceId: undefined,
       /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
          Same rule as the fields above: an absent fact is rendered as absent,

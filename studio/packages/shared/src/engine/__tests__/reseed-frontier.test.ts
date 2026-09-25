@@ -294,3 +294,134 @@ describe('RS2 — reseedFrontier: determinism', () => {
     expect(r1).toEqual(r2);
   });
 });
+
+describe('RS4 — reseedFrontier: a copied call node links the child run that produced it', () => {
+  function callNode(id: string): Node {
+    seq += 1;
+    return {
+      id,
+      type: 'call_pipeline',
+      config: {},
+      call: { pipelineVersionId: 'childPv', params: {} },
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  /** The child id R1's reducer really minted for `id`, read off its own
+   * `startChild` command — never re-implemented here, so the test cannot agree
+   * with a wrong hash. */
+  function mintedChildRunId(eng: Engine, id: string): { childRunId: string; attemptId: string } {
+    const r = eng.reduce(eng.seedState(), {
+      type: 'run.started',
+      runId: 'R1',
+      pipelineVersionId: 'pv1',
+      params: {},
+    });
+    const cmd = r.commands.find((c) => c.type === 'startChild' && c.callNodeId === id);
+    if (cmd === undefined || cmd.type !== 'startChild') throw new Error(`no startChild for ${id}`);
+    return { childRunId: cmd.childRunId, attemptId: cmd.attemptId };
+  }
+
+  it('an EXECUTED call node on the frontier links the child its current attempt spawned', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const { childRunId, attemptId } = mintedChildRunId(eng, 'call');
+    const s = state({ nodes: { call: 'success', b: 'failure' }, outputs: { call: { r: 1 } } });
+    s.nodes.call = { status: 'success', attempts: 1, retries: 0, currentAttemptId: attemptId };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['call']);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: childRunId }]);
+  });
+
+  it("a RETRIED call node links its LATEST attempt's child, and a live attempt outranks a carried link", () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const { childRunId: first } = mintedChildRunId(eng, 'call');
+    const link = (currentAttemptId: string): string | undefined => {
+      const s = state({ nodes: { call: 'success', b: 'failure' } });
+      s.nodes.call = {
+        status: 'success',
+        attempts: 2,
+        retries: 1,
+        currentAttemptId,
+        sourceChildRunId: 'child_carried',
+      };
+      return eng.reseedFrontier(s).childLinks[0]?.sourceChildRunId;
+    };
+    expect(link('call#0')).toBe(first);
+    expect(link('call#1')).not.toBe(first);
+    expect(link('call#1')).not.toBe('child_carried');
+  });
+
+  it('a DETACHED (wait: false) call node links the child its real call.detached named', () => {
+    const detached: Node = {
+      ...callNode('call'),
+      call: { pipelineVersionId: 'childPv', params: {}, wait: false },
+    };
+    const eng = engine([detached, node('b')], [edge('call', 'b', 'success')]);
+    // Fold R1 for real, so the state is what the reducer makes of a detach.
+    let s = eng.seedState();
+    const started = eng.reduce(s, {
+      type: 'run.started',
+      runId: 'R1',
+      pipelineVersionId: 'pv1',
+      params: {},
+    });
+    s = started.state;
+    const cmd = started.commands.find((c) => c.type === 'startChild');
+    if (cmd === undefined || cmd.type !== 'startChild') throw new Error('no startChild');
+    expect(cmd.wait).toBe(false);
+    s = eng.reduce(s, {
+      type: 'call.detached',
+      runId: 'R1',
+      callNodeId: 'call',
+      attemptId: cmd.attemptId,
+      childRunId: cmd.childRunId,
+    }).state;
+    expect(s.nodes.call!.status).toBe('success');
+    s = { ...s, nodes: { ...s.nodes, b: { status: 'failure', attempts: 1, retries: 0 } } };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['call']);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: cmd.childRunId }]);
+  });
+
+  it('a call node INSIDE a copied container gets no link — the container is copied as one unit', () => {
+    const eng = engine(
+      [callNode('inner'), node('z')],
+      [edge('loop', 'z', 'success')],
+      [{ id: 'loop', kind: 'foreach', children: ['inner'], items: '[1]' } as Container],
+    );
+    const s = state({
+      nodes: { inner: 'success', z: 'failure' },
+      containers: { loop: cs('success') },
+    });
+    s.nodes.inner = { status: 'success', attempts: 1, retries: 0, currentAttemptId: 'inner#0' };
+    const r = eng.reseedFrontier(s);
+    expect(r.copiedContainers).toEqual({ loop: cs('success') });
+    expect(r.childLinks).toEqual([]);
+  });
+
+  it('a call node that was itself COPIED (a rerun of a rerun) carries its link forward', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const s = state({ nodes: { call: 'success', b: 'failure' } });
+    // What `run.reseeded` folds for a copied call node: no live attempt, the
+    // original child recorded instead.
+    s.nodes.call = { status: 'success', attempts: 0, retries: 0, sourceChildRunId: 'child_orig' };
+    const r = eng.reseedFrontier(s);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: 'child_orig' }]);
+  });
+
+  it('a call node OFF the frontier gets no link — it re-runs and spawns a fresh child', () => {
+    const eng = engine([node('a'), callNode('call')], [edge('a', 'call', 'success')]);
+    const s = state({ nodes: { a: 'success', call: 'failure' } });
+    s.nodes.call = { status: 'failure', attempts: 1, retries: 0, currentAttemptId: 'call#0' };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['a']);
+    expect(r.childLinks).toEqual([]);
+  });
+
+  it('non-call frontier nodes, and a call node with no attempt and no link, get none', () => {
+    const eng = engine([node('a'), callNode('call'), node('c')], [edge('a', 'c', 'success')]);
+    const r = eng.reseedFrontier(state({ nodes: { a: 'success', call: 'success', c: 'failure' } }));
+    expect(r.frontier).toEqual(['a', 'call']);
+    expect(r.childLinks).toEqual([]);
+  });
+});

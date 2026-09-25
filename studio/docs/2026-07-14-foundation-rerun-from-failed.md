@@ -98,7 +98,7 @@ same walk as a normal run.
 | RS1 | `run.reseeded` event schema + reducer fold (mark frontier terminal, seed outputs/containers) — **SHIPPED 2026-07-24** (`rerunOf` defer-settle + `onReseeded` fold + guards; built-block below) |
 | RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link + live producer — **SHIPPED 2026-07-24** (`Engine.reseedFrontier` satisfied-edge strict prefix + `createReseedService` atomic reseed-pair producer + `POST /api/runs/:id/rerun-from-failed`; built-block below) |
 | RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) — **SHIPPED 2026-07-24** (rule delivered by RS1+RS2; RS3 = the end-to-end copy-vs-re-run SOUNDNESS proof across container kinds + a `driveRun` reseed seam; built-block below) |
-| RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier |
+| RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier — **SHIPPED 2026-09-25** (built-block below; a call node INSIDE a copied container is not linked) |
 | RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream |
 | RS6 | Monitor copied-vs-executed render + rerun-history grouping (T13) — **copied-vs-executed SHIPPED 2026-08-05** (#918: `deriveNodeActivity` folds `run.reseeded`, so a copied node carries its copied outputs and a `copiedFromRunId`; the node table's Detail cell reads `reused from run <id>` and the drill-in names the source run and drops the "has not started" sentence). The run GRAPH is deliberately exempt — the reducer writes a copied node `{status:'success', attempts:0}`, identical to an executed success, so `RunState` carries no marker for it to read. **Rerun-history grouping + the Run-type column are still open.** |
 
@@ -257,3 +257,33 @@ copiability NUANCES" — which resolve NOT to new code but to a **soundness prop
   are top-level entities), so there is no nested-container copiability case to test.
 - **No R1/RS2 semantics changed:** the diff is tests + the additive `driveRun` reseed seam + this
   doc. The never-throw pure reducer and the RS1 crash-safety atomicity invariant are untouched.
+
+## RS4 built-block (2026-09-25) — `call_pipeline` child provenance on a reseed
+
+Unblocked by P3b slice 1 (#1022), which made a call node's child a real run keyed on the reducer's
+deterministic `childRunId`.
+
+- **Fresh child for a non-frontier call node needed no code.** `deterministicChildRunId` hashes
+  `(runId, callNodeId, attemptId)`, so a call node that re-runs in R2 mints a child id from R2's run
+  id and cannot collide with R1's. Pinned by tests at the reducer and producer levels.
+- **`run.reseeded.childLinks?: {callNodeId, sourceChildRunId}[]`**, optional (older logs parse
+  unchanged), and omitted by the producer when no call node was copied. `reseedFrontier` computes
+  it for each copied frontier node that has `.call`:
+  - **executed in the source run** → re-derived from its `currentAttemptId` with the reducer's own
+    hash. This is sound because a call node reaches `success` only via `call.returned{success}` or
+    `call.detached`, both of which the reducer folds only for the child id it minted. The executor
+    emits neither for a spawn it refused (a refusal is `call.returned{failure}`), so the link always
+    names a run that exists. A retried node links its latest attempt's child.
+  - **itself copied (a rerun of a rerun)** → there is no attempt to derive from, so the fold records
+    `NodeRunState.sourceChildRunId` and the next frontier carries it forward. A live attempt always
+    outranks a carried link.
+- **Fold:** records `sourceChildRunId` on the copied node and never spawns. A link for a node it did
+  not copy, a non-call node, or a second link for one node is a diagnostic plus skip (the fold stays
+  total).
+- **Monitor:** `NodeActivity.copiedChildRunId` is a separate field, NOT folded into `childRunIds`.
+  `RunCostSummary` reads `childRunIds` as spend this run excludes, and a reused child spent nothing
+  here. The copied-node banner links the child run.
+- **Limitation (stated rather than hidden):** a call node inside a COPIED container gets no link. The
+  container is copied as one unit, its children are not on the frontier, and the monitor has no
+  container rows to hang one on.
+
