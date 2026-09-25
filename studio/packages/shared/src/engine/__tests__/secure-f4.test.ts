@@ -161,6 +161,77 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     expect(JSON.stringify(ev)).not.toMatch(/h-sys|h-msg|h-out/);
   });
 
+  /* #605 L9b — a 'full' capture carries raw text. On a secure node every text
+     becomes the marker (never dropped: an ABSENT text means "metadata mode", and
+     the UI must be able to tell the two apart), `truncated` goes with it, and the
+     lengths survive exactly as they do for the hashes. */
+  it('withholds every captured TEXT on a secure node, keeping the lengths', () => {
+    const ev = eng.redact({
+      type: 'activity.captured',
+      runId: RUN,
+      nodeId: 's',
+      attemptId: 's#0',
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      request: {
+        messageCount: 1,
+        system: { chars: 7, contentHash: 'h1', text: 'sys-txt' },
+        messages: [
+          { role: 'user', chars: 9, contentHash: 'h2', text: 'hunter2-p', truncated: true },
+        ],
+      },
+      completion: { chars: 8, contentHash: 'h3', text: 'answer-x' },
+    });
+    expect(JSON.stringify(ev)).not.toMatch(/sys-txt|hunter2-p|answer-x/);
+    expect(ev).toMatchObject({
+      request: {
+        system: { chars: 7, text: SECURE_REDACTED },
+        messages: [{ chars: 9, text: SECURE_REDACTED }],
+      },
+      completion: { chars: 8, text: SECURE_REDACTED },
+    });
+    if (ev.type !== 'activity.captured') throw new Error('type changed');
+    expect('truncated' in ev.request.messages[0]!).toBe(false);
+  });
+
+  it('leaves a metadata-mode capture with NO text key on a secure node', () => {
+    const ev = eng.redact({
+      type: 'activity.captured',
+      runId: RUN,
+      nodeId: 's',
+      attemptId: 's#0',
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      request: { messageCount: 1, messages: [{ role: 'user', chars: 1, contentHash: 'h' }] },
+    });
+    if (ev.type !== 'activity.captured') throw new Error('type changed');
+    expect('text' in ev.request.messages[0]!).toBe(false);
+    expect('completion' in ev).toBe(false);
+  });
+
+  it("leaves a non-secure node's captured text untouched", () => {
+    const ev = eng.redact({
+      type: 'activity.captured',
+      runId: RUN,
+      nodeId: 'p',
+      attemptId: 'p#0',
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      request: {
+        messageCount: 1,
+        messages: [{ role: 'user', chars: 2, contentHash: 'h', text: 'hi' }],
+      },
+      completion: { chars: 2, contentHash: 'h', text: 'yo' },
+    });
+    expect(ev).toMatchObject({
+      completion: { text: 'yo' },
+      request: { messages: [{ text: 'hi' }] },
+    });
+  });
+
   it('passes a run-level event through (no node to be secure)', () => {
     const ev: EngineEvent = {
       type: 'run.started',

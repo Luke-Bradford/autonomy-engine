@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useBusyAction } from '../../hooks/useBusyAction';
-import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
+import { describeDatasetAddress, surrogateSafeCut, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatNodeDuration, formatOutputValue, surrogateSafeCut } from './format';
+import { formatNodeDuration, formatOutputValue } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';

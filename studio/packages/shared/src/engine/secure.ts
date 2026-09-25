@@ -46,7 +46,7 @@
  * invalid. Nothing re-redacts, and a second caller must not be added.
  */
 import type { Node } from '../schemas/pipeline.js';
-import type { EngineEvent } from './types.js';
+import type { CapturedContent, EngineEvent } from './types.js';
 import {
   outputContract,
   matchesType,
@@ -94,6 +94,29 @@ function redactOutputs(node: Node, outputs: Record<string, unknown>): Record<str
 }
 
 /**
+ * One `activity.captured` field on a secure node: the hash becomes the marker,
+ * and so does the text when a `capture: 'full'` node stored one (#605). The
+ * text becomes the marker rather than being DROPPED, because an absent text
+ * means "metadata mode" and the monitor must be able to say which it is.
+ * `truncated` goes with the text; `chars` stays, as it always has.
+ *
+ * Stricter than the spec's per-flag split (prompt is `secureInput`-eligible,
+ * completion `secureOutput`-eligible): EITHER flag withholds every field,
+ * matching the hash rule F4 already applied here — a completion routinely
+ * quotes its prompt, so the split would leak through the other half.
+ *
+ * A non-secure prompt that literally reads `SECURE_REDACTED` renders as a
+ * withheld one. Outputs have the same property; the marker is not forgeable
+ * INTO a secret, only into a false "withheld".
+ */
+function redactCaptured<T extends CapturedContent>(field: T): T {
+  if (field.text === undefined) return { ...field, contentHash: SECURE_REDACTED };
+  const withText: T = { ...field, contentHash: SECURE_REDACTED, text: SECURE_REDACTED };
+  delete withText.truncated;
+  return withText;
+}
+
+/**
  * PURE: the event as it may be persisted, given the doc node it belongs to
  * (`undefined` — a run-level event, or a node the doc does not know — passes
  * untouched).
@@ -120,13 +143,11 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         request: {
           ...event.request,
           ...(event.request.system !== undefined
-            ? { system: { ...event.request.system, contentHash: SECURE_REDACTED } }
+            ? { system: redactCaptured(event.request.system) }
             : {}),
-          messages: event.request.messages.map((m) => ({ ...m, contentHash: SECURE_REDACTED })),
+          messages: event.request.messages.map(redactCaptured),
         },
-        ...(event.completion !== undefined
-          ? { completion: { ...event.completion, contentHash: SECURE_REDACTED } }
-          : {}),
+        ...(event.completion !== undefined ? { completion: redactCaptured(event.completion) } : {}),
       };
     case 'activity.agentTelemetry':
       return event.outputHash !== undefined ? { ...event, outputHash: SECURE_REDACTED } : event;

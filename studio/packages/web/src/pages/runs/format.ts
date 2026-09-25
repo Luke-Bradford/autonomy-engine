@@ -1,4 +1,4 @@
-import { DatasetAddressSchema, describeDatasetAddress } from '@autonomy-studio/shared';
+import { DatasetAddressSchema, describeDatasetAddress, surrogateSafeCut } from '@autonomy-studio/shared';
 import type { Run, RunEvent } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
 
@@ -181,22 +181,6 @@ export function failureClass(kind: string | undefined, code: string | undefined)
   return [kind, code].filter((v): v is string => typeof v === 'string' && v.length > 0).join(' · ');
 }
 
-/** A UTF-16 high surrogate — the FIRST half of an astral character's pair. */
-export function isHighSurrogate(unit: number): boolean {
-  return unit >= 0xd800 && unit <= 0xdbff;
-}
-
-/**
- * Where to cut `text` so that it keeps at most `max` UTF-16 units WITHOUT
- * splitting an astral character's surrogate pair — `max`, or one less when the
- * last kept unit would be a lone high surrogate (rendered as a replacement
- * glyph instead of ending where it was cut). Callers decide what to do with the
- * remainder; this only answers where it starts.
- */
-export function surrogateSafeCut(text: string, max: number): number {
-  return isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max;
-}
-
 /** The cap on a streamed output value's inline rendering, in UTF-16 units. */
 export const MAX_INLINE_OUTPUT_CHARS = 80;
 
@@ -208,7 +192,8 @@ export const MAX_INLINE_OUTPUT_CHARS = 80;
  * is a small object, but nothing stops an adapter streaming a large one, and
  * this renders inline in a table row. A string renders bare (JSON would wrap it
  * in quotes); anything else as compact JSON. The cut never splits a surrogate
- * pair (`surrogateSafeCut`, shared with `OutputsSection`) and says it was cut.
+ * pair (`surrogateSafeCut`, from shared since #605 — the server's capture
+ * budget cuts with it too) and says it was cut.
  */
 export function formatOutputValue(value: unknown): string {
   let text: string;
