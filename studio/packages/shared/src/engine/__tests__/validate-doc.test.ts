@@ -591,7 +591,7 @@ describe('validateDoc — foreach container (#4 A4)', () => {
         [NAME],
       );
       expect(validateDoc(d).join(' '), items).toContain(
-        "container.fe.items: items must be an array expression, got",
+        'container.fe.items: items must be an array expression, got',
       );
     }
   });

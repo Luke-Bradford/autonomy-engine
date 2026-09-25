@@ -1672,8 +1672,7 @@ function refsInScope(
     const contract = outputsById?.get(id);
     if (contract?.kind !== 'declared') continue;
     const dominates = guaranteed.has(id);
-    const rescuable =
-      site.offerRescued && !dominates && (reachable.has(id) || soft.has(id));
+    const rescuable = site.offerRescued && !dominates && (reachable.has(id) || soft.has(id));
     if (!dominates && !rescuable) continue;
     for (const declared of contract.outputs) {
       const ref = `nodes.${id}.output.${declared.name}`;

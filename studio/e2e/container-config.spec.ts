@@ -403,7 +403,9 @@ test.describe('#864 — the expression flyout on container fields', () => {
     // rule is what keeps the upstream `rows` out — neither restated in the UI.
     await expect(panel(page).getByRole('button', { name: /→ note/ })).toHaveCount(0);
     await expect(panel(page).getByRole('button', { name: /→ rows/ })).toHaveCount(0);
-    await panel(page).getByRole('button', { name: /→ done/ }).click();
+    await panel(page)
+      .getByRole('button', { name: /→ done/ })
+      .click();
     await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${nodes.n_body.output.done}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
@@ -435,7 +437,9 @@ test.describe('#864 — the expression flyout on container fields', () => {
     await configure(page, 'foreach 1');
     await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
     await expect(panel(page).getByRole('button', { name: /→ done/ })).toHaveCount(0);
-    await panel(page).getByRole('button', { name: /→ rows/ }).click();
+    await panel(page)
+      .getByRole('button', { name: /→ rows/ })
+      .click();
     await expect(page.getByLabel(/^items/)).toHaveValue('${nodes.n_src.output.rows}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
