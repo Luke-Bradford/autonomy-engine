@@ -65,13 +65,18 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     expect(ev).toMatchObject({ outputs: { count: SECURE_REDACTED_INVALID } });
   });
 
-  it('is idempotent — a second pass cannot flip a verdict', () => {
-    const n = node('n', { ...SECURE, ...declares([{ name: 'count', type: 'number' }]) });
-    const e = createEngine({ nodes: [n], edges: [] });
-    for (const raw of [3, 'seven']) {
-      const once = e.redact(succeeded('n', { count: raw }));
-      expect(e.redact(once)).toEqual(once);
-    }
+  // Review NITPICK on #1313: the verdict is taken on the RAW value, so an output
+  // that merely spells a marker cannot forge one.
+  it('a raw value spelled like a marker cannot forge a verdict', () => {
+    const str = node('t', { ...SECURE, ...declares([{ name: 's', type: 'string' }]) });
+    const num = node('n', { ...SECURE, ...declares([{ name: 'count', type: 'number' }]) });
+    const e = createEngine({ nodes: [str, num], edges: [] });
+    expect(e.redact(succeeded('t', { s: SECURE_REDACTED_INVALID }))).toMatchObject({
+      outputs: { s: SECURE_REDACTED },
+    });
+    expect(e.redact(succeeded('n', { count: SECURE_REDACTED }))).toMatchObject({
+      outputs: { count: SECURE_REDACTED_INVALID },
+    });
   });
 
   it('resolves a parallel-foreach INSTANCE id (`s@2`) to its doc node', () => {

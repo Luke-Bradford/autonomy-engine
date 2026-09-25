@@ -37,15 +37,19 @@
  * `waiting` node). A LEGACY log that carries plaintext for a secure node is
  * checked exactly as before: neither marker matches a real value.
  *
- * IDEMPOTENT: a marker re-redacts to itself (`SECURE_REDACTED` "matches" in
- * secure mode; `SECURE_REDACTED_INVALID` stays invalid), so a second pass can
- * never flip a verdict.
+ * RUNS EXACTLY ONCE per event — `appendAndFold` is its only caller — so the
+ * verdict is taken with the plain type check on the RAW value. That is what
+ * stops an output that merely SPELLS a marker from forging a verdict (a
+ * declared `string` whose value is the invalid-marker text is still a valid
+ * string). The price is that it is not idempotent: re-redacting a valid
+ * `number` output's marker would judge the marker string itself and flip it to
+ * invalid. Nothing re-redacts, and a second caller must not be added.
  */
 import type { Node } from '../schemas/pipeline.js';
 import type { EngineEvent } from './types.js';
 import {
   outputContract,
-  isSecureOutputValue,
+  matchesType,
   SECURE_REDACTED,
   SECURE_REDACTED_INVALID,
 } from './outputs.js';
@@ -80,7 +84,7 @@ function redactOutputs(node: Node, outputs: Record<string, unknown>): Record<str
     const d = declared.find((o) => o.name === name);
     if (d?.optional === true && (value === null || value === undefined)) {
       out[name] = value;
-    } else if (d === undefined || isSecureOutputValue(value, d.type)) {
+    } else if (d === undefined || matchesType(value, d.type)) {
       out[name] = SECURE_REDACTED;
     } else {
       out[name] = SECURE_REDACTED_INVALID;

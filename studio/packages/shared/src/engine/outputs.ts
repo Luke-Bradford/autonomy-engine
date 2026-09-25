@@ -219,7 +219,7 @@ export const SECURE_REDACTED_INVALID = '[redacted: secure, invalid]';
  * the verdict as the marker, so `SECURE_REDACTED` passes whatever the declared
  * type and `SECURE_REDACTED_INVALID` fails it (even a declared `string`, which
  * the marker would otherwise satisfy). Anything else is a plaintext value — a
- * legacy log, or redaction's own first look — and is checked as normal.
+ * legacy log from before the flag was honoured — and is checked as normal.
  */
 export function isSecureOutputValue(value: unknown, type: OutputType): boolean {
   if (value === SECURE_REDACTED) return true;
@@ -227,7 +227,7 @@ export function isSecureOutputValue(value: unknown, type: OutputType): boolean {
   return matchesType(value, type);
 }
 
-function matchesType(value: unknown, type: OutputType): boolean {
+export function matchesType(value: unknown, type: OutputType): boolean {
   switch (type) {
     case 'string':
       return typeof value === 'string';
