@@ -27,6 +27,7 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
+import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
 import type { ChildRuns } from '../child.js';
@@ -187,21 +188,6 @@ function gate(): { held: Promise<void>; open: () => void } {
     open = resolve;
   });
   return { held, open };
-}
-
-/** Poll `pred` until it holds or `ms` elapses; the final answer either way. */
-async function eventually(pred: () => boolean, ms = 2000): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (pred()) return true;
-    await sleep(5);
-  }
-  return pred();
-}
-
-/** `promise`'s value, or `'timeout'` if it has not settled within `ms`. */
-function within<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
-  return Promise.race([promise, sleep(ms).then(() => 'timeout' as const)]);
 }
 
 // --- tests -----------------------------------------------------------------
@@ -1705,7 +1691,10 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
 
     const driving = startRun(deps(db, { adapters, catalog: pairedCatalog() }), run);
     try {
-      expect(await eventually(() => eventTypes(db, run.id).includes('node.output'))).toBe(true);
+      await until(
+        () => eventTypes(db, run.id).includes('node.output'),
+        'the output while the adapter is held',
+      );
       const serialized = JSON.stringify(loadEngineEvents(db, run.id));
       expect(serialized).not.toContain('SINK-KEY-XYZ');
       expect(serialized).toContain('wrote with');
@@ -4328,7 +4317,10 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
 
     const driving = startRun(deps(db, { adapters }), run);
     try {
-      expect(await eventually(() => eventTypes(db, run.id).includes('node.output'))).toBe(true);
+      await until(
+        () => eventTypes(db, run.id).includes('node.output'),
+        'the output while the adapter is held',
+      );
       expect(eventTypes(db, run.id)).not.toContain('node.succeeded');
     } finally {
       g.open();
@@ -4413,9 +4405,12 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
     try {
       expect((await stream.next()).value).toMatchObject({ type: 'node.dispatched' });
       // Reaches the output while the adapter is still held at the gate.
-      expect(await within(stream.next(), 500)).toMatchObject({
-        value: { type: 'node.output', name: 'progress' },
+      let second: IteratorResult<EngineEvent> | undefined;
+      void stream.next().then((r) => {
+        second = r;
       });
+      await until(() => second !== undefined, 'the output while the adapter is held');
+      expect(second).toMatchObject({ value: { type: 'node.output', name: 'progress' } });
 
       let closed = false;
       const closing = stream.return(undefined).then(() => {
