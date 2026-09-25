@@ -1,6 +1,6 @@
 import sodium from 'libsodium-wrappers';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { NewPipelineVersion, Node } from '@autonomy-studio/shared';
+import type { EngineEvent, NewPipelineVersion, Node } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, MAX_CALL_DEPTH } from '@autonomy-studio/shared';
 import { archivePipelineRow, createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -56,14 +56,14 @@ function leaf(id: string, outputs: { name: string; type: 'number' | 'string' }[]
   };
 }
 
-function callNode(id: string, pipelineVersionId: string): Node {
+function callNode(id: string, pipelineVersionId: string, wait?: boolean): Node {
   seq += 1;
   return {
     id,
     type: 'call_pipeline',
     config: {},
     position: { x: seq, y: 0 },
-    call: { pipelineVersionId, params: {} },
+    call: { pipelineVersionId, params: {}, ...(wait === undefined ? {} : { wait }) },
   };
 }
 
@@ -108,6 +108,9 @@ function boundary(
   db: Db,
   nodeOutputs: Record<string, Record<string, unknown>> = {},
   nodePlans: StubExecutorOptions['nodes'] = {},
+  /** #796 item 2 — run before `call.detached` is handed to the pump, to open
+   * the window where the kicked child finishes first. */
+  holdDetach?: () => Promise<void>,
 ) {
   const resolveDoc = resolveDocFor(db);
   const drives = createRunDrives();
@@ -135,9 +138,18 @@ function boundary(
       result: (id) => childRuns.result(id),
     },
   });
+  async function* startChildHeld(
+    command: ExecutorCommand,
+    runId: string,
+  ): AsyncGenerator<EngineEvent> {
+    for await (const e of real.perform(command, runId)) {
+      if (e.type === 'call.detached' && holdDetach !== undefined) await holdDetach();
+      yield e;
+    }
+  }
   const executor: Executor = {
     perform: (command: ExecutorCommand, runId: string) =>
-      command.type === 'startChild' ? real.perform(command, runId) : stub.perform(command, runId),
+      command.type === 'startChild' ? startChildHeld(command, runId) : stub.perform(command, runId),
   };
   const deps = { db, resolveDoc, executor, alarms: refuseToArm, drives, bus };
   childRuns = createChildRuns(deps);
@@ -296,6 +308,56 @@ describe('#796 — a call node runs a REAL child', () => {
     expect(again.terminal).toBe(true); // already finished → resolve, don't re-kick
     expect(again.announced).toBe(true); // already announced → don't double-announce
     expect(listRuns(db, { parentRunId: run.id })).toHaveLength(1);
+    b.unsubscribe();
+  });
+});
+
+describe('#796 item 2 — wait: false detaches the parent from its child', () => {
+  it('the parent SUCCEEDS once the child is started; the failing child runs on and returns nothing', async () => {
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv, false)]);
+    const run = seedRun(db, parentPv);
+    const b = boundary(db, {}, { work: { outcome: 'failure', error: 'boom' } });
+
+    await b.drives.serialize(run.id, () => startRun(b, run));
+    await settle(b.drives);
+
+    expect(types(db, run.id)).toEqual([
+      'run.started',
+      'call.started',
+      'call.detached',
+      'run.finished',
+    ]);
+    expect(getRun(db, run.id)!.status).toBe('success');
+    const children = listRuns(db, { parentRunId: run.id });
+    expect(children).toHaveLength(1);
+    expect(children[0]!.status).toBe('failure'); // it really ran, to its own end
+    b.unsubscribe();
+  });
+
+  it('a child that finishes BEFORE the detach lands does not resolve the node with its result', async () => {
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv, false)]);
+    const run = seedRun(db, parentPv);
+    const childTerminal = async (): Promise<void> => {
+      for (let i = 0; i < 400; i += 1) {
+        const [c] = listRuns(db, { parentRunId: run.id });
+        if (c !== undefined && (c.status === 'failure' || c.status === 'success')) break;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      // …and let the reactor's microtask + its out-of-band append run.
+      for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    };
+    const b = boundary(db, {}, { work: { outcome: 'failure', error: 'boom' } }, childTerminal);
+
+    await b.drives.serialize(run.id, () => startRun(b, run));
+    await settle(b.drives);
+
+    expect(listRuns(db, { parentRunId: run.id })[0]!.status).toBe('failure');
+    expect(types(db, run.id)).not.toContain('call.returned');
+    expect(getRun(db, run.id)!.status).toBe('success');
     b.unsubscribe();
   });
 });

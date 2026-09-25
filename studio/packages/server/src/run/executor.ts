@@ -175,6 +175,20 @@ function callFailed(
   };
 }
 
+/** #796 item 2 — a `wait: false` call node's child is started; the node is done. */
+function callDetached(
+  runId: string,
+  command: Extract<ExecutorCommand, { type: 'startChild' }>,
+): EngineEvent {
+  return {
+    type: 'call.detached',
+    runId,
+    callNodeId: command.callNodeId,
+    attemptId: command.attemptId,
+    childRunId: command.childRunId,
+  };
+}
+
 /**
  * Item 7 / S3 — scrub every held plaintext from an outbound adapter event before
  * it becomes durable. Only the value-bearing shapes can carry a leak: a
@@ -1612,6 +1626,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // unreachable for it. If a future change did make it reachable,
           // `result()` reads an empty log as `failure` (`child.ts`), which is
           // the fail-safe direction rather than a silent success.
+          // #796 item 2 — a detached call takes nothing from its child, not
+          // even from one that has already finished: it was started, which is
+          // the node's whole claim.
+          if (!command.wait) {
+            yield callDetached(runId, command);
+            return;
+          }
           const { outcome, outputs } = deps.childRuns.result(command.childRunId);
           yield {
             type: 'call.returned',
@@ -1644,6 +1665,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // Awaiting instead would strand a parent whose child PARKS, and would
         // deadlock boot reconcile outright (see `child.ts`'s module doc).
         deps.childRuns.kick(ensured.run);
+        // #796 item 2 — a `wait: false` node is done once its child is started.
+        // The detach is yielded AFTER the kick, deliberately: once it is folded
+        // the node is terminal and nothing re-emits `startChild`, so a detach
+        // that came first and a crash before the kick would strand the child
+        // with no one left to start it. The price is the opposite race — the
+        // child can finish before this lands — and `isDetachedChild` in
+        // `child.ts` is what keeps the reactor from resolving the node with the
+        // child's result in that window.
+        if (!command.wait) yield callDetached(runId, command);
         return;
       }
       yield* performDispatch(command, runId);
