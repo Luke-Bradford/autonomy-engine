@@ -316,7 +316,7 @@ export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<
 export function revealReady(
   pending: ReadonlySet<string>,
   boxes: ReadonlyMap<string, ContainerBox>,
-  containers: readonly Container[],
+  containers: Container[],
   docNodeIds: ReadonlySet<string>,
 ): { ready: string[]; waiting: string[] } {
   const { owner } = containerMembership(containers);
