@@ -162,7 +162,8 @@ export function WindowEditor({
       {/* Deliberately NO `min`: a valid offset is negative, and the form runs
           native constraint validation before its own `role="alert"` path. */}
       <label>
-        Depend on earlier windows: offset in seconds (optional — negative, before each window&apos;s start)
+        Depend on earlier windows: offset in seconds (optional — negative, before each window&apos;s
+        start)
         <input
           type="number"
           max={-1}

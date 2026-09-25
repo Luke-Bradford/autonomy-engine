@@ -136,16 +136,23 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
     selfDependency: { offsetInSeconds: -7200 },
   };
   /** A valid window with nothing but the geometry — the base the sub-objects are typed into. */
-  const base = (): WindowFormState => windowToForm({
-    frequency: 'hour',
-    interval: 2,
-    startTime: '2026-08-01T08:00:00.000Z',
-  });
+  const base = (): WindowFormState =>
+    windowToForm({
+      frequency: 'hour',
+      interval: 2,
+      startTime: '2026-08-01T08:00:00.000Z',
+    });
 
   it('round-trips a fully-populated window byte for byte', () => {
     expect(windowOf(windowToForm(stored))).toEqual(stored);
-    expect(windowOf(windowToForm({ ...stored, selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 } })))
-      .toEqual({ ...stored, selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 } });
+    expect(
+      windowOf(
+        windowToForm({
+          ...stored,
+          selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 },
+        }),
+      ),
+    ).toEqual({ ...stored, selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 } });
   });
 
   it('loads each sub-object field into its own text control', () => {
