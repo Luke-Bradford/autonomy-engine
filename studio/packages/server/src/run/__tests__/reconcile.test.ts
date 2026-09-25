@@ -2527,3 +2527,98 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
     expect(report.resumed).toContain(child.id);
   });
 });
+
+describe('reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not its parent\'s', () => {
+  /**
+   * A `call.wait: false` parent never wanted its child's result, so neither
+   * reconcile rule that keys on "the parent can no longer consume this" applies:
+   * #1053's `parent_terminal` freeze, and #1041's sweep of a never-started child.
+   * The parent's DOC says detached; its log may not yet carry `call.detached`
+   * (the executor kicks first), so these seed only `call.started`.
+   */
+  function seedDetachedFamily(db: Db, parentLog: 'started' | 'detached') {
+    const childPvId = seedVersion(db, [node('c')]);
+    const parentPvId = seedVersion(db, [
+      node('caller', {
+        type: 'call_pipeline',
+        call: { pipelineVersionId: childPvId, params: {}, wait: false },
+      }),
+    ]);
+    const parent = seedRun(db, parentPvId);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: childPvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    const ids = { runId: parent.id, callNodeId: 'caller', attemptId: 'caller#0', childRunId: child.id };
+    appendEngineEvent(db, { type: 'run.started', runId: parent.id, pipelineVersionId: parentPvId, params: {} });
+    appendEngineEvent(db, { type: 'call.started', ...ids });
+    if (parentLog === 'detached') appendEngineEvent(db, { type: 'call.detached', ...ids });
+    return { parent, child, childPvId };
+  }
+
+  it('RESUMES a started detached child of a terminal parent, where a waiting one is frozen', async () => {
+    const { db } = freshDb();
+    const { parent, child } = seedDetachedFamily(db, 'started');
+    appendEngineEvent(db, { type: 'run.finished', runId: parent.id, outcome: 'failure' });
+    updateRun(db, parent.id, { status: 'failure', finishedAt: Date.now() });
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ nodes: { c: { hang: true, idempotent: true } } }),
+        alarms: stubAlarms(),
+      },
+      child,
+    );
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.interrupted).not.toContain(child.id);
+    expect(report.resumed).toContain(child.id);
+    expect(getRun(db, child.id)!.status).toBe('success');
+  });
+
+  it('STARTS a never-started detached child through kickChild — even while its parent still runs', async () => {
+    const { db } = freshDb();
+    const { child } = seedDetachedFamily(db, 'detached');
+    const kicked: string[] = [];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      kickChild: (run) => kicked.push(run.id),
+    });
+
+    expect(kicked).toEqual([child.id]);
+    expect(report.kickedDetached).toEqual([child.id]);
+    expect(report.sweptOrphans).not.toContain(child.id);
+  });
+
+  it('never SWEEPS a never-started detached child of a terminal parent; without kickChild it is deferred', async () => {
+    const { db } = freshDb();
+    const { parent, child } = seedDetachedFamily(db, 'started');
+    appendEngineEvent(db, { type: 'run.finished', runId: parent.id, outcome: 'success' });
+    updateRun(db, parent.id, { status: 'success', finishedAt: Date.now() });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.sweptOrphans).toEqual([]);
+    expect(report.deferred).toContain(child.id);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+});
