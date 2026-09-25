@@ -269,6 +269,21 @@ describe('deriveNodeActivity', () => {
     ]);
   });
 
+  it('#796 item 2 — call.detached resolves a wait:false call node SUCCESS, keeping the child link', () => {
+    const ids = { runId: 'r', callNodeId: 'c', attemptId: 'c#0', childRunId: 'child_abc' };
+    const [row] = deriveNodeActivity([
+      envelope({ type: 'call.started', ...ids }),
+      envelope({ type: 'call.detached', ...ids }),
+    ]);
+    expect(row).toMatchObject({
+      nodeId: 'c',
+      status: 'success',
+      attempts: 1, // ONE attempt: detaching does not count a second
+      outputValues: {}, // "returned nothing" is exact, not an absent section
+      childRunIds: ['child_abc'],
+    });
+  });
+
   it('#796 — call.started puts the call node on the page WHILE its child runs', () => {
     // Before #796 a call node's only event was `call.returned`, so for the whole
     // time its child ran the node had NO row here at all (#735's blind spot) —

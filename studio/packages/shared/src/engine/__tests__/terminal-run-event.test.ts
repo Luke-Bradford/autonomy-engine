@@ -91,6 +91,8 @@ describe('#443 — terminalStatusOf', () => {
       // #796 — the durable record that a `call_pipeline` child was spawned.
       // NON-terminal: it announces a park, it does not end anything.
       { type: 'call.started', ...run, callNodeId: 'c1', attemptId: 'c1#0', childRunId: 'r2' },
+      // #796 item 2 — a detached call stopped waiting. NON-terminal for the run.
+      { type: 'call.detached', ...run, callNodeId: 'c1', attemptId: 'c1#0', childRunId: 'r2' },
       {
         type: 'call.returned',
         ...run,

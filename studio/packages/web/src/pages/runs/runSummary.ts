@@ -1006,6 +1006,21 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         countIfUnstarted(n); // a call node's only event
         break;
       }
+      case 'call.detached': {
+        /* #796 item 2 — a `wait: false` call node is DONE once its child is
+           started: `success` with nothing returned, which is what the reducer
+           folds. `{}` rather than leaving the section absent, on #911's
+           reasoning for control nodes — "returned nothing" is exact. The
+           child's id stays in `childRunIds` (recorded by `call.started`), so
+           the drill still reaches a child that is very likely still running. */
+        const n = ensure(e.callNodeId);
+        clearResult(n);
+        n.status = 'success';
+        n.outputValues = {};
+        n.instanceId = instanceOf(e.callNodeId);
+        countIfUnstarted(n);
+        break;
+      }
       case 'run.reseeded': {
         /* #918 / RS1 — the ONE run-level event that carries per-node results,
            and the only arm here that seeds several rows from a single event.

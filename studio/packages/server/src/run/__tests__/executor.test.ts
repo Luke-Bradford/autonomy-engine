@@ -2911,6 +2911,7 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
   const startChild = (pipelineVersionId: string) =>
     ({
       type: 'startChild' as const,
+      wait: true,
       callNodeId: 'caller',
       attemptId: 'attempt-1',
       childRunId: 'child-1',

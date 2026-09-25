@@ -282,6 +282,7 @@ describe('#796 — a call node runs a REAL child', () => {
     // Re-issue the SAME command the reducer would re-emit after a restart.
     const command = {
       type: 'startChild' as const,
+      wait: true,
       callNodeId: 'caller',
       attemptId: 'caller#0',
       childRunId: first[0]!.id,
@@ -307,6 +308,7 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const out = b.childRuns.ensure(
       {
         type: 'startChild',
+        wait: true,
         callNodeId: 'caller',
         attemptId: 'caller#0',
         // A DISTINCT id per probe: `ensure` adopts an existing child before it
@@ -382,6 +384,7 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
       out = b.childRuns.ensure(
         {
           type: 'startChild',
+          wait: true,
           callNodeId: 'caller',
           attemptId: 'caller#0',
           childRunId: 'child_throws',
@@ -415,6 +418,7 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const out = b.childRuns.ensure(
       {
         type: 'startChild',
+        wait: true,
         callNodeId: 'caller',
         attemptId: 'caller#0',
         childRunId: 'child_unsafe',
