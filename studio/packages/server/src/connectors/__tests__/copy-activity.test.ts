@@ -896,6 +896,22 @@ describe('copy activity — §5 progress ticks stream while the copy runs (#1299
     expect(closed).toBe(true);
   });
 
+  it('maps a writeRows that throws SYNCHRONOUSLY onto the failed path, counters included', async () => {
+    const { io } = gatedIo([]);
+    const throwing: CopyIo = {
+      ...io,
+      writeRows: () => {
+        throw new DatasetIoError('permanent', 'refused before any promise existed');
+      },
+    };
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(ctxFor(), throwing)) events.push(e);
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toMatch(/refused before any promise existed/);
+    expect(events.some((e) => e.type === 'output' && e.name === 'rowsWritten')).toBe(true);
+  });
+
   it('keeps the running total as rowsWritten when the sink cannot prove a rollback', async () => {
     const { io, release } = gatedIo(
       [[{ id: 1, name: 'a' }]],

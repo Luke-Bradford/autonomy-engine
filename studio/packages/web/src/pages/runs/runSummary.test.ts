@@ -2993,6 +2993,27 @@ describe('deriveNodeActivity — the latest streamed value (#1299)', () => {
     expect(c?.lastOutputName).toBe('progress');
   });
 
+  it('clears it on a retry RE-OPEN, before any re-dispatch — no stale live reading', () => {
+    for (const type of ['node.retryRequested', 'node.retryDue'] as const) {
+      const [c] = deriveNodeActivity([
+        dispatched('c#0', 1_000),
+        tick({ rowsInFlight: 1000 }, 1_100),
+        envelope(
+          {
+            type,
+            runId: 'r',
+            nodeId: 'c',
+            previousAttemptId: 'c#0',
+            reason: 'crash',
+          } as EngineEvent,
+          1_200,
+        ),
+      ]);
+      expect(c?.status, type).toBe('dispatched');
+      expect(c?.lastOutput, type).toBeUndefined();
+    }
+  });
+
   it('keeps a tick whose value is undefined as a tick', () => {
     const [c] = deriveNodeActivity([dispatched('c#0', 1_000), tick(undefined, 1_100)]);
     expect(c?.lastOutput).toEqual({ name: 'progress', value: undefined });

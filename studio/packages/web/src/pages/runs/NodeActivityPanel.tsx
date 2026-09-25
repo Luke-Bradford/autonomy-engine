@@ -5,7 +5,7 @@ import { describeDatasetAddress, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatNodeDuration, formatOutputValue, isHighSurrogate } from './format';
+import { formatNodeDuration, formatOutputValue, surrogateSafeCut } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 
@@ -638,8 +638,7 @@ function OutputsSection({ node }: { node: NodeActivity }) {
      fix: the withheld half is shown by the toggle like everything else after
      the cut, and the hint below reports the number actually mounted rather
      than the nominal cap, so the two never disagree. */
-  const cutsPair = truncated && isHighSurrogate(text.charCodeAt(MAX_OUTPUT_CHARS - 1));
-  const cut = cutsPair ? MAX_OUTPUT_CHARS - 1 : MAX_OUTPUT_CHARS;
+  const cut = truncated ? surrogateSafeCut(text, MAX_OUTPUT_CHARS) : MAX_OUTPUT_CHARS;
   const shown = truncated && !expanded ? text.slice(0, cut) : text;
   /* Read at render, not cached: `navigator.clipboard` is undefined outside a
      secure context, and offering a control that cannot work is worse than not

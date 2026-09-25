@@ -443,17 +443,18 @@ export async function* runCopyActivity(
       (error: unknown) => ({ ok: false as const, error }),
     )
     .finally(() => ticks.close());
+  let outcome: Awaited<typeof write>;
   try {
     for await (const progress of ticks) {
       yield { type: 'output', name: COPY_PROGRESS_OUTPUT, value: progress };
     }
   } finally {
-    // A consumer that closes this generator mid-copy must not leave the write —
-    // an open transaction on the operator's store — running under nobody.
-    // Closing waits for it, as the executor waits for its adapter.
-    await write;
+    // In `finally`, not after the loop: a consumer that closes this generator
+    // mid-copy must not leave the write — an open transaction on the operator's
+    // store — running under nobody. Closing waits for it, as the executor waits
+    // for its adapter; only a normal exit goes on to read the outcome.
+    outcome = await write;
   }
-  const outcome = await write;
 
   try {
     if (!outcome.ok) throw outcome.error;

@@ -213,13 +213,20 @@ test('#1299 — a copy streams per-batch progress, and the run page shows the la
     const ticks = events.filter(
       (e) => e.type === 'node.output' && e.payload.name === COPY_PROGRESS_OUTPUT,
     );
-    /* 999, not 1,000: the CSV parser batches raw LINES, and the header line is
-       one of the first batch's 1,000 before the reader strips it (measured —
-       the first run of this spec asserted 1,000). */
-    expect(ticks.map((e) => e.payload.value)).toEqual([
-      { rowsRead: 999, rowsInFlight: 999, rowsFailed: 0 },
-      { rowsRead: 1500, rowsInFlight: 1500, rowsFailed: 0 },
-    ]);
+    /* Two ticks, the first a genuine PART of the copy and the second all of it.
+       Deliberately not pinned to 1,000: the CSV parser batches raw LINES, so the
+       header takes one of the first batch's slots (measured: 999) — a reader
+       detail this spec is not about. */
+    const values = ticks.map((e) => e.payload.value as Record<string, number>);
+    expect(values).toHaveLength(2);
+    expect(values[0]!.rowsRead).toBeGreaterThan(0);
+    expect(values[0]!.rowsRead).toBeLessThan(1500);
+    expect(values[0]).toEqual({
+      rowsRead: values[0]!.rowsRead,
+      rowsInFlight: values[0]!.rowsRead,
+      rowsFailed: 0,
+    });
+    expect(values[1]).toEqual({ rowsRead: 1500, rowsInFlight: 1500, rowsFailed: 0 });
     const succeededAt = events.findIndex((e) => e.type === 'node.succeeded');
     expect(succeededAt).toBeGreaterThan(events.indexOf(ticks[1]!));
     expect(events[succeededAt]?.payload.outputs).toMatchObject({ rowsWritten: 1500 });

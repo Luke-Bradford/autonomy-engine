@@ -129,7 +129,7 @@ export interface NodeActivity {
    * because `node.output.value` is `z.unknown()` — a tick whose value is
    * `undefined` must still read as a tick.
    *
-   * Cleared on every dispatch, unlike `lastOutputName`: this is attempt-scoped
+   * Cleared on every dispatch and retry re-open, unlike `lastOutputName`: this is attempt-scoped
    * progress, and attempt 1's "1,000 rows in flight" shown while attempt 2 runs
    * would be a live reading of a copy that has already rolled back. Shared by a
    * parallel foreach's item instances like the rest of the row, so there it is
@@ -863,6 +863,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            last attempt's target standing would name a destination over a node
            that is being sent somewhere else. The re-dispatch sets it again. */
         n.datasetAddresses = undefined;
+        /* #1299 — and the last progress tick, for the same argument again: the
+           status is `dispatched` from here, so the table would show the failed
+           attempt's "rows in flight" as live progress of a node that has not
+           started its next attempt — and would keep showing it if the process
+           dies before the re-dispatch. */
+        n.lastOutput = undefined;
         break;
       }
       case 'node.retryScheduled': {
