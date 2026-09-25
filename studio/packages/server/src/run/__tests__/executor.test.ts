@@ -4312,12 +4312,15 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
 describe('createExecutor — events stream while the activity runs (#1135)', () => {
   const url = 'https://x/y';
 
+  // `http_request` declares its outputs, so a success must carry them.
+  const httpOutputs = { status: 200, body: '', headers: {} };
+
   it('a non-terminal event is durable while its node is still running', async () => {
     const g = gate();
     const adapters = fakeHttpAdapter(async function* () {
       yield { type: 'output', name: 'progress', value: 1 };
       await g.held;
-      yield { type: 'succeeded', outputs: {} };
+      yield { type: 'succeeded', outputs: httpOutputs };
     });
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
@@ -4361,7 +4364,7 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
       try {
         yield { type: 'output', name: 'progress', value: 1 };
         await g.held;
-        yield { type: 'succeeded', outputs: {} };
+        yield { type: 'succeeded', outputs: httpOutputs };
       } finally {
         adapterFinished = true;
       }

@@ -377,8 +377,8 @@ export async function* runCopyActivity(
   // while this one is already known. Emitting it once up front is what puts it
   // on the FAILING path too — and a copy that then failed for an unrelated
   // reason is exactly the one whose operator is reading the log. The executor
-  // buffers every adapter event and replays them in order around the terminal
-  // (`executor.ts`), so an early yield costs nothing in the run log's ordering.
+  // streams adapter events into the log in the order they are yielded
+  // (`executor.ts`, #1135), so this lands before any row is written.
   if (drift.unmapped.length > 0) {
     yield {
       type: 'warned',
@@ -433,15 +433,12 @@ export async function* runCopyActivity(
     // outputs, so a failed or cancelled copy would otherwise report how far it
     // got NOWHERE — the counters would die with the throw. Emitting them as
     // `output` events first is what makes a partial legible; the executor keeps
-    // every buffered event regardless of which terminal follows.
+    // every event it was handed regardless of which terminal follows.
     //
     // On the SUCCESS path they would be redundant with `succeeded.outputs`, so
     // they are emitted here only. §5 also asks for per-batch ticks during a long
-    // copy; those are NOT emitted, and #1135 records why — `runAdapter` buffers
-    // every event until the terminal (`executor.ts:788` collects, `:1283`
-    // yields), so a tick cannot reach anyone before the copy has already
-    // finished. Building the machinery would produce a record identical to the
-    // one below.
+    // copy. Since #1135 the executor streams, so a tick would now reach the log
+    // while the copy runs; they are not emitted yet, and #1299 owns building them.
     // `onBatch` ticks the RUNNING TOTAL of rows inserted into the still-OPEN
     // transaction, and the sink's own docblock is explicit that "a tick is
     // progress, not committed truth … an operator can legitimately see '500
