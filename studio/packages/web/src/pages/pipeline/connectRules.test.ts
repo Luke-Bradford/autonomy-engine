@@ -762,3 +762,76 @@ describe('backEdgeOffer (U6e/U19)', () => {
     ).toBeNull();
   });
 });
+
+/**
+ * #1064 — one intent, one edge, at the GESTURE. The Edge panel disables the same
+ * choices (`takenConditions`); this is the drag/click-connect and reconnect
+ * half, which is where the operator actually meets it.
+ */
+describe('connectRejection — overlapping outcomes (#1064)', () => {
+  const two = (edges: Edge[]) => graph([node('a'), node('b')], edges);
+  const judge = (g: ConnectGraph, on: Edge['on'], back = false) =>
+    connectRejection(precomputeConnect(g), {
+      from: 'a',
+      to: 'b',
+      condition: on === 'branch' ? { on, branch: 'x' } : { on },
+      ...(back ? { back: true } : {}),
+    });
+
+  it('refuses success beside completion, and says completion already covers it', () => {
+    const r = judge(two([edge('a', 'b', 'completion')]), 'success');
+    expect(r?.reason).toBe('overlapping-outcome');
+    expect(r?.message).toBe(
+      "'Agent Task 1' → 'Agent Task 2' already has a 'completion' edge, which fires on " +
+        "'success' as well — a second edge would add nothing",
+    );
+  });
+
+  it('refuses completion beside success, and points at widening that edge', () => {
+    const r = judge(two([edge('a', 'b', 'success')]), 'completion');
+    expect(r?.reason).toBe('overlapping-outcome');
+    expect(r?.message).toContain("already has a 'success' edge");
+    expect(r?.message).toMatch(/drag that edge's end onto 'completion'/);
+  });
+
+  it('refuses completion beside success AND failure, and names the collapse', () => {
+    const r = judge(two([edge('a', 'b', 'success'), edge('a', 'b', 'failure')]), 'completion');
+    expect(r?.reason).toBe('overlapping-outcome');
+    expect(r?.message).toContain("'success' and 'failure' edges");
+    expect(r?.message).toContain('replace both with one');
+  });
+
+  it('allows success beside failure — the pair is legal, and collapsible', () => {
+    expect(judge(two([edge('a', 'b', 'success')]), 'failure')).toBeNull();
+  });
+
+  it('never refuses skipped or a business branch on this rule', () => {
+    const full = two([edge('a', 'b', 'success'), edge('a', 'b', 'completion')]);
+    expect(judge(full, 'skipped')).toBeNull();
+    const ifNode = graph(
+      [node('a', 'if'), node('b')],
+      [edge('a', 'b', 'completion'), edge('a', 'b', 'success')],
+    );
+    expect(
+      connectRejection(precomputeConnect(ifNode), {
+        from: 'a',
+        to: 'b',
+        condition: { on: 'branch', branch: 'true' },
+      }),
+    ).toBeNull();
+  });
+
+  it('keys on the PAIR — the same outcomes to another target are unaffected', () => {
+    const g = graph([node('a'), node('b'), node('c')], [edge('a', 'c', 'completion')]);
+    expect(judge(g, 'success')).toBeNull();
+  });
+
+  /** `fireBackEdges` bounces each back-edge on its own counter — not an OR group. */
+  it('exempts a back-edge candidate, and ignores back-edges already on the pair', () => {
+    const back = { ...edge('a', 'b', 'completion'), back: true, maxBounces: 2 } as Edge;
+    expect(judge(two([back]), 'success')?.reason).not.toBe('overlapping-outcome');
+    expect(judge(two([edge('a', 'b', 'completion')]), 'success', true)?.reason).not.toBe(
+      'overlapping-outcome',
+    );
+  });
+});

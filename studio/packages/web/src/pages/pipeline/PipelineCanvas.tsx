@@ -84,6 +84,7 @@ import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from
 import { saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
+  completionSibling,
   conditionOf,
   edgeLabel,
   encodeCondition,
@@ -1796,7 +1797,9 @@ export function EdgePanel({
   const offered = declaredConditionsOf(source, branchConditions).map((c) => encodeCondition(c));
 
   /**
-   * Conditions ALREADY taken by another edge between the same two nodes.
+   * Conditions this edge cannot be retyped to — held by another edge between
+   * the same two nodes, or (#1064) overlapping an outcome that pair already
+   * routes on — each with the reason.
    *
    * `rewireEdge` refuses such a retype (it would mint a duplicate), and a
    * refusal the operator cannot see is a control that silently does nothing:
@@ -1805,6 +1808,9 @@ export function EdgePanel({
    * same "no" before the click, and says why.
    */
   const taken = takenConditions(edges, edge);
+  /* #1064 — this edge's `success`/`failure` partner, if the pair is a
+     completion spelled as two edges. */
+  const sibling = completionSibling(edges, edge);
 
   /**
    * The persisted condition is one this source no longer declares.
@@ -1881,6 +1887,11 @@ export function EdgePanel({
           />
         ))}
       </fieldset>
+      {sibling !== null && (
+        <button type="button" onClick={() => store.getState().collapseToCompletion(edge.id)}>
+          Replace both with one completion edge
+        </button>
+      )}
       <p className="edge-rewire-hint">
         Drag either end of this edge on the canvas to move it to another activity.
       </p>
@@ -1990,7 +2001,7 @@ function BounceCapField({
   );
 }
 
-/** One condition option, disabled (with the reason) when another edge holds it. */
+/** One condition option, disabled (with the reason) when it cannot be chosen. */
 function ConditionChoice({
   store,
   edge,
@@ -2003,11 +2014,12 @@ function ConditionChoice({
   edge: Edge;
   condition: EdgeCondition;
   label: string;
-  taken: ReadonlySet<string>;
+  taken: ReadonlyMap<string, string>;
   checked: boolean;
 }) {
   const value = encodeCondition(condition);
-  const isTaken = taken.has(value);
+  const reason = taken.get(value);
+  const isTaken = reason !== undefined;
   return (
     <label /* The class suffix IS the outcome — the same `${on}` shape
          `edgeVariantClass` and `SourcePorts` use, and `palette.test.ts`
@@ -2030,7 +2042,7 @@ function ConditionChoice({
         }}
       />
       <span className="edge-outcome-swatch" aria-hidden="true" />
-      {isTaken ? `${label} — already used by another edge` : label}
+      {isTaken ? `${label} — ${reason}` : label}
     </label>
   );
 }

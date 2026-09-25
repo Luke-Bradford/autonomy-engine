@@ -8,6 +8,7 @@ import {
   connectNodesBackwards,
   dragNodeBy,
   edgeGroup,
+  firesOn,
   fitAndSettle,
   selectEdge,
 } from './support/canvasGraph';
@@ -189,6 +190,66 @@ test.describe('U6b connect-time validation', () => {
     await page.keyboard.press('Backspace');
     await expect(edgeGroup(page)).toHaveCount(0);
     await expect(page.locator(REFUSAL)).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1064 — one intent, one edge. Between the same two activities `completion`
+   * IS `success` + `failure`, so the canvas refuses the overlapping spellings at
+   * the gesture, disables them in the Edge panel with the reason in each radio's
+   * accessible name, and collapses a success + failure pair into one edge.
+   */
+  test('an OVERLAPPING outcome is refused, and a success + failure pair collapses', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'e2e 1064 overlap');
+    await seedTwoNodes(page);
+    await connectNodes(page, 0, 1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    // The gesture: completion beside success is refused, and says what to do.
+    await connectNodes(page, 0, 1, undefined, 'op:completion');
+    await expect(edgeGroup(page)).toHaveCount(1);
+    const refusal = page.locator(REFUSAL);
+    await expect(refusal).toContainText(
+      "'HTTP Request 1' → 'Write File 1' already has a 'success' edge, and 'completion' " +
+        'would fire on it too',
+    );
+    await refusal.getByRole('button', { name: 'Dismiss' }).click();
+
+    // success + failure is legal — each is the narrower intent.
+    await connectNodes(page, 0, 1, undefined, 'op:failure');
+    await expect(edgeGroup(page)).toHaveCount(2);
+    await expect(refusal).toHaveCount(0);
+
+    /* The panel: completion is disabled, and the reason is in its NAME.
+       Selected by KEYBOARD, not by pointing: two edges between one pair draw
+       within pixels of each other, so a midpoint click picks whichever is on top
+       (`back-edge-authoring.spec.ts` measured the same overlap). Focus + Enter
+       names the edge, and is the path a keyboard author takes anyway. */
+    await page.locator('.react-flow__edge.edge-variant-failure').focus();
+    await page.keyboard.press('Enter');
+    await expect(firesOn(page)).toBeVisible();
+    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const completion = panel.getByRole('radio', {
+      name: 'completion — would repeat the success edge',
+    });
+    await expect(completion).toBeDisabled();
+    await expect(panel.getByRole('radio', { name: 'skipped' })).toBeEnabled();
+
+    // The collapse: one completion edge, in the completion hue.
+    await panel.getByRole('button', { name: 'Replace both with one completion edge' }).click();
+    await expect(edgeGroup(page)).toHaveCount(1);
+    await expect(page.locator('.react-flow__edge.edge-variant-completion')).toHaveCount(1);
+
+    // ...and now success beside it is the redundant one, at the gesture too.
+    await connectNodes(page, 0, 1, undefined, 'op:success');
+    await expect(edgeGroup(page)).toHaveCount(1);
+    await expect(refusal).toContainText(
+      "already has a 'completion' edge, which fires on 'success'",
+    );
 
     await expectQuiet(page, problems);
   });

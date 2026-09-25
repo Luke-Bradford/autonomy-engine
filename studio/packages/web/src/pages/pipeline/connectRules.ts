@@ -5,11 +5,19 @@ import {
   crossesContainerBoundary,
   type Container,
   type Edge,
+  type EdgeOn,
   type Node,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
 import { containerLabels } from './containerRules';
-import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
+import {
+  authoringEdgeKey,
+  edgeLabel,
+  forwardPairKey,
+  outcomesByForwardPair,
+  overlappingOutcomes,
+  type EdgeCondition,
+} from './edgeCondition';
 import { conditionLabel, declaredConditionsOf, encodeCondition } from './ports';
 
 /**
@@ -38,6 +46,9 @@ export type ConnectRejectionReason =
   /* U19 — the drawn condition is the PORT's, and an orphaned port offers one
      the source no longer declares. See the rule in `connectRejection`. */
   | 'undeclared-condition'
+  /* #1064 — `completion` beside `success`/`failure` on one forward pair. See
+     `overlappingOutcomes`. */
+  | 'overlapping-outcome'
   /* U6e — the three back-edge rules, reachable only for a `back: true`
      candidate. See the block at the foot of `connectRejection`. */
   | 'back-ancestry'
@@ -94,6 +105,8 @@ export interface ConnectPrecheck {
   endpoints: ReadonlySet<string>;
   /** `authoringEdgeKey` of every existing edge. */
   edgeKeys: ReadonlySet<string>;
+  /** #1064 — each forward pair's operational outcomes (`outcomesByForwardPair`). */
+  pairOutcomes: ReadonlyMap<string, ReadonlySet<EdgeOn>>;
   /** Each activity's identifying name (#878) — what a refusal calls its ends. */
   nodeLabels: ReadonlyMap<string, string>;
   /** Each container's identifying name (#883) — the text its box draws. */
@@ -151,6 +164,7 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
       ]),
     ),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
+    pairOutcomes: outcomesByForwardPair(graph.edges),
     nodeLabels: activityLabels(graph.nodes),
     containerNames: containerLabels(graph.containers),
     childOwner: containerMembership(graph.containers).owner,
@@ -293,6 +307,29 @@ export function connectRejection(
         `'${fromName}' no longer offers '${key}' — that port is only there for an edge that ` +
         `already routes on it. Re-declare '${key}' on '${fromName}', or draw from an outcome ` +
         `it does offer`,
+    };
+  }
+
+  /* #1064 — one intent, one edge. Ordered after the port rule: an orphaned port
+     is the more basic thing wrong with the gesture. A back-edge candidate has no
+     forward pair and is never judged here (`forwardPairKey` says why). */
+  const pair = forwardPairKey({ from, to, back: candidate.back });
+  const held = pair === null ? undefined : pre.pairOutcomes.get(pair);
+  const overlap = held === undefined ? [] : overlappingOutcomes(held, candidate.condition);
+  if (overlap.length > 0) {
+    const drawn = conditionLabel(candidate.condition);
+    return {
+      reason: 'overlapping-outcome',
+      message:
+        drawn === 'completion'
+          ? overlap.length > 1
+            ? `'${fromName}' → '${toName}' already has 'success' and 'failure' edges, which ` +
+              `together are a completion — select one of them and replace both with one ` +
+              `'completion' edge`
+            : `'${fromName}' → '${toName}' already has a '${overlap[0]}' edge, and 'completion' ` +
+              `would fire on it too — drag that edge's end onto 'completion' to widen it instead`
+          : `'${fromName}' → '${toName}' already has a 'completion' edge, which fires on ` +
+            `'${drawn}' as well — a second edge would add nothing`,
     };
   }
 

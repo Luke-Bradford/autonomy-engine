@@ -18,6 +18,7 @@ import {
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
 import {
+  completionSibling,
   conditionOf,
   DEFAULT_MAX_BOUNCES,
   encodeCondition,
@@ -453,9 +454,13 @@ function cloneNodesInto(target: CloneTarget, sources: Node[], internalEdges: Edg
     // Judged against the graph INCLUDING the edges accepted before it, for the
     // same reason `connect` judges against the live graph: an accepted edge
     // changes the answer for the next one.
-    if (connectRejection(precomputeConnect({ nodes, edges, containers }), candidate) !== null) {
-      continue;
-    }
+    const rejection = connectRejection(precomputeConnect({ nodes, edges, containers }), candidate);
+    /* #1064's overlap rule is an AUTHORING rule about new intent, and a copy
+       authors none: it reproduces what the original already routes on. Refusing
+       here would keep whichever of a stored `success` + `completion` pair came
+       first in the array — and a copy that kept only `success` would not run
+       when the predecessor fails, which the original does. */
+    if (rejection !== null && rejection.reason !== 'overlapping-outcome') continue;
     edges.push({ ...e, id: newLocalId('e'), to });
   }
 
@@ -956,6 +961,14 @@ export interface CanvasState {
    * the load-bearing part.
    */
   rewireEdge(id: string, target: { from: string; to: string; condition: EdgeCondition }): void;
+  /**
+   * #1064 — replace a forward `success` + `failure` pair between the same two
+   * activities with ONE `completion` edge, as one undo step.
+   *
+   * The edge `id` survives (retyped); its `completionSibling` is deleted. No-op
+   * when there is no sibling — the offer is only ever shown when there is one.
+   */
+  collapseToCompletion(id: string): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
   /**
    * #425 — set (or clear) a call node's `Node.call` blob.
@@ -1655,6 +1668,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const rewired = retypeEdge({ ...current, from, to }, condition);
         edit((s) => ({
           edges: s.edges.map((e) => (e.id === id ? rewired : e)),
+        }));
+      },
+
+      collapseToCompletion(id) {
+        const { edges } = get();
+        const current = edges.find((e) => e.id === id);
+        const sibling = current === undefined ? null : completionSibling(edges, current);
+        if (current === undefined || sibling === null) return;
+        const widened = retypeEdge(current, { on: 'completion' });
+        edit((s) => ({
+          edges: s.edges.filter((e) => e.id !== sibling.id).map((e) => (e.id === id ? widened : e)),
+          selected: s.selected.filter((sel) => !(sel.kind === 'edge' && sel.id === sibling.id)),
         }));
       },
 

@@ -10,6 +10,8 @@ import {
   isMaxBounces,
   OPERATIONAL_CONDITIONS,
   authoringEdgeKey,
+  completionSibling,
+  overlappingOutcomes,
   takenConditions,
 } from './edgeCondition';
 
@@ -135,11 +137,11 @@ describe('takenConditions', () => {
       [subject, { id: 'e2', from: 'a', to: 'b', on: 'failure' }],
       subject,
     );
-    expect([...taken]).toEqual(['op:failure']);
+    expect(taken.get('op:failure')).toBe('already used by another edge');
   });
 
   it('never reports the edge’s OWN condition — a no-op retype is not a collision', () => {
-    expect([...takenConditions([subject], subject)]).toEqual([]);
+    expect([...takenConditions([subject], subject).keys()]).toEqual([]);
   });
 
   it('ignores an identically-conditioned edge between a DIFFERENT pair', () => {
@@ -147,7 +149,7 @@ describe('takenConditions', () => {
       [subject, { id: 'e2', from: 'a', to: 'c', on: 'failure' }],
       subject,
     );
-    expect([...taken]).toEqual([]);
+    expect([...taken.keys()]).toEqual([]);
   });
 
   it('reports a branch arm by its routing key', () => {
@@ -155,7 +157,7 @@ describe('takenConditions', () => {
       [subject, { id: 'e2', from: 'a', to: 'b', on: 'branch', branch: 'true' }],
       subject,
     );
-    expect([...taken]).toEqual(['branch:true']);
+    expect([...taken.keys()]).toEqual(['branch:true']);
   });
 
   /**
@@ -174,7 +176,7 @@ describe('takenConditions', () => {
       back: true,
       maxBounces: 3,
     };
-    expect([...takenConditions([subject, backEdge], subject)]).toEqual([]);
+    expect([...takenConditions([subject, backEdge], subject).keys()]).toEqual([]);
   });
 
   /**
@@ -288,5 +290,135 @@ describe('a back-edge with no declared cap', () => {
     for (const n of [0, 1, 3.5, -1, 10_000, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(isMaxBounces(n)).toBe(MaxBouncesSchema.safeParse(n).success);
     }
+  });
+});
+
+/**
+ * #1064 — one intent, one edge. `success` + `failure` between the same two
+ * activities IS `completion` (the reducer ORs edges from one predecessor), so
+ * a candidate that re-states an outcome the pair already routes on is refused.
+ */
+describe('overlappingOutcomes', () => {
+  const held = (...ons: Array<'success' | 'failure' | 'completion' | 'skipped'>) => new Set(ons);
+
+  it('refuses success or failure beside a completion edge', () => {
+    expect(overlappingOutcomes(held('completion'), { on: 'success' })).toEqual(['completion']);
+    expect(overlappingOutcomes(held('completion'), { on: 'failure' })).toEqual(['completion']);
+  });
+
+  it('refuses completion beside success, failure, or both — naming each', () => {
+    expect(overlappingOutcomes(held('success'), { on: 'completion' })).toEqual(['success']);
+    expect(overlappingOutcomes(held('failure'), { on: 'completion' })).toEqual(['failure']);
+    expect(overlappingOutcomes(held('success', 'failure'), { on: 'completion' })).toEqual([
+      'success',
+      'failure',
+    ]);
+  });
+
+  it('leaves success + failure legal — each is a narrower intent', () => {
+    expect(overlappingOutcomes(held('success'), { on: 'failure' })).toEqual([]);
+    expect(overlappingOutcomes(held('failure'), { on: 'success' })).toEqual([]);
+  });
+
+  /** A skip is NOT a completion (`EdgeOnSchema`), so it overlaps nothing. */
+  it('never involves skipped, in either direction', () => {
+    expect(
+      overlappingOutcomes(held('success', 'failure', 'completion'), { on: 'skipped' }),
+    ).toEqual([]);
+    expect(overlappingOutcomes(held('skipped'), { on: 'completion' })).toEqual([]);
+    expect(overlappingOutcomes(held('skipped'), { on: 'success' })).toEqual([]);
+  });
+
+  it('never involves a business branch', () => {
+    expect(
+      overlappingOutcomes(held('success', 'completion'), { on: 'branch', branch: 'completion' }),
+    ).toEqual([]);
+  });
+});
+
+describe('takenConditions — #1064 overlap', () => {
+  const subject: Edge = { id: 'e1', from: 'a', to: 'b', on: 'success' };
+
+  it('disables success and failure beside a completion edge, with the reason', () => {
+    const completion: Edge = { id: 'e2', from: 'a', to: 'b', on: 'completion' };
+    const skip: Edge = { id: 'e1', from: 'a', to: 'b', on: 'skipped' };
+    const taken = takenConditions([skip, completion], skip);
+    expect(taken.get('op:success')).toBe('already covered by the completion edge');
+    expect(taken.get('op:failure')).toBe('already covered by the completion edge');
+    // The duplicate reason wins for the condition another edge literally holds.
+    expect(taken.get('op:completion')).toBe('already used by another edge');
+    expect(taken.has('op:skipped')).toBe(false);
+  });
+
+  it('disables completion beside a failure sibling, naming it', () => {
+    const failure: Edge = { id: 'e2', from: 'a', to: 'b', on: 'failure' };
+    expect(takenConditions([subject, failure], subject).get('op:completion')).toBe(
+      'would repeat the failure edge',
+    );
+  });
+
+  it('names BOTH siblings when a skipped edge sits beside success and failure', () => {
+    const skip: Edge = { id: 'e0', from: 'a', to: 'b', on: 'skipped' };
+    const failure: Edge = { id: 'e2', from: 'a', to: 'b', on: 'failure' };
+    expect(takenConditions([skip, subject, failure], skip).get('op:completion')).toBe(
+      'would repeat the success and failure edges',
+    );
+  });
+
+  /** Retyping the ONLY edge of a pair is widening it, not overlapping it. */
+  it('lets a lone success edge widen to completion', () => {
+    expect(takenConditions([subject], subject).has('op:completion')).toBe(false);
+  });
+
+  it('ignores an overlapping edge between a different pair', () => {
+    const elsewhere: Edge = { id: 'e2', from: 'a', to: 'c', on: 'completion' };
+    expect(takenConditions([subject, elsewhere], subject).size).toBe(0);
+  });
+
+  /**
+   * Back-edges are exempt: `fireBackEdges` bounces each one on its OWN counter
+   * under its own `maxBounces`, so a success back-edge beside a completion one
+   * is not the same intent spelled twice.
+   */
+  it('exempts back-edges, on either side of the comparison', () => {
+    const back = (id: string, on: Edge['on']): Edge =>
+      ({ id, from: 'a', to: 'b', on, back: true, maxBounces: 2 }) as Edge;
+    expect(takenConditions([subject, back('e2', 'completion')], subject).size).toBe(0);
+    const backSubject = back('e1', 'success');
+    const fwdCompletion: Edge = { id: 'e2', from: 'a', to: 'b', on: 'completion' };
+    expect(takenConditions([backSubject, fwdCompletion], backSubject).size).toBe(0);
+    expect(
+      takenConditions([backSubject, back('e2', 'completion')], backSubject).has('op:success'),
+    ).toBe(false);
+  });
+});
+
+describe('completionSibling', () => {
+  const success: Edge = { id: 'e1', from: 'a', to: 'b', on: 'success' };
+  const failure: Edge = { id: 'e2', from: 'a', to: 'b', on: 'failure' };
+
+  it('finds the partner of a success/failure pair, from either side', () => {
+    expect(completionSibling([success, failure], success)?.id).toBe('e2');
+    expect(completionSibling([success, failure], failure)?.id).toBe('e1');
+  });
+
+  it('is null with no partner, across a different pair, or for a back-edge', () => {
+    expect(completionSibling([success], success)).toBeNull();
+    const elsewhere: Edge = { ...failure, to: 'c' };
+    expect(completionSibling([success, elsewhere], success)).toBeNull();
+    const backFailure = { ...failure, back: true, maxBounces: 1 } as Edge;
+    expect(completionSibling([success, backFailure], success)).toBeNull();
+  });
+
+  /** Retyping onto `completion` there would duplicate the completion edge. */
+  it('is null when the pair ALREADY holds a completion edge beside the two', () => {
+    const completion: Edge = { id: 'e3', from: 'a', to: 'b', on: 'completion' };
+    expect(completionSibling([success, failure, completion], success)).toBeNull();
+    expect(completionSibling([success, failure, completion], failure)).toBeNull();
+  });
+
+  it('is null for an edge that is not success or failure', () => {
+    const completion: Edge = { id: 'e3', from: 'a', to: 'b', on: 'completion' };
+    expect(completionSibling([success, failure, completion], completion)).toBeNull();
   });
 });
