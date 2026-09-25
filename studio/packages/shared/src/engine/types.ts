@@ -672,6 +672,40 @@ export const FAILURE_CODES = {
    */
   DATASET_CONNECTION_MISMATCH: 'dataset_connection_mismatch',
   /**
+   * #1144 — a node's resolved `datasetParams` key is one no per-dispatch
+   * override may set, whatever the dataset's `parameters` allowlist says
+   * (`DATASET_NON_OVERRIDABLE_CONFIG_KEYS`): a `table`'s `schema`/`table`
+   * identifiers and a `query`'s `sql` text. §8 of the data-movement spec keeps
+   * both literal at save because the adapter cannot tell an interpolated name
+   * from an authored one; an override is the same `${}` one layer down.
+   * Distinct from `DATASET_PARAM_UNDECLARED` exactly as the connection pair is:
+   * the owner CANNOT opt this key in. `permanent`.
+   */
+  DATASET_PARAM_NON_OVERRIDABLE: 'dataset_param_non_overridable',
+  /**
+   * #1144 — a resolved `datasetParams` key the dataset's `parameters`
+   * allowlist does not declare. The allowlist is the dataset OWNER's opt-in, so
+   * an undeclared key is refused, never silently dropped or merged. `permanent`.
+   */
+  DATASET_PARAM_UNDECLARED: 'dataset_param_undeclared',
+  /**
+   * #1144 — a resolved `datasetParams` VALUE is (or embeds) a `{$secret}`
+   * marker. Parameters are non-secret by design; the connection pair's
+   * `CONNECTION_PARAM_SECRET_MARKER` argument verbatim. `permanent`.
+   */
+  DATASET_PARAM_SECRET_MARKER: 'dataset_param_secret_marker',
+  /**
+   * #1144 — the dataset config AFTER the override merge is not a valid config
+   * for its kind (a `delimited` `delimiter` of two characters, an `excel`
+   * `sheet` override on a dataset addressed by `sheetIndex`), or an override
+   * names a key the kind's config does not have. The stored config was
+   * validated at write; a per-dispatch value was not, so it is judged here, at
+   * the one point both halves exist. An unknown key is refused rather than let
+   * through, because the kind's schema strips unknown keys and the override
+   * would otherwise do nothing, silently. `permanent`.
+   */
+  DATASET_PARAM_INVALID: 'dataset_param_invalid',
+  /**
    * The node's source and sink name the SAME dataset.
    *
    * A data-loss guard, not tidiness. The sink's `overwrite` mode DELETEs inside
@@ -1920,6 +1954,19 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * command union rather than validating a stored artifact.
      */
     resolvedDatasetIds: z.object({ source: z.string(), sink: z.string().optional() }).optional(),
+    /**
+     * #1144 — the node's per-end `datasetParams` after the reducer resolved each
+     * value's `${}` against the run env (type-PRESERVING, exactly as
+     * `resolvedConnectionParams`). The EXECUTOR gates each end against its
+     * resolved dataset's `parameters` allowlist and merges it over that
+     * dataset's stored `config`. Ephemeral like the fields above.
+     */
+    resolvedDatasetParams: z
+      .object({
+        source: z.record(z.string(), z.unknown()).optional(),
+        sink: z.record(z.string(), z.unknown()).optional(),
+      })
+      .optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

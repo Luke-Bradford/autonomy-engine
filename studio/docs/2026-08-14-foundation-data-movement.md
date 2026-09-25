@@ -1337,6 +1337,22 @@ exists — save time.
 - **The escape hatch that survives that** is the dataset's `parameters` allowlist (§2.2): an
   owner-declared closed set, secret-refusing, with strict identifier validation and quoting at the
   adapter. Never free text.
+
+  **AS BUILT (#1144) — the escape hatch does NOT reach identifiers or statement text.** The bullet
+  above read as though an allowlisted override could set a `table`'s name, which contradicts this
+  section's own rule, the kinds table (`table` is "save-time literal-only") and the security model
+  ("identifiers are refused at save time"). #1144 resolved it fail-closed:
+  `DATASET_NON_OVERRIDABLE_CONFIG_KEYS` (`catalog/dataset-config.ts`) refuses `table`/`schema` and a
+  `query`'s `sql` at the dispatch merge, whatever the allowlist says, because an override is exactly
+  a `${}` one layer down — and even a well-formed identifier would let a trigger-influenced value
+  re-point an overwriting sink at any table the store can reach. What the allowlist DOES reach: a
+  file dataset's `path` (still confined by the connection's non-overridable `roots`), its format
+  settings, an excel `sheet`, and a `query`'s bind-value `parameters`. The node side is
+  `Node.datasetParams: {source?, sink?}`, per end; the executor re-validates the MERGED config
+  against the kind's schema (`dataset_param_invalid`) and refuses a key the kind does not have,
+  since that schema strips unknown keys and the override would otherwise do nothing, silently.
+  The id-level self-copy refusal now fires only when both ends' EFFECTIVE configs agree too, so one
+  dataset can serve as a template for both ends; the address check still refuses a real collision.
 - **Paths: EXTRACT and share `fs`'s guard — do not mirror it.** `resolveWithinRoots`
   (`connectors/fs.ts:186`) is a hardened single implementation — lexical `..` collapse, `realpath` on
   roots _and_ the target's parent, `lstat` + `O_NOFOLLOW` at the target, atomic temp+`rename` writes.

@@ -528,6 +528,46 @@ describe('#2 L13a — connectionId resolution on dispatchNode', () => {
 });
 
 // ===========================================================================
+// #1144 — per-end datasetParams resolve on the same env as config
+// ===========================================================================
+
+describe('#1144 — datasetParams resolution on dispatchNode', () => {
+  function dpNode(id: string, datasetParams: Node['datasetParams']): Node {
+    return { ...node(id), datasetIds: { source: 'ds_a', sink: 'ds_b' }, datasetParams };
+  }
+
+  it('resolves each end TYPE-PRESERVINGLY and leaves an unbound end ABSENT', () => {
+    const eng = engine([dpNode('a', { source: { path: '${params.p}', limit: '${params.n}' } })]);
+    const r = eng.reduce(eng.seedState(), started({ p: 'in/2026-09-25.csv', n: 7 }));
+    const resolved = dispatchCmd(r.commands, 'a').resolvedDatasetParams;
+    expect(resolved).toEqual({ source: { path: 'in/2026-09-25.csv', limit: 7 } });
+    expect(resolved !== undefined && 'sink' in resolved).toBe(false);
+  });
+
+  it('leaves resolvedDatasetParams undefined when the node carries none', () => {
+    const eng = engine([node('a')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedDatasetParams).toBeUndefined();
+  });
+
+  it('re-resolves identically on a retry re-dispatch', () => {
+    const eng = engine([dpNode('a', { sink: { path: '${params.p}' } })]);
+    let s = eng.reduce(eng.seedState(), started({ p: 'out.csv' })).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const retry = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'a',
+      previousAttemptId: attempt('a'),
+      reason: 'boot_reconcile',
+    });
+    expect(dispatchCmd(retry.commands, 'a').resolvedDatasetParams).toEqual({
+      sink: { path: 'out.csv' },
+    });
+  });
+});
+
+// ===========================================================================
 // M1 (#1104) — the PAIRED source/sink binding resolves on the same env
 // ===========================================================================
 

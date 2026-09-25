@@ -1945,6 +1945,22 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               // is unconditionally true for that kind — and is left as a no-op
               // rather than a cast asserting what the branch above already
               // establishes.
+              //
+              // #1144 — a dataset end that is no longer bound takes its
+              // `datasetParams` end with it. The write gate refuses bindings for
+              // an end the node does not address, and no control renders them,
+              // so leaving one behind would make the node unsaveable with
+              // nothing on screen to explain or clear it.
+              if (kind === 'datasets' && next.datasetParams !== undefined) {
+                const params = { ...next.datasetParams };
+                if (next.datasetIds === undefined) delete params.source;
+                if (next.datasetIds?.sink === undefined) delete params.sink;
+                if (params.source === undefined && params.sink === undefined) {
+                  delete next.datasetParams;
+                } else {
+                  next.datasetParams = params;
+                }
+              }
               return next;
             }),
           }));

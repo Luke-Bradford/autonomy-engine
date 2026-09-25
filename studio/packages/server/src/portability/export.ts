@@ -133,11 +133,20 @@ function stripNodeDatasetIds(node: NodeExport): NodeExport {
   // reads as "export stripped a literal" and drops the whole pair on — losing a
   // source-only node's binding silently. `envelope.ts` states the two meanings.
   const sink = node.datasetIds.sink;
+  const source = portableEnd(node.datasetIds.source);
+  const portableSink = sink === undefined ? undefined : portableEnd(sink);
+  // #1144 — a nulled end means the importer drops the pair WHOLE (`import.ts`),
+  // so its `datasetParams` could never bind again. They are dropped here too,
+  // rather than left riding in the envelope as override values (a file path, a
+  // bind value) for an address the export has already declared stripped.
+  const { datasetParams, ...rest } = node;
+  const pairSurvives = source !== null && portableSink !== null;
   return {
-    ...node,
+    ...rest,
+    ...(datasetParams !== undefined && pairSurvives ? { datasetParams } : {}),
     datasetIds: {
-      source: portableEnd(node.datasetIds.source),
-      ...(sink === undefined ? {} : { sink: portableEnd(sink) }),
+      source,
+      ...(portableSink === undefined ? {} : { sink: portableSink }),
     },
   };
 }

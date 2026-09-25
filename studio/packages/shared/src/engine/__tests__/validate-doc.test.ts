@@ -1390,6 +1390,52 @@ describe('validateDoc — connectionParams shape (L13b)', () => {
 });
 
 // ===========================================================================
+// datasetParams — per-end dataset overrides' shape rules at SAVE time (#1144)
+// ===========================================================================
+
+describe('validateDoc — datasetParams shape (#1144)', () => {
+  it('accepts a binding for each end the node addresses (literal or ${})', () => {
+    const paired = node(
+      'n',
+      {},
+      {
+        datasetIds: { source: 'ds_src', sink: 'ds_sink' },
+        datasetParams: { source: { path: 'in.csv' }, sink: { path: '${params.out}' } },
+      },
+    );
+    const params: Param[] = [{ name: 'out', type: 'string', required: true }];
+    expect(validateDoc(doc([paired], [], [], params))).toEqual([]);
+    const sourceOnly = node(
+      's',
+      {},
+      { datasetIds: { source: 'ds_src' }, datasetParams: { source: { path: 'a.csv' } } },
+    );
+    expect(validateDoc(doc([sourceOnly]))).toEqual([]);
+  });
+
+  it('rejects datasetParams on a node with no datasetIds (silently-inert config)', () => {
+    const d = doc([node('n', {}, { datasetParams: { source: { path: 'a.csv' } } })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: datasetParams need datasetIds/);
+  });
+
+  it('rejects a SINK binding on a source-only node — that end addresses nothing', () => {
+    const d = doc([
+      node(
+        'n',
+        {},
+        { datasetIds: { source: 'ds_src' }, datasetParams: { sink: { path: 'b.csv' } } },
+      ),
+    ]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: datasetParams\.sink needs a sink dataset/);
+  });
+
+  it('rejects datasetParams on a call node (child pipeline owns dispatch)', () => {
+    const withParams = { ...callNode('c', 'ver_1'), datasetParams: { source: { path: 'a' } } };
+    expect(validateDoc(doc([withParams])).join(' ')).toMatch(/node\.c: datasetParams .*call node/);
+  });
+});
+
+// ===========================================================================
 // connectionIds — the paired binding's shape rules at SAVE time (M1, #1104)
 // ===========================================================================
 

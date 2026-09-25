@@ -329,6 +329,32 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(node.datasetIds!.sink).not.toBe(sink.id);
   });
 
+  it('#1144 — datasetParams ride with a remapped pair, and drop with a nulled one instead of refusing the apply', () => {
+    const src = freshDb().db;
+    const { pipe, incoming } = datasetSnapshot(src);
+    const incomingNode = incoming.pipelines[0]!.data.versions[0]!.nodes[0]!;
+    incomingNode.datasetParams = { source: { path: 'in.csv' } };
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    expect(getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!.datasetParams).toEqual({
+      source: { path: 'in.csv' },
+    });
+
+    // A hand-edited null end unbinds the pair; its bindings go with it rather
+    // than tripping the write gate's "datasetParams need datasetIds".
+    incomingNode.datasetIds!.sink = null;
+    const tgt2 = freshDb().db;
+    expect(applyWorkspace(tgt2, 'local', incoming, 'sha1', 'main').refused).toBe(false);
+    const node = getLatestPipelineVersion(
+      tgt2,
+      getPipelineByResourceId(tgt2, 'local', pipe.resourceId)!.id,
+    )!.nodes[0]!;
+    expect(node.datasetIds).toBeUndefined();
+    expect(node.datasetParams).toBeUndefined();
+  });
+
   it('M3 (#1117) — a dangling dataset END refuses the apply, naming WHICH end', () => {
     const src = freshDb().db;
     const { incoming } = datasetSnapshot(src);

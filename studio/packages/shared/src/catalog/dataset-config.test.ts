@@ -19,6 +19,7 @@ import {
   tableDatasetConfigSchema,
   excelDatasetConfigSchema,
   unimplementedDatasetConfigSchema,
+  isNonOverridableDatasetConfigKey,
 } from './dataset-config.js';
 
 describe('dataset config catalog', () => {
@@ -524,5 +525,18 @@ describe('datasetConnectionKindAdvisory (#1145)', () => {
         expect(note === null, `${datasetKind} on ${connectionKind}`).toBe(agrees);
       }
     }
+  });
+});
+
+describe('#1144 — DATASET_NON_OVERRIDABLE_CONFIG_KEYS', () => {
+  it('keeps SQL identifiers and statement text literal, and nothing else', () => {
+    expect(isNonOverridableDatasetConfigKey('table', 'table')).toBe(true);
+    expect(isNonOverridableDatasetConfigKey('table', 'schema')).toBe(true);
+    expect(isNonOverridableDatasetConfigKey('query', 'sql')).toBe(true);
+    // The BIND values are what a query's parameters are for.
+    expect(isNonOverridableDatasetConfigKey('query', 'parameters')).toBe(false);
+    // A file path is confined by the CONNECTION's non-overridable roots.
+    expect(isNonOverridableDatasetConfigKey('delimited', 'path')).toBe(false);
+    expect(isNonOverridableDatasetConfigKey('excel', 'sheet')).toBe(false);
   });
 });
