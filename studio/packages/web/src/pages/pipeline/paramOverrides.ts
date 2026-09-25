@@ -65,9 +65,26 @@ export function datasetOverrideResource(d: Dataset): OverrideResource {
   };
 }
 
-/** Keys the kind has that no dispatch refuses by construction. */
+/**
+ * Keys a kind has that no dispatch refuses by construction: its schema-derived
+ * fields minus its security-boundary keys. The ONE rule behind both the canvas
+ * Add control and the resource pages' allowlist editor (#1305), so the pages can
+ * never offer a key the canvas would then refuse to add.
+ */
+export function overridableKeys(
+  fields: readonly ConfigField[],
+  isNonOverridable: (key: string) => boolean,
+): string[] {
+  return fields.map((f) => f.name).filter((k) => !isNonOverridable(k));
+}
+
 function usableKeys(r: OverrideResource): string[] {
-  return r.fields.map((f) => f.name).filter((k) => !r.isNonOverridable(k));
+  return overridableKeys(r.fields, r.isNonOverridable);
+}
+
+/** The note for a KIND with no overridable settings at all — which no allowlist edit can change. */
+export function noOverridableSettingsNote(kind: string, noun: OverrideResource['noun']): string {
+  return `A ${kind} ${noun} has no settings a node can override.`;
 }
 
 /**
@@ -103,7 +120,7 @@ export function overrideNote(
   if (addableKeys(r, current).length > 0) return null;
   const usable = usableKeys(r);
   if (usable.length === 0) {
-    return `A ${r.kind} ${r.noun} has no settings a node can override.`;
+    return noOverridableSettingsNote(r.kind, r.noun);
   }
   if (r.allowlist.length === 0) {
     return `${r.name} declares no overridable settings, so there is nothing to override here.`;
