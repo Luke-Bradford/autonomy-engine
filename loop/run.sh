@@ -20,6 +20,15 @@
 #   fires back-to-back (drive.sh MAX_FIRES, 6 at time of writing), so per-fire
 #   cost compounds.
 #   Do NOT "simplify" this away by trusting settings inheritance -- there is none.
+#
+# CONNECTORS (#1282): --settings '{"disableClaudeAiConnectors":true}' is REQUIRED.
+#   `--setting-sources` does not govern claude.ai account connectors, so without
+#   this every fire loaded the operator's connectors -- including eToro's
+#   place-trade / place-close / execute-write -- into an unattended session that
+#   runs with --dangerously-skip-permissions. The build loop needs none of them.
+#   Project-scoped MCP (.mcp.json: the playwright browser the UI gate uses) is
+#   unaffected; verified by the init event: claude_ai tools 25 -> 0, playwright
+#   still connected.
 set -uo pipefail
 
 # --- executable body (repo convention: sourcing this file must only define,
@@ -55,6 +64,7 @@ claude -p "$(cat "$PROMPT")" \
   --effort high \
   --fallback-model sonnet \
   --setting-sources project,local \
+  --settings '{"disableClaudeAiConnectors":true}' \
   --dangerously-skip-permissions \
   --output-format stream-json --verbose \
   >>"$LOG" 2>&1
