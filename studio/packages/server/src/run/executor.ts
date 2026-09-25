@@ -1134,6 +1134,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
   }
 
+  /** The two events that end an attempt — the only ones `runAdapter` holds. */
+  const isNodeTerminal = (ev: EngineEvent): boolean =>
+    ev.type === 'node.succeeded' || ev.type === 'node.failed';
+
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
     runId: string,
@@ -1570,6 +1574,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // The adapter is not paced by the fold: `emit` only enqueues, so a slow
     // append never stalls a side effect or holds the limit slot longer. Per-node
     // order is unchanged — it is the order `runAdapter` emitted in.
+    //
+    // Only the TERMINAL is held back, until `runAdapter` has returned. Folding it
+    // can dispatch a successor (or re-dispatch this node in a loop), so it must
+    // not land before the adapter's own cleanup, the abort and the limit slot's
+    // release — the guarantee the batching version gave by construction.
+    //
+    // A consequence worth knowing: an attempt cut off mid-activity (a crash, or
+    // the pump dropping a run that went terminal elsewhere) now leaves the
+    // events it streamed in the log with no terminal beside them. They are all
+    // inert, and a streamed `activity.metered` is spend that really happened.
     const pending: EngineEvent[] = [];
     let wake: (() => void) | null = null;
     let settled = false;
@@ -1609,12 +1623,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       });
     try {
       while (true) {
-        const next = pending.shift();
-        if (next !== undefined) {
+        const next = pending[0];
+        if (next === undefined) {
+          if (settled) break;
+        } else if (settled || !isNodeTerminal(next)) {
+          pending.shift();
           yield redact(next);
           continue;
         }
-        if (settled) break;
         await new Promise<void>((resolve) => {
           wake = resolve;
         });

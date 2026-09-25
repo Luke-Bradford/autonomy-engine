@@ -175,8 +175,10 @@ export type ExecutorCommand = Extract<EngineCommand, { type: 'dispatchNode' | 's
 /**
  * Performs a single reducer command, YIELDING the durable events it produces,
  * IN ORDER, as an async stream. For a `dispatchNode` the executor yields
- * `node.dispatched{idempotent}` then a terminal `node.succeeded`/`node.failed`;
- * for a `startChild` it yields a `call.returned`. The driver appends+folds each
+ * `node.dispatched{idempotent}` then a terminal `node.succeeded`/`node.failed`,
+ * with any inert telemetry the activity emits (`node.output`, `activity.*`)
+ * yielded between them AS THE ACTIVITY RUNS (#1135) — the terminal only once
+ * the activity has finished; for a `startChild` it yields a `call.returned`. The driver appends+folds each
  * event AS IT ARRIVES — the executor never touches the DB or state itself.
  *
  * CRASH-SAFETY CONTRACT (load-bearing for the boot reconciler) — and why the

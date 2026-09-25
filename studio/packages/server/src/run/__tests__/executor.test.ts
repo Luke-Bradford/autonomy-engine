@@ -4339,6 +4339,28 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
     expect(nodeEvents).toEqual(['node.dispatched', 'node.output', 'node.succeeded']);
   });
 
+  it('the terminal is held until the adapter has finished cleaning up', async () => {
+    // Folding a terminal can dispatch the next node, so it must not reach the
+    // log while this adapter is still inside its own `finally`.
+    let runId = '';
+    let terminalSeenDuringCleanup: boolean | undefined;
+    const adapters = fakeHttpAdapter(async function* () {
+      try {
+        yield { type: 'succeeded', outputs: httpOutputs };
+      } finally {
+        await sleep(20);
+        terminalSeenDuringCleanup = eventTypes(db, runId).includes('node.succeeded');
+      }
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
+    runId = run.id;
+
+    expect((await startRun(deps(db, { adapters }), run)).status).toBe('success');
+    expect(terminalSeenDuringCleanup).toBe(false);
+  });
+
   it('a streamed event survives an adapter that then throws', async () => {
     const adapters = fakeHttpAdapter(async function* () {
       yield { type: 'output', name: 'progress', value: 1 };
@@ -4350,7 +4372,11 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
 
     expect((await startRun(deps(db, { adapters }), run)).status).toBe('failure');
     const nodeEvents = loadEngineEvents(db, run.id).filter((e) => e.type.startsWith('node.'));
-    expect(nodeEvents.map((e) => e.type)).toEqual(['node.dispatched', 'node.output', 'node.failed']);
+    expect(nodeEvents.map((e) => e.type)).toEqual([
+      'node.dispatched',
+      'node.output',
+      'node.failed',
+    ]);
     expect(nodeEvents[2]).toMatchObject({ code: 'adapter_threw', error: 'adapter bug' });
   });
 
@@ -4374,18 +4400,16 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
     const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url })]));
     const { executor } = deps(db, { adapters });
 
-    const stream = executor
-      .perform(
-        {
-          type: 'dispatchNode',
-          nodeId: 'n1',
-          attemptId: 'n1-a1',
-          preparedInput: { url },
-          resolvedConnectionId: connId,
-        },
-        run.id,
-      )
-      [Symbol.asyncIterator]();
+    const stream = executor.perform(
+      {
+        type: 'dispatchNode',
+        nodeId: 'n1',
+        attemptId: 'n1-a1',
+        preparedInput: { url },
+        resolvedConnectionId: connId,
+      },
+      run.id,
+    ) as AsyncGenerator<EngineEvent>;
     try {
       expect((await stream.next()).value).toMatchObject({ type: 'node.dispatched' });
       // Reaches the output while the adapter is still held at the gate.
