@@ -1009,6 +1009,10 @@ async function* runAgentTask(
  *   them. An author who needs e.g. `temperature: 0` for a deterministic Judge
  *   must set the CLI's own flag in `args`; the node-config value is inert here.
  *   (Called out rather than silently assumed, matching the price/token honesty.)
+ * - `capture: 'full'` (#605) is inert here too: this adapter emits no
+ *   `captured` event at all (its subprocess telemetry is `agentTelemetry`), so
+ *   an `llm_call` bound to an `agent_cli` connection stores no prompt/completion
+ *   text whatever the node says.
  * - The folded prompt is the FINAL argv element (never shell-interpolated). If a
  *   prompt can begin with `-`/`--`, add a `--` end-of-options terminator to the
  *   connection's `args` where the target CLI supports it, so the prompt is never

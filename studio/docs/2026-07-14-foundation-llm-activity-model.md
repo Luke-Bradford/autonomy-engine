@@ -188,6 +188,23 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > reasoning-trace (needs adapter thinking-block extraction too), and structured-
 > mode capture (its completion is raw structured content; its request half is
 > F4-independent but deferred with it for plumbing cohesion).
+>
+> **L9b slice 1 — `'full'` capture, AS BUILT (#605, after F4 #1313):** `llm_call`
+> gained `capture: 'metadata'|'full'` (absent = metadata; a flat enum so the node
+> form renders it as a select). In `full` mode `activity.captured` adds each
+> field's `text`, under a server budget (16k UTF-16 units per field, 64k per
+> event, spent completion → system → newest turn first; a cut field says
+> `truncated: true`, and `chars`/`contentHash` always describe the whole text).
+> On a secure node — either flag — every text AND hash becomes `SECURE_REDACTED`
+> at the one emit-time seam (`redactSecureEvent`); the text becomes the marker
+> rather than being dropped, so "withheld" stays distinguishable from "metadata
+> mode". The run drill-in renders it (`CaptureSection`). No `CATALOG_VERSION`
+> bump: an older build strips the key and captures less, the safe polarity.
+> **Still on #605:** the keyed-HMAC hash (deferred: the unsalted hash is an
+> oracle only for secret-marked content, and on exactly those nodes F4 already
+> scrubs it), structured-mode capture, the verbose reasoning trace, and tool-loop
+> rounds after the first. `capture: 'full'` is knowingly inert on all three of
+> those and on an `agent_cli`-bound node.
 
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
 

@@ -454,6 +454,17 @@
 // and copies from the dataset's UNMODIFIED path/sheet/bind values — the
 // silent-WRONG shape that mandates a bump on its own. No `SCHEMA_VERSION` bump
 // and no upgrader: a doc without the key is byte-identical across the bump.
+// NO BUMP for #605 (L9b), recorded because a silent no-bump is the drift this
+// ledger exists to prevent. `llm_call` gained an optional `capture:
+// 'metadata'|'full'` config key. `llmCallConfigSchema` is a plain (non-strict)
+// `z.object`, so a pre-#605 build importing a `capture: 'full'` node PARSES it
+// and strips the key — it cannot fail the import the way bump 22's unparseable
+// shapes did. What it then runs is identical: the key is observability only, so
+// the node sends the same request and yields the same outputs, and the one
+// difference is that its `activity.captured` holds lengths and hashes instead
+// of text. That is the SAFE polarity — the older build stores LESS than the
+// author asked for, never more — and it is not bump 21's "parseable, not
+// runnable as authored": nothing the run computes depends on it.
 export const CATALOG_VERSION = 32;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
