@@ -237,7 +237,9 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
       node('d'),
     ]);
     expect(issues).toHaveLength(3);
-    expect(issues[0]).toMatch(/^node 'a': policy\.retryIntervalSeconds: .*has no effect without retry/);
+    expect(issues[0]).toMatch(
+      /^node 'a': policy\.retryIntervalSeconds: .*has no effect without retry/,
+    );
     expect(issues[1]).toMatch(/^node 'b': policy\.retry: /);
     expect(issues[2]).toMatch(/^node 'c': policy\.timeoutSeconds: .*one year/);
   });
@@ -274,7 +276,7 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
     expect(nodePolicyIssues(viaBox, 'p', [])).toEqual([]);
   });
 
-  it('includes this node\'s own write-schema policy issues', () => {
+  it("includes this node's own write-schema policy issues", () => {
     const issues = policyIssues([withPolicy('a', { retryIntervalSeconds: 60 })]);
     expect(nodePolicyIssues(issues, 'a', [])).toEqual(issues);
     expect(nodePolicyIssues(issues, 'ab', [])).toEqual([]);

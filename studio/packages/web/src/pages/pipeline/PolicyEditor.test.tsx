@@ -38,7 +38,9 @@ function enter(input: HTMLElement, value: string) {
 describe('PolicyEditor (#1312)', () => {
   it('shows the stored policy', () => {
     const { field } = mount([
-      node('a', 'http_request', { policy: { retry: 3, retryIntervalSeconds: 90, secureOutput: true } }),
+      node('a', 'http_request', {
+        policy: { retry: 3, retryIntervalSeconds: 90, secureOutput: true },
+      }),
     ]);
     expect(field('Retries')).toHaveProperty('value', '3');
     expect(field('Retry interval (seconds)')).toHaveProperty('value', '90');

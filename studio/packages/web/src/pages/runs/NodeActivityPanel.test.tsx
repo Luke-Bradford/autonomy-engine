@@ -628,7 +628,7 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
 
   it('explains a redacted output value', () => {
     const panel = renderPanel(
-      row({ nodeId: 'a', status: 'succeeded', outputValues: { body: '[redacted: secure]' } }),
+      row({ nodeId: 'a', status: 'success', outputValues: { body: '[redacted: secure]' } }),
     );
     expect(panel.textContent).toMatch(HINT);
     expect(panel.textContent).not.toMatch(/did not match its declared output type/);
@@ -638,7 +638,7 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
     const panel = renderPanel(
       row({
         nodeId: 'a',
-        status: 'failed',
+        status: 'failure',
         outputValues: { count: '[redacted: secure, invalid]' },
       }),
     );
@@ -657,7 +657,7 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
     const panel = renderPanel(
       row({
         nodeId: 'a',
-        status: 'succeeded',
+        status: 'success',
         outputs: 1,
         lastOutputName: 'progress',
         outputValues: { body: 'redacted: secure' },
