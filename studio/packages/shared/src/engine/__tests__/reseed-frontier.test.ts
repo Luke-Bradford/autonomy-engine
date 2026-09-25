@@ -351,6 +351,38 @@ describe('RS4 — reseedFrontier: a copied call node links the child run that pr
     expect(link('call#1')).not.toBe('child_carried');
   });
 
+  it('a DETACHED (wait: false) call node links the child its real call.detached named', () => {
+    const detached: Node = {
+      ...callNode('call'),
+      call: { pipelineVersionId: 'childPv', params: {}, wait: false },
+    };
+    const eng = engine([detached, node('b')], [edge('call', 'b', 'success')]);
+    // Fold R1 for real, so the state is what the reducer makes of a detach.
+    let s = eng.seedState();
+    const started = eng.reduce(s, {
+      type: 'run.started',
+      runId: 'R1',
+      pipelineVersionId: 'pv1',
+      params: {},
+    });
+    s = started.state;
+    const cmd = started.commands.find((c) => c.type === 'startChild');
+    if (cmd === undefined || cmd.type !== 'startChild') throw new Error('no startChild');
+    expect(cmd.wait).toBe(false);
+    s = eng.reduce(s, {
+      type: 'call.detached',
+      runId: 'R1',
+      callNodeId: 'call',
+      attemptId: cmd.attemptId,
+      childRunId: cmd.childRunId,
+    }).state;
+    expect(s.nodes.call!.status).toBe('success');
+    s = { ...s, nodes: { ...s.nodes, b: { status: 'failure', attempts: 1, retries: 0 } } };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['call']);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: cmd.childRunId }]);
+  });
+
   it('a call node that was itself COPIED (a rerun of a rerun) carries its link forward', () => {
     const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
     const s = state({ nodes: { call: 'success', b: 'failure' } });
