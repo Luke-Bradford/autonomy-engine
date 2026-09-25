@@ -634,8 +634,9 @@ test('#1242 — the canvas back control is an anchor, and a bare link takes the 
  * The SIZE half is the decision the fix made: family-only, so the buttons keep
  * the UA control size rather than growing to their container's (14px inside
  * the Fluent root). The reference is a bare `<button>` probe, sized by the
- * same engine's UA sheet, so no pixel literal is hard-coded. A `font: inherit` shorthand in place of the
- * family reset would pass the family half and fail this one.
+ * same engine's UA sheet, so no pixel literal is hard-coded. A `font: inherit`
+ * shorthand in place of the family reset would pass the family half and fail
+ * this one.
  *
  * jsdom resolves no cascade and inherits nothing, so no unit test can see
  * either half.
