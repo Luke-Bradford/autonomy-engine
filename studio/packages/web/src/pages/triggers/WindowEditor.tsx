@@ -1,6 +1,9 @@
 import {
   MAX_BACKFILL_WINDOWS_CAP,
   MAX_CONCURRENT_WINDOWS_CAP,
+  MAX_WINDOW_RETRY_COUNT_CAP,
+  MAX_WINDOW_RETRY_INTERVAL_SECONDS,
+  MIN_WINDOW_RETRY_INTERVAL_SECONDS,
   WindowFrequencySchema,
   windowSizeSeconds,
   type WindowFrequency,
@@ -131,6 +134,56 @@ export function WindowEditor({
         />
       </label>
 
+      {/* #861 — the two opt-in sub-objects. Blank means absent (no retry, no
+          dependency); every range is the write schema's, reported below. */}
+      <label>
+        Retry a failed window N times (optional — blank means no retry)
+        <input
+          type="number"
+          min={1}
+          max={MAX_WINDOW_RETRY_COUNT_CAP}
+          value={value.retryCount}
+          onChange={(e) => set({ retryCount: e.target.value })}
+          placeholder="no retry"
+        />
+      </label>
+
+      <label>
+        Seconds between retries
+        <input
+          type="number"
+          min={MIN_WINDOW_RETRY_INTERVAL_SECONDS}
+          max={MAX_WINDOW_RETRY_INTERVAL_SECONDS}
+          value={value.retryIntervalSeconds}
+          onChange={(e) => set({ retryIntervalSeconds: e.target.value })}
+        />
+      </label>
+
+      {/* Deliberately NO `min`: a valid offset is negative, and the form runs
+          native constraint validation before its own `role="alert"` path. */}
+      <label>
+        Depend on earlier windows: offset in seconds (optional — negative, before each window&apos;s
+        start)
+        <input
+          type="number"
+          max={-1}
+          value={value.dependencyOffsetSeconds}
+          onChange={(e) => set({ dependencyOffsetSeconds: e.target.value })}
+          placeholder="no dependency"
+        />
+      </label>
+
+      <label>
+        Dependency span in seconds (optional — blank means one window)
+        <input
+          type="number"
+          min={1}
+          value={value.dependencySizeSeconds}
+          onChange={(e) => set({ dependencySizeSeconds: e.target.value })}
+          placeholder="one window"
+        />
+      </label>
+
       {/* The epoch is an absolute instant; the control is anchored in the
           browser's zone, so echo what will actually be stored. Every window
           boundary the trigger ever computes is keyed off this instant. */}
@@ -149,22 +202,15 @@ export function WindowEditor({
         </p>
       )}
 
-      {/* #854 ships editors for the geometry and bounds only; #861 adds the rest.
-          A window authored through the API can carry a retry policy or a
-          self-dependency — say so rather than let it look absent, since a save
-          DOES write it back. */}
-      {(value.retry !== undefined || value.selfDependency !== undefined) && (
-        <p className="page-hint" data-testid="window-preserved">
-          {'This window also carries '}
-          {[
-            value.retry !== undefined ? 'a retry policy' : null,
-            value.selfDependency !== undefined ? 'a self-dependency' : null,
-          ]
-            .filter((s) => s !== null)
-            .join(' and ')}
-          {
-            ', authored outside this form. There is no control for it here yet (#861); it is preserved unchanged while this trigger stays in tumbling mode. A self-dependency is measured against the window size, so changing the frequency or interval above can put it out of range.'
-          }
+      {built?.retry && (
+        <p className="page-hint" data-testid="window-retry-preview">
+          {`A failed window is re-run up to ${built.retry.count} more time${built.retry.count === 1 ? '' : 's'}, ${built.retry.intervalInSeconds}s apart`}
+        </p>
+      )}
+
+      {built?.selfDependency && (
+        <p className="page-hint" data-testid="window-dependency-preview">
+          {dependencySentence(built.selfDependency, windowSizeSeconds(built))}
         </p>
       )}
 
@@ -175,4 +221,20 @@ export function WindowEditor({
       )}
     </fieldset>
   );
+}
+
+/**
+ * What a self-dependency makes each window wait for, stated from the numbers.
+ * A window the trigger itself dispositioned (skipped, superseded) satisfies the
+ * dependency too (`WindowSelfDependencySchema`), so "succeeded" alone would
+ * overclaim.
+ */
+function dependencySentence(
+  dependency: { offsetInSeconds: number; sizeInSeconds?: number },
+  windowSeconds: number,
+): string {
+  const from = -dependency.offsetInSeconds;
+  const to = from - (dependency.sizeInSeconds ?? windowSeconds);
+  const end = to === 0 ? 'its own start' : `${to}s before its start`;
+  return `Each window waits until every window overlapping ${from}s before its start to ${end} has succeeded (or was skipped or superseded by the trigger itself)`;
 }

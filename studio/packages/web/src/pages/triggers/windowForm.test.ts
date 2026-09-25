@@ -124,11 +124,7 @@ describe('formToWindow — every rule beyond "is this a number" comes from the s
   });
 });
 
-describe('windowToForm — a window this builder has no controls for still survives', () => {
-  // #854 deliberately ships editors for the geometry + bounds only. `retry` and
-  // `selfDependency` are held VERBATIM so editing a window authored through the
-  // API (or a later, richer editor) cannot silently drop them — the same reason
-  // `eventForm` keeps its catchall extras.
+describe('#861 retry + self-dependency — edited as text, validated by the write schema', () => {
   const stored: WindowConfig = {
     frequency: 'hour',
     interval: 2,
@@ -139,28 +135,104 @@ describe('windowToForm — a window this builder has no controls for still survi
     retry: { count: 2, intervalInSeconds: 60 },
     selfDependency: { offsetInSeconds: -7200 },
   };
+  /** A valid window with nothing but the geometry — the base the sub-objects are typed into. */
+  const base = (): WindowFormState =>
+    windowToForm({
+      frequency: 'hour',
+      interval: 2,
+      startTime: '2026-08-01T08:00:00.000Z',
+    });
 
   it('round-trips a fully-populated window byte for byte', () => {
     expect(windowOf(windowToForm(stored))).toEqual(stored);
+    expect(
+      windowOf(
+        windowToForm({
+          ...stored,
+          selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 },
+        }),
+      ),
+    ).toEqual({ ...stored, selfDependency: { offsetInSeconds: -14400, sizeInSeconds: 3600 } });
   });
 
-  it('keeps retry and selfDependency when an editable field is changed', () => {
+  it('loads each sub-object field into its own text control', () => {
+    const loaded = windowToForm(stored);
+    expect(loaded.retryCount).toBe('2');
+    expect(loaded.retryIntervalSeconds).toBe('60');
+    expect(loaded.dependencyOffsetSeconds).toBe('-7200');
+    // ABSENT size stays blank — it means "one window", not 0.
+    expect(loaded.dependencySizeSeconds).toBe('');
+  });
+
+  it('keeps retry and selfDependency when an unrelated field is changed', () => {
     const edited = { ...windowToForm(stored), maxBackfillWindows: '9' };
     expect(windowOf(edited)).toEqual({ ...stored, maxBackfillWindows: 9 });
   });
 
-  it('reports a preserved sub-object so the editor can say it is there', () => {
-    const loaded = windowToForm(stored);
-    expect(loaded.retry).toEqual({ count: 2, intervalInSeconds: 60 });
-    expect(loaded.selfDependency).toEqual({ offsetInSeconds: -7200 });
-    expect(blankWindowForm().retry).toBeUndefined();
+  it('authors both sub-objects from typed text', () => {
+    const typed = {
+      ...base(),
+      retryCount: '3',
+      retryIntervalSeconds: '120',
+      dependencyOffsetSeconds: '-7200',
+      dependencySizeSeconds: '3600',
+    };
+    expect(windowOf(typed)).toMatchObject({
+      retry: { count: 3, intervalInSeconds: 120 },
+      selfDependency: { offsetInSeconds: -7200, sizeInSeconds: 3600 },
+    });
   });
 
-  it('is not read as an untouched form merely because the text fields are blank', () => {
-    // A preserved sub-object is authored state: clearing the visible fields must
-    // not collapse the whole window to null and take the retry policy with it.
-    const preservedOnly = form({ retry: { count: 2, intervalInSeconds: 60 } });
-    expect(reasonOf(preservedOnly)).toMatch(/startTime/);
+  it('reads blank fields as ABSENT sub-objects, never zeros', () => {
+    const w = windowOf(base());
+    expect(w).not.toHaveProperty('retry');
+    expect(w).not.toHaveProperty('selfDependency');
+    // Clearing a loaded policy removes it — that is how an operator turns retry off.
+    const cleared = { ...windowToForm(stored), retryCount: '', retryIntervalSeconds: '' };
+    expect(windowOf(cleared)).not.toHaveProperty('retry');
+  });
+
+  it('refuses half a retry policy, naming the missing half', () => {
+    expect(reasonOf({ ...base(), retryCount: '3' })).toMatch(/^retry: .*interval/);
+    expect(reasonOf({ ...base(), retryIntervalSeconds: '60' })).toMatch(/^retry: .*count/);
+  });
+
+  it('refuses a dependency size with no offset', () => {
+    expect(reasonOf({ ...base(), dependencySizeSeconds: '3600' })).toMatch(
+      /^selfDependency: .*offset/,
+    );
+  });
+
+  it('refuses text that is not a whole number, naming the control', () => {
+    expect(reasonOf({ ...base(), retryCount: '1.5', retryIntervalSeconds: '60' })).toMatch(
+      /^retryCount: /,
+    );
+    expect(reasonOf({ ...base(), dependencyOffsetSeconds: 'soon' })).toMatch(
+      /^dependencyOffsetSeconds: /,
+    );
+  });
+
+  it('leaves the ranges to the write schema — the client restates no cap', () => {
+    // Each of these is a WindowConfigWriteSchema rule, so the refusal carries its path.
+    expect(reasonOf({ ...base(), retryCount: '101', retryIntervalSeconds: '60' })).toMatch(
+      /retry\.count/,
+    );
+    expect(reasonOf({ ...base(), retryCount: '1', retryIntervalSeconds: '29' })).toMatch(
+      /retry\.intervalInSeconds/,
+    );
+    // A dependency on the present or future is a deadlock: the offset must be negative …
+    expect(reasonOf({ ...base(), dependencyOffsetSeconds: '7200' })).toMatch(/selfDependency/);
+    // … and the interval must end at or before the window's own start.
+    expect(
+      reasonOf({ ...base(), dependencyOffsetSeconds: '-3600', dependencySizeSeconds: '7200' }),
+    ).toMatch(/selfDependency/);
+  });
+
+  it('is not read as an untouched form merely because the geometry is blank', () => {
+    // A typed sub-object field is authored state: it must not collapse the whole
+    // window to null and silently drop what was typed.
+    expect(reasonOf(form({ retryCount: '2' }))).toMatch(/startTime/);
+    expect(reasonOf(form({ dependencyOffsetSeconds: '-60' }))).toMatch(/startTime/);
   });
 
   it('does not re-derive an untouched bound from the control', () => {

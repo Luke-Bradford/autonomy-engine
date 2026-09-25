@@ -159,6 +159,63 @@ test.describe('#854 tumbling mode', () => {
     await expectQuiet(page, problems);
   });
 
+  test('authors a retry policy and a self-dependency, and refuses half a policy (#861)', async ({
+    page,
+  }) => {
+    const problems = await openTriggers(page);
+
+    await page.getByRole('button', { name: /New trigger/i }).click();
+    const form = triggerForm(page);
+    await form.getByLabel('Name').fill('Retrying windows');
+    await form.getByLabel(/^Mode/).selectOption('tumbling');
+    await form.getByLabel('Window frequency', { exact: true }).selectOption('hour');
+    await form.getByLabel(/Each window covers/).fill('1');
+    await form.getByLabel(/^Start time/).fill('2026-08-01T09:00');
+
+    // Half a policy is refused where it was typed AND blocks the save.
+    await form.getByLabel(/Retry a failed window/).fill('3');
+    await expect(form.getByTestId('window-problem')).toContainText('needs an interval');
+    await form.getByRole('button', { name: /Create trigger/i }).click();
+    await expect(form.getByRole('alert')).toContainText('needs an interval');
+
+    await form.getByLabel(/Seconds between retries/).fill('120');
+    // A NEGATIVE offset must pass the browser's own constraint check: the form
+    // validates natively before its own alert path, so a copied `min` would
+    // silently make every legal offset unsubmittable.
+    await form.getByLabel(/offset in seconds/).fill('-7200');
+    await expect(form.getByTestId('window-retry-preview')).toContainText(
+      'up to 3 more times, 120s apart',
+    );
+    await expect(form.getByTestId('window-dependency-preview')).toContainText(
+      'overlapping 7200s before its start to 3600s before its start',
+    );
+
+    await form.getByRole('button', { name: /Create trigger/i }).click();
+    await expect(form).toBeHidden();
+
+    const created = await storedTrigger(page, 'Retrying windows');
+    expect(created.window).toMatchObject({
+      retry: { count: 3, intervalInSeconds: 120 },
+      selfDependency: { offsetInSeconds: -7200 },
+    });
+    // ABSENT span stays absent — it means one window, and is not stored as a number.
+    expect((created.window as { selfDependency: object }).selfDependency).not.toHaveProperty(
+      'sizeInSeconds',
+    );
+
+    await page
+      .getByRole('row', { name: /Retrying windows/ })
+      .getByRole('button', { name: /^Edit / })
+      .click();
+    const reopened = triggerForm(page);
+    await expect(reopened.getByLabel(/Retry a failed window/)).toHaveValue('3');
+    await expect(reopened.getByLabel(/Seconds between retries/)).toHaveValue('120');
+    await expect(reopened.getByLabel(/offset in seconds/)).toHaveValue('-7200');
+    await expect(reopened.getByLabel(/Dependency span/)).toHaveValue('');
+
+    await expectQuiet(page, problems);
+  });
+
   test('lets a configured tumbling trigger leave the mode', async ({ page }) => {
     // Seeded with params that carry NO `${trigger.windowStart}` binding: those
     // are refused off tumbling by `assertWindowBindingsConsistent`, which is a
