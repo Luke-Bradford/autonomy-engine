@@ -4,18 +4,15 @@ import { NewDatasetSchema, canonicalStringify } from '@autonomy-studio/shared';
 import {
   createDataset,
   deleteDataset,
-  getConnection,
   getDataset,
   listDatasetsPage,
   updateDataset,
 } from '../repo/index.js';
-import { BadRequestError, NotFoundError } from '../errors.js';
+import { NotFoundError } from '../errors.js';
 import { datasetReferences } from '../datamove/dataset-references.js';
 import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
 import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
-import type { Db } from '../repo/types.js';
-import type { Principal } from '../auth/principal.js';
 
 /**
  * #1114 (M2, data-movement spec §2) — the `datasets` REST surface, mirroring
