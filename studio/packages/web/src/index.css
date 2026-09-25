@@ -997,13 +997,16 @@ td button + button {
 }
 
 /* `.labelled-control` (#1227) is the wrapper `LabelledControl` puts where a
-   wrapping `<label>` used to be, so it takes that label's layout here and below. */
+   wrapping `<label>` used to be, so it takes that label's layout here and below.
+   A `.config-field` is excluded in every context: it is a `LabelledControl` too,
+   but it had its own rhythm (`.config-field`, below) before the fold, and these
+   rules would otherwise outrank that bare class. */
 .connection-form label,
 .dataset-form label,
 .trigger-form label,
-.connection-form .labelled-control,
-.dataset-form .labelled-control,
-.trigger-form .labelled-control {
+.connection-form .labelled-control:not(.config-field),
+.dataset-form .labelled-control:not(.config-field),
+.trigger-form .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -1332,7 +1335,7 @@ td button + button {
 }
 
 .property-panel label,
-.property-panel .labelled-control {
+.property-panel .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -2908,16 +2911,10 @@ td button + button {
    fight the control it is meant to serve. It inherits the column direction its
    bare `<label>` had inside `.contract-section`, so wrapping changes no
    layout. */
-.config-field,
-/* #1227 — a config field is a `LabelledControl`, and inside the property panel
-   `.property-panel .labelled-control` outranks the bare class. The field keeps
-   its own tighter rhythm and takes no row type, exactly as before the fold. */
-.property-panel .labelled-control.config-field {
+.config-field {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  font-size: inherit;
-  color: inherit;
 }
 
 /* #1169 — an array-of-objects config field. The rows themselves are
@@ -3023,7 +3020,7 @@ td button + button {
 }
 
 .run-filters label,
-.run-filters .labelled-control {
+.run-filters .labelled-control:not(.config-field) {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;

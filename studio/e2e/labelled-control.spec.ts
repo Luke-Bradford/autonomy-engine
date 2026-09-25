@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { canvasNodes } from './support/canvasGraph';
@@ -116,7 +116,10 @@ test.describe('#1227 — a label names its control and nothing else', () => {
     await expectQuiet(page, problems);
   });
 
-  test('a config field keeps its own rhythm inside the property panel', async ({ page }) => {
+  // Both contexts that render a config field: the property panel, and the
+  // connection/dataset forms (through `ConfigEditor`). Each has a `.labelled-control`
+  // row rule that would outrank the bare `.config-field` class if it matched.
+  test('a config field keeps its own rhythm in the property panel and a form', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, '1227 config field rhythm', {
       nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
@@ -126,26 +129,40 @@ test.describe('#1227 — a label names its control and nothing else', () => {
       .getByRole('complementary', { name: 'Properties' })
       .getByLabel('url', { exact: true });
     await expect(url).toBeVisible();
-    const style = await url.evaluate((el) => {
-      const field = el.closest('.config-field');
-      if (field === null || field.parentElement === null) return null;
-      const s = getComputedStyle(field);
-      const parent = getComputedStyle(field.parentElement);
-      return {
-        cls: field.className,
-        gap: s.rowGap,
-        fontSize: s.fontSize === parent.fontSize,
-        color: s.color === parent.color,
-      };
-    });
-    // 0.25rem, and neither the font size nor the colour of a form row: the
-    // values `.config-field` had before it became a `LabelledControl`.
-    expect(style).toEqual({
-      cls: 'labelled-control config-field',
-      gap: '4px',
-      fontSize: true,
-      color: true,
-    });
+    expect(await configFieldStyle(url)).toEqual(CONFIG_FIELD_RHYTHM);
+
+    await page.goto('/#/manage/connections');
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New connection' }).click();
+    const form = page.getByRole('form', { name: 'Connection form' });
+    await form.getByLabel('Kind', { exact: true }).selectOption('fs');
+    const roots = form.getByLabel(/^roots/);
+    await expect(roots).toBeVisible();
+    expect(await configFieldStyle(roots)).toEqual(CONFIG_FIELD_RHYTHM);
     await expectQuiet(page, problems);
   });
 });
+
+// 0.25rem, and neither the font size nor the colour of a form row: the values
+// `.config-field` had before it became a `LabelledControl`.
+const CONFIG_FIELD_RHYTHM = {
+  cls: 'labelled-control config-field',
+  gap: '4px',
+  fontSize: true,
+  color: true,
+};
+
+function configFieldStyle(control: Locator) {
+  return control.evaluate((el) => {
+    const field = el.closest('.config-field');
+    if (field === null || field.parentElement === null) return null;
+    const s = getComputedStyle(field);
+    const parent = getComputedStyle(field.parentElement);
+    return {
+      cls: field.className,
+      gap: s.rowGap,
+      fontSize: s.fontSize === parent.fontSize,
+      color: s.color === parent.color,
+    };
+  });
+}
