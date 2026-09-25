@@ -829,9 +829,13 @@ describe('connectRejection — overlapping outcomes (#1064)', () => {
   /** `fireBackEdges` bounces each back-edge on its own counter — not an OR group. */
   it('exempts a back-edge candidate, and ignores back-edges already on the pair', () => {
     const back = { ...edge('a', 'b', 'completion'), back: true, maxBounces: 2 } as Edge;
-    expect(judge(two([back]), 'success')?.reason).not.toBe('overlapping-outcome');
-    expect(judge(two([edge('a', 'b', 'completion')]), 'success', true)?.reason).not.toBe(
-      'overlapping-outcome',
+    expect(judge(two([back]), 'success')).toBeNull();
+    /* A back candidate beside a FORWARD completion on its own pair can never be
+       legal — the forward edge means `b` cannot reach `a` — so the exact reason
+       is what pins the exemption: the overlap rule runs BEFORE the back-edge
+       rules, and without the exemption it would be the one reported. */
+    expect(judge(two([edge('a', 'b', 'completion')]), 'success', true)?.reason).toBe(
+      'back-ancestry',
     );
   });
 });
