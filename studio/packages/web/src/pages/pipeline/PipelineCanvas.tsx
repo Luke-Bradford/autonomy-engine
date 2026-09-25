@@ -2753,7 +2753,11 @@ export function NodePanel({
         <ParamOverridesEditor
           legend="Connection overrides"
           noun="connection"
-          resource={overrideResourceFor(connections, thisNode.connectionId, connectionOverrideResource)}
+          resource={overrideResourceFor(
+            connections,
+            thisNode.connectionId,
+            connectionOverrideResource,
+          )}
           value={thisNode.connectionParams}
           onChange={(next, key) =>
             store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
@@ -2811,7 +2815,13 @@ export function NodePanel({
             ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
             onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
           />
-          <DatasetOverrides store={store} nodeId={nodeId} side="source" datasets={datasets} picker={picker} />
+          <DatasetOverrides
+            store={store}
+            nodeId={nodeId}
+            side="source"
+            datasets={datasets}
+            picker={picker}
+          />
           {datasetKinds.sink !== undefined && (
             <BindingSelect
               label="Sink dataset"
@@ -2828,7 +2838,13 @@ export function NodePanel({
             />
           )}
           {datasetKinds.sink !== undefined && (
-            <DatasetOverrides store={store} nodeId={nodeId} side="sink" datasets={datasets} picker={picker} />
+            <DatasetOverrides
+              store={store}
+              nodeId={nodeId}
+              side="sink"
+              datasets={datasets}
+              picker={picker}
+            />
           )}
         </>
       )}

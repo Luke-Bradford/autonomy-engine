@@ -1880,7 +1880,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const node = get().nodes.find((n) => n.id === id);
         if (node === undefined) return;
         const bound =
-          end === 'connection' ? node.connectionId !== undefined : node.datasetIds?.[end] !== undefined;
+          end === 'connection'
+            ? node.connectionId !== undefined
+            : node.datasetIds?.[end] !== undefined;
         if (!bound) return;
         const value = params !== undefined && Object.keys(params).length > 0 ? params : undefined;
         edit(

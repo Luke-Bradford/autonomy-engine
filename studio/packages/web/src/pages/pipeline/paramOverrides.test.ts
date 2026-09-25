@@ -40,9 +40,7 @@ describe('paramOverrides (#1304)', () => {
   });
 
   it('never offers a non-overridable key, even when the allowlist names it', () => {
-    const r = datasetOverrideResource(
-      dataset('table', { table: 't' }, ['table', 'schema']),
-    );
+    const r = datasetOverrideResource(dataset('table', { table: 't' }, ['table', 'schema']));
     expect(addableKeys(r, {})).toEqual([]);
     // …and says the KIND has none, not that the allowlist is empty.
     expect(overrideNote(r, {})).toMatch(/has no settings a node can override/);
@@ -91,9 +89,7 @@ describe('paramOverrides (#1304)', () => {
   });
 
   it('flags an empty text override, which replaces the setting rather than unsetting it', () => {
-    const r = datasetOverrideResource(
-      dataset('delimited', { path: 'in.csv' }, ['path']),
-    );
+    const r = datasetOverrideResource(dataset('delimited', { path: 'in.csv' }, ['path']));
     expect(overrideRowProblem(r, 'path', '')).toMatch(/empty/);
     expect(overrideRowProblem(r, 'path', 'other.csv')).toBeNull();
   });

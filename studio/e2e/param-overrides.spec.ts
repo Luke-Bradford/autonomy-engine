@@ -81,7 +81,9 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
     await expect(connGroup.getByRole('textbox', { name: 'maxBytes' })).toHaveValue('4096');
-    await expect(setGroup.getByRole('textbox', { name: 'path' })).toHaveValue('out-${run.runId}.csv');
+    await expect(setGroup.getByRole('textbox', { name: 'path' })).toHaveValue(
+      'out-${run.runId}.csv',
+    );
 
     // Read from the PERSISTED version, not from what the panel shows.
     const res = await page.request.get(`/api/pipelines/${pipelineId}/versions`);

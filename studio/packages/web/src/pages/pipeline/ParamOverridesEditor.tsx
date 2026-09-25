@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Node } from '@autonomy-studio/shared';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
@@ -115,8 +115,8 @@ export function ParamOverridesEditor({
 
 /**
  * One override. The input shows a local DRAFT, not the stored value. A number
- * row stores `12` for the text `12.`, and rendering the stored value back would
- * snap the input to `12` while the operator is still typing. The draft follows
+ * row stores `12.5` for the text `12.50`, and rendering the stored value back
+ * would snap the input to `12.5` while the operator is still typing. The draft follows
  * the store only when the store moves on its own (undo, a flyout insert), which
  * is the one case where the two disagree after coercion.
  */
@@ -140,9 +140,14 @@ function OverrideRow({
   onRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => formatDefaultInput(stored));
-  useEffect(() => {
+  // Adjusted during render when `stored` changes (React's documented pattern for
+  // state derived from a prop), not in an effect, which would first render the
+  // stale draft and then cascade a second render.
+  const [synced, setSynced] = useState(stored);
+  if (synced !== stored) {
+    setSynced(stored);
     if (!sameValue(coerceOverride(field, draft), stored)) setDraft(formatDefaultInput(stored));
-  }, [stored, field, draft]);
+  }
 
   const target: PickerTarget = {
     place: (node, text) => place(node, name, coerceOverride(field, text)),

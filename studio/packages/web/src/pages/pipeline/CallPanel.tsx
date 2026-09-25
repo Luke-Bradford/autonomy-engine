@@ -19,7 +19,7 @@ import {
   type Seed,
 } from './callRules';
 import type { createCanvasStore } from './canvasStore';
-import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
+import type { FieldPicker } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
 import { LabelledControl } from '../../lib/LabelledControl';
 
