@@ -3050,6 +3050,22 @@ function validateAgentTaskOutput(node: Node, errors: string[]): void {
 }
 
 /**
+ * A whole-value field's body, parsed and TYPED in `scope` — the shared first
+ * step of every save-time field-type check (`exitWhen`'s boolean, `items`' and
+ * `history`'s array). `null` when the body does not parse: `scan` has already
+ * reported that, and a type check has nothing to add to a malformed expression.
+ */
+function wholeValueType(body: string, scope: ScanScope): { expr: Expr; type: SigType } | null {
+  let expr: Expr;
+  try {
+    expr = parseExpr(body);
+  } catch {
+    return null;
+  }
+  return { expr, type: inferExprType(expr, scope) };
+}
+
+/**
  * #2 L12 — the EXPRESSION half of the `history` rules (the config-SHAPE half is
  * `validateLlmCallConversation`). Two checks, mirroring `validateExitWhen`'s
  * E2/E6 split:
@@ -3091,14 +3107,10 @@ function scanLlmHistoryRef(node: Node, scope: ScanScope, errors: string[]): void
     );
     return;
   }
-  let parsed: Expr;
-  try {
-    parsed = parseExpr(whole.body);
-  } catch {
-    return; // malformed — already reported by the generic `scan`
-  }
-  const type = inferExprType(parsed, scope);
-  if (type === 'string' || type === 'number' || type === 'boolean') {
+  const typed = wholeValueType(whole.body, scope);
+  if (typed === null) return;
+  const { type } = typed;
+  if (!assignableTo(type, 'array')) {
     errors.push(
       `${where}: history must resolve to an array of {role, content} turns, got ${type} — ` +
         'reference a json/array value (e.g. ${nodes.<id>.output.messages})',
@@ -3252,12 +3264,9 @@ function validateExitWhen(
   // does, hence this explicit rule. Checking the WHOLE-VALUE body (not every
   // match) also makes it precise: `x=${true}` is an embedding defect, already
   // reported as such above, and is no longer double-reported as a constant.
-  let parsed: Expr;
-  try {
-    parsed = parseExpr(whole.body);
-  } catch {
-    return; // malformed — already reported by `scan` above
-  }
+  const typed = wholeValueType(whole.body, scope);
+  if (typed === null) return;
+  const { expr: parsed, type } = typed;
   if (parsed.kind === 'str' || parsed.kind === 'num' || parsed.kind === 'bool') {
     errors.push(
       `${where}: exitWhen must reference child outputs, not the constant ` +
@@ -3278,7 +3287,6 @@ function validateExitWhen(
   // The write path refuses this now (#444), but rows written before that gate
   // were never validated — `evalExitWhen` throws on the same defect at RUN time,
   // which is what binds for those. Both halves or the rule is decorative.
-  const type = inferExprType(parsed, scope);
   if (!assignableTo(type, 'boolean')) {
     errors.push(
       `${where}: exitWhen must be a boolean expression, got ${type} — ` +
@@ -3336,15 +3344,9 @@ function validateForeachItems(
   // run once. It exists now because the expression flyout (#864) offers
   // references into this field and filters them through this validator — with
   // no type rule, every `run.*` field would have been offered and accepted.
-  let parsed: Expr;
-  try {
-    parsed = parseExpr(whole.body);
-  } catch {
-    return; // malformed — already reported by `scan` above
-  }
-  const type = inferExprType(parsed, scope);
-  if (!assignableTo(type, 'array')) {
-    errors.push(`${where}: items must be an array expression, got ${type}`);
+  const typed = wholeValueType(whole.body, scope);
+  if (typed !== null && !assignableTo(typed.type, 'array')) {
+    errors.push(`${where}: items must be an array expression, got ${typed.type}`);
   }
 }
 
