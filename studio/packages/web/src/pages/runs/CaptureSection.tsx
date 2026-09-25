@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { SECURE_REDACTED } from '@autonomy-studio/shared';
 import type { CapturedText, NodeCapture } from './runSummary';
 
@@ -30,12 +31,14 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
   const shown =
     captures.length > MAX_CAPTURE_EXCHANGES ? captures.slice(-MAX_CAPTURE_EXCHANGES) : captures;
   const offset = captures.length - shown.length;
+  const showAttempt = captures.some((x) => x.attempt !== captures[0]?.attempt);
+  const headingId = useId();
   const withheld = shown.some((c) =>
     [c.system, c.completion, ...c.messages].some((f) => f?.text === SECURE_REDACTED),
   );
   return (
-    <section className="contract-section" aria-label="Prompt and completion">
-      <h4>Prompt &amp; completion</h4>
+    <section className="contract-section" aria-labelledby={headingId}>
+      <h4 id={headingId}>Prompt &amp; completion</h4>
       <p className="page-hint">
         Stored because this node&rsquo;s <em>capture</em> setting is <code>full</code>.
       </p>
@@ -57,9 +60,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
           >
             <summary>
               Exchange {n}
-              {captures.some((x) => x.attempt !== captures[0]?.attempt) && (
-                <> · attempt {c.attempt}</>
-              )}
+              {showAttempt && <> · attempt {c.attempt}</>}
               {c.instanceId !== undefined && <> · item {c.instanceId}</>} · {c.model}
             </summary>
             {c.system !== undefined && <CapturedBlock label="System" field={c.system} />}

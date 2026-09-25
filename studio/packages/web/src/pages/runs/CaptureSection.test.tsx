@@ -21,7 +21,7 @@ function exchange(over: Partial<NodeCapture> = {}): NodeCapture {
 describe('CaptureSection (#605)', () => {
   it('shows the system, each turn and the completion, labelled', () => {
     render(<CaptureSection captures={[exchange()]} />);
-    const section = screen.getByRole('region', { name: 'Prompt and completion' });
+    const section = screen.getByRole('region', { name: 'Prompt & completion' });
     expect(within(section).getByText('be brief')).toBeTruthy();
     expect(within(section).getByText('what is 2+2?')).toBeTruthy();
     expect(within(section).getByText('4')).toBeTruthy();
