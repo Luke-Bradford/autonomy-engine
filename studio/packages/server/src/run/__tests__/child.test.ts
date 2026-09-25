@@ -331,8 +331,16 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const run = seedRun(db, parentPv);
     const out = ensureAgainst(db, foreignPv, run.id);
     expect(out.ok).toBe(false);
-    expect(out.ok === false && out.reason).toMatch(/different owner/);
     expect(listRuns(db, { parentRunId: run.id })).toHaveLength(0);
+    // The reason is the operator-facing text that lands in the parent's DURABLE
+    // log, so it must not be an existence oracle for another owner's version: a
+    // foreign version reads exactly as a missing one. The precise cause is the
+    // server log's.
+    const missing = ensureAgainst(db, 'pv_gone', run.id);
+    const reasonOf = (r: typeof out) => (r.ok ? undefined : r.reason);
+    expect(reasonOf(out)).toBe(reasonOf(missing)?.replace('pv_gone', foreignPv));
+    expect(reasonOf(out)).toMatch(/was not found/);
+    expect(reasonOf(out)).not.toMatch(/owner/);
   });
 
   it('refuses an ARCHIVED child pipeline (the dispatch guard `fire()` applies)', () => {
@@ -352,7 +360,7 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const run = seedRun(db, parentPv);
     const out = ensureAgainst(db, 'pv_gone', run.id);
     expect(out.ok).toBe(false);
-    expect(out.ok === false && out.reason).toMatch(/cannot be resolved/);
+    expect(out.ok === false && out.reason).toBe("child pipeline version 'pv_gone' was not found");
   });
 
   it('refuses rather than THROWING when a call inside the seam throws (A9/#516)', () => {
@@ -387,7 +395,28 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
       );
     }).not.toThrow();
     expect(out?.ok).toBe(false);
+    // A thrown error's message is arbitrary internal text (here a ZodError dump);
+    // it goes to the server log, never into the durable event.
+    expect(out?.ok === false && out.reason).toBe(
+      'the child run could not be created — the server log has the cause',
+    );
     expect(listRuns(db, { parentRunId: run.id })).toHaveLength(0);
+    b.unsubscribe();
+  });
+
+  it('carries the refusal REASON onto the parent’s call.returned, end to end', async () => {
+    // Before this the reason reached only the server log, so the run page could
+    // say a call node failed but never why. Through the REAL executor branch.
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv)]);
+    const run = seedRun(db, parentPv);
+    archivePipelineRow(db, getPipelineVersion(db, childPv)!.pipelineId);
+    const b = boundary(db);
+    const state = await b.drives.serialize(run.id, () => startRun(b, run));
+    expect(state.nodes.caller!.status).toBe('failure');
+    const returned = loadEngineEvents(db, run.id).find((e) => e.type === 'call.returned');
+    expect(returned).toMatchObject({ childOutcome: 'failure', reason: 'child pipeline is archived' });
     b.unsubscribe();
   });
 

@@ -201,6 +201,35 @@ describe('deriveNodeActivity', () => {
     expect(a).toMatchObject({ nodeId: 'a', status: 'dispatched', attempts: 2 });
   });
 
+  it('#796 — a REFUSED call carries its reason into the node error, and a later attempt clears it', () => {
+    const refused = envelope({
+      type: 'call.returned',
+      runId: 'r',
+      callNodeId: 'c',
+      attemptId: 'c#0',
+      childRunId: 'r2',
+      childOutcome: 'failure',
+      outputs: {},
+      reason: 'child pipeline is archived',
+    });
+    expect(deriveNodeActivity([refused])[0]).toMatchObject({
+      status: 'failure',
+      error: 'child pipeline is archived',
+    });
+    /* A retry whose child RAN and failed has no reason of its own; showing the
+       first attempt's refusal against it would name the wrong cause. */
+    const ran = envelope({
+      type: 'call.returned',
+      runId: 'r',
+      callNodeId: 'c',
+      attemptId: 'c#1',
+      childRunId: 'r3',
+      childOutcome: 'failure',
+      outputs: {},
+    });
+    expect(deriveNodeActivity([refused, ran])[0]!.error).toBeUndefined();
+  });
+
   it('resolves a call node from call.returned', () => {
     const events = [
       envelope({
