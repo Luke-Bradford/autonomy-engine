@@ -275,6 +275,51 @@ describe('JOIN semantics (F14 / T7)', () => {
   });
 });
 
+/**
+ * #1064 — the premise of the canvas's "one intent, one edge" rule, pinned in the
+ * reducer it rests on. Edges from ONE predecessor are OR'd (F14), so between the
+ * same two nodes `success` + `failure` IS `completion`, and `success` +
+ * `completion` is `completion` again. The canvas refuses to AUTHOR the
+ * redundant spellings; this is what makes that a legibility rule rather than a
+ * behaviour change — and why a stored doc holding them keeps running as it did.
+ */
+describe('one intent, three spellings — success|failure ≡ completion (#1064)', () => {
+  const SPELLINGS: Record<string, Array<'success' | 'failure' | 'completion'>> = {
+    completion: ['completion'],
+    'success+failure': ['success', 'failure'],
+    'success+completion': ['success', 'completion'],
+  };
+
+  /** `a`'s outcome is driven, or `a` is SKIPPED via a dead `x -failure-> a`. */
+  function run(
+    ons: Array<'success' | 'failure' | 'completion'>,
+    a: 'success' | 'failure' | 'skipped',
+  ) {
+    const toB = ons.map((on) => edge('a', 'b', on));
+    const eng =
+      a === 'skipped'
+        ? engine([node('x'), node('a'), node('b')], [edge('x', 'a', 'failure'), ...toB])
+        : engine([node('a'), node('b')], toB);
+    const { state, finish } = runAll(eng, a === 'failure' ? { a: 'failure' } : {});
+    return { a: state.nodes.a!.status, b: state.nodes.b!.status, outcome: finish?.outcome };
+  }
+
+  for (const a of ['success', 'failure', 'skipped'] as const) {
+    it(`gives b the same fate under every spelling when a is ${a}`, () => {
+      const results = Object.values(SPELLINGS).map((ons) => run(ons, a));
+      expect(results[0]!.a).toBe(a);
+      for (const r of results) expect(r).toEqual(results[0]);
+    });
+  }
+
+  /** Guards the loop above against passing by all three being equally wrong. */
+  it('runs b on success and failure, and skips it on a skip', () => {
+    expect(run(['completion'], 'success').b).toBe('success');
+    expect(run(['completion'], 'failure').b).toBe('success');
+    expect(run(['completion'], 'skipped').b).toBe('skipped');
+  });
+});
+
 describe('a skip-only loop body cannot spin (bounce cap is a real ceiling)', () => {
   // Newly reachable via F1. An OPERATIONAL back-edge can't spin inside one
   // reduce: firing it resets the body to `pending`, the body then DISPATCHES

@@ -1,5 +1,11 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
-import { conditionLabel, conditionOf, encodeCondition, TARGET_PORT_ID } from './ports';
+import {
+  conditionLabel,
+  conditionOf,
+  encodeCondition,
+  OPERATIONAL_CONDITIONS,
+  TARGET_PORT_ID,
+} from './ports';
 import {
   EdgeOnSchema,
   MaxBouncesSchema,
@@ -195,30 +201,154 @@ export function authoringEdgeKey(e: Edge): string {
 }
 
 /**
- * The encoded conditions ALREADY held by another edge between the same two
- * nodes — the ones `canvasStore.rewireEdge` will refuse, because retyping onto
- * one would mint a duplicate edge.
+ * #1064 — which FORWARD pair an edge belongs to, for the overlap rule below.
+ *
+ * `null` for a back-edge, and that exemption is the rule's scope rather than a
+ * gap in it. Forward edges from one predecessor are OR'd (`computeReadiness`
+ * groups them by source), which is what makes `success` + `failure` the same
+ * thing as `completion`. Back-edges are not grouped at all: `fireBackEdges`
+ * bounces each one on its own counter (`stableEdgeKey` includes `on`) under its
+ * own `maxBounces`, so a `success` back-edge capped at 3 beside a `failure` one
+ * capped at 1 says something no single `completion` back-edge can.
+ */
+export function forwardPairKey(e: Pick<Edge, 'from' | 'to' | 'back'>): string | null {
+  return e.back === true ? null : `${e.from}\x00${e.to}`;
+}
+
+/**
+ * #1064 — the operational outcomes a forward pair ALREADY routes on that
+ * `candidate` would overlap. Empty means no overlap.
+ *
+ * Operator intent (2026-08-13): *"a success and failure is a completion."* The
+ * reducer agrees — see `forwardPairKey` — so between the same two activities:
+ *
+ * - a `success` or `failure` edge beside a `completion` one adds nothing, since
+ *   `completion` already fires on both;
+ * - a `completion` edge beside a `success` or `failure` one re-states it.
+ *
+ * `success` + `failure` together stays LEGAL: each is a narrower intent, and
+ * the pair is only redundant once both are present — which is what the Edge
+ * panel's "one completion edge" offer is for, rather than a refusal of whichever
+ * was drawn second. `skipped` overlaps nothing (a skip is NOT a completion,
+ * `EdgeOnSchema`), and neither does a business `branch`.
+ *
+ * NOT A CORRECTNESS RULE. The OR grouping means a redundant edge neither
+ * double-activates its target nor deadlocks it. What it costs is legibility:
+ * one intent with three spellings, carried into every export, diff and review
+ * of the doc. So this judges CANDIDATES only — a stored doc that already holds
+ * redundant edges loads, validates and runs unchanged.
+ */
+export function overlappingOutcomes(
+  pairOutcomes: ReadonlySet<EdgeOn>,
+  candidate: EdgeCondition,
+): EdgeOn[] {
+  if (candidate.on === 'completion') {
+    return COVERED_BY_COMPLETION.filter((on) => pairOutcomes.has(on));
+  }
+  if (candidate.on === 'success' || candidate.on === 'failure') {
+    return pairOutcomes.has('completion') ? ['completion'] : [];
+  }
+  return [];
+}
+
+/** The outcomes `completion` fires on — `EdgeOnSchema`'s own definition of it. */
+const COVERED_BY_COMPLETION: readonly EdgeOn[] = ['success', 'failure'];
+
+/**
+ * Each forward pair's operational outcomes, keyed by `forwardPairKey`.
+ *
+ * One builder for both readers — the connect precheck and `takenConditions` —
+ * so the gesture and the Edge panel cannot come to disagree about what a pair
+ * already holds.
+ */
+export function outcomesByForwardPair(
+  edges: readonly Edge[],
+): ReadonlyMap<string, ReadonlySet<EdgeOn>> {
+  const byPair = new Map<string, Set<EdgeOn>>();
+  for (const e of edges) {
+    const key = forwardPairKey(e);
+    if (key === null || e.on === 'branch') continue;
+    let held = byPair.get(key);
+    if (held === undefined) {
+      held = new Set();
+      byPair.set(key, held);
+    }
+    held.add(e.on);
+  }
+  return byPair;
+}
+
+/**
+ * The encoded conditions this edge CANNOT be retyped to, each with the reason —
+ * the ones `canvasStore.rewireEdge` will refuse.
+ *
+ * Two reasons, both judged by the predicates `connectRejection` uses:
+ * - another edge between the same two nodes already holds it (a retype would
+ *   mint a duplicate — `authoringEdgeKey`);
+ * - #1064, it overlaps an outcome the pair already routes on
+ *   (`overlappingOutcomes`).
  *
  * Surfacing them lets the picker disable those options instead of accepting a
  * click and silently reverting: a refusal the operator cannot see is a control
- * that does nothing for no stated reason.
+ * that does nothing for no stated reason. The reason is TEXT inside the label,
+ * so it is in the radio's accessible name rather than carried by disabled-ness
+ * alone.
  *
  * The probe is the edge this one WOULD become — the same value the store builds
  * before consulting the key — so the picker and the store cannot disagree about
  * what collides.
  */
-export function takenConditions(edges: readonly Edge[], edge: Edge): ReadonlySet<string> {
-  const otherKeys = new Set(
-    edges.filter((other) => other.id !== edge.id).map((other) => authoringEdgeKey(other)),
-  );
-  const taken = new Set<string>();
-  for (const other of edges) {
-    if (other.id === edge.id) continue;
+export function takenConditions(edges: readonly Edge[], edge: Edge): ReadonlyMap<string, string> {
+  const others = edges.filter((other) => other.id !== edge.id);
+  const otherKeys = new Set(others.map((other) => authoringEdgeKey(other)));
+  const taken = new Map<string, string>();
+  for (const other of others) {
     const condition = conditionOf(other);
     const probe = { ...edge, ...condition } as Edge;
-    if (otherKeys.has(authoringEdgeKey(probe))) taken.add(encodeCondition(condition));
+    if (otherKeys.has(authoringEdgeKey(probe))) {
+      taken.set(encodeCondition(condition), 'already used by another edge');
+    }
+  }
+  const pair = forwardPairKey(edge);
+  const held = pair === null ? undefined : outcomesByForwardPair(others).get(pair);
+  if (held === undefined) return taken;
+  for (const on of OPERATIONAL_CONDITIONS) {
+    const value = encodeCondition({ on });
+    if (taken.has(value)) continue;
+    const overlap = overlappingOutcomes(held, { on });
+    if (overlap.length > 0) taken.set(value, overlapReason(on, overlap));
   }
   return taken;
+}
+
+/** The Edge panel's short form of an overlap — the connect refusal says more. */
+function overlapReason(on: EdgeOn, overlap: readonly EdgeOn[]): string {
+  return on === 'completion'
+    ? `would repeat the ${overlap.join(' and ')} ${overlap.length > 1 ? 'edges' : 'edge'}`
+    : 'already covered by the completion edge';
+}
+
+/**
+ * #1064 — the sibling a forward `success`/`failure` edge can be COLLAPSED with
+ * into one `completion` edge, or `null`.
+ *
+ * `success` + `failure` between the same two activities IS `completion`
+ * (`overlappingOutcomes`), so the panel offers the one-edge spelling as ONE act
+ * (one undo step) instead of leaving the operator to find the order that works:
+ * retyping either edge to `completion` first is refused, because it would sit
+ * beside the other.
+ */
+export function completionSibling(edges: readonly Edge[], edge: Edge): Edge | null {
+  if (edge.on !== 'success' && edge.on !== 'failure') return null;
+  const pair = forwardPairKey(edge);
+  if (pair === null) return null;
+  /* A stored doc can hold all three (authored before the rule, imported, or a
+     copy of either). Retyping onto `completion` there would mint a DUPLICATE
+     of the completion edge already on the pair — the collapse is not the
+     repair for that shape, deleting the two narrower edges is. */
+  if (outcomesByForwardPair(edges).get(pair)?.has('completion') === true) return null;
+  const want: EdgeOn = edge.on === 'success' ? 'failure' : 'success';
+  return edges.find((e) => e.id !== edge.id && e.on === want && forwardPairKey(e) === pair) ?? null;
 }
 
 /**

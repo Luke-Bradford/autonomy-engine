@@ -237,9 +237,12 @@ describe('EdgePanel — a condition another edge already holds', () => {
     expect(taken.label).toMatch(/^failure — already used/);
   });
 
+  /* #1064 — `completion` is NOT among them any more: beside the `failure`
+     sibling it would repeat that edge, so it is disabled with its own reason
+     (asserted in the #1064 block below). */
   it('leaves every other option, and the edge’s OWN condition, selectable', () => {
     mount(subject, [node('n_a', 'http_request')], [subject, sibling]);
-    for (const on of ['success', 'completion', 'skipped']) {
+    for (const on of ['success', 'skipped']) {
       expect(radio(`op:${on}`)!.disabled).toBe(false);
     }
     // ...and the edge's own condition stays CHECKED, not merely selectable.
@@ -408,5 +411,66 @@ describe('EdgePanel — a back-edge bounce cap', () => {
     store.setState({ dirty: false });
     fireEvent.blur(field, { target: { value: '6' } });
     expect(store.getState().dirty).toBe(false);
+  });
+});
+
+/**
+ * #1064 — one intent, one edge. The panel disables what the connect gesture
+ * refuses, says why in the radio's own label (its accessible name), and offers
+ * the one-edge spelling of a success + failure pair.
+ */
+describe('EdgePanel — overlapping outcomes (#1064)', () => {
+  const nodes = [node('n_a', 'http_request'), node('n_b', 'http_request')];
+  const success: Edge = { id: 'e1', from: 'n_a', to: 'n_b', on: 'success' };
+  const failure: Edge = { id: 'e2', from: 'n_a', to: 'n_b', on: 'failure' };
+  const completion: Edge = { id: 'e3', from: 'n_a', to: 'n_b', on: 'completion' };
+  const skipped: Edge = { id: 'e4', from: 'n_a', to: 'n_b', on: 'skipped' };
+
+  it('beside a completion edge, disables success and failure with the reason', () => {
+    mount(skipped, nodes, [skipped, completion]);
+    for (const on of ['success', 'failure']) {
+      expect(radio(`op:${on}`)!.disabled).toBe(true);
+      expect(
+        screen.getByRole('radio', { name: `${on} — already covered by the completion edge` }),
+      ).toBeTruthy();
+    }
+    expect(radio('op:skipped')!.disabled).toBe(false);
+  });
+
+  it('beside a failure sibling, disables completion and names the sibling', () => {
+    mount(success, nodes, [success, failure]);
+    expect(radio('op:completion')!.disabled).toBe(true);
+    expect(
+      screen.getByRole('radio', { name: 'completion — would repeat the failure edge' }),
+    ).toBeTruthy();
+  });
+
+  it('offers the collapse only when the pair is success + failure', () => {
+    mount(success, nodes, [success, skipped]);
+    expect(screen.queryByRole('button', { name: /one completion edge/ })).toBeNull();
+  });
+
+  it('collapses success + failure into ONE completion edge, as ONE undo step', () => {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes,
+        edges: [success, failure],
+        containers: [],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    render(<EdgePanel store={store} edge={success} nodes={nodes} edges={[success, failure]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Replace both with one completion edge' }));
+    expect(store.getState().edges).toEqual([{ ...success, on: 'completion' }]);
+    store.getState().undo();
+    expect(store.getState().edges).toEqual([success, failure]);
   });
 });

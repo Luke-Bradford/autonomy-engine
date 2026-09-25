@@ -2644,6 +2644,27 @@ describe('canvasStore — duplicateNode (U21)', () => {
     expect(froms.sort()).toEqual(['n_a', 'n_c']);
   });
 
+  /**
+   * #1064's overlap rule is for NEW intent. A stored doc can hold `success` +
+   * `completion` from one source (authored before the rule, or imported); a copy
+   * that kept only whichever came first would not run when that source FAILS,
+   * which the original does.
+   */
+  it('copies a stored success + completion in-edge pair WHOLE, not the first of them', () => {
+    const s = loaded({
+      edges: [
+        { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+        { id: 'e_2', from: 'n_a', to: 'n_b', on: 'completion' },
+      ],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    const ons = st.edges.filter((e) => e.to === copyId).map((e) => e.on);
+    expect(ons.sort()).toEqual(['completion', 'success']);
+  });
+
   it('drops an in-edge that would cross a container boundary', () => {
     // A doc can ARRIVE holding an edge from outside a container to a node
     // inside it (`loadVersion` drops only dangling endpoints, not this), and
@@ -3224,5 +3245,78 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
     store.getState().setNodeBindingEnd('c', 'connections', 'source', 'conn_a');
     store.getState().loadVersion(null);
     expect(store.getState().pendingBindings).toEqual({});
+  });
+});
+
+/**
+ * #1064 — one intent, one edge, through the store's own writers. The predicate
+ * is `connectRejection`'s; these pin that `connect` and `rewireEdge` consult it,
+ * and that a stored doc holding the redundancy is left exactly as it is.
+ */
+describe('canvasStore — overlapping outcomes (#1064)', () => {
+  const redundant = [
+    { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' as const },
+    { id: 'e_2', from: 'n_a', to: 'n_b', on: 'completion' as const },
+  ];
+
+  it('loads a doc that already holds success + completion, and keeps both', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ edges: redundant }));
+    expect(s.getState().edges).toEqual(redundant);
+    const st = s.getState();
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+  });
+
+  it('refuses to connect completion beside an existing success edge', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().connect('n_a', 'n_b', { on: 'completion' });
+    expect(s.getState().edges.map((e) => e.on)).toEqual(['success']);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('refuses to retype a skipped edge to success beside a completion edge', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'completion' },
+          { id: 'e_2', from: 'n_a', to: 'n_b', on: 'skipped' },
+        ],
+      }),
+    );
+    s.getState().rewireEdge('e_2', { from: 'n_a', to: 'n_b', condition: { on: 'success' } });
+    expect(s.getState().edges.find((e) => e.id === 'e_2')?.on).toBe('skipped');
+  });
+
+  it('still lets the only edge of a pair widen to completion', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().rewireEdge('e_1', { from: 'n_a', to: 'n_b', condition: { on: 'completion' } });
+    expect(s.getState().edges[0]?.on).toBe('completion');
+  });
+
+  it('collapseToCompletion drops a selected sibling from the selection too', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+          { id: 'e_2', from: 'n_a', to: 'n_b', on: 'failure' },
+        ],
+      }),
+    );
+    s.getState().select({ kind: 'edge', id: 'e_2' });
+    s.getState().collapseToCompletion('e_1');
+    expect(s.getState().edges).toEqual([{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'completion' }]);
+    expect(s.getState().selected).toEqual([]);
+  });
+
+  it('collapseToCompletion is a no-op, off the undo stack, without a sibling', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().collapseToCompletion('e_1');
+    expect(s.getState().edges[0]?.on).toBe('success');
+    expect(s.getState().dirty).toBe(false);
   });
 });
