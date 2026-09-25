@@ -87,25 +87,34 @@ export async function addActivity(page: Page, title: string): Promise<void> {
   await toolbox(page).getByRole('button', { name: title, exact: true }).click();
 }
 
-/** Wait until React Flow's viewport transform stops changing. */
-export async function viewportSettled(page: Page): Promise<void> {
+/**
+ * Wait until React Flow's viewport transform stops changing, and return it.
+ *
+ * Through `settled`, the one quiet-window primitive — NOT a seed read compared
+ * to one probe (#1073). Those two reads are back-to-back round trips that can
+ * both land before a fit has started to move the viewport, and two reads of a
+ * transform that has not started changing agree. That was this helper's shape
+ * until #1073, on the path of nearly every canvas spec via `fitAndSettle`,
+ * `marqueeAllNodes` and `openSeededCanvas`. `viewport-settle.spec.ts` pins it.
+ *
+ * An absent or empty transform is never "settled": the viewport has not been
+ * laid out, and two `undefined`s agreeing says nothing about where it will land.
+ */
+export async function viewportSettled(page: Page): Promise<string> {
   const read = () =>
     page.evaluate(
       () =>
         (document.querySelector('.react-flow__viewport') as HTMLElement | null)?.style.transform,
     );
-  let previous = await read();
-  await expect
-    .poll(
-      async () => {
-        const current = await read();
-        const stable = current !== undefined && current !== '' && current === previous;
-        previous = current;
-        return stable;
-      },
-      { message: 'the React Flow viewport never stopped moving' },
-    )
-    .toBe(true);
+  const transform = await settled(
+    read,
+    (a, b) => a !== undefined && a !== '' && a === b,
+    'the React Flow viewport never stopped moving',
+  );
+  // `same` refuses to call an absent transform settled, so this cannot fire;
+  // it narrows the type rather than guarding a reachable state.
+  if (transform === undefined) throw new Error('the React Flow viewport has no transform');
+  return transform;
 }
 
 /**
@@ -648,21 +657,39 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
       return { x: p.x, y: p.y };
     }, index);
 
+  return settled(
+    read,
+    (a, b) => Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1,
+    `the edge path never held still for ${String(SETTLE_QUIET_READS)} reads`,
+  );
+}
+
+/**
+ * Read until `SETTLE_QUIET_READS` CONSECUTIVE probes agree under `same`, then
+ * return the last reading. Any disagreement resets the run to zero.
+ *
+ * The ONE settle primitive in this file (#1073). `edgeMidpoint`'s docblock
+ * above carries the argument for the quiet window and what it really enforces;
+ * it was hardened there first while `viewportSettled` kept the one-comparison
+ * shape, which is the helper-existing-twice failure this file keeps paying for.
+ * A new "wait until X stops moving" goes through here, not a third loop.
+ */
+async function settled<T>(
+  read: () => Promise<T>,
+  same: (previous: T, current: T) => boolean,
+  message: string,
+): Promise<T> {
   let previous = await read();
   let quiet = 0;
   await expect
     .poll(
       async () => {
         const current = await read();
-        const stable = Math.abs(current.x - previous.x) < 1 && Math.abs(current.y - previous.y) < 1;
-        quiet = stable ? quiet + 1 : 0;
+        quiet = same(previous, current) ? quiet + 1 : 0;
         previous = current;
         return quiet;
       },
-      {
-        message: `the edge path never held still for ${String(SETTLE_QUIET_READS)} reads`,
-        intervals: [SETTLE_INTERVAL_MS],
-      },
+      { message, intervals: [SETTLE_INTERVAL_MS] },
     )
     .toBeGreaterThanOrEqual(SETTLE_QUIET_READS);
   return previous;
