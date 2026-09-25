@@ -213,6 +213,13 @@ export const NodeRunStateSchema = z.object({
   attempts: z.number().int().nonnegative(),
   currentAttemptId: z.string().optional(),
   /**
+   * RS4 — set ONLY on a `call_pipeline` node COPIED by `run.reseeded`: the child
+   * run (in the source run's lineage) that produced its copied outputs. A copied
+   * node has no `currentAttemptId` to derive its child from, so this is what lets
+   * a rerun OF a rerun carry the link forward instead of losing it.
+   */
+  sourceChildRunId: z.string().optional(),
+  /**
    * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
    * ONLY counter retry-eligibility reads (`retries < policy.retry`).
    *
@@ -988,8 +995,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   // pinning the same immutable `pipelineVersionId` (hence the same output
   // contract) as R1. `${trigger.*}` reuse is handled by REPLAYING R1's
   // `run.triggerContext` before `run.started` (single SSOT), not a field here.
-  // `childLinks` (RS4 call_pipeline provenance) is a later backward-compatible
-  // optional-field addition.
+  // `childLinks` (RS4) is `call_pipeline` provenance, optional so an older log
+  // parses unchanged.
   z.object({
     type: z.literal('run.reseeded'),
     runId: z.string(),
@@ -1004,6 +1011,16 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     /** Fully-completed containers copied as terminal units (`containerId → state`);
      * RS3 decides which containers are copiable, this fold applies them. */
     copiedContainers: z.record(z.string(), ContainerRunStateSchema),
+    /**
+     * RS4 — for each COPIED `call_pipeline` frontier node, the child run whose
+     * result it carries. Provenance only: the child is never re-spawned (a
+     * copied node is terminal and never dispatches), and a call node OFF the
+     * frontier re-runs and gets a fresh child id minted from this run's id.
+     * Absent on older logs and on a reseed that copied no call node.
+     */
+    childLinks: z
+      .array(z.object({ callNodeId: z.string(), sourceChildRunId: z.string() }))
+      .optional(),
   }),
   z.object({
     type: z.literal('node.dispatched'),

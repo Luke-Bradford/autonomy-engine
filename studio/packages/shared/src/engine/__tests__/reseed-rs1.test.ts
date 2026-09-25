@@ -52,6 +52,7 @@ function reseeded(fields: {
   copiedOutputs?: Record<string, Record<string, unknown>>;
   copiedContainers?: Record<string, RunState['containers'][string]>;
   sourceRunId?: string;
+  childLinks?: { callNodeId: string; sourceChildRunId: string }[];
 }): EngineEvent {
   return {
     type: 'run.reseeded',
@@ -60,6 +61,7 @@ function reseeded(fields: {
     frontier: fields.frontier ?? [],
     copiedOutputs: fields.copiedOutputs ?? {},
     copiedContainers: fields.copiedContainers ?? {},
+    ...(fields.childLinks !== undefined ? { childLinks: fields.childLinks } : {}),
   };
 }
 
@@ -263,5 +265,70 @@ describe('RS1 — event-sourcing invariants', () => {
     expect(half.status).toBe('running');
     const resumed = eng.resume(half);
     expect(dispatchIds(resumed.commands)).toEqual(['a']);
+  });
+});
+
+describe('RS4 — run.reseeded childLinks fold', () => {
+  function callNode(id: string): Node {
+    seq += 1;
+    return {
+      id,
+      type: 'call_pipeline',
+      config: {},
+      call: { pipelineVersionId: 'childPv', params: {} },
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  it('records the source child on a copied call node and spawns NOTHING for it', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const { state, lastCommands, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({
+        frontier: ['call'],
+        copiedOutputs: { call: { r: 1 } },
+        childLinks: [{ callNodeId: 'call', sourceChildRunId: 'child_r1' }],
+      }),
+    ]);
+    expect(allDiagnostics).toEqual([]);
+    expect(state.nodes.call).toEqual({
+      status: 'success',
+      attempts: 0,
+      retries: 0,
+      sourceChildRunId: 'child_r1',
+    });
+    expect(lastCommands.some((c) => c.type === 'startChild')).toBe(false);
+    expect(dispatchIds(lastCommands)).toEqual(['b']);
+  });
+
+  it('a link naming a node that is NOT on the frontier is skipped with a diagnostic', () => {
+    const eng = engine([node('a'), callNode('call')], [edge('a', 'call', 'success')]);
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({
+        frontier: ['a'],
+        childLinks: [{ callNodeId: 'call', sourceChildRunId: 'child_r1' }],
+      }),
+    ]);
+    expect(allDiagnostics).toEqual([
+      "impossible run.reseeded: child link for 'call', which is not a copied frontier node",
+    ]);
+    expect(state.nodes.call!.sourceChildRunId).toBeUndefined();
+  });
+
+  it('a NON-frontier call node re-runs with a FRESH child id minted from the new run', () => {
+    const eng = engine([node('a'), callNode('call')], [edge('a', 'call', 'success')]);
+    const r1Child = fold(eng, [
+      { ...started(), runId: 'R1' },
+      { type: 'node.dispatched', runId: 'R1', nodeId: 'a', attemptId: 'a#0', idempotent: true },
+      { type: 'node.succeeded', runId: 'R1', nodeId: 'a', attemptId: 'a#0', outputs: {} },
+    ]).lastCommands.find((c) => c.type === 'startChild');
+    const r2Child = fold(eng, [startedRerun(), reseeded({ frontier: ['a'] })]).lastCommands.find(
+      (c) => c.type === 'startChild',
+    );
+    expect(r1Child).toBeDefined();
+    expect(r2Child).toBeDefined();
+    if (r1Child?.type !== 'startChild' || r2Child?.type !== 'startChild') throw new Error('shape');
+    expect(r2Child.childRunId).not.toBe(r1Child.childRunId);
   });
 });

@@ -294,3 +294,67 @@ describe('RS2 — reseedFrontier: determinism', () => {
     expect(r1).toEqual(r2);
   });
 });
+
+describe('RS4 — reseedFrontier: a copied call node links the child run that produced it', () => {
+  function callNode(id: string): Node {
+    seq += 1;
+    return {
+      id,
+      type: 'call_pipeline',
+      config: {},
+      call: { pipelineVersionId: 'childPv', params: {} },
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  /** The child id R1's reducer really minted for `id`, read off its own
+   * `startChild` command — never re-implemented here, so the test cannot agree
+   * with a wrong hash. */
+  function mintedChildRunId(eng: Engine, id: string): { childRunId: string; attemptId: string } {
+    const r = eng.reduce(eng.seedState(), {
+      type: 'run.started',
+      runId: 'R1',
+      pipelineVersionId: 'pv1',
+      params: {},
+    });
+    const cmd = r.commands.find((c) => c.type === 'startChild' && c.callNodeId === id);
+    if (cmd === undefined || cmd.type !== 'startChild') throw new Error(`no startChild for ${id}`);
+    return { childRunId: cmd.childRunId, attemptId: cmd.attemptId };
+  }
+
+  it('an EXECUTED call node on the frontier links the child its current attempt spawned', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const { childRunId, attemptId } = mintedChildRunId(eng, 'call');
+    const s = state({ nodes: { call: 'success', b: 'failure' }, outputs: { call: { r: 1 } } });
+    s.nodes.call = { status: 'success', attempts: 1, retries: 0, currentAttemptId: attemptId };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['call']);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: childRunId }]);
+  });
+
+  it('a call node that was itself COPIED (a rerun of a rerun) carries its link forward', () => {
+    const eng = engine([callNode('call'), node('b')], [edge('call', 'b', 'success')]);
+    const s = state({ nodes: { call: 'success', b: 'failure' } });
+    // What `run.reseeded` folds for a copied call node: no live attempt, the
+    // original child recorded instead.
+    s.nodes.call = { status: 'success', attempts: 0, retries: 0, sourceChildRunId: 'child_orig' };
+    const r = eng.reseedFrontier(s);
+    expect(r.childLinks).toEqual([{ callNodeId: 'call', sourceChildRunId: 'child_orig' }]);
+  });
+
+  it('a call node OFF the frontier gets no link — it re-runs and spawns a fresh child', () => {
+    const eng = engine([node('a'), callNode('call')], [edge('a', 'call', 'success')]);
+    const s = state({ nodes: { a: 'success', call: 'failure' } });
+    s.nodes.call = { status: 'failure', attempts: 1, retries: 0, currentAttemptId: 'call#0' };
+    const r = eng.reseedFrontier(s);
+    expect(r.frontier).toEqual(['a']);
+    expect(r.childLinks).toEqual([]);
+  });
+
+  it('non-call frontier nodes, and a call node with no attempt and no link, get none', () => {
+    const eng = engine([node('a'), callNode('call'), node('c')], [edge('a', 'c', 'success')]);
+    const r = eng.reseedFrontier(state({ nodes: { a: 'success', call: 'success', c: 'failure' } }));
+    expect(r.frontier).toEqual(['a', 'call']);
+    expect(r.childLinks).toEqual([]);
+  });
+});

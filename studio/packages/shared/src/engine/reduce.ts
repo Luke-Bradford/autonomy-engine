@@ -159,7 +159,9 @@ export interface Engine {
  *    at an obsolete iteration, and a copied run takes no bounce to `resetNodes` it.
  *    The top-level analogue of the container-loop rule; RS3 may refine.
  *  - A copied `call_pipeline` node is a plain success node here (never re-spawns its
- *    child); RS4 adds `childLinks` provenance for RS6's render only.
+ *    child). RS4's `childLinks` name the child that produced it — provenance for the
+ *    monitor only. A call node INSIDE a copied container gets no link: the container
+ *    is copied as one unit and its children are not on the frontier.
  *  - `secureOutput` exclusion (RS5) is a NO-OP today: the field ships with F4 and
  *    does not exist yet, so no frontier node can carry a redacted output.
  */
@@ -171,6 +173,18 @@ export interface ReseedFrontier {
   copiedOutputs: Record<string, Record<string, unknown>>;
   /** Fully-completed (terminal-`success`) containers copied as terminal units. */
   copiedContainers: Record<string, ContainerRunState>;
+  /**
+   * RS4 — one entry per copied `call_pipeline` frontier node whose child is known,
+   * in frontier order. For a node that EXECUTED in the source run the id is
+   * re-derived from its `currentAttemptId` with the reducer's own
+   * `deterministicChildRunId`. That is sound, not a guess: a call node reaches
+   * `success` only by `call.returned{success}` or `call.detached`, both of which
+   * `onCallReturned`/`onCallDetached` fold ONLY when the event's `childRunId` equals
+   * that re-derivation, and the executor emits neither for a spawn it refused (a
+   * refusal is `call.returned{failure}`). For a node that was itself COPIED (a rerun
+   * of a rerun) there is no attempt, so its folded `sourceChildRunId` carries on.
+   */
+  childLinks: { callNodeId: string; sourceChildRunId: string }[];
 }
 
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
@@ -3088,6 +3102,7 @@ export function createEngine(doc: EngineDoc): Engine {
 
     const nodes: Record<string, NodeRunState> = { ...state.nodes };
     const outputs: Record<string, Record<string, unknown>> = { ...state.outputs };
+    const applied = new Set<string>();
     for (const nodeId of event.frontier) {
       if (nodes[nodeId] === undefined) {
         // Keep the pure fold TOTAL (like the other impossible-log guards): a
@@ -3103,10 +3118,25 @@ export function createEngine(doc: EngineDoc): Engine {
       // in `TERMINAL_NODE`, so `settle`'s edge routing, `allTopLevelTerminal` and
       // `runOutcomeFailure` treat it identically to an executed success.
       nodes[nodeId] = { status: 'success', attempts: 0, retries: 0 };
+      applied.add(nodeId);
       // Raw write of the already-normalized copied outputs — see the event doc's
       // sourcing contract. `?? {}` for a frontier node the manifest gave no
       // outputs (a node with no declared outputs).
       outputs[nodeId] = event.copiedOutputs[nodeId] ?? {};
+    }
+
+    // RS4 — provenance for a copied call node, read back by the NEXT rerun's
+    // `reseedFrontier` (a copied node has no attempt to derive its child from). A
+    // link for a node this fold did not copy is a malformed manifest: report and
+    // skip, never attach provenance to a node that will execute here.
+    for (const link of event.childLinks ?? []) {
+      if (!applied.has(link.callNodeId)) {
+        diagnostics.push(
+          `impossible run.reseeded: child link for '${link.callNodeId}', which is not a copied frontier node`,
+        );
+        continue;
+      }
+      nodes[link.callNodeId] = { ...nodes[link.callNodeId]!, sourceChildRunId: link.sourceChildRunId };
     }
 
     const containers: Record<string, ContainerRunState> = { ...state.containers };
@@ -4448,7 +4478,20 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const id of containerIds) {
       if (included.has(id)) copiedContainers[id] = { ...sourceState.containers[id]! };
     }
-    return { frontier, copiedOutputs, copiedContainers };
+    // RS4 — see `ReseedFrontier.childLinks`. A live attempt wins over a carried
+    // link: an attempt means the node ran in THIS source run, so its own child is
+    // the one that produced the result.
+    const childLinks: ReseedFrontier['childLinks'] = [];
+    for (const id of frontier) {
+      if (nodeById.get(id)?.call === undefined) continue;
+      const ns = sourceState.nodes[id]!;
+      const sourceChildRunId =
+        ns.currentAttemptId !== undefined
+          ? deterministicChildRunId(sourceState.runId, id, ns.currentAttemptId)
+          : ns.sourceChildRunId;
+      if (sourceChildRunId !== undefined) childLinks.push({ callNodeId: id, sourceChildRunId });
+    }
+    return { frontier, copiedOutputs, copiedContainers, childLinks };
   }
 
   return {
