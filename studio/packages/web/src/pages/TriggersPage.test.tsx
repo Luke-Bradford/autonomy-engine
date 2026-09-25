@@ -954,9 +954,9 @@ describe('#854 — the trigger modes that had no config UI', () => {
     expect(updateMock.mock.calls[0]![1].event).toBeNull();
   });
 
-  it('preserves a window sub-object it has no control for through an unrelated edit', async () => {
-    // The editor ships geometry + bounds only. Renaming a trigger whose window
-    // carries an API-authored retry policy must not truncate it.
+  it('shows a window retry policy in its controls and writes it back through an unrelated edit', async () => {
+    // #861 — the retry policy has controls now; renaming the trigger must still
+    // write it back byte-identical rather than re-derive or drop it.
     const user = userEvent.setup();
     const window = {
       frequency: 'hour' as const,
@@ -976,7 +976,8 @@ describe('#854 — the trigger modes that had no config UI', () => {
     renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
-    expect(form.getByTestId('window-preserved')).toHaveTextContent(/retry policy/i);
+    expect(form.getByLabelText(/Retry a failed window/)).toHaveValue(3);
+    expect(form.getByLabelText(/Seconds between retries/)).toHaveValue(60);
     await user.type(form.getByLabelText('Name'), ' renamed');
     await user.click(form.getByRole('button', { name: /Save changes/i }));
 

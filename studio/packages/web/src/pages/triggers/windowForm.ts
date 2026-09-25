@@ -23,10 +23,12 @@ import { parseWholeNumber, resolveBoundsInto, utcIsoToLocalInput } from './formF
  *    (`assertWindowConsistent` requires one only when ENABLED), so the builder
  *    must round-trip that state; but silently reading half-typed geometry as
  *    "no window" would discard what the operator typed and save clean doing it.
- * 3. **What this editor cannot show, it still carries.** `retry` and
- *    `selfDependency` have no controls in this release (#861), so they are held
- *    verbatim and written back — editing a window authored through the API must
- *    not silently drop them.
+ * 3. **A sub-object is all or nothing.** `retry` needs both of its fields and
+ *    `selfDependency` needs its offset (#861). Both halves blank is an ABSENT
+ *    sub-object (rule 1); half of one is refused here, naming the control, where
+ *    the schema would only say `Required` against a path the operator never saw.
+ *    That is the one shape rule restated client-side, for its message (the
+ *    `startTime` precedent below) — every RANGE stays the schema's.
  *
  * Validation is delegated WHOLE to `WindowConfigWriteSchema`, not re-implemented
  * as a subset: that buys the caps, the non-empty `[startTime, endTime)` window
@@ -51,9 +53,15 @@ export interface WindowFormState {
    */
   startTimeIso: string;
   endTimeIso: string;
-  /** Preserved verbatim — see rule 3. No controls in this release (#861). */
-  retry: WindowConfig['retry'];
-  selfDependency: WindowConfig['selfDependency'];
+  /** #861 — `retry.count` / `retry.intervalInSeconds`, as typed. */
+  retryCount: string;
+  retryIntervalSeconds: string;
+  /** #861 — `selfDependency`, as typed. The offset is SIGNED (strictly
+   * negative when valid), exactly the stored field, so the schema's own
+   * refusals name what the operator typed rather than a negated copy of it. */
+  dependencyOffsetSeconds: string;
+  /** Blank = ABSENT = one window size — the schema's default, not `0`. */
+  dependencySizeSeconds: string;
 }
 
 export function blankWindowForm(): WindowFormState {
@@ -66,8 +74,10 @@ export function blankWindowForm(): WindowFormState {
     endTime: '',
     startTimeIso: '',
     endTimeIso: '',
-    retry: undefined,
-    selfDependency: undefined,
+    retryCount: '',
+    retryIntervalSeconds: '',
+    dependencyOffsetSeconds: '',
+    dependencySizeSeconds: '',
   };
 }
 
@@ -75,19 +85,10 @@ export function blankWindowForm(): WindowFormState {
  * Is this form still exactly as it was opened on an unconfigured trigger?
  *
  * `frequency` is excluded deliberately: it has a default and no "unset" state,
- * so choosing one authors nothing on its own. Everything else — including a
- * preserved sub-object, which IS authored state — counts as touched.
+ * so choosing one authors nothing on its own. Every other control counts.
  */
 function isUntouched(form: WindowFormState): boolean {
-  return (
-    form.interval.trim() === '' &&
-    form.maxBackfillWindows.trim() === '' &&
-    form.maxConcurrentWindows.trim() === '' &&
-    form.startTime.trim() === '' &&
-    form.endTime.trim() === '' &&
-    form.retry === undefined &&
-    form.selfDependency === undefined
-  );
+  return TEXT_FIELDS.every((key) => form[key].trim() === '');
 }
 
 export type WindowConversion =
@@ -96,6 +97,23 @@ export type WindowConversion =
 /** The optional whole-number caps. Both are read the same way, so they are a
  * plain list rather than a table of one-field rows. */
 const CAP_FIELDS = ['maxBackfillWindows', 'maxConcurrentWindows'] as const;
+
+/** The #861 sub-object fields, read like the caps: whole numbers, blank = absent. */
+const SUB_OBJECT_FIELDS = [
+  'retryCount',
+  'retryIntervalSeconds',
+  'dependencyOffsetSeconds',
+  'dependencySizeSeconds',
+] as const;
+
+/** Every free-text control — what "untouched" is judged over. */
+const TEXT_FIELDS = [
+  'interval',
+  'startTime',
+  'endTime',
+  ...CAP_FIELDS,
+  ...SUB_OBJECT_FIELDS,
+] as const;
 
 /**
  * Build a `WindowConfig` from the form, or report the first reason it cannot be.
@@ -129,10 +147,33 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   const boundProblem = resolveBoundsInto(form, candidate);
   if (boundProblem !== null) return { ok: false, reason: boundProblem };
 
-  // Rule 3: carried through untouched, so the write is not a silent truncation
-  // of what was loaded.
-  if (form.retry !== undefined) candidate.retry = form.retry;
-  if (form.selfDependency !== undefined) candidate.selfDependency = form.selfDependency;
+  const sub: Partial<Record<(typeof SUB_OBJECT_FIELDS)[number], number>> = {};
+  for (const key of SUB_OBJECT_FIELDS) {
+    const parsed = parseWholeNumber(form[key]);
+    if (!parsed.ok) return { ok: false, reason: `${key}: ${parsed.reason}` };
+    if (parsed.value !== undefined) sub[key] = parsed.value;
+  }
+
+  // Rule 3: all or nothing per sub-object.
+  const { retryCount, retryIntervalSeconds, dependencyOffsetSeconds, dependencySizeSeconds } = sub;
+  if (retryCount !== undefined && retryIntervalSeconds !== undefined) {
+    candidate.retry = { count: retryCount, intervalInSeconds: retryIntervalSeconds };
+  } else if (retryCount !== undefined) {
+    return { ok: false, reason: 'retry: a retry policy needs an interval as well as a count' };
+  } else if (retryIntervalSeconds !== undefined) {
+    return { ok: false, reason: 'retry: a retry policy needs a count as well as an interval' };
+  }
+  if (dependencyOffsetSeconds !== undefined) {
+    candidate.selfDependency = {
+      offsetInSeconds: dependencyOffsetSeconds,
+      ...(dependencySizeSeconds !== undefined ? { sizeInSeconds: dependencySizeSeconds } : {}),
+    };
+  } else if (dependencySizeSeconds !== undefined) {
+    return {
+      ok: false,
+      reason: 'selfDependency: a dependency size needs an offset to measure it from',
+    };
+  }
 
   const parsed = WindowConfigWriteSchema.safeParse(candidate);
   if (!parsed.success) {
@@ -144,22 +185,25 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   return { ok: true, window: parsed.data };
 }
 
-/** Load a stored window back into the editor. The inverse of `formToWindow` for
- * any window that form could have produced — and a faithful carrier for the
- * parts it could not. */
+/** Load a stored window back into the editor — the inverse of `formToWindow`. */
 export function windowToForm(window: WindowConfig): WindowFormState {
   return {
     frequency: window.frequency,
     interval: String(window.interval),
-    maxBackfillWindows:
-      window.maxBackfillWindows === undefined ? '' : String(window.maxBackfillWindows),
-    maxConcurrentWindows:
-      window.maxConcurrentWindows === undefined ? '' : String(window.maxConcurrentWindows),
+    maxBackfillWindows: optionalText(window.maxBackfillWindows),
+    maxConcurrentWindows: optionalText(window.maxConcurrentWindows),
     startTime: utcIsoToLocalInput(window.startTime),
     endTime: window.endTime === undefined ? '' : utcIsoToLocalInput(window.endTime),
     startTimeIso: window.startTime,
     endTimeIso: window.endTime ?? '',
-    retry: window.retry,
-    selfDependency: window.selfDependency,
+    retryCount: optionalText(window.retry?.count),
+    retryIntervalSeconds: optionalText(window.retry?.intervalInSeconds),
+    dependencyOffsetSeconds: optionalText(window.selfDependency?.offsetInSeconds),
+    dependencySizeSeconds: optionalText(window.selfDependency?.sizeInSeconds),
   };
+}
+
+/** An absent number is a blank control, never `'0'` or `'undefined'`. */
+function optionalText(value: number | undefined): string {
+  return value === undefined ? '' : String(value);
 }
