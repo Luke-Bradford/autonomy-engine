@@ -285,12 +285,20 @@ test.describe('#425 — call-node authoring', () => {
     await canvasNodes(page).first().click();
     await expect(arg(page, 'query')).toHaveValue('about ');
 
-    await panel(page).getByRole('button', { name: 'Insert reference into parameter query' }).click();
-    await panel(page).getByRole('button', { name: /^topic/ }).click();
+    await panel(page)
+      .getByRole('button', { name: 'Insert reference into parameter query' })
+      .click();
+    await panel(page)
+      .getByRole('button', { name: /^topic/ })
+      .click();
     await expect(arg(page, 'query')).toHaveValue('about ${params.topic}');
 
-    await panel(page).getByRole('button', { name: 'Insert reference into parameter limit' }).click();
-    await panel(page).getByRole('button', { name: /^topic/ }).click();
+    await panel(page)
+      .getByRole('button', { name: 'Insert reference into parameter limit' })
+      .click();
+    await panel(page)
+      .getByRole('button', { name: /^topic/ })
+      .click();
     await expect(arg(page, 'limit')).toHaveValue('${params.topic}');
 
     await panel(page).getByRole('button', { name: 'Apply call' }).click();

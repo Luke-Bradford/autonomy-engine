@@ -144,7 +144,7 @@ export function ConfigFieldControl({
 }) {
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
-  const caret = useCaretInsert<HTMLTextAreaElement>();
+  const { ref: inputRef, onSelect, insert: insertAtCaret } = useCaretInsert<HTMLTextAreaElement>();
 
   if (field.kind === 'objectList') {
     return (
@@ -217,9 +217,9 @@ export function ConfigFieldControl({
       <label>
         {hint === null ? label : `${label} — ${hint}`}
         <textarea
-          ref={caret.ref}
+          ref={inputRef}
           value={text}
-          onSelect={caret.onSelect}
+          onSelect={onSelect}
           rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
           spellCheck={false}
           placeholder={field.defaultText}
@@ -299,7 +299,7 @@ export function ConfigFieldControl({
           fieldName={shown}
           describe={picker.describe}
           resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
-          onSelect={(insert, mode) => onChange(caret.insert(text, insert, mode))}
+          onSelect={(insert, mode) => onChange(insertAtCaret(text, insert, mode))}
         />
       )}
     </div>

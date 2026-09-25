@@ -480,15 +480,15 @@ function PickableInput({
   after?: ReactNode;
   children: ReactNode;
 }) {
-  const caret = useCaretInsert<HTMLInputElement>();
+  const { ref: inputRef, onSelect, insert: insertAtCaret } = useCaretInsert<HTMLInputElement>();
   return (
     <div className="config-field">
       <label>
         {children}
         <input
-          ref={caret.ref}
+          ref={inputRef}
           value={value}
-          onSelect={caret.onSelect}
+          onSelect={onSelect}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
         />
@@ -499,7 +499,7 @@ function PickableInput({
           fieldName={pickerName}
           describe={picker.describe}
           resolve={() => picker.resolve(target)}
-          onSelect={(insert, mode) => onChange(caret.insert(value, insert, mode))}
+          onSelect={(insert, mode) => onChange(insertAtCaret(value, insert, mode))}
         />
       )}
     </div>
