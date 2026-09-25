@@ -10,7 +10,9 @@ import {
   type Node,
   type Param,
 } from '@autonomy-studio/shared';
-import { ConfigFieldControl } from './ConfigFieldControl';
+import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
+import { activityLabels } from './activityLabel';
+import { useExpressionPicker } from './useExpressionPicker';
 import {
   assembleConfig,
   deriveConfigFields,
@@ -57,6 +59,18 @@ import { confirmContainerEdit, containerLabels } from './containerRules';
  * on kind-legality — a `stage` with a `timeout` parses cleanly and is refused
  * only by `validateDoc` — so offering the schema's fields unfiltered would let
  * the panel author a doc the save gate then rejects.
+ *
+ * ## The expression flyout on `exitWhen` and `items` (#864)
+ *
+ * The two `${}` fields a container has get the same "Insert reference" flyout a
+ * node's config does, through the same `ConfigFieldControl`. What differs is the
+ * SITE: neither field is in any node's scope. A loop's `exitWhen` reads its OWN
+ * children; a foreach's `items` reads the container's upstream and never its
+ * body. `availableRefs` answers each from the `ScanScope` its validator builds.
+ *
+ * Only a field LEGAL for this kind gets one. An illegal carried field (below) is
+ * a clear-only repair path, and a flyout there would invite the very value the
+ * panel refuses.
  */
 /**
  * Would this form display the same thing for both seeds? (U17)
@@ -96,6 +110,31 @@ export function ContainerPanel({
 }) {
   const label = containerLabels(containers).get(container.id) ?? container.kind;
   const stored = container as unknown as Record<string, unknown>;
+
+  // #864 — one picker per expression field, since each is its own site. Both
+  // hooks run whatever the kind (hooks cannot be conditional); the one whose
+  // field this kind does not carry is simply never handed to a control.
+  const nodeNames = useMemo(() => activityLabels(nodes), [nodes]);
+  const exitWhenPicker = useExpressionPicker(
+    nodes,
+    edges,
+    containers,
+    params,
+    { kind: 'container', containerId: container.id, field: 'exitWhen' },
+    nodeNames,
+  );
+  const itemsPicker = useExpressionPicker(
+    nodes,
+    edges,
+    containers,
+    params,
+    { kind: 'container', containerId: container.id, field: 'items' },
+    nodeNames,
+  );
+  const pickers: Partial<Record<string, FieldPicker>> = {
+    exitWhen: exitWhenPicker,
+    items: itemsPicker,
+  };
 
   /**
    * The controls to render: the fields legal for this kind, PLUS any illegal
@@ -300,6 +339,7 @@ export function ContainerPanel({
               field={field}
               value={inputs[field.name] ?? emptyControlValue(field)}
               onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+              picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
             />
           ))}
           {illegal.length > 0 && (

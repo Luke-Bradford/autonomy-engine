@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { Container, Node } from '@autonomy-studio/shared';
+import type { Container, Node, Param } from '@autonomy-studio/shared';
 import { ContainerPanel } from './ContainerPanel';
 
 /**
@@ -309,5 +309,98 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
     // why this panel keys on `sameContainerConfig` instead.
     rerender({ ...LOOP, children: ['n_a', 'n_b'] });
     expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${half-typed');
+  });
+});
+
+describe('ContainerPanel — the expression flyout on exitWhen and items (#864)', () => {
+  /**
+   * `n_src → [container: n_body] `. `n_src` is UPSTREAM of the container; the
+   * body child declares the boolean an exit condition reads. So the two fields
+   * must disagree about both nodes, which is the whole reason each is its own
+   * site: `exitWhen` reads the body, `items` reads the upstream.
+   */
+  const SRC: Node = {
+    id: 'n_src',
+    type: 'agent_task',
+    config: { outputs: [{ name: 'rows', type: 'json' }] },
+    position: { x: 0, y: 0 },
+  };
+  const BODY: Node = {
+    id: 'n_body',
+    type: 'agent_task',
+    config: {
+      outputs: [
+        { name: 'done', type: 'boolean' },
+        { name: 'note', type: 'string' },
+      ],
+    },
+    position: { x: 0, y: 100 },
+  };
+  const PARAMS: Param[] = [{ name: 'flag', type: 'boolean', required: true }];
+
+  function mountSite(container: Container) {
+    const onApply = vi.fn();
+    render(
+      <ContainerPanel
+        container={container}
+        nodes={[SRC, BODY]}
+        edges={[{ id: 'e', from: 'n_src', to: container.id, on: 'success' }]}
+        containers={[container]}
+        params={PARAMS}
+        onApply={onApply}
+      />,
+    );
+    return onApply;
+  }
+  const open = (field: string) =>
+    fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` }));
+  const option = (name: RegExp) => screen.queryByRole('button', { name });
+
+  it("offers a loop's exitWhen its own child's boolean, never the upstream node", () => {
+    const onApply = mountSite({
+      id: 'loop_1',
+      kind: 'loop',
+      children: ['n_body'],
+      exitWhen: '${params.flag}',
+    });
+    open('exitWhen');
+    expect(option(/→ done/)).not.toBeNull();
+    // Filtered by the save gate's own boolean check, not by a rule restated here.
+    expect(option(/→ note/)).toBeNull();
+    expect(option(/→ rows/)).toBeNull();
+
+    fireEvent.click(option(/→ done/)!);
+    apply();
+    // Whole-value field, so the pick REPLACES rather than splicing into `${params.flag}`.
+    expect(applied(onApply).exitWhen).toBe('${nodes.n_body.output.done}');
+  });
+
+  it("offers a foreach's items its upstream output, never its own body", () => {
+    const onApply = mountSite({
+      id: 'fe_1',
+      kind: 'foreach',
+      children: ['n_body'],
+      items: '${createArray(1)}',
+    });
+    open('items');
+    expect(option(/→ rows/)).not.toBeNull();
+    expect(option(/→ done/)).toBeNull();
+    expect(option(/^item/)).toBeNull();
+
+    fireEvent.click(option(/→ rows/)!);
+    apply();
+    expect(applied(onApply).items).toBe('${nodes.n_src.output.rows}');
+  });
+
+  it('gives a field that is dead on this kind no flyout — it may only be cleared', () => {
+    mountSite({
+      id: 'loop_1',
+      kind: 'loop',
+      children: ['n_body'],
+      exitWhen: '${params.flag}',
+      items: '${params.flag}',
+    });
+    expect(screen.getByRole('button', { name: 'Insert reference into exitWhen' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Insert reference into items' })).toBeNull();
   });
 });
