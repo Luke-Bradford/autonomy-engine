@@ -2,7 +2,6 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { COPY_PROGRESS_OUTPUT } from '@autonomy-studio/shared';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
@@ -185,6 +184,12 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
  * value while the node RUNS) is not reachable deterministically here, a local
  * copy of this size settles in milliseconds; `RunDetailPage.test.tsx` pins it.
  */
+/* `COPY_PROGRESS_OUTPUT` in `@autonomy-studio/shared`. Spelled here because the
+   e2e harness does not depend on the workspace packages, and because this IS
+   the wire name a stored run log carries — a rename that forgot old logs should
+   fail here. */
+const COPY_PROGRESS_OUTPUT = 'progress';
+
 test('#1299 — a copy streams per-batch progress, and the run page shows the latest', async ({
   page,
 }) => {

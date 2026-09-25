@@ -2957,10 +2957,7 @@ describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
 
 describe('deriveNodeActivity — the latest streamed value (#1299)', () => {
   const dispatched = (attemptId: string, at: number) =>
-    envelope(
-      { type: 'node.dispatched', runId: 'r', nodeId: 'c', attemptId, idempotent: true },
-      at,
-    );
+    envelope({ type: 'node.dispatched', runId: 'r', nodeId: 'c', attemptId, idempotent: true }, at);
   const tick = (value: unknown, at: number) =>
     envelope({ type: 'node.output', runId: 'r', nodeId: 'c', name: 'progress', value }, at);
 

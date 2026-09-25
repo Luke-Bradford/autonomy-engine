@@ -825,7 +825,9 @@ describe('copy activity — §5 progress ticks stream while the copy runs (#1299
   };
 
   const progressOf = (events: ActivityEvent[]): unknown[] =>
-    events.flatMap((e) => (e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT ? [e.value] : []));
+    events.flatMap((e) =>
+      e.type === 'output' && e.name === COPY_PROGRESS_OUTPUT ? [e.value] : [],
+    );
 
   it('yields a tick BEFORE the write has finished — progress, not a batch at the end', async () => {
     const { io, release } = gatedIo([[{ id: 1, name: 'a' }], [{ id: 2, name: 'b' }]]);

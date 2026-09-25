@@ -1017,7 +1017,13 @@ reproduce the log-volume problem this section forbids.
 
 _As built (#1135):_ the executor now streams an activity's events into the log as they are yielded;
 until then it buffered them until the terminal, so a tick could not arrive before the copy finished.
-The per-batch ticks themselves are not emitted yet — #1299.
+
+_As built (#1299):_ one `node.output` named `progress` (`COPY_PROGRESS_OUTPUT`) per batch, valued
+`{ rowsRead, rowsInFlight, rowsFailed }`. It is driven off the PUMP's `onBatch`, not the sink's, so a
+batch whose rows all failed coercion — which never reaches the sink — still ticks. `rowsInFlight`, not
+`rowsWritten`: those rows are in the sink's still-open transaction and a later failure rolls them back,
+so a tick is progress and the terminal's outputs are the committed truth. The run page shows a
+RUNNING node's latest tick in the node table and the latest of the current attempt in the drill-in.
 
 ---
 
