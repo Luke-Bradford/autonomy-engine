@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { getActivity, isStructuralCallActivity, type Node } from '@autonomy-studio/shared';
+import {
+  getActivity,
+  isStructuralCallActivity,
+  type Node,
+  type Param,
+} from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
 import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
@@ -29,9 +34,10 @@ function mountOver(
   target: Node,
   connections: Parameters<typeof NodePanel>[0]['connections'] = [],
   datasets: Parameters<typeof NodePanel>[0]['datasets'] = [],
+  params: Param[] = [],
 ) {
   const store = createCanvasStore();
-  store.setState({ nodes: [target] });
+  store.setState({ nodes: [target], params });
 
   function Harness() {
     const node = useStore(store, (s) => s.nodes.find((n) => n.id === target.id));
@@ -1137,5 +1143,81 @@ describe('NodePanel (Auto-map and the unmapped advisory, #1170)', () => {
     panel.apply();
 
     expect(screen.queryByText(/Apply config to save/)).toBeNull();
+  });
+});
+
+/**
+ * #1178 — the expression picker on a mapping row's cells (§13, item 3 of #1170).
+ *
+ * The picker used to probe a candidate by TOP-LEVEL config field name, so a cell
+ * (`mapping[1].expression`) had no way to ask about itself and was given no
+ * picker at all. Every assertion here is about which references a CELL is
+ * offered and where a chosen one lands — never about the list's markup.
+ */
+describe('the expression picker on a mapping cell (#1178)', () => {
+  const copyNode = (config: Record<string, unknown>): Node => ({
+    id: 'n_copy',
+    type: 'copy',
+    position: { x: 0, y: 0 },
+    config,
+  });
+  const params: Param[] = [{ name: 'limit', type: 'number', required: true }];
+  const rows = [
+    { source: 'name', sink: 'full_name', type: 'string', onError: 'fail' },
+    { expression: 'fixed', sink: 'tag', type: 'string', onError: 'fail' },
+    { source: 'city', sink: 'town', type: 'string', onError: 'fail' },
+  ];
+  const open = (cell: string) =>
+    fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${cell}` }));
+  const offered = () => screen.queryByRole('button', { name: /^limit/ });
+
+  it("writes a chosen reference into THAT row's expression, and no other row", () => {
+    const panel = mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    fireEvent.change(screen.getByLabelText('mapping row 2 expression (optional)'), {
+      target: { value: '' },
+    });
+    open('mapping row 2 expression');
+    fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [rows[0], { ...rows[1], expression: '${params.limit}' }, rows[2]],
+    });
+  });
+
+  it('offers references to a row that exists only in the draft', () => {
+    // The stored doc has three rows; the fourth is unapplied. Probing against
+    // the STORED doc would put the candidate on a row that does not exist there.
+    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
+    open('mapping row 4 expression');
+    fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
+
+    expect(
+      (screen.getByLabelText('mapping row 4 expression (optional)') as HTMLTextAreaElement).value,
+    ).toBe('${params.limit}');
+  });
+
+  it('offers nothing to a column-name cell, which §8 holds to a literal', () => {
+    // `sink` refuses any `${}` at save (`validateCopyMappingIdentifiers`). Both
+    // mode probes carry that refusal equally, so the field reads as a template —
+    // and an unfiltered template list would offer references that are ALL refused.
+    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    open('mapping row 3 sink');
+
+    expect(offered()).toBeNull();
+    expect(screen.getByText(/No reference in this pipeline fits mapping row 3 sink/)).toBeTruthy();
+  });
+
+  it("offers nothing to the expression of a row that already reads a source column", () => {
+    // `source` XOR `expression`: any reference here is refused at save.
+    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    open('mapping row 1 expression');
+
+    expect(offered()).toBeNull();
   });
 });
