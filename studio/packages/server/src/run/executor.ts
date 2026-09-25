@@ -154,14 +154,14 @@ function nodeFailed(
 /**
  * #796 — a typed `call.returned{failure}` for a child that could not be
  * spawned. `childRunId` is echoed so the reducer's deterministic-child-id
- * identity check passes and the call node actually terminalizes. The REASON is
- * logged by the seam that refused (`child.ts`'s `ensure`) rather than carried
- * here: `call.returned` has no error field, and inventing one is #796's own
- * follow-up.
+ * identity check passes and the call node actually terminalizes. `reason` is
+ * the refusing seam's OPERATOR-FACING text (`child.ts`'s `ensure`), so the run
+ * page can say why — there is no child run to explain itself.
  */
 function callFailed(
   runId: string,
   command: Extract<ExecutorCommand, { type: 'startChild' }>,
+  reason: string,
 ): EngineEvent {
   return {
     type: 'call.returned',
@@ -171,6 +171,7 @@ function callFailed(
     childRunId: command.childRunId,
     childOutcome: 'failure',
     outputs: {},
+    reason,
   };
 }
 
@@ -180,7 +181,9 @@ function callFailed(
  * `node.output` (both its `name` AND `value` — an adapter could build either from
  * a resolved secret), a `node.succeeded` outputs map, and a `node.failed` message
  * (a string). Every other event type (`node.dispatched`, `call.returned`) carries
- * no adapter value and passes through untouched.
+ * no adapter value and passes through untouched. (`call.returned`'s `reason` is
+ * server-authored refusal text from `child.ts`, and the `startChild` branch never
+ * reaches this scrub anyway — it returns before `performDispatch`.)
  *
  * `node.dispatched` is the one that needs stating rather than listing, since M6
  * slice B (#1149) put an adapter-minted value on it after this was written:
@@ -1564,12 +1567,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // throwing executor makes boot reconcile throw on every restart. Every
         // refusal below is a typed `call.returned{failure}` instead (A9/#516).
         if (deps.childRuns === undefined) {
-          yield callFailed(runId, command);
+          yield callFailed(
+            runId,
+            command,
+            'call_pipeline execution is not available in this server',
+          );
           return;
         }
         const ensured = deps.childRuns.ensure(command, runId);
         if (!ensured.ok) {
-          yield callFailed(runId, command);
+          yield callFailed(runId, command, ensured.reason);
           return;
         }
         if (ensured.terminal) {

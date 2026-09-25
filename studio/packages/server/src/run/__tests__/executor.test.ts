@@ -10,6 +10,7 @@ import {
   type ActivityCatalog,
   type ActivityCatalogEntry,
   type ConnectionKind,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
   type PipelineVersion,
@@ -2847,7 +2848,11 @@ describe('createExecutor — call_pipeline with NO child-spawn seam wired', () =
 
     expect(state.status).toBe('failure');
     expect(state.nodes['caller']!.status).toBe('failure'); // terminal, not `waiting`
-    expect(eventTypes(db, run.id)).toContain('call.returned');
+    const returned = loadEngineEvents(db, run.id).find((e) => e.type === 'call.returned');
+    expect(returned).toMatchObject({
+      childOutcome: 'failure',
+      reason: 'call_pipeline execution is not available in this server',
+    });
 
     // The boot reconciler must not throw on this run (no waiting node → no
     // startChild re-emit loop). It should be a no-op (run already terminal).
@@ -2912,6 +2917,38 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
       pipelineVersionId,
       params: {},
     }) satisfies ExecutorCommand;
+
+  it('#796 — a REFUSED spawn yields call.returned{failure} carrying the seam’s reason', async () => {
+    const db = freshDb().db;
+    const { runId, childPvId } = seedCall(db);
+    const kick = vi.fn();
+    const executor = createExecutor({
+      db,
+      masterKey: KEY,
+      resolveDoc: resolveDocFor(db),
+      adapters: testRegistry(),
+      childRuns: {
+        ensure: () => ({ ok: false, reason: 'child pipeline is archived' }),
+        kick,
+        result: () => ({ outcome: 'failure', outputs: {} }),
+      },
+    });
+    const seen: EngineEvent[] = [];
+    for await (const event of executor.perform(startChild(childPvId), runId)) seen.push(event);
+    expect(seen).toEqual([
+      {
+        type: 'call.returned',
+        runId,
+        callNodeId: 'caller',
+        attemptId: 'attempt-1',
+        childRunId: 'child-1',
+        childOutcome: 'failure',
+        outputs: {},
+        reason: 'child pipeline is archived',
+      },
+    ]);
+    expect(kick).not.toHaveBeenCalled();
+  });
 
   it('a child whose announcement never lands is never kicked', async () => {
     const db = freshDb().db;

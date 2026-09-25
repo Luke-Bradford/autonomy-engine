@@ -218,9 +218,10 @@ export function NodeActivityPanel({
       {node.status === 'failure' && (
         <section className="contract-section">
           <h4>Failure</h4>
-          {/* Gated on the STATUS, not on the message: a `call.returned` with a
-              failing child sets the row red and carries no message of its own,
-              and gating on `error` hid the whole section for it. */}
+          {/* Gated on the STATUS, not on the message: a `call.returned` whose
+              child RAN and failed sets the row red with no message of its own
+              (only a refused spawn carries a `reason`, #796), and gating on
+              `error` hid the whole section for it. */}
           {node.error === undefined ? (
             <p className="page-hint">
               No message was recorded — this node reports another run&apos;s outcome.

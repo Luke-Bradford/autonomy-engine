@@ -1170,6 +1170,31 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     expect(within(panel).getByText(/reports another run/i)).toBeInTheDocument();
   });
 
+  it('#796 — a REFUSED call node quotes its refusal reason in the Failure section', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'call.returned',
+            runId: 'run_1',
+            callNodeId: 'greet',
+            attemptId: 'greet#0',
+            childRunId: 'run_child',
+            childOutcome: 'failure',
+            outputs: {},
+            reason: 'child pipeline is archived',
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
+    expect(within(panel).getByText('child pipeline is archived')).toBeInTheDocument();
+    expect(within(panel).queryByText(/reports another run/i)).not.toBeInTheDocument();
+  });
+
   it('keeps the class on screen through a retry HOLD — it is the reason for the hold', async () => {
     useRunStreamMock.mockReturnValue(
       stream({

@@ -100,3 +100,56 @@ test('#1231 — a call node names its child run, and the child names its caller'
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #796 — a call node whose child could not be SPAWNED says why. There is no
+ * child run to drill into, so before this the drill-in's Failure section could
+ * only say the node "reports another run's outcome" — pointing at a run that
+ * does not exist — while the reason sat in the server log. Archiving the callee
+ * AFTER the parent is saved is the refusal an operator can actually reach: the
+ * save gate knows nothing of it, and `child.ts` refuses it at spawn time.
+ */
+test('#796 — a refused call node names its refusal reason on the run page', async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const childDoc: SeedDoc = {
+    nodes: [
+      { id: 'childWork', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } },
+    ],
+  };
+  const child = await seedVersion(page, '#796 archived child', childDoc);
+  const parentDoc: SeedDoc = {
+    nodes: [
+      {
+        id: 'callRefused',
+        type: 'call_pipeline',
+        config: {},
+        call: { pipelineVersionId: child.pipelineVersionId, params: {} },
+        position: { x: 0, y: 0 },
+      },
+    ],
+  };
+  const { pipelineVersionId: parentPv } = await seedVersion(page, '#796 parent', parentDoc);
+  const archived = await page.request.post(`/api/pipelines/${child.pipelineId}/archive`);
+  expect(archived.status(), await archived.text()).toBe(200);
+
+  const parentRunId = await fireAndSettle(page, parentPv, '#796 parent run');
+
+  /* PREMISE: the spawn really was refused — no child run exists. */
+  const childrenRes = await page.request.get(
+    `/api/runs?parentRunId=${encodeURIComponent(parentRunId)}`,
+  );
+  expect(((await childrenRes.json()) as { items: unknown[] }).items).toHaveLength(0);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(parentRunId)}`);
+  await fluentRootReady(page);
+  const callRow = page.getByRole('row').filter({ hasText: 'callRefused' });
+  await callRow.getByRole('button').first().click();
+
+  const panel = page.getByRole('complementary', { name: /^Node / });
+  await expect(panel.getByRole('heading', { name: 'Failure' })).toBeVisible();
+  await expect(panel.getByText('child pipeline is archived')).toBeVisible();
+  await expect(panel.getByText(/reports another run/)).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
