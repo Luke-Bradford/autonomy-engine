@@ -11,9 +11,13 @@ import globals from 'globals';
 // mocked API once more after every test, and a test that had armed it to reject
 // failed after its assertions passed. The second selector closes the same hole
 // through a block body's explicit `return`, while still admitting a returned
-// function LITERAL, which is vitest's documented teardown idiom. Shared by the
-// web block and the rest-of-studio block below, because a later block's
-// `no-restricted-syntax` REPLACES an earlier one's rather than adding to it.
+// function LITERAL, which is vitest's documented teardown idiom. It sees only a
+// `return` at the top of the hook's body: one nested under an `if` or a loop
+// passes, because esquery cannot say "a descendant, but not inside a nested
+// function", and a plain descendant selector would flag every callback's own
+// `return`. Shared by the web block and the rest-of-studio block below, because
+// a later block's `no-restricted-syntax` REPLACES an earlier one's rather than
+// adding to it.
 const HOOK_RETURNS_TEARDOWN = [
   {
     selector:
