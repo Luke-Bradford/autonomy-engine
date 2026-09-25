@@ -3129,9 +3129,9 @@ describe('setNodeBindingEnd — paired bindings reach the doc WHOLE (#1139)', ()
   });
 
   it("#1144 — unbinding a dataset end takes that end's datasetParams with it", () => {
-    // No control renders `datasetParams`, so a binding left behind for an end
-    // the node no longer addresses would make it unsaveable with nothing on
-    // screen to explain or clear it.
+    // The override editor renders rows only for an end the node addresses
+    // (#1304), so a binding left behind for an unbound end would make the node
+    // unsaveable with nothing on screen to explain or clear it.
     const store = createCanvasStore();
     store.setState({
       nodes: [
@@ -3543,5 +3543,79 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     expect(s.getState().duplicateContainer('c_gone')).toBeNull();
     expect(s.getState().containers).toBe(before.containers);
     expect(s.getState().past).toHaveLength(before.past.length);
+  });
+});
+
+describe('setNodeParamOverrides + the connection unbind prune (#1304)', () => {
+  const lookupNode = (extra: Partial<Node> = {}): Node =>
+    ({
+      id: 'l',
+      type: 'lookup',
+      config: {},
+      connectionId: 'conn',
+      datasetIds: { source: 'ds' },
+      position: { x: 0, y: 0 },
+      ...extra,
+    }) as Node;
+  const setup = (extra: Partial<Node> = {}) => {
+    const store = createCanvasStore();
+    store.setState({ nodes: [lookupNode(extra)] });
+    return store;
+  };
+  const node = (store: ReturnType<typeof createCanvasStore>) => store.getState().nodes[0]!;
+
+  it('writes connection and per-end dataset overrides, and dirties the doc', () => {
+    const store = setup();
+    store.getState().setNodeParamOverrides('l', 'connection', { maxBytes: 5 });
+    store.getState().setNodeParamOverrides('l', 'source', { path: 'x.csv' });
+    expect(node(store).connectionParams).toEqual({ maxBytes: 5 });
+    expect(node(store).datasetParams).toEqual({ source: { path: 'x.csv' } });
+    expect(store.getState().dirty).toBe(true);
+  });
+
+  it('clearing the last override removes the field, never an empty record', () => {
+    const store = setup({
+      connectionParams: { maxBytes: 5 },
+      datasetParams: { source: { path: 'x.csv' } },
+    });
+    store.getState().setNodeParamOverrides('l', 'connection', undefined);
+    store.getState().setNodeParamOverrides('l', 'source', {});
+    expect('connectionParams' in node(store)).toBe(false);
+    expect('datasetParams' in node(store)).toBe(false);
+  });
+
+  it('refuses an end the node does not bind — no undo slot, no write', () => {
+    const store = setup({ connectionId: undefined });
+    store.getState().setNodeParamOverrides('l', 'connection', { maxBytes: 5 });
+    store.getState().setNodeParamOverrides('l', 'sink', { path: 'y.csv' });
+    expect(node(store).connectionParams).toBeUndefined();
+    expect(node(store).datasetParams).toBeUndefined();
+    expect(store.getState().past).toHaveLength(0);
+  });
+
+  it('one burst of typing into one row is ONE undo step', () => {
+    const store = setup();
+    for (const path of ['a', 'ab', 'abc']) {
+      store.getState().setNodeParamOverrides('l', 'source', { path }, 'path');
+    }
+    expect(store.getState().past).toHaveLength(1);
+    store.getState().undo();
+    expect(node(store).datasetParams).toBeUndefined();
+  });
+
+  it('unbinding the connection takes its overrides with it', () => {
+    // `validateDoc` refuses `connectionParams` without a `connectionId`, so
+    // leaving them behind made the node unsaveable.
+    const store = setup({ connectionParams: { maxBytes: 5 } });
+    store.getState().setNodeConnection('l', undefined);
+    expect('connectionParams' in node(store)).toBe(false);
+  });
+
+  it('switching to a different connection KEEPS the overrides for the editor to flag', () => {
+    // Mirrors `setNodeBindingEnd`, which prunes a dataset end only on unbind.
+    // A key the new connection does not declare shows its row's flag and Remove.
+    const store = setup({ connectionParams: { maxBytes: 5 } });
+    store.getState().setNodeConnection('l', 'other');
+    expect(node(store).connectionParams).toEqual({ maxBytes: 5 });
   });
 });

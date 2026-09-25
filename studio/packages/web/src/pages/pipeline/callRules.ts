@@ -178,7 +178,7 @@ export function storedBlankKeys(call: CallConfig | undefined): Set<string> {
  * interpolated string is already a string. It is not parity with the config
  * surface's interpolation, and this panel makes no claim that it is.
  */
-function isExpressionText(raw: string): boolean {
+export function isExpressionText(raw: string): boolean {
   const t = raw.trim();
   return t.startsWith('${') && t.endsWith('}');
 }
