@@ -1369,6 +1369,11 @@ describe('parameter override editor (#1304)', () => {
       fsConn(['maxBytes']),
     ]);
     const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    // `12.` already stores the number 12. Rendering the STORED value back would
+    // snap the input to `12` while the operator is still typing the decimal.
+    fireEvent.change(input, { target: { value: '12.' } });
+    expect((input as HTMLInputElement).value).toBe('12.');
+    expect(docNode(store).connectionParams).toEqual({ maxBytes: 12 });
     fireEvent.change(input, { target: { value: '12x' } });
     expect((input as HTMLInputElement).value).toBe('12x');
     expect(docNode(store).connectionParams).toEqual({ maxBytes: '12x' });
