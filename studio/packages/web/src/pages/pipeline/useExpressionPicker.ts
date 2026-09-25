@@ -58,11 +58,16 @@ export function useExpressionPicker(
   const field = site.kind === 'container' ? site.field : undefined;
   return useMemo(() => {
     const doc = { params, nodes, edges, containers };
-    const at: RefSite =
-      field === undefined
-        ? { kind: 'node', nodeId: subjectId }
-        : { kind: 'container', containerId: subjectId, field };
-    const suggestions = availableRefs(doc, at);
+    // Asked per TARGET, because a node's scope can differ by field — a
+    // `filter`'s predicate binds `${item}`, its items does not (#864). A
+    // container site already names its one field.
+    const suggestionsFor = (target: PickerTarget) =>
+      availableRefs(
+        doc,
+        field === undefined
+          ? { kind: 'node', nodeId: subjectId, field: target.field }
+          : { kind: 'container', containerId: subjectId, field },
+      );
     const labels = containerLabels(containers);
     // #878 — an activity is offered under the SAME name its box carries, which
     // is what lets the author match an option to a rectangle. This replaced a
@@ -136,7 +141,7 @@ export function useExpressionPicker(
           mode === 'replace' ? insert : `${LITERAL_PROBE}${insert}`;
         return {
           mode,
-          suggestions: suggestions.filter((s) => {
+          suggestions: suggestionsFor(target).filter((s) => {
             const after = issuesWith(target, shaped(s.insert));
             return !after.some((issue) => !baseline.includes(issue));
           }),
