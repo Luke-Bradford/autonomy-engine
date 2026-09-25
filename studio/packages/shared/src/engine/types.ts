@@ -599,6 +599,18 @@ export const FAILURE_CODES = {
    */
   CONNECTION_PARAM_SECRET_MARKER: 'connection_param_secret_marker',
   /**
+   * #1306 — a resolved `connectionParams` key is not a setting the connection's
+   * kind has, or the connection config AFTER the override merge is not a valid
+   * config for its kind (a `timeoutMs` that resolved to a string). The dataset
+   * pair's `DATASET_PARAM_INVALID` argument: the kind schemas strip unknown keys,
+   * so an unknown key would otherwise be merged in and then do nothing, silently,
+   * and a wrongly-typed value would fail inside the connector instead of at the
+   * gate. A key outside the schema that is read raw (`priceTable`) is refused
+   * too — no override editor offers it, and a per-node price table would let a
+   * borrower rewrite the connection's cost accounting. `permanent`.
+   */
+  CONNECTION_PARAM_INVALID: 'connection_param_invalid',
+  /**
    * #3 G8a — the bound connection is NOT ready to dispatch: it is operator-
    * `enabled:false`, or its secret-readiness is `needs_secret` (a required
    * connection credential is absent). Refused at DISPATCH, BEFORE any secret

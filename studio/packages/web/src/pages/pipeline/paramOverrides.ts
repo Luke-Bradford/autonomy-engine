@@ -248,12 +248,8 @@ export function overrideRowProblem(
   if (violation !== null) return violationMessage(r, violation);
   const field = r.fields.find((f) => f.name === key);
   if (field === undefined) {
-    // The two dispatch paths differ here. A dataset refuses a key its kind lacks,
-    // while a connection merges it in and the connector's schema strips it, so
-    // the override silently does nothing (#1306).
-    return r.noun === 'dataset'
-      ? `A ${r.kind} dataset has no \`${key}\` setting, so a run will refuse it.`
-      : `A ${r.kind} connection has no \`${key}\` setting, so a run ignores this override.`;
+    // Both dispatch gates refuse a key the kind lacks (#1306).
+    return `A ${r.kind} ${r.noun} has no \`${key}\` setting, so a run will refuse it.`;
   }
   const typed = typeProblem(field, value);
   if (typed !== null) return `\`${key}\` ${typed}.`;

@@ -1302,11 +1302,11 @@ describe('createExecutor — #2 L13b connection parameters (dispatch-time merge)
       ownerId: 'local',
       name: 'C',
       kind: 'http',
-      config: { tag: 'static', model: 'default-model' },
-      parameters: ['model'],
+      config: { tag: 'static', baseUrl: 'https://static.example' },
+      parameters: ['baseUrl'],
       secretRef: null,
     }).id;
-    const pvId = paramsVersion(db, connId, { model: 'override-model' });
+    const pvId = paramsVersion(db, connId, { baseUrl: 'https://override.example' });
 
     const sink: { config?: Record<string, unknown> } = {};
     const state = await startRun(
@@ -1314,8 +1314,68 @@ describe('createExecutor — #2 L13b connection parameters (dispatch-time merge)
       paramsRun(db, pvId),
     );
     expect(state.status).toBe('success');
-    // `model` overridden, `tag` untouched — the static value is the default.
-    expect(sink.config).toEqual({ tag: 'static', model: 'override-model' });
+    // `baseUrl` overridden, `tag` untouched — the static value is the default,
+    // and the RAW merge flows on (a stored key outside the kind's schema, such
+    // as `priceTable`, is not stripped by the re-validation).
+    expect(sink.config).toEqual({ tag: 'static', baseUrl: 'https://override.example' });
+  });
+
+  it('#1306 — REFUSES an allowlisted key the kind does not have, rather than let the connector strip it', async () => {
+    // The connector schemas strip unknown keys, so a merged-in `model` on an
+    // `http` connection would reach the adapter and then do nothing, silently.
+    let adapterRan = false;
+    const adapters = fakeHttpAdapter(async function* () {
+      adapterRan = true;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['model'],
+      secretRef: null,
+    }).id;
+    const run = paramsRun(db, paramsVersion(db, connId, { model: 'x' }));
+
+    const state = await startRun(deps(db, { adapters }), run);
+    expect(state.status).toBe('failure');
+    expect(adapterRan).toBe(false);
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: "connection parameter 'model' is not a 'http' connection setting",
+      kind: 'permanent',
+      code: 'connection_param_invalid',
+    });
+  });
+
+  it('#1306 — REFUSES a wrongly-typed override at the gate, judged on the merged config', async () => {
+    let adapterRan = false;
+    const adapters = fakeHttpAdapter(async function* () {
+      adapterRan = true;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: { timeoutMs: 1000 },
+      parameters: ['timeoutMs'],
+      secretRef: null,
+    }).id;
+    const run = paramsRun(db, paramsVersion(db, connId, { timeoutMs: 'soon' }));
+
+    const state = await startRun(deps(db, { adapters }), run);
+    expect(state.status).toBe('failure');
+    expect(adapterRan).toBe(false);
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringMatching(
+        /^connection '.+' is not a valid 'http' connection once its parameters are applied: timeoutMs: /,
+      ),
+      kind: 'permanent',
+      code: 'connection_param_invalid',
+    });
   });
 
   it('REFUSES an UNDECLARED binding key — permanent, its own code, allowlist is the connection owner\u2019s', async () => {
