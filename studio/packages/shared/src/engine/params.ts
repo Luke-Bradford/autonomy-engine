@@ -2322,10 +2322,14 @@ export function validateDoc(
     // not dropped. `outputsByIdOf` is the other half — it gives such a node an
     // EMPTY declared contract, so a `${}` naming one of its outputs is refused
     // too, and the reducer re-checks at `call.detached` for a stored doc.
+    // An EMPTY declaration declares nothing a detached call could fail to
+    // produce, so only a non-empty one is refused.
+    const declared = node.config['outputs'];
     if (
       node.call !== undefined &&
       callDetaches(node.call) &&
-      node.config['outputs'] !== undefined
+      declared !== undefined &&
+      !(Array.isArray(declared) && declared.length === 0)
     ) {
       errors.push(
         `node.${node.id}: a call that does not wait for its child returns no outputs ` +

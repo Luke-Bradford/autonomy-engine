@@ -78,7 +78,11 @@ export function seedCall(call: CallConfig | undefined, targets: readonly CallTar
     pipelineId: match?.pipelineId ?? '',
     versionId: match?.versionId ?? '',
     expression: match ? '' : stored,
-    wait: call?.wait ?? false,
+    // #796 item 2 — what the ENGINE does: an absent `wait` waits (it always
+    // has), so the box must read checked for it. It read unchecked before
+    // `wait` was consumed, and so offered fire-and-forget as the default of a
+    // node that waited.
+    wait: call?.wait !== false,
     params: seedParamText(call?.params ?? {}, match),
     paramsJson: Object.keys(call?.params ?? {}).length
       ? JSON.stringify(call?.params ?? {}, null, 2)
