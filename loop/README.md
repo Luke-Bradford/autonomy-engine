@@ -301,11 +301,14 @@ Four independent bounds, checked before every fire, each with its own test in
   direct polling. What decides the order is therefore **cache-backed vs direct**, not new vs proven:
   a source is cheap to ask when asking it does not touch the upstream.
   - Studio is first **because it is now sampler-backed** — `CLAUDE_QUOTA_SAMPLER=1` in the service
-    plist arms a background sampler, so `/api/quota` answers from that cache and the request path
-    never reaches the provider. #765 named this as the precondition in exactly these terms: *"a
+    plist arms a background sampler, and its reader bounds provider calls to one per TTL/throttle
+    window however often `/api/quota` is asked. #765 named this as the precondition: *"a
     sampler-backed studio can be polled freely … that is the state in which studio actually
-    deserves to be the primary source."* Before that it was a lazy reader, every read was the
-    direct poll that 429s, and it was correctly placed LAST.
+    deserves to be the primary source."* Before that it was a lazy reader competing with the
+    dashboard's sampler, every read was the direct poll that 429s, and it was correctly placed LAST.
+    The request path is NOT provider-free: the sampler ticks every five minutes, because a
+    one-minute cadence overdrew the account's limit and flapped (#1292). So most guard reads take
+    a live sample (≤5s, inside the 8s curl), against a bucket the sampler no longer keeps empty.
   - The dashboard rode through a 429 the same way (background sampler, warm cache) and was first
     for that reason. C3 **retires it** — its sampler is stopped, because two standing samplers on
     one budget is what #770 refuses. It is kept in the list, second, purely so that re-loading the
