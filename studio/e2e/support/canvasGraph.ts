@@ -686,42 +686,50 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
  *
  * STARTS AT THE ACTIVITY TOOLBOX, not wherever focus happens to be. The
  * toolbox immediately precedes the canvas in tab order, so from its filter the
- * distance to a node or edge is fixed by this page alone.
+ * distance to a node or edge is fixed by this page alone — and ONE pass is
+ * enough. A pass that misses the target is a real failure, not something to
+ * tab round the page and retry past.
  *
- * Why that matters, measured: TAB INTERMITTENTLY STEPS OVER a freshly added
- * node (toolbox → zoom controls; #1259). The old helper survived that only by
- * tabbing on round the whole page — through the navigation pane, which holds
- * two tab stops per pipeline in the workspace. The e2e database is shared by
- * every spec in a run, so that detour grew with however many pipelines earlier
- * specs had created, and one spec adding a pipeline pushed it past the bound.
- * A skipped pass now restarts from the filter instead: the same tolerance of
- * the skip as before, at a cost that no longer depends on the database.
+ * WAITS UNTIL THE TARGET IS TABBABLE FIRST (#1259). React Flow renders a node
+ * `visibility: hidden` until it has measured it, and a hidden element is not in
+ * the tab order. In isolation that lasts about a frame; under the full suite it
+ * was measured at ~100ms, while Playwright's walk from the filter past the
+ * canvas took ~70ms (3-4ms a press). So the walk outran the measurement and
+ * TAB went straight past a node that was not yet focusable. That read as "TAB
+ * intermittently steps over a freshly added node", and it is not a product
+ * defect: no keyboard user presses TAB 17 times in 70ms. (The other symptom
+ * reported alongside it, node → Zoom Out with Zoom In skipped, is not a skip
+ * either. One fitted node sits at React Flow's `maxZoom` of 2, and Zoom In is
+ * `disabled` there.) The previous helper's three passes only absorbed the race.
+ * Waiting for it is what lets this assert a single pass.
  *
  * Focusing the START programmatically loses neither real reason above: the
  * element under test is still reached by TAB, which is what puts
  * `:focus-visible` on it. It throws rather than returning false so the caller
  * cannot silently proceed against whatever happened to hold focus instead.
  */
-export async function tabToFocus(
-  page: Page,
-  className: string,
-  passes = 3,
-  pressesPerPass = 60,
-): Promise<void> {
-  const start = page.getByRole('searchbox', { name: 'Filter activities' });
-  for (let pass = 0; pass < passes; pass++) {
-    await start.focus();
-    for (let i = 0; i < pressesPerPass; i++) {
-      await page.keyboard.press('Tab');
-      const reached = await page.evaluate(
-        (cls) => Boolean(document.activeElement?.classList.contains(cls)),
-        className,
-      );
-      if (reached) return;
-    }
+export async function tabToFocus(page: Page, className: string, presses = 60): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate((cls) => {
+          const all = Array.from(document.getElementsByClassName(cls));
+          return all.length > 0 && all.every((el) => getComputedStyle(el).visibility === 'visible');
+        }, className),
+      { message: `no .${className} became visible, so none is in the tab order yet` },
+    )
+    .toBe(true);
+  await page.getByRole('searchbox', { name: 'Filter activities' }).focus();
+  for (let i = 0; i < presses; i++) {
+    await page.keyboard.press('Tab');
+    const reached = await page.evaluate(
+      (cls) => Boolean(document.activeElement?.classList.contains(cls)),
+      className,
+    );
+    if (reached) return;
   }
   throw new Error(
-    `TAB never reached .${className} in ${String(passes)} passes of ${String(pressesPerPass)} presses from the activity toolbox`,
+    `TAB never reached .${className} in ${String(presses)} presses from the activity toolbox`,
   );
 }
 
