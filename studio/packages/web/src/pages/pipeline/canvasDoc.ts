@@ -123,19 +123,13 @@ export function nodePolicyIssues(
 }
 
 /**
- * The containers `nodeId` sits in, innermost first. A secure child makes every
- * enclosing container secure (`secureOutputIdsOf`), so a ref refused against
- * any of them is this node's policy at work.
+ * The containers `nodeId` sits in. A secure child makes its container secure
+ * (`secureOutputIdsOf`), so a ref refused against the container is this node's
+ * policy at work. One level only, because containers do not nest: a container's
+ * `children` are node ids, and `validateDoc` refuses any that is not a node.
  */
 export function enclosingContainers(nodeId: string, containers: Container[]): string[] {
-  const out: string[] = [];
-  let current = nodeId;
-  for (;;) {
-    const parent = containers.find((c) => c.children.includes(current) && !out.includes(c.id));
-    if (parent === undefined) return out;
-    out.push(parent.id);
-    current = parent.id;
-  }
+  return containers.filter((c) => c.children.includes(nodeId)).map((c) => c.id);
 }
 
 /** What can stand between the canvas and a save. */

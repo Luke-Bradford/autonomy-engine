@@ -151,14 +151,9 @@ describe('PolicyEditor (#1312)', () => {
 describe('enclosingContainers (#1312)', () => {
   const box = (id: string, children: string[]) => ({ id, children }) as unknown as Container;
 
-  it('walks outward through nested containers, innermost first', () => {
-    const containers = [box('outer', ['inner', 'x']), box('inner', ['k'])];
-    expect(enclosingContainers('k', containers)).toEqual(['inner', 'outer']);
-    expect(enclosingContainers('x', containers)).toEqual(['outer']);
+  it('names the container a node sits in, and none for a free node', () => {
+    const containers = [box('loop', ['k', 'x']), box('other', ['y'])];
+    expect(enclosingContainers('k', containers)).toEqual(['loop']);
     expect(enclosingContainers('free', containers)).toEqual([]);
-  });
-
-  it('terminates on a malformed cycle rather than looping', () => {
-    expect(enclosingContainers('k', [box('a', ['k', 'b']), box('b', ['a'])])).toEqual(['a', 'b']);
   });
 });

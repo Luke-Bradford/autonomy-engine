@@ -57,7 +57,10 @@ export function PolicyEditor({
   );
 
   function set(patch: Partial<NodePolicy>) {
-    store.getState().setNodePolicy(nodeId, { ...policy, ...patch });
+    // Merged over the store's CURRENT policy, not this render's closure, so two
+    // commits landing before a re-render cannot drop each other's key.
+    const current = store.getState().nodes.find((n) => n.id === nodeId)?.policy;
+    store.getState().setNodePolicy(nodeId, { ...current, ...patch });
   }
 
   return (
@@ -89,10 +92,7 @@ export function PolicyEditor({
         />
         Secure input
       </label>
-      <p className="page-hint">
-        Keep this node&rsquo;s resolved input out of the run log — failure text and warnings that
-        would repeat it are withheld.
-      </p>
+      <p className="page-hint">Keep this node&rsquo;s resolved input out of the run log.</p>
       <label>
         <input
           type="checkbox"
@@ -104,6 +104,10 @@ export function PolicyEditor({
       <p className="page-hint">
         Redact this node&rsquo;s outputs before they reach the run log. Nothing downstream can
         reference them.
+      </p>
+      <p className="page-hint">
+        Either flag also withholds this node&rsquo;s failure text and warnings, which could repeat a
+        secret.
       </p>
       {policy?.timeoutSeconds !== undefined && (
         <p className="contract-advisory">

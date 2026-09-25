@@ -8,7 +8,7 @@ import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration, formatOutputValue, surrogateSafeCut } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
-import { SecureMarkerHint } from './secureMarker';
+import { SecureMarkerHint } from './SecureMarkerHint';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
