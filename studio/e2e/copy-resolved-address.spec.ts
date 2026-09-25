@@ -177,8 +177,8 @@ test('#1162 — a copy run names both addresses it resolved', async ({ page }) =
  * #1299 (data-movement spec §5) — "a long copy must not look hung": it streams a
  * `progress` tick per batch, and the run page shows the latest one.
  *
- * 1,500 rows is two of the reader's 1,000-row batches, so a REAL copy through
- * the real executor emits exactly two ticks. The drill-in's "latest" is then the
+ * 1,500 rows is two of the reader's batches, so a REAL copy through the real
+ * executor emits exactly two ticks. The drill-in's "latest" is then the
  * second, and its value is asserted exactly — a panel rendering some other
  * stream, or the name without the value, cannot pass. The live table cell (the
  * value while the node RUNS) is not reachable deterministically here, a local
@@ -213,8 +213,11 @@ test('#1299 — a copy streams per-batch progress, and the run page shows the la
     const ticks = events.filter(
       (e) => e.type === 'node.output' && e.payload.name === COPY_PROGRESS_OUTPUT,
     );
+    /* 999, not 1,000: the CSV parser batches raw LINES, and the header line is
+       one of the first batch's 1,000 before the reader strips it (measured —
+       the first run of this spec asserted 1,000). */
     expect(ticks.map((e) => e.payload.value)).toEqual([
-      { rowsRead: 1000, rowsInFlight: 1000, rowsFailed: 0 },
+      { rowsRead: 999, rowsInFlight: 999, rowsFailed: 0 },
       { rowsRead: 1500, rowsInFlight: 1500, rowsFailed: 0 },
     ]);
     const succeededAt = events.findIndex((e) => e.type === 'node.succeeded');
