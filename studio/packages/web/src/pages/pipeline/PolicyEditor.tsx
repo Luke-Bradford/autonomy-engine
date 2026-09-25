@@ -3,30 +3,13 @@ import { useStore } from 'zustand';
 import {
   DEFAULT_RETRY_INTERVAL_SECONDS,
   MAX_RETRY_INTERVAL_SECONDS,
-  type Container,
   type NodePolicy,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { parseWholeNumber } from '../triggers/formFields';
-import { nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
+import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
 import type { createCanvasStore } from './canvasStore';
 import { readableIssue } from './containerRules';
-
-/**
- * The containers `nodeId` sits in, innermost first. A secure child makes every
- * enclosing container secure (`secureOutputIdsOf`), so a ref refused against
- * any of them is this node's policy at work.
- */
-export function enclosingContainers(nodeId: string, containers: Container[]): string[] {
-  const out: string[] = [];
-  let current = nodeId;
-  for (;;) {
-    const parent = containers.find((c) => c.children.includes(current) && !out.includes(c.id));
-    if (parent === undefined) return out;
-    out.push(parent.id);
-    current = parent.id;
-  }
-}
 
 /**
  * #1312 — a node's run `policy` in the canvas: retries, the interval between

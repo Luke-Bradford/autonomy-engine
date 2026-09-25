@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Container, Edge, Node } from '@autonomy-studio/shared';
 import { createCanvasStore } from './canvasStore';
-import { enclosingContainers, PolicyEditor } from './PolicyEditor';
+import { enclosingContainers } from './canvasDoc';
+import { PolicyEditor } from './PolicyEditor';
 
 const node = (id: string, type: string, extra: Partial<Node> = {}): Node => ({
   id,

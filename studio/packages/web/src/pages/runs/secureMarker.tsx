@@ -5,7 +5,7 @@ import { SECURE_REDACTED, SECURE_REDACTED_INVALID } from '@autonomy-studio/share
  * replaced by these at EMIT time (`redactSecureEvent`), so the run page only
  * ever holds the marker, never the value behind it.
  */
-export function isSecureMarker(value: unknown): boolean {
+function isSecureMarker(value: unknown): boolean {
   return value === SECURE_REDACTED || value === SECURE_REDACTED_INVALID;
 }
 

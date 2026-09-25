@@ -122,6 +122,22 @@ export function nodePolicyIssues(
   );
 }
 
+/**
+ * The containers `nodeId` sits in, innermost first. A secure child makes every
+ * enclosing container secure (`secureOutputIdsOf`), so a ref refused against
+ * any of them is this node's policy at work.
+ */
+export function enclosingContainers(nodeId: string, containers: Container[]): string[] {
+  const out: string[] = [];
+  let current = nodeId;
+  for (;;) {
+    const parent = containers.find((c) => c.children.includes(current) && !out.includes(c.id));
+    if (parent === undefined) return out;
+    out.push(parent.id);
+    current = parent.id;
+  }
+}
+
 /** What can stand between the canvas and a save. */
 export interface SaveControlContext {
   /** A save already in flight. */
