@@ -8,6 +8,7 @@ import {
   EMPTY_CONTAINER_SIZE,
   REVEAL_MARGIN,
   appearedIds,
+  revealReady,
   containerRects,
   emptyContainerIds,
   liveNodeRects,
@@ -400,6 +401,52 @@ describe('the reveal trigger', () => {
 
     it('is empty when there are no containers at all', () => {
       expect(emptyContainerIds(new Map()).size).toBe(0);
+    });
+  });
+
+  describe('revealReady (U21 #935)', () => {
+    const box = (childCount: number) => ({ x: 0, y: 0, width: 220, height: 120, childCount });
+    const loop = (id: string, children: string[]): Container => ({ id, kind: 'loop', children });
+
+    it('holds a copy whose children are in the doc but not yet drawn', () => {
+      // The one-render transient: the box sits at the EMPTY fallback, which is
+      // not where it is about to be.
+      expect(
+        revealReady(new Set(['c']), new Map([['c', box(0)]]), [loop('c', ['n'])], new Set(['n'])),
+      ).toEqual({ ready: [], waiting: ['c'] });
+    });
+
+    it('releases it once the box is derived from its children', () => {
+      expect(
+        revealReady(new Set(['c']), new Map([['c', box(1)]]), [loop('c', ['n'])], new Set(['n'])),
+      ).toEqual({ ready: ['c'], waiting: [] });
+    });
+
+    it('releases an empty container at once — its fallback box IS its box', () => {
+      // A phantom child (not a node in the doc) is nothing to wait for either.
+      expect(
+        revealReady(new Set(['c']), new Map([['c', box(0)]]), [loop('c', ['gone'])], new Set()),
+      ).toEqual({ ready: ['c'], waiting: [] });
+    });
+
+    it('does not wait on a child an EARLIER container draws', () => {
+      // First-declared wins, so `n` is never drawn in `c` — waiting on it would
+      // hold `c` pending for good.
+      expect(
+        revealReady(
+          new Set(['c']),
+          new Map([['c', box(0)]]),
+          [loop('first', ['n']), loop('c', ['n'])],
+          new Set(['n']),
+        ),
+      ).toEqual({ ready: ['c'], waiting: [] });
+    });
+
+    it('forgets an id whose container is gone', () => {
+      expect(revealReady(new Set(['c']), new Map(), [], new Set())).toEqual({
+        ready: [],
+        waiting: [],
+      });
     });
   });
 

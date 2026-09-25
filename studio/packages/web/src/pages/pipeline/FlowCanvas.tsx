@@ -59,6 +59,7 @@ import {
 } from './connectRules';
 import {
   appearedIds,
+  revealReady,
   containerAriaLabel,
   containerHandles,
   containerRects,
@@ -1200,10 +1201,25 @@ export function FlowCanvas({
    * Re-running is cheap and idempotent: the set is invariant under pan and
    * measurement (membership does not depend on either), so the identity churn in
    * `containerBoxes` as React Flow measures produces no `appeared` and no write.
+   *
+   * U21 (#935) — a container that APPEARS already SELECTED is revealed the same
+   * way. That is a duplicate: it lands clear of everything in its row, which is
+   * off-screen whenever that row is wider than the pane, and it is the property
+   * panel's subject, so leaving it culled would put the operator's current
+   * subject somewhere they cannot see. Selected, not merely new: an undo that
+   * restores a deleted container restores no selection, and moving the viewport
+   * because of an undo is a pan nobody asked for. It is held PENDING until its box
+   * is derived from its children (`revealReady` says why), and while it waits it
+   * is kept out of the empty diff above: its one-render "empty" is a transient
+   * of the view lagging the store, not an emptying. The first run records only,
+   * for the mount reason above.
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
+  const knownContainers = useRef<Set<string> | null>(null);
+  const pendingReveal = useRef<Set<string>>(new Set());
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
+    const present = new Set(containerBoxes.keys());
     /* Read the pane BEFORE banking the set: React Flow reports 0x0 until it has
        measured, and a run that cannot tell what is visible must not consume a
        transition it could not act on.
@@ -1227,7 +1243,26 @@ export function FlowCanvas({
 
     const known = knownEmptyContainers.current;
     knownEmptyContainers.current = empty;
-    const appeared = appearedIds(known, empty);
+    const knownPresent = knownContainers.current;
+    knownContainers.current = present;
+    const { ready, waiting } = revealReady(
+      new Set([
+        ...pendingReveal.current,
+        ...appearedIds(knownPresent, present).filter((id) =>
+          selected.some((sel) => sel.kind === 'container' && sel.id === id),
+        ),
+      ]),
+      containerBoxes,
+      containers,
+      new Set(nodes.map((n) => n.id)),
+    );
+    pendingReveal.current = new Set(waiting);
+    const appeared = [
+      ...new Set([
+        ...appearedIds(known, empty).filter((id) => !pendingReveal.current.has(id)),
+        ...ready,
+      ]),
+    ];
     if (appeared.length === 0) return;
 
     const boxes = appeared
@@ -1242,7 +1277,16 @@ export function FlowCanvas({
     const usable = usableExtent(paneWidth, paneHeight);
     const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
-  }, [containerBoxes, paneWidth, paneHeight, reactFlowStore, setViewport]);
+  }, [
+    containerBoxes,
+    containers,
+    nodes,
+    selected,
+    paneWidth,
+    paneHeight,
+    reactFlowStore,
+    setViewport,
+  ]);
 
   /**
    * U9 (#1004) — fit the content when Arrange asks for it.

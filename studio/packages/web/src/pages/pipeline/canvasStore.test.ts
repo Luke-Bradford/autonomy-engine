@@ -3320,3 +3320,202 @@ describe('canvasStore — overlapping outcomes (#1064)', () => {
     expect(s.getState().dirty).toBe(false);
   });
 });
+
+describe('canvasStore — duplicateContainer (U21 #935)', () => {
+  /**
+   * `n_up → loop{n_x → n_y} → n_down`. The loop's `exitWhen` reads its child
+   * `n_y`, and `n_y` reads its sibling `n_x`.
+   */
+  function loaded(overrides: Partial<PipelineVersion> = {}) {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_up',
+            type: 'http_request',
+            config: { outputs: [{ name: 'body', type: 'string' }] },
+            position: { x: 0, y: 0 },
+          },
+          {
+            id: 'n_x',
+            type: 'http_request',
+            config: { outputs: [{ name: 'body', type: 'string' }] },
+            position: { x: 200, y: 0 },
+          },
+          {
+            id: 'n_y',
+            type: 'http_request',
+            config: { url: 'https://example.test/${nodes.n_x.output.body}' },
+            position: { x: 400, y: 100 },
+          },
+          { id: 'n_down', type: 'http_request', config: {}, position: { x: 800, y: 0 } },
+        ],
+        edges: [
+          { id: 'e_in', from: 'n_up', to: 'c_loop', on: 'success' },
+          { id: 'e_xy', from: 'n_x', to: 'n_y', on: 'success' },
+          { id: 'e_out', from: 'c_loop', to: 'n_down', on: 'success' },
+        ],
+        containers: [
+          {
+            id: 'c_loop',
+            kind: 'loop',
+            children: ['n_x', 'n_y'],
+            exitWhen: '${equals(nodes.n_y.status, "success")}',
+            maxRounds: 3,
+          },
+        ],
+        ...overrides,
+      }),
+    );
+    return s;
+  }
+
+  it('copies the box and its body, and the copy exits on ITS OWN child', () => {
+    const s = loaded();
+    const before = s.getState();
+    const newId = s.getState().duplicateContainer('c_loop');
+
+    const st = s.getState();
+    expect(newId).not.toBeNull();
+    expect(newId).not.toBe('c_loop');
+    expect(st.containers).toHaveLength(2);
+    // The source is untouched — by reference, the store's copy-on-write rule.
+    expect(st.containers[0]).toBe(before.containers[0]);
+
+    const copy = st.containers.find((c) => c.id === newId)!;
+    expect(copy.kind).toBe('loop');
+    expect(copy.maxRounds).toBe(3);
+    expect(copy.children).toHaveLength(2);
+    expect(copy.children.some((id) => ['n_x', 'n_y', 'n_up', 'n_down'].includes(id))).toBe(false);
+    expect(st.nodes).toHaveLength(6);
+
+    // The copy's exit condition names the copy of `n_y`. Left unremapped it
+    // would read the ORIGINAL loop's child — and fail the save gate, since
+    // exitWhen is scoped to the container's own children.
+    const [copyX, copyY] = copy.children.map((cid) => st.nodes.find((n) => n.id === cid)!);
+    // ...and the body's own sibling ref follows too.
+    expect((copyY!.config as { url?: string }).url).toBe(
+      `https://example.test/\${nodes.${copyX!.id}.output.body}`,
+    );
+    expect(copy.exitWhen).toBe(`\${equals(nodes.${copyY!.id}.status, "success")}`);
+  });
+
+  it('carries the body edges and the box in-edge, never an out-edge, and saves', () => {
+    const s = loaded();
+    const newId = s.getState().duplicateContainer('c_loop')!;
+    const st = s.getState();
+    const copy = st.containers.find((c) => c.id === newId)!;
+    const [copyX, copyY] = copy.children;
+
+    // The body edge, remapped to both copies.
+    expect(st.edges).toContainEqual(expect.objectContaining({ from: copyX, to: copyY }));
+    // The box's in-edge, re-derived onto the copy.
+    expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_up', to: newId }));
+    // No out-edge: `n_down` must not gain a second producer.
+    expect(st.edges.filter((e) => e.to === 'n_down')).toHaveLength(1);
+    expect(st.edges).toHaveLength(5);
+
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+  });
+
+  it('a foreach copy keeps reading the OUTER upstream its items names', () => {
+    const s = loaded({
+      nodes: [
+        {
+          id: 'n_up',
+          type: 'http_request',
+          config: { outputs: [{ name: 'rows', type: 'json' }] },
+          position: { x: 0, y: 0 },
+        },
+        { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+      ],
+      edges: [{ id: 'e_in', from: 'n_up', to: 'c_each', on: 'success' }],
+      containers: [
+        {
+          id: 'c_each',
+          kind: 'foreach',
+          children: ['n_x'],
+          items: '${nodes.n_up.output.rows}',
+        },
+      ],
+    });
+    const newId = s.getState().duplicateContainer('c_each')!;
+    const st = s.getState();
+    const copy = st.containers.find((c) => c.id === newId)!;
+    expect(copy.items).toBe('${nodes.n_up.output.rows}');
+    expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_up', to: newId }));
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+  });
+
+  it('places the copy clear of the original box, keeping the body layout', () => {
+    const s = loaded();
+    const newId = s.getState().duplicateContainer('c_loop')!;
+    const st = s.getState();
+    const copy = st.containers.find((c) => c.id === newId)!;
+    const pos = (id: string) => st.nodes.find((n) => n.id === id)!.position;
+    const copyLeft = Math.min(...copy.children.map((id) => pos(id).x));
+    // Clear of everything in its row — the source body AND `n_down` beyond it
+    // (x 800) — by more than a node's width, so no derived box overlaps another
+    // and membership is never ambiguous.
+    expect(copyLeft).toBeGreaterThan(pos('n_down').x + 168);
+    // The body's internal layout survives: same relative offset between copies.
+    const [cx, cy] = copy.children.map((id) => pos(id));
+    expect({ dx: cy!.x - cx!.x, dy: cy!.y - cx!.y }).toEqual({ dx: 200, dy: 100 });
+  });
+
+  it('a SECOND duplicate lands clear of the first, never on top of it', () => {
+    // Without this a repeated ⌘D stacks box on box, and the hidden copy is a
+    // whole container the operator cannot see is there.
+    const s = loaded();
+    const first = s.getState().duplicateContainer('c_loop')!;
+    const second = s.getState().duplicateContainer('c_loop')!;
+    const st = s.getState();
+    const xsOf = (cid: string) =>
+      st.containers
+        .find((c) => c.id === cid)!
+        .children.map((id) => st.nodes.find((n) => n.id === id)!.position.x);
+    expect(Math.min(...xsOf(second))).toBeGreaterThan(Math.max(...xsOf(first)) + 168);
+  });
+
+  it('an EMPTY container copies to an empty copy', () => {
+    const s = loaded({ containers: [{ id: 'c_stage', kind: 'stage', children: [] }], edges: [] });
+    const newId = s.getState().duplicateContainer('c_stage')!;
+    const st = s.getState();
+    expect(st.containers.find((c) => c.id === newId)).toEqual({
+      id: newId,
+      kind: 'stage',
+      children: [],
+    });
+    expect(st.nodes).toHaveLength(4);
+  });
+
+  it('selects the copy, and ONE undo takes the whole duplicate back', () => {
+    const s = loaded();
+    const before = s.getState();
+    const newId = s.getState().duplicateContainer('c_loop')!;
+    expect(s.getState().selected).toEqual([{ kind: 'container', id: newId }]);
+    expect(s.getState().dirty).toBe(true);
+
+    s.getState().undo();
+    const st = s.getState();
+    expect(st.nodes).toBe(before.nodes);
+    expect(st.edges).toBe(before.edges);
+    expect(st.containers).toBe(before.containers);
+  });
+
+  it('does not spend a stagger slot — the copy is not placed by the stagger', () => {
+    const s = loaded();
+    const before = s.getState().addCount;
+    s.getState().duplicateContainer('c_loop');
+    expect(s.getState().addCount).toBe(before);
+  });
+
+  it('an unknown id is a no-op that records no history', () => {
+    const s = loaded();
+    const before = s.getState();
+    expect(s.getState().duplicateContainer('c_gone')).toBeNull();
+    expect(s.getState().containers).toBe(before.containers);
+    expect(s.getState().past).toHaveLength(before.past.length);
+  });
+});

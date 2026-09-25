@@ -367,6 +367,16 @@ export function PipelineCanvas({
           return;
         }
         if (clip === 'duplicate') {
+          const box = singleSelection(store.getState().selected);
+          if (box?.kind === 'container') {
+            // A container is selection-EXCLUSIVE, so a selected box is the whole
+            // selection and ⌘D means "another one of these", as it does for nodes.
+            const name = containerLabels(store.getState().containers).get(box.id);
+            if (store.getState().duplicateContainer(box.id) === null) return;
+            e.preventDefault();
+            showCanvasMsg(`Duplicated ${name ?? 'container'}.`);
+            return;
+          }
           if (store.getState().selected.every((sel) => sel.kind !== 'node')) return;
           e.preventDefault();
           const made = store.getState().duplicateSelection();
@@ -1240,6 +1250,13 @@ function PropertyPanel({
         containers={containers}
         params={params}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
+        onDuplicate={() => {
+          if (store.getState().duplicateContainer(container.id) !== null) {
+            onNotice(
+              `Duplicated ${containerLabels(containers).get(container.id) ?? container.kind}.`,
+            );
+          }
+        }}
       />
     );
   }
