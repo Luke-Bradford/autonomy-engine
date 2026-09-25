@@ -291,7 +291,7 @@ export interface BuildAppOptions {
   claudeAccountQuotaSamplerEnabled?: boolean;
   /**
    * #765 — the sampler's cadence. Defaults to five reader TTLs; see
-   * `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS` for why (#1292, the account's limit). Call-time only (a test
+   * `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS` for why (#1292). Call-time only (a test
    * wanting to observe several ticks without also driving every other timer in
    * the app passes something tiny).
    */

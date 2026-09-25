@@ -101,12 +101,14 @@ host polling the same endpoint — notably the prototype engine's dashboard samp
 
 By default the reader is **lazy**: it polls only when someone calls the route, so
 an install that never asks never touches the credential store. `CLAUDE_QUOTA_SAMPLER=1`
-instead arms a background sampler that keeps the reading warm (a poll every 30s,
-half the cache TTL), so a caller gets a cached answer rather than paying for a
-live provider call — and, when the provider is rate-limiting, gets one at all.
-Arming it does not increase provider calls per cache window, but it does make
-them standing (~60/hour, falling to ~7.5/hour once the backoff engages) and it
-puts one Keychain read on the boot path. **Leave it off unless nothing else on
+instead arms a background sampler that polls every five minutes, so a reading is
+taken even when nobody asks (it feeds the Monitor panel's last-known value). It
+is deliberately slower than the one-minute cache TTL: the account's limit
+refills about one call per 80-90s, and a one-minute cadence kept it empty and
+flapping (#1292). So a caller arriving after the cache expires still pays for a
+live provider call, against a bucket the sampler has left room in. Arming it
+makes those calls standing (~12/hour) and puts one Keychain read on the boot
+path. **Leave it off unless nothing else on
 the host is sampling that endpoint** — the limit is per-account, so two samplers
 starve each other. It stays off unless the value is exactly `1`; any other value
 fails the boot with a clear error rather than guessing, because both wrong

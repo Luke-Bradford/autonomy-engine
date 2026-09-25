@@ -534,7 +534,7 @@ test.describe('#917 Monitor › AI activity', () => {
       await expect(panel).toContainText('58%');
       // Past the reader's own refresh cadence, so it says so in words rather
       // than leaving the operator to judge from a duration.
-      await expect(panel).toContainText('has been failing for a while');
+      await expect(panel).toContainText('treat it as out of date');
       // The freshness claim attached to the NUMBER is the number's own age; the
       // request stamp names what it stamps.
       await expect(panel).toContainText('Last checked');
