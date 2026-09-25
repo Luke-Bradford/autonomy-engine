@@ -1200,10 +1200,19 @@ export function FlowCanvas({
    * Re-running is cheap and idempotent: the set is invariant under pan and
    * measurement (membership does not depend on either), so the identity churn in
    * `containerBoxes` as React Flow measures produces no `appeared` and no write.
+   *
+   * U21 (#935) — a container that has just APPEARED is revealed the same way,
+   * over the same diff of container ids. A duplicate lands clear of everything in
+   * its row, which is off-screen whenever that row is wider than the pane — and
+   * the copy is the selected subject of the property panel, so leaving it culled
+   * would put the operator's current subject somewhere they cannot see. The first
+   * run records only, for the mount reason above.
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
+  const knownContainers = useRef<Set<string> | null>(null);
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
+    const present = new Set(containerBoxes.keys());
     /* Read the pane BEFORE banking the set: React Flow reports 0x0 until it has
        measured, and a run that cannot tell what is visible must not consume a
        transition it could not act on.
@@ -1227,7 +1236,11 @@ export function FlowCanvas({
 
     const known = knownEmptyContainers.current;
     knownEmptyContainers.current = empty;
-    const appeared = appearedIds(known, empty);
+    const knownPresent = knownContainers.current;
+    knownContainers.current = present;
+    const appeared = [
+      ...new Set([...appearedIds(known, empty), ...appearedIds(knownPresent, present)]),
+    ];
     if (appeared.length === 0) return;
 
     const boxes = appeared
