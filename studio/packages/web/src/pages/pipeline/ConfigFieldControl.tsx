@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { RefSuggestion } from '@autonomy-studio/shared';
-import { emptyControlValue, isRowList, parseFieldInput } from './configForm';
+import { emptyControlValue, isRowList, parseRowCells } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions } from './ExpressionPicker';
 import { applyInsert } from './expressionInsert';
@@ -339,8 +339,8 @@ export function ConfigFieldControl({
  *
  * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`
  * with a `target` naming the cell's own position (#1178): the candidate is this
- * list's DRAFT rows with one cell replaced, read back through `parseFieldInput`
- * exactly as an apply would. Which cells actually receive offers is the
+ * list's DRAFT rows with one cell replaced, read by the same `parseRowCells` an
+ * apply uses (keeping the cells that parse — see `cellTarget`). Which cells actually receive offers is the
  * validator's answer, not this control's — `source` and `sink` are held to a
  * literal by §8, so their lists come back empty and say so, and `expression` on
  * a row that already reads a `source` is refused by the XOR. No cell-name table.
@@ -353,6 +353,13 @@ export function ConfigFieldControl({
  * describes: a cell control holds no draft of its own (only a caret ref), so a
  * removal cannot strand a half-typed value on the row that shifts up. It can
  * still move FOCUS to a different logical row, which is the part #1092 owns.
+ *
+ * A cell's key carries the ROW COUNT for the one piece of state a cell does
+ * hold: an open expression flyout, whose options were resolved against the row
+ * it was opened on. Without it, removing an earlier row would slide a later
+ * row's content under that open list, and a choice made from it would be
+ * written into a row it was never checked against. Any add or remove remounts
+ * the cells, which closes every flyout.
  */
 export function ObjectListControl({
   field,
@@ -369,27 +376,20 @@ export function ObjectListControl({
 }) {
   const cells = field.elementFields ?? [];
 
-  // Each row is read back cell by cell, as an apply would, EXCEPT that a cell
-  // which cannot parse yet is omitted rather than failing the whole list. A
-  // freshly added row is the common case: its `type` is `''`, which no enum
-  // accepts, so an all-or-nothing `parseFieldInput(field, rows)` would refuse
-  // every draft row until it was complete. Omitting keeps the shape the
-  // validator reads (`source === undefined` means "not set" to the XOR rule),
-  // where placing the raw control values would not — a raw row is DENSE, every
-  // cell present as `''`.
+  // Each row is read by `parseRowCells`, the reader an apply uses, keeping the
+  // cells that parse. An apply refuses the whole list on one bad cell; a
+  // candidate cannot, because a freshly added row is the common case and its
+  // `type` is `''`, which no enum accepts — so every draft row would be
+  // unprobeable until complete. The bad cell is absent on BOTH sides of the
+  // comparison (the baseline is placed the same way), so it cancels. Raw control
+  // values would not do: a raw row is DENSE, every cell present as `''`, and the
+  // XOR rule reads `source !== undefined` as "set".
   const cellTarget = (index: number, cell: string): PickerTarget => ({
     place: (config, value) => ({
       ...config,
-      [field.name]: rows.map((row, i) => {
-        const read: Record<string, unknown> = {};
-        for (const c of cells) {
-          const raw =
-            i === index && c.name === cell ? value : (row[c.name] ?? emptyControlValue(c));
-          const parsed = parseFieldInput(c, raw);
-          if (parsed.ok && !parsed.omit) read[c.name] = parsed.value;
-        }
-        return read;
-      }),
+      [field.name]: rows.map(
+        (row, i) => parseRowCells(cells, i === index ? { ...row, [cell]: value } : row).value,
+      ),
     }),
     baseline: 'probed',
   });
@@ -404,7 +404,7 @@ export function ObjectListControl({
             const held = row[cell.name];
             return (
               <ConfigFieldControl
-                key={cell.name}
+                key={`${cell.name}:${rows.length}`}
                 field={cell}
                 name={`${field.name} row ${index + 1} ${cell.name}`}
                 value={held ?? emptyControlValue(cell)}

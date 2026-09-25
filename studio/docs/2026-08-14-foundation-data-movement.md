@@ -1624,9 +1624,10 @@ carrying its own target type and `onError`), and `.contract-row`, already carryi
 **Slice 1 is NOT §13 complete, and the remainder is not polish deferred out of
 laziness.** Auto-map (§6.3) and the explicit *unmapped* state both need the SINK's
 column list, and there is no seam that resolves one at authoring time — M6 built
-`describeSource` for DISPATCH. The per-column expression escape hatch is deferred
-with them: the flyout resolves its options by top-level config field name, so a
-cell would ask it about `sink`.
+`describeSource` for DISPATCH. The per-column expression escape hatch was deferred
+with them: the flyout resolved its options by top-level config field name, so a
+cell would have asked it about `sink`. (All three have since shipped — #1170 and
+#1178; see the end of this block.)
 
 **It must fit inside U7's settled rule, not beside it** (`adf-grade-ui-design.md:148`): fields are
 derived from each activity's own Zod `configSchema`, never from hand-written metadata on the catalog

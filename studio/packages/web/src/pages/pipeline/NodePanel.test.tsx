@@ -1230,6 +1230,19 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     expect(offered()).toBeNull();
   });
 
+  it('closes an open list when an earlier row is removed, rather than aim it at the next row', () => {
+    // Row 2's list is resolved against row 2. Removing row 1 slides row 3 (which
+    // reads a `source`, so its expression is XOR-refused) into that slot; a list
+    // still open there would write a reference into a row it never checked.
+    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    open('mapping row 2 expression');
+    expect(offered()).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+
+    expect(offered()).toBeNull();
+  });
+
   it("offers nothing to an llm_call tool's cells, none of which take a pipeline reference", () => {
     // `llm_call.tools` is the other row list, so its text cells gained the picker
     // too. Every one refuses a pipeline reference at save — `name` must be an
