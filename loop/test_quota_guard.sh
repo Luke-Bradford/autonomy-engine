@@ -222,6 +222,9 @@ echo \$((cc + 1)) >"\$ccf"
 if [ -n "\${CURL_READABLE_CALLS:-}" ] && [ "\$cc" -ge "\$CURL_READABLE_CALLS" ]; then
   echo ""; exit 0
 fi
+# CURL_UNREADABLE_AT="0 2 4": ALSO unreadable at those (0-based) dashboard calls,
+# so isolated 429 blips BETWEEN readable reads are reachable (#1285).
+case " \${CURL_UNREADABLE_AT:-} " in *" \$cc "*) echo ""; exit 0 ;; esac
 # CURL_UTIL_AFTER + CURL_SWITCH_CALLS: the window CHANGES mid-run, which is what
 # a long block looks like from the outside.
 if [ -n "\${CURL_UTIL_AFTER:-}" ] && [ "\$cc" -ge "\${CURL_SWITCH_CALLS:-1}" ]; then
@@ -765,6 +768,19 @@ check "leading-zero cached epoch is read as decimal -> still refuses" "0" "$(fir
 # none of the documented grace. Dashboard dies after 2 readable fires here.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 CURL_READABLE_CALLS=2)"
 check "2 readable fires then unreadable -> 2 readable + 2 blind = 4" "4" "$(fires_of "$r")"
+
+# --- 15b. the blind cap bounds CONSECUTIVE blind fires, not a run's total (#1285)
+# 2026-09-24: three isolated 429s, each followed by a good reading, added up over
+# a 12h uncapped run and STOPPED it with the window at 26%. A readable reading
+# ends the unknown, so it resets the count. Pattern U R U R U U U...: blind, ok,
+# blind, ok, blind, blind, then STOP on the third consecutive UNREADABLE. The
+# per-run count stopped at the third U with only 4 fires.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 CURL_READABLE_CALLS=5 "CURL_UNREADABLE_AT=0 2 4")"
+check "isolated blind blips separated by readable reads -> 6 fires, not 4" "6" "$(fires_of "$r")"
+# ...and two CONSECUTIVE unreadable reads still stop at the cap: case 4's shape
+# after a readable prefix. R U U U...: 1 readable + 2 blind = 3.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 CURL_READABLE_CALLS=1)"
+check "consecutive blind fires are still capped after a readable read" "3" "$(fires_of "$r")"
 
 # --- 16. the driver creates its own log directory (WARNING) ------------------
 # Only run.sh mkdir'd it, and only per fire -- so a first run under a new INFRA

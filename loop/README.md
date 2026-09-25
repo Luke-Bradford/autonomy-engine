@@ -393,8 +393,9 @@ Four independent bounds, checked before every fire, each with its own test in
   sampler in the same breath as re-loading the dashboard, or two standing samplers contend.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
-  evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache
-  can only ever REFUSE a fire, never permit one.
+  evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) CONSECUTIVE blind fires are allowed, then it stops.
+  A readable reading resets the count (#1285): isolated 429s separated by good reads no longer add
+  up across a long uncapped run. The cache can only ever REFUSE a fire, never permit one.
 - **Fire budget** — `MAX_FIRES` (0 = uncapped by default since `a8c72bd`) per run, re-granted
   at most `MAX_BUDGET_REGRANTS` (1) times
   after an auth/limit block long enough that the quota window it was sized against has moved on.
