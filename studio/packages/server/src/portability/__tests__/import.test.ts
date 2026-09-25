@@ -156,8 +156,6 @@ describe('importEnvelope: pipeline', () => {
     ).toContain('mixed');
   });
 
-  // M3 (#1117) — driven through the REAL `exportPipeline` rather than a
-  // hand-built envelope, so a stubbed-out export arm cannot let this pass.
   // #1144 — `datasetParams` rides WITH the dataset pair: bindings for a pair
   // the import dropped are refused by the write gate, and would roll the whole
   // import back if they survived on their own.
@@ -198,6 +196,8 @@ describe('importEnvelope: pipeline', () => {
     expect(byId('stripped').datasetParams).toBeUndefined();
   });
 
+  // M3 (#1117) — driven through the REAL `exportPipeline` rather than a
+  // hand-built envelope, so a stubbed-out export arm cannot let this pass.
   it('M3 (#1117) — a datasetIds pair round-trips: all-dynamic survives, a stripped end drops the pair WHOLE', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Copies' });

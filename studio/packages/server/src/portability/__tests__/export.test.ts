@@ -207,13 +207,6 @@ describe('exportPipeline', () => {
     expect(JSON.stringify(envelope)).not.toContain(connection.id);
   });
 
-  // M3 (#1117) — the dataset pair gets the SAME L13a rule, and the cases below
-  // are a deliberate CROSS-PRODUCT with the connection field. `datasetIds` is
-  // orthogonal to `connectionId`/`connectionIds` (a copy binds two stores and
-  // two addresses; a lookup will bind one of each), so the dataset rule is
-  // COMPOSED over the connection rule's result rather than added to one of its
-  // three branches. Bolt it into a branch and it silently disappears on the
-  // other two — which is exactly what these four nodes measure.
   it('#1144 — datasetParams leave with a portable pair and are dropped with a stripped one', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'Params' });
@@ -251,6 +244,13 @@ describe('exportPipeline', () => {
     expect('datasetParams' in byId('stripped')).toBe(false);
   });
 
+  // M3 (#1117) — the dataset pair gets the SAME L13a rule, and the cases below
+  // are a deliberate CROSS-PRODUCT with the connection field. `datasetIds` is
+  // orthogonal to `connectionId`/`connectionIds` (a copy binds two stores and
+  // two addresses; a lookup will bind one of each), so the dataset rule is
+  // COMPOSED over the connection rule's result rather than added to one of its
+  // three branches. Bolt it into a branch and it silently disappears on the
+  // other two — which is exactly what these four nodes measure.
   it('M3 (#1117) — nulls each LITERAL dataset end independently, on every connection shape', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'Copies' });
