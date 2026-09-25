@@ -480,7 +480,12 @@ function PickableInput({
   after?: ReactNode;
   children: ReactNode;
 }) {
-  const { ref: inputRef, onSelect, insert: insertAtCaret } = useCaretInsert<HTMLInputElement>();
+  const {
+    ref: inputRef,
+    onSelect,
+    insert: insertAtCaret,
+    wrapOptions,
+  } = useCaretInsert<HTMLInputElement>();
   return (
     <div className="config-field">
       <label>
@@ -500,6 +505,11 @@ function PickableInput({
           describe={picker.describe}
           resolve={() => picker.resolve(target)}
           onSelect={(insert, mode) => onChange(insertAtCaret(value, insert, mode))}
+          wrap={{
+            value,
+            resolve: () =>
+              wrapOptions(value, (span) => picker.wraps(target, value, span), onChange),
+          }}
         />
       )}
     </div>

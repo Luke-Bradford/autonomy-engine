@@ -17,11 +17,13 @@ export * from './nodeRefs.js';
 // would make engine-internal machinery part of `@autonomy-studio/shared`'s API
 // by accident, which is the same trap that kept `MissingValueError`
 // private. Only the surface a CONSUMER needs is exported: the caps (for a UI to
-// explain a limit) and the catalog's NAMES (for editor autocomplete at U-series).
+// explain a limit), the catalog's NAMES (for editor autocomplete at U-series)
+// and each name's printed SIGNATURE (the U8a flyout's function list, #864).
 export {
   MAX_ARRAY_ELEMENTS,
   MAX_ARRAY_ELEMENTS_TOTAL,
   MAX_PATH_DEPTH,
+  fnSignature,
   listFunctions,
 } from './functions.js';
 export type { SigType } from './functions.js';

@@ -6,6 +6,8 @@
  * a canvas — the same split `configForm.ts` / `containerRules.ts` already use.
  */
 
+import { refAt } from '@autonomy-studio/shared';
+
 /**
  * How an insert must be applied to a field.
  *
@@ -80,4 +82,51 @@ export function insertModeFor(issuesWith: (fieldValue: string) => string[]): Ins
   const whole = issuesWith(WHOLE_VALUE_PROBE);
   const interpolated = issuesWith(INTERPOLATED_PROBE);
   return interpolated.some((issue) => !whole.includes(issue)) ? 'replace' : 'insert';
+}
+
+/** A half-open `[start, end)` range of a field's value. */
+export type WrapSpan = { start: number; end: number };
+
+/**
+ * The text a "Wrap in function" choice goes around (#864), as a half-open
+ * `[start, end)` range of the field's value — or `null` when the caret is in
+ * no `${}` at all, and there is nothing to wrap.
+ *
+ * A function is almost always wanted AROUND something already written
+ * (`toUpper(X)`), which is why this wraps rather than inserting a bare
+ * `${name()}` — that would be refused at save the moment it landed. The target
+ * is the author's SELECTION when it sits inside one expression's body, so a
+ * sub-expression can be wrapped in place; otherwise it is that expression's
+ * whole body. A selection that reaches past the body — over the braces, say —
+ * means the expression itself.
+ */
+export function wrapTarget(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): WrapSpan | null {
+  const ref = refAt(value, selectionStart, selectionEnd);
+  if (ref === null) return null;
+  const bodyStart = ref.start + 2;
+  if (selectionStart < selectionEnd && selectionStart >= bodyStart && selectionEnd <= ref.end) {
+    return { start: selectionStart, end: selectionEnd };
+  }
+  return { start: bodyStart, end: ref.end };
+}
+
+/**
+ * `value` with `fn(...)` put around `target`, and the caret just after the
+ * closing paren — still inside the expression, so a second wrap goes around
+ * the first.
+ */
+export function applyWrap(
+  value: string,
+  target: WrapSpan,
+  fn: string,
+): { value: string; caret: number } {
+  const wrapped = `${fn}(${value.slice(target.start, target.end)})`;
+  return {
+    value: `${value.slice(0, target.start)}${wrapped}${value.slice(target.end)}`,
+    caret: target.start + wrapped.length,
+  };
 }

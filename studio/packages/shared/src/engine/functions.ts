@@ -383,6 +383,25 @@ export function arity(spec: FnSpec): { min: number; max: number | null } {
   return { min: spec.minArgs, max: spec.variadic ? null : spec.args.length };
 }
 
+/**
+ * How a catalog function is NAMED to an author (#864, the flyout's function
+ * list): `substring(string, number, number?) → string`, `concat(any, ...any)`.
+ * Read straight off the spec's `args`/`minArgs`/`variadic`/`ret`, so the text
+ * cannot disagree with the arity and type checks that decide what is offered.
+ */
+export function fnSignature(name: string): string {
+  const spec = FUNCTIONS[name];
+  if (spec === undefined) throw new Error(`fnSignature: '${name}' is not in the catalog`);
+  const fixed = spec.variadic ? spec.args.slice(0, -1) : spec.args;
+  const parts = fixed.map((t, i) => (i < spec.minArgs ? t : `${t}?`));
+  if (spec.variadic) {
+    const repeated = spec.args[spec.args.length - 1] as SigType;
+    for (let i = fixed.length; i < spec.minArgs; i += 1) parts.push(repeated);
+    parts.push(`...${repeated}`);
+  }
+  return `${name}(${parts.join(', ')}) → ${spec.ret}`;
+}
+
 // --- ordering + equality (STRICT — no coercion) ------------------------------
 
 /**

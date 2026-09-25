@@ -53,6 +53,64 @@ const FETCH = {
 };
 
 test.describe('U8a — expression insert flyout', () => {
+  test('a FUNCTION goes around the selected part, then around the whole, and reaches the stored version', async ({
+    page,
+  }) => {
+    // #864 — the functions half. What only a real browser proves: the author's
+    // SELECTION survives the click on the toggle (focus moves, the selection
+    // must not), and the caret the wrap restores is where a second wrap reads.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u8a wrap in a function', {
+      nodes: [
+        FETCH,
+        { id: 'call', type: 'http_request', position: { x: 260, y: 0 }, config: { method: 'GET' } },
+      ],
+      edges: [{ id: 'e1', from: 'fetch', to: 'call', on: 'success' }],
+    });
+
+    await nodeById(page, 'call').click();
+    const url = panel(page).getByRole('textbox', { name: 'url' });
+    const text = '${concat(nodes.fetch.output.body, "x")}';
+    await url.fill(text);
+    const [from, to] = [text.indexOf('nodes'), text.indexOf(',')];
+    // Selected the way an author does, with the keyboard: a programmatic
+    // `setSelectionRange` raises none of the events React's `onSelect` reads,
+    // and the control only trusts a selection the author actually made.
+    // Arrows from the END, where `fill` leaves the caret: `Home` is not
+    // start-of-line on macOS, so it would pass on the Linux CI and silently
+    // select nothing on a developer's machine.
+    for (let i = text.length; i > to; i -= 1) await url.press('ArrowLeft');
+    for (let i = to; i > from; i -= 1) await url.press('Shift+ArrowLeft');
+
+    const wrap = panel(page).getByRole('button', {
+      name: 'Wrap an expression in url in a function',
+    });
+    await wrap.click();
+    // Offered by what the save gate accepts: a two-argument function is not.
+    await expect(panel(page).getByRole('button', { name: /^substring\(/ })).toHaveCount(0);
+    await panel(page)
+      .getByRole('button', { name: /^toUpper\(/ })
+      .click();
+    await expect(url).toHaveValue('${concat(toUpper(nodes.fetch.output.body), "x")}');
+
+    // No selection now: the caret sits after `toUpper(...)`, so the next wrap
+    // takes the WHOLE expression it is in.
+    await wrap.click();
+    await panel(page)
+      .getByRole('button', { name: /^toLower\(/ })
+      .click();
+    await expect(url).toHaveValue('${toLower(concat(toUpper(nodes.fetch.output.body), "x"))}');
+
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id, 'call')).toMatchObject({
+      url: '${toLower(concat(toUpper(nodes.fetch.output.body), "x"))}',
+    });
+
+    await expectQuiet(page, problems);
+  });
+
   test('an upstream output can be CHOSEN, and reaches the stored version', async ({ page }) => {
     const problems = collectPageProblems(page);
     const id = await openSeededCanvas(page, 'u8a insert a reference', {

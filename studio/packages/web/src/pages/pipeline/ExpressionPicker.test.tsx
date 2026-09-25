@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useStore } from 'zustand';
-import type { Edge, Node, Param } from '@autonomy-studio/shared';
+import { listFunctions, type Edge, type Node, type Param } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
+import { validateCanvas } from './canvasDoc';
+import { applyWrap, wrapTarget } from './expressionInsert';
 
 /**
  * U8a — the expression-insert flyout, mounted in its real home.
@@ -44,6 +46,16 @@ function mount(nodes: Node[], edges: Edge[], params: Param[], selected: string) 
     apply: () => fireEvent.click(screen.getByRole('button', { name: 'Apply config' })),
     open: (field: string) =>
       fireEvent.click(screen.getByRole('button', { name: `Insert reference into ${field}` })),
+    openFunctions: (field: string) =>
+      fireEvent.click(
+        screen.getByRole('button', { name: `Wrap an expression in ${field} in a function` }),
+      ),
+    /** The functions the open list offers, by name. */
+    offered: () =>
+      screen
+        .queryAllByRole('button')
+        .map((b) => /^(\w+)\(.*\) → /.exec(b.getAttribute('aria-label') ?? '')?.[1])
+        .filter((name): name is string => name !== undefined),
     // The label text alone is ambiguous — the picker's toggle carries the same
     // field name in its accessible name — so the textarea is reached by role.
     field: (label: string) => screen.getByRole('textbox', { name: label }) as HTMLTextAreaElement,
@@ -257,5 +269,128 @@ describe('ExpressionPicker in NodePanel', () => {
     ui.open('url');
     expect(screen.getByRole('button', { name: /^runId/ })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Upstream outputs' })).toBeNull();
+  });
+});
+
+// #864 — the FUNCTIONS half: a function goes AROUND the expression at the caret.
+describe('ExpressionPicker — wrap in a function', () => {
+  const READS: Node = { ...CALL, config: { method: 'GET', url: '${nodes.fetch.output.body}' } };
+
+  it('wraps the expression in the field and writes the result into the DOC', () => {
+    const ui = mount([FETCH, READS], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    fireEvent.click(screen.getByRole('button', { name: /^toUpper\(/ }));
+    ui.apply();
+    expect(ui.storedConfig()['url']).toBe('${toUpper(nodes.fetch.output.body)}');
+  });
+
+  it('offers nothing the save gate would refuse — every row validates as clean as the field already does', () => {
+    const ui = mount([FETCH, READS], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    const offered = ui.offered();
+    // Non-trivial on both sides: plenty is offered, and plenty is not.
+    expect(offered).toContain('toUpper');
+    expect(offered).toContain('concat');
+    expect(offered.length).toBeLessThan(listFunctions().length);
+    // Two required arguments, so a one-argument wrap is an arity refusal.
+    expect(offered).not.toContain('substring');
+    expect(offered).not.toContain('default');
+
+    const url = READS.config['url'] as string;
+    const span = wrapTarget(url, url.length, url.length)!;
+    const issues = (value: string) =>
+      validateCanvas([FETCH, { ...READS, config: { ...READS.config, url: value } }], CHAIN, [], []);
+    const baseline = issues(url);
+    for (const name of offered) {
+      const after = issues(applyWrap(url, span, name).value);
+      expect(
+        after.filter((i) => !baseline.includes(i)),
+        name,
+      ).toEqual([]);
+    }
+  });
+
+  it('offers only what a TYPE-CHECKED field would accept', () => {
+    // A `filter`'s `items` must be an array: a string-returning wrap would
+    // leave the doc unsavable.
+    const src: Node = {
+      id: 'src',
+      type: 'http_request',
+      config: { method: 'GET', url: 'https://a.test', outputs: [{ name: 'rows', type: 'json' }] },
+      position: at,
+    };
+    const pick: Node = {
+      id: 'pick',
+      type: 'filter',
+      config: { items: '${nodes.src.output.rows}', predicate: '${item}' },
+      position: at,
+    };
+    const ui = mount(
+      [src, pick],
+      [{ id: 'e1', from: 'src', to: 'pick', on: 'success' }],
+      [],
+      'pick',
+    );
+    ui.openFunctions('items');
+    const offered = ui.offered();
+    expect(offered).not.toContain('toUpper');
+    expect(offered).not.toContain('length');
+  });
+
+  it('wraps only the SELECTED part of an expression, in place', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    const url = ui.field('url');
+    const text = '${concat(nodes.fetch.output.body, "x")}';
+    fireEvent.change(url, { target: { value: text } });
+    url.selectionStart = text.indexOf('nodes');
+    url.selectionEnd = text.indexOf(',');
+    fireEvent.select(url);
+
+    ui.openFunctions('url');
+    fireEvent.click(screen.getByRole('button', { name: /^toUpper\(/ }));
+    ui.apply();
+    expect(ui.storedConfig()['url']).toBe('${concat(toUpper(nodes.fetch.output.body), "x")}');
+  });
+
+  it('says what to do when the caret is in no expression, rather than offering a bare call', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    fireEvent.change(ui.field('url'), { target: { value: 'https://a.test' } });
+    ui.openFunctions('url');
+    expect(screen.getByText(/Put the cursor inside a \$\{…\} expression/)).toBeTruthy();
+    expect(ui.offered()).toEqual([]);
+  });
+
+  it('offers nothing around an expression the save already refuses — a wrap cannot repair it', () => {
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    fireEvent.change(ui.field('url'), { target: { value: '${nodes.nope.output.x}' } });
+    ui.openFunctions('url');
+    expect(ui.offered()).toEqual([]);
+    expect(screen.getByText(/No function takes this expression/)).toBeTruthy();
+  });
+
+  it('CLOSES when the field is edited while open, so a choice cannot put back the old text', () => {
+    const ui = mount([FETCH, READS], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    expect(ui.offered()).toContain('toUpper');
+    const edited = '${nodes.fetch.output.body} and more';
+    fireEvent.change(ui.field('url'), { target: { value: edited } });
+    expect(ui.offered()).toEqual([]);
+    expect(
+      screen
+        .getByRole('button', { name: 'Wrap an expression in url in a function' })
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(ui.field('url').value).toBe(edited);
+  });
+
+  it('keeps ONE list open at a time', () => {
+    const ui = mount([FETCH, READS], CHAIN, [], 'call');
+    ui.open('url');
+    expect(screen.getByRole('button', { name: /HTTP Request 1 → body/ })).toBeTruthy();
+    ui.openFunctions('url');
+    expect(screen.queryByRole('button', { name: /HTTP Request 1 → body/ })).toBeNull();
+    expect(ui.offered()).toContain('toUpper');
+    ui.open('url');
+    expect(ui.offered()).toEqual([]);
   });
 });
