@@ -61,7 +61,7 @@ import {
   singleSelection,
   type Selection,
 } from './canvasStore';
-import { type FieldPicker } from './ConfigFieldControl';
+import { type FieldPicker, type PickerTarget } from './ConfigFieldControl';
 import { ConfigEditor } from './ConfigEditor';
 import { useConfigEditor } from './useConfigEditor';
 import { autoMappableField, describeSkips } from './copyMappingAids';
@@ -2294,11 +2294,9 @@ function useExpressionPicker(
     // name that exists on both surfaces.
     const producerName = (id: string) => nodeNames.get(id) ?? labels.get(id) ?? id;
 
-    const issuesWith = (fieldName: string, value: string) =>
+    const issuesWith = (target: PickerTarget, value: string) =>
       validateCanvas(
-        nodes.map((n) =>
-          n.id === nodeId ? { ...n, config: { ...n.config, [fieldName]: value } } : n,
-        ),
+        nodes.map((n) => (n.id === nodeId ? { ...n, config: target.place(n.config, value) } : n)),
         edges,
         containers,
         params,
@@ -2313,19 +2311,26 @@ function useExpressionPicker(
       },
       // Run only when a flyout OPENS, never per render: this validates the whole
       // doc once for the mode and once more per candidate.
-      resolve: (fieldName: string) => {
-        const mode = insertModeFor((value) => issuesWith(fieldName, value));
-        // In INSERT mode the field becomes an interpolated template, which always
-        // resolves to a string whatever is spliced in — so no candidate can be
-        // type-refused, and the node-level answer is already exact. Only REPLACE
-        // mode makes the field BECOME the reference, which is where a field's own
-        // type check can reject it.
-        if (mode === 'insert') return { mode, suggestions };
-        const baseline = validateCanvas(nodes, edges, containers, params);
+      resolve: (target: PickerTarget) => {
+        const mode = insertModeFor((value) => issuesWith(target, value));
+        const baseline =
+          target.baseline === 'stored'
+            ? validateCanvas(nodes, edges, containers, params)
+            : issuesWith(target, '');
+        // Filtered in BOTH modes. REPLACE makes the field become the reference,
+        // which is where a field's own type check rejects one. INSERT used to
+        // skip the filter on the argument that a template always resolves to a
+        // string — true of TYPES, and false of a field that refuses `${}`
+        // outright: a copy mapping's `source`/`sink` must be literal (§8), both
+        // mode probes carry that refusal equally, so such a field reads as a
+        // template and an unfiltered list offered references that were ALL
+        // refused at save (#1178). An insert candidate is probed in the shape a
+        // splice makes — the same `x…` prefix `INTERPOLATED_PROBE` uses.
+        const shaped = (insert: string) => (mode === 'replace' ? insert : `x${insert}`);
         return {
           mode,
           suggestions: suggestions.filter((s) => {
-            const after = issuesWith(fieldName, s.insert);
+            const after = issuesWith(target, shaped(s.insert));
             return !after.some((issue) => !baseline.includes(issue));
           }),
         };

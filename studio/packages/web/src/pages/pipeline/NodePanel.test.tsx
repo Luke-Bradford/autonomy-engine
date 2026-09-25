@@ -1186,12 +1186,15 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     });
   });
 
-  it('offers references to a row that exists only in the draft', () => {
-    // The stored doc has three rows; the fourth is unapplied. Probing against
-    // the STORED doc would put the candidate on a row that does not exist there.
+  it('offers references to a draft row that carries a complaint of its own', () => {
+    // The stored doc has three rows; the fourth is unapplied, and mid-edit it
+    // repeats row 2's sink. Compared against the STORED doc, every candidate
+    // would carry that duplicate-sink complaint as a NEW issue and be refused for
+    // a problem the reference did not cause — so the list would be empty.
     mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
+    fireEvent.change(screen.getByLabelText('mapping row 4 sink'), { target: { value: 'tag' } });
     open('mapping row 4 expression');
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
 
@@ -1205,6 +1208,12 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     // mode probes carry that refusal equally, so the field reads as a template —
     // and an unfiltered template list would offer references that are ALL refused.
     mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+    // Already holding a refused `${}`: the refusal must not become the BASELINE
+    // a candidate is compared against, or every candidate would pass as "no new
+    // issue".
+    fireEvent.change(screen.getByLabelText('mapping row 3 sink'), {
+      target: { value: '${run.runId}' },
+    });
 
     open('mapping row 3 sink');
 

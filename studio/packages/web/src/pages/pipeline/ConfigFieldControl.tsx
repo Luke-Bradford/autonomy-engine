@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { RefSuggestion } from '@autonomy-studio/shared';
-import { emptyControlValue, isRowList } from './configForm';
+import { emptyControlValue, isRowList, parseFieldInput } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions } from './ExpressionPicker';
 import { applyInsert } from './expressionInsert';
@@ -14,8 +14,37 @@ import { applyInsert } from './expressionInsert';
 export type FieldPicker = {
   describe: (suggestion: RefSuggestion) => string;
   /** Resolved lazily, per OPENING — it runs the whole-doc validator repeatedly. */
-  resolve: (fieldName: string) => FieldOptions;
+  resolve: (target: PickerTarget) => FieldOptions;
 };
+
+/**
+ * Where ONE control's text sits in its node's config — the question the flyout
+ * has to ask the whole-doc validator about every candidate (#1178).
+ *
+ * It used to be a top-level field NAME, and the candidate was built as
+ * `{ ...config, [name]: value }`. A cell inside a row list has no such name —
+ * `mapping[1].expression` is not a config key — so the control that knows the
+ * position builds the candidate, and the owning panel only runs the validator.
+ *
+ * `baseline` says what a candidate is compared against. A top-level field's
+ * position always exists in the STORED config, so the stored doc is the answer.
+ * A cell's row may exist only in the draft (added, not yet applied), and then
+ * the stored doc lacks the row the candidate sits on: every candidate would
+ * carry the draft row's own issues and be refused for them. So a cell compares
+ * against its draft with the cell EMPTIED — not with its current text, which in
+ * a literal-only cell (`sink`) is itself a refused `${}` and would put that very
+ * refusal into the baseline, letting every candidate through.
+ */
+export type PickerTarget = {
+  place: (config: Readonly<Record<string, unknown>>, value: string) => Record<string, unknown>;
+  baseline: 'stored' | 'placedEmpty';
+};
+
+/** A top-level config field's position: the one shape the flyout knew before #1178. */
+const topLevelTarget = (name: string): PickerTarget => ({
+  place: (config, value) => ({ ...config, [name]: value }),
+  baseline: 'stored',
+});
 
 /**
  * Values the OWNING panel can offer for one field, when only it can know them
@@ -71,6 +100,7 @@ export function ConfigFieldControl({
   picker,
   choices,
   name,
+  target,
 }: {
   field: ConfigField;
   value: FieldInput;
@@ -85,6 +115,8 @@ export function ConfigFieldControl({
    * by keyboard, or assert on in a spec.
    */
   name?: string;
+  /** Where this control sits in the config, when it is not a top-level field (#1178). */
+  target?: PickerTarget;
 }) {
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
@@ -117,6 +149,7 @@ export function ConfigFieldControl({
         label={label}
         rows={isRowList(value) ? value : []}
         onChange={onChange}
+        picker={picker}
       />
     );
   }
@@ -261,9 +294,9 @@ export function ConfigFieldControl({
       )}
       {picker && field.kind === 'text' && (
         <ExpressionPicker
-          fieldName={field.name}
+          fieldName={shown}
           describe={picker.describe}
-          resolve={() => picker.resolve(field.name)}
+          resolve={() => picker.resolve(target ?? topLevelTarget(field.name))}
           onSelect={(insert, mode) => {
             // The selection survives the toggle click (focus moves, the caret
             // does not), so a mid-string insert lands where the author left it —
@@ -296,11 +329,17 @@ export function ConfigFieldControl({
  * convention this follows so the three read alike to a screen reader and to a
  * spec.
  *
- * Every cell is a plain `ConfigFieldControl`, and deliberately gets NO `picker`.
- * The flyout resolves its options by TOP-LEVEL CONFIG FIELD NAME
- * (`picker.resolve(field.name)`), so a cell would ask it about `sink` or
- * `source` — names no config field has — and ship a broken affordance in the
- * slice that defers the picker.
+ * Every cell is a plain `ConfigFieldControl`, and gets the panel's `picker`
+ * with a `target` naming the cell's own position (#1178): the candidate is this
+ * list's DRAFT rows with one cell replaced, read back through `parseFieldInput`
+ * exactly as an apply would. Which cells actually receive offers is the
+ * validator's answer, not this control's — `source` and `sink` are held to a
+ * literal by §8, so their lists come back empty and say so, and `expression` on
+ * a row that already reads a `source` is refused by the XOR. No cell-name table.
+ *
+ * Nothing offered is a per-ROW value, and nothing here may suggest one: §8 puts
+ * substitution in the reducer, so a mapping's `expression` is one constant per
+ * dispatch applied to every row (#1129).
  *
  * Rows are keyed by INDEX, which is sound here and is not the hazard #1092
  * describes: a cell control holds no draft of its own (only a caret ref), so a
@@ -312,13 +351,27 @@ export function ObjectListControl({
   label,
   rows,
   onChange,
+  picker,
 }: {
   field: ConfigField;
   label: string;
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
+  picker?: FieldPicker;
 }) {
   const cells = field.elementFields ?? [];
+
+  const cellTarget = (index: number, cell: string): PickerTarget => ({
+    place: (config, value) => {
+      const next = rows.map((r, i) => (i === index ? { ...r, [cell]: value } : r));
+      // A row list the form cannot read back yet (a cell mid-edit that fails its
+      // own parse) is placed RAW: the baseline is placed the same way, so the
+      // shape complaints it causes appear on both sides and cancel.
+      const parsed = parseFieldInput(field, next);
+      return { ...config, [field.name]: parsed.ok && !parsed.omit ? parsed.value : next };
+    },
+    baseline: 'placedEmpty',
+  });
 
   return (
     <div className="config-field object-list" role="group" aria-label={label}>
@@ -334,6 +387,8 @@ export function ObjectListControl({
                 field={cell}
                 name={`${field.name} row ${index + 1} ${cell.name}`}
                 value={held ?? emptyControlValue(cell)}
+                picker={picker}
+                target={cellTarget(index, cell.name)}
                 onChange={(next) =>
                   onChange(
                     rows.map((r, i) =>
