@@ -437,7 +437,16 @@
 // The import floor refuses both with a version message naming the real cause.
 // No `SCHEMA_VERSION` bump and no upgrader: the member only ADMITS a value no
 // older export can contain, so every pre-30 artifact parses here unchanged.
-export const CATALOG_VERSION = 30;
+// CATALOG_VERSION 31 (#796 item 2): `call.wait: false` is READ. The field has
+// parsed since P2c and nothing consumed it, so every earlier build accepts a
+// `wait: false` call node and silently WAITS on it: the node takes the child's
+// outcome and outputs, and a failing child fails a parent its author meant to
+// be indifferent to. That is bump 21's case — parseable, not runnable as
+// authored — so the import floor refuses the artifact on a pre-31 build rather
+// than run it wrong. No `SCHEMA_VERSION` bump and no upgrader: the field's
+// shape is unchanged, and absent still means wait, so every pre-31 artifact
+// runs here exactly as it did.
+export const CATALOG_VERSION = 31;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

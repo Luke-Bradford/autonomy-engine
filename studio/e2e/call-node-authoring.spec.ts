@@ -88,7 +88,14 @@ test.describe('#425 — call-node authoring', () => {
     await expect(arg(page, 'query')).toBeVisible();
     await arg(page, 'query').fill('ships');
     await arg(page, 'limit').fill('25');
-    await panel(page).getByLabel('Wait for the child run').check();
+    // #796 item 2 — a new call WAITS, because that is what the engine does with
+    // an absent `wait`; the box used to read unchecked while the node waited.
+    // Unticking it is the one choice that gets written.
+    const wait = panel(page).getByLabel('Wait for the child run');
+    await expect(wait).toBeChecked();
+    await expect(panel(page).getByText('succeeds as soon as the child run starts')).toHaveCount(0);
+    await wait.uncheck();
+    await expect(panel(page).getByText('succeeds as soon as the child run starts')).toBeVisible();
     await panel(page).getByRole('button', { name: 'Apply call' }).click();
 
     expect(await validationIssues(page), 'the authored call left the doc invalid').toEqual([]);
@@ -107,7 +114,7 @@ test.describe('#425 — call-node authoring', () => {
     await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
     await expect(arg(page, 'query')).toHaveValue('ships');
     await expect(arg(page, 'limit')).toHaveValue('25');
-    await expect(panel(page).getByLabel('Wait for the child run')).toBeChecked();
+    await expect(panel(page).getByLabel('Wait for the child run')).not.toBeChecked();
 
     // The contract that would otherwise be destroyed silently: a call node's
     // outputs come from the CHILD projection, so `config.outputs` must be ABSENT
@@ -121,7 +128,7 @@ test.describe('#425 — call-node authoring', () => {
     const saved = versions.find((v) => v.version === 2)!;
     const node = saved.nodes.find((n) => n.type === 'execute_pipeline')!;
     expect(node.config['outputs'], 'a catalog outputs:[] was baked in').toBeUndefined();
-    expect(node.call).toMatchObject({ params: { query: 'ships', limit: 25 }, wait: true });
+    expect(node.call).toMatchObject({ params: { query: 'ships', limit: 25 }, wait: false });
 
     await expectQuiet(page, problems);
   });

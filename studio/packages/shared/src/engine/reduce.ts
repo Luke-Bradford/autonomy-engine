@@ -28,6 +28,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
+import { callDetaches } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   composeFilterExpr,
@@ -71,7 +72,8 @@ import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 //     `exitWhen` / `maxRounds`. The container's terminal outcome fires its OUTER
 //     edges; a child `skipped` never fails the container.
 //   - `call_pipeline` (`node.call`): emits `startChild`, holds the node
-//     `waiting` until `call.returned` (a FAILED child still returns outputs).
+//     `waiting` until `call.returned` (a FAILED child still returns outputs) —
+//     or, for `wait: false` (#796 item 2), until `call.detached`.
 // ---------------------------------------------------------------------------
 
 /** The immutable graph the reducer walks. Params/outputs arrive via events. */
@@ -202,7 +204,8 @@ const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
  * only a comment as non-empty):
  *   - `ready`         — `dispatchNode` was emitted; the driver owes `node.dispatched`.
  *   - `dispatched`    — the executor owes a `node.succeeded` / `node.failed`.
- *   - `waiting`       — a `call_pipeline` child owes a `call.returned`.
+ *   - `waiting`       — a `call_pipeline` child owes a `call.returned` (or, for a
+ *     `wait: false` node, the executor owes its `call.detached`).
  *   - `retry_pending` — S1's DURABLE ALARM row owes a `node.retryDue`. NOTHING is
  *     in flight here, which is exactly why a naive "converged and idle" test
  *     would tear down every retrying run.
@@ -1580,6 +1583,7 @@ export function createEngine(doc: EngineDoc): Engine {
         childRunId,
         pipelineVersionId: pvId,
         params: callParams,
+        wait: !callDetaches(node.call),
       });
       return { state: next, changed: true };
     }
@@ -3392,6 +3396,82 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * `call.detached` (#796 item 2): a `wait: false` call node's child exists and
+   * was kicked, so the node is DONE — `success`, with empty outputs. The guards
+   * are `onCallReturned`'s, in the same order and for the same reasons (stale
+   * attempt, foreign child, never-dispatched, duplicate), plus one of its own: a
+   * call node that WAITS refuses this event, because only its child's result may
+   * resolve it. Reading the flag from the DOC rather than trusting the event is
+   * what keeps a misrouted `call.detached` from cutting a waiting call short.
+   *
+   * The empty outputs still go through the node's declared contract. The save
+   * gate refuses `config.outputs` on a detached call, but a stored version
+   * predates that rule, and a required declared output the node can never
+   * produce must fail the node here rather than let a `${}` downstream read it
+   * as present.
+   */
+  function onCallDetached(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'call.detached' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.callNodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status === 'pending') {
+      diagnostics.push(
+        `impossible call.detached for never-dispatched call node '${event.callNodeId}'`,
+      );
+      return {
+        state,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    }
+    if (event.attemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics }; // STALE → ignored
+    }
+    if (ns.status !== 'waiting') {
+      diagnostics.push(
+        `duplicate call.detached for already-terminal call node '${event.callNodeId}'`,
+      );
+      return { state, commands: [], diagnostics };
+    }
+    const node = docNodeFor(event.callNodeId)!;
+    if (node.call === undefined || !callDetaches(node.call)) {
+      diagnostics.push(
+        `call.detached for '${event.callNodeId}', which does not detach (it waits for ` +
+          'its child) — ignored',
+      );
+      return { state, commands: [], diagnostics };
+    }
+    const expectedChildRunId = deterministicChildRunId(
+      state.runId,
+      event.callNodeId,
+      event.attemptId,
+    );
+    if (event.childRunId !== expectedChildRunId) {
+      diagnostics.push(
+        `call.detached for '${event.callNodeId}' names an unexpected childRunId ` +
+          `'${event.childRunId}' (expected '${expectedChildRunId}') — ignored`,
+      );
+      return { state, commands: [], diagnostics };
+    }
+    const { errs, checked } = validateOutputs(outputContract(node), {});
+    if (checked === null || errs.length > 0) {
+      diagnostics.push(
+        checked === null
+          ? `call node '${event.callNodeId}' has invalid config: ${errs.join('; ')}`
+          : `call node '${event.callNodeId}' detaches from its child, so it can never ` +
+              `produce its declared outputs: ${errs.join('; ')}`,
+      );
+      return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
+    }
+    let next = withNode(state, event.callNodeId, { status: 'success' });
+    next = { ...next, outputs: { ...next.outputs, [event.callNodeId]: storeOutputs(checked, {}) } };
+    return settle(next, diagnostics);
+  }
+
+  /**
    * `node.retryDue` (F2b/F2c): the alarm fired — re-dispatch a HELD node under a
    * NEW attempt.
    *
@@ -4008,6 +4088,7 @@ export function createEngine(doc: EngineDoc): Engine {
           childRunId: deterministicChildRunId(state.runId, id, ns.currentAttemptId),
           pipelineVersionId: pvId,
           params: callParams,
+          wait: !callDetaches(node.call),
         });
       }
     }
@@ -4190,6 +4271,8 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       case 'call.returned':
         return onCallReturned(state, event, diagnostics);
+      case 'call.detached':
+        return onCallDetached(state, event, diagnostics);
       case 'node.retryScheduled':
         // Inert BY DESIGN (§A.2): the durable record that the driver armed this
         // node's retry alarm, carrying the `nextAttemptAt` the log/monitor needs.

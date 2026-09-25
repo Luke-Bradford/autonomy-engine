@@ -123,7 +123,8 @@ export class ParamResolveError extends Error {
  * - `success` / `failure` — terminal, from `node.succeeded` / `node.failed`.
  * - `skipped`    — an incoming edge became impossible under the join rule.
  * - `waiting`    — a `call_pipeline` node that emitted `startChild` and is
- *                  awaiting its `call.returned` event (P2c).
+ *                  awaiting its `call.returned` event (P2c), or its
+ *                  `call.detached` for a `wait: false` node (#796 item 2).
  * - `retry_pending` — F2b/D4's **HOLD**: a `transient` failure the node's policy
  *                  still has budget for. NON-terminal, which is the whole design
  *                  (see below), and resolved only by a `node.retryDue`.
@@ -861,7 +862,8 @@ export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];
  * `node.retryRequested` are the ENGINE-decision (retry) variants the P2d boot
  * reconciler will emit — the reducer HANDLES them here (a fresh dispatch with a
  * new attempt), kept distinct from the driver-accepted `node.dispatched`.
- * `call.returned` (P2c) resolves a `waiting` `call_pipeline` node.
+ * `call.returned` (P2c) resolves a `waiting` `call_pipeline` node, and
+ * `call.detached` (#796 item 2) resolves a `wait: false` one.
  */
 export const EngineEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -1140,6 +1142,25 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * not already carry this event for the same `childRunId`.
      */
     type: z.literal('call.started'),
+    runId: z.string(),
+    callNodeId: z.string(),
+    attemptId: z.string(),
+    childRunId: z.string(),
+  }),
+  z.object({
+    /**
+     * #796 item 2 — a `wait: false` call node STOPPED WAITING: its child run
+     * exists and has been kicked, and the parent will never receive the child's
+     * outcome or outputs. Appended by the executor after `call.started` and the
+     * kick, never by the child-return reactor. The fold resolves a detached call
+     * node `success` with EMPTY outputs; on a call node that waits, it is
+     * refused with a diagnostic, because the only thing that may resolve a
+     * waiting call is its child's own result.
+     *
+     * A spawn REFUSAL on a detached node is still `call.returned{failure}`: the
+     * node's claim is "the child was started", and a refusal falsifies it.
+     */
+    type: z.literal('call.detached'),
     runId: z.string(),
     callNodeId: z.string(),
     attemptId: z.string(),
@@ -1831,7 +1852,8 @@ export function terminalStatusOf(event: EngineEvent): RunLifecycleStatus | null 
  * Requests from the reducer to the driver. A command NEVER changes state — the
  * driver performs it and appends the resulting event. `startChild` (P2c) asks
  * the driver to spawn a `call_pipeline` child; the reducer awaits a
- * `call.returned` event before the call node leaves `waiting`.
+ * `call.returned` event before the call node leaves `waiting` — or, for a
+ * `wait: false` node (#796 item 2), a `call.detached`.
  */
 export const EngineCommandSchema = z.discriminatedUnion('type', [
   z.object({
@@ -1910,6 +1932,14 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     /** Resolved literal id (a `${}` ref in the call config is substituted first). */
     pipelineVersionId: z.string(),
     params: z.record(z.string(), z.unknown()),
+    /**
+     * #796 item 2 — `false` for a `call.wait: false` node: the executor appends
+     * `call.detached` once the child is kicked instead of leaving the node for
+     * the child-return reactor. `true` for an absent `wait`, which is every
+     * version authored before this field was read. The executor has no doc, so
+     * the flag rides on the command.
+     */
+    wait: z.boolean(),
   }),
   z.object({
     /**

@@ -1622,3 +1622,51 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
     expect([...onSchema].sort()).toEqual([...STRUCTURAL, ...CONTAINER_CONFIG_FIELD_NAMES].sort());
   });
 });
+
+describe('#796 item 2 — a detached call (wait: false) returns nothing', () => {
+  const detached = (id: string, config: Record<string, unknown> = {}): Node =>
+    node(id, config, {
+      type: 'call_pipeline',
+      call: { pipelineVersionId: 'pv_child', params: {}, wait: false },
+    });
+  const docOf = (nodes: Node[], edges: Edge[] = []) => ({
+    params: [],
+    nodes,
+    edges,
+    containers: [],
+  });
+
+  it('refuses declared outputs on a detached call, and not on a waiting one', () => {
+    const outputs = [{ name: 'x', type: 'string' }];
+    expect(validatePipelineDoc(docOf([detached('c', { outputs })])).join(' ')).toContain(
+      'node.c: a call that does not wait for its child returns no outputs',
+    );
+    const waiting = node(
+      'c',
+      { outputs },
+      {
+        type: 'call_pipeline',
+        call: { pipelineVersionId: 'pv_child', params: {} },
+      },
+    );
+    expect(validatePipelineDoc(docOf([waiting])).join(' ')).not.toContain('does not wait');
+    // An empty declaration declares nothing, so it is not refused.
+    expect(validatePipelineDoc(docOf([detached('c', { outputs: [] })]))).toEqual([]);
+  });
+
+  it("refuses a ${} naming a detached call's output; the same ref on a waiting call passes", () => {
+    const reader = node('r', { prompt: '${nodes.c.output.x}' });
+    const e = [edge('c', 'r', 'success')];
+    expect(validatePipelineDoc(docOf([detached('c'), reader], e)).join(' ')).toContain(
+      "node 'c' declares no output named 'x'",
+    );
+    expect(validatePipelineDoc(docOf([callNode('c', 'pv_child'), reader], e))).toEqual([]);
+  });
+
+  it("a detached call's STATUS stays referable", () => {
+    const reader = node('r', { prompt: '${nodes.c.status}' });
+    expect(
+      validatePipelineDoc(docOf([detached('c'), reader], [edge('c', 'r', 'completion')])),
+    ).toEqual([]);
+  });
+});

@@ -9,6 +9,7 @@ import type {
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
 import type { OutputType, ParamType } from '../schemas/pipeline.js';
+import { callDetaches } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
@@ -2316,6 +2317,25 @@ export function validateDoc(
           "(its dispatch and refs are the child pipeline's) — remove them",
       );
     }
+    // #796 item 2 — a `wait: false` call never receives its child's result, so
+    // declared outputs could never be produced. Same idiom as above: refused,
+    // not dropped. `outputsByIdOf` is the other half — it gives such a node an
+    // EMPTY declared contract, so a `${}` naming one of its outputs is refused
+    // too, and the reducer re-checks at `call.detached` for a stored doc.
+    // An EMPTY declaration declares nothing a detached call could fail to
+    // produce, so only a non-empty one is refused.
+    const declared = node.config['outputs'];
+    if (
+      node.call !== undefined &&
+      callDetaches(node.call) &&
+      declared !== undefined &&
+      !(Array.isArray(declared) && declared.length === 0)
+    ) {
+      errors.push(
+        `node.${node.id}: a call that does not wait for its child returns no outputs ` +
+          '— remove the declared outputs, or wait for the child',
+      );
+    }
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -4022,7 +4042,14 @@ function outputsByIdOf(
   containers: readonly Container[] = [],
 ): Map<string, OutputContract> {
   const m = new Map<string, OutputContract>();
-  for (const node of nodes) m.set(node.id, outputContract(node));
+  for (const node of nodes) {
+    // #796 item 2 — a detached call produces NOTHING, whatever its config says,
+    // so its static contract is an empty declaration: any `${}` naming one of
+    // its outputs is refused. Here, not in `outputContract`, which the reducer
+    // also reads when re-folding stored runs.
+    const detached = node.call !== undefined && callDetaches(node.call);
+    m.set(node.id, detached ? { kind: 'declared', outputs: [] } : outputContract(node));
+  }
   // #567: container endpoints are first-class producers. A foreach declares
   // `results`; loop/stage carry an `absent` (dynamic) contract (name-unchecked).
   for (const c of containers) m.set(c.id, containerOutputContract(c));

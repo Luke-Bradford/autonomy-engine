@@ -5,6 +5,7 @@ import {
   type EngineEvent,
   type PipelineVersion,
   TERMINAL_RUN_ROW_STATUS,
+  callDetaches,
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
@@ -24,6 +25,7 @@ import {
 } from './driver.js';
 import type { RunEventBus } from './event-bus.js';
 import type { RunDrives } from './drives.js';
+import { isDetachedChild } from './child.js';
 import {
   appendAndFold,
   appendEngineEvent,
@@ -210,6 +212,18 @@ export interface ReconcileDeps {
    * throws loudly rather than hanging. Threaded through to the pump's driver boundary.
    */
   signExternalWaitToken?: (args: { runId: string; nodeId: string; attemptId: string }) => string;
+  /**
+   * #796 item 2 — `childRuns.kick`, for the one child only the reconciler can
+   * start: a DETACHED (`call.wait: false`) child that never ran. The executor
+   * kicks before it yields `call.detached`, but a crash can land after the
+   * detach is durable and before the kicked drive's first append — and a
+   * detached call node is terminal, so its parent will never re-emit
+   * `startChild`. Not awaited, so a detached child's whole drive never holds up
+   * boot; `kick` queues behind this scan's own lock on that run and owns its
+   * failure handling. Absent ⇒ the child is left `pending` and reported
+   * `deferred`, never swept: sweeping it would bury work that was asked for.
+   */
+  kickChild?: (run: Run) => void;
 }
 
 export interface ReconcileReport {
@@ -238,6 +252,8 @@ export interface ReconcileReport {
   interrupted: string[];
   /** Resumable runs left for a later boot with an executor (no executor now). */
   deferred: string[];
+  /** #796 item 2 — never-started DETACHED children the sweep started (`kickChild`). */
+  kickedDetached: string[];
   /** Running rows whose LOG already ended terminal; only `runs.status` resynced. */
   resynced: string[];
   /** Runs that only needed their crash-dropped `finishRun` reconstructed (no
@@ -531,6 +547,7 @@ export function emptyReconcileReport(): ReconcileReport {
     resumed: [],
     interrupted: [],
     deferred: [],
+    kickedDetached: [],
     resynced: [],
     finalized: [],
     held: [],
@@ -698,7 +715,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  *
  * #1053 added a SECOND reader of "is the parent over" that deliberately reads the
  * LOG instead. Not a contradiction and not drift — the argument is in
- * `parentIsOver`'s docblock, which owns it; the short version is that the last
+ * `parentLog`'s docblock, which owns it; the short version is that the last
  * sentence above is this sweep's whole licence for the cheap read, and that
  * licence is not available inside the `running` scan.
  *
@@ -852,7 +869,43 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   const parent = getParsedRun(deps.db, parentRunId, (id, err) => {
     report.corrupt.push({ runId: id, reason: unparseableRowReason(err) });
   });
-  if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
+  if (parent === null) return;
+
+  // #796 item 2 — a DETACHED child that never started is not an orphan: its
+  // call node already succeeded on the promise that it was started, and nothing
+  // else will ever start it (see `ReconcileDeps.kickChild`). Checked BEFORE the
+  // parent-terminal test, because in this crash window the parent is as likely
+  // to be still `running`, where the sweep would otherwise just walk away.
+  //
+  // GATED so the cheap read above stays cheap for everything else. The parent's
+  // LOG is loaded only when its DOC holds a detached call at all, or — for a
+  // TERMINAL parent — when the doc is gone and the log is the only witness left.
+  // A running parent whose doc cannot be resolved is left alone: its own
+  // reconcile meets that failure, and "undecidable" is a verdict this sweep only
+  // needs about a parent that will never re-emit `startChild` again.
+  const parentTerminal = TERMINAL_RUN_ROW_STATUS.has(parent.status);
+  const parentDoc = parentDocOf(deps, parent.pipelineVersionId);
+  const mayDetach =
+    parentDoc === null
+      ? parentTerminal
+      : parentDoc.nodes.some((n) => n.call !== undefined && callDetaches(n.call));
+  const parentEvents = mayDetach ? parentLog(deps, report, parentRunId) : null;
+  const detached = parentEvents === null ? false : detachVerdict(parentEvents, parentDoc, run.id);
+  if (detached === null) {
+    report.deferred.push(run.id); // undecidable: never bury it (see `detachVerdict`)
+    return;
+  }
+  if (detached) {
+    if (deps.kickChild === undefined) {
+      report.deferred.push(run.id);
+      return;
+    }
+    deps.kickChild(run);
+    report.kickedDetached.push(run.id);
+    return;
+  }
+
+  if (!parentTerminal) return;
 
   // The reason is INERT on this path and is passed only so both producers read
   // the same: the empty-log guard above has already proven `events.length === 0`,
@@ -1000,18 +1053,57 @@ function interruptRun(deps: ReconcileDeps, runId: string, reason: string): void 
  * A NON-corruption fault (a locked DB) propagates to the fault boundary, which
  * files it `failed` — transient, cleared by the next boot's re-read.
  */
-function parentIsOver(deps: ReconcileDeps, report: ReconcileReport, parentRunId: string): boolean {
-  let parentEvents: EngineEvent[];
+function parentLog(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  parentRunId: string,
+): EngineEvent[] | null {
   try {
-    parentEvents = loadEngineEvents(deps.db, parentRunId);
+    return loadEngineEvents(deps.db, parentRunId);
   } catch (err) {
     if (err instanceof RunLogUnparseableError) {
       report.corrupt.push({ runId: parentRunId, reason: `run_log_unparseable:${err.message}` });
-      return false;
+      return null; // not over: the asymmetry above
     }
     throw err;
   }
-  return terminalFactFromLog(parentEvents) !== null;
+}
+
+/** The parent's bound doc, or `null` when it cannot be resolved. Not reported
+ * here: the parent's own reconcile meets the same failure and files it. */
+function parentDocOf(
+  deps: ReconcileDeps,
+  pipelineVersionId: string | null,
+): PipelineVersion | null {
+  if (pipelineVersionId === null) return null;
+  try {
+    return deps.resolveDoc(pipelineVersionId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #796 item 2 — did the parent DETACH from `childRunId`? See `isDetachedChild`
+ * for why the bound doc is consulted and not only the log.
+ *
+ * `null` is UNDECIDABLE: the parent announced this child, its log has no
+ * `call.detached`, and there is no doc to ask. Both callers resolve that the way
+ * #1053's asymmetry does — toward the reversible act. The running scan resumes
+ * rather than freezes, and the sweep leaves a never-started child `pending`
+ * rather than burying work that may have been asked for.
+ */
+function detachVerdict(
+  parentEvents: readonly EngineEvent[],
+  parentDoc: PipelineVersion | null,
+  childRunId: string,
+): boolean | null {
+  if (isDetachedChild(parentEvents, parentDoc, childRunId)) return true;
+  if (parentDoc !== null) return false;
+  const announced = parentEvents.some(
+    (e) => e.type === 'call.started' && e.childRunId === childRunId,
+  );
+  return announced ? null : false;
 }
 
 /**
@@ -1135,14 +1227,25 @@ export async function reconcileOne(
   // gets a row patch, and neither manufactures. (That run legitimately appears
   // in `resynced` AND `sweptOrphans`; see the `pending` branch, which already
   // documents that pair.)
-  if (
-    run.parentRunId !== null &&
-    hasRunStartedFact(events) &&
-    parentIsOver(deps, report, run.parentRunId)
-  ) {
-    interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
-    report.interrupted.push(run.id);
-    return;
+  //
+  // #796 item 2 — NOT for a DETACHED child. Its parent never wanted the result,
+  // so "nothing can consume it" is not a reason to stop it: its work IS the
+  // point. It resumes like any other crash survivor.
+  if (run.parentRunId !== null && hasRunStartedFact(events)) {
+    const parentEvents = parentLog(deps, report, run.parentRunId);
+    if (
+      parentEvents !== null &&
+      terminalFactFromLog(parentEvents) !== null &&
+      detachVerdict(
+        parentEvents,
+        parentDocOf(deps, getRun(deps.db, run.parentRunId)?.pipelineVersionId ?? null),
+        run.id,
+      ) === false
+    ) {
+      interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
+      report.interrupted.push(run.id);
+      return;
+    }
   }
 
   // #508/#515 — the doc is resolved HERE, and a PERMANENT resolve failure is

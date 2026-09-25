@@ -113,7 +113,8 @@ export interface NodeActivity {
    *    so one event is one attempt exactly;
    *  - a TERMINAL event for a node with no attempts yet is itself the start
    *    (`fail`/`filter`, whose only event is their `node.failed`/`node.succeeded`,
-   *    and a call node, whose only event is `call.returned`). A dispatched node
+   *    and a call node, whose only event is `call.returned` or — adopting an
+   *    already-announced child — `call.detached`). A dispatched node
    *    already has attempts ≥ 1 by then, so this never double-counts.
    */
   attempts: number;
@@ -1004,6 +1005,21 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            `closeSpan` is documented as a no-op without an open span. */
         closeSpan(n, e.callNodeId, row.ts);
         countIfUnstarted(n); // a call node's only event
+        break;
+      }
+      case 'call.detached': {
+        /* #796 item 2 — a `wait: false` call node is DONE once its child is
+           started: `success` with nothing returned, which is what the reducer
+           folds. `{}` rather than leaving the section absent, on #911's
+           reasoning for control nodes — "returned nothing" is exact. The
+           child's id stays in `childRunIds` (recorded by `call.started`), so
+           the drill still reaches a child that is very likely still running. */
+        const n = ensure(e.callNodeId);
+        clearResult(n);
+        n.status = 'success';
+        n.outputValues = {};
+        n.instanceId = instanceOf(e.callNodeId);
+        countIfUnstarted(n);
         break;
       }
       case 'run.reseeded': {

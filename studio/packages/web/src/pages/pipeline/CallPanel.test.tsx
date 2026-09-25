@@ -53,7 +53,17 @@ describe('seedCall (#425 read model)', () => {
     expect(seed.mode).toBe('pick');
     expect(seed.pipelineId).toBe('');
     expect(seed.versionId).toBe('');
-    expect(seed.wait).toBe(false);
+    expect(seed.wait).toBe(true); // #796 item 2 — absent WAITS, so the box reads checked
+  });
+
+  it('reads wait from the stored call: only an explicit false is fire-and-forget (#796 item 2)', () => {
+    expect(seedCall({ pipelineVersionId: 'pv_a2', params: {} }, TARGETS).wait).toBe(true);
+    expect(seedCall({ pipelineVersionId: 'pv_a2', params: {}, wait: true }, TARGETS).wait).toBe(
+      true,
+    );
+    expect(seedCall({ pipelineVersionId: 'pv_a2', params: {}, wait: false }, TARGETS).wait).toBe(
+      false,
+    );
   });
 
   it('resolves a stored literal version id back to its pipeline AND version', () => {
@@ -238,10 +248,12 @@ describe('CallPanel (component)', () => {
     const before = store.getState().past.length;
     fireEvent.click(screen.getByRole('button', { name: 'Apply call' }));
 
+    // The box starts CHECKED (absent waits), so the click above UNTICKED it,
+    // and only that departure from the default is written (#796 item 2).
     expect(store.getState().nodes[0]!.call).toEqual({
       pipelineVersionId: 'pv_a2',
       params: { query: 'ships', limit: 25 },
-      wait: true,
+      wait: false,
     });
     // ONE gesture, ONE undo entry (U21's rule) — not one per control touched.
     expect(store.getState().past.length).toBe(before + 1);

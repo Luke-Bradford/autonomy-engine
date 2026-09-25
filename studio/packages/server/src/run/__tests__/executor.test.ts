@@ -29,6 +29,7 @@ import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
+import type { ChildRuns } from '../child.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
 import { and, eq } from 'drizzle-orm';
@@ -2911,6 +2912,7 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
   const startChild = (pipelineVersionId: string) =>
     ({
       type: 'startChild' as const,
+      wait: true,
       callNodeId: 'caller',
       attemptId: 'attempt-1',
       childRunId: 'child-1',
@@ -3017,6 +3019,74 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
 
     expect(seen).toEqual(['call.returned']);
     expect(kick).not.toHaveBeenCalled();
+  });
+
+  describe('#796 item 2 — wait: false', () => {
+    const detachedStart = (pv: string) => ({ ...startChild(pv), wait: false });
+    const exec = (db: Db, ensured: ReturnType<ChildRuns['ensure']>, kick: () => void) =>
+      createExecutor({
+        db,
+        masterKey: KEY,
+        resolveDoc: resolveDocFor(db),
+        adapters: testRegistry(),
+        childRuns: {
+          ensure: () => ensured,
+          kick,
+          result: () => ({ outcome: 'failure', outputs: { leaked: 1 } }),
+        },
+      });
+
+    it('announces, KICKS, then detaches — the kick is already done when call.detached is yielded', async () => {
+      const db = freshDb().db;
+      const { runId, childPvId, child } = seedCall(db);
+      const kick = vi.fn();
+      const executor = exec(db, { ok: true, run: child, terminal: false, announced: false }, kick);
+      const it = executor.perform(detachedStart(childPvId), runId)[Symbol.asyncIterator]();
+      const first = await it.next();
+      expect(first.value).toMatchObject({ type: 'call.started', childRunId: 'child-1' });
+      expect(kick).not.toHaveBeenCalled();
+      const second = await it.next();
+      expect(second.value).toEqual({
+        type: 'call.detached',
+        runId,
+        callNodeId: 'caller',
+        attemptId: 'attempt-1',
+        childRunId: 'child-1',
+      });
+      // Kicked BEFORE the detach is appended: a detached node never re-emits
+      // `startChild`, so nothing else would ever start this child.
+      expect(kick).toHaveBeenCalledTimes(1);
+      expect((await it.next()).done).toBe(true);
+    });
+
+    it('an adopted TERMINAL child detaches rather than returning its outcome', async () => {
+      const db = freshDb().db;
+      const { runId, childPvId, child } = seedCall(db);
+      const kick = vi.fn();
+      const seen: EngineEvent[] = [];
+      for await (const e of exec(
+        db,
+        { ok: true, run: child, terminal: true, announced: true },
+        kick,
+      ).perform(detachedStart(childPvId), runId))
+        seen.push(e);
+      expect(seen.map((e) => e.type)).toEqual(['call.detached']);
+      expect(kick).not.toHaveBeenCalled();
+    });
+
+    it('a REFUSED spawn still fails the node — call.returned{failure}, never a detach', async () => {
+      const db = freshDb().db;
+      const { runId, childPvId } = seedCall(db);
+      const kick = vi.fn();
+      const seen: EngineEvent[] = [];
+      for await (const e of exec(db, { ok: false, reason: 'not found' }, kick).perform(
+        detachedStart(childPvId),
+        runId,
+      ))
+        seen.push(e);
+      expect(seen).toMatchObject([{ type: 'call.returned', childOutcome: 'failure' }]);
+      expect(kick).not.toHaveBeenCalled();
+    });
   });
 });
 

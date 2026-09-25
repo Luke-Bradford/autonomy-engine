@@ -187,7 +187,8 @@ export type Position = z.infer<typeof PositionSchema>;
 /**
  * The `call_pipeline` config on a Node (P2c). A node carrying a `call` is a call
  * node: the engine emits `startChild` (a deterministic child run id) and holds
- * the node `waiting` until a `call.returned` event. `pipelineVersionId` may be a
+ * the node `waiting` until a `call.returned` event — or, when `wait` is `false`,
+ * until `call.detached`. `pipelineVersionId` may be a
  * literal id or a `${}` param/output ref resolved at dispatch time. A FAILED
  * child still returns projected `outputs` (the findings loop).
  */
@@ -195,9 +196,22 @@ export const CallConfigSchema = z.object({
   pipelineVersionId: z.string().min(1),
   /** Param overrides passed to the child run (an empty object when none). */
   params: z.record(z.string(), z.unknown()),
+  /**
+   * #796 item 2 — absent or `true`: WAIT for the child and take its outcome and
+   * outputs (the P2c behaviour, and so every version authored before this field
+   * was read). `false`: DETACH — the node succeeds once the child run exists and
+   * has been started, with no outputs, and the child's outcome never reaches the
+   * parent. Read it through `callDetaches`, never `!call.wait`, which would read
+   * an absent flag as a detach.
+   */
   wait: z.boolean().optional(),
 });
 export type CallConfig = z.infer<typeof CallConfigSchema>;
+
+/** #796 item 2 — does this call node fire and forget? Absent means WAIT. */
+export function callDetaches(call: CallConfig): boolean {
+  return call.wait === false;
+}
 
 /**
  * Per-activity execution policy (spec #1 D4). Every knob is optional: an absent

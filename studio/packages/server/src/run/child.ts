@@ -1,4 +1,5 @@
-import type { EngineEvent, Run, RunOutcome } from '@autonomy-studio/shared';
+import type { EngineEvent, PipelineVersion, Run, RunOutcome } from '@autonomy-studio/shared';
+import { callDetaches, resolveDocNode } from '@autonomy-studio/shared';
 import {
   assertJsonReplaySafe,
   MAX_CALL_DEPTH,
@@ -417,6 +418,41 @@ export function subscribeChildReturns(deps: ChildReturnReactorDeps): () => void 
   };
 }
 
+/**
+ * #796 item 2 — did this child's PARENT detach from it (`call.wait: false`)?
+ * A detached child owes its parent nothing and its parent owes it nothing: no
+ * `call.returned` goes back, and the parent terminalizing does not make the
+ * child's work undeliverable (#1053's premise), because nothing was ever going
+ * to be delivered.
+ *
+ * Decided from the parent's BOUND DOC, not from its log's `call.detached`, and
+ * the log alone is not enough. The executor kicks the child BEFORE it yields
+ * `call.detached` (see the executor for why that order), so there are two
+ * windows where the log does not yet say "detached" but the child is running:
+ * a small child finishing before the detach is appended, and the parent
+ * terminalizing on another branch, which drops the detach unappended. In both,
+ * `call.started` is in the log and names the call node, and the doc says what
+ * that node does.
+ *
+ * The log's `call.detached` is still read first. It needs no doc, so a parent
+ * whose version cannot be resolved (`parentDoc: null`) is still answered
+ * correctly whenever the detach did land.
+ */
+export function isDetachedChild(
+  parentEvents: readonly EngineEvent[],
+  parentDoc: Pick<PipelineVersion, 'nodes'> | null,
+  childRunId: string,
+): boolean {
+  let callNodeId: string | undefined;
+  for (const e of parentEvents) {
+    if (e.type === 'call.detached' && e.childRunId === childRunId) return true;
+    if (e.type === 'call.started' && e.childRunId === childRunId) callNodeId = e.callNodeId;
+  }
+  if (callNodeId === undefined || parentDoc === null) return false;
+  const node = resolveDocNode(parentDoc.nodes, callNodeId);
+  return node?.call !== undefined && callDetaches(node.call);
+}
+
 async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string): Promise<void> {
   const { db } = deps;
   const child = getRun(db, childRunId);
@@ -436,6 +472,14 @@ async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string):
   if (announcement === undefined) return;
   if (terminalFactFromLog(parentEvents) !== null) return; // parent already over
 
+  const parent = getRun(db, parentRunId);
+  if (parent === null) return;
+  const doc = deps.resolveDoc(parent.pipelineVersionId);
+  // #796 item 2 — a detached call takes nothing back. Without this, a child
+  // that finishes before its parent's `call.detached` lands would resolve the
+  // still-`waiting` node with the CHILD's outcome and outputs.
+  if (isDetachedChild(parentEvents, doc, childRunId)) return;
+
   const { outcome, outputs } = deps.childRuns.result(childRunId);
   const event: EngineEvent = {
     type: 'call.returned',
@@ -452,9 +496,6 @@ async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string):
   // the parent's drive lock and re-projects. A duplicate delivery is absorbed by the
   // reducer's own guards: `onCallReturned` ignores an event whose call node is
   // no longer `waiting` on that attempt.
-  const parent = getRun(db, parentRunId);
-  if (parent === null) return;
-  const doc = deps.resolveDoc(parent.pipelineVersionId);
   const engine = buildEngine(doc);
   const record = db.transaction(() => {
     const events = loadEngineEvents(db, parentRunId);

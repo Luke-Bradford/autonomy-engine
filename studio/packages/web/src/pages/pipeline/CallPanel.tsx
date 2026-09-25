@@ -297,10 +297,10 @@ function CallEditor({
 
     setError(null);
     const next: CallConfig = { pipelineVersionId: target, params: params.value };
-    // `wait` is absent-or-present, not nullable: writing `wait: false` would
-    // persist a choice the operator never made, and the schema's own default is
-    // the honest representation of "not specified".
-    if (draft.wait) next.wait = true;
+    // Only the DEPARTURE from the default is written (#796 item 2): absent
+    // means wait, so writing `wait: true` for a box nobody unticked would record
+    // a choice the operator never made.
+    if (!draft.wait) next.wait = false;
     store.getState().updateNodeCall(nodeId, next);
   }
 
@@ -393,6 +393,12 @@ function CallEditor({
         />
         Wait for the child run to finish
       </label>
+      {!draft.wait && (
+        <p className="page-hint">
+          This node succeeds as soon as the child run starts. The child runs on by itself, and its
+          outcome and outputs never come back here.
+        </p>
+      )}
 
       <h4>Parameters</h4>
       {draft.mode === 'pick' && !chosen ? (
