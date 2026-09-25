@@ -2908,10 +2908,16 @@ td button + button {
    fight the control it is meant to serve. It inherits the column direction its
    bare `<label>` had inside `.contract-section`, so wrapping changes no
    layout. */
-.config-field {
+.config-field,
+/* #1227 — a config field is a `LabelledControl`, and inside the property panel
+   `.property-panel .labelled-control` outranks the bare class. The field keeps
+   its own tighter rhythm and takes no row type, exactly as before the fold. */
+.property-panel .labelled-control.config-field {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  font-size: inherit;
+  color: inherit;
 }
 
 /* #1169 — an array-of-objects config field. The rows themselves are

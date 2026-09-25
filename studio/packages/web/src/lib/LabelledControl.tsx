@@ -12,9 +12,10 @@ import type { ReactNode } from 'react';
  *
  * The render-prop hands the control its id, which is what lets a site inside a
  * `.map()` pair its controls without calling `useId` in a loop. The wrapper is a
- * `div.labelled-control`, which the stylesheet lays out exactly as each context
- * laid out the bare `<label>` it replaces, so the conversion moves no pixels.
- * `<input>` needs none of this — its value is an attribute, not text.
+ * `div.labelled-control`, which the stylesheet lays out as each context laid out
+ * the wrapping `<label>` it replaced (a stacked form row; the AI page's inline
+ * picker; a config field's own `.config-field` rhythm) — `e2e/labelled-control`
+ * pins all three. `<input>` needs none of this: its value is an attribute.
  */
 export function LabelledControl({
   label,

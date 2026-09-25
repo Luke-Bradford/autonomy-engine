@@ -1,4 +1,3 @@
-import { useId } from 'react';
 import {
   MAX_BACKFILL_WINDOWS_CAP,
   MAX_CONCURRENT_WINDOWS_CAP,
@@ -9,6 +8,7 @@ import {
 import { formToWindow, type WindowFormState } from './windowForm';
 import { boundEcho } from './formFields';
 import { BoundShiftNotices } from './BoundShiftNotices';
+import { LabelledControl } from '../../lib/LabelledControl';
 
 const FREQUENCIES = WindowFrequencySchema.options;
 
@@ -40,7 +40,6 @@ export function WindowEditor({
   value: WindowFormState;
   onChange: (next: WindowFormState) => void;
 }) {
-  const frequencyId = useId();
   const set = (patch: Partial<WindowFormState>) => onChange({ ...value, ...patch });
 
   const conversion = formToWindow(value);
@@ -57,20 +56,23 @@ export function WindowEditor({
     <fieldset className="window-editor">
       <legend>Tumbling window</legend>
 
-      {/* The select is labelled by `htmlFor`/`id` rather than wrapped: wrapping
-       * folds every option's text into the control's accessible name (#857). */}
-      <label htmlFor={frequencyId}>Window frequency</label>
-      <select
-        id={frequencyId}
-        value={value.frequency}
-        onChange={(e) => set({ frequency: e.target.value as WindowFrequency })}
-      >
-        {FREQUENCIES.map((f) => (
-          <option key={f} value={f}>
-            {f}
-          </option>
-        ))}
-      </select>
+      {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
+       * option's text into the control's accessible name (#857, #1227). */}
+      <LabelledControl label="Window frequency">
+        {(id) => (
+          <select
+            id={id}
+            value={value.frequency}
+            onChange={(e) => set({ frequency: e.target.value as WindowFrequency })}
+          >
+            {FREQUENCIES.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        )}
+      </LabelledControl>
 
       <label>
         {`Each window covers N ${PERIOD_NOUN[value.frequency]}`}

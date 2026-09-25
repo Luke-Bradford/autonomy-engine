@@ -78,7 +78,7 @@ export default tseslint.config(
           selector:
             "JSXElement[openingElement.name.name='label'] JSXElement[openingElement.name.name=/^(select|textarea)$/]",
           message:
-            "Pair the <label> with this control by htmlFor/id (useId) rather than wrapping it: a wrapping label absorbs the control's option text / value (#1227).",
+            "Use LabelledControl (src/lib/LabelledControl.tsx) rather than wrapping this control in a <label>: a wrapping label absorbs the control's option text / value (#1227).",
         },
       ],
     },

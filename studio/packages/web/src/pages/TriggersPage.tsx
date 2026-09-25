@@ -697,7 +697,6 @@ function TriggerForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const scheduleKindId = useId();
   const bindingKindId = useId();
   const editing = form.id !== null;
   /* The version last chosen on the concrete side, so switching to bind-to-active
@@ -1123,16 +1122,21 @@ function TriggerForm({
       {form.mode === 'schedule' && (
         <>
           {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
-           * option's text into the control's accessible name (#857). */}
-          <label htmlFor={scheduleKindId}>Schedule authored as</label>
-          <select
-            id={scheduleKindId}
-            value={form.scheduleKind}
-            onChange={(e) => onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })}
-          >
-            <option value="recurrence">Recurrence</option>
-            <option value="cron">Cron expression</option>
-          </select>
+           * option's text into the control's accessible name (#857, #1227). */}
+          <LabelledControl label="Schedule authored as">
+            {(id) => (
+              <select
+                id={id}
+                value={form.scheduleKind}
+                onChange={(e) =>
+                  onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })
+                }
+              >
+                <option value="recurrence">Recurrence</option>
+                <option value="cron">Cron expression</option>
+              </select>
+            )}
+          </LabelledControl>
 
           {form.scheduleKind === 'recurrence' ? (
             <RecurrenceEditor
