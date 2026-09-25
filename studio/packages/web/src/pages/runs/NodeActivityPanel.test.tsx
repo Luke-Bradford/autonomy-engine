@@ -622,3 +622,47 @@ describe('NodeActivityPanel — the latest streamed value (#1299)', () => {
     expect(panel.textContent).toContain('1 event (latest: progress)');
   });
 });
+
+describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
+  const HINT = /withheld from the run log.*Secure output/;
+
+  it('explains a redacted output value', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'succeeded', outputValues: { body: '[redacted: secure]' } }),
+    );
+    expect(panel.textContent).toMatch(HINT);
+    expect(panel.textContent).not.toMatch(/did not match its declared output type/);
+  });
+
+  it('explains the invalid variant as well', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'failed',
+        outputValues: { count: '[redacted: secure, invalid]' },
+      }),
+    );
+    expect(panel.textContent).toMatch(HINT);
+    expect(panel.textContent).toMatch(/did not match its declared output type/);
+  });
+
+  it('explains a redacted streamed output (its name is redacted too)', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', outputs: 1, lastOutputName: '[redacted: secure]', lastOutput: undefined }),
+    );
+    expect(panel.textContent).toMatch(HINT);
+  });
+
+  it('says nothing about redaction when no value is redacted', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'succeeded',
+        outputs: 1,
+        lastOutputName: 'progress',
+        outputValues: { body: 'redacted: secure' },
+      }),
+    );
+    expect(panel.textContent).not.toMatch(HINT);
+  });
+});

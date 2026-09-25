@@ -8,6 +8,7 @@ import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration, formatOutputValue, surrogateSafeCut } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
+import { SecureMarkerHint } from './secureMarker';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -317,6 +318,10 @@ export function NodeActivityPanel({
             node.lastOutputName !== undefined && <> (latest: {node.lastOutputName})</>
           )}
         </p>
+        {/* A secure node's stream is redacted name AND value (`redactSecureEvent`). */}
+        <SecureMarkerHint
+          values={[node.lastOutputName, node.lastOutput?.name, node.lastOutput?.value]}
+        />
       </section>
     </aside>
   );
@@ -749,6 +754,7 @@ function OutputsSection({ node }: { node: NodeActivity }) {
           )}
         </>
       )}
+      <SecureMarkerHint values={Object.values(node.outputValues)} />
     </section>
   );
 }
