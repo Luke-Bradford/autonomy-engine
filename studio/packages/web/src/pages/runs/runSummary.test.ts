@@ -458,6 +458,19 @@ describe('deriveRunLifecycle', () => {
     const events = [envelope({ type: 'run.interrupted', runId: 'r', reason: 'boot' })];
     expect(deriveRunLifecycle(events)).toEqual({ status: 'interrupted', waitingReason: null });
   });
+  it('CX1 (#1320) — a cancel un-parks a waiting run in the live view, then its finish reads `cancelled`', () => {
+    const events = [
+      started(),
+      envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
+      envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }),
+    ];
+    // The reducer un-parks on the cancel (it joins UNPARK_EVENTS), so the view must too.
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    events.push(
+      envelope({ type: 'run.finished', runId: 'r', outcome: 'cancelled', reason: 'cancelled:operator' }),
+    );
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'cancelled', waitingReason: null });
+  });
   it('#5 S3 — a run.waiting tailing after run.started shows `waiting` (live park view)', () => {
     const events = [
       started(),

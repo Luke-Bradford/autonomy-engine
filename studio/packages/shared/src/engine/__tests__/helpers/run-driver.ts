@@ -35,7 +35,13 @@
  * NEVER wraps `reduce` in try/catch: malformed-doc relies on a #487 throw
  * propagating.
  */
-import type { ContainerRunState, EngineCommand, EngineEvent, RunState } from '../../types.js';
+import type {
+  ContainerRunState,
+  EngineCommand,
+  EngineEvent,
+  RunOutcome,
+  RunState,
+} from '../../types.js';
 import type { Engine } from '../../reduce.js';
 
 /** The default run/version identifiers every engine test uses. */
@@ -85,7 +91,7 @@ export interface DriveResult {
   /** Dispatch order (each `dispatchNode`'s nodeId, as drained). */
   order: string[];
   /** The FIRST `finishRun` the reducer asked for (a healthy run has exactly one). */
-  finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
+  finish: { outcome: RunOutcome; reason?: string } | undefined;
   /** How many `finishRun` commands were drained — see the `finishes` note above. */
   finishes: number;
 }
@@ -123,7 +129,7 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
   const diagnostics: string[] = [];
   const order: string[] = [];
   const pending: EngineCommand[] = [];
-  let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
+  let finish: { outcome: RunOutcome; reason?: string } | undefined;
   let finishes = 0;
 
   const apply = (ev: EngineEvent): void => {

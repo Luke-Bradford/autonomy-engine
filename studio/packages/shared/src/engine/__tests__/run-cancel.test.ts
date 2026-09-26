@@ -283,6 +283,7 @@ describe('CX1 D4 — retry holds', () => {
       runId: RUN,
       nodeId: 'a',
       previousAttemptId: 'a#0',
+      reason: 'crash',
     });
     expect(starting(r.commands)).toEqual([]);
     expect(r.state.nodes.a!.status).toBe('failure');

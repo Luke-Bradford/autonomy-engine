@@ -430,6 +430,7 @@ describe('RS5 — reseedFrontier never copies a secure node', () => {
       branches: {},
       sessions: {},
       triggerContext: null,
+      cancelRequested: null,
     };
   }
 

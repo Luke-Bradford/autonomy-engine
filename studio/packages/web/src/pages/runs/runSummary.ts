@@ -1194,6 +1194,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'run.resumed':
       case 'run.interrupted':
       case 'run.waiting':
+      case 'run.cancelRequested':
       case 'run.triggerContext':
       case 'container.timeoutScheduled':
       case 'container.timedOut':
