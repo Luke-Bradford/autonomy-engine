@@ -248,43 +248,54 @@ test.describe('U7 — per-activity node config form', () => {
     await canvasNodes(page).first().click();
     const p = panel(page);
     // No JSON blob for either record: a row group per field.
-    await expect(p.getByRole('group', { name: 'headers (optional)' })).toBeVisible();
-    await expect(p.getByRole('group', { name: 'secretHeaders (optional)' })).toBeVisible();
-    await expect(p.getByRole('textbox', { name: 'headers row 1 key' })).toHaveValue('X-Keep');
+    await expect(p.getByRole('group', { name: 'headers (optional)', exact: true })).toBeVisible();
+    await expect(
+      p.getByRole('group', { name: 'secretHeaders (optional)', exact: true }),
+    ).toBeVisible();
+    await expect(p.getByRole('textbox', { name: 'headers row 1 key', exact: true })).toHaveValue(
+      'X-Keep',
+    );
 
-    await p.getByRole('button', { name: 'Add headers row' }).click();
-    await p.getByRole('textbox', { name: 'headers row 2 key' }).fill('X-Trace');
-    await p.getByRole('textbox', { name: 'headers row 2 value' }).fill('${run.runId}');
-    await p.getByRole('button', { name: 'Add secretHeaders row' }).click();
-    await p.getByRole('textbox', { name: 'secretHeaders row 1 key' }).fill('Authorization');
-    await p.getByRole('textbox', { name: 'secretHeaders row 1 secret name' }).fill('api-token');
+    await p.getByRole('button', { name: 'Add headers row', exact: true }).click();
+    await p.getByRole('textbox', { name: 'headers row 2 key', exact: true }).fill('X-Trace');
+    await p.getByRole('textbox', { name: 'headers row 2 value', exact: true }).fill('${run.runId}');
+    await p.getByRole('button', { name: 'Add secretHeaders row', exact: true }).click();
+    await p
+      .getByRole('textbox', { name: 'secretHeaders row 1 key', exact: true })
+      .fill('Authorization');
+    await p
+      .getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true })
+      .fill('api-token');
     // The value cell takes a reference; the key and secret-name cells do not.
     await expect(
-      p.getByRole('button', { name: 'Insert reference into headers row 2 value' }),
+      p.getByRole('button', { name: 'Insert reference into headers row 2 value', exact: true }),
     ).toBeVisible();
     await expect(
-      p.getByRole('button', { name: 'Insert reference into secretHeaders row 1 secret name' }),
+      p.getByRole('button', {
+        name: 'Insert reference into secretHeaders row 1 secret name',
+        exact: true,
+      }),
     ).toHaveCount(0);
-    await p.getByRole('button', { name: 'Apply config' }).click();
+    await p.getByRole('button', { name: 'Apply config', exact: true }).click();
 
-    await page.getByRole('button', { name: 'Save version' }).click();
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
-    expect(await persistedConfig(page, id)).toEqual({
-      url: 'https://example.test',
-      headers: { 'X-Keep': '1', 'X-Trace': '${run.runId}' },
-      secretHeaders: { Authorization: { $secret: 'api-token' } },
-    });
+    // Exact on the two records: a marker with any extra key would be refused.
+    const saved = await persistedConfig(page, id);
+    expect(saved.url).toBe('https://example.test');
+    expect(saved.headers).toEqual({ 'X-Keep': '1', 'X-Trace': '${run.runId}' });
+    expect(saved.secretHeaders).toEqual({ Authorization: { $secret: 'api-token' } });
 
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
-    await expect(p.getByRole('textbox', { name: 'headers row 2 value' })).toHaveValue(
+    await expect(p.getByRole('textbox', { name: 'headers row 2 value', exact: true })).toHaveValue(
       '${run.runId}',
     );
-    await expect(p.getByRole('textbox', { name: 'secretHeaders row 1 secret name' })).toHaveValue(
-      'api-token',
-    );
+    await expect(
+      p.getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true }),
+    ).toHaveValue('api-token');
 
     await expectQuiet(page, problems);
   });
