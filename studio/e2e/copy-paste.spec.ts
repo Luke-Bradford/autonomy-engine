@@ -1,6 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { canvasNodes, edgeGroup, marqueeAllNodes, viewportSettled } from './support/canvasGraph';
+import {
+  canvasNodes,
+  edgeGroup,
+  fitAndSettle,
+  marqueeAllNodes,
+  viewportSettled,
+} from './support/canvasGraph';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 
 /**
@@ -206,10 +212,6 @@ test.describe('copy/paste on the canvas (U21)', () => {
 
   test('a self-contained copy pastes into ANOTHER pipeline and saves there', async ({ page }) => {
     const problems = collectPageProblems(page);
-    // #852 — the property dock sits UNDER the canvas, so at the default 720px
-    // viewport the canvas is short enough to cull part of this fixture. A taller
-    // viewport restores the room the fixture was laid out for.
-    await page.setViewportSize({ width: 1280, height: 1000 });
     const { pipelineId: targetId } = await seedVersion(page, 'u21 paste target', TARGET);
     await openSeededCanvas(page, 'u21 paste source', SOURCE);
 
@@ -221,6 +223,11 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await expect(canvasNodes(page)).toHaveCount(2);
     await page.keyboard.press('Meta+v');
     await expect(page.getByText('Pasted 2 activities from another pipeline.')).toBeVisible();
+    // Fit before COUNTING: the canvas culls off-screen nodes, and the #1336
+    // reveal pans to the PASTE, which at the wider canvas the #852 bottom dock
+    // gives (and so a closer fitted zoom) can take the originals out of view.
+    // What is asserted here is the doc, not the reveal.
+    await fitAndSettle(page);
     await expect(canvasNodes(page)).toHaveCount(4);
     // z→a, and the copied a'→b'. NOT a re-derived z→a' off the coincident id.
     await expect(edgeGroup(page)).toHaveCount(2);

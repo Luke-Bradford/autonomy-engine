@@ -186,10 +186,11 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     // though U17 has since made it reversible. Playwright DISMISSES dialogs by
     // default, which would make this test pass for the wrong reason — nothing
     // deleted, nothing to save.
-    // #852 — the property dock sits UNDER the canvas, so at the default 720px
-    // viewport the canvas is short enough to cull part of this fixture. A taller
-    // viewport restores the room the fixture was laid out for.
-    await page.setViewportSize({ width: 1280, height: 1000 });
+    // #852 — the assertions below need a WIDTH-bound fit (vertical slack, so the
+    // box is off the right edge only). The bottom dock made the default canvas
+    // wide and short, which binds the fit on height instead; a narrower, taller
+    // viewport restores the shape this fixture was laid out for.
+    await page.setViewportSize({ width: 1000, height: 1000 });
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 
