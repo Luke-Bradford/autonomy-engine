@@ -131,6 +131,9 @@ export function rowsToRecord(
     } else if (key === '' && !keep) {
       continue;
     }
+    // Lenient mode can build `{ $secret: '' }` for a half-filled secret row. It is
+    // a flyout candidate only, and no secret-row cell is offered the flyout (both
+    // are `literal`), so it never reaches the validator; the apply is strict.
     const value = secret ? { $secret: held } : held;
     const earlier = seen.get(key);
     if (earlier !== undefined) {

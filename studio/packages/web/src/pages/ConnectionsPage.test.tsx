@@ -275,6 +275,33 @@ describe('ConnectionsPage', () => {
     );
   });
 
+  it("authors an http connection's headers as rows, and keeps stored ones on edit (#852)", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({
+        name: 'Api',
+        kind: 'http',
+        config: { baseUrl: 'https://a.test', headers: { 'X-A': '1' } },
+      }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Api');
+
+    await user.click(screen.getByRole('button', { name: ROW_EDIT }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    // A row group, not a JSON blob — derived from the same schema the server reads.
+    expect(within(form).getByRole('group', { name: 'headers (optional)' })).toBeInTheDocument();
+    expect(within(form).getByLabelText('headers row 1 key')).toHaveValue('X-A');
+    await user.click(within(form).getByRole('button', { name: 'Add headers row' }));
+    await user.type(within(form).getByLabelText('headers row 2 key'), 'X-B');
+    await user.type(within(form).getByLabelText('headers row 2 value'), '2');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, body] = updateMock.mock.calls[0]!;
+    expect(body.config).toEqual({ baseUrl: 'https://a.test', headers: { 'X-A': '1', 'X-B': '2' } });
+  });
+
   it('keeps a config key no kind declares through a field-mode save', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([
