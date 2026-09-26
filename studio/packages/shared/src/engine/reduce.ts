@@ -1,4 +1,5 @@
 import type {
+  CancelSource,
   Container,
   Edge,
   EngineCommand,
@@ -311,12 +312,8 @@ function unparkIfWaiting(state: RunState): RunState {
  * so the reason cannot drift between them. The reason names the machine-set
  * source kind and nothing else (spec D2: no free text).
  */
-function cancelFinish(state: RunState): EngineCommand {
-  return {
-    type: 'finishRun',
-    outcome: 'cancelled',
-    reason: `cancelled:${state.cancelRequested?.source.kind ?? 'operator'}`,
-  };
+function cancelFinish(source: CancelSource): EngineCommand {
+  return { type: 'finishRun', outcome: 'cancelled', reason: `cancelled:${source.kind}` };
 }
 
 /**
@@ -2768,7 +2765,9 @@ export function createEngine(doc: EngineDoc): Engine {
         // CX1 D3 — under a cancel that already stopped work, the run's outcome is
         // the cancel's, not the cap's.
         const finish =
-          state.cancelRequested?.stoppedWork === true ? cancelFinish(state) : fired.finish;
+          state.cancelRequested?.stoppedWork === true
+            ? cancelFinish(state.cancelRequested.source)
+            : fired.finish;
         return { state: fired.state, commands: [finish], diagnostics };
       }
       if (fired.changed) {
@@ -2918,7 +2917,7 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       const prevented =
         state.cancelRequested.stoppedWork || preventedBounce || !allTopLevelTerminal(state);
-      commands.push(prevented ? cancelFinish(state) : outcomeFinish(state));
+      commands.push(prevented ? cancelFinish(state.cancelRequested.source) : outcomeFinish(state));
       return { state, commands, diagnostics };
     }
 
@@ -4440,7 +4439,7 @@ export function createEngine(doc: EngineDoc): Engine {
         runId: event.runId,
         cancelRequested: { source: event.source, stoppedWork: false },
       };
-      return { state: next, commands: [cancelFinish(next)], diagnostics };
+      return { state: next, commands: [cancelFinish(event.source)], diagnostics };
     }
     // ...and the terminal fact that cancel asked for. Only `cancelled`, only for
     // this run, and only after its cancel: every other `run.finished` before
