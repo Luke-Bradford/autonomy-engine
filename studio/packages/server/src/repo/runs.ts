@@ -12,7 +12,7 @@ import {
   type RunStatus,
   type Paginated,
 } from '@autonomy-studio/shared';
-import { pipelines, pipelineVersions, runs, triggers } from '../db/schema.js';
+import { pipelines, pipelineVersions, runEvents, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
 import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
@@ -759,6 +759,11 @@ export function queuedTriggerCandidatesForPipeline(
 
   // Service record per trigger: MAX(started_at) over its NON-queued rows (a
   // queued row's started_at is an enqueue-time placeholder, not a service).
+  // #1326 — nor is a row CX2 cancelled while still queued (`cancelQueuedRun`):
+  // it keeps that placeholder under a terminal status. It is told apart by
+  // having no event log, since a queued run is row-only and admission is what
+  // gives a run its log. The probe runs only for `cancelled` rows, on the
+  // `run_events_run_id_idx` index.
   // PIPELINE-scoped like everything else here: a trigger rebound from another
   // pipeline must rank by its service within THIS pipeline, not drag its old
   // pipeline's history into the fairness order.
@@ -774,6 +779,7 @@ export function queuedTriggerCandidatesForPipeline(
         eq(pipelineVersions.pipelineId, pipelineId),
         inArray(runs.triggerId, triggerIds),
         sql`${runs.status} != 'queued'`,
+        sql`not (${runs.status} = 'cancelled' and not exists (select 1 from ${runEvents} where ${runEvents.runId} = ${runs.id}))`,
       ),
     )
     .groupBy(runs.triggerId)
