@@ -1210,7 +1210,7 @@ describe('normalizeModelId (#751)', () => {
     // `claude-3-haiku-20240307` has no dated/undated alias pair — the date IS
     // the id. Normalising yields a string no provider serves, which is harmless
     // for set lookup (neither form is a member) but must not be mistaken for a
-    // real id. Pinned so #729's known-gap ids stay permitted either way.
+    // real id. Pinned so #729's retired ids stay permitted either way.
     expect(normalizeModelId('claude-3-haiku-20240307')).toBe('claude-3-haiku');
   });
 
@@ -1224,9 +1224,9 @@ describe('normalizeModelId (#751)', () => {
       // carries a `-0` the dated id does not. Documented on the helper; pinned
       // here so it is enforced rather than merely written down.
       //
-      // Harmless today (both aliases are #729 known-gap NON-members, so this is
-      // one non-member reducing to another), but it means a future #729 entry for
-      // either alias MUST list both spellings or it will not be found for the
+      // Harmless (both aliases are NON-members, which #729 closed as retired
+      // models, so this is one non-member reducing to another), but it means any
+      // entry ever added for either alias MUST list both spellings or it will not be found for the
       // dated form — the exact spelling-dependent divergence #751 exists to
       // remove. This assertion fails the day someone "fixes" the normaliser into
       // guessing the `-0` back on, which would be a fabricated mapping.

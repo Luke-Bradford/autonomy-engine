@@ -135,12 +135,21 @@ describe('unsupportedAnthropicParams (#727)', () => {
     // Re-derived rather than transcribed from #727, whose own list omitted
     // `claude-sonnet-5` and the Fable/Mythos ids — pinned so a future edit is a
     // decision against the source, not a drift.
+    //
+    // #729 (2026-09-26): the model-deprecations page's parameter table states the
+    // sampling 400 per-model — "Claude 4.7 and later models and Claude Mythos
+    // Preview" — which settles `claude-mythos-preview` and brings in the three
+    // post-4.7 ids the set had not caught up with.
     expect([...MODELS_REJECTING_SAMPLING_PARAMS].sort()).toEqual([
       'claude-fable-5',
+      'claude-fable-5-1',
       'claude-mythos-5',
+      'claude-mythos-5-1',
+      'claude-mythos-preview',
       'claude-opus-4-7',
       'claude-opus-4-8',
       'claude-opus-5',
+      'claude-opus-5-5',
       'claude-sonnet-5',
     ]);
     // #729 (2026-07-29): `claude-opus-4-1` added on the models overview page's
@@ -193,8 +202,8 @@ describe('unsupportedParamFailure message (#727)', () => {
   it('emits one clause per CAUSE when a model is in both sets', () => {
     // Not reachable through `unsupportedAnthropicParams` today — the two sets
     // are disjoint, pinned above. Tested directly because the builder is
-    // exported and generic, and because a legacy id landing under #729 could
-    // reject both surfaces. Asserts the two remedies stay separate rather than
+    // exported and generic, and because a future model could reject both
+    // surfaces. Asserts the two remedies stay separate rather than
     // one cause silently mislabelling the other's fields.
     const ev = unsupportedParamFailure('anthropic_api', 'some-legacy-model', [
       { name: 'temperature', cause: 'removed' },
@@ -211,9 +220,31 @@ describe('unsupportedParamFailure message (#727)', () => {
   });
 });
 
+describe('sampling classification settled by the deprecations page (#729)', () => {
+  it('refuses temperature and topP on every id the page names', () => {
+    // "Claude 4.7 and later models and Claude Mythos Preview" — each id here is
+    // one the set lacked before this pass. Asserted per id so dropping any ONE
+    // of them fails by name rather than hiding inside the membership pin.
+    for (const model of [
+      'claude-mythos-preview',
+      'claude-opus-5-5',
+      'claude-fable-5-1',
+      'claude-mythos-5-1',
+    ]) {
+      expect(
+        unsupportedAnthropicParams(model, { ...NONE, hasTemperature: true, hasTopP: true }),
+      ).toEqual([
+        { name: 'temperature', cause: 'removed' },
+        { name: 'topP', cause: 'removed' },
+      ]);
+    }
+  });
+});
+
 /**
- * #729 — the legacy-id classification, settled for two of the five ids and
- * deliberately still open for three.
+ * #729 — the legacy-id classification: settled for two of the five ids by a
+ * per-model row, and closed for the other three as RETIRED (model-deprecations
+ * page, fetched 2026-09-26).
  *
  * SOURCE: the models overview page's per-model **"Adaptive thinking"** row
  * (fetched 2026-07-29), which is the per-model fact this module spent two
@@ -230,12 +261,14 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     ]);
   });
 
-  it('still PERMITS the three ids the source says nothing about', () => {
+  it('still PERMITS the three RETIRED ids, which no capability table covers', () => {
     // The deliberate omission, pinned so a later author cannot quietly
-    // "complete" the list. These appear in NEITHER published comparison table,
-    // and this module's governing rule is that an absent fact is not a refusal:
-    // guessing them in would manufacture a local failure of a call that works,
-    // while leaving them out costs at most the pre-existing provider 400.
+    // "complete" the list. All three are RETIRED on Anthropic-operated platforms
+    // (model-deprecations page, fetched 2026-09-26), so the provider refuses
+    // them whatever the request carries — the omission changes no outcome
+    // there. A local `reasoningEffort` refusal would only name the WRONG cause
+    // for that failure, and behind a proxied `baseUrl` that still serves one of
+    // them the governing rule holds: an absent capability fact is not a refusal.
     for (const model of ['claude-opus-4-0', 'claude-sonnet-4-0', 'claude-3-haiku-20240307']) {
       expect(unsupportedAnthropicParams(model, EFFORT)).toEqual([]);
     }
@@ -266,7 +299,7 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     ]);
   });
 
-  it('leaves the #729 known-gap ids permitted — including their DATED forms', () => {
+  it('leaves the #729 retired ids permitted — including their DATED forms', () => {
     // #751 must not quietly settle #729. The dated forms are the point of this
     // test: the bare aliases contain no date, so on their own they never reach
     // the new code path at all and would pin nothing (an earlier version of this
@@ -276,7 +309,7 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     // `claude-3-haiku-20240307` carries its date as part of the published id, and
     // the two 4.0 full ids miss their own `-0` alias when the date is stripped
     // (see `normalizeModelId`). Every one of these lands on a NON-member either
-    // way, so #729's deliberate omission survives this change untouched.
+    // way, so the retired ids' deliberate omission holds for every spelling.
     for (const model of [
       'claude-opus-4-0',
       'claude-sonnet-4-0',
@@ -293,7 +326,7 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     // lookups normalise first, so a member that is not a fixed point could never
     // be matched by any input — it would read as a live capability fact while
     // being unreachable code. Guards both sets at once, and is the test that
-    // fires if a future #729 pass adds a DATED id (e.g. `claude-opus-4-20250514`)
+    // fires if a future pass adds a DATED id (e.g. `claude-opus-4-20250514`)
     // instead of the alias, or adds it without also adding the alias.
     for (const set of [MODELS_REJECTING_SAMPLING_PARAMS, MODELS_REJECTING_ADAPTIVE_THINKING]) {
       for (const model of set) {

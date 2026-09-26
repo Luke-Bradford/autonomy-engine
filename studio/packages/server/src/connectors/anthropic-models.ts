@@ -56,7 +56,9 @@ import type { UnsupportedParam } from './llm-shared.js';
  * SOURCE: the `claude-api` skill's model + thinking/effort tables (cached
  * 2026-06-24), re-derived 2026-07-25. Re-derived rather than transcribed from
  * ticket #727, whose own list omitted `claude-sonnet-5` and the Fable/Mythos
- * ids.
+ * ids. Since then, two per-model docs pages: the models overview's "Adaptive
+ * thinking" rows (2026-07-29), and the model-deprecations page's parameter and
+ * lifecycle tables (2026-09-26). Each set's note says which facts came from which.
  */
 
 /**
@@ -72,11 +74,26 @@ import type { UnsupportedParam } from './llm-shared.js';
  * function, which turns on authored INTENT rather than on wire acceptance. Stated
  * per-model rather than as a vague "sources differ" because the evidence is not
  * actually in conflict — it is specific.
+ *
+ * #729 (2026-09-26) — a second, per-model source now backs this set: the
+ * model-deprecations page's parameter table
+ * (`platform.claude.com/docs/en/about-claude/model-deprecations.md`) says the
+ * three knobs return 400 "when set to a non-default value on Claude 4.7 and
+ * later models and Claude Mythos Preview". That settled `claude-mythos-preview`
+ * (named there outright, after being tracked in #729 as prose-only), and it
+ * brought in `claude-opus-5-5`, `claude-fable-5-1` and `claude-mythos-5-1`,
+ * which are later than 4.7 and which the set had not been updated for. It also
+ * confirms the same non-default scope for every member, so the Sonnet 5 note
+ * above now covers the whole set, and so does the over-refusal it argues for.
  */
 export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
   'claude-fable-5',
+  'claude-fable-5-1',
   'claude-mythos-5',
+  'claude-mythos-5-1',
+  'claude-mythos-preview',
   'claude-opus-5',
+  'claude-opus-5-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-sonnet-5',
@@ -89,7 +106,7 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * this connector never emits). The connector emits those two keys TOGETHER and
  * only when `reasoningEffort` is set, so one set covers both.
  *
- * SETTLED 2026-07-29 (#729, partially). Every member below is now backed by a
+ * SETTLED 2026-07-29 (#729). Every member below is now backed by a
  * DIRECT PER-MODEL FACT rather than by generation-level inference: the models
  * overview page (`platform.claude.com/docs/en/about-claude/models/overview.md`)
  * publishes an explicit **"Adaptive thinking"** row per model in both its
@@ -100,15 +117,16 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * non-member, which is the half a one-directional citation usually leaves
  * unchecked. The "that has a row" qualifier is load-bearing, not hedging:
  * `claude-mythos-5` is permitted here and has no row (the page covers it in
- * prose only), so its permission still rests on absence, like the three ids in
- * the KNOWN GAP below.
+ * prose only), so its permission still rests on absence, like the three
+ * retired ids below.
  *
- * RETIREMENT, because it changes how much this settlement is worth:
- * `claude-opus-4-1` is DEPRECATED and retires 2026-08-05, days after this entry
- * was added. The entry is still correct and still worth having — an operator
- * naming it today gets a local diagnostic instead of a provider 400 — but it is
- * short-lived by construction, and after that date it becomes dead weight to
- * prune rather than a fact to maintain.
+ * RETIREMENT: `claude-opus-4-1` was RETIRED on 2026-08-05 (model-deprecations
+ * page), so on Anthropic-operated platforms the provider now refuses it whatever
+ * the request carries. The entry stays because its fact is still true. It still
+ * governs a proxied `baseUrl` that serves the model, and pruning it would change
+ * that case for no gain. #729's own thread named pruning it as the natural
+ * step once it retired; this is a deliberate reversal of that note, for the
+ * proxied-`baseUrl` reason. Nothing else depends on it.
  *
  * `claude-opus-4-5` is worth spelling out because it is the one model where the
  * two facts come apart: it accepts `output_config.effort` (at
@@ -127,22 +145,20 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * or is refused outright. Re-check THAT claim before removing any model from
  * this set — it does not follow from the adaptive-thinking rows.
  *
- * KNOWN GAP, narrowed 2026-07-29 from four ids to three. `claude-opus-4-1` was
- * on this list and is now a member on the direct row above. The remainder —
- * `claude-opus-4-0`, `claude-sonnet-4-0`, `claude-3-haiku-20240307` — appear in
- * NEITHER published comparison table, so the source that settled the other four
- * says nothing at all about them. Under this module's governing rule an absent
- * fact is not a refusal, so they stay PERMITTED and remain tracked in #729.
- * `claude-mythos-preview` is a different shape of gap on the SAMPLING set above
- * (the page names it in prose but gives it no capability row) and rides the same
- * ticket.
- *
- * Two of those three are near or past retirement — `claude-3-haiku-20240307`'s
- * published retirement date (2026-04-19) has ALREADY passed, so its row may be
- * absent because the model is gone rather than because the fact is unpublished,
- * and no classification would change any outcome for it. Treat the live residue
- * of #729 as `claude-opus-4-0` and `claude-sonnet-4-0`, and confirm the third is
- * actually retired before spending a cycle on it.
+ * THE THREE RETIRED IDS — #729 CLOSED 2026-09-26. `claude-opus-4-0`,
+ * `claude-sonnet-4-0` and `claude-3-haiku-20240307` appear in neither published
+ * comparison table, so no source states their adaptive-thinking fact. The
+ * model-deprecations page (fetched 2026-09-26) settles why that no longer
+ * matters. All three are RETIRED on Anthropic-operated platforms: Opus 4 and
+ * Sonnet 4 on 2026-06-15, Haiku 3 on 2026-04-20. "Requests to retired models
+ * will fail." So they stay OUT on purpose, and no future pass should add them.
+ * On the first-party API their omission changes no outcome, and a local
+ * `reasoningEffort` refusal would only name the WRONG cause for a call that
+ * fails anyway. Behind a proxied `baseUrl` that still serves one, the governing
+ * rule below applies unchanged: an absent fact is not a refusal. (Partner
+ * platforms set their own retirement dates, but their prefixed ids never
+ * normalise onto these entries; see the module note.) `claude-mythos-preview`,
+ * the other id #729 tracked, is settled on the SAMPLING set above.
  *
  * Settling those needs a per-model fact this page cannot supply — it has no row
  * for them at all. The Models API `capabilities.thinking.types.adaptive` tree
@@ -150,8 +166,8 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * rows; what changed is that the page CAN now settle any id it lists, which is
  * how the other four were closed without it.
  *
- * The trap that cost two prior passes, kept because it is still live for those
- * three: the tempting citation is the migration guide's heading "Effort
+ * The trap that cost two prior passes, kept for whoever classifies the next
+ * model: the tempting citation is the migration guide's heading "Effort
  * parameter (Opus 4.5, Opus 4.6, Sonnet 4.6 only)", read as a global list of
  * what supports `effort`. It is not one — it sits under "Migrating to Opus 4.6 /
  * Sonnet 4.6" and is scoped to that era. Read globally it would also exclude
@@ -161,7 +177,7 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * reading of a generation-level statement never would have.
  *
  * WHY THE BAR FOR ADDING IS HIGHER THAN THE BAR FOR LEAVING OUT, which is what
- * keeps those three out on no evidence rather than in on a plausible guess: the
+ * kept the retired three out on no evidence rather than in on a plausible guess: the
  * two errors are not symmetric. Omitting a model that DOES reject costs a
  * provider 400 classified `permanent` — the pre-existing behaviour, bounded, and
  * the direction this module's fail-open essay prefers. Including a model that
@@ -226,7 +242,7 @@ export function unsupportedAnthropicParams(
   //
   // The two sets are disjoint today (pinned by test), so in practice one call
   // yields one cause. Nothing here depends on that: a model added to BOTH sets
-  // — which a legacy id landing under #729 could be — yields both causes and
+  // — which a future model rejecting both surfaces would be — yields both causes and
   // the message builder groups them. Stated because the previous single-cause
   // shape made the disjointness load-bearing without saying so.
   if (MODELS_REJECTING_ADAPTIVE_THINKING.has(id) && requested.hasReasoningEffort) {
