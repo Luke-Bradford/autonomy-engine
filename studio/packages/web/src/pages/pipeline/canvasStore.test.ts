@@ -2562,6 +2562,28 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     });
   });
 
+  it("refuses a dangling ref that lands on the TARGET's container", () => {
+    const s = loaded();
+    // `stage_1` exists only in the target, and only as a container.
+    s.getState().updateNodeConfig('n_c', { prompt: '${nodes.stage_1.status}' });
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('read from stage_1,'),
+    });
+  });
+
+  it('keeps the source positions when the target pipeline is EMPTY', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_a' }]);
+    s.getState().copySelection('pl_1');
+    const t = createCanvasStore();
+    t.getState().loadVersion(null);
+    expect(t.getState().pasteClipboard('pl_2')).toMatchObject({ ok: true, crossPipeline: true });
+    expect(t.getState().nodes[0]!.position).toEqual({ x: 0, y: 0 });
+  });
+
   it('lands a foreign paste BELOW the target, keeping the copied layout', () => {
     const s = loaded();
     s.getState().setSelection([

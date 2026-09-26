@@ -6,6 +6,8 @@ import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 /**
  * U21 slice 3 — copy/paste on the authoring canvas, and the ref remapping that
  * makes a MULTI-node copy correct rather than merely plausible.
+ * Slice 5 (#935) adds the paste into ANOTHER pipeline, reached client-side so
+ * the module-level clipboard survives the move.
  *
  * The rewriter and the store rules are unit-tested (`nodeRefs.test.ts`,
  * `canvasStore.test.ts`). What only a real browser and a real server can prove
