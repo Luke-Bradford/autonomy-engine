@@ -1122,8 +1122,11 @@ export async function pump(
   };
 
   // CX2 (#1320) — publish this pump's poke for as long as it holds the run. A
-  // cancel requested BEFORE the poke existed (while this pump's caller was still
-  // setting up) is picked up by the marker pushed straight after.
+  // cancel requested BEFORE the poke existed is picked up by the marker pushed
+  // straight after. `startRun` and `drive` fold any intent synchronously just
+  // before calling here, so for them this is a no-op; it is what covers the boot
+  // reconciler, which folds its intent at the top of `reconcileOne` and can
+  // `await` before it pumps.
   const pokeMe = (): void => {
     if (dropped) return;
     // At the FRONT: an event already queued ahead of it (a `node.succeeded`,
@@ -1546,8 +1549,10 @@ export async function driveCancelIntent(deps: DriveDeps, runId: string): Promise
   await deps.drives.serialize(runId, async () => {
     if (deps.cancels?.pending(runId) !== true) return;
     await driveLocked(deps, runId);
-    // A drive that threw before folding the intent (its doc is gone, say) has
-    // already terminalized the run; the intent has nothing left to stop.
+    // Normally `drive` consumed it. It is still here when the run had already
+    // ended (a cancel that lost the race) or the drive threw before folding it
+    // (and terminalized the run): either way there is nothing left to stop, and
+    // it must not sit in the map for good.
     deps.cancels.take(runId);
   });
 }
@@ -1578,9 +1583,6 @@ async function drive(deps: DriveDeps, runId: string): Promise<void> {
     // needs no doc, so an unresolvable version cannot strand a finished run.
     const terminal = terminalFactFromLog(events);
     if (terminal !== null) {
-      // CX2 — a cancel that lost the race to the run's own end has nothing left
-      // to stop. Discard it rather than leave it in the map for good.
-      deps.cancels?.take(runId);
       syncRunLifecycle(deps.db, runId, terminal);
       return;
     }
