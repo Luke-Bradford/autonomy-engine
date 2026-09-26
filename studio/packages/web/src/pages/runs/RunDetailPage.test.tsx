@@ -1445,6 +1445,79 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     expect(within(panel).getByText(/has not settled yet/i)).toBeInTheDocument();
   });
 
+  /**
+   * #890 — the Duration of a running node COUNTS UP, but only while this page
+   * would hear it settle. These pin the PAGE's half of that (the stream phase
+   * and the run's status); `NodeDuration.test.tsx` pins the row's half.
+   * `Date` and the interval are faked, `setTimeout` is not, so `findBy*` keeps
+   * its real polling.
+   */
+  describe('#890 — a live elapsed counter', () => {
+    const dispatchedAt1s = () => [
+      envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+      envelope(
+        {
+          type: 'node.dispatched',
+          runId: 'run_1',
+          nodeId: 'greet',
+          attemptId: 'greet#0',
+          idempotent: true,
+        },
+        1_000,
+      ),
+    ];
+    const durationCell = async () =>
+      (await screen.findByRole('button', { name: 'HTTP Request 1' }))
+        .closest('tr')!
+        .querySelector('.node-duration')!;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: 11_000 });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('counts a running node up while the stream is live, in the table and the drill-in', async () => {
+      useRunStreamMock.mockReturnValue(stream({ events: dispatchedAt1s() }));
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      const cell = await durationCell();
+      expect(cell.textContent).toBe('10s so far');
+
+      act(() => {
+        screen.getByRole('button', { name: 'HTTP Request 1' }).click();
+      });
+      const panel = screen.getByRole('complementary');
+      expect(panel.querySelector('strong')?.textContent).toBe('10s so far');
+      expect(within(panel).getByText(/counts up from its start/)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(cell.textContent).toBe('12s so far');
+      expect(panel.querySelector('strong')?.textContent).toBe('12s so far');
+    });
+
+    it('keeps the em-dash once the stream has CLOSED — a settle it cannot hear would leave it rising', async () => {
+      useRunStreamMock.mockReturnValue(stream({ events: dispatchedAt1s(), phase: 'closed' }));
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect((await durationCell()).textContent).toBe('—');
+    });
+
+    it('keeps the em-dash for a never-closed span in a run that has FINISHED, even on a live socket', async () => {
+      useRunStreamMock.mockReturnValue(
+        stream({
+          events: [
+            ...dispatchedAt1s(),
+            envelope({ type: 'run.finished', runId: 'run_1', outcome: 'failure' }),
+          ],
+        }),
+      );
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect((await durationCell()).textContent).toBe('—');
+    });
+  });
+
   it('the panel names a BACKWARDS span as a clock problem rather than leaving a bare em-dash', async () => {
     // Both stamps come from one single-writer append path, so an end before its
     // start is a corrupt log. It renders as unmeasured (never a clamped 0ms),

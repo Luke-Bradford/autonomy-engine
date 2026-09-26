@@ -46,8 +46,9 @@ import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
  * not a per-field form derived from `config.outputs` — the contract is already
  * rendered as a sentence by `describeCallbackBody`, so the data for a form exists;
  * it is polish, and the textarea is the path. And the expiry is an absolute time
- * that does not tick, so a wait about to expire looks like one with an hour left —
- * the same missing-clock problem as #890, which the two should solve together.
+ * that does not tick, so a wait about to expire looks like one with an hour left.
+ * #890 has since given the page a clock (`useTickingNow`), so a countdown here is
+ * now a use of it rather than a missing primitive.
  */
 export function PendingCallbacks({
   runId,

@@ -58,7 +58,13 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
  */
 function renderPanel(node: NodeActivity, runStatus: RunStatus = 'running'): HTMLElement {
   renderWithRouter(
-    <NodeActivityPanel node={node} name={null} runStatus={runStatus} onClose={vi.fn()} />,
+    <NodeActivityPanel
+      node={node}
+      name={null}
+      runStatus={runStatus}
+      live={false}
+      onClose={vi.fn()}
+    />,
   );
   return screen.getByRole('complementary');
 }
@@ -630,6 +636,7 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
             node={nodes[i] as NodeActivity}
             name={null}
             runStatus="running"
+            live={false}
             onClose={vi.fn()}
           />
         </>

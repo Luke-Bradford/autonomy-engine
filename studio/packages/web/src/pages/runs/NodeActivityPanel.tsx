@@ -10,7 +10,8 @@ import {
 import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
 import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatNodeDuration, formatOutputValue } from './format';
+import { formatOutputValue, liveSpanStart } from './format';
+import { NodeDuration } from './NodeDuration';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 import { SecureMarkerHint } from './SecureMarkerHint';
@@ -105,12 +106,15 @@ export function NodeActivityPanel({
   node,
   name,
   runStatus,
+  live,
   onClose,
 }: {
   node: NodeActivity;
   name: string | null;
   /** The run's status, for the one node word that depends on it (CX4). */
   runStatus: RunStatus;
+  /** #890 — whether the page would hear this node settle, so its Duration may count up. */
+  live: boolean;
   onClose: () => void;
 }) {
   return (
@@ -186,9 +190,12 @@ export function NodeActivityPanel({
       <p className="page-hint">
         {/* A COLON, not a dash: the value is itself an em-dash whenever no span
             was measured, and "Duration — — wall clock…" is what a dash gave. */}
-        Duration: <strong>{formatNodeDuration(node)}</strong> — wall clock for the latest attempt,
-        from start to settle, including any wait it parked on and excluding time held between
-        retries.{' '}
+        Duration:{' '}
+        <strong>
+          <NodeDuration node={node} live={live} />
+        </strong>{' '}
+        — wall clock for the latest attempt, from start to settle, including any wait it parked on
+        and excluding time held between retries.{' '}
         {node.startedAtMs === undefined &&
           (node.copiedFromRunId !== undefined
             ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
@@ -238,7 +245,11 @@ export function NodeActivityPanel({
             ? /* #1329 — the started counterpart of the CX4 arm above: the run
                  ended, so this attempt never will settle. */
               'The run was cancelled while this attempt was live, so its span never closed.'
-            : 'This attempt has not settled yet, so its span is not complete.')}
+            : live && liveSpanStart(node) !== undefined
+              ? /* #890 — the figure above is COUNTING, and "not complete" beside
+                   a number that rises every second reads as a contradiction. */
+                'This attempt has not settled yet, so the figure counts up from its start while this page is connected.'
+              : 'This attempt has not settled yet, so its span is not complete.')}
         {/* The corrupt-log case. `formatNodeDuration` renders it as unmeasured
             rather than clamping to `0ms`, and without this arm it would be the
             ONE em-dash on this panel with no sentence explaining it — which

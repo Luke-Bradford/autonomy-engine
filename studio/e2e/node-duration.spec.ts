@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { fireAndSettle, fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -88,6 +88,70 @@ test('#867 — a node row states how long it took, and says nothing where nothin
   const panel = page.getByRole('complementary');
   await expect(panel).toContainText('wall clock for the latest attempt');
   await expect(panel).toContainText('including any wait it parked on');
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #890 — a node that is STILL RUNNING counts up, where #867 could only print an
+ * em-dash for want of a clock.
+ *
+ * The node is a `wait` of an hour, so the run parks and stays parked for the
+ * whole spec — the same egress-free park `run-status-vocabulary.spec.ts` uses.
+ * For a `wait`, the park IS the work, so its span opens at `timer.waitScheduled`
+ * and the counter runs from there.
+ *
+ * Asserted by SHAPE and by MOTION, not by value: the figure is real wall clock,
+ * so pinning "3s" would flake on scheduling. What must hold is that the cell
+ * says "so far" (it is an unfinished figure, and says so) and that the number
+ * RISES without any new frame arriving — the park emits nothing, which is
+ * exactly the case a frame-driven recomputation would have frozen at ~0.
+ */
+const PARKED_DOC = {
+  nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${3600}' }, position: { x: 0, y: 0 } }],
+  edges: [],
+};
+
+test("#890 — a running node's duration counts up while the page is live", async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, '#890 live duration', PARKED_DOC);
+  const runId = await fireManualTrigger(page, pipelineVersionId, '#890 park');
+
+  /* Wait for the park on the ROW before opening the page, as #870's spec does:
+     the counter needs the span's start event in the log, and asserting the
+     rendered text first would race the driver. */
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+        return res.status() === 200 ? ((await res.json()) as { status: string }).status : '';
+      },
+      { message: `run ${runId} never parked`, timeout: 20_000 },
+    )
+    .toBe('waiting');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  const cell = page
+    .locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) })
+    .locator('.node-duration');
+  await expect(cell).toHaveText(/ so far$/);
+
+  /* Seconds, parsed from the two formats a sub-hour figure can take ("<1s",
+     "7s", "1m 05s"). */
+  const seconds = async (): Promise<number> => {
+    const text = (await cell.textContent()) ?? '';
+    if (text.startsWith('<1s')) return 0;
+    const m = /^(?:(\d+)m )?(\d+)s so far$/.exec(text.trim());
+    if (m === null) throw new Error(`not a live duration: ${JSON.stringify(text)}`);
+    return Number(m[1] ?? 0) * 60 + Number(m[2]);
+  };
+  const first = await seconds();
+  await expect
+    .poll(seconds, { message: 'the live duration never rose', timeout: 5_000 })
+    .toBeGreaterThanOrEqual(first + 2);
 
   await expectQuiet(page, problems);
 });

@@ -528,9 +528,9 @@ export interface NodeCapture {
  *
  * `endedAs`/`endedAtMs` are `undefined` together, and mean the span is still
  * open — the terminal has not been appended. That is the absence of a
- * measurement, never a zero: this view has no clock (a live elapsed counter is
- * #890's, deliberately deferred with #867), so an open span states its start and
- * claims no length at all.
+ * measurement, never a zero: this fold has no clock, so an open span states its
+ * start and claims no length at all. The live counter a still-running row shows
+ * is #890's `NodeDuration`, which owns a clock and reads this start.
  */
 export interface AttemptSpan {
   startedAtMs: number;
