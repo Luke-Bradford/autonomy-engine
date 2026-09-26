@@ -1,6 +1,6 @@
 # Foundation sub-spec (CX) — Run cancellation
 
-**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop; no CX code exists yet.
+**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop. **CX1 built** (reducer + schemas); CX2-CX5 open.
 **Scope:** a cancel primitive that crosses a run boundary — an operator can stop a run, and a
 `call_pipeline` child stops when its parent no longer wants it. This is the engine-semantics epic the
 UI spec's U28 row and #1056 both name. The UI epic's pre-settled note (operator, 2026-07-23) forbids
@@ -278,7 +278,7 @@ is a forward-only migration that widens the list, so every existing row satisfie
 | # | Ticket |
 | --- | --- |
 | CX1 | **Reducer + schemas.** `run.cancelRequested{runId, source}` in `EngineEventSchema`. `cancelled` in `RunOutcome`/`RunLifecycleStatus`/`RunStatus`/terminal sets. `RunState.cancelRequested`. `settle`'s cancel mode (D2: no dispatch, drain, then finish). D3 truthful outcome. D4 retry-hold and container rules. D5 legality from `pending`/`waiting` (joins `UNPARK_EVENTS`), duplicate ignored. Pure and unit-tested. Every exhaustive switch gains its arm. |
-| CX2 | **Server producer.** `runs.status` CHECK rebuild migration. `CancelIntents` + pump waker registry + pump-start consumption + serialized out-of-band path (D6). `executor.abortRun(runId)` via the per-run controller set, called after the fold. `POST /api/runs/:id/cancel` (202 / 409 incl. `log_unreadable` / 404). The `queued` row-patch path (D5). The single `onCancelFolded` hook. Reconciler D7. `syncRunLifecycle` mapping the new status onto the `runs` row. **Every consumer that would HANG or mis-handle a now-producible `cancelled`, in the same PR:** `tumbling.ts:512` above all (D9), plus the literal-comparison grep from D1. |
+| CX2 | **Server producer.** *Contract CX1 fixed (build it exactly):* a `dispatchNode` stream that has not STARTED when the cancel folds must still yield `node.failed{kind:'cancelled'}` for its attempt — never be dropped. The reducer counts a `ready` node as in flight, so a dropped stream leaves the run live forever. (A `ready` node whose command died with the PROCESS is different: `engine.resume` under a cancel folds it to `failure` itself.) `runs.status` CHECK rebuild migration. `CancelIntents` + pump waker registry + pump-start consumption + serialized out-of-band path (D6). `executor.abortRun(runId)` via the per-run controller set, called after the fold. `POST /api/runs/:id/cancel` (202 / 409 incl. `log_unreadable` / 404). The `queued` row-patch path (D5). The single `onCancelFolded` hook. Reconciler D7. `syncRunLifecycle` mapping the new status onto the `runs` row. **Every consumer that would HANG or mis-handle a now-producible `cancelled`, in the same PR:** `tumbling.ts:512` above all (D9), plus the literal-comparison grep from D1. |
 | CX3 | **Children.** Parent-cancel propagation to live non-detached children (D8). The #1056 live parent-terminal path through the terminal-event tap. The #1053 boot guard moved onto `run.cancelRequested{parent_terminal}` + D7. |
 | CX4 | **UI (U28's cancel-run half).** A Cancel control on the run detail page for a non-terminal run, with a confirmation that names what is in flight. A "Cancelling…" state while `cancelRequested` is folded but the run is not terminal. `cancelled` as a neutral status in chips, filters, timeline and cost. The node table renders a pending node of a cancelled run as "not run (cancelled)". `NodeActivityPanel`'s "no cancel" note is updated. e2e covers cancelling a live run and a waiting run. |
 | CX5 | **Consumer audit (D9) for the consumers that do not hang.** Rerun-from-failed eligibility. The tumbling-window no-retry rule. External-wait completion refused on a cancelled run. A container `timedOut` or retry alarm arriving after a cancel is suppressed, walked through `durable-alarm-handler.ts`'s `containerActiveGuard`/`nodeParkedAtAttemptGuard` and not only its terminal-log arm. Each gets a test pinning it. |
@@ -286,6 +286,18 @@ is a forward-only migration that widens the list, so every existing row satisfie
 Build order: CX1 → CX2 → CX4 (the operator-visible path, usable against a single run) → CX3 → CX5.
 CX3 comes after CX4 on purpose. Cancelling a run the operator can see is the core path, while child
 propagation stops spend the operator cannot see, and both need CX1+CX2.
+
+### CX1 — as built
+
+Decisions the reducer had to take that the D-sections left implicit:
+
+- **`RunState.cancelRequested = {source, stoppedWork} | null`.** `stoppedWork` answers D3's "a node ended `failure{kind:'cancelled'}`": `NodeRunState` keeps no failure kind, so the fold records it when it happens. It is also set by a retry the cancel refused or cancelled, a lost `ready`/call-`waiting` node folded at resume, and a child returning `cancelled` under the parent's own cancel.
+- **Where "start no work" is enforced:** `tryDispatchNode` (one guard covers dispatch, child, control, fail, filter, wait and webhook), top-level container entry, `startParallelItems`, the two `resetContainerRound` sites in `stepContainers`, and a within-cap back-edge bounce. A suppressed bounce persists NOTHING, not even its counted `bounces` entry, which would otherwise re-count on every walk until `capped` fired. It is reported so D3 calls the run `cancelled`.
+- **A capped finish under a cancel that already stopped work** reports `cancelled` (D3), not `capped`.
+- **`onRetryRequested` and `onResumed` bypass `settle`**, so each gets its own cancel arm: a `node.retryRequested` folds the node to `failure`, never re-dispatching it, and a resume re-derives nothing, folding a lost `ready` node or call-`waiting` node to `failure` (see the CX2 contract). `dispatched` nodes are left to D7.
+- **Pending:** an EMPTY seed (runId `''`) accepts the cancel and adopts its runId, as `run.triggerContext` does. A `run.started` carries a folded cancel, so a start racing it finishes `cancelled` without dispatching.
+- **`reason`** is `cancelled:<source.kind>` on every cancelled finish.
+- **Web:** `cancelled` is a neutral pill and tone, and it is offered rerun-from-failed. The server's existing rule ("terminated and not `success`") already admits it, per D9.
 
 ## Open questions (none block CX1)
 

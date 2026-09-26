@@ -66,6 +66,7 @@ const UNPLOTTABLE_BY_STATUS: Record<RunStatus, string | null> = {
   failure: null,
   interrupted: null,
   skipped: null,
+  cancelled: null,
 };
 
 export function unplottableReason(run: RunSummary): string | null {

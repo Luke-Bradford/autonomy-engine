@@ -21,6 +21,10 @@ export const RunStatusSchema = z.enum([
   'skipped',
   'waiting',
   'interrupted',
+  // CX1 (#1320) — an operator (or a parent run) stopped the run on purpose. A
+  // terminal ROW status. The `runs.status` CHECK that admits it is CX2's
+  // migration; nothing writes it until CX2's cancel route exists.
+  'cancelled',
 ]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 

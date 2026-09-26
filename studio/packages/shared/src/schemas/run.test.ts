@@ -24,7 +24,7 @@ describe('RunStatusSchema', () => {
   });
 
   it('rejects an unknown status', () => {
-    expect(() => RunStatusSchema.parse('cancelled')).toThrow();
+    expect(() => RunStatusSchema.parse('aborted')).toThrow();
   });
 });
 
@@ -77,7 +77,7 @@ describe('RunSchema', () => {
   });
 
   it('rejects an invalid status', () => {
-    expect(() => RunSchema.parse({ ...run, status: 'cancelled' })).toThrow();
+    expect(() => RunSchema.parse({ ...run, status: 'aborted' })).toThrow();
   });
 
   it('rejects a non-integer leaseUntil', () => {
@@ -231,7 +231,13 @@ describe('TERMINAL_RUN_ROW_STATUS (#930)', () => {
   it('partitions every RunStatus, so a new one cannot go unclassified', () => {
     const terminal = RunStatusSchema.options.filter((s) => TERMINAL_RUN_ROW_STATUS.has(s));
     const advancing = RunStatusSchema.options.filter((s) => !TERMINAL_RUN_ROW_STATUS.has(s));
-    expect([...terminal].sort()).toEqual(['failure', 'interrupted', 'skipped', 'success']);
+    expect([...terminal].sort()).toEqual([
+      'cancelled',
+      'failure',
+      'interrupted',
+      'skipped',
+      'success',
+    ]);
     expect([...advancing].sort()).toEqual(['pending', 'queued', 'running', 'waiting']);
     expect(terminal.length + advancing.length).toBe(RunStatusSchema.options.length);
   });

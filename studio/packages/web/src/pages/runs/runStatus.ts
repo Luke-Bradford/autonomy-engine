@@ -63,6 +63,7 @@ const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   // Bare, and completed by the reason where one is known — see `runStatusLabel`.
   waiting: 'waiting',
   interrupted: 'interrupted',
+  cancelled: 'cancelled',
 };
 
 /**
@@ -160,6 +161,11 @@ const RUN_TONES: Record<RunStatus, StatusTone> = {
   failure: 'failure',
   interrupted: 'failure',
   skipped: 'skipped',
+  // CX1 (#1320) — NEUTRAL, not red (cancel spec D9): the operator stopped it on
+  // purpose, so nothing went wrong. Unlike `interrupted`, which is a run that
+  // did not do what it was asked and must stand out to someone scanning for
+  // trouble.
+  cancelled: 'neutral',
 };
 
 export function runStatusTone(status: RunStatus): StatusTone {

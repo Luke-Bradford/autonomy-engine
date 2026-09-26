@@ -85,6 +85,7 @@ function state(fields: {
     branches: fields.branches ?? {},
     sessions: {},
     triggerContext: null,
+    cancelRequested: null,
   };
 }
 
