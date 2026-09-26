@@ -56,7 +56,9 @@ import type { UnsupportedParam } from './llm-shared.js';
  * SOURCE: the `claude-api` skill's model + thinking/effort tables (cached
  * 2026-06-24), re-derived 2026-07-25. Re-derived rather than transcribed from
  * ticket #727, whose own list omitted `claude-sonnet-5` and the Fable/Mythos
- * ids.
+ * ids. Since then, two per-model docs pages: the models overview's "Adaptive
+ * thinking" rows (2026-07-29), and the model-deprecations page's parameter and
+ * lifecycle tables (2026-09-26). Each set's note says which facts came from which.
  */
 
 /**
@@ -122,7 +124,9 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * page), so on Anthropic-operated platforms the provider now refuses it whatever
  * the request carries. The entry stays because its fact is still true. It still
  * governs a proxied `baseUrl` that serves the model, and pruning it would change
- * that case for no gain. Nothing else depends on it.
+ * that case for no gain. #729's own thread named pruning it as the natural
+ * step once it retired; this is a deliberate reversal of that note, for the
+ * proxied-`baseUrl` reason. Nothing else depends on it.
  *
  * `claude-opus-4-5` is worth spelling out because it is the one model where the
  * two facts come apart: it accepts `output_config.effort` (at

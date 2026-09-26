@@ -220,15 +220,6 @@ describe('unsupportedParamFailure message (#727)', () => {
   });
 });
 
-/**
- * #729 — the legacy-id classification: settled for two of the five ids by a
- * per-model row, and closed for the other three as RETIRED (model-deprecations
- * page, fetched 2026-09-26).
- *
- * SOURCE: the models overview page's per-model **"Adaptive thinking"** row
- * (fetched 2026-07-29), which is the per-model fact this module spent two
- * passes waiting for.
- */
 describe('sampling classification settled by the deprecations page (#729)', () => {
   it('refuses temperature and topP on every id the page names', () => {
     // "Claude 4.7 and later models and Claude Mythos Preview" — each id here is
@@ -250,6 +241,15 @@ describe('sampling classification settled by the deprecations page (#729)', () =
   });
 });
 
+/**
+ * #729 — the legacy-id classification: settled for two of the five ids by a
+ * per-model row, and closed for the other three as RETIRED (model-deprecations
+ * page, fetched 2026-09-26).
+ *
+ * SOURCE: the models overview page's per-model **"Adaptive thinking"** row
+ * (fetched 2026-07-29), which is the per-model fact this module spent two
+ * passes waiting for.
+ */
 describe('adaptive-thinking classification of legacy ids (#729)', () => {
   const EFFORT = { hasTemperature: false, hasTopP: false, hasReasoningEffort: true };
 
