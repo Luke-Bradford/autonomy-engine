@@ -172,7 +172,8 @@ export function runFlowNodes(
     const name = names.get(n.id) ?? activityLabel(n);
     const status = showStatus ? (state?.nodes[n.id]?.status ?? null) : null;
     /* U25 — the node says the same word the table's pill does. The TONE still
-       comes off the raw engine status; only what an operator reads is worded. */
+       comes off the raw engine status, except where a cancel stopped the node
+       (#1329, see `nodeStatusTone`); only what an operator reads is worded. */
     const label = status === null ? null : nodeStatusLabel(status, state?.status);
     return {
       id: n.id,
@@ -184,7 +185,7 @@ export function runFlowNodes(
       data: {
         title: name,
         status: label,
-        tone: status === null ? null : nodeStatusTone(status),
+        tone: status === null ? null : nodeStatusTone(status, state?.status),
         showStatus,
         portIds: portIdsOf(portsOf(n.id, n)),
       } satisfies RunNodeData,
@@ -270,7 +271,7 @@ export function runFlowNodes(
       data: {
         name,
         status: label,
-        tone: status === null ? null : containerStatusTone(status),
+        tone: status === null ? null : containerStatusTone(status, state?.status),
         round: cs?.round ?? null,
         portIds: portIdsOf(portsOf(c.id, undefined)),
       } satisfies RunContainerData,

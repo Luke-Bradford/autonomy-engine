@@ -106,6 +106,34 @@ describe('NodeActivityPanel — why there is no duration', () => {
     },
   );
 
+  /* #1329 — the started-but-stopped counterpart: its attempt never closed, and
+     never will, so "not settled YET" promises an end that is not coming. */
+  it.each(['wait_pending', 'external_wait_pending', 'waiting', 'dispatched'] as const)(
+    '#1329 — a %s node a cancel stopped mid-attempt says so, with no "yet", in the stopped pill',
+    (status) => {
+      const panel = renderPanel(
+        row({ nodeId: 'a', status, attempts: 1, startedAtMs: 1_000 }),
+        'cancelled',
+      );
+      expect(panel.textContent).toContain('stopped (cancelled)');
+      expect(panel.textContent).toMatch(/cancelled while this attempt was live/);
+      expect(panel.textContent).not.toMatch(/has not settled yet/);
+      expect(panel.querySelector('.node-status')!.className).toBe(
+        'node-status node-status-cancelled',
+      );
+    },
+  );
+
+  it('#1329 — a live run keeps the "not settled yet" sentence and the raw-status pill', () => {
+    const panel = renderPanel(
+      row({ nodeId: 'a', status: 'wait_pending', attempts: 1, startedAtMs: 1_000 }),
+    );
+    expect(panel.textContent).toMatch(/has not settled yet/);
+    expect(panel.querySelector('.node-status')!.className).toBe(
+      'node-status node-status-wait_pending',
+    );
+  });
+
   it('keeps the copied-node sentence ahead of both', () => {
     const panel = renderPanel(
       row({ nodeId: 'a', status: 'success', attempts: 0, copiedFromRunId: 'run_0' }),

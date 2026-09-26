@@ -2769,9 +2769,15 @@ td button + button {
    run. `skipped` shares the grey rather than taking a colour of its own, which
    matches the settled edge encoding (a skipped edge is grey) and the graph's
    own `skipped` tone — "this did not run" reads the same everywhere. */
+/* #1329 — `node-status-cancelled` is the pill of a node a cancelled run left
+   non-terminal (`nodeStatusPillClass`), whatever live status it kept: without
+   it a stopped `dispatched` node kept the accent and a stopped retry the amber
+   of something still coming, beside a muted `cancelled` run pill. Muted, like
+   the run it belongs to. */
 .node-status-pending,
 .node-status-ready,
-.node-status-skipped {
+.node-status-skipped,
+.node-status-cancelled {
   color: var(--muted);
   border-color: var(--muted);
 }

@@ -29,7 +29,7 @@ import {
   formatWhen,
 } from './format';
 import { activityLabels } from '../pipeline/activityLabel';
-import { nodeStatusLabel } from './nodeStatus';
+import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
@@ -733,8 +733,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         node differently. The CLASS stays keyed on the raw
                         status: the graph's six tones put a retry backoff and a
                         routine park in one `holding` hue, and #483 established
-                        that those must not share a colour here. */}
-                    <span className={`node-status node-status-${n.status}`}>
+                        that those must not share a colour here. Except under a
+                        cancel (#1329 — `nodeStatusPillClass`). */}
+                    <span className={nodeStatusPillClass(n.status, status)}>
                       {nodeStatusLabel(n.status, status)}
                     </span>
                   </td>
@@ -796,7 +797,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           there is a row to arrange, since an empty chart with an empty caveat
           list beneath it says nothing the "No node activity yet." above has not
           already said. */}
-      {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} />}
+      {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} runStatus={status} />}
 
       {/* #1065 — the reducer's explanations, between the run's SHAPE and its raw
           decision log. Everything above answers "what happened"; the event feed

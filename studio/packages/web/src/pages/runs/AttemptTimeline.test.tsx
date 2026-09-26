@@ -238,6 +238,33 @@ describe('<AttemptTimeline>', () => {
     expect(bars.map((b) => b.getAttribute('data-tone'))).toEqual(['failure', 'success']);
   });
 
+  /* #1329 — under a cancelled run an OPEN span is one the cancel stopped: it is
+     worded and coloured as stopped. A CLOSED span that ended into a hold did end,
+     and keeps its own word and hue. */
+  it('#1329 — draws a span a cancel left open as stopped, and leaves a closed one alone', () => {
+    const { container } = render(
+      <AttemptTimeline
+        runStatus="cancelled"
+        nodes={[
+          node({
+            nodeId: 'a',
+            status: 'wait_pending',
+            spans: [
+              span({ startedAtMs: 1_000, endedAtMs: 1_200, endedAs: 'retry_pending' }),
+              span({ startedAtMs: 2_000, startedAs: 'wait_pending' }),
+            ],
+          }),
+        ]}
+        nameOf={noNames}
+      />,
+    );
+    const bars = [...container.querySelectorAll('.timeline-span')];
+    expect(bars.map((b) => b.getAttribute('data-tone'))).toEqual(['holding', 'neutral']);
+    expect(bars[0]!.textContent).toContain('retrying');
+    expect(bars[1]!.textContent).toContain('stopped (cancelled)');
+    expect(bars[1]!.textContent).not.toContain('waiting (timer)');
+  });
+
   it('marks an open span open and claims no length for it', () => {
     const { container } = render(
       <AttemptTimeline

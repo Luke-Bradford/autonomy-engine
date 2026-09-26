@@ -1,3 +1,4 @@
+import type { RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
 import { formatClock, formatElapsed } from './format';
@@ -35,9 +36,20 @@ export interface AttemptTimelineProps {
   nodes: NodeActivity[];
   /** The node's authored name, when the doc resolved. */
   nameOf: (nodeId: string) => string | null;
+  /** The run's status, so a span a cancel left open is worded as stopped (#1329). */
+  runStatus?: RunStatus;
 }
 
-const toneOf = (span: AttemptSpan): StatusTone => nodeStatusTone(span.endedAs ?? span.startedAs);
+/**
+ * #1329 — under a cancelled run, an OPEN span is one the cancel stopped, so the
+ * run status reaches the word and the tone for it alone. A CLOSED span did end,
+ * even into a hold (`retry_pending`), and keeps what it ended as.
+ */
+const openSpanRun = (span: AttemptSpan, runStatus: RunStatus | undefined): RunStatus | undefined =>
+  span.endedAs === undefined ? runStatus : undefined;
+
+const toneOf = (span: AttemptSpan, runStatus: RunStatus | undefined): StatusTone =>
+  nodeStatusTone(span.endedAs ?? span.startedAs, openSpanRun(span, runStatus));
 
 /**
  * What the span's own bar says it was, which is the LOG's word — see `AttemptSpan`.
@@ -53,7 +65,8 @@ const toneOf = (span: AttemptSpan): StatusTone => nodeStatusTone(span.endedAs ??
  * That the word is the START's rather than the END's is therefore read off the
  * note, which is the same fact stated once instead of twice.
  */
-const spanLabel = (span: AttemptSpan): string => nodeStatusLabel(span.endedAs ?? span.startedAs);
+const spanLabel = (span: AttemptSpan, runStatus: RunStatus | undefined): string =>
+  nodeStatusLabel(span.endedAs ?? span.startedAs, openSpanRun(span, runStatus));
 
 /**
  * Why a bar states no length. THREE cases share the hatched rendering and must
@@ -69,7 +82,11 @@ const unmeasuredNote = (span: AttemptSpan): string =>
     ? 'no end on record'
     : 'the recorded end precedes the start, so no length can be stated';
 
-export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.ReactElement {
+export function AttemptTimeline({
+  nodes,
+  nameOf,
+  runStatus,
+}: AttemptTimelineProps): React.ReactElement {
   const timed = nodes.filter((n) => n.spans.length > 0);
   const untimed = nodes.filter((n) => n.spans.length === 0);
   const window = timelineWindow(nodes);
@@ -113,7 +130,7 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                        them here would paint a transparent bar. The tone is the
                        graph surface's vocabulary and the one already defined for
                        "what colour is this state". */
-                    data-tone={toneOf(placed.span)}
+                    data-tone={toneOf(placed.span, runStatus)}
                     data-open={placed.width === null ? 'true' : undefined}
                     className="timeline-span"
                     style={{
@@ -129,7 +146,7 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                          to jsdom and quietly voided the test asserting it. */
                       ...(placed.width === null ? { right: '0' } : { width: `${placed.width}%` }),
                     }}
-                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span)} · started ${formatClock(
+                    title={`${name ?? node.nodeId} · ${spanLabel(placed.span, runStatus)} · started ${formatClock(
                       placed.span.startedAtMs,
                     )}${
                       placed.width === null
@@ -138,7 +155,7 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                     }`}
                   >
                     <span className="visually-hidden">
-                      {spanLabel(placed.span)}
+                      {spanLabel(placed.span, runStatus)}
                       {placed.width === null
                         ? `, ${unmeasuredNote(placed.span)}`
                         : `, ${formatElapsed(placed.durationMs)}`}
