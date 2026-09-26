@@ -30,6 +30,7 @@ const NO_LLM_ACTIVITY = {
      every ordinary node carries the absent one. */
   datasetAddresses: undefined,
   input: undefined,
+  params: undefined,
   inputInstanceId: undefined,
 };
 
@@ -3304,5 +3305,53 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
     );
     expect(r.input).toEqual(inputOf('{"i":2}'));
     expect(r.inputInstanceId).toBe('w@2');
+  });
+
+  /* The resolved parameters travel with the input: set, replaced, cleared and
+     paired by foreach item at exactly the same points. */
+  const withParams = (nodeId: string, attempt: number, params?: { text: string; chars: number }) =>
+    envelope({
+      type: 'node.dispatched',
+      runId: 'r',
+      nodeId,
+      attemptId: `${nodeId}#${attempt}`,
+      idempotent: false,
+      ...(params !== undefined ? { params } : {}),
+    });
+
+  it('projects the parameters; a retry replaces them, and a re-open drops them', () => {
+    const p1 = inputOf('{"connectionParams":{"m":1}}');
+    const p2 = inputOf('{"connectionParams":{"m":2}}');
+    expect(row([withParams('a', 0, p1), failed('a', 0)], 'a').params).toEqual(p1);
+    const events = [withParams('a', 0, p1), failed('a', 0)];
+    expect(row([...events, withParams('a', 1, p2)], 'a').params).toEqual(p2);
+    expect(row([...events, withParams('a', 1)], 'a').params).toBeUndefined();
+    const reopened = row(
+      [
+        ...events,
+        envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }),
+      ],
+      'a',
+    );
+    expect(reopened.params).toBeUndefined();
+  });
+
+  it("pairs a late-settling item's result with THAT item's parameters", () => {
+    const r = row(
+      [
+        withParams('w@1', 0, inputOf('{"i":1}')),
+        withParams('w@2', 0, inputOf('{"i":2}')),
+        envelope({
+          type: 'node.succeeded',
+          runId: 'r',
+          nodeId: 'w@2',
+          attemptId: 'w@2#0',
+          outputs: {},
+        }),
+        failed('w@1', 0),
+      ],
+      'w',
+    );
+    expect(r.params).toEqual(inputOf('{"i":1}'));
   });
 });

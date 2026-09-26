@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -37,6 +37,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     failureCode: undefined,
     datasetAddresses: undefined,
     input: undefined,
+    params: undefined,
     inputInstanceId: undefined,
     outputValues: undefined,
     copiedFromRunId: undefined,
@@ -756,5 +757,53 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     const section = inputSection() as HTMLElement;
     expect(within(section).getByText(/withheld from the run log/)).toBeTruthy();
     expect(section.querySelector('.node-detail-outputs')).toBeNull();
+  });
+
+  it('shows the resolved parameters under their own heading, apart from the config', () => {
+    const params = '{"connectionParams":{"maxEntries":5}}';
+    renderPanel(
+      row({
+        nodeId: 'a',
+        input: { text: '{"path":"/tmp"}', chars: 15 },
+        params: { text: params, chars: params.length },
+      }),
+    );
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByRole('heading', { name: 'Parameters' })).toBeTruthy();
+    expect(within(section).getByText(params)).toBeTruthy();
+    expect(within(section).getByText('{"path":"/tmp"}')).toBeTruthy();
+  });
+
+  it('has no Parameters heading for a dispatch that bound none', () => {
+    renderPanel(row({ nodeId: 'a', input: { text: '{}', chars: 2 } }));
+    expect(screen.queryByRole('heading', { name: 'Parameters' })).toBeNull();
+  });
+
+  it('shows parameters with no recorded config, and says the config is missing rather than empty', () => {
+    renderPanel(row({ nodeId: 'a', params: { text: '{"connectionParams":{"m":1}}', chars: 28 } }));
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByText(/config was not recorded/)).toBeTruthy();
+    expect(within(section).getByText('{"connectionParams":{"m":1}}')).toBeTruthy();
+  });
+
+  it('withholds secure parameters with the same wording, and cuts them with the same hint', () => {
+    renderPanel(
+      row({
+        nodeId: 'a',
+        input: { text: SECURE_REDACTED, chars: 7 },
+        params: { text: SECURE_REDACTED, chars: 50 },
+      }),
+    );
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getAllByText(/withheld from the run log/)).toHaveLength(2);
+    expect(within(section).getByText(/\(50 characters\)/)).toBeTruthy();
+    expect(section.querySelector('.node-detail-outputs')).toBeNull();
+    cleanup();
+    renderPanel(
+      row({ nodeId: 'a', params: { text: '{"connectionParams"', chars: 9000, truncated: true } }),
+    );
+    expect(
+      within(inputSection() as HTMLElement).getByText(/stored the first 19 of 9000 characters/),
+    ).toBeTruthy();
   });
 });

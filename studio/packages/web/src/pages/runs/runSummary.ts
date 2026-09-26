@@ -205,6 +205,13 @@ export interface NodeActivity {
    */
   input: DispatchInput | undefined;
   /**
+   * #890 — the connection and dataset PARAMETERS that same dispatch applied
+   * (`node.dispatched.params`), which `input` cannot show because it is the
+   * node's config only. Set, replaced, cleared and paired by foreach item at
+   * exactly the points `input` is, so the two always describe one dispatch.
+   */
+  params: DispatchInput | undefined;
+  /**
    * #890 — WHICH foreach item `input` belongs to (`'w@2'`, as `instanceId`). Unlike the
    * dataset address, an item's input genuinely differs from its siblings', and
    * `instanceId` is stamped by TERMINAL events only — so a parallel item still
@@ -616,7 +623,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   /* #890 — each dispatch's recorded input, by RAW id (`w@2`), so a row showing
      a settled foreach item's result can show THAT item's input (see the
      projection at the end). */
-  const inputByRaw = new Map<string, DispatchInput | undefined>();
+  const inputByRaw = new Map<
+    string,
+    { input: DispatchInput | undefined; params: DispatchInput | undefined }
+  >();
   /* Dispatches per RAW node id — `w@1` counted apart from `w@2`, unlike the
      row's own `attempts`, which folds every item's dispatch onto one number.
      A tool call belongs to ONE item's attempt, and saying `w@2`'s first exchange
@@ -669,6 +679,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         failureCode: undefined,
         datasetAddresses: undefined,
         input: undefined,
+        params: undefined,
         inputInstanceId: undefined,
         outputValues: undefined,
         copiedFromRunId: undefined,
@@ -879,8 +890,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.datasetAddresses = e.datasetAddresses;
         // #890 — unconditionally too, for the same reason.
         n.input = e.input;
+        n.params = e.params;
         n.inputInstanceId = instanceOf(e.nodeId);
-        inputByRaw.set(e.nodeId, e.input);
+        inputByRaw.set(e.nodeId, { input: e.input, params: e.params });
         openSpan(n, e.nodeId, row.ts);
         break;
       }
@@ -948,6 +960,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.datasetAddresses = undefined;
         // #890 — and the input: the re-dispatch records its own.
         n.input = undefined;
+        n.params = undefined;
         n.inputInstanceId = undefined;
         inputByRaw.delete(e.nodeId);
         /* #1299 — and the last progress tick, for the same argument again: the
@@ -1335,7 +1348,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
          panel would otherwise pair w@1's failure with w@2's input. With no
          item result on show, the latest dispatch stands. */
       ...(n.instanceId !== undefined
-        ? { input: inputByRaw.get(n.instanceId), inputInstanceId: n.instanceId }
+        ? {
+            input: inputByRaw.get(n.instanceId)?.input,
+            params: inputByRaw.get(n.instanceId)?.params,
+            inputInstanceId: n.instanceId,
+          }
         : {}),
     };
   });
@@ -1474,6 +1491,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          manufactured. */
       datasetAddresses: undefined,
       input: undefined,
+      params: undefined,
       inputInstanceId: undefined,
       outputValues: undefined,
       /* A row reached here because NO event named this node, and a copied

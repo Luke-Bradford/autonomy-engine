@@ -84,7 +84,9 @@ describe('#890 captureDispatchParams', () => {
   });
 
   it('is bounded like the input: cut at the cap, flagged, with the whole length', () => {
-    const got = captureDispatchParams({ connectionParams: { s: 'a'.repeat(DISPATCH_INPUT_MAX_CHARS) } });
+    const got = captureDispatchParams({
+      connectionParams: { s: 'a'.repeat(DISPATCH_INPUT_MAX_CHARS) },
+    });
     expect(got?.text.length).toBe(DISPATCH_INPUT_MAX_CHARS);
     expect(got?.truncated).toBe(true);
     expect(got?.chars).toBe(DISPATCH_INPUT_MAX_CHARS + 29);

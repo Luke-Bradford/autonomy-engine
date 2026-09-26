@@ -69,7 +69,8 @@ import { CaptureSection } from './CaptureSection';
  *
  * INPUT was on that list and no longer is: #890 records the config each
  * dispatch ran with, after `${}` substitution, on `node.dispatched`
- * (`InputSection`). A node the executor never dispatches — a control activity,
+ * (`InputSection`), with the connection and dataset parameters it applied
+ * beside it. A node the executor never dispatches — a control activity,
  * a pipeline call, a node a rerun copied — and an `llm_call` not on
  * `capture: 'full'` still have none, and get no section rather than an
  * invented one.
@@ -319,8 +320,8 @@ export function NodeActivityPanel({
           it rather than trailing after it. */}
       <ChildRuns node={node} />
 
-      {node.input !== undefined && (
-        <InputSection input={node.input} instanceId={node.inputInstanceId} />
+      {(node.input !== undefined || node.params !== undefined) && (
+        <InputSection input={node.input} params={node.params} instanceId={node.inputInstanceId} />
       )}
 
       {/* KEYED on the node's identity, which is load-bearing rather than tidy.
@@ -649,15 +650,21 @@ function CostSection({ node }: { node: NodeActivity }) {
  * stored text is mounted and can be selected and copied as it stands.
  * What a cut withholds is not in the log at all, and the hint says so rather
  * than offering a "show all" that has nothing more to show.
+ *
+ * The PARAMETERS the dispatch applied over its connection's and datasets'
+ * stored settings (`node.dispatched.params`) sit under their own heading: the
+ * config alone does not show them, and they are recorded, cut and withheld on
+ * the same terms. A dispatch that bound none has no Parameters heading.
  */
 function InputSection({
   input,
+  params,
   instanceId,
 }: {
-  input: DispatchInput;
+  input: DispatchInput | undefined;
+  params: DispatchInput | undefined;
   instanceId: string | undefined;
 }) {
-  const withheld = input.text === SECURE_REDACTED;
   return (
     <section className="contract-section">
       <h4>Input</h4>
@@ -667,22 +674,45 @@ function InputSection({
           dispatched most recently.
         </p>
       )}
-      {withheld ? (
-        <p className="page-hint">
-          <code>{SECURE_REDACTED}</code> — withheld from the run log: this node&rsquo;s run policy
-          has Secure input or Secure output set ({input.chars} characters).
-        </p>
+      {input !== undefined ? (
+        <RecordedText record={input} />
       ) : (
+        // Only a config JSON cannot represent gets here: everything else that
+        // withholds the config withholds the parameters too.
+        <p className="page-hint">This dispatch&rsquo;s config was not recorded.</p>
+      )}
+      {params !== undefined && (
         <>
-          <code className="node-detail-outputs">{input.text}</code>
-          {input.truncated === true && (
-            <p className="page-hint">
-              … the run log stored the first {input.text.length} of {input.chars} characters.
-            </p>
-          )}
+          <h5>Parameters</h5>
+          <p className="page-hint">
+            The connection and dataset parameters this dispatch applied over their stored settings.
+          </p>
+          <RecordedText record={params} />
         </>
       )}
     </section>
+  );
+}
+
+/** One `DispatchInput` as stored: the text, a cut hint, or the secure withholding. */
+function RecordedText({ record }: { record: DispatchInput }) {
+  if (record.text === SECURE_REDACTED) {
+    return (
+      <p className="page-hint">
+        <code>{SECURE_REDACTED}</code> — withheld from the run log: this node&rsquo;s run policy has
+        Secure input or Secure output set ({record.chars} characters).
+      </p>
+    );
+  }
+  return (
+    <>
+      <code className="node-detail-outputs">{record.text}</code>
+      {record.truncated === true && (
+        <p className="page-hint">
+          … the run log stored the first {record.text.length} of {record.chars} characters.
+        </p>
+      )}
+    </>
   );
 }
 

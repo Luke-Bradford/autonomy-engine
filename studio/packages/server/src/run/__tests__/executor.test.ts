@@ -2376,7 +2376,10 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     );
     const [dispatched] = dispatchesOf(db, run.id);
     expect(JSON.parse(dispatched!.params!.text)).toEqual({
-      datasetParams: { source: { path: 'in/2026-09-25.csv' }, sink: { path: 'out/2026-09-25.csv' } },
+      datasetParams: {
+        source: { path: 'in/2026-09-25.csv' },
+        sink: { path: 'out/2026-09-25.csv' },
+      },
     });
   });
 
