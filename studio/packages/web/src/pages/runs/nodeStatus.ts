@@ -1,4 +1,4 @@
-import type { ContainerRunStatus, NodeRunStatus } from '@autonomy-studio/shared';
+import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-studio/shared';
 
 /**
  * U25 — the Monitor's ONE graph vocabulary: the engine's own `NodeRunStatus`
@@ -142,7 +142,17 @@ const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
   external_wait_pending: 'waiting (callback)',
 };
 
-export function nodeStatusLabel(status: NodeRunStatus): string {
+/**
+ * CX4 (#1320) — the one wording that depends on the RUN, not just the node.
+ * A node still `pending` when its run finished `cancelled` is not waiting its
+ * turn: the cancel stopped it from ever starting (spec D2/D3 — cancel mode keeps
+ * a READY node `pending`). Printing "pending" under a terminal run would claim
+ * it may yet run. Every other status says the same thing whatever the run did.
+ */
+export const NOT_RUN_CANCELLED_LABEL = 'not run (cancelled)';
+
+export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
+  if (status === 'pending' && runStatus === 'cancelled') return NOT_RUN_CANCELLED_LABEL;
   return NODE_STATUS_LABELS[status];
 }
 

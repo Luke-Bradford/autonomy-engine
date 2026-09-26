@@ -68,6 +68,20 @@ describe('nodeStatusLabel', () => {
     expect(nodeStatusLabel('retry_pending')).toBe('retrying');
   });
 
+  it('CX4 (#1320) — a node a cancel stopped from starting says so, instead of "pending"', () => {
+    expect(nodeStatusLabel('pending', 'cancelled')).toBe('not run (cancelled)');
+    // Only `pending` changes: a node the cancel caught mid-flight failed, and one
+    // that finished before it keeps what it did.
+    expect(nodeStatusLabel('success', 'cancelled')).toBe('success');
+    expect(nodeStatusLabel('failure', 'cancelled')).toBe('failure');
+    // And only under a CANCELLED run: a live run's pending node may yet run, and
+    // a failed run's pending node was routed nowhere by the failure, not a cancel.
+    for (const run of ['running', 'waiting', 'failure', 'interrupted', 'success'] as const) {
+      expect(nodeStatusLabel('pending', run)).toBe('pending');
+    }
+    expect(nodeStatusLabel('pending')).toBe('pending');
+  });
+
   it('words no two statuses the same — a label an operator cannot invert is not a label', () => {
     const labels = NodeRunStatusSchema.options.map((s) => nodeStatusLabel(s));
     expect(new Set(labels).size).toBe(labels.length);

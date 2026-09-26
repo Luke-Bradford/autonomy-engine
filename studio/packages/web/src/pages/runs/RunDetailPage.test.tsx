@@ -24,6 +24,7 @@ vi.mock('../../api/runs', async (importActual) => ({
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
   rerunFromFailed: vi.fn(),
+  cancelRun: vi.fn(),
   /* Defaulted to `[]` rather than a bare `vi.fn()`, and listed HERE rather than
      left to fall through to the real module. An un-mocked member of this module
      reaches `fetch`, which jsdom cannot serve; the rejection lands inside an
@@ -53,6 +54,7 @@ vi.mock('./useRunStream', async (importActual) => ({
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
+const cancelRunMock = vi.mocked(runsApi.cancelRun);
 const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
 const completeExternalWaitMock = vi.mocked(runsApi.completeExternalWait);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
@@ -604,7 +606,7 @@ describe('RunDetailPage', () => {
 
         expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
         // The doc-free fold, left to itself, would have said `running` here.
-        expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+        expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null, cancelRequested: false });
       });
 
       /**
@@ -1888,6 +1890,151 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
   it('shows no lineage row on an original run', async () => {
     await mountWithStatus('failure');
     expect(screen.queryByText('Rerun of')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * CX4 (#1320) — the cancel action. The engine and server halves (CX1/CX2) are
+ * pinned in their own packages; these pin the page: where the control is
+ * offered, what the confirmation says, how a refusal and the queued row-patch
+ * are shown, and that "Cancelling…" is read off the LOG, not the 202.
+ */
+describe('RunDetailPage — the cancel-run action (CX4)', () => {
+  const ACTION = 'Cancel run';
+  const started = () =>
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} });
+  const dispatched = () =>
+    envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    });
+  const cancelRequested = () =>
+    envelope({ type: 'run.cancelRequested', runId: 'run_1', source: { kind: 'operator' } });
+
+  async function mountWithStatus(status: Run['status']) {
+    getRunDetailMock.mockResolvedValue({ run: run({ status }), pipelineVersion: version() });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByText('pv_1');
+  }
+
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    cancelRunMock.mockResolvedValue({ runId: 'run_1', state: 'requested' });
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  it.each(['pending', 'queued', 'running', 'waiting'] as const)(
+    'offers the action on a %s run',
+    async (s) => {
+      await mountWithStatus(s);
+      expect(screen.getByRole('button', { name: ACTION })).toBeInTheDocument();
+    },
+  );
+
+  it.each(['success', 'failure', 'interrupted', 'cancelled'] as const)(
+    'withholds the action on a %s run',
+    async (s) => {
+      await mountWithStatus(s);
+      expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
+    },
+  );
+
+  it('confirms first, naming what is in progress, then cancels THIS run', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: [started(), dispatched()] }));
+    await mountWithStatus('running');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const text = String(confirmSpy.mock.calls[0]?.[0]);
+    expect(text).toContain('HTTP Request 1 — running');
+    expect(text).toContain('is not undone');
+    expect(cancelRunMock).toHaveBeenCalledWith('run_1');
+  });
+
+  it('sends nothing when the confirmation is declined', async () => {
+    confirmSpy.mockReturnValue(false);
+    await mountWithStatus('running');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(cancelRunMock).not.toHaveBeenCalled();
+  });
+
+  it('says why the server refused, and gives the button back', async () => {
+    cancelRunMock.mockRejectedValue(new ApiError(409, "run 'run_1' has already ended (success)"));
+    await mountWithStatus('running');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('has already ended (success)');
+    expect(screen.getByRole('button', { name: ACTION })).toBeEnabled();
+  });
+
+  /* A queued run is cancelled by a row patch and has no log (spec D5), so no
+     event will ever tail in: the page must re-read the row or it would keep
+     saying `queued` over a run that is gone. */
+  it('re-reads the row when a QUEUED run is cancelled outright', async () => {
+    cancelRunMock.mockResolvedValue({ runId: 'run_1', state: 'cancelled' });
+    vi.mocked(runsApi.getRun).mockResolvedValue(run({ status: 'cancelled' }));
+    await mountWithStatus('queued');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(
+      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
+  });
+
+  /* The 202 is not the fact: a `requested` intent lost with a crashed process
+     leaves the run running (D6/D7). Only the folded `run.cancelRequested` may
+     turn the header into "Cancelling…". */
+  it('says "Cancelling…" once the cancel is on the LOG, and not before', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: [started(), dispatched()] }));
+    await mountWithStatus('running');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(cancelRunMock).toHaveBeenCalled();
+    expect(screen.queryByText('Cancelling…', { selector: '.run-status' })).not.toBeInTheDocument();
+  });
+
+  it('shows "Cancelling…" while a folded cancel drains, and withdraws the control', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({ events: [started(), dispatched(), cancelRequested()] }),
+    );
+    await mountWithStatus('running');
+    expect(screen.getByText('Cancelling…', { selector: '.run-status' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
+  });
+
+  it('shows a cancelled run, and names the node the cancel kept from starting', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          started(),
+          dispatched(),
+          cancelRequested(),
+          envelope({
+            type: 'node.failed',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            error: 'run cancelled',
+            kind: 'cancelled',
+            code: 'run_cancelled',
+          } as EngineEvent),
+          envelope({
+            type: 'run.finished',
+            runId: 'run_1',
+            outcome: 'cancelled',
+            reason: 'cancelled:operator',
+          }),
+        ],
+      }),
+    );
+    await mountWithStatus('running');
+    expect(
+      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Cancelling…')).not.toBeInTheDocument();
+    // `never` hangs off greet's failure edge: the cancel kept it from starting.
+    const row = (await screen.findByRole('button', { name: 'HTTP Request 2' })).closest('tr')!;
+    expect(within(row).getByText('not run (cancelled)')).toBeInTheDocument();
   });
 });
 

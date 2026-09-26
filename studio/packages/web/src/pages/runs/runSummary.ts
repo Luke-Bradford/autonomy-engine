@@ -1502,6 +1502,14 @@ export interface RunLifecycle {
    * stale reason cannot survive an unpark and be rendered over a running run.
    */
   waitingReason: WaitingReason | null;
+  /**
+   * CX4 (#1320) — whether a `run.cancelRequested` has been folded. The page
+   * shows "Cancelling…" while this is true and the run is not yet terminal (the
+   * cancel spec's D2: in-flight work drains before the run finishes). Never
+   * cleared, like the reducer's `RunState.cancelRequested`: once the terminal
+   * lands it is simply no longer read.
+   */
+  cancelRequested: boolean;
 }
 
 /**
@@ -1538,9 +1546,13 @@ export interface RunLifecycle {
 export function deriveRunLifecycle(events: RunEvent[]): RunLifecycle | null {
   let status: RunLifecycleStatus | null = null;
   let waitingReason: WaitingReason | null = null;
+  let cancelRequested = false;
   for (const row of events) {
     const e = parseEngineEvent(row);
     if (e === null) continue;
+    // Before the status arms: a cancel also un-parks (it is in UNPARK_EVENTS),
+    // and that arm below must still run for it.
+    if (e.type === 'run.cancelRequested') cancelRequested = true;
     const terminal = terminalStatusOf(e);
     if (terminal !== null) {
       status = terminal;
@@ -1592,5 +1604,5 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycle | null {
       }
     }
   }
-  return status === null ? null : { status, waitingReason };
+  return status === null ? null : { status, waitingReason, cancelRequested };
 }

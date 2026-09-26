@@ -173,7 +173,7 @@ export function runFlowNodes(
     const status = showStatus ? (state?.nodes[n.id]?.status ?? null) : null;
     /* U25 — the node says the same word the table's pill does. The TONE still
        comes off the raw engine status; only what an operator reads is worded. */
-    const label = status === null ? null : nodeStatusLabel(status);
+    const label = status === null ? null : nodeStatusLabel(status, state?.status);
     return {
       id: n.id,
       type: 'runActivity',
