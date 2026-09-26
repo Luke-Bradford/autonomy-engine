@@ -806,3 +806,24 @@ export function confirmContainerEdit(
   );
   return message === null || window.confirm(message);
 }
+
+/**
+ * Do two `issuesBySubject` results say the same thing — the same subjects, each
+ * with the same messages in the same order? Lets the canvas keep one map
+ * identity across recomputes that changed nothing (see its use in
+ * `PipelineCanvas`).
+ */
+export function sameAttribution(
+  a: ReadonlyMap<string, readonly SubjectIssue[]>,
+  b: ReadonlyMap<string, readonly SubjectIssue[]>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, list] of a) {
+    const other = b.get(key);
+    if (other === undefined || other.length !== list.length) return false;
+    if (list.some((issue, i) => issue.raw !== other[i]!.raw || issue.text !== other[i]!.text)) {
+      return false;
+    }
+  }
+  return true;
+}

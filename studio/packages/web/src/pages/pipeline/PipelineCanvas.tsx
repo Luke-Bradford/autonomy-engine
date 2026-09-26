@@ -91,6 +91,7 @@ import {
   containerLabels,
   issuesBySubject,
   readableIssue,
+  sameAttribution,
 } from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
 import {
@@ -602,10 +603,19 @@ export function PipelineCanvas({
     () => [...located.map((issue) => issue.text), ...nameIssues(params, outputs)],
     [located, params, outputs],
   );
-  const bySubject = useMemo(
+  const attribution = useMemo(
     () => issuesBySubject(located, nodes, edges, containers),
     [located, nodes, edges, containers],
   );
+  // Held at a STABLE identity while its content is unchanged. `located` is
+  // recomputed on every param keystroke, so without this each one would hand
+  // the context a fresh map and re-render every box on the canvas for an edit
+  // that attributed nothing new. State adjusted during render — React's
+  // "information from previous renders" pattern — rather than a ref read.
+  const [bySubject, setBySubject] = useState(attribution);
+  if (bySubject !== attribution && !sameAttribution(bySubject, attribution)) {
+    setBySubject(attribution);
+  }
 
   /**
    * #1141 — why a save is refused, computed ONCE and read by BOTH buttons that

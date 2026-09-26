@@ -8,6 +8,7 @@ import {
   issuesBySubject,
   readableIssue,
   routingChangeBetween,
+  sameAttribution,
   routingSentence,
   subjectKey,
   type ContainerEditDoc,
@@ -864,5 +865,34 @@ describe('issuesBySubject (#863)', () => {
     );
     expect(map.get(subjectKey('node', 'a.b'))?.map((i) => i.text)).toEqual(['x']);
     expect(map.get(subjectKey('node', 'a'))?.map((i) => i.text)).toEqual(['y']);
+  });
+});
+
+describe('sameAttribution (#863)', () => {
+  const one = (raw: string, text = raw) => ({ raw, text });
+  const map = (entries: Array<[string, Array<{ raw: string; text: string }>]>) => new Map(entries);
+
+  it('is true for equal content held in different objects', () => {
+    expect(sameAttribution(map([['node:a', [one('x')]]]), map([['node:a', [one('x')]]]))).toBe(
+      true,
+    );
+    expect(sameAttribution(map([]), map([]))).toBe(true);
+  });
+
+  it.each([
+    ['a different subject', map([['node:b', [one('x')]]])],
+    [
+      'an extra subject',
+      map([
+        ['node:a', [one('x')]],
+        ['node:b', [one('y')]],
+      ]),
+    ],
+    ['an extra message', map([['node:a', [one('x'), one('y')]]])],
+    ['a different raw message', map([['node:a', [one('z', 'x')]]])],
+    // A rename changes only the READABLE text — the badge's title must follow it.
+    ['the same raw message worded differently', map([['node:a', [one('x', 'renamed')]]])],
+  ])('is false for %s', (_, other) => {
+    expect(sameAttribution(map([['node:a', [one('x')]]]), other)).toBe(false);
   });
 });
