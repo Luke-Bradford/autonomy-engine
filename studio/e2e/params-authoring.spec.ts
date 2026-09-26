@@ -46,6 +46,8 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     // Blur commits the default — the one control that cannot write per keystroke.
     await page.getByLabel('param 1 name').click();
 
+    // #844 — outputs are the property dock's second tab.
+    await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('button', { name: 'Add output' }).click();
     await page.getByLabel('output 1 name').fill('answer');
     await page.getByLabel('output 1 type').selectOption('json');
@@ -65,6 +67,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     // Typed, not the raw text: the doc stores the NUMBER 42, which formats back
     // to '42' — a stored string would too, so the server body is checked below.
     await expect(page.getByLabel('param 1 default')).toHaveValue('42');
+    await page.getByRole('tab', { name: 'Outputs' }).click();
     await expect(page.getByLabel('output 1 name')).toHaveValue('answer');
     await expect(page.getByLabel('output 1 type')).toHaveValue('json');
 
@@ -97,6 +100,8 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
 
     await expect(page.getByLabel('param 1 name')).toHaveValue('kept');
 
+    // #844 — outputs are the property dock's second tab.
+    await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('button', { name: 'Add output' }).click();
     await page.getByLabel('output 2 name').fill('added');
     await page.getByRole('button', { name: 'Save version' }).click();

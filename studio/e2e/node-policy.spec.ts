@@ -7,6 +7,14 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  * in the canvas. Before this it could be set only through the API or an import.
  */
 
+/** #852 — run policy is the property dock's General tab (ADF's). */
+async function openGeneralTab(page: Page): Promise<void> {
+  await page
+    .getByRole('complementary', { name: 'Properties' })
+    .getByRole('tab', { name: 'General' })
+    .click();
+}
+
 function policySection(page: Page) {
   return page
     .getByRole('complementary', { name: 'Properties' })
@@ -41,6 +49,7 @@ test.describe('#1312 — node run policy editor', () => {
     const problems = collectPageProblems(page);
     const id = await openSeededCanvas(page, 'policy round trip', seed);
     await nodeById(page, 'a').click();
+    await openGeneralTab(page);
 
     const section = policySection(page);
     await section.getByLabel('Retries').fill('2');
@@ -61,6 +70,7 @@ test.describe('#1312 — node run policy editor', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
+    await openGeneralTab(page);
     await expect(policySection(page).getByLabel('Retries')).toHaveValue('2');
     await expect(policySection(page).getByLabel('Retry interval (seconds)')).toHaveValue('60');
     await expect(policySection(page).getByLabel('Secure output')).toBeChecked();
@@ -75,6 +85,7 @@ test.describe('#1312 — node run policy editor', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'policy refused', seed);
     await nodeById(page, 'a').click();
+    await openGeneralTab(page);
 
     const section = policySection(page);
     const save = page.getByRole('button', { name: 'Save version' });

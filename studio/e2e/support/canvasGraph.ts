@@ -118,6 +118,15 @@ export async function viewportSettled(page: Page): Promise<string> {
 }
 
 /**
+ * The zoom in a React Flow viewport transform (`translate(Xpx,Ypx) scale(Z)`),
+ * as written — a string, so two readings compare exactly. `undefined` when the
+ * transform carries no scale, which a caller should treat as a broken reader.
+ */
+export function scaleOf(transform: string): string | undefined {
+  return /scale\(([^)]+)\)/.exec(transform)?.[1];
+}
+
+/**
  * Reveal everything the viewport culled and settle it — then the node at `index`
  * is measured, draggable, and where its `boundingBox()` says it is.
  */

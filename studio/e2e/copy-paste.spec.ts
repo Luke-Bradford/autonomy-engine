@@ -1,6 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { canvasNodes, edgeGroup, marqueeAllNodes, viewportSettled } from './support/canvasGraph';
+import {
+  canvasNodes,
+  edgeGroup,
+  fitAndSettle,
+  marqueeAllNodes,
+  scaleOf,
+  viewportSettled,
+} from './support/canvasGraph';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 
 /**
@@ -217,6 +224,11 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await expect(canvasNodes(page)).toHaveCount(2);
     await page.keyboard.press('Meta+v');
     await expect(page.getByText('Pasted 2 activities from another pipeline.')).toBeVisible();
+    // Fit before COUNTING: the canvas culls off-screen nodes, and the #1336
+    // reveal pans to the PASTE, which at the wider canvas the #852 bottom dock
+    // gives (and so a closer fitted zoom) can take the originals out of view.
+    // What is asserted here is the doc, not the reveal.
+    await fitAndSettle(page);
     await expect(canvasNodes(page)).toHaveCount(4);
     // z→a, and the copied a'→b'. NOT a re-derived z→a' off the coincident id.
     await expect(edgeGroup(page)).toHaveCount(2);
@@ -290,8 +302,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
     }
     // It PANNED: the viewport moved, and the zoom the operator had is kept.
     expect(after).not.toBe(before);
-    const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
-    expect(scale(after)).toBe(scale(before));
+    expect(scaleOf(after)).toBe(scaleOf(before));
 
     await expectQuiet(page, problems);
   });

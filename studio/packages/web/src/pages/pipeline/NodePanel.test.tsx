@@ -109,6 +109,8 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
     expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
     // #1312 — the early return keeps the run policy section: retry applies to a
     // call, and a secure flag refused on one must be explained where it is set.
+    // #852 — on the General tab, as for any activity.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
     // The generic config-JSON editor + Apply are NOT offered.
     expect(screen.queryByLabelText(/Config \(JSON\)/)).toBeNull();
@@ -1578,11 +1580,62 @@ describe('parameter override editor (#1304)', () => {
 describe('NodePanel — run policy (#1312)', () => {
   it('offers the run policy section on an ordinary activity, writing to node.policy', () => {
     const { store } = mountOver(httpNode({ url: 'https://example.test' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
     const section = screen.getByRole('group', { name: 'Run policy' });
     fireEvent.click(within(section).getByLabelText('Secure output'));
     expect(store.getState().nodes[0]?.policy).toEqual({ secureOutput: true });
     // Straight to the store: the config form's Apply is not involved.
     expect(store.getState().nodes[0]?.config).toEqual({ url: 'https://example.test' });
+  });
+});
+
+describe('NodePanel — the dock tabs (#852)', () => {
+  it('opens on Settings, with run policy behind General', () => {
+    mountOver(httpNode({ url: 'https://example.test' }));
+    expect(screen.getByRole('tab', { name: 'Settings', selected: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Run policy' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
+  });
+
+  it('keeps a half-typed field in the tab it left', () => {
+    // The panels are HIDDEN, not unmounted. `Retries` holds its draft in its OWN
+    // state until blur (#1315), so a strip that unmounted the tab it left would
+    // throw that draft away on the way to the Settings form and back.
+    const { store } = mountOver(httpNode({ url: 'https://example.test' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    fireEvent.change(screen.getByLabelText('Retries'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    expect((screen.getByLabelText('Retries') as HTMLInputElement).value).toBe('3');
+    // Still a draft — nothing reached the store without the blur.
+    expect(store.getState().nodes[0]?.policy).toBeUndefined();
+  });
+
+  it('follows a lifted tab choice, so the host can keep it across nodes', () => {
+    const store = createCanvasStore();
+    store.setState({ nodes: [httpNode({ url: 'https://example.test' })] });
+    const onTab = vi.fn();
+    render(
+      <NodePanel
+        store={store}
+        connections={[]}
+        datasets={[]}
+        nodeId={httpNode({}).id}
+        nodeType="http_request"
+        config={{ url: 'https://example.test' }}
+        connectionId={undefined}
+        call={undefined}
+        tab="general"
+        onTab={onTab}
+      />,
+    );
+    expect(screen.getByRole('group', { name: 'Run policy' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(onTab).toHaveBeenCalledWith('settings');
   });
 });
 
@@ -1622,7 +1675,7 @@ describe('NodePanel — the issues on this node (#863)', () => {
     expect(screen.getByText('2 validation issues')).toBeTruthy();
     expect(screen.getByText('readable bad ref')).toBeTruthy();
     expect(screen.queryByText('readable policy refusal')).toBeNull();
-    expect(screen.getByText('1 more under Run policy, below.')).toBeTruthy();
+    expect(screen.getByText('1 more under Run policy, on the General tab.')).toBeTruthy();
   });
 
   it('shows no issue section for a node with none', () => {

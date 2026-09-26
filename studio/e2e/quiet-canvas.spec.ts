@@ -5,6 +5,7 @@ import {
   canvasNodes,
   deselect,
   edgeGroup,
+  scaleOf,
   seedSelectedEdge,
   selectEdge,
 } from './support/canvasGraph';
@@ -338,8 +339,17 @@ test.describe('#1066 — a container collapses its ports too', () => {
     await nodeById(page, 'a').click();
     await page.getByRole('button', { name: 'Delete node' }).click();
     await expect(nodeById(page, 'a')).toHaveCount(0);
+    // In FLOW units (screen height / zoom): the fitted zoom depends on the
+    // canvas's shape, which the #852 bottom dock changed, while the box, its
+    // ports and its ✕ all scale together — so the relation under test does not.
     await expect
-      .poll(async () => (await page.locator('.flow-container').boundingBox())?.height)
+      .poll(async () => {
+        const height = (await page.locator('.flow-container').boundingBox())?.height ?? Infinity;
+        const transform = await page
+          .locator('.react-flow__viewport')
+          .evaluate((el) => (el as HTMLElement).style.transform);
+        return height / Number(scaleOf(transform) ?? 'NaN');
+      })
       .toBeLessThan(140);
 
     const remove = page

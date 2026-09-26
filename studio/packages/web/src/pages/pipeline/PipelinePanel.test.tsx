@@ -267,6 +267,8 @@ describe('PipelinePanel (U16) — outputs', () => {
 
   it('"Add output" puts a new row in the store', () => {
     const store = mount(version());
+    // #844 — outputs are the dock's second tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Outputs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add output' }));
     expect(store.getState().outputs).toHaveLength(1);
   });

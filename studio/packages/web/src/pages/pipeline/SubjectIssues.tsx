@@ -20,6 +20,7 @@ export function SubjectIssues({
    * Issues on this element that another section of the panel lists beside the
    * fields causing them (`PolicyEditor`), so they are COUNTED here — the header
    * then agrees with the canvas badge — and pointed at rather than repeated.
+   * `where` names the section AND how to reach it (e.g. its tab).
    */
   listedElsewhere?: { count: number; where: string };
 }) {
@@ -36,7 +37,9 @@ export function SubjectIssues({
         ))}
         {elsewhere > 0 && (
           <li>
-            {elsewhere} more under {listedElsewhere?.where}, below.
+            {/* #852 — no "below": the section named may sit on another tab of
+                the dock, so the caller's `where` says where it is. */}
+            {elsewhere} more under {listedElsewhere?.where}.
           </li>
         )}
       </ul>

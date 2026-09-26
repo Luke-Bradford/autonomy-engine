@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -104,6 +104,7 @@ import {
 import { SubjectIssues } from './SubjectIssues';
 import { SubjectIssuesContext, useSubjectIssues } from './issueContext';
 import { PolicyEditor } from './PolicyEditor';
+import { PanelTabs } from './PanelTabs';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
   completionSibling,
@@ -210,6 +211,9 @@ export function PipelineCanvas({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  // #852 — the property dock can be folded away to give the canvas the height.
+  const [dockOpen, setDockOpen] = useState(true);
+  const dockBodyId = useId();
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
@@ -536,6 +540,9 @@ export function PipelineCanvas({
   const params = useStore(store, (s) => s.params);
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
+  // #852 — read by the folded dock's toggle, so a selection made while the
+  // properties are folded away still gets a visible answer.
+  const selectedCount = useStore(store, (s) => s.selected.length);
   const loaded = useStore(store, (s) => s.loaded);
 
   const arrangeReason = arrangeDisabledReason({
@@ -1248,22 +1255,53 @@ export function PipelineCanvas({
             {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
             <ActivityToolbox store={store} />
-            <div className="canvas-wrap">
-              <ReactFlowProvider>
-                <FlowCanvas
-                  store={store}
-                  fitSignal={fitSignal}
-                  measuredSizesRef={measuredSizesRef}
-                />
-              </ReactFlowProvider>
+            {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
+                properties sit under it (ADF's layout), and one dock serves both
+                the activity forms and the pipeline's params/outputs. */}
+            <div className="canvas-main">
+              <div className="canvas-wrap">
+                <ReactFlowProvider>
+                  <FlowCanvas
+                    store={store}
+                    fitSignal={fitSignal}
+                    measuredSizesRef={measuredSizesRef}
+                  />
+                </ReactFlowProvider>
+              </div>
+              <div
+                className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
+              >
+                <button
+                  type="button"
+                  className="property-dock__toggle"
+                  aria-expanded={dockOpen}
+                  aria-controls={dockBodyId}
+                  onClick={() => setDockOpen((open) => !open)}
+                >
+                  {/* Folded, a selection would otherwise change nothing on screen
+                      but the canvas highlight. The dock does NOT reopen by itself:
+                      the operator folded it to look at the graph, and a click or a
+                      drag selects — so the toggle says what is waiting instead. */}
+                  {dockOpen
+                    ? 'Hide properties'
+                    : selectedCount > 0
+                      ? `Show properties (${String(selectedCount)} selected)`
+                      : 'Show properties'}
+                </button>
+                {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
+                    (an unapplied config form, a half-typed param) that closing
+                    the dock to look at the graph must not throw away. */}
+                <div id={dockBodyId} className="property-dock__body" hidden={!dockOpen}>
+                  <PropertyPanel
+                    store={store}
+                    connections={connections}
+                    datasets={datasets}
+                    pipelineId={pipelineId}
+                    onNotice={showCanvasMsg}
+                  />
+                </div>
+              </div>
             </div>
-            <PropertyPanel
-              store={store}
-              connections={connections}
-              datasets={datasets}
-              pipelineId={pipelineId}
-              onNotice={showCanvasMsg}
-            />
           </div>
         </SubjectIssuesContext.Provider>
       )}
@@ -1294,6 +1332,20 @@ function PropertyPanel({
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
+  // #852 / #844 — the dock's tab choices live HERE, above the panels, because
+  // `NodePanel` is keyed per node: selecting another activity remounts it, and
+  // the operator should land on the tab they were using, as ADF does.
+  const [nodeTab, setNodeTab] = useState<NodeTab>('settings');
+  const [pipelineTab, setPipelineTab] = useState<PipelineTab>('params');
+  const pipelinePanel = (
+    <PipelinePanel
+      store={store}
+      pipelineId={pipelineId}
+      onNotice={onNotice}
+      tab={pipelineTab}
+      onTab={setPipelineTab}
+    />
+  );
 
   // U21 — a marquee selects many, and the editor below edits ONE. `singleSelection`
   // is the seam: many is its own state with its own panel, not "the first one".
@@ -1308,14 +1360,14 @@ function PropertyPanel({
     );
   }
   const selected = singleSelection(selection);
-  if (!selected) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
+  if (!selected) return pipelinePanel;
 
   if (selected.kind === 'edge') {
     const edge = edges.find((e) => e.id === selected.id);
     // A selection pointing at an element that no longer exists is, from the
     // operator's side, indistinguishable from having nothing selected — so it
     // gets the same pipeline-level panel as the `!selected` branch above.
-    if (!edge) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
+    if (!edge) return pipelinePanel;
     // Keyed like `NodePanel`: `EdgePanel` holds a DRAFT for the bounce cap, and
     // selecting a different edge must not carry the previous one's half-typed
     // text (or its error) onto it.
@@ -1324,8 +1376,7 @@ function PropertyPanel({
 
   if (selected.kind === 'container') {
     const container = containers.find((c) => c.id === selected.id);
-    if (!container)
-      return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
+    if (!container) return pipelinePanel;
     // Keyed for the same reason the other two are: the form holds a draft per
     // field, and configuring a different container must not carry the previous
     // one's half-typed values (or its error) onto it.
@@ -1355,7 +1406,7 @@ function PropertyPanel({
   }
 
   const node = nodes.find((n) => n.id === selected.id);
-  if (!node) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
+  if (!node) return pipelinePanel;
   return (
     <NodePanel
       key={node.id}
@@ -1367,6 +1418,8 @@ function PropertyPanel({
       config={node.config}
       connectionId={node.connectionId}
       call={node.call}
+      tab={nodeTab}
+      onTab={setNodeTab}
     />
   );
 }
@@ -1506,14 +1559,24 @@ export function MultiSelectionPanel({
  *
  * Exported for its own tests, the same reason `EdgePanel`/`NodePanel` are.
  */
+/** #844 — the pipeline-level panel's tabs. */
+export type PipelineTab = 'params' | 'outputs';
+/** #852 — an activity's tabs: its configuration, then ADF's "General" (run policy). */
+export type NodeTab = 'settings' | 'general';
+
 export function PipelinePanel({
   store,
   pipelineId,
   onNotice,
+  tab,
+  onTab,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   pipelineId: string;
   onNotice: (message: string) => void;
+  /** #844 — the dock's lifted tab choice; see `PanelTabs`. */
+  tab?: PipelineTab;
+  onTab?: (tab: PipelineTab) => void;
 }) {
   const params = useStore(store, (s) => s.params);
   const outputs = useStore(store, (s) => s.outputs);
@@ -1541,32 +1604,53 @@ export function PipelinePanel({
         Paste
       </button>
 
-      <section className="contract-section">
-        <h4>Params</h4>
-        <p className="page-hint">
-          The typed inputs a run supplies. Referenced as <code>{'${params.name}'}</code>, and what a
-          trigger binds its values to.
-        </p>
-        {params.length === 0 ? <p className="page-hint">None declared.</p> : null}
-        {params.map((p, i) => (
-          <ParamRow key={i} store={store} index={i} param={p} />
-        ))}
-        <button type="button" onClick={() => store.getState().addParam()}>
-          Add param
-        </button>
-      </section>
-
-      <section className="contract-section">
-        <h4>Outputs</h4>
-        <p className="page-hint">The results this pipeline declares to a caller.</p>
-        {outputs.length === 0 ? <p className="page-hint">None declared.</p> : null}
-        {outputs.map((o, i) => (
-          <OutputRow key={i} store={store} index={i} output={o} />
-        ))}
-        <button type="button" onClick={() => store.getState().addOutput()}>
-          Add output
-        </button>
-      </section>
+      {/* #844 — the U16 contract editor, as the dock's pipeline-level tabs (ADF's
+          Parameters / Output). Each section keeps its heading inside its tab, so
+          a panel read on its own still says what it is. */}
+      <PanelTabs
+        label="Pipeline properties"
+        selected={tab}
+        onSelect={onTab}
+        tabs={[
+          {
+            key: 'params',
+            label: 'Parameters',
+            content: (
+              <section className="contract-section">
+                <h4>Params</h4>
+                <p className="page-hint">
+                  The typed inputs a run supplies. Referenced as <code>{'${params.name}'}</code>,
+                  and what a trigger binds its values to.
+                </p>
+                {params.length === 0 ? <p className="page-hint">None declared.</p> : null}
+                {params.map((p, i) => (
+                  <ParamRow key={i} store={store} index={i} param={p} />
+                ))}
+                <button type="button" onClick={() => store.getState().addParam()}>
+                  Add param
+                </button>
+              </section>
+            ),
+          },
+          {
+            key: 'outputs',
+            label: 'Outputs',
+            content: (
+              <section className="contract-section">
+                <h4>Outputs</h4>
+                <p className="page-hint">The results this pipeline declares to a caller.</p>
+                {outputs.length === 0 ? <p className="page-hint">None declared.</p> : null}
+                {outputs.map((o, i) => (
+                  <OutputRow key={i} store={store} index={i} output={o} />
+                ))}
+                <button type="button" onClick={() => store.getState().addOutput()}>
+                  Add output
+                </button>
+              </section>
+            ),
+          },
+        ]}
+      />
     </aside>
   );
 }
@@ -2429,6 +2513,8 @@ export function NodePanel({
   connectionId,
   call,
   datasets,
+  tab,
+  onTab,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
@@ -2439,6 +2525,9 @@ export function NodePanel({
   connectionId: string | undefined;
   /** #425 — the structural call blob, passed through to `CallPanel` for a call node. */
   call: CallConfig | undefined;
+  /** #852 — the dock's lifted tab choice; see `PanelTabs`. */
+  tab?: NodeTab;
+  onTab?: (tab: NodeTab) => void;
 }) {
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
@@ -2469,7 +2558,7 @@ export function NodePanel({
   );
   const policyElsewhere = {
     count: attributed.length - ownIssues.length,
-    where: 'Run policy',
+    where: 'Run policy, on the General tab',
   };
   const picker = useExpressionPicker(
     docNodes,
@@ -2780,14 +2869,37 @@ export function NodePanel({
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
         <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
-        <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
-        {/* Membership is orthogonal to the call blob, so this early return must
-            not swallow it: a container is exactly the construct that puts a call
-            node in one, and this is the only panel such a node ever gets. */}
-        <ContainerSection store={store} nodeId={nodeId} />
-        {/* #1312 — likewise policy: retry applies to a call, and a secure flag
-            is refused on one, which is explained only if the section is here. */}
-        <PolicyEditor store={store} nodeId={nodeId} />
+        <PanelTabs
+          label="Activity properties"
+          selected={tab}
+          onSelect={onTab}
+          tabs={[
+            {
+              key: 'settings',
+              label: 'Settings',
+              content: (
+                <>
+                  <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
+                  {/* Membership is orthogonal to the call blob, so this early
+                      return must not swallow it: a container is exactly the
+                      construct that puts a call node in one, and this is the
+                      only panel such a node ever gets. */}
+                  <ContainerSection store={store} nodeId={nodeId} />
+                </>
+              ),
+            },
+            {
+              key: 'general',
+              label: 'General',
+              content: (
+                // #1312 — likewise policy: retry applies to a call, and a secure
+                // flag is refused on one, which is explained only if the section
+                // is here.
+                <PolicyEditor store={store} nodeId={nodeId} />
+              ),
+            },
+          ]}
+        />
       </aside>
     );
   }
@@ -2796,251 +2908,285 @@ export function NodePanel({
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
       <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
-      {entry && !paired && entry.connectionKinds.length > 0 && (
-        <LabelledControl label="Connection">
-          {(id) => (
-            <select
-              id={id}
-              value={connectionId ?? ''}
-              onChange={(e) =>
-                store.getState().setNodeConnection(nodeId, e.target.value || undefined)
-              }
-            >
-              <option value="">— none —</option>
-              {eligible.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.kind})
-                </option>
-              ))}
-            </select>
-          )}
-        </LabelledControl>
-      )}
-      {entry &&
-        !paired &&
-        entry.connectionKinds.length > 0 &&
-        thisNode?.connectionId !== undefined && (
-          <ParamOverridesEditor
-            legend="Connection overrides"
-            noun="connection"
-            resource={overrideResourceFor(
-              connections,
-              thisNode.connectionId,
-              connectionOverrideResource,
-            )}
-            value={thisNode.connectionParams}
-            onChange={(next, key) =>
-              store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
-            }
-            picker={picker}
-            place={(n, key, v) => ({ ...n, connectionParams: { ...n.connectionParams, [key]: v } })}
-          />
-        )}
+      {/* #852 — ADF's split: what the activity DOES under Settings, how it RUNS
+          (retry, timeout, secure input/output) under General. Policy was already
+          outside the config form's Apply draft (#1312), so the tab boundary
+          follows a line the panel already drew. Container MEMBERSHIP stays on
+          Settings: it is also where a container is CREATED (U6d), an authoring
+          act that must not hide behind a second tab. */}
+      <PanelTabs
+        label="Activity properties"
+        selected={tab}
+        onSelect={onTab}
+        tabs={[
+          {
+            key: 'settings',
+            label: 'Settings',
+            content: (
+              <>
+                {entry && !paired && entry.connectionKinds.length > 0 && (
+                  <LabelledControl label="Connection">
+                    {(id) => (
+                      <select
+                        id={id}
+                        value={connectionId ?? ''}
+                        onChange={(e) =>
+                          store.getState().setNodeConnection(nodeId, e.target.value || undefined)
+                        }
+                      >
+                        <option value="">— none —</option>
+                        {eligible.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.kind})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </LabelledControl>
+                )}
+                {entry &&
+                  !paired &&
+                  entry.connectionKinds.length > 0 &&
+                  thisNode?.connectionId !== undefined && (
+                    <ParamOverridesEditor
+                      legend="Connection overrides"
+                      noun="connection"
+                      resource={overrideResourceFor(
+                        connections,
+                        thisNode.connectionId,
+                        connectionOverrideResource,
+                      )}
+                      value={thisNode.connectionParams}
+                      onChange={(next, key) =>
+                        store.getState().setNodeParamOverrides(nodeId, 'connection', next, key)
+                      }
+                      picker={picker}
+                      place={(n, key, v) => ({
+                        ...n,
+                        connectionParams: { ...n.connectionParams, [key]: v },
+                      })}
+                    />
+                  )}
 
-      {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
+                {/* #1139 — a PAIRED activity binds a source and a sink store. The singular
           picker above is hidden rather than shown alongside, because
           `validateDoc` refuses `connectionId` and `connectionIds` together. */}
-      {entry && paired && sinkConnectionKinds !== undefined && (
-        <>
-          <BindingSelect
-            label="Source connection"
-            value={boundConnections?.source}
-            options={eligibleForBinding(
-              connections,
-              (c) => entry.connectionKinds.includes(c.kind),
-              boundConnections?.source,
-            ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
-            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)}
-          />
-          <BindingSelect
-            label="Sink connection"
-            value={boundConnections?.sink}
-            options={eligibleForBinding(
-              connections,
-              (c) => sinkConnectionKinds.includes(c.kind),
-              boundConnections?.sink,
-            ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
-            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)}
-          />
-        </>
-      )}
+                {entry && paired && sinkConnectionKinds !== undefined && (
+                  <>
+                    <BindingSelect
+                      label="Source connection"
+                      value={boundConnections?.source}
+                      options={eligibleForBinding(
+                        connections,
+                        (c) => entry.connectionKinds.includes(c.kind),
+                        boundConnections?.source,
+                      ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+                      onPick={(id) =>
+                        store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)
+                      }
+                    />
+                    <BindingSelect
+                      label="Sink connection"
+                      value={boundConnections?.sink}
+                      options={eligibleForBinding(
+                        connections,
+                        (c) => sinkConnectionKinds.includes(c.kind),
+                        boundConnections?.sink,
+                      ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+                      onPick={(id) =>
+                        store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)
+                      }
+                    />
+                  </>
+                )}
 
-      {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
+                {/* #1139 — the dataset ADDRESSES within those stores. Narrowed by the
           connection bound to the SAME end as well as by kind: slice 4a refuses a
           node/dataset connection disagreement at dispatch
           (`DATASET_CONNECTION_MISMATCH`), so an unnarrowed list would offer
           bindings that cannot run. `sink` is optional — M12's `lookup` reads a
           source only. */}
-      {datasetKinds !== undefined && (
-        <>
-          <BindingSelect
-            label="Source dataset"
-            value={boundDatasets?.source}
-            options={eligibleForBinding(
-              datasets,
-              (d) =>
-                datasetKinds.source.includes(d.kind) &&
-                (sourceConnectionId === undefined || d.connectionId === sourceConnectionId),
-              boundDatasets?.source,
-            ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
-            onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)}
-          />
-          <DatasetOverrides
-            store={store}
-            node={thisNode}
-            side="source"
-            datasets={datasets}
-            picker={picker}
-          />
-          {datasetKinds.sink !== undefined && (
-            <BindingSelect
-              label="Sink dataset"
-              value={boundDatasets?.sink}
-              options={eligibleForBinding(
-                datasets,
-                (d) =>
-                  (datasetKinds.sink ?? []).includes(d.kind) &&
-                  (boundConnections?.sink === undefined ||
-                    d.connectionId === boundConnections.sink),
-                boundDatasets?.sink,
-              ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
-              onPick={(id) => store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)}
-            />
-          )}
-          {datasetKinds.sink !== undefined && (
-            <DatasetOverrides
-              store={store}
-              node={thisNode}
-              side="sink"
-              datasets={datasets}
-              picker={picker}
-            />
-          )}
-        </>
-      )}
+                {datasetKinds !== undefined && (
+                  <>
+                    <BindingSelect
+                      label="Source dataset"
+                      value={boundDatasets?.source}
+                      options={eligibleForBinding(
+                        datasets,
+                        (d) =>
+                          datasetKinds.source.includes(d.kind) &&
+                          (sourceConnectionId === undefined ||
+                            d.connectionId === sourceConnectionId),
+                        boundDatasets?.source,
+                      ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+                      onPick={(id) =>
+                        store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)
+                      }
+                    />
+                    <DatasetOverrides
+                      store={store}
+                      node={thisNode}
+                      side="source"
+                      datasets={datasets}
+                      picker={picker}
+                    />
+                    {datasetKinds.sink !== undefined && (
+                      <BindingSelect
+                        label="Sink dataset"
+                        value={boundDatasets?.sink}
+                        options={eligibleForBinding(
+                          datasets,
+                          (d) =>
+                            (datasetKinds.sink ?? []).includes(d.kind) &&
+                            (boundConnections?.sink === undefined ||
+                              d.connectionId === boundConnections.sink),
+                          boundDatasets?.sink,
+                        ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+                        onPick={(id) =>
+                          store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)
+                        }
+                      />
+                    )}
+                    {datasetKinds.sink !== undefined && (
+                      <DatasetOverrides
+                        store={store}
+                        node={thisNode}
+                        side="sink"
+                        datasets={datasets}
+                        picker={picker}
+                      />
+                    )}
+                  </>
+                )}
 
-      {halfBound && (
-        <p className="contract-advisory" role="status">
-          Both ends of a binding are needed — a half-bound pair is not saved.
-        </p>
-      )}
+                {halfBound && (
+                  <p className="contract-advisory" role="status">
+                    Both ends of a binding are needed — a half-bound pair is not saved.
+                  </p>
+                )}
 
-      {/* A `copy` node that arrived by import or an API seed can carry a stray
+                {/* A `copy` node that arrived by import or an API seed can carry a stray
           singular `connectionId`. The paired branch hides the picker that would
           clear it, and `validateDoc` refuses the two together — so without this
           the doc would be unsaveable with no affordance to repair it. */}
-      {paired && connectionId !== undefined && (
-        <p className="contract-advisory">
-          This node also carries a single-connection binding, which a paired activity may not have.{' '}
-          <button
-            type="button"
-            onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
-          >
-            Clear it
-          </button>
-        </p>
-      )}
-      <ContainerSection store={store} nodeId={nodeId} />
+                {paired && connectionId !== undefined && (
+                  <p className="contract-advisory">
+                    This node also carries a single-connection binding, which a paired activity may
+                    not have.{' '}
+                    <button
+                      type="button"
+                      onClick={() => store.getState().setNodeConnection(nodeId, undefined)}
+                    >
+                      Clear it
+                    </button>
+                  </p>
+                )}
+                <ContainerSection store={store} nodeId={nodeId} />
 
-      <ConfigEditor
-        editor={editor}
-        className="contract-section"
-        rows={10}
-        advisory={null}
-        picker={picker}
-        emptyHint="This activity has no settings."
-        fieldModeExtra={
-          /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
+                <ConfigEditor
+                  editor={editor}
+                  className="contract-section"
+                  rows={10}
+                  advisory={null}
+                  picker={picker}
+                  emptyHint="This activity has no settings."
+                  fieldModeExtra={
+                    /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
              state. After the derived controls, never inside them: that loop is
              the generic U7 renderer and a field-name branch inside it would be
              the activity-specific fork U7 exists to keep out. A field-mode
              extra because it describes the FORM draft, which the author is not
              editing in JSON mode. */
-          mappingField && (
-            <div className="contract-section">
-              <button type="button" onClick={runAutoMap} disabled={autoMapBlocked !== null}>
-                Auto-map columns
-              </button>
-              {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
-              {autoMapNotice !== null && (
-                <p className="contract-advisory" role="status">
-                  {autoMapNotice}
-                </p>
-              )}
-              {/* NOT a live region, deliberately, though it sits beside one that is.
+                    mappingField && (
+                      <div className="contract-section">
+                        <button
+                          type="button"
+                          onClick={runAutoMap}
+                          disabled={autoMapBlocked !== null}
+                        >
+                          Auto-map columns
+                        </button>
+                        {autoMapBlocked !== null && <p className="page-hint">{autoMapBlocked}</p>}
+                        {autoMapNotice !== null && (
+                          <p className="contract-advisory" role="status">
+                            {autoMapNotice}
+                          </p>
+                        )}
+                        {/* NOT a live region, deliberately, though it sits beside one that is.
                   This is recomputed STATE rather than the outcome of a gesture, and
                   it changes on every keystroke in a mapping cell — announced, it
                   would talk over the author continuously and collide with the
                   notice above (#960's two-live-regions failure). It is plain
                   visible text, always present, read on demand. */}
-              {requiredUnwritten.length > 0 && (
-                <p className="contract-advisory">
-                  The sink requires a value for {requiredUnwritten.map((c) => c.name).join(', ')},
-                  and nothing writes {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy
-                  cannot succeed until every one is mapped.
-                </p>
-              )}
-              {optionalUnwritten.length > 0 && (
-                <p className="contract-advisory">
-                  Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
-                </p>
-              )}
-              {sinkAdvisory !== null &&
-                sinkAdvisory.duplicateWrites.map((pair) => (
-                  <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
-                    {pair.first} and {pair.second} differ only by case, so both write the same sink
-                    column — the store refuses that when the copy runs.
-                  </p>
-                ))}
-              {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
-                <p className="contract-advisory">
-                  {sinkAdvisory.undeclared.join(', ')}{' '}
-                  {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by the sink
-                  dataset.
-                </p>
-              )}
-              {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
-                <p className="contract-advisory">
-                  Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
-                </p>
-              )}
-              {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
-                <p className="contract-advisory">
-                  {sourceAdvisory.missing.join(', ')}{' '}
-                  {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the source
-                  dataset.
-                </p>
-              )}
-              {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
-                <p className="contract-advisory">
-                  {sourceAdvisory.ambiguous.join(', ')} match more than one source column
-                  case-insensitively — name the column exactly.
-                </p>
-              )}
-              {/* A declared column list is an authoring aid and can be stale, so
+                        {requiredUnwritten.length > 0 && (
+                          <p className="contract-advisory">
+                            The sink requires a value for{' '}
+                            {requiredUnwritten.map((c) => c.name).join(', ')}, and nothing writes{' '}
+                            {requiredUnwritten.length === 1 ? 'it' : 'them'} — the copy cannot
+                            succeed until every one is mapped.
+                          </p>
+                        )}
+                        {optionalUnwritten.length > 0 && (
+                          <p className="contract-advisory">
+                            Not copied: {optionalUnwritten.map((c) => c.name).join(', ')}.
+                          </p>
+                        )}
+                        {sinkAdvisory !== null &&
+                          sinkAdvisory.duplicateWrites.map((pair) => (
+                            <p className="contract-advisory" key={`${pair.first}/${pair.second}`}>
+                              {pair.first} and {pair.second} differ only by case, so both write the
+                              same sink column — the store refuses that when the copy runs.
+                            </p>
+                          ))}
+                        {sinkAdvisory !== null && sinkAdvisory.undeclared.length > 0 && (
+                          <p className="contract-advisory">
+                            {sinkAdvisory.undeclared.join(', ')}{' '}
+                            {sinkAdvisory.undeclared.length === 1 ? 'is' : 'are'} not declared by
+                            the sink dataset.
+                          </p>
+                        )}
+                        {sourceAdvisory !== null && sourceAdvisory.unmapped.length > 0 && (
+                          <p className="contract-advisory">
+                            Not read from the source: {sourceAdvisory.unmapped.join(', ')}.
+                          </p>
+                        )}
+                        {sourceAdvisory !== null && sourceAdvisory.missing.length > 0 && (
+                          <p className="contract-advisory">
+                            {sourceAdvisory.missing.join(', ')}{' '}
+                            {sourceAdvisory.missing.length === 1 ? 'is' : 'are'} not declared by the
+                            source dataset.
+                          </p>
+                        )}
+                        {sourceAdvisory !== null && sourceAdvisory.ambiguous.length > 0 && (
+                          <p className="contract-advisory">
+                            {sourceAdvisory.ambiguous.join(', ')} match more than one source column
+                            case-insensitively — name the column exactly.
+                          </p>
+                        )}
+                        {/* A declared column list is an authoring aid and can be stale, so
                   every line above is a warning and none of them is a refusal. The
                   gate reads the store's ACTUAL columns at dispatch. */}
-              {(sinkAdvisory !== null || sourceAdvisory !== null) && (
-                <p className="page-hint">
-                  Read from each dataset&rsquo;s declared columns, which can be out of date — the
-                  copy is checked against the store itself when it runs.
-                </p>
-              )}
-            </div>
-          )
-        }
-      />
+                        {(sinkAdvisory !== null || sourceAdvisory !== null) && (
+                          <p className="page-hint">
+                            Read from each dataset&rsquo;s declared columns, which can be out of
+                            date — the copy is checked against the store itself when it runs.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  }
+                />
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="form-actions">
-        <button type="button" onClick={apply}>
-          Apply config
-        </button>
-        {/* U21 — duplicate. Between Apply and Delete because that is the order
+                {error && (
+                  <p className="error" role="alert">
+                    {error}
+                  </p>
+                )}
+                <div className="form-actions">
+                  <button type="button" onClick={apply}>
+                    Apply config
+                  </button>
+                  {/* U21 — duplicate. Between Apply and Delete because that is the order
             of consequence, and because it acts on the node as SAVED into the
             store, not on the unapplied form state: the copy carries the config
             `Apply config` last wrote, which is why it sits after it. Ungated for
@@ -3048,16 +3194,23 @@ export function NodePanel({
             archived pipeline, which the server REFUSES (the button itself stays
             live); editing was left alone, and a copy that cannot yet be saved is
             still an edit the operator can undo. */}
-        <button type="button" onClick={() => store.getState().duplicateNode(nodeId)}>
-          Duplicate node
-        </button>
-        <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
-          Delete node
-        </button>
-      </div>
-      {/* #1312 — after the config form's actions, not between the form and its
-          Apply: policy writes straight to the store and is not part of that draft. */}
-      <PolicyEditor store={store} nodeId={nodeId} />
+                  <button type="button" onClick={() => store.getState().duplicateNode(nodeId)}>
+                    Duplicate node
+                  </button>
+                  <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
+                    Delete node
+                  </button>
+                </div>
+              </>
+            ),
+          },
+          {
+            key: 'general',
+            label: 'General',
+            content: <PolicyEditor store={store} nodeId={nodeId} />,
+          },
+        ]}
+      />
     </aside>
   );
 }

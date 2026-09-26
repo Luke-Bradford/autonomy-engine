@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { scaleOf } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
@@ -13,10 +14,7 @@ function viewportTransform(page: Page): Promise<string> {
   );
 }
 
-/** React Flow writes `translate(Xpx,Ypx) scale(Z)`. */
-function scaleOf(transform: string): string | undefined {
-  return /scale\(([^)]+)\)/.exec(transform)?.[1];
-}
+/** React Flow writes `translate(Xpx,Ypx) scale(Z)`; `scaleOf` reads the second half. */
 function translateOf(transform: string): { x: string | undefined; y: string | undefined } {
   const m = /translate\(([^,]+),\s*([^)]+)\)/.exec(transform);
   return { x: m?.[1], y: m?.[2] };
@@ -186,6 +184,11 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     // though U17 has since made it reversible. Playwright DISMISSES dialogs by
     // default, which would make this test pass for the wrong reason — nothing
     // deleted, nothing to save.
+    // #852 — the assertions below need a WIDTH-bound fit (vertical slack, so the
+    // box is off the right edge only). The bottom dock made the default canvas
+    // wide and short, which binds the fit on height instead; a narrower, taller
+    // viewport restores the shape this fixture was laid out for.
+    await page.setViewportSize({ width: 1000, height: 1000 });
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 

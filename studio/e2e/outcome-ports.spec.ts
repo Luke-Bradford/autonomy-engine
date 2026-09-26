@@ -330,6 +330,10 @@ test.describe('U19 outcome ports', () => {
    * and invisible on the one surface that is meant to show it.
    */
   test('an edge on an undeclared case still has a port, and is still drawn', async ({ page }) => {
+    // #852 — the property dock sits UNDER the canvas, so at the default 720px
+    // viewport the canvas is short enough to cull part of this fixture. A taller
+    // viewport restores the room the fixture was laid out for.
+    await page.setViewportSize({ width: 1280, height: 1000 });
     await openSeededCanvas(page, 'u19 orphan', {
       nodes: [
         {
