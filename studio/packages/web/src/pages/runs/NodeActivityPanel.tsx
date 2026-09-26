@@ -53,7 +53,8 @@ import { CaptureSection } from './CaptureSection';
  *    parent page, which is where it lives, and there is still nothing a
  *    node-scoped rerun control could call.
  *
- * Deliberately NOT shown yet, each for a stated reason rather than an oversight:
+ * Every drill-in item the U24 row names is now shown. The ones this list once
+ * deferred, each for a stated reason, have since shipped:
  *
  * COST and TOOL CALLS were on that list and no longer are: #866 shipped both.
  * Neither needed new data — `activity.metered` already carried the money and
@@ -307,6 +308,10 @@ export function NodeActivityPanel({
           it rather than trailing after it. */}
       <ChildRuns node={node} />
 
+      {node.input !== undefined && (
+        <InputSection input={node.input} instanceId={node.inputInstanceId} />
+      )}
+
       {/* KEYED on the node's identity, which is load-bearing rather than tidy.
           `RunDetailPage` swaps this panel IN PLACE when a different node is
           opened — it is not remounted (`node-drill-in.spec.ts` asserts exactly
@@ -316,10 +321,6 @@ export function NodeActivityPanel({
           DOM: the very thing the cap exists to prevent, reintroduced by the
           control that relieves it. A foreach folds every item onto ONE
           `nodeId`, so `instanceId` is part of the identity too. */}
-      {node.input !== undefined && (
-        <InputSection input={node.input} instanceId={node.inputInstanceId} />
-      )}
-
       <OutputsSection key={`${node.nodeId}#${node.instanceId ?? ''}`} node={node} />
 
       {/* The `||` is DEFENCE, not a live path: the tool loop yields its `metered`

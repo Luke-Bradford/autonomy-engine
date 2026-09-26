@@ -23,9 +23,9 @@ import { surrogateSafeCut } from './surrogate.js';
 export const DISPATCH_INPUT_MAX_CHARS = 4_000;
 
 /**
- * Compact JSON of `config` minus its `outputs` key, cut at `DISPATCH_INPUT_MAX_CHARS` without splitting a
- * surrogate pair. `chars` is always the WHOLE length and `truncated` is present
- * only when the text was cut. `undefined` when JSON cannot represent the value
+ * Compact JSON of `config` minus its `outputs` key, cut at
+ * `DISPATCH_INPUT_MAX_CHARS` without splitting a surrogate pair. `chars` is
+ * always the WHOLE length and `truncated` is present only when the text was cut. `undefined` when JSON cannot represent the value
  * (a cycle, a bigint): absent means "not recorded", and a substitute would be
  * an invented input.
  *
