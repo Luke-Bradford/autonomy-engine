@@ -19,6 +19,7 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
+import { RUN_TYPE_LABEL, runTypeOf, runTypeTitle } from './runType';
 import { RunTimeline } from './RunTimeline';
 import {
   hasActiveRunFilters,
@@ -576,6 +577,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                     <th scope="col">Run</th>
                     <th scope="col">Pipeline</th>
                     <th scope="col">Trigger</th>
+                    <th scope="col">Type</th>
                     <th scope="col">Status</th>
                     <th scope="col">Started</th>
                     <th scope="col">Duration</th>
@@ -601,6 +603,14 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                       {/* `null` for a rerun, or a run whose trigger was deleted —
                           an em-dash, never a manufactured name. */}
                       <td>{r.triggerName ?? '—'}</td>
+                      {/* RS6 — the Run-type column: the one cell in the row that
+                          says a run REUSED another's work (the Trigger em-dash
+                          above means "rerun OR deleted trigger"). The source id is
+                          the cell's title, not a link: two reruns of one run would
+                          put two identically named "Source run …" links on the
+                          page, and Watch already reaches the detail page's own
+                          lineage link. */}
+                      <td title={runTypeTitle(r)}>{RUN_TYPE_LABEL[runTypeOf(r)]}</td>
                       <td>
                         {/* #870 — the WORD comes from the Monitor's one run-status
                             vocabulary; the CLASS still comes from the status itself,

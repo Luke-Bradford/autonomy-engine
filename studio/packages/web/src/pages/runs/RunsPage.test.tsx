@@ -280,6 +280,38 @@ describe('RunsPage', () => {
     expect(cost.title).toMatch(/re-executed only from the failure onward/);
   });
 
+  /*
+     RS6 — the Run-type column. Before it, nothing in a row said a run was a
+     rerun: the Trigger em-dash means "rerun OR deleted trigger", and the Cost
+     title is reachable only on hover. The source id rides in the cell's title,
+     NOT as a link — two reruns of one run would otherwise put two identically
+     named "Source run …" links on the page, and each row's Watch link already
+     reaches the detail page's own lineage link.
+  */
+  it('says which runs are reruns from failed, and names the source run', async () => {
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_rerun', triggerId: null, rerunOf: 'run_source' }),
+        run({ id: 'run_source', status: 'failure' }),
+      ]),
+    );
+    renderWithRouter(<RunsPage />);
+    const rerunType = cellUnder(
+      (await screen.findByText('run_rerun')).closest('tr') as HTMLElement,
+      'Type',
+    );
+    expect(rerunType).toHaveTextContent('Rerun from failed');
+    expect(rerunType.title).toContain('run_source');
+    expect(within(rerunType).queryByRole('link')).toBeNull();
+
+    const sourceType = cellUnder(
+      screen.getByText('run_source').closest('tr') as HTMLElement,
+      'Type',
+    );
+    expect(sourceType).toHaveTextContent('Original');
+    expect(sourceType.title).toBe('');
+  });
+
   it('Watch navigates to the run detail route', async () => {
     listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);

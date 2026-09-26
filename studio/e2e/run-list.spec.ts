@@ -54,7 +54,13 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
 
   // R2 — a real measured duration for a settled run: some number followed by a
   // unit, and specifically NOT the em-dash that means "no answer".
-  const duration = row.getByRole('cell').nth(5);
+  // Located by its HEADER, not a fixed index — RS6's Type column shifted every
+  // cell after Trigger, and a hardcoded position silently reads the wrong one.
+  const durationColumn = (await page.getByRole('columnheader').allTextContents()).indexOf(
+    'Duration',
+  );
+  expect(durationColumn).toBeGreaterThanOrEqual(0);
+  const duration = row.getByRole('cell').nth(durationColumn);
   await expect(duration).toHaveText(/^\d+(\.\d+)?(ms|s|m \d+s|h \d+m)$/);
 
   // U10 — the origin tabs. This run was fired by a trigger, so it belongs to

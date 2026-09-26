@@ -81,12 +81,17 @@ const RunDiagnosticListSchema = z.array(RunDiagnosticSchema);
  * against its own clock — the same clock that stamped `started_at`. Resolving it
  * here would offset the window by whatever this browser's clock skew is, and
  * would bake a moment into any shared link.
+ *
+ * `rerunOf` is NOT one of the Monitor's filter axes — no control on the runs
+ * list sets it. It is the run detail page's lineage axis (RS6, `RerunHistory`):
+ * "the reruns of THIS run", answered by the server's indexed `?rerunOf=` filter.
  */
 export interface ListRunsQuery {
   status?: RunStatus;
   pipelineId?: string;
   triggerId?: string;
   since?: RunSince;
+  rerunOf?: string;
 }
 
 /**

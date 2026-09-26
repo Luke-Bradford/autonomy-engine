@@ -2821,6 +2821,13 @@ td button + button {
   overflow-wrap: anywhere;
 }
 
+/* RS6 — the start time beside each link in the run detail page's `Reruns` row:
+   secondary to the link, the same weight as the `<dt>` labels. */
+.rerun-history-when {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 /* #996 M9 (#1185) — an unbulleted, unindented list used inside a table cell, a
    `.run-meta` <dd> and (since #1231) a `.contract-section` on the run monitor's
    node drill-in, where a default disc + 40px indent would read as a nested
