@@ -672,8 +672,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
   if (typeof shape !== 'object' || shape === null) return null;
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
-    const { inner, optional, defaultText, singleLine, authoredAsExpression } =
-      unwrap(fieldSchema);
+    const { inner, optional, defaultText, singleLine, authoredAsExpression } = unwrap(fieldSchema);
     // Never classified: the schema describes the RESOLVED value, and the
     // control has to take the `${}` text that resolves to it.
     if (authoredAsExpression) {
