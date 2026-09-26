@@ -273,6 +273,11 @@ describe('paramNameNote / paramDefaultNote — non-gating notes on a row (#844)'
     expect(paramDefaultNote(param({ type: 'json', default: deep }))).not.toBeNull();
   });
 
+  it('survive a json default far WIDER than a call can take as spread arguments', () => {
+    const wide = [...Array.from({ length: 500_000 }, () => 'x'), '${x}'];
+    expect(paramDefaultNote(param({ type: 'json', default: wide }))).not.toBeNull();
+  });
+
   it('note an escaped $${ too, because a default never unescapes it either', () => {
     expect(paramDefaultNote(param({ default: 'cost $${x}' }))).not.toBeNull();
   });

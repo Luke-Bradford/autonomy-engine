@@ -207,8 +207,8 @@ export function formatDefaultInput(value: unknown, type?: ParamType): string {
 
 /**
  * Whether any string anywhere inside `value` (arrays included) opens a `${`.
- * Iterative, so a deeply nested json default cannot overflow the stack while
- * the row renders.
+ * Iterative and spread-free, so neither a deep nor a wide json default can
+ * overflow the stack while the row renders.
  */
 function holdsReferenceOpener(value: unknown): boolean {
   const pending: unknown[] = [value];
@@ -217,7 +217,9 @@ function holdsReferenceOpener(value: unknown): boolean {
     if (typeof v === 'string') {
       if (v.includes('${')) return true;
     } else if (v !== null && typeof v === 'object') {
-      pending.push(...Object.values(v));
+      // Not `push(...values)`: a spread passes every child as an argument,
+      // which throws on a wide enough array just as recursion does on depth.
+      for (const child of Object.values(v)) pending.push(child);
     }
   }
   return false;
