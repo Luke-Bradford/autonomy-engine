@@ -245,7 +245,11 @@ export function supersedeWindow(db: Db, key: WindowKey, currentEpoch: string): b
 /** The terminal fact `completeWindow` folds a run's outcome into. */
 export type WindowTerminal =
   | { status: 'succeeded'; runId: string }
-  | { status: 'failed'; runId: string | null; runStatus: 'failure' | 'interrupted' | 'missing' };
+  | {
+      status: 'failed';
+      runId: string | null;
+      runStatus: 'failure' | 'interrupted' | 'cancelled' | 'missing';
+    };
 
 /**
  * COMPLETE a window from its run's terminal fact: guarded flip `running →

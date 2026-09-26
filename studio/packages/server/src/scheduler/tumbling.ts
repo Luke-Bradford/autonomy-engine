@@ -509,6 +509,15 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       completeWindow(db, key, { status: 'succeeded', runId });
       return;
     }
+    if (run.status === 'cancelled') {
+      // CX2 (#1320, spec D9) — an operator cancel FAILS the window, so it does
+      // not satisfy a dependent window, and is never retried: the cancel is
+      // operator intent and an automatic retry would undo it. Before CX2 this
+      // status fell through the literal check below as "still live", which would
+      // have left the window `running` forever.
+      completeWindow(db, key, { status: 'failed', runId, runStatus: 'cancelled' });
+      return;
+    }
     if (run.status !== 'failure' && run.status !== 'interrupted') {
       return; // pending/queued/running/waiting → still live; the tap completes it later.
     }

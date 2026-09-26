@@ -81,13 +81,15 @@ export const WindowSucceededPayloadSchema = z.object({
  * epoch, unreadable trigger row, or an unknown outcome). TERMINAL: a failed
  * window is never re-driven — a retry happens INSTEAD of this event
  * (`window.retryScheduled`), never after it. `runStatus`: `failure` (the run
- * failed), `interrupted` (crash/abort — a terminal run fact), or `missing`
- * (the linked run row is GONE at reconcile time — an absent fact folded
- * closed as failure, never silently dropped).
+ * failed), `interrupted` (crash/abort — a terminal run fact), `cancelled`
+ * (CX2 #1320 — an operator stopped the run; never retried, because a cancel is
+ * operator intent and an automatic retry would undo it), or `missing` (the
+ * linked run row is GONE at reconcile time — an absent fact folded closed as
+ * failure, never silently dropped).
  */
 export const WindowFailedPayloadSchema = z.object({
   runId: z.string().min(1).nullable(),
-  runStatus: z.enum(['failure', 'interrupted', 'missing']),
+  runStatus: z.enum(['failure', 'interrupted', 'cancelled', 'missing']),
 });
 
 /**
