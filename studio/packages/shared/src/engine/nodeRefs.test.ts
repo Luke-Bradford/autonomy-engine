@@ -222,3 +222,13 @@ describe('referencedNodeIds (#935 — which of these nodes does a config read?)'
     expect(referencedNodeIds({ x: 'nothing here', n: 3, b: null }, [A])).toEqual([]);
   });
 });
+
+describe('referencedNodeIds is a GUARD, so it reads what the rewriter may skip', () => {
+  it('still reads a ref in a string holding the NUL mask char', () => {
+    expect(referencedNodeIds({ x: `\u0000 \${nodes.${A}.output.y}` }, [A])).toEqual([A]);
+  });
+
+  it('still reads every span before an UNTERMINATED `${`', () => {
+    expect(referencedNodeIds({ x: `\${nodes.${A}.output.y} then \${oops` }, [A])).toEqual([A]);
+  });
+});

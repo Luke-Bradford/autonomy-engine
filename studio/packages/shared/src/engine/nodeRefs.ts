@@ -179,11 +179,6 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<
  * the thing that reports the defect.
  */
 export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, string>): string {
-  return rewriteString(s, idMap);
-}
-
-/** `remapNodeRefsInString`, recording each id it matched in `seen` when given. */
-function rewriteString(s: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
   if (idMap.size === 0 || !s.includes('${') || s.includes(MASK_CHAR)) return s;
   const scanned = s.split(ESCAPED_OPEN).join(MASK_OPEN);
   const { matches, unterminatedAt } = scanTemplateRefs(scanned);
@@ -193,7 +188,7 @@ function rewriteString(s: string, idMap: ReadonlyMap<string, string>, seen?: Set
   let out = scanned;
   for (let k = matches.length - 1; k >= 0; k -= 1) {
     const m = matches[k] as { start: number; end: number; body: string };
-    const body = remapBody(m.body, idMap, seen);
+    const body = remapBody(m.body, idMap);
     if (body === m.body) continue;
     out = `${out.slice(0, m.start + 2)}${body}${out.slice(m.end)}`;
   }
@@ -219,36 +214,49 @@ function rewriteString(s: string, idMap: ReadonlyMap<string, string>, seen?: Set
  * left alone — only values are rewritten.
  */
 export function remapNodeRefs<T>(value: T, idMap: ReadonlyMap<string, string>): T {
-  return walkConfig(value, idMap);
+  return walkConfig(value, (s) => remapNodeRefsInString(s, idMap));
 }
 
 /**
  * #935 — which of `ids` a config tree READS through a `${nodes.<id>…}` reference.
  *
- * The same scanner and the same walk as `remapNodeRefs`, run with an identity
- * map and a record of what matched, rather than a fourth reader of the grammar:
- * "which node ids does this reference" and "rewrite these node ids" have to agree
- * on what a reference IS, or a paste could clear a ref the remap would have
- * rewritten. So the answer inherits that walk's scope exactly — deferred-eval
- * subtrees included, quoted literals, prose and `$${` escapes excluded, and a
- * subtree past `MAX_CONFIG_DEPTH` not read at all (the save gate refuses such a
- * config regardless).
+ * The same walk and the same body scanner (`remapBody`, run with an identity map
+ * and a record of what matched) as `remapNodeRefs`, rather than a fourth reader
+ * of the grammar: "which node ids does this reference" and "rewrite these node
+ * ids" have to agree on what a reference IS. So quoted literals, prose and
+ * `$${` escapes are excluded, and deferred-eval subtrees are included.
+ *
+ * It does NOT share `remapNodeRefsInString`'s bail-outs, and that is the point
+ * of having its own string step. A rewriter may leave a string it cannot safely
+ * round-trip untouched — one holding the NUL mask char, or with an unterminated
+ * `${` — because an unrewritten string is reported by the save gate. This answer
+ * is a GUARD: a paste is refused on it, so a string skipped here is a read that
+ * silently passes. The mask only has to be reversible when output is produced,
+ * and nothing is produced here; an unterminated span still yields every span
+ * before it. The one thing left unread is a subtree past `MAX_CONFIG_DEPTH`,
+ * which the save gate refuses outright.
  */
 export function referencedNodeIds(value: unknown, ids: Iterable<string>): string[] {
   const identity = new Map<string, string>();
   for (const id of ids) identity.set(id, id);
   const seen = new Set<string>();
-  walkConfig(value, identity, seen);
+  if (identity.size === 0) return [];
+  walkConfig(value, (s) => {
+    if (!s.includes('${')) return s;
+    const { matches } = scanTemplateRefs(s.split(ESCAPED_OPEN).join(MASK_OPEN));
+    for (const m of matches) remapBody(m.body, identity, seen);
+    return s;
+  });
   return [...seen];
 }
 
-function walkConfig<T>(value: T, idMap: ReadonlyMap<string, string>, seen?: Set<string>): T {
+function walkConfig<T>(value: T, onString: (s: string) => string): T {
   // The walk itself is the clone — it rebuilds every array and object it meets,
   // so an empty map still yields a fresh structure and callers need no second
   // copy. (`structuredClone` is not reachable here: `shared` compiles without
   // the DOM lib, and the input is parsed JSON regardless.)
   const walk = (v: unknown, depth: number): unknown => {
-    if (typeof v === 'string') return rewriteString(v, idMap, seen);
+    if (typeof v === 'string') return onString(v);
     if (depth > MAX_CONFIG_DEPTH) return v;
     if (Array.isArray(v)) return v.map((child) => walk(child, depth + 1));
     if (v !== null && typeof v === 'object') {
