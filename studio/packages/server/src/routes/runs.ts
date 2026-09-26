@@ -519,10 +519,9 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
           message: `run '${run.id}' has an unreadable event log and cannot be cancelled; it needs repair`,
         } satisfies ApiErrorBody);
       case 'not_found':
-        return reply.status(404).send({
-          error: 'not_found',
-          message: `run '${run.id}' not found`,
-        } satisfies ApiErrorBody);
+        // The row vanished after `requireOwned` found it: the same 404, in the
+        // same shape, as a run that never existed.
+        throw new NotFoundError('run', run.id);
     }
   });
 };
