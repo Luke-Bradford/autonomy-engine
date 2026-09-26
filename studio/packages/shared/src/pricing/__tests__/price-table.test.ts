@@ -39,6 +39,28 @@ describe('#2 L5 — resolvePrice', () => {
     });
   });
 
+  it('#1323 prices the post-4.8 models that have a sourced list price', () => {
+    // The capability sets knew these ids (#729) while the table did not, so an
+    // llm_call on them ran and stamped no cost at all.
+    expect(resolvePrice('anthropic_api', 'claude-opus-5-5', null)).toEqual({
+      inUnitPrice: 4,
+      outUnitPrice: 20,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+    });
+    for (const model of ['claude-fable-5-1', 'claude-mythos-5-1']) {
+      expect(resolvePrice('anthropic_api', model, null)).toEqual({
+        inUnitPrice: 10,
+        outUnitPrice: 50,
+        priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+      });
+    }
+    // No published price exists for the invitation-only preview, so it stays
+    // unpriced rather than borrowing its successor's rate.
+    expect(resolvePrice('anthropic_api', 'claude-mythos-preview', null)).toBeNull();
+    // Adding rows changes the table's contents, so its version label moves (#708).
+    expect(BUILTIN_PRICE_TABLE_VERSION).not.toBe('builtin-2026-07-25');
+  });
+
   it('returns null (UNPRICED, never a zero) for a model with no known price', () => {
     // A legacy-active Anthropic model absent from the built-in table.
     expect(resolvePrice('anthropic_api', 'claude-opus-4-5', null)).toBeNull();

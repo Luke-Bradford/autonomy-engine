@@ -50,7 +50,7 @@ export interface ResolvedPrice extends ModelUnitPrice {
  * table — which is the one property the pin exists to provide. The rule to
  * carry forward is "any change to the CONTENTS bumps it", not just to a value.
  */
-export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-25';
+export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-09-26';
 
 /**
  * Built-in prices (USD per 1M tokens), keyed by ConnectionKind then EXACT
@@ -64,7 +64,10 @@ export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-25';
  *
  * Seeded ONLY with authoritatively-sourced Anthropic list prices (claude-api
  * skill model table, cached 2026-06-24; the `claude-opus-5` row added
- * 2026-07-25 from the same source). `openai_api` and `ollama` are deliberately ABSENT:
+ * 2026-07-25 from the same source; #1323 added `claude-opus-5-5`,
+ * `claude-fable-5-1` and `claude-mythos-5-1` on 2026-09-26, again from that
+ * table). `claude-mythos-preview` stays ABSENT: the source names it only as
+ * Mythos 5.1's predecessor and publishes no price for it. `openai_api` and `ollama` are deliberately ABSENT:
  * no authoritative unit prices were on hand, and the repo's "verify before
  * asserting" rule forbids guessing them — an unpriced provider is the honest
  * fail-closed default, addable now via the per-connection override and later via
@@ -77,6 +80,7 @@ export const BUILTIN_PRICES: Partial<Record<ConnectionKind, Record<string, Model
     // #708 — the connector's DEFAULT_MODEL. An absent row here meant every
     // default-model call resolved to `null` and stamped NO `costEstimate`, so
     // the loss of cost telemetry was silent rather than an error.
+    'claude-opus-5-5': { inUnitPrice: 4, outUnitPrice: 20 },
     'claude-opus-5': { inUnitPrice: 5, outUnitPrice: 25 },
     'claude-opus-4-8': { inUnitPrice: 5, outUnitPrice: 25 },
     'claude-opus-4-7': { inUnitPrice: 5, outUnitPrice: 25 },
@@ -84,7 +88,9 @@ export const BUILTIN_PRICES: Partial<Record<ConnectionKind, Record<string, Model
     'claude-sonnet-5': { inUnitPrice: 3, outUnitPrice: 15 },
     'claude-sonnet-4-6': { inUnitPrice: 3, outUnitPrice: 15 },
     'claude-haiku-4-5': { inUnitPrice: 1, outUnitPrice: 5 },
+    'claude-fable-5-1': { inUnitPrice: 10, outUnitPrice: 50 },
     'claude-fable-5': { inUnitPrice: 10, outUnitPrice: 50 },
+    'claude-mythos-5-1': { inUnitPrice: 10, outUnitPrice: 50 },
     'claude-mythos-5': { inUnitPrice: 10, outUnitPrice: 50 },
   },
 };
