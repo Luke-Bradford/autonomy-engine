@@ -181,13 +181,14 @@ export interface NodeActivity {
    * outcome would answer "where did this data go" wrongly and confidently. The
    * per-ATTEMPT record stays in the event feed, which glosses each dispatch.
    *
-   * SHARED BY A PARALLEL FOREACH's item instances, like every other field on
-   * this row: `ensure` folds `w@1` and `w@2` onto one `w`, and the dispatch arm
-   * does not set `instanceId`, so on a foreach of copies this holds whichever
-   * item dispatched last. Today that is never a WRONG address — §8 gates a
-   * mapping's names to literals and a dataset ref is not `${}`-substituted, so
-   * every instance resolves the same pair — but the row cannot prove that, so
-   * the panel says which instance it is looking at when there is one.
+   * PAIRED BY FOREACH ITEM, like `input` (#1340). `ensure` folds a parallel
+   * foreach's `w@1` and `w@2` onto one `w`, and items genuinely resolve
+   * DIFFERENT addresses: `datasetParams` are `${}`-substituted per item, and
+   * `path` is an overridable dataset parameter, so `'${item}'` names a
+   * different file for each. When the row shows a settled item's result
+   * (`instanceId`) this is that item's own address — absent if that item has
+   * no dispatch on record — and otherwise the latest dispatch's, which
+   * `inputInstanceId` names.
    */
   datasetAddresses: Extract<EngineEvent, { type: 'node.dispatched' }>['datasetAddresses'];
   /**
@@ -212,10 +213,11 @@ export interface NodeActivity {
    */
   params: DispatchInput | undefined;
   /**
-   * #890 — WHICH foreach item `input` belongs to (`'w@2'`, as `instanceId`). Unlike the
-   * dataset address, an item's input genuinely differs from its siblings', and
-   * `instanceId` is stamped by TERMINAL events only — so a parallel item still
-   * running would otherwise label another item's input with the settled one's.
+   * #890 — WHICH foreach item's dispatch `input`, `params` and `datasetAddresses`
+   * describe (`'w@2'`, as `instanceId`). An item's dispatch genuinely differs
+   * from its siblings', and `instanceId` is stamped by TERMINAL events only — so
+   * a parallel item still running would otherwise label another item's dispatch
+   * with the settled one's.
    */
   inputInstanceId: string | undefined;
   /**
@@ -620,12 +622,16 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const instanceSpannedCost = new Set<string>();
   const toolCallsByNode = new Map<string, NodeToolCall[]>();
   const capturesByNode = new Map<string, NodeCapture[]>();
-  /* #890 — each dispatch's recorded input, by RAW id (`w@2`), so a row showing
-     a settled foreach item's result can show THAT item's input (see the
-     projection at the end). */
-  const inputByRaw = new Map<
+  /* #890 / #1340 — each dispatch's recorded input, parameters and address, by
+     RAW id (`w@2`), so a row showing a settled foreach item's result can show
+     THAT item's dispatch (see the projection at the end). */
+  const dispatchByRaw = new Map<
     string,
-    { input: DispatchInput | undefined; params: DispatchInput | undefined }
+    {
+      input: DispatchInput | undefined;
+      params: DispatchInput | undefined;
+      datasetAddresses: NodeActivity['datasetAddresses'];
+    }
   >();
   /* Dispatches per RAW node id — `w@1` counted apart from `w@2`, unlike the
      row's own `attempts`, which folds every item's dispatch onto one number.
@@ -892,7 +898,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.input = e.input;
         n.params = e.params;
         n.inputInstanceId = instanceOf(e.nodeId);
-        inputByRaw.set(e.nodeId, { input: e.input, params: e.params });
+        dispatchByRaw.set(e.nodeId, {
+          input: e.input,
+          params: e.params,
+          datasetAddresses: e.datasetAddresses,
+        });
         openSpan(n, e.nodeId, row.ts);
         break;
       }
@@ -962,7 +972,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.input = undefined;
         n.params = undefined;
         n.inputInstanceId = undefined;
-        inputByRaw.delete(e.nodeId);
+        dispatchByRaw.delete(e.nodeId);
         /* #1299 — and the last progress tick, for the same argument again: the
            status is `dispatched` from here, so the table would show the failed
            attempt's "rows in flight" as live progress of a node that has not
@@ -1342,15 +1352,17 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       costSpansInstances: instanceSpannedCost.has(n.nodeId),
       toolCalls: toolCallsByNode.get(n.nodeId) ?? [],
       captures: capturesByNode.get(n.nodeId) ?? [],
-      /* #890 — when the row shows a settled foreach ITEM's result, its input is
-         that item's, not whichever item dispatched last: parallel items settle
-         out of order, so `failed w@1` can land after `dispatched w@2`, and the
-         panel would otherwise pair w@1's failure with w@2's input. With no
-         item result on show, the latest dispatch stands. */
+      /* #890 / #1340 — when the row shows a settled foreach ITEM's result, its
+         input, parameters and address are that item's, not whichever item
+         dispatched last: parallel items settle out of order, so `failed w@1`
+         can land after `dispatched w@2`, and the panel would otherwise pair
+         w@1's failure with w@2's dispatch. With no item result on show, the
+         latest dispatch stands. */
       ...(n.instanceId !== undefined
         ? {
-            input: inputByRaw.get(n.instanceId)?.input,
-            params: inputByRaw.get(n.instanceId)?.params,
+            input: dispatchByRaw.get(n.instanceId)?.input,
+            params: dispatchByRaw.get(n.instanceId)?.params,
+            datasetAddresses: dispatchByRaw.get(n.instanceId)?.datasetAddresses,
             inputInstanceId: n.instanceId,
           }
         : {}),
