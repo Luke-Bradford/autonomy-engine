@@ -45,6 +45,8 @@ function node(id: string, policy?: NodePolicy): Node {
 }
 function waitNode(id: string): Node {
   seq += 1;
+  // `seconds` is an expression: a bare number fails the wait's prep, so every fold
+  // through it emitted `finishRun{invalid_event}` (found and fixed in CX5).
   return { id, type: 'wait', config: { seconds: '${60}' }, position: { x: seq, y: 0 } };
 }
 function callNode(id: string): Node {
