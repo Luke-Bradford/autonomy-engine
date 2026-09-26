@@ -3022,6 +3022,12 @@ td button + button {
   align-self: stretch;
 }
 
+/* #1347 — a row's Up / Down / Remove sit on one line under its cells. */
+.object-list-row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
 .object-list-label {
   font-size: 0.8rem;
   color: var(--muted);

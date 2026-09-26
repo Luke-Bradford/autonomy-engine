@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -401,7 +402,12 @@ export function ConfigFieldControl({
  * it was opened on. Without it, removing an earlier row would slide a later
  * row's content under that open list, and a choice made from it would be
  * written into a row it was never checked against. Any add or remove remounts
- * the cells, which closes every flyout.
+ * the cells, which closes every flyout. A MOVE (#1347) shifts rows the same
+ * way with the count unchanged, so the key also carries a local move count.
+ *
+ * Move up / move down are buttons rather than drag handles because order is
+ * the MEANING of some lists — an `llm_call` conversation is its turn order —
+ * and a button is reachable from the keyboard, which drag alone is not.
  */
 export function ObjectListControl({
   field,
@@ -417,6 +423,36 @@ export function ObjectListControl({
   picker?: FieldPicker;
 }) {
   const cells = field.elementFields ?? [];
+  const [moves, setMoves] = useState(0);
+  const groupRef = useRef<HTMLDivElement>(null);
+  // Where the last move put its row. The buttons are index-keyed, so the
+  // focused one now belongs to the row that shifted the other way; focus
+  // follows the moved row instead, so pressing again keeps moving it.
+  const moved = useRef<{ index: number; direction: 'up' | 'down' } | null>(null);
+  const move = (from: number, to: number) => {
+    const next = [...rows];
+    const [row] = next.splice(from, 1);
+    if (row === undefined) return;
+    next.splice(to, 0, row);
+    moved.current = { index: to, direction: to < from ? 'up' : 'down' };
+    setMoves((n) => n + 1);
+    onChange(next);
+  };
+  useEffect(() => {
+    const target = moved.current;
+    moved.current = null;
+    if (target === null) return;
+    const byName = (direction: 'up' | 'down') =>
+      Array.from(groupRef.current?.querySelectorAll('button') ?? []).find(
+        (b) =>
+          b.getAttribute('aria-label') ===
+          `move ${field.name} row ${target.index + 1} ${direction}`,
+      );
+    // At either end the same direction is disabled, and a disabled button
+    // cannot hold focus; the other direction is the row's only move left.
+    const same = byName(target.direction);
+    (same && !same.disabled ? same : byName(target.direction === 'up' ? 'down' : 'up'))?.focus();
+  }, [moves, field.name]);
 
   // Each row is read by `parseRowCells`, the reader an apply uses, keeping the
   // cells that parse. An apply refuses the whole list on one bad cell; a
@@ -435,7 +471,7 @@ export function ObjectListControl({
   });
 
   return (
-    <div className="config-field object-list" role="group" aria-label={label}>
+    <div className="config-field object-list" role="group" aria-label={label} ref={groupRef}>
       <span className="object-list-label">{label}</span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
@@ -449,7 +485,7 @@ export function ObjectListControl({
             const held = row[cell.name];
             return (
               <ConfigFieldControl
-                key={`${cell.name}:${rows.length}`}
+                key={`${cell.name}:${rows.length}:${moves}`}
                 field={cell}
                 name={`${field.name} row ${index + 1} ${cell.name}`}
                 value={held ?? emptyControlValue(cell)}
@@ -469,13 +505,31 @@ export function ObjectListControl({
               />
             );
           })}
-          <button
-            type="button"
-            aria-label={`remove ${field.name} row ${index + 1}`}
-            onClick={() => onChange(rows.filter((_, i) => i !== index))}
-          >
-            Remove
-          </button>
+          <div className="object-list-row-actions">
+            <button
+              type="button"
+              aria-label={`move ${field.name} row ${index + 1} up`}
+              disabled={index === 0}
+              onClick={() => move(index, index - 1)}
+            >
+              Up
+            </button>
+            <button
+              type="button"
+              aria-label={`move ${field.name} row ${index + 1} down`}
+              disabled={index === rows.length - 1}
+              onClick={() => move(index, index + 1)}
+            >
+              Down
+            </button>
+            <button
+              type="button"
+              aria-label={`remove ${field.name} row ${index + 1}`}
+              onClick={() => onChange(rows.filter((_, i) => i !== index))}
+            >
+              Remove
+            </button>
+          </div>
         </div>
       ))}
       <button type="button" onClick={() => onChange([...rows, {}])}>
