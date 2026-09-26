@@ -772,8 +772,7 @@ export type BindingKind = 'connections' | 'datasets';
 
 /** U21 — what a paste did; `crossPipeline` marks a copy from another pipeline (#935). */
 export type PasteOutcome =
-  | { ok: true; count: number; crossPipeline: boolean }
-  | { ok: false; reason: string };
+  { ok: true; count: number; crossPipeline: boolean } | { ok: false; reason: string };
 
 export interface CanvasState {
   /**

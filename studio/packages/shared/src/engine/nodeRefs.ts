@@ -136,11 +136,7 @@ function matchMappedId(s: string, i: number, idMap: ReadonlyMap<string, string>)
  * so an id that appears inside a literal is never touched. Returns the body
  * unchanged when nothing matched.
  */
-function remapBody(
-  body: string,
-  idMap: ReadonlyMap<string, string>,
-  seen?: Set<string>,
-): string {
+function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
   let out = '';
   let cut = 0;
   let i = 0;
