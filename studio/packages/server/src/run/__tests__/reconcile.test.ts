@@ -2768,6 +2768,7 @@ describe('reconcileOnBoot — CX2 (#1320) D7: a cancelled run is FINISHED, never
 
     expect(report.finalized).toEqual([run.id]);
     expect(recovery.dispatched).toEqual([]);
+    expect(types(loadEngineEvents(db, run.id))).not.toContain('run.resumed');
     expect(loadEngineEvents(db, run.id).at(-1)).toMatchObject({
       type: 'run.finished',
       outcome: 'cancelled',
