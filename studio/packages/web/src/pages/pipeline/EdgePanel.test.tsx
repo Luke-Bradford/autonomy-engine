@@ -362,6 +362,23 @@ describe('EdgePanel — a back-edge bounce cap', () => {
   });
 
   /**
+   * #1315 — the cap is read with `parseWholeNumber`, the policy fields' parser,
+   * not `Number`. `Number` accepts hex and exponent literals, so `0x1f` used to
+   * be stored as 31 and `2e1` as 20 under a banner-free field that had just
+   * been told "a whole number".
+   */
+  it.each([
+    ['0x1f', 'a hex literal'],
+    ['2e1', 'an exponent literal'],
+  ])('refuses %s (%s) rather than converting it', (typed) => {
+    const { store, field } = mountBack(back(6));
+    fireEvent.change(field, { target: { value: typed } });
+    fireEvent.blur(field, { target: { value: typed } });
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
+    expect(screen.getByRole('alert').textContent).toMatch(/whole number/);
+  });
+
+  /**
    * Reverting to the STORED value after a refusal must clear the banner.
    *
    * The no-op-blur guard returns before the write, and used to return before

@@ -1757,9 +1757,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // Re-committing the cap it already holds must not mark the canvas dirty —
         // `setNodeContainer`'s rule, for its reason: an unchanged graph that
         // reports itself as edited is how a "you have unsaved changes" prompt
-        // loses the operator's trust. The panel's own guard is a STRING compare
-        // (`text === stored`), so `10.0`, ` 10` and `+10` over a stored `10` all
-        // reach here as a numerically identical write.
+        // loses the operator's trust. The panel (`DraftNumberField`) compares the
+        // parsed value too, but the store is the rail: any other caller writing
+        // the cap it already holds lands here.
         if (current.maxBounces === maxBounces) return;
         edit((s) => ({
           edges: s.edges.map((e) => (e.id === id ? { ...e, maxBounces } : e)),

@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useStore } from 'zustand';
 import {
   DEFAULT_RETRY_INTERVAL_SECONDS,
   MAX_RETRY_INTERVAL_SECONDS,
   type NodePolicy,
 } from '@autonomy-studio/shared';
-import { LabelledControl } from '../../lib/LabelledControl';
 import { parseWholeNumber } from '../triggers/formFields';
+import { DraftNumberField } from './DraftNumberField';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
 import type { createCanvasStore } from './canvasStore';
 import { readableIssue } from './containerRules';
@@ -66,16 +66,18 @@ export function PolicyEditor({
   return (
     <fieldset className="contract-section">
       <legend>Run policy</legend>
-      <PolicyNumber
+      <DraftNumberField
         label="Retries"
         stored={policy?.retry}
+        parse={parseWholeNumber}
         placeholder="no retry"
         hint="Times a transient failure is retried after the first attempt. 0 never retries; blank leaves it unset."
         onCommit={(retry) => set({ retry })}
       />
-      <PolicyNumber
+      <DraftNumberField
         label="Retry interval (seconds)"
         stored={policy?.retryIntervalSeconds}
+        parse={parseWholeNumber}
         placeholder={String(DEFAULT_RETRY_INTERVAL_SECONDS)}
         hint={
           `Wait between attempts, ${DEFAULT_RETRY_INTERVAL_SECONDS}–${MAX_RETRY_INTERVAL_SECONDS}. ` +
@@ -129,78 +131,5 @@ export function PolicyEditor({
         </ul>
       )}
     </fieldset>
-  );
-}
-
-/**
- * One whole-number policy field. A TEXT input for `ConfigFieldControl`'s reason:
- * a `type="number"` input reports text it rejects as `''`, which this field reads
- * as "unset", so a typo would silently delete the setting. Commits on blur, and
- * re-seeds when the stored value changes underneath it (an undo) — the bounce
- * cap editor's pattern, render-phase derived state rather than an effect.
- *
- * Range is NOT checked here: `parseWholeNumber` leaves it to the write schema,
- * whose refusal comes back through `policyIssues` as a badge naming the field.
- */
-function PolicyNumber({
-  label,
-  stored,
-  placeholder,
-  hint,
-  onCommit,
-}: {
-  label: string;
-  stored: number | undefined;
-  placeholder: string;
-  hint: string;
-  onCommit: (value: number | undefined) => void;
-}) {
-  const text = stored === undefined ? '' : String(stored);
-  const [draft, setDraft] = useState(text);
-  const [error, setError] = useState<string | null>(null);
-  const [synced, setSynced] = useState(text);
-  if (synced !== text) {
-    setSynced(text);
-    setDraft(text);
-    setError(null);
-  }
-
-  function commit(raw: string) {
-    const parsed = parseWholeNumber(raw);
-    if (!parsed.ok) {
-      setError(parsed.reason);
-      return;
-    }
-    setError(null);
-    // A blur that changed nothing must not write, or tabbing through the field
-    // would dirty an untouched doc. It still cleared the error above.
-    if (parsed.value === stored) return;
-    onCommit(parsed.value);
-  }
-
-  return (
-    <>
-      <LabelledControl label={label}>
-        {(id) => (
-          <input
-            id={id}
-            type="text"
-            inputMode="numeric"
-            spellCheck={false}
-            placeholder={placeholder}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={(e) => commit(e.target.value)}
-          />
-        )}
-      </LabelledControl>
-      {error !== null ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : (
-        <p className="page-hint">{hint}</p>
-      )}
-    </>
   );
 }
