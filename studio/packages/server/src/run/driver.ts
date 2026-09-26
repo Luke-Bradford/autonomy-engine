@@ -34,6 +34,7 @@ import type { RunEventBus } from './event-bus.js';
 import {
   appendAndFold,
   appendEngineEvent,
+  hasRunStartedFact,
   loadEngineEvents,
   terminalFactFromLog,
 } from './events.js';
@@ -1646,9 +1647,10 @@ export async function startRun(
   if (existing.length > 0) {
     // CX2 (#1320) — a cancel's drive can reach a not-yet-started run first and
     // finish it `cancelled` (spec D5). Starting it afterwards is not a fault, so
-    // it is not reported as one: the run is already over.
+    // it is not reported as one: the run is already over. Scoped to exactly that
+    // shape; every other existing log still refuses, as a double start should.
     const terminal = terminalFactFromLog(existing);
-    if (terminal !== null) {
+    if (terminal === 'cancelled' && !hasRunStartedFact(existing)) {
       syncRunLifecycle(deps.db, run.id, terminal);
       return buildEngine(deps.resolveDoc(run.pipelineVersionId)).projectRunState(existing);
     }
