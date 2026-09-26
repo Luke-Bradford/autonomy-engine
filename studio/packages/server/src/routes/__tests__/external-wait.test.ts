@@ -14,6 +14,7 @@ import { createRun, getRun } from '../../repo/runs.js';
 import { markExternalWaitExpired } from '../../repo/external-waits.js';
 import { getWakeupByKey } from '../../repo/scheduled-wakeups.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+import { until } from '../../__tests__/poll-until.js';
 import { startRun, buildEngine, type DocResolver, type DriveDeps } from '../../run/driver.js';
 import { createRunDrives } from '../../run/drives.js';
 import { loadEngineEvents } from '../../run/events.js';
@@ -560,6 +561,34 @@ describe('external-wait routes', () => {
     const body = ApiErrorBodySchema.parse(second.json());
     expect(body.error).toBe('external_wait_settled');
     expect(body.message).toContain('already completed');
+  });
+
+  it('CX5 (#1320) D9 — completing a wait on a CANCELLED run is refused (owner 409, token 404) and appends nothing', async () => {
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    const tokenPath = await callbackPathFor(runId);
+
+    // Through the real cancel route: a parked run has nothing in flight, so it
+    // unparks and finishes `cancelled` at once.
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${runId}/cancel` });
+    expect(res.statusCode).toBe(202);
+    await until(() => getRun(app.db, runId)?.status === 'cancelled', 'the run to finish cancelled');
+    const before = loadEngineEvents(app.db, runId).length;
+
+    const late = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(late.statusCode).toBe(409);
+    const body = ApiErrorBodySchema.parse(late.json());
+    expect(body.error).toBe('external_wait_settled');
+    expect(body.message).toContain('no longer completable');
+    // The anonymous token seam answers its one fail-closed 404, never a state oracle.
+    const viaToken = await app.inject({ method: 'POST', url: tokenPath });
+    expect(viaToken.statusCode).toBe(404);
+    expect(loadEngineEvents(app.db, runId)).toHaveLength(before);
+    expect(getRun(app.db, runId)?.status).toBe('cancelled');
   });
 
   it('#901 — an EXPIRED wait is a 410, distinguished from a completed one', async () => {

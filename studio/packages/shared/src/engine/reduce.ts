@@ -3874,13 +3874,15 @@ export function createEngine(doc: EngineDoc): Engine {
    * fired, folds as a no-op (the second layer behind the handler's `active` guard).
    *
    * CX5 (#1320) — also a no-op once a cancel is folded. A timeout can only land on
-   * a cancelled run while one of the loop's children is still DRAINING (with
-   * nothing in flight the cancel already finished the run). Folding it there would
-   * abandon the child whose abort the cancel sent, exit the loop `failure`, and
-   * finish the run `failure` although the operator cancelled it. It removes no
-   * kill backstop either: a timeout aborts nothing, it only abandons in the fold.
-   * The child's own `node.failed{cancelled}` then finishes the run `cancelled`.
-   * The handler's guard suppresses it first; this is the replay-total second layer.
+   * a cancelled run while some node is still in flight (with nothing in flight the
+   * cancel already finished the run). Folding it there would abandon the loop's
+   * live children, exit the loop `failure`, and can finish the run `failure`
+   * although the operator cancelled it. The in-flight node's own
+   * `node.failed{cancelled}` finishes the run `cancelled` instead. The cost, which
+   * spec D9 accepts: an adapter that ignores its abort signal now keeps the run
+   * live, where the timeout would have ended the loop (it kills nothing either
+   * way — it only abandons in the fold). The handler's guard suppresses it first;
+   * this is the replay-total second layer.
    */
   function onContainerTimedOut(
     state: RunState,

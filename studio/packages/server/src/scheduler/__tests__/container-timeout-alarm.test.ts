@@ -28,7 +28,7 @@ import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import { makeStubExecutor, type StubExecutorOptions } from '../../run/__tests__/stub-executor.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createContainerTimeoutAlarmHandler } from '../container-timeout-alarm.js';
-import { containerActiveGuard } from '../durable-alarm-handler.js';
+import { containerActiveGuard, RUN_CANCEL_REQUESTED } from '../durable-alarm-handler.js';
 import { silentLog } from './testLog.js';
 
 /**
@@ -372,7 +372,7 @@ describe('A17 — freshness: at-least-once + a stale-delivery check', () => {
     expect(draining.containers.lp!.status).toBe('active');
     expect(containerActiveGuard('container_not_active')(draining, { containerId: 'lp' })).toEqual({
       fresh: false,
-      reason: 'run_cancel_requested',
+      reason: RUN_CANCEL_REQUESTED,
     });
 
     clock.tick();

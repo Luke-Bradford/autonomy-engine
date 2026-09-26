@@ -58,8 +58,9 @@ export interface ReseedService {
    * before it runs recovers via the boot reconciler (R2's row is durably `running`
    * with its reseed log, the RS1 crash-safety invariant).
    * @throws {RerunNotEligibleError} if the source run is missing, has no log, or
-   *   did not terminate in a FAILURE (`failure`/`interrupted`) — only a failed run
-   *   is rerun-from-failed eligible; a successful run has nothing to resume from —
+   *   did not terminate in a FAILURE (`failure`/`interrupted`/`cancelled` — CX
+   *   spec D9) — only a run that did not succeed is rerun-from-failed eligible; a
+   *   successful run has nothing to resume from —
    *   or (#896) if a rerun of it is still live, which is the transient one: at most
    *   one rerun of a given source run may be in flight at a time, so a remount or a
    *   second tab cannot bill the same resumed work twice.
