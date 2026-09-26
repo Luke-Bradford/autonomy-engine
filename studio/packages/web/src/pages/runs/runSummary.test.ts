@@ -3097,6 +3097,28 @@ describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
     expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: OTHER_SINK });
   });
 
+  /* One item re-opening retracts ITS dispatch, not a sibling's: the row keeps
+     showing the latest dispatch that still stands. */
+  it("keeps a sibling's standing dispatch when another item re-opens", () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }, 'w@1'),
+        dispatch(0, { source: SOURCE, sink: OTHER_SINK }, 'w@2'),
+        failedItem('w@1', 0),
+        envelope({
+          type: 'node.retryDue',
+          runId: 'r',
+          nodeId: 'w@1',
+          previousAttemptId: 'w@1#0',
+        }),
+      ],
+      'w',
+    );
+    expect(row.instanceId).toBeUndefined();
+    expect(row.inputInstanceId).toBe('w@2');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: OTHER_SINK });
+  });
+
   /* The settled item was re-opened and has not dispatched again, so it has no
      address of its own on record. Absent is the honest answer; the sibling's
      would be exactly the wrong pairing this ticket removes. */

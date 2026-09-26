@@ -966,12 +966,18 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            one line up. These events re-open the node without resolving
            anything; the dataset row behind the ref is mutable, so leaving the
            last attempt's target standing would name a destination over a node
-           that is being sent somewhere else. The re-dispatch sets it again. */
-        n.datasetAddresses = undefined;
-        // #890 — and the input: the re-dispatch records its own.
-        n.input = undefined;
-        n.params = undefined;
-        n.inputInstanceId = undefined;
+           that is being sent somewhere else. The re-dispatch sets it again.
+           #1340 — only when the row is showing THIS item's dispatch. A parallel
+           foreach's row shows the latest item's (`inputInstanceId`), and one
+           item re-opening does not retract a sibling's dispatch that still
+           stands; for a plain node both sides are `undefined`, so it clears. */
+        if (n.inputInstanceId === instanceOf(e.nodeId)) {
+          n.datasetAddresses = undefined;
+          // #890 — and the input: the re-dispatch records its own.
+          n.input = undefined;
+          n.params = undefined;
+          n.inputInstanceId = undefined;
+        }
         dispatchByRaw.delete(e.nodeId);
         /* #1299 — and the last progress tick, for the same argument again: the
            status is `dispatched` from here, so the table would show the failed
