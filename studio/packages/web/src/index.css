@@ -1175,7 +1175,10 @@ td button + button {
 
 .canvas-grid {
   display: grid;
-  grid-template-columns: 180px 1fr 320px;
+  /* #852 — two columns: the toolbox, then the canvas with the property dock
+     UNDER it (`.canvas-main`). The properties used to be a third, 320px column;
+     U7 draws them as a bottom dock, which also gives the canvas that width. */
+  grid-template-columns: 180px minmax(0, 1fr);
   /* ONE row, filling the height this grid was given. `minmax(0, 1fr)` rather
      than `1fr`: a bare `1fr` is `minmax(auto, 1fr)`, whose auto MINIMUM is the
      content's intrinsic height, so a tall toolbox catalog would push the row
@@ -1471,6 +1474,74 @@ td button + button {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  /* #852 — now a FLEX item of `.canvas-main` rather than a grid item, so the
+     definite height React Flow needs comes from here: `.canvas-main` is
+     stretched to the grid row's definite `minmax(0, 1fr)`, and this item takes
+     whatever the dock below leaves. `min-height: 0` lets it shrink below its
+     content's intrinsic height instead of pushing the dock out of the row. */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* #852 / #844 — the canvas over its bottom property dock (U7). */
+.canvas-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.property-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  /* A share of the column, bounded both ways: enough rows to edit a form in on
+     a short screen, never so much that the canvas drops under the 200px
+     `canvas-fills-viewport.spec.ts` guards. The percentage resolves against
+     `.canvas-main`, whose height is definite (stretched to the grid row). */
+  height: clamp(200px, 42%, 460px);
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* Folded: only the toggle remains, and the canvas takes the height back. */
+.property-dock--collapsed {
+  height: auto;
+}
+
+.property-dock__toggle {
+  align-self: flex-start;
+  font-size: 0.8rem;
+}
+
+.property-dock__body:not([hidden]) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The panel scrolls INSIDE the dock rather than growing it. */
+.property-dock__body > .property-panel {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* A form stretched across a 1200px dock is hard to read: a row of inputs
+   running the width of the screen. Cap the content, not the dock. */
+.property-dock__body > .property-panel > *,
+.panel-tab > * {
+  max-width: 56rem;
+}
+
+/* A tab's panel is the same flex column `.property-panel` is, so a section moved
+   into a tab keeps its spacing. `:not([hidden])` is load-bearing: a bare
+   `display: flex` here would OUTRANK the `hidden` attribute's UA `display: none`
+   and show every tab at once. */
+.panel-tab:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
 /* A node is an ICON AND A NAME on one line, and the row is the whole design.
