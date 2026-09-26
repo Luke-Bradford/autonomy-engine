@@ -69,9 +69,11 @@ describe('nodeStatusLabel', () => {
   });
 
   it('CX4 (#1320) — under a cancelled run, a node left non-terminal says the cancel stopped it', () => {
+    // Never started: `pending`, and `ready` (queued for dispatch, never begun).
     expect(nodeStatusLabel('pending', 'cancelled')).toBe('not run (cancelled)');
+    expect(nodeStatusLabel('ready', 'cancelled')).toBe('not run (cancelled)');
     // D5 — a parked run's cancel finishes it with the park still on the node.
-    for (const live of ['wait_pending', 'external_wait_pending', 'waiting', 'ready'] as const) {
+    for (const live of ['wait_pending', 'external_wait_pending', 'waiting'] as const) {
       expect(nodeStatusLabel(live, 'cancelled')).toBe('stopped (cancelled)');
     }
     // A terminal node keeps what it actually did.

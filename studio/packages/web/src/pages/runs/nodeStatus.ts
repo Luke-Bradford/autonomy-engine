@@ -160,7 +160,8 @@ const STOPPED_CANCELLED = 'stopped (cancelled)';
 
 export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
   if (runStatus === 'cancelled' && !TERMINAL_NODE.has(status)) {
-    return status === 'pending' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
+    // `ready` was queued for dispatch and never began, so it did not run either.
+    return status === 'pending' || status === 'ready' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
   }
   return NODE_STATUS_LABELS[status];
 }
