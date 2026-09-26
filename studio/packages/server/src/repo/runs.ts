@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, inArray, not, notExists, sql } from 'drizzle-orm';
+import { and, asc, count, eq, exists, gte, inArray, ne, or, sql } from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,
@@ -785,16 +785,14 @@ export function queuedTriggerCandidatesForPipeline(
         eq(pipelineVersions.pipelineId, pipelineId),
         inArray(runs.triggerId, triggerIds),
         sql`${runs.status} != 'queued'`,
-        not(
-          and(
-            eq(runs.status, 'cancelled'),
-            notExists(
-              db
-                .select({ one: sql`1` })
-                .from(runEvents)
-                .where(eq(runEvents.runId, runs.id)),
-            ),
-          )!,
+        or(
+          ne(runs.status, 'cancelled'),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(runEvents)
+              .where(eq(runEvents.runId, runs.id)),
+          ),
         ),
       ),
     )
