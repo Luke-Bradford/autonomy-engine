@@ -274,12 +274,13 @@ describe('ExpressionPicker in NodePanel', () => {
     // A `json` control parses its text with `JSON.parse` on apply, so a bare
     // `${...}` is not applicable there at all — offering the picker would be a
     // dead end rather than an affordance.
-    const agent: Node = { id: 'agent', type: 'agent_task', config: {}, position: at };
-    mount([FETCH, agent], [{ id: 'e1', from: 'fetch', to: 'agent', on: 'success' }], [], 'agent');
-    expect(screen.getByRole('button', { name: 'Insert reference into task' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Insert reference into outputSchema/ })).toBeNull();
+    // `history` is the JSON field: `outputSchema` became rows (#852 item 3).
+    const llm: Node = { id: 'llm', type: 'llm_call', config: {}, position: at };
+    mount([FETCH, llm], [{ id: 'e1', from: 'fetch', to: 'llm', on: 'success' }], [], 'llm');
+    expect(screen.getByRole('button', { name: 'Insert reference into system' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Insert reference into history/ })).toBeNull();
     // The json field itself is still rendered — this is about the picker only.
-    expect(screen.getByRole('textbox', { name: /outputSchema/ })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /history/ })).toBeTruthy();
   });
 
   it('offers a header VALUE a reference, and never its key or a secret name (#852)', () => {

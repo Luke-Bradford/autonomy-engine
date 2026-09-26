@@ -468,4 +468,86 @@ test.describe('U7 — per-activity node config form', () => {
 
     await expectQuiet(page, problems);
   });
+
+  // #852 item 3 — a structured output is declared as ROWS, one per field, where
+  // it used to be a JSON Schema typed by hand.
+  test('a structured outputSchema is rows that survive a save and reload', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const connectionId = await seedConnection(page, {
+      name: `e2e 852 output schema ${Date.now()}`,
+      kind: 'ollama',
+      config: {},
+    });
+    const category = {
+      type: 'string',
+      description: 'The chosen category.',
+      enum: ['positive', 'negative'],
+    };
+    const id = await openSeededCanvas(page, 'u7 output schema rows', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'llm_call',
+          position: { x: 0, y: 0 },
+          connectionId,
+          config: {
+            outputMode: 'structured',
+            messages: [{ role: 'user', content: 'Classify this.' }],
+            outputSchema: {
+              type: 'object',
+              properties: { category },
+              required: ['category'],
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    const p = panel(page);
+    const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
+      p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
+    await expect(
+      p.getByRole('group', { name: 'outputSchema (optional)', exact: true }),
+    ).toBeVisible();
+    await expect(cell('textbox', 1, 'name')).toHaveValue('category');
+    await expect(cell('combobox', 1, 'type')).toHaveValue('string');
+    await expect(cell('checkbox', 1, 'required')).toBeChecked();
+    await expect(cell('textbox', 1, 'constraints')).toHaveValue(/"positive"/);
+    // A property name is not substituted, so it offers no reference.
+    await expect(
+      p.getByRole('button', { name: 'Insert reference into outputSchema row 1 name' }),
+    ).toHaveCount(0);
+
+    await p.getByRole('button', { name: 'Add outputSchema row', exact: true }).click();
+    await cell('textbox', 2, 'name').fill('confidence');
+    await cell('combobox', 2, 'type').selectOption('number');
+    await cell('textbox', 2, 'description').fill('How sure, 0 to 1.');
+    await p.getByRole('button', { name: 'Apply config', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    // Exact: the unticked row is optional because `required` is written
+    // explicitly — absent would have made both fields required (#594).
+    const saved = await persistedConfig(page, id);
+    expect(saved.outputSchema).toEqual({
+      type: 'object',
+      properties: {
+        category,
+        confidence: { type: 'number', description: 'How sure, 0 to 1.' },
+      },
+      required: ['category'],
+      additionalProperties: false,
+    });
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await canvasNodes(page).first().click();
+    await expect(cell('textbox', 2, 'name')).toHaveValue('confidence');
+    await expect(cell('checkbox', 2, 'required')).not.toBeChecked();
+
+    await expectQuiet(page, problems);
+  });
 });

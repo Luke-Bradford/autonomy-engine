@@ -167,6 +167,7 @@ function paramTypeFor(kind: ConfigFieldKind): ParamType {
     case 'stringList':
     case 'objectList':
     case 'keyValue':
+    case 'outputSchema':
       return 'json';
     case 'text':
     case 'enum':

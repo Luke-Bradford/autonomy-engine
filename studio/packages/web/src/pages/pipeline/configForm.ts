@@ -1,5 +1,13 @@
 import type { z } from 'zod';
-import { SecretRefSchema, isSingleLine, llmMessagesSchema } from '@autonomy-studio/shared';
+import {
+  SecretRefSchema,
+  isAddressableOutputName,
+  isOptionalProperty,
+  isSingleLine,
+  llmMessagesSchema,
+  llmOutputPropertyTypeSchema,
+  llmOutputSchemaSchema,
+} from '@autonomy-studio/shared';
 
 /**
  * The pure rules behind the per-activity node config form (U7).
@@ -39,7 +47,15 @@ import { SecretRefSchema, isSingleLine, llmMessagesSchema } from '@autonomy-stud
 
 /** The controls this form can render. Anything else authors as JSON. */
 export type ConfigFieldKind =
-  'text' | 'number' | 'boolean' | 'enum' | 'stringList' | 'json' | 'objectList' | 'keyValue';
+  | 'text'
+  | 'number'
+  | 'boolean'
+  | 'enum'
+  | 'stringList'
+  | 'json'
+  | 'objectList'
+  | 'keyValue'
+  | 'outputSchema';
 
 /**
  * One row of an `objectList` control: the same cell-input map the top-level
@@ -51,7 +67,7 @@ export type ConfigFieldKind =
  */
 export type ObjectListRow = Readonly<Record<string, string | boolean>>;
 
-/** What one control holds. `objectList` and `keyValue` are the kinds that hold rows. */
+/** What one control holds. The kinds `isRowKind` names are the ones that hold rows. */
 export type FieldInput = string | boolean | readonly ObjectListRow[];
 
 /**
@@ -66,8 +82,10 @@ export function isRowList(value: FieldInput | undefined): value is readonly Obje
 }
 
 /** The kinds whose control holds a list of rows rather than one scalar. */
-export function isRowKind(kind: ConfigFieldKind): kind is 'objectList' | 'keyValue' {
-  return kind === 'objectList' || kind === 'keyValue';
+export function isRowKind(
+  kind: ConfigFieldKind,
+): kind is 'objectList' | 'keyValue' | 'outputSchema' {
+  return kind === 'objectList' || kind === 'keyValue' || kind === 'outputSchema';
 }
 
 /** A `keyValue` row's key cell, the same for both value shapes. */
@@ -170,8 +188,175 @@ export function placeRowCandidate(
     const record = rowsToRecord(field, probed, { strict: false, keep: index });
     return record.ok ? record.value : {};
   }
+  if (field.kind === 'outputSchema') {
+    // Unreachable today: every text cell of these rows is `literal`, and the
+    // flyout is offered on no other kind. Answered rather than left to fall
+    // through, because a row list is not a schema.
+    const schema = rowsToOutputSchema(probed);
+    return schema.ok ? schema.value : {};
+  }
   const cells = field.elementFields ?? [];
   return probed.map((row) => parseRowCells(cells, row).value);
+}
+
+/**
+ * The cells of an `outputSchema` row (#852 item 3): one row per property of a
+ * structured output. `constraints` holds whatever the property declares beyond
+ * its type and description — `enum`, or an `array`'s `items` — as JSON, so every
+ * schema the subset admits has a row form and none is sent to the JSON editor
+ * for declaring an enum.
+ *
+ * Both text cells are `literal`: a property name is an identifier the lowering
+ * reads verbatim, and a description is documentation for the model, so the
+ * expression flyout is offered on neither.
+ */
+const OUTPUT_SCHEMA_CELLS: readonly ConfigField[] = [
+  { name: 'name', kind: 'text', optional: false, literal: true, singleLine: true },
+  { name: 'type', kind: 'enum', optional: false, enumOptions: llmOutputPropertyTypeSchema.options },
+  { name: 'required', kind: 'boolean', optional: true },
+  { name: 'description', kind: 'text', optional: true, literal: true },
+  { name: 'constraints', kind: 'json', optional: true },
+];
+
+/** The root keys a row list can stand for. Anything else would be dropped by an apply. */
+const OUTPUT_SCHEMA_ROOT_KEYS = new Set(['type', 'properties', 'required', 'additionalProperties']);
+
+/** A property's keys that have a column of their own, so `constraints` may not restate them. */
+const OUTPUT_SCHEMA_COLUMN_KEYS = ['type', 'description'] as const;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A stored `outputSchema` as rows, or the reason it has none.
+ *
+ * A row is ticked `required` by `isOptionalProperty`, the SSOT the lowering and
+ * the dispatch validator both read (#594): an ABSENT `required` list means every
+ * property is required, so it renders with every row ticked. Reading absent as
+ * "none ticked" would turn every field optional on the next apply.
+ *
+ * Refused, so the node opens in the JSON editor instead: anything a row list
+ * cannot carry back — a root `description` or `title`, an open object — and
+ * anything invalid that a row would silently repair, such as a `required` entry
+ * naming no property.
+ */
+function outputSchemaRows(value: unknown): FieldRender {
+  if (!isPlainRecord(value)) return { ok: false, reason: 'not a schema object' };
+  for (const key of Object.keys(value)) {
+    if (!OUTPUT_SCHEMA_ROOT_KEYS.has(key)) {
+      return { ok: false, reason: `holds a root '${key}' the rows cannot carry` };
+    }
+  }
+  if (value.type !== 'object') return { ok: false, reason: 'is not an object schema' };
+  if (value.additionalProperties !== undefined && value.additionalProperties !== false) {
+    return { ok: false, reason: 'is an open object' };
+  }
+  const { properties, required } = value;
+  if (!isPlainRecord(properties)) return { ok: false, reason: 'has no properties object' };
+  if (required !== undefined) {
+    if (!Array.isArray(required)) return { ok: false, reason: 'required is not a list' };
+    const seen = new Set<unknown>();
+    for (const name of required) {
+      if (typeof name !== 'string' || !Object.hasOwn(properties, name) || seen.has(name)) {
+        return { ok: false, reason: `required holds '${String(name)}', which no row can say` };
+      }
+      seen.add(name);
+    }
+  }
+  const types: readonly string[] = llmOutputPropertyTypeSchema.options;
+  const rows: ObjectListRow[] = [];
+  for (const [name, property] of Object.entries(properties)) {
+    if (name === '') return { ok: false, reason: 'holds an empty property name' };
+    if (!isPlainRecord(property)) return { ok: false, reason: `'${name}' is not a property` };
+    const { type, description, ...rest } = property;
+    if (typeof type !== 'string' || !types.includes(type)) {
+      return { ok: false, reason: `'${name}' has a type the rows cannot offer` };
+    }
+    // `''` is storable but reads back as "not set" — the cell-level form of the
+    // clearing-gesture rule `objectList` refuses on for the same reason.
+    if (description !== undefined && (typeof description !== 'string' || description === '')) {
+      return { ok: false, reason: `'${name}' has a description a row would drop` };
+    }
+    const constraints = Object.keys(rest).length > 0 ? JSON.stringify(rest, null, 2) : '';
+    // `undefined` back from stringify means the keywords have no JSON form.
+    if (typeof constraints !== 'string') return { ok: false, reason: `'${name}' is not JSON` };
+    rows.push({
+      name,
+      type,
+      required: !isOptionalProperty({ required: required as string[] | undefined }, name),
+      description: description ?? '',
+      constraints,
+    });
+  }
+  return { ok: true, value: rows };
+}
+
+/**
+ * `outputSchema` rows as the schema they stand for — the one reader, used by an
+ * apply.
+ *
+ * Each row's cells go through `parseRowCells`, the same reader every row list
+ * uses; what is added here is the schema's own rules. The written form is
+ * canonical: properties and `required` in row order, `required` ALWAYS present
+ * (an empty list is "all optional", absent would be "all required" — #594), and
+ * `additionalProperties: false`, which the subset treats as implied anyway. An
+ * UNTOUCHED field is not rewritten into it — see `assembleConfig`.
+ *
+ * `__proto__` is refused by name. `Object.fromEntries` would keep it as data
+ * here, but Zod's record parser skips that key, so the save-time schema would
+ * drop the row without a word — or, as the only row, fail as "no properties".
+ */
+export function rowsToOutputSchema(
+  rows: readonly ObjectListRow[],
+): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
+  const entries: [string, Record<string, unknown>][] = [];
+  const required: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, row] of rows.entries()) {
+    const at = `row ${index + 1}`;
+    const { value, failure } = parseRowCells(OUTPUT_SCHEMA_CELLS, row);
+    if (failure !== null)
+      return { ok: false, message: `${at} ${failure.cell}: ${failure.message}` };
+    const name = typeof value.name === 'string' ? value.name : '';
+    if (name === '') return { ok: false, message: `${at} name: required` };
+    if (!isAddressableOutputName(name)) {
+      return {
+        ok: false,
+        message: `${at} name: '${name}' is not addressable — a reference reads it as one identifier`,
+      };
+    }
+    if (name === '__proto__') return { ok: false, message: `${at} name: '__proto__' is reserved` };
+    if (seen.has(name)) return { ok: false, message: `${at}: duplicate property '${name}'` };
+    seen.add(name);
+    if (typeof value.type !== 'string') return { ok: false, message: `${at} type: required` };
+    const extra = value.constraints;
+    if (extra !== undefined && !isPlainRecord(extra)) {
+      return { ok: false, message: `${at} constraints: must be a JSON object` };
+    }
+    const restated = OUTPUT_SCHEMA_COLUMN_KEYS.find((key) => extra !== undefined && key in extra);
+    if (restated !== undefined) {
+      return { ok: false, message: `${at} constraints: set '${restated}' in its own column` };
+    }
+    entries.push([
+      name,
+      {
+        type: value.type,
+        ...(value.description !== undefined && { description: value.description }),
+        ...extra,
+      },
+    ]);
+    if (value.required === true) required.push(name);
+  }
+  return {
+    ok: true,
+    value: {
+      type: 'object',
+      properties: Object.fromEntries(entries),
+      required,
+      additionalProperties: false,
+    },
+  };
 }
 
 /** One derived control: a config key, and how to author it. */
@@ -401,6 +586,13 @@ function classify(
   schema: unknown,
   nestable: boolean,
 ): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields' | 'recordValue'> {
+  // IDENTITY, as with `llmMessagesSchema` below: a structured-output schema is an
+  // object with rules of its own (#852 item 3), not a record or a list. A tool's
+  // `parameters` is built from the same factory but is its own instance, and sits
+  // inside a row, so it stays JSON.
+  if (nestable && schema === llmOutputSchemaSchema) {
+    return { kind: 'outputSchema', elementFields: OUTPUT_SCHEMA_CELLS };
+  }
   switch (defOf(schema)?.type) {
     case 'record': {
       // A record inside a row stays a JSON cell: rows do not nest.
@@ -487,10 +679,10 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
   if (value === undefined) return { ok: true, value: emptyControlValue(field) };
 
   switch (field.kind) {
+    case 'outputSchema':
+      return outputSchemaRows(value);
     case 'keyValue': {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return { ok: false, reason: 'not a record' };
-      }
+      if (!isPlainRecord(value)) return { ok: false, reason: 'not a record' };
       const second = valueCell(field);
       const rows: ObjectListRow[] = [];
       for (const [key, held] of Object.entries(value)) {
@@ -729,6 +921,15 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
     return { ok: true, omit: false, value: record.value };
   }
 
+  if (field.kind === 'outputSchema') {
+    if (!isRowList(raw)) return { ok: false, message: 'expected a row list' };
+    // No rows: `objectList`'s rule. A required field writes the empty schema,
+    // which the subset refuses in its own words ("at least one property").
+    if (raw.length === 0 && field.optional) return { ok: true, omit: true };
+    const schema = rowsToOutputSchema(raw);
+    return schema.ok ? { ok: true, omit: false, value: schema.value } : schema;
+  }
+
   if (isRowList(raw)) return { ok: false, message: 'expected a single value, not a row list' };
 
   if (field.kind === 'boolean') {
@@ -854,6 +1055,20 @@ export function assembleConfig(
       }
       delete config[field.name];
       continue;
+    }
+    // An UNTOUCHED control writes back what was stored, verbatim. For most kinds
+    // this changes nothing, because reading back what a stored value renders to
+    // IS that value. `outputSchema` rows write a canonical form (#852 item 3),
+    // though, and an apply that changed a different field must not rewrite this
+    // one. Checked only after the parse succeeded, so it never excuses a refusal.
+    const stored = original[field.name];
+    if (stored !== undefined) {
+      const rendered = formatFieldValue(field, stored);
+      if (rendered.ok && sameControlValue(raw, rendered.value)) {
+        config[field.name] = stored;
+        owned[field.name] = stored;
+        continue;
+      }
     }
     config[field.name] = parsed.value;
     owned[field.name] = parsed.value;
