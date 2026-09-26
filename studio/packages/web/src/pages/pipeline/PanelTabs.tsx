@@ -37,10 +37,7 @@ export function PanelTabs<K extends string>({
 }) {
   const baseId = useId();
   const [own, setOwn] = useState<K>(tabs[0].key);
-  const requested = selected ?? own;
-  // A lifted choice this panel does not offer (a node tab carried onto a panel
-  // with fewer tabs) falls back to the first, rather than showing nothing.
-  const current = tabs.some((t) => t.key === requested) ? requested : tabs[0].key;
+  const current = selected ?? own;
   const tabId = (key: K) => `${baseId}-tab-${key}`;
   const panelId = (key: K) => `${baseId}-panel-${key}`;
 

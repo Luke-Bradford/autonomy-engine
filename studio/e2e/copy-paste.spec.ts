@@ -5,6 +5,7 @@ import {
   edgeGroup,
   fitAndSettle,
   marqueeAllNodes,
+  scaleOf,
   viewportSettled,
 } from './support/canvasGraph';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
@@ -301,8 +302,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
     }
     // It PANNED: the viewport moved, and the zoom the operator had is kept.
     expect(after).not.toBe(before);
-    const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
-    expect(scale(after)).toBe(scale(before));
+    expect(scaleOf(after)).toBe(scaleOf(before));
 
     await expectQuiet(page, problems);
   });

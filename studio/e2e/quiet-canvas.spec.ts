@@ -5,6 +5,7 @@ import {
   canvasNodes,
   deselect,
   edgeGroup,
+  scaleOf,
   seedSelectedEdge,
   selectEdge,
 } from './support/canvasGraph';
@@ -344,12 +345,10 @@ test.describe('#1066 — a container collapses its ports too', () => {
     await expect
       .poll(async () => {
         const height = (await page.locator('.flow-container').boundingBox())?.height ?? Infinity;
-        const zoom = await page.evaluate(() => {
-          const t = (document.querySelector('.react-flow__viewport') as HTMLElement).style
-            .transform;
-          return Number(/scale\(([^)]+)\)/.exec(t)?.[1] ?? 'NaN');
-        });
-        return height / zoom;
+        const transform = await page
+          .locator('.react-flow__viewport')
+          .evaluate((el) => (el as HTMLElement).style.transform);
+        return height / Number(scaleOf(transform) ?? 'NaN');
       })
       .toBeLessThan(140);
 

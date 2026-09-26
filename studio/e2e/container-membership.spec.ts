@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { scaleOf } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
@@ -13,10 +14,7 @@ function viewportTransform(page: Page): Promise<string> {
   );
 }
 
-/** React Flow writes `translate(Xpx,Ypx) scale(Z)`. */
-function scaleOf(transform: string): string | undefined {
-  return /scale\(([^)]+)\)/.exec(transform)?.[1];
-}
+/** React Flow writes `translate(Xpx,Ypx) scale(Z)`; `scaleOf` reads the second half. */
 function translateOf(transform: string): { x: string | undefined; y: string | undefined } {
   const m = /translate\(([^,]+),\s*([^)]+)\)/.exec(transform);
   return { x: m?.[1], y: m?.[2] };
