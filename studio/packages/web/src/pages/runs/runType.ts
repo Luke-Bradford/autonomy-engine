@@ -33,3 +33,15 @@ export const RUN_TYPE_LABEL: Record<RunType, string> = {
   original: 'Original',
   rerun_from_failed: 'Rerun from failed',
 };
+
+/**
+ * The Type cell's title: the source run, for a rerun. Keyed on `runTypeOf`, so
+ * the title and the label cannot disagree about what a run is — when F11 adds
+ * its discriminator, a simple rerun stops getting this sentence by the same
+ * edit that stops it getting this label. (The `rerunOf` check that remains only
+ * narrows the type for the template.)
+ */
+export function runTypeTitle(run: Pick<Run, 'rerunOf'>): string | undefined {
+  if (runTypeOf(run) !== 'rerun_from_failed' || run.rerunOf === null) return undefined;
+  return `Rerun of run ${run.rerunOf}`;
+}

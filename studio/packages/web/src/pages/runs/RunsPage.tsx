@@ -19,7 +19,7 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { runStatusLabel } from './runStatus';
-import { RUN_TYPE_LABEL, runTypeOf } from './runType';
+import { RUN_TYPE_LABEL, runTypeOf, runTypeTitle } from './runType';
 import { RunTimeline } from './RunTimeline';
 import {
   hasActiveRunFilters,
@@ -610,9 +610,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                           put two identically named "Source run …" links on the
                           page, and Watch already reaches the detail page's own
                           lineage link. */}
-                      <td title={r.rerunOf !== null ? `Rerun of run ${r.rerunOf}` : undefined}>
-                        {RUN_TYPE_LABEL[runTypeOf(r)]}
-                      </td>
+                      <td title={runTypeTitle(r)}>{RUN_TYPE_LABEL[runTypeOf(r)]}</td>
                       <td>
                         {/* #870 — the WORD comes from the Monitor's one run-status
                             vocabulary; the CLASS still comes from the status itself,
