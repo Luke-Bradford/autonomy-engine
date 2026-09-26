@@ -11,6 +11,7 @@ import {
   type ActivityCatalogEntry,
   type ConnectionKind,
   type EngineEvent,
+  FAILURE_CODES,
   type NewPipelineVersion,
   type Node,
   type PipelineVersion,
@@ -30,6 +31,7 @@ import { loadEngineEvents } from '../events.js';
 import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
+import { createRunCancels } from '../cancel.js';
 import type { ChildRuns } from '../child.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import { connections } from '../../db/schema.js';
@@ -4672,5 +4674,91 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
     } finally {
       g.open();
     }
+  });
+});
+
+describe("createExecutor — CX2 (#1320): abortRun stops a cancelled run's dispatches", () => {
+  /** Resolves when `signal` aborts. */
+  const aborted = (signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+
+  const failureOf = (db: Db, runId: string) =>
+    loadEngineEvents(db, runId).find(
+      (e): e is Extract<EngineEvent, { type: 'node.failed' }> => e.type === 'node.failed',
+    );
+
+  it('an in-flight adapter that THROWS on abort fails cancelled, not permanent ADAPTER_THREW', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]));
+    const started = gate();
+    // Many real adapters surface an abort as a rejected fetch/stream rather
+    // than a terminal of their own. That is the cancel's effect, not a bug.
+    // eslint-disable-next-line require-yield -- this adapter's whole point is that it only throws
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      started.open();
+      await aborted(ctx.signal);
+      throw new Error('The operation was aborted');
+    });
+    const cancels = createRunCancels();
+    const d = { ...deps(db, { adapters }), cancels };
+
+    const done = startRun(d, run);
+    await started.held;
+    cancels.request(run.id, { kind: 'operator' });
+    cancels.poke(run.id);
+    const state = await done;
+
+    expect(state.status).toBe('cancelled');
+    expect(failureOf(db, run.id)).toMatchObject({
+      kind: 'cancelled',
+      code: FAILURE_CODES.RUN_CANCELLED,
+    });
+  });
+
+  it('an attempt still WAITING for a global slot fails cancelled at once, while another run holds the slot, and its adapter never runs', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
+    const holder = seedRun(db, pvId);
+    const victim = seedRun(db, pvId);
+    const holderStarted = gate();
+    const releaseHolder = gate();
+    const adapterRuns: string[] = [];
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      adapterRuns.push(ctx.runId);
+      holderStarted.open();
+      await releaseHolder.held;
+      yield { type: 'succeeded', outputs: { status: 200, body: '', headers: {} } };
+    });
+    const cancels = createRunCancels();
+    // ONE global slot: the holder takes it, the victim's attempt queues behind it.
+    const d = { ...deps(db, { adapters, concurrency: 1 }), cancels };
+
+    const holderDone = startRun(d, holder);
+    await holderStarted.held;
+    const victimDone = startRun(d, victim);
+    await until(
+      () => eventTypes(db, victim.id).includes('node.dispatched'),
+      'the victim attempt queued behind the global slot',
+    );
+
+    cancels.request(victim.id, { kind: 'operator' });
+    cancels.poke(victim.id);
+    const victimState = await victimDone;
+
+    // Settled while the holder STILL holds the only slot.
+    expect(victimState.status).toBe('cancelled');
+    expect(failureOf(db, victim.id)).toMatchObject({
+      kind: 'cancelled',
+      code: FAILURE_CODES.RUN_CANCELLED,
+    });
+    expect(adapterRuns).toEqual([holder.id]);
+
+    releaseHolder.open();
+    expect((await holderDone).status).toBe('success');
+    // The skipped attempt's queued slot resolves without ever starting it.
+    await sleep(10);
+    expect(adapterRuns).toEqual([holder.id]);
   });
 });

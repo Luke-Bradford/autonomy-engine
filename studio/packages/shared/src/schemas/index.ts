@@ -16,6 +16,7 @@ export * from './fire-result.js';
 export * from './run.js';
 export * from './run-detail.js';
 export * from './rerun.js';
+export * from './run-cancel.js';
 export * from './external-agent-activity.js';
 export * from './external-wait.js';
 export * from './run-stream.js';

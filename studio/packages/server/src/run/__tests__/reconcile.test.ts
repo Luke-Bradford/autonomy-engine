@@ -50,6 +50,7 @@ import {
 } from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { createRunCancels } from '../cancel.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -2681,5 +2682,113 @@ describe("reconcileOnBoot — #796 item 2 a DETACHED child is its own work, not 
     expect(kicked).toEqual([]);
     expect(report.deferred).toContain(child.id);
     expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+});
+
+describe('reconcileOnBoot — CX2 (#1320) D7: a cancelled run is FINISHED, never resumed', () => {
+  const cancelRequested = (runId: string): EngineEvent => ({
+    type: 'run.cancelRequested',
+    runId,
+    source: { kind: 'operator' },
+  });
+
+  it('fails each in-flight node cancelled and finishes the run cancelled: no run.resumed, no run.interrupted', async () => {
+    const { db } = freshDb();
+    // NON-idempotent, so without D7 the reconciler would interrupt it instead.
+    const run = await seedCrashedRun(db, [node('a'), node('b')], [edge('a', 'b')], {
+      nodes: { a: { hang: true, idempotent: false } },
+    });
+    appendEngineEvent(db, cancelRequested(run.id));
+
+    const recovery = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+    });
+
+    expect(report.finalized).toEqual([run.id]);
+    expect(report.interrupted).toEqual([]);
+    expect(recovery.dispatched).toEqual([]);
+    const log = loadEngineEvents(db, run.id);
+    expect(types(log).slice(-3)).toEqual(['run.cancelRequested', 'node.failed', 'run.finished']);
+    expect(log.at(-2)).toMatchObject({ nodeId: 'a', kind: 'cancelled', code: 'run_cancelled' });
+    expect(log.at(-1)).toMatchObject({ outcome: 'cancelled' });
+    expect(getRun(db, run.id)!.status).toBe('cancelled');
+  });
+
+  it('folds a cancel still PENDING as an intent before building any resume fact (lease reclaim)', async () => {
+    const { db } = freshDb();
+    const run = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const cancels = createRunCancels();
+    cancels.request(run.id, { kind: 'operator' });
+
+    const recovery = makeStubExecutor();
+    await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+      cancels,
+    });
+
+    const log = types(loadEngineEvents(db, run.id));
+    expect(log).not.toContain('run.resumed');
+    expect(log.slice(-3)).toEqual(['run.cancelRequested', 'node.failed', 'run.finished']);
+    expect(recovery.dispatched).toEqual([]);
+    expect(cancels.pending(run.id)).toBe(false);
+    expect(getRun(db, run.id)!.status).toBe('cancelled');
+  });
+
+  it('a READY node whose dispatch was lost with the process fails too, so the run can finish', async () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+    // `run.started` makes `a` ready; its dispatch command died before any
+    // `node.dispatched`, then the cancel folded.
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: run.pipelineVersionId,
+      startedAt: new Date(run.startedAt).toISOString(),
+      params: {},
+    });
+    appendEngineEvent(db, cancelRequested(run.id));
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    const recovery = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+    });
+
+    expect(report.finalized).toEqual([run.id]);
+    expect(recovery.dispatched).toEqual([]);
+    expect(types(loadEngineEvents(db, run.id))).not.toContain('run.resumed');
+    expect(loadEngineEvents(db, run.id).at(-1)).toMatchObject({
+      type: 'run.finished',
+      outcome: 'cancelled',
+    });
+    expect(getRun(db, run.id)!.status).toBe('cancelled');
+  });
+
+  it('a never-started run whose cancel folded but whose finish was lost is finished cancelled, not swept interrupted', async () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+    appendEngineEvent(db, cancelRequested(run.id));
+
+    await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    expect(types(loadEngineEvents(db, run.id))).toEqual(['run.cancelRequested', 'run.finished']);
+    expect(getRun(db, run.id)!.status).toBe('cancelled');
   });
 });

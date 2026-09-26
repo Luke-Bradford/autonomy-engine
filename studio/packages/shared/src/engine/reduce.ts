@@ -307,12 +307,13 @@ function unparkIfWaiting(state: RunState): RunState {
 }
 
 /**
- * CX1 (#1320) — the ONE terminal command a cancelled run finishes with. Both
- * finish sites (a `pending` run's cancel, and cancel-mode `settle`) build it here
- * so the reason cannot drift between them. The reason names the machine-set
+ * CX1 (#1320) — the ONE terminal command a cancelled run finishes with. Every
+ * finish site (a `pending` run's cancel, cancel-mode `settle`, and CX2's boot
+ * reconciler finishing a `pending` run whose cancel was folded before a crash)
+ * builds it here so the reason cannot drift between them. The reason names the machine-set
  * source kind and nothing else (spec D2: no free text).
  */
-function cancelFinish(source: CancelSource): EngineCommand {
+export function cancelFinish(source: CancelSource): EngineCommand {
   return { type: 'finishRun', outcome: 'cancelled', reason: `cancelled:${source.kind}` };
 }
 

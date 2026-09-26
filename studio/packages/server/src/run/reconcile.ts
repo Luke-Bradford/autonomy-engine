@@ -1,4 +1,5 @@
 import {
+  cancelFinish,
   terminalStatusOf,
   type ArmWakeupInput,
   type Engine,
@@ -6,6 +7,7 @@ import {
   type PipelineVersion,
   TERMINAL_RUN_ROW_STATUS,
   callDetaches,
+  type EngineCommand,
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
@@ -15,6 +17,7 @@ import type { Db } from '../repo/types.js';
 import {
   buildEngine,
   DocUnresolvableError,
+  foldPendingCancel,
   pump,
   retryArmInput,
   syncRunLifecycle,
@@ -25,6 +28,7 @@ import {
 } from './driver.js';
 import type { RunEventBus } from './event-bus.js';
 import type { RunDrives } from './drives.js';
+import { runCancelledFailure, type RunCancels } from './cancel.js';
 import { isDetachedChild } from './child.js';
 import {
   appendAndFold,
@@ -188,6 +192,13 @@ export interface ReconcileDeps {
    * the type cannot state.
    */
   drives?: RunDrives;
+  /**
+   * CX2 (#1320) — the cancel registry (`cancel.ts`). A pending intent is folded
+   * here before anything is derived (spec D6/D7), and it reaches the pump this
+   * reconcile starts, so a cancel requested mid-resume is delivered at once.
+   * Optional like `drives`: production always passes the ONE process registry.
+   */
+  cancels?: RunCancels;
   /** Clock seam (epoch ms) for a RE-ARMED retry's `dueAt`; mirrors `DriverDeps.now`. */
   now?: () => number;
   /**
@@ -820,7 +831,11 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   // below is exactly what makes the verdict independent of which sub-tick the
   // crash hit — the property this branch was protecting all along. Nothing to do
   // here: hand the row over and let the shared unit decide.
-  if (hasRunStartedFact(events)) {
+  // CX2 (#1320) — a cancel folded onto a never-started run whose `run.finished`
+  // was lost to a crash is not a strand: it is a cancel owed its finish, and
+  // `reconcileOne`'s D7 branch pays it. Without this it would be terminalized
+  // `interrupted` below, reporting a stop the operator asked for as a fault.
+  if (hasRunStartedFact(events) || events.some((e) => e.type === 'run.cancelRequested')) {
     await reconcileOne(deps, report, run);
     return;
   }
@@ -1281,7 +1296,59 @@ export async function reconcileOne(
     throw err;
   }
   const engine = buildEngine(doc);
-  const state = engine.projectRunState(events);
+  let state = engine.projectRunState(events);
+
+  // CX2 (#1320, spec D6) — a cancel requested while this run was unowned (lease
+  // reclaim) folds BEFORE any resume fact is built, so the log never records a
+  // resume the cancel then contradicts.
+  const cancelFold = foldPendingCancel(deps, engine, state, run.id);
+  if (cancelFold !== null) state = cancelFold.state;
+
+  // CX2 (#1320, spec D7) — the cancel is already folded: FINISH it, never
+  // resume it. Anything that was in flight died with the process, so each
+  // `dispatched` node fails `cancelled`; `resume` then fails the `ready` nodes
+  // and call nodes whose commands were lost, and settles to the D3 finish. No
+  // `run.resumed` (it would re-dispatch work the operator stopped) and no
+  // `run.interrupted` (the run is not frozen, it is being cancelled). Ahead of
+  // the `pending` re-sync below, because a cancel folded onto a never-started
+  // run is still owed its `run.finished`.
+  if (state.cancelRequested !== null) {
+    let next = state;
+    let commands: EngineCommand[];
+    if (next.status === 'pending') {
+      commands = [cancelFinish(next.cancelRequested!.source)];
+    } else {
+      for (const { id, attemptId } of dispatchedNodes(next)) {
+        next = appendAndFold(
+          deps.db,
+          deps.bus,
+          engine,
+          next,
+          runCancelledFailure(run.id, id, attemptId),
+        ).state;
+      }
+      const resumed = engine.resume(next);
+      next = resumed.state;
+      commands = resumed.commands;
+    }
+    syncRunLifecycle(deps.db, run.id, next.status);
+    await pump(
+      {
+        db: deps.db,
+        resolveDoc: deps.resolveDoc,
+        executor: deps.executor ?? refuseToExecute,
+        alarms: deps.alarms,
+        bus: deps.bus,
+        signExternalWaitToken: deps.signExternalWaitToken,
+        cancels: deps.cancels,
+      },
+      engine,
+      next,
+      commands,
+    );
+    report.finalized.push(run.id);
+    return;
+  }
 
   // Defensive, and unreachable today: a `running` row whose log has no
   // `run.started` (the projection is then the `pending` seed). `updateRun`'s
@@ -1479,6 +1546,7 @@ export async function reconcileOne(
       alarms: deps.alarms,
       bus: deps.bus,
       signExternalWaitToken: deps.signExternalWaitToken,
+      cancels: deps.cancels,
     },
     engine,
     next,

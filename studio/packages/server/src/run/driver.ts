@@ -29,10 +29,12 @@ import { recordExternalWait } from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
+import { runCancelledFailure, type RunCancels } from './cancel.js';
 import type { RunEventBus } from './event-bus.js';
 import {
   appendAndFold,
   appendEngineEvent,
+  hasRunStartedFact,
   loadEngineEvents,
   terminalFactFromLog,
 } from './events.js';
@@ -204,6 +206,17 @@ export type ExecutorCommand = Extract<EngineCommand, { type: 'dispatchNode' | 's
  */
 export interface Executor {
   perform(command: ExecutorCommand, runId: string): AsyncIterable<EngineEvent>;
+  /**
+   * CX2 (#1320, spec D6) — abort every live dispatch of `runId`. Each aborted
+   * attempt still ends with a terminal of its own (`node.failed{kind:'cancelled'}`
+   * at the latest), so nothing it held is left in flight. Called ONLY from
+   * `onCancelFolded`, i.e. AFTER `run.cancelRequested` is folded: the reducer is
+   * then already in cancel mode when the first cancelled failure arrives, so that
+   * failure can never be routed down a failure edge.
+   *
+   * Optional because a test executor with nothing to abort need not implement it.
+   */
+  abortRun?(runId: string): void;
 }
 
 /**
@@ -301,6 +314,14 @@ export interface DriverDeps {
    * a silent hang), so a server with no webhooks constructs the driver unchanged.
    */
   signExternalWaitToken?: (args: { runId: string; nodeId: string; attemptId: string }) => string;
+  /**
+   * CX2 (#1320) — the cancel intents + live-pump poke registry (`cancel.ts`).
+   * OPTIONAL: without it no cancel can be delivered to a run this driver pumps,
+   * and nothing else changes. Production wires the ONE process-wide registry in
+   * `index.ts`, into this boundary and the boot reconciler alike, because a
+   * cancel must reach whichever holder owns the run.
+   */
+  cancels?: RunCancels;
   /** P6 — the live-monitor bus. When present, every event this driver appends is
    * published to it (after the durable append) so a watching WS client tails the
    * run in real time. Optional: P2/P3 driver tests run without a bus unchanged. */
@@ -901,6 +922,78 @@ function recordQuotaWindowIfExhausted(db: Db, event: EngineEvent, eventTs: numbe
  */
 const PER_RUN_DISPATCH_CONCURRENCY = 4;
 
+/** CX2 (#1320) — a pump inbox entry that stands for "fold the cancel intent". */
+const CANCEL_MARKER = Symbol('cancel-marker');
+
+/** CX2 — the stream a dispatch gets when the cancel folded before it started. */
+async function* cancelledStream(
+  runId: string,
+  nodeId: string,
+  attemptId: string,
+): AsyncGenerator<EngineEvent> {
+  yield runCancelledFailure(runId, nodeId, attemptId);
+}
+
+/**
+ * CX2 (#1320, spec D6) — the ONE hook every fold of `run.cancelRequested` calls:
+ * the pump's marker, a starting drive, `startRun`, and the boot reconciler.
+ * It aborts the run's live dispatches. CX3 adds child propagation (D8) HERE,
+ * and nowhere else calls either.
+ */
+export function onCancelFolded(
+  deps: { executor?: Pick<Executor, 'abortRun'>; log?: DriveLog },
+  runId: string,
+): void {
+  // NEVER throws. It runs right after the fold, and a throw here would stop the
+  // caller before the `finishRun` that fold produced — leaving a `pending` run
+  // with a cancel and no terminal, which the boot sweep would then misreport.
+  // The abort is best-effort by nature: an attempt it misses still ends on its
+  // own, and its successors are never dispatched because the fold already
+  // happened.
+  try {
+    deps.executor?.abortRun?.(runId);
+  } catch (err) {
+    deps.log?.error({ err, runId }, 'run cancel: aborting live dispatches failed');
+  }
+}
+
+/**
+ * CX2 (#1320, spec D6) — a drive that is STARTING folds a pending cancel intent
+ * after projecting from the log and BEFORE computing its first commands, so its
+ * initial queue comes from a cancel-aware state and no dispatch computed from a
+ * cancel-unaware projection can escape. `null` when there was nothing to fold.
+ */
+export function foldPendingCancel(
+  deps: Pick<DriverDeps, 'db' | 'bus' | 'cancels' | 'log'> & { executor?: Executor },
+  engine: Engine,
+  state: RunState,
+  runId: string,
+): ReturnType<typeof appendAndFold> | null {
+  const cancels = deps.cancels;
+  if (cancels?.pending(runId) !== true) return null;
+  const source = cancels.peek(runId)!;
+  // Already folded (a duplicate request that raced the first): the reducer would
+  // ignore a second `run.cancelRequested` too, but appending one is noise.
+  if (state.cancelRequested !== null) {
+    cancels.take(runId);
+    return null;
+  }
+  const result = appendAndFold(
+    deps.db,
+    deps.bus,
+    engine,
+    state,
+    { type: 'run.cancelRequested', runId, source },
+    deps.log,
+  );
+  // Consumed only once the fact is durable: an append that threw leaves the
+  // intent for the next holder.
+  cancels.take(runId);
+  syncRunLifecycle(deps.db, runId, result.state.status);
+  onCancelFolded(deps, runId);
+  return result;
+}
+
 /** How a stream event left the pump's fold channel (see `pump`). */
 type SinkOutcome = 'folded' | 'dropped';
 
@@ -951,7 +1044,12 @@ export async function pump(
 
   // ---- stream plumbing (see the CONCURRENCY doc block above) ---------------
   const streamLimit = pLimit(PER_RUN_DISPATCH_CONCURRENCY);
-  const pendingFolds: { event: EngineEvent; settle: (outcome: SinkOutcome) => void }[] = [];
+  // A `CANCEL_MARKER` entry is a poke (CX2, D6): the intent is consumed when
+  // the marker is SHIFTED, so the cancel folds in this pump's own log order.
+  const pendingFolds: {
+    event: EngineEvent | typeof CANCEL_MARKER;
+    settle: (outcome: SinkOutcome) => void;
+  }[] = [];
   const pushers: Promise<void>[] = [];
   const streamErrors: unknown[] = [];
   let liveStreams = 0;
@@ -968,7 +1066,15 @@ export async function pump(
       // Teardown already began while this stream sat in the per-run cap's
       // queue: never START a stream whose events can only be dropped.
       if (dropped) return;
-      for await (const event of deps.executor.perform(command, state.runId)) {
+      // CX2 (#1320) — the cancel folded while this stream sat in the per-run
+      // cap's queue. Its attempt never started, but the reducer counts its node
+      // as in flight, so dropping the stream would hold the run live forever:
+      // it ends with the cancelled failure instead, and the adapter never runs.
+      const streamed =
+        command.type === 'dispatchNode' && state.cancelRequested !== null
+          ? cancelledStream(state.runId, command.nodeId, command.attemptId)
+          : deps.executor.perform(command, state.runId);
+      for await (const event of streamed) {
         const outcome = await new Promise<SinkOutcome>((settle) => {
           if (dropped) {
             settle('dropped');
@@ -1008,6 +1114,40 @@ export async function pump(
     return TERMINAL_RUN.has(state.status);
   };
 
+  // CX2 (#1320) — consume and fold this run's cancel intent, if it is still
+  // there: another marker, or a starting drive, may already have folded it.
+  // Take + append + fold run in ONE tick (`cancel.ts`), then the abort follows
+  // the fold, never precedes it.
+  const foldCancelIntent = (): boolean => {
+    const source = deps.cancels?.peek(state.runId);
+    if (source === undefined) return false;
+    if (state.cancelRequested !== null) {
+      deps.cancels?.take(state.runId);
+      return false;
+    }
+    const terminal = fold({ type: 'run.cancelRequested', runId: state.runId, source });
+    deps.cancels?.take(state.runId);
+    onCancelFolded(deps, state.runId);
+    return terminal;
+  };
+
+  // CX2 (#1320) — publish this pump's poke for as long as it holds the run. A
+  // cancel requested BEFORE the poke existed is picked up by the marker pushed
+  // straight after. `startRun` and `drive` fold any intent synchronously just
+  // before calling here, so for them this is a no-op; it is what covers the boot
+  // reconciler, which folds its intent at the top of `reconcileOne` and can
+  // `await` before it pumps.
+  const pokeMe = (): void => {
+    if (dropped) return;
+    // At the FRONT: an event already queued ahead of it (a `node.succeeded`,
+    // say) would otherwise fold first and dispatch a successor the cancel is
+    // about to stop anyway. Folding the cancel first starts nothing needless.
+    pendingFolds.unshift({ event: CANCEL_MARKER, settle: () => undefined });
+    wake();
+  };
+  const unregisterPoke = deps.cancels?.registerPoke(state.runId, pokeMe);
+  if (deps.cancels?.pending(state.runId) === true) pokeMe();
+
   // A pump-side (fold) error is CAPTURED, not thrown past teardown: a direct
   // rethrow would exit before the streamErrors merge below, silently discarding
   // any concurrently-failed streams' diagnostics (the review WARNING on #657).
@@ -1022,7 +1162,7 @@ export async function pump(
         if (next !== undefined) {
           let terminal: boolean;
           try {
-            terminal = fold(next.event);
+            terminal = next.event === CANCEL_MARKER ? foldCancelIntent() : fold(next.event);
           } catch (err) {
             // Settle BEFORE rethrowing: the entry is already shifted OUT of
             // `pendingFolds`, so the teardown sweep below cannot reach it — an
@@ -1200,6 +1340,10 @@ export async function pump(
     // a pusher's `break` runs the generator's `.return()`, which finishes any
     // in-flight adapter work and its `finally` blocks, so nothing untracked
     // survives past the drive lock. Dropped events are NEVER appended.
+    // CX2 (#1320) — unpublish the poke BEFORE anything is dropped. A marker
+    // dropped below never consumed its intent, so the intent is still in the
+    // map, and the drive the route queued behind this lock folds it.
+    unregisterPoke?.();
     dropped = true;
     for (const pending of pendingFolds.splice(0)) pending.settle('dropped');
     await Promise.all(pushers);
@@ -1401,21 +1545,43 @@ export interface DriveDeps extends DriverDeps {
  *    settled run's nodes.
  */
 export async function driveRun(deps: DriveDeps, runId: string): Promise<void> {
+  await deps.drives.serialize(runId, () => driveLocked(deps, runId));
+}
+
+/**
+ * CX2 (#1320, spec D6) — the SERIALIZED half of a cancel: runs once no pump
+ * holds the run's lock. If the cancel intent is still in the map (no live pump
+ * folded it, or a pump's teardown dropped its marker) this drive folds it and
+ * takes the run to its end. If a pump already folded it, there is nothing to do,
+ * and re-driving a run nobody asked to drive would be wrong, so it does nothing.
+ */
+export async function driveCancelIntent(deps: DriveDeps, runId: string): Promise<void> {
   await deps.drives.serialize(runId, async () => {
-    try {
-      await drive(deps, runId);
-    } catch (err) {
-      // The SAME handling the launcher gives an unexpectedly-thrown drive, and
-      // shared with it rather than re-implemented: without this, an identical
-      // fault is a visible needs-attention run when the LAUNCHER drives and a
-      // SILENT HANG when the alarm does — the run stays `running`, its alarm row
-      // is now spent, and the throw stops at the clock's floating `afterCommit`
-      // catch as one log line. That asymmetry between two entry points doing the
-      // same job is what produced B1; it does not get to survive B1's fix.
-      deps.log?.error({ err, runId }, 'retry drive failed');
-      terminalizeInterrupted(deps, runId);
-    }
+    if (deps.cancels?.pending(runId) !== true) return;
+    await driveLocked(deps, runId);
+    // Normally `drive` consumed it. It is still here when the run had already
+    // ended (a cancel that lost the race) or the drive threw before folding it
+    // (and terminalized the run): either way there is nothing left to stop, and
+    // it must not sit in the map for good.
+    deps.cancels.take(runId);
   });
+}
+
+/** `drive` under the run's lock, with the thrown-drive handling both entry points share. */
+async function driveLocked(deps: DriveDeps, runId: string): Promise<void> {
+  try {
+    await drive(deps, runId);
+  } catch (err) {
+    // The SAME handling the launcher gives an unexpectedly-thrown drive, and
+    // shared with it rather than re-implemented: without this, an identical
+    // fault is a visible needs-attention run when the LAUNCHER drives and a
+    // SILENT HANG when the alarm does — the run stays `running`, its alarm row
+    // is now spent, and the throw stops at the clock's floating `afterCommit`
+    // catch as one log line. That asymmetry between two entry points doing the
+    // same job is what produced B1; it does not get to survive B1's fix.
+    deps.log?.error({ err, runId }, 'retry drive failed');
+    terminalizeInterrupted(deps, runId);
+  }
 }
 
 /** `driveRun`'s critical section — already under the run's lock. */
@@ -1441,7 +1607,17 @@ async function drive(deps: DriveDeps, runId: string): Promise<void> {
     // From the run ROW, not the projection: that is what lets the doc resolve
     // before anything is folded.
     const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-    const result = engine.resume(engine.projectRunState(events));
+    const projected = engine.projectRunState(events);
+    const cancelled = foldPendingCancel(deps, engine, projected, runId);
+    // A cancel folded onto a run that never started (`pending`, no `run.started`)
+    // carries its own `finishRun`, and `resume` would re-derive nothing for a
+    // run that is not `running`. Every other state resumes as usual, and
+    // `resume` under a cancel fails the `ready` nodes whose commands died with
+    // the pump that owned them (CX1's `resumeCancelled`).
+    const result =
+      cancelled !== null && cancelled.state.status === 'pending'
+        ? cancelled
+        : engine.resume(cancelled?.state ?? projected);
     // #497 — `resume` folds NO event, so there is no appended `seq` to key its
     // diagnostics to. They are keyed at the log position they were DERIVED AT
     // (the max seq of the projection) under a distinct `phase`, which is exactly
@@ -1477,7 +1653,17 @@ export async function startRun(
   run: Run,
   triggerContext?: TriggerContext,
 ): Promise<RunState> {
-  if (loadEngineEvents(deps.db, run.id).length > 0) {
+  const existing = loadEngineEvents(deps.db, run.id);
+  if (existing.length > 0) {
+    // CX2 (#1320) — a cancel's drive can reach a not-yet-started run first and
+    // finish it `cancelled` (spec D5). Starting it afterwards is not a fault, so
+    // it is not reported as one: the run is already over. Scoped to exactly that
+    // shape; every other existing log still refuses, as a double start should.
+    const terminal = terminalFactFromLog(existing);
+    if (terminal === 'cancelled' && !hasRunStartedFact(existing)) {
+      syncRunLifecycle(deps.db, run.id, terminal);
+      return buildEngine(deps.resolveDoc(run.pipelineVersionId)).projectRunState(existing);
+    }
     throw new Error(`run '${run.id}' already has an event log — use the boot reconciler to resume`);
   }
   const pv = deps.resolveDoc(run.pipelineVersionId);
@@ -1493,6 +1679,11 @@ export async function startRun(
   // Only emitted when a trigger fired the run; a child `call_pipeline` run passes
   // none, so its `RunState.triggerContext` stays `null`.
   let seed = engine.seedState();
+  // CX2 (#1320, spec D5) — cancelled before it started: fold the cancel onto the
+  // seed, which finishes the run `cancelled` at once. No `run.started` is
+  // written, so no work was ever begun.
+  const cancelled = foldPendingCancel(deps, engine, seed, run.id);
+  if (cancelled !== null) return pump(deps, engine, cancelled.state, cancelled.commands);
   if (triggerContext !== undefined) {
     const tctxEvent: EngineEvent = {
       type: 'run.triggerContext',

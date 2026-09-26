@@ -5,6 +5,7 @@ import type { RunLauncher } from './run/launcher.js';
 import type { RunEventBus } from './run/event-bus.js';
 import type { ExternalWaitCompleter } from './run/external-wait-service.js';
 import type { ReseedService } from './run/reseed.js';
+import type { RunCanceller } from './run/cancel-service.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 import type { ClaudeAccountQuotaReader } from './quota/claude-quota.js';
 import type { CodexAccountQuotaReader } from './quota/codex-quota.js';
@@ -49,6 +50,8 @@ declare module 'fastify' {
      * driver boundary so the reseed append + drive run under the same per-run lock
      * as every other drive entry point. */
     reseedService: ReseedService;
+    /** CX2 (#1320) — `POST /api/runs/:id/cancel`'s service (`run/cancel-service.ts`). */
+    runCanceller: RunCanceller;
     /** This app instance's schedule RECONCILER (#5 S5): reconciles the durable
      * `schedule_tick` outbox rows against the DB's schedulable triggers (croner is
      * a next-fire CALCULATOR now, not a firing source — the alarm clock fires).

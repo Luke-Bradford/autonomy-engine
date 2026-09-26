@@ -44,6 +44,12 @@ export const ApiErrorCodeSchema = z.enum([
   // there for any `SQLITE_CONSTRAINT` — offering a "save anyway" on one of
   // those would re-POST straight into the same violation.
   'stale_write',
+  // CX2 (#1320, spec D5) — a cancel was refused because the run's event log
+  // cannot be parsed (409). Its OWN code rather than `conflict`, because the two
+  // 409s on the cancel route mean different things to an operator: `conflict`
+  // says the run already ended (nothing to do), this says the run is stuck and
+  // needs repair, which cancelling cannot do.
+  'log_unreadable',
   // #901 — the body an owner sent to complete a parked external wait failed the
   // node's declared `config.outputs` contract (422). Its OWN code, on the same
   // test `stale_write` passed: it is the one refusal on that route the operator

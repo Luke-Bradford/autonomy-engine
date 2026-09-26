@@ -31,6 +31,7 @@ import {
   type WarningCode,
   isNonOverridableConnectionConfigKey,
 } from '@autonomy-studio/shared';
+import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
@@ -390,6 +391,28 @@ function mergeParamOverrides(
 export function createExecutor(deps: ExecutorDeps): Executor {
   const limit = pLimit(deps.concurrency ?? 4);
   const catalog = deps.catalog ?? sharedCatalog;
+
+  /**
+   * CX2 (#1320, spec D6) — every live dispatch's abort controller, by run, so a
+   * cancel can reach them. A dispatch adds itself BEFORE its pre-flight and
+   * removes itself once it has settled, so there is no window in which a
+   * started dispatch is out of reach of `abortRun`.
+   */
+  const liveByRun = new Map<string, Set<AbortController>>();
+  function track(runId: string, controller: AbortController): void {
+    let set = liveByRun.get(runId);
+    if (set === undefined) {
+      set = new Set();
+      liveByRun.set(runId, set);
+    }
+    set.add(controller);
+  }
+  function untrack(runId: string, controller: AbortController): void {
+    const set = liveByRun.get(runId);
+    if (set === undefined) return;
+    set.delete(controller);
+    if (set.size === 0) liveByRun.delete(runId);
+  }
 
   /**
    * Resolve the node object AND the run's owner for a dispatch command. The
@@ -1245,6 +1268,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       );
       return;
     } catch (err) {
+      // CX2 (#1320) — a throw after the run's cancel aborted this attempt is the
+      // cancel's effect, not an adapter bug: many adapters surface an abort as a
+      // rejected fetch/stream. Reporting it `permanent` would make the run finish
+      // `failure` for a stop the operator asked for (spec D3).
+      if (controller.signal.reason === RUN_CANCELLED_REASON) {
+        emit(runCancelledFailure(runId, nodeId, attemptId));
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       // An unexpected throw is an adapter BUG of unknown cause, not a classified
       // failure — adapters signal a real cancel/transient by yielding a terminal
@@ -1271,6 +1302,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
     runId: string,
+  ): AsyncGenerator<EngineEvent> {
+    // CX2 (#1320) — reachable by `abortRun` from its first line: a cancel that
+    // folds during the pre-flight below must still stop this attempt.
+    const controller = new AbortController();
+    track(runId, controller);
+    try {
+      yield* dispatchUnder(command, runId, controller);
+    } finally {
+      untrack(runId, controller);
+    }
+  }
+
+  async function* dispatchUnder(
+    command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
+    runId: string,
+    controller: AbortController,
   ): AsyncGenerator<EngineEvent> {
     const { nodeId, attemptId } = command;
 
@@ -1638,6 +1685,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const { secretFields } = resolvedSecrets;
 
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
+    // CX2 (#1320) — cancelled during the pre-flight: the attempt never started,
+    // so it fails without a `node.dispatched` (the node is still `ready`).
+    if (controller.signal.aborted) {
+      yield runCancelledFailure(runId, nodeId, attemptId);
+      return;
+    }
     yield {
       type: 'node.dispatched',
       runId,
@@ -1651,7 +1704,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
     };
 
-    const controller = new AbortController();
     const ctx: ActivityContext = {
       runId,
       nodeId,
@@ -1734,8 +1786,29 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       wake = null;
       w?.();
     };
-    const adapterDone = limit(() =>
-      runAdapter(
+    // CX2 (#1320) — a cancel that lands while this attempt still WAITS for a
+    // global limit slot ends it at once. The slot may be held by other runs'
+    // long adapters, and waiting for it would leave a cancelled run live (and
+    // its drive lock held) for as long as they take. `started` is set in the
+    // same tick the slot is granted, so exactly one of the two happens: the
+    // adapter starts, or the attempt fails cancelled and never starts.
+    let started = false;
+    let skipped = false;
+    const onQueuedAbort = (): void => {
+      if (started || controller.signal.reason !== RUN_CANCELLED_REASON) return;
+      skipped = true;
+      pending.push(runCancelledFailure(runId, nodeId, attemptId));
+      settled = true;
+      signal();
+    };
+    controller.signal.addEventListener('abort', onQueuedAbort, { once: true });
+    // Aborted while suspended at `yield node.dispatched` above: the event fired
+    // before anyone listened, so apply it now.
+    if (controller.signal.aborted) onQueuedAbort();
+    const adapterDone = limit(() => {
+      if (skipped) return Promise.resolve();
+      started = true;
+      return runAdapter(
         adapter,
         ctx,
         secret,
@@ -1750,8 +1823,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           pending.push(ev);
           signal();
         },
-      ),
-    )
+      );
+    })
       // Captured rather than left rejecting: nothing awaits this promise until
       // the queue drains, and a rejection with no handler attached by then is
       // an unhandled one.
@@ -1759,6 +1832,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         adapterError = { error };
       })
       .finally(() => {
+        controller.signal.removeEventListener('abort', onQueuedAbort);
         settled = true;
         signal();
       });
@@ -1783,11 +1857,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // drive lock. Closing mid-activity must therefore WAIT for the adapter,
       // as it did when this generator could only be closed after it: the
       // in-flight side effect completes and its remaining events are dropped.
-      await adapterDone;
+      // A SKIPPED attempt (cancelled while queued) has no adapter to wait for,
+      // and awaiting its slot would re-introduce the very wait it skipped.
+      if (!skipped) await adapterDone;
     }
   }
 
   return {
+    abortRun(runId: string): void {
+      for (const controller of liveByRun.get(runId) ?? []) controller.abort(RUN_CANCELLED_REASON);
+    },
     async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
       if (command.type === 'startChild') {
         // #796 (P3b) — real `call_pipeline` child execution. NOTE this branch

@@ -664,6 +664,29 @@ export function admitQueuedRun(db: Db, id: string): Run | null {
 }
 
 /**
+ * CX2 (#1320, spec D5) — cancel a run that is still `queued`. A queued run is a
+ * ROW-ONLY status: admission has not let it start, so it has no event log and no
+ * drive, and there is nothing to fold a cancel onto. It is therefore cancelled by
+ * a row patch, the way `sweepPendingRuns` patches a run with no event-sourced
+ * lifecycle to preserve.
+ *
+ * The `status = 'queued'` guard is the whole race story: admission flips the same
+ * row with the same guard (`admitQueuedRun`), so exactly one of the two wins. A
+ * `false` here means admission got there first and the run now has (or is about
+ * to have) a log, so the caller must cancel it the event-sourced way instead. And
+ * a row this patched can never be admitted afterwards, because admission only
+ * selects and flips `queued` rows.
+ */
+export function cancelQueuedRun(db: Db, id: string): boolean {
+  const result = db
+    .update(runs)
+    .set({ status: 'cancelled', finishedAt: Date.now() })
+    .where(and(eq(runs.id, id), eq(runs.status, 'queued')))
+    .run();
+  return result.changes > 0;
+}
+
+/**
  * #5 S6b — count the PIPELINE's currently-active runs across ALL its versions
  * and triggers (including a trigger-less `call_pipeline` child bound to one of
  * its versions): the per-pipeline half of both-must-pass admission. Same

@@ -452,6 +452,11 @@ export interface TumblingService {
   reconcile(): void;
   /** Wire the run-terminal completion tap. Returns the unsubscribe. */
   subscribeCompletion(bus: RunEventBus): () => void;
+  /**
+   * CX2 (#1320) — settle a run's window from its row now, for a terminal that
+   * was written without a bus event (a `queued` run cancelled by row patch).
+   */
+  settleRunWindow(runId: string): void;
   /** Stop syncing/materializing (idempotent; the clock owns firing). */
   stop(): void;
 }
@@ -507,6 +512,15 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     }
     if (run.status === 'success') {
       completeWindow(db, key, { status: 'succeeded', runId });
+      return;
+    }
+    if (run.status === 'cancelled') {
+      // CX2 (#1320, spec D9) — an operator cancel FAILS the window, so it does
+      // not satisfy a dependent window, and is never retried: the cancel is
+      // operator intent and an automatic retry would undo it. Before CX2 this
+      // status fell through the literal check below as "still live", which would
+      // have left the window `running` forever.
+      completeWindow(db, key, { status: 'failed', runId, runStatus: 'cancelled' });
       return;
     }
     if (run.status !== 'failure' && run.status !== 'interrupted') {
@@ -1477,6 +1491,53 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     }
   }
 
+  /**
+   * Settle the window linked to `runId` from its run row's terminal status, then
+   * kick the trigger's drain. The completion tap's body, and also what CX2's
+   * cancel calls for a `queued` run it ends by row patch: that terminal is
+   * written without a bus event, so the tap alone would never see it and the
+   * window would stay `running` until the next boot reconcile (#1320).
+   * Idempotent: a window no longer `running` is left alone. Never throws.
+   */
+  function settleRunWindow(runId: string): void {
+    try {
+      if (stopped) return;
+      const row = getWindowStateByRunId(db, runId);
+      if (row === null || row.status !== 'running') return;
+      // #637 — lenient read, BEFORE the settle since #5 S11c's retry
+      // decision needs the policy: the settle (derived from the RUN row)
+      // must land even when the trigger row is corrupt — a `null` trigger
+      // folds terminal (policy unknown), never throws; only the drain
+      // kick below is additionally skipped, with a warn instead of the
+      // per-terminal-run error spam a throw produced here.
+      const read = getParsedTrigger(db, row.triggerId);
+      const parsed = read.status === 'found' ? read.trigger : null;
+      // Settle sees the ENABLED-agnostic guard (a pause must not forfeit
+      // the retry); the drain kick below keeps the full `isTumblable`.
+      settleIfTerminal(
+        keyOf(row),
+        runId,
+        parsed !== null && isWindowConfigured(parsed) ? parsed : null,
+      );
+      // #5 S10 — drain continuation: the settle just released the
+      // materialization gate (the window is no longer `running`), so the
+      // trigger's next backfill window fires now — this tap is what makes
+      // a bulk backlog drain serially instead of waiting for boot.
+      if (read.status === 'unparseable') {
+        log.warn(
+          { triggerId: row.triggerId, err: read.error },
+          'tumbling: completion tap skipped the drain kick — trigger row unparseable',
+        );
+        return;
+      }
+      if (parsed !== null && isTumblable(parsed) && parsed.pipelineVersionId !== null) {
+        materializeWindows(parsed);
+      }
+    } catch (err) {
+      log.error({ err, runId }, 'tumbling: window completion tap failed');
+    }
+  }
+
   function subscribeCompletion(bus: RunEventBus): () => void {
     return bus.subscribeAll((event) => {
       if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return;
@@ -1485,44 +1546,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       // microtask runs after the publishing frame (the run row's terminal
       // status is durably synced by then), and a fault here must be logged,
       // never an unhandled rejection.
-      queueMicrotask(() => {
-        try {
-          if (stopped) return;
-          const row = getWindowStateByRunId(db, runId);
-          if (row === null || row.status !== 'running') return;
-          // #637 — lenient read, BEFORE the settle since #5 S11c's retry
-          // decision needs the policy: the settle (derived from the RUN row)
-          // must land even when the trigger row is corrupt — a `null` trigger
-          // folds terminal (policy unknown), never throws; only the drain
-          // kick below is additionally skipped, with a warn instead of the
-          // per-terminal-run error spam a throw produced here.
-          const read = getParsedTrigger(db, row.triggerId);
-          const parsed = read.status === 'found' ? read.trigger : null;
-          // Settle sees the ENABLED-agnostic guard (a pause must not forfeit
-          // the retry); the drain kick below keeps the full `isTumblable`.
-          settleIfTerminal(
-            keyOf(row),
-            runId,
-            parsed !== null && isWindowConfigured(parsed) ? parsed : null,
-          );
-          // #5 S10 — drain continuation: the settle just released the
-          // materialization gate (the window is no longer `running`), so the
-          // trigger's next backfill window fires now — this tap is what makes
-          // a bulk backlog drain serially instead of waiting for boot.
-          if (read.status === 'unparseable') {
-            log.warn(
-              { triggerId: row.triggerId, err: read.error },
-              'tumbling: completion tap skipped the drain kick — trigger row unparseable',
-            );
-            return;
-          }
-          if (parsed !== null && isTumblable(parsed) && parsed.pipelineVersionId !== null) {
-            materializeWindows(parsed);
-          }
-        } catch (err) {
-          log.error({ err, runId }, 'tumbling: window completion tap failed');
-        }
-      });
+      queueMicrotask(() => settleRunWindow(runId));
     });
   }
 
@@ -1530,5 +1554,5 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     stopped = true;
   }
 
-  return { handler, retryHandler, sync, reconcile, subscribeCompletion, stop };
+  return { handler, retryHandler, sync, reconcile, subscribeCompletion, settleRunWindow, stop };
 }

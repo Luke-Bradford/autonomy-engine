@@ -170,7 +170,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
           triggerId: null,
           parentRunId: null,
           params: {},
-          status: 'cancelled' as never,
+          status: 'aborted' as never,
           leaseUntil: null,
           heartbeatAt: null,
           startedAt: 1,

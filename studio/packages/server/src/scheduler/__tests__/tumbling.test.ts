@@ -2184,7 +2184,7 @@ describe('#5 S11c — per-trigger window retry', () => {
     db: Db,
     trigger: Trigger,
     pv: string,
-    runStatus: 'failure' | 'interrupted' = 'failure',
+    runStatus: 'failure' | 'interrupted' | 'cancelled' = 'failure',
   ) {
     if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
     const key = keyFor(trigger, T0);
@@ -2463,6 +2463,54 @@ describe('#5 S11c — per-trigger window retry', () => {
       await tapTerminal(bus, run.id);
 
       expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
+
+    it('a CANCELLED run fails its window and never retries, even with budget left (CX2 D9)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv, 'cancelled');
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      const types = listWindowEvents(db, key).map((e) => e.type);
+      expect(types).not.toContain('window.retryScheduled');
+      expect(listWindowEvents(db, key).at(-1)).toEqual({
+        type: 'window.failed',
+        payload: { runId: run.id, runStatus: 'cancelled' },
+      });
+    });
+
+    it('settleRunWindow settles a window whose run ended WITHOUT a bus event (a queued run cancelled by row patch, CX2)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv, 'cancelled');
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+
+      service.settleRunWindow(run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(listWindowEvents(db, key).at(-1)).toEqual({
+        type: 'window.failed',
+        payload: { runId: run.id, runStatus: 'cancelled' },
+      });
     });
 
     it('budget EXHAUSTED → terminal window.failed exactly as before', async () => {
