@@ -13,6 +13,7 @@ import { createPipeline } from '../pipelines.js';
 import { createTrigger } from '../triggers.js';
 import {
   admitQueuedRun,
+  cancelQueuedRun,
   countActiveRunsForPipeline,
   countActiveRunsForTrigger,
   countQueuedRunsForTrigger,
@@ -460,6 +461,50 @@ describe('per-pipeline admission — #5 S6b', () => {
       { triggerId: tA.id, oldestQueuedAt: 7, lastAdmittedAt: null },
     ]);
     expect(queuedTriggerCandidatesForPipeline(db, 'pipe_nonexistent')).toEqual([]);
+  });
+
+  it('#1326 a run cancelled while still QUEUED is not a service; one cancelled after admission still is', () => {
+    const { db, sqlite } = freshDb();
+    const { pipeline, v1 } = seedPipelineWithVersions(db);
+    const tA = seedTriggerOn(db, v1.id, 'A');
+    const tB = seedTriggerOn(db, v1.id, 'B');
+
+    // B was genuinely served at 1000.
+    const servedB = createRun(db, buildRunInput(v1.id, { triggerId: tB.id }));
+    updateRun(db, servedB.id, { status: 'success' });
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(1000, servedB.id);
+
+    // A's only non-queued row is a fire cancelled BEFORE admission (CX2 row
+    // patch): its started_at is the enqueue placeholder, later than B's service.
+    const cancelledQueued = createRun(
+      db,
+      buildRunInput(v1.id, { triggerId: tA.id, status: 'queued', queuedAt: 1 }),
+    );
+    expect(cancelQueuedRun(db, cancelledQueued.id)).toBe(true);
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(2000, cancelledQueued.id);
+
+    createRun(db, buildRunInput(v1.id, { triggerId: tA.id, status: 'queued', queuedAt: 20 }));
+    createRun(db, buildRunInput(v1.id, { triggerId: tB.id, status: 'queued', queuedAt: 10 }));
+
+    // A was never served, so it ranks ahead of B despite the later placeholder.
+    expect(queuedTriggerCandidatesForPipeline(db, pipeline.id)).toEqual([
+      { triggerId: tA.id, oldestQueuedAt: 20, lastAdmittedAt: null },
+      { triggerId: tB.id, oldestQueuedAt: 10, lastAdmittedAt: 1000 },
+    ]);
+
+    // A run that WAS admitted has an event log, so cancelling it afterwards
+    // leaves its admission on the service record.
+    const admittedThenCancelled = createRun(db, buildRunInput(v1.id, { triggerId: tA.id }));
+    appendRunEvent(db, { runId: admittedThenCancelled.id, type: 'run.started', payload: {} });
+    updateRun(db, admittedThenCancelled.id, { status: 'cancelled' });
+    sqlite
+      .prepare('UPDATE runs SET started_at = ? WHERE id = ?')
+      .run(3000, admittedThenCancelled.id);
+
+    expect(queuedTriggerCandidatesForPipeline(db, pipeline.id)).toEqual([
+      { triggerId: tB.id, oldestQueuedAt: 10, lastAdmittedAt: 1000 },
+      { triggerId: tA.id, oldestQueuedAt: 20, lastAdmittedAt: 3000 },
+    ]);
   });
 
   it('a REBOUND trigger: candidates + oldest pick + service record are all PIPELINE-scoped, never trigger-global', () => {
