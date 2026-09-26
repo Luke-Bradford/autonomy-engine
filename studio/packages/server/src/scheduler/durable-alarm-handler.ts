@@ -256,11 +256,17 @@ export function nodeParkedAtAttemptGuard(
  * (runId, containerId) pair is the freshness handle — a container timeout is armed
  * ONCE per run at enter, so there is no attempt to match. An exited loop
  * (`exitWhen`/`maxRounds`/a child failure) or an already-fired timeout is stale.
+ *
+ * CX5 (#1320) — a run whose cancel is folded but still draining a child is stale
+ * too (`run_cancel_requested`): the loop is still `active`, but a timeout folded
+ * now would abandon the child the cancel is aborting and finish the run `failure`
+ * instead of `cancelled`. The reducer's `onContainerTimedOut` ignores it as well.
  */
 export function containerActiveGuard(
   reason: string,
 ): (state: RunState, ref: { containerId: string }) => FreshnessVerdict {
   return (state, ref) => {
+    if (state.cancelRequested !== null) return { fresh: false, reason: 'run_cancel_requested' };
     const cs = state.containers[ref.containerId];
     if (cs === undefined || cs.status !== 'active') {
       return { fresh: false, reason };

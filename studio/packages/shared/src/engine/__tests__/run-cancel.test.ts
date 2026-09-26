@@ -45,7 +45,7 @@ function node(id: string, policy?: NodePolicy): Node {
 }
 function waitNode(id: string): Node {
   seq += 1;
-  return { id, type: 'wait', config: { seconds: 60 }, position: { x: seq, y: 0 } };
+  return { id, type: 'wait', config: { seconds: '${60}' }, position: { x: seq, y: 0 } };
 }
 function callNode(id: string): Node {
   seq += 1;
@@ -577,6 +577,71 @@ describe('CX1 — resume and children under a cancel', () => {
     expect(r.state.nodes.c!.status).toBe('failure');
     expect(r.commands).toEqual([
       { type: 'finishRun', outcome: 'failure', reason: 'node_failed:c' },
+    ]);
+  });
+});
+
+describe('CX5 (#1320) D9 — an alarm that lands while a cancel is still draining', () => {
+  const LOOP: Container = {
+    id: 'L',
+    kind: 'loop',
+    exitWhen: '${false}',
+    maxRounds: 5,
+    timeout: 60,
+    children: ['w'],
+  };
+  const timedOut: EngineEvent = { type: 'container.timedOut', runId: RUN, containerId: 'L' };
+
+  it('a container timeout is ignored: the draining child is not abandoned, and the run finishes `cancelled`', () => {
+    const eng = engine([node('w')], [], [LOOP]);
+    const s = fold(eng, [started(), dispatched('w'), cancel()]);
+    expect(finishes(s.last)).toEqual([]); // w is still in flight
+
+    const r = eng.reduce(s.state, timedOut);
+    expect(r.state).toBe(s.state);
+    expect(r.commands).toEqual([]);
+    expect(r.state.nodes.w!.status).toBe('dispatched');
+    expect(r.state.containers.L!.status).toBe('active');
+
+    const end = eng.reduce(r.state, failed('w', 'cancelled'));
+    expect(end.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
+    ]);
+  });
+
+  it('without a cancel the same timeout still fails the loop (the guard is the cancel, not the timeout)', () => {
+    const eng = engine([node('w')], [], [LOOP]);
+    const s = fold(eng, [started(), dispatched('w')]);
+    const r = eng.reduce(s.state, timedOut);
+    expect(r.state.containers.L).toMatchObject({ status: 'failure', reason: 'timeout' });
+    expect(finishes(r.commands)).toEqual([
+      { type: 'finishRun', outcome: 'failure', reason: 'node_failed:L' },
+    ]);
+  });
+
+  it('a wait timer due mid-drain completes its wait but starts nothing after it', () => {
+    const eng = engine([node('a'), waitNode('t'), node('b')], [edge('t', 'b', 'success')]);
+    const s = fold(eng, [
+      started(),
+      dispatched('a'),
+      { type: 'timer.waitScheduled', runId: RUN, nodeId: 't', attemptId: 't#0', dueAt: 1 },
+      cancel(),
+    ]);
+    expect(s.state.nodes.t!.status).toBe('wait_pending');
+
+    const r = eng.reduce(s.state, {
+      type: 'timer.due',
+      runId: RUN,
+      nodeId: 't',
+      previousAttemptId: 't#0',
+    });
+    expect(r.state.nodes.t!.status).toBe('success');
+    expect(starting(r.commands)).toEqual([]);
+    expect(r.state.nodes.b!.status).toBe('pending');
+
+    const end = eng.reduce(r.state, failed('a', 'cancelled'));
+    expect(end.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
     ]);
   });
 });
