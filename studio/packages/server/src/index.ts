@@ -34,6 +34,8 @@ import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
 import { createExternalWaitCompleter } from './run/external-wait-service.js';
 import { createReseedService } from './run/reseed.js';
+import { createRunCanceller } from './run/cancel-service.js';
+import { createRunCancels } from './run/cancel.js';
 import { deriveExternalWaitToken } from './webhooks/external-wait-token.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
 import {
@@ -599,12 +601,17 @@ export async function buildApp(opts?: BuildAppOptions) {
   // deterministic token) so the two cannot drift.
   const signExternalWaitToken = (args: { runId: string; nodeId: string; attemptId: string }) =>
     deriveExternalWaitToken(masterKeyResolution.key, args);
+  // CX2 (#1320) — the ONE cancel registry, for the reason `drives` is one: a
+  // cancel must reach whichever holder owns the run (a live pump, a drive queued
+  // behind the lock, or the boot reconciler), so they all read the same map.
+  const cancels = createRunCancels();
   const driverBoundary = {
     db,
     resolveDoc,
     executor,
     alarms,
     drives,
+    cancels,
     bus: runEventBus,
     log: fastify.log,
     signExternalWaitToken,
@@ -695,6 +702,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     // #796 — boot reconcile takes the per-run drive lock now that reconciling a
     // parent can spawn a child drive mid-scan (see `reconcile.ts`'s lock contract).
     drives,
+    cancels,
     bus: runEventBus,
     // #4 A13 — the reconciler RESUMES a `ready` webhook (a crash between the
     // predecessor event and `externalWait.created` left its `scheduleExternalWait`
@@ -743,6 +751,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // Same driver boundary as `runLauncher`/`externalWaitCompleter` so R2's reseed
   // append + downstream drive run under the shared per-run lock.
   fastify.decorate('reseedService', createReseedService(driverBoundary));
+  fastify.decorate('runCanceller', createRunCanceller(driverBoundary));
 
   // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
   // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR

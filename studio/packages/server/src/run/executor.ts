@@ -1104,14 +1104,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ...priceFields,
       };
     };
-    // CX2 (#1320) — the run was cancelled while this attempt waited for a slot
-    // in the global limit. Never start the adapter: the side effect is exactly
-    // what the cancel exists to prevent.
-    if (controller.signal.aborted && controller.signal.reason === RUN_CANCELLED_REASON) {
-      emit(runCancelledFailure(runId, nodeId, attemptId));
-      controller.abort();
-      return;
-    }
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
@@ -1794,8 +1786,29 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       wake = null;
       w?.();
     };
-    const adapterDone = limit(() =>
-      runAdapter(
+    // CX2 (#1320) — a cancel that lands while this attempt still WAITS for a
+    // global limit slot ends it at once. The slot may be held by other runs'
+    // long adapters, and waiting for it would leave a cancelled run live (and
+    // its drive lock held) for as long as they take. `started` is set in the
+    // same tick the slot is granted, so exactly one of the two happens: the
+    // adapter starts, or the attempt fails cancelled and never starts.
+    let started = false;
+    let skipped = false;
+    const onQueuedAbort = (): void => {
+      if (started || controller.signal.reason !== RUN_CANCELLED_REASON) return;
+      skipped = true;
+      pending.push(runCancelledFailure(runId, nodeId, attemptId));
+      settled = true;
+      signal();
+    };
+    controller.signal.addEventListener('abort', onQueuedAbort, { once: true });
+    // Aborted while suspended at `yield node.dispatched` above: the event fired
+    // before anyone listened, so apply it now.
+    if (controller.signal.aborted) onQueuedAbort();
+    const adapterDone = limit(() => {
+      if (skipped) return Promise.resolve();
+      started = true;
+      return runAdapter(
         adapter,
         ctx,
         secret,
@@ -1810,8 +1823,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           pending.push(ev);
           signal();
         },
-      ),
-    )
+      );
+    })
       // Captured rather than left rejecting: nothing awaits this promise until
       // the queue drains, and a rejection with no handler attached by then is
       // an unhandled one.
@@ -1819,6 +1832,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         adapterError = { error };
       })
       .finally(() => {
+        controller.signal.removeEventListener('abort', onQueuedAbort);
         settled = true;
         signal();
       });
@@ -1843,7 +1857,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // drive lock. Closing mid-activity must therefore WAIT for the adapter,
       // as it did when this generator could only be closed after it: the
       // in-flight side effect completes and its remaining events are dropped.
-      await adapterDone;
+      // A SKIPPED attempt (cancelled while queued) has no adapter to wait for,
+      // and awaiting its slot would re-introduce the very wait it skipped.
+      if (!skipped) await adapterDone;
     }
   }
 

@@ -9,6 +9,8 @@ import {
   type CompleteExternalWaitBody,
   type PendingExternalWait,
   type RerunAccepted,
+  type RunCancelAccepted,
+  type ApiErrorBody,
   type RunDetail,
 } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRunSummariesPage } from '../repo/index.js';
@@ -480,4 +482,47 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(202).send({ runId } satisfies RerunAccepted);
     },
   );
+
+  /**
+   * CX2 (#1320) — `POST /api/runs/:id/cancel`: stop a run (spec D5/D6). No body:
+   * the cancel's source is set by the server, never typed by the operator, so no
+   * stored-content surface is added to the log (spec D2 + Security model).
+   *
+   * `202` answers "requested" (or "cancelled" for a still-`queued` run, which a
+   * row patch ends at once) — never "done": in-flight work stops cooperatively,
+   * and a run whose last node completes first finishes `success` (D3). Repeating
+   * the request is `202` and records nothing. `409 conflict` for a run that has
+   * already ended, `409 log_unreadable` for a run whose log cannot be folded.
+   * Another owner's run and a missing run are both `404` (`requireOwned`).
+   */
+  fastify.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (request, reply) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    const verdict = fastify.runCanceller.cancel(run.id);
+    switch (verdict.kind) {
+      case 'accepted':
+        return reply
+          .status(202)
+          .send({ runId: run.id, state: verdict.state } satisfies RunCancelAccepted);
+      case 'terminal':
+        return reply.status(409).send({
+          error: 'conflict',
+          message: `run '${run.id}' has already ended (${verdict.status})`,
+        } satisfies ApiErrorBody);
+      case 'log_unreadable':
+        return reply.status(409).send({
+          error: 'log_unreadable',
+          message: `run '${run.id}' has an unreadable event log and cannot be cancelled; it needs repair`,
+        } satisfies ApiErrorBody);
+      case 'not_found':
+        return reply.status(404).send({
+          error: 'not_found',
+          message: `run '${run.id}' not found`,
+        } satisfies ApiErrorBody);
+    }
+  });
 };
