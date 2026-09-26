@@ -74,6 +74,16 @@ describe('insertModeFor', () => {
     expect(insertModeFor(issuesWithField(node, 'items'))).toBe('replace');
   });
 
+  it('says REPLACE for an llm_call history, which must be one whole turn-array reference', () => {
+    const node: Node = {
+      id: 'chat',
+      type: 'llm_call',
+      config: { model: 'm', prompt: 'hi' },
+      position: { x: 0, y: 0 },
+    };
+    expect(insertModeFor(issuesWithField(node, 'history'))).toBe('replace');
+  });
+
   it('is not fooled by a field whose complaints are the SAME in both shapes', () => {
     // A node type with no per-activity validator raises nothing either way, so
     // the difference is empty and the field reads as interpolated. This is the

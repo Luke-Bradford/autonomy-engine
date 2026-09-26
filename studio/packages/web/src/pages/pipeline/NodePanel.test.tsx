@@ -1026,11 +1026,10 @@ describe('NodePanel (the objectList control, #1169)', () => {
   });
 
   it('keeps the derived form for an llm_call whose history is the expression its save gate demands', () => {
-    // The regression the strictness gate exists to stop. `history` is typed
-    // `z.array(...)` but `validateDoc` refuses any non-string value, so a row
-    // control would find a STRING there, refuse to render it, and take the whole
-    // node into the JSON editor — this ticket's own defect, on the catalog's
-    // most-used activity.
+    // `history` is typed `z.array(...)` but `validateDoc` refuses any non-string
+    // value, so a row control would find a STRING there, refuse to render it,
+    // and take the whole node into the JSON editor. Since #864 it is expression
+    // text (`authoredAsExpression`), which renders that string as it is.
     mountOver({
       id: 'n_llm',
       type: 'llm_call',
@@ -1040,6 +1039,24 @@ describe('NodePanel (the objectList control, #1169)', () => {
 
     expect(screen.getByLabelText('prompt (optional)')).toBeTruthy();
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
+  });
+
+  it('applies another setting on an llm_call that holds a history (#864 item 4)', () => {
+    // Apply's schema pre-check used to read the history TEXT as the dispatch
+    // array and refuse it, so a node holding one could have nothing applied.
+    const panel = mountOver({
+      id: 'n_llm',
+      type: 'llm_call',
+      position: { x: 0, y: 0 },
+      config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
+    });
+    fireEvent.change(screen.getByLabelText('prompt (optional)'), { target: { value: 'bye' } });
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      prompt: 'bye',
+      history: '${nodes.a.outputs.turns}',
+    });
   });
 });
 

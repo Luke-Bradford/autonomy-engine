@@ -82,6 +82,7 @@ import {
   formatFieldValue,
   parseFieldInput,
   readConfigDraft,
+  schemaPrecheckCandidate,
   seedFieldInputs,
   type ConfigDraft,
   type ConfigField,
@@ -2702,9 +2703,9 @@ export function NodePanel({
    * result here does not mean the version will save — it only spares the author a
    * round-trip to a 400 they were going to get anyway.
    */
-  function schemaIssues(candidate: unknown): string | null {
+  function schemaIssues(candidate: Record<string, unknown>): string | null {
     if (!entry) return null;
-    const check = entry.configSchema.safeParse(candidate);
+    const check = entry.configSchema.safeParse(schemaPrecheckCandidate(candidate, fields));
     if (check.success) return null;
     return formatZodIssues(check.error.issues);
   }

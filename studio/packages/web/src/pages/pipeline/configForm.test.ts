@@ -23,6 +23,7 @@ import {
   parseFieldInput,
   placeRowCandidate,
   readConfigDraft,
+  schemaPrecheckCandidate,
   seedFieldInputs,
   unrepresentableFields,
   type ConfigDraft,
@@ -813,9 +814,27 @@ describe('llm_call messages as rows (#852 item 3)', () => {
     expect(field(twin, 'turns').kind).toBe('json');
   });
 
-  /** Same element schema, opposite answer: `history` must hold a `${}` string. */
-  it('leaves history on the JSON control its save gate needs', () => {
-    expect(field(llm, 'history').kind).toBe('json');
+  /**
+   * Same element schema, opposite answer (#864 item 4): `history` must hold a
+   * whole `${}` string at save, so it is authored as one line of expression
+   * text rather than as rows or JSON.
+   */
+  it('authors history as expression text, the shape its save gate needs', () => {
+    expect(field(llm, 'history')).toEqual({
+      name: 'history',
+      kind: 'text',
+      optional: true,
+      singleLine: true,
+      authoredAsExpression: true,
+    });
+  });
+
+  it('writes a history expression back as typed, never parsed as JSON', () => {
+    expect(parseFieldInput(field(llm, 'history'), '${nodes.a.outputs.messages}')).toEqual({
+      ok: true,
+      omit: false,
+      value: '${nodes.a.outputs.messages}',
+    });
   });
 
   it('round-trips a stored conversation verbatim, multi-line content included', () => {
@@ -1188,7 +1207,7 @@ describe('singleLine presentation hint (#852 item 4)', () => {
 
   it('marks the tagged short strings of a catalogued activity, and only those', () => {
     expect(flagged(fieldsOf('http_request'))).toEqual(['url', 'method']);
-    expect(flagged(fieldsOf('llm_call'))).toEqual(['model']);
+    expect(flagged(fieldsOf('llm_call'))).toEqual(['model', 'history']);
     expect(flagged(fieldsOf('file_write'))).toEqual(['path']);
     expect(field(fieldsOf('agent_task'), 'task').singleLine).toBeUndefined();
   });
@@ -1508,5 +1527,33 @@ describe('outputSchema as rows (#852 item 3)', () => {
       required: ['a'],
       additionalProperties: false,
     });
+  });
+});
+
+describe('schemaPrecheckCandidate (#864 item 4)', () => {
+  const llm = fieldsOf('llm_call');
+  const base = { model: 'claude-opus-5', prompt: 'hi' };
+
+  it('leaves an expression-authored field holding its expression to the save gate', () => {
+    const history = '${nodes.a.outputs.messages}';
+    expect(schemaPrecheckCandidate({ ...base, history }, llm)).toEqual(base);
+  });
+
+  it('still hands the schema a non-string value, which it can judge', () => {
+    const history = [{ role: 'user', content: 'x' }];
+    expect(schemaPrecheckCandidate({ ...base, history }, llm)).toEqual({ ...base, history });
+  });
+
+  it('touches no other field, and no field when there is no form', () => {
+    const config = { ...base, history: '${x}' };
+    expect(schemaPrecheckCandidate(config, fieldsOf('http_request'))).toEqual(config);
+    expect(schemaPrecheckCandidate(config, null)).toEqual(config);
+  });
+
+  it('lets the real llm_call schema accept a config holding a history expression', () => {
+    const schema = getActivity('llm_call')!.configSchema;
+    const config = { ...base, history: '${nodes.a.outputs.messages}' };
+    expect(schema.safeParse(config).success).toBe(false);
+    expect(schema.safeParse(schemaPrecheckCandidate(config, llm)).success).toBe(true);
   });
 });

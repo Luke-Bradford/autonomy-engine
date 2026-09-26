@@ -102,3 +102,27 @@ describe('ConfigFieldControl — a single-line field is an input (#852 item 4)',
     expect(container.querySelector('input.config-field-line')).toBeNull();
   });
 });
+
+describe('ConfigFieldControl — the expression flyout is withheld on a JSON field (#864)', () => {
+  // A `json` control parses its text with `JSON.parse` on apply, so a bare
+  // `${...}` is not applicable there at all, and offering the picker would be
+  // a dead end rather than an affordance.
+  const picker = {
+    describe: () => '',
+    resolve: () => ({ mode: 'insert' as const, suggestions: [] }),
+    wraps: () => [],
+  };
+
+  it('offers the picker on a text field and not on a json field', () => {
+    const text: ConfigField = { name: 'url', kind: 'text', optional: false };
+    const json: ConfigField = { name: 'quota', kind: 'json', optional: true };
+    const { getByRole, queryByRole } = render(
+      <>
+        <ConfigFieldControl field={text} value="" onChange={noop} picker={picker} />
+        <ConfigFieldControl field={json} value="" onChange={noop} picker={picker} />
+      </>,
+    );
+    expect(getByRole('button', { name: 'Insert reference into url' })).toBeTruthy();
+    expect(queryByRole('button', { name: 'Insert reference into quota' })).toBeNull();
+  });
+});
