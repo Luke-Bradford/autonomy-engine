@@ -332,7 +332,14 @@ describe('CX5 (#1320) D9 — a CANCELLED run is rerun-from-failed eligible', () 
     const r1 = await seedRun(db, pvId, { nodes: { b: { hang: true } } });
     for (const e of [
       { type: 'run.cancelRequested', runId: r1, source: { kind: 'operator' } },
-      { type: 'node.failed', runId: r1, nodeId: 'b', attemptId: 'b#0', error: 'x', kind: 'cancelled' },
+      {
+        type: 'node.failed',
+        runId: r1,
+        nodeId: 'b',
+        attemptId: 'b#0',
+        error: 'x',
+        kind: 'cancelled',
+      },
       { type: 'run.finished', runId: r1, outcome: 'cancelled', reason: 'cancelled:operator' },
     ] satisfies EngineEvent[]) {
       appendEngineEvent(db, e);
