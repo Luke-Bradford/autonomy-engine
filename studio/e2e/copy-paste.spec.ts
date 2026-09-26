@@ -7,7 +7,8 @@ import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
  * U21 slice 3 — copy/paste on the authoring canvas, and the ref remapping that
  * makes a MULTI-node copy correct rather than merely plausible.
  * Slice 5 (#935) adds the paste into ANOTHER pipeline, reached client-side so
- * the module-level clipboard survives the move.
+ * the module-level clipboard survives the move. Slice 6 (#935) adds a CONTAINER
+ * on the clipboard, and ⌘X — whose paste has to put back the edge the cut took.
  *
  * The rewriter and the store rules are unit-tested (`nodeRefs.test.ts`,
  * `canvasStore.test.ts`). What only a real browser and a real server can prove
@@ -334,6 +335,118 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await panel.getByRole('button', { name: 'Paste' }).click();
     await expect(page.getByText('Nothing has been copied yet.')).toBeVisible();
     await expect(canvasNodes(page)).toHaveCount(1);
+
+    await expectQuiet(page, problems);
+  });
+
+  /* #935 — a CONTAINER on the clipboard. The store rules are unit-tested; what
+     this proves is that ⌘C on a selected box reaches `copyContainer`, and that
+     the doc a paste into ANOTHER pipeline produces is one the SERVER accepts,
+     with the copy's `exitWhen` naming the copy's own child. Unremapped, it names
+     the source loop's child, which the save gate refuses. */
+  test('a container copies into ANOTHER pipeline, exits on its own child, and saves', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId: targetId } = await seedVersion(page, 'u21 box paste target', TARGET);
+    await openSeededCanvas(page, 'u21 box paste source', {
+      nodes: [
+        {
+          id: 'x',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: { outputs: [{ name: 'body', type: 'string' }] },
+        },
+        {
+          id: 'y',
+          type: 'http_request',
+          position: { x: 240, y: 0 },
+          config: { url: 'https://example.test/${nodes.x.output.body}' },
+        },
+      ],
+      edges: [{ id: 'e_xy', from: 'x', to: 'y', on: 'success' }],
+      containers: [
+        {
+          id: 'loop_1',
+          kind: 'loop',
+          children: ['x', 'y'],
+          exitWhen: '${equals(nodes.y.status, "success")}',
+          maxRounds: 2,
+        },
+      ],
+    });
+
+    await page.getByRole('button', { name: 'Configure loop 1' }).click();
+    await page.keyboard.press('Meta+c');
+    await expect(page.getByText('Copied loop 1.')).toBeVisible();
+    // A container is never cut — said, not silently ignored.
+    await page.keyboard.press('Meta+x');
+    await expect(page.getByText('A container cannot be cut. Copy it with ⌘C.')).toBeVisible();
+
+    await openInApp(page, targetId, ['z', 'a']);
+    await page.keyboard.press('Meta+v');
+    await expect(page.getByText('Pasted loop 1 from another pipeline.')).toBeVisible();
+    await expect(page.locator('.flow-container')).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.getByText(/^Saved v2\.$/)).toBeVisible();
+
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(targetId)}/versions`);
+    expect(res.status()).toBe(200);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { id: string; config: Record<string, unknown> }[];
+      edges: { from: string; to: string }[];
+      containers: { id: string; children: string[]; exitWhen?: string }[];
+    }[];
+    const latest = versions.reduce((p, q) => (p.version > q.version ? p : q));
+    expect(latest.containers).toHaveLength(1);
+    const box = latest.containers[0]!;
+    const copyY = latest.nodes.find(
+      (n) => box.children.includes(n.id) && typeof n.config['url'] === 'string',
+    )!;
+    // THE POINT: the copy exits on ITS OWN copy of `y`...
+    expect(box.exitWhen).toBe(`\${equals(nodes.${copyY.id}.status, "success")}`);
+    // ...and nothing was wired to it off the target's coincident ids.
+    expect(latest.edges).toHaveLength(2);
+    expect(latest.edges.some((e) => e.to === box.id)).toBe(false);
+
+    await expectQuiet(page, problems);
+  });
+
+  /* #935 — ⌘X then ⌘V in the SAME pipeline. The cut deletes `b`'s in-edge, so a
+     paste that only re-derived edges from the live graph brought `b` back with
+     no upstream while its url still read `a`: "Pasted", then refused at save. */
+  test('a cut activity pastes back wired to its upstream, and saves', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, 'u21 cut paste', SOURCE);
+
+    await nodeById(page, 'b').click();
+    await page.keyboard.press('Meta+x');
+    await expect(page.getByText('Cut 1 activity.')).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(1);
+    await expect(edgeGroup(page)).toHaveCount(0);
+
+    await page.keyboard.press('Meta+v');
+    await expect(page.getByText('Pasted 1 activity.')).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(2);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.getByText(/^Saved v2\.$/)).toBeVisible();
+
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`);
+    expect(res.status()).toBe(200);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { id: string; config: Record<string, unknown> }[];
+      edges: { from: string; to: string }[];
+    }[];
+    const latest = versions.reduce((p, q) => (p.version > q.version ? p : q));
+    const copy = latest.nodes.find((n) => n.id !== 'a')!;
+    expect(copy.id).not.toBe('b');
+    expect(copy.config['url']).toBe('https://example.test/${nodes.a.output.body}');
+    expect(latest.edges).toEqual([expect.objectContaining({ from: 'a', to: copy.id })]);
 
     await expectQuiet(page, problems);
   });

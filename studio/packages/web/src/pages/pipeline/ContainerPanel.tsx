@@ -100,6 +100,7 @@ export function ContainerPanel({
   containers,
   params,
   onApply,
+  onCopy,
   onDuplicate,
 }: {
   container: Container;
@@ -108,6 +109,8 @@ export function ContainerPanel({
   containers: Container[];
   params: Param[];
   onApply: (next: Container) => void;
+  /** #935 — put this container and its body on the canvas clipboard. */
+  onCopy: () => void;
   /** U21 (#935) — copy this container and its body; the store owns every rule. */
   onDuplicate: () => void;
 }) {
@@ -364,10 +367,13 @@ export function ContainerPanel({
           </button>
         </div>
       )}
-      {/* U21 (#935). Outside the form on purpose: it copies the container as
+      {/* U21 (#935). Outside the form on purpose: both copy the container as
           STORED, not the unapplied drafts above — the same rule as `Duplicate
           node` — and a container this form cannot render is still one a verbatim
-          copy can carry. */}
+          copy can carry. Copy is ⌘C's mouse path, for a paste elsewhere. */}
+      <button type="button" onClick={onCopy}>
+        Copy container
+      </button>
       <button type="button" onClick={onDuplicate}>
         Duplicate container
       </button>

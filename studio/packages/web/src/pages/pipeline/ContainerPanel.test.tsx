@@ -38,6 +38,7 @@ function mount(container: Container, before: Container[] = []) {
       containers={containers}
       params={[]}
       onApply={onApply}
+      onCopy={() => {}}
       onDuplicate={() => {}}
     />,
   );
@@ -275,6 +276,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
         containers={[container]}
         params={[]}
         onApply={onApply}
+        onCopy={() => {}}
         onDuplicate={() => {}}
       />,
     );
@@ -287,6 +289,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
           containers={[next]}
           params={[]}
           onApply={onApply}
+          onCopy={() => {}}
           onDuplicate={() => {}}
         />,
       );
@@ -351,6 +354,7 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
         containers={[container]}
         params={PARAMS}
         onApply={onApply}
+        onCopy={() => {}}
         onDuplicate={() => {}}
       />,
     );
@@ -409,10 +413,9 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
   });
 });
 
-describe('ContainerPanel — Duplicate container (U21 #935)', () => {
-  it('hands the duplicate to the store and applies nothing', () => {
-    const onApply = vi.fn();
-    const onDuplicate = vi.fn();
+describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
+  function panel() {
+    const handlers = { onApply: vi.fn(), onCopy: vi.fn(), onDuplicate: vi.fn() };
     render(
       <ContainerPanel
         container={LOOP}
@@ -420,12 +423,25 @@ describe('ContainerPanel — Duplicate container (U21 #935)', () => {
         edges={[]}
         containers={[LOOP]}
         params={[]}
-        onApply={onApply}
-        onDuplicate={onDuplicate}
+        {...handlers}
       />,
     );
+    return handlers;
+  }
+
+  it('hands the duplicate to the store and applies nothing', () => {
+    const { onApply, onCopy, onDuplicate } = panel();
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate container' }));
     expect(onDuplicate).toHaveBeenCalledTimes(1);
+    expect(onCopy).not.toHaveBeenCalled();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('hands the copy to the store and applies nothing', () => {
+    const { onApply, onCopy, onDuplicate } = panel();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy container' }));
+    expect(onCopy).toHaveBeenCalledTimes(1);
+    expect(onDuplicate).not.toHaveBeenCalled();
     expect(onApply).not.toHaveBeenCalled();
   });
 });

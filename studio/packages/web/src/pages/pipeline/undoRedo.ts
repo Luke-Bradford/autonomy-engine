@@ -166,7 +166,7 @@ export function historyCommandFor(e: {
 }
 
 /** U21 — a canvas clipboard gesture, as read off the keyboard. */
-export type ClipboardCommand = 'copy' | 'paste' | 'duplicate';
+export type ClipboardCommand = 'copy' | 'cut' | 'paste' | 'duplicate';
 
 /**
  * U21 — which clipboard gesture (if any) this keydown asks for.
@@ -176,10 +176,10 @@ export type ClipboardCommand = 'copy' | 'paste' | 'duplicate';
  * keystroke aimed at a text-entry control — ⌘C in a prompt field is the FIELD's
  * copy, and taking it would break the most ordinary thing an author does.
  *
- * ⌘X is NOT here. Cut is delete-plus-copy, and delete already has an owner
- * (`isDeleteKeystroke` → `deleteSelection`); adding a second path to it earns a
- * second way for the two to disagree about what a container in the selection
- * means. It is a later slice, with the rest of the clipboard.
+ * ⌘X is copy-then-delete (#935), and it does not add a second answer to what a
+ * delete removes: `cutSelection` deletes the copied nodes through the same
+ * cascade `deleteSelection` uses, and refuses a container, whose only delete is
+ * the confirm-gated ✕ (#748) — which keeps the body, so it could not be a cut.
  *
  * The CALLER, not this function, decides whether to `preventDefault`: with
  * nothing selected there is no canvas copy to make, and swallowing ⌘C would take
@@ -198,6 +198,7 @@ export function clipboardCommandFor(e: {
   if (isTextEntryTarget(e.target)) return null;
   const key = e.key.toLowerCase();
   if (key === 'c') return 'copy';
+  if (key === 'x') return 'cut';
   if (key === 'v') return 'paste';
   if (key === 'd') return 'duplicate';
   return null;

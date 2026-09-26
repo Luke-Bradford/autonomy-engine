@@ -29,7 +29,7 @@ import {
 } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
-import { readClipboard, writeClipboard, type CanvasClipboard } from './clipboard';
+import { readClipboard, writeClipboard, type CanvasClipboard, type CutContext } from './clipboard';
 import {
   CONTAINER_GAP,
   CONTAINER_HEADER_HEIGHT,
@@ -416,6 +416,12 @@ interface CloneOptions {
    * copies land top-level with only their internal edges.
    */
   foreign?: boolean;
+  /**
+   * #935 — what a cut removed around its nodes. Rules 3 and 4 fall back to it
+   * for a source whose original is gone from the live graph, and for nothing
+   * else — see `CutContext`. Ignored on a `foreign` paste, for rule 3's reason.
+   */
+  restore?: CutContext;
 }
 
 /**
@@ -459,6 +465,11 @@ interface CloneOptions {
  *    belongs to the container's copy, and re-deriving would put it back into
  *    the original. Off for a foreign paste, for rule 3's reason.
  *
+ * After a CUT the originals are gone, so rules 3 and 4 have nothing live to
+ * read. `CloneOptions.restore` supplies what the cut took, for those sources
+ * only, and it goes through the same checks: a restored edge still goes through
+ * the gate, which drops one whose source no longer exists.
+ *
  * A copied CONTAINER is an endpoint like any node, so it rides the same rules
  * rather than a second set: its id is in the one id map, so rule 2 copies an
  * edge between it and a member, and rule 3 re-derives its incoming edges — which
@@ -497,11 +508,16 @@ function cloneNodesInto(
     }),
   }));
   const claimed = new Set(sourceContainers.flatMap((c) => c.children));
+  const live = new Set(target.nodes.map((n) => n.id));
+  const restore = options.restore;
 
   let containers = [...target.containers, ...containerCopies];
   for (const source of sources) {
     if (claimed.has(source.id) || options.foreign === true) continue;
-    const owner = containers.find((c) => c.children.includes(source.id))?.id ?? null;
+    // A container deleted since the cut takes no member: `assignContainerChild`
+    // only ever adds to a container that is there.
+    const cutOwner = live.has(source.id) ? undefined : restore?.owners[source.id];
+    const owner = containers.find((c) => c.children.includes(source.id))?.id ?? cutOwner ?? null;
     containers = assignContainerChild(containers, idMap.get(source.id) as string, owner);
   }
 
@@ -513,8 +529,14 @@ function cloneNodesInto(
     edges.push({ ...e, id: newLocalId('e'), from, to });
   }
 
+  // A restored edge whose source is gone since the cut is refused by the gate
+  // below ('unknown-endpoint'), like any other candidate.
+  const inbound =
+    options.foreign === true
+      ? []
+      : [...target.edges, ...(restore?.inEdges ?? []).filter((e) => !live.has(e.to))];
   const nodes = [...target.nodes, ...copies];
-  for (const e of options.foreign === true ? [] : target.edges) {
+  for (const e of inbound) {
     const to = idMap.get(e.to);
     if (to === undefined || idMap.has(e.from)) continue;
     const candidate = { from: e.from, to, condition: conditionOf(e), back: e.back === true };
@@ -569,11 +591,56 @@ function duplicateContainerShift(body: Node[], nodes: Node[]): number {
 }
 
 /**
+ * #935 — what a copy of container `id` consists of: the box, its body, and the
+ * edges with both ends among them. `null` for an unknown id. The ONE answer,
+ * shared by ⌘D and ⌘C, so the two cannot drift on what a container copy holds.
+ */
+function containerCopySet(
+  live: { nodes: Node[]; edges: Edge[]; containers: Container[] },
+  id: string,
+): { source: Container; body: Node[]; internal: Edge[] } | null {
+  const source = live.containers.find((c) => c.id === id);
+  if (source === undefined) return null;
+  const body = live.nodes.filter((n) => source.children.includes(n.id));
+  const members = new Set([id, ...body.map((n) => n.id)]);
+  const internal = live.edges.filter((e) => members.has(e.from) && members.has(e.to));
+  return { source, body, internal };
+}
+
+/**
+ * #935 — the selected ACTIVITIES as a clipboard, or `null` when none is selected.
+ * Shared by copy and cut, so a cut holds exactly what a copy would.
+ */
+function selectionCopy(
+  live: { nodes: Node[]; edges: Edge[]; containers: Container[]; selected: Selection[] },
+  pipelineId: string,
+): CanvasClipboard | null {
+  const ids = live.selected.filter((s) => s.kind === 'node').map((s) => s.id);
+  const nodes = live.nodes.filter((n) => ids.includes(n.id));
+  if (nodes.length === 0) return null;
+  const kept = new Set(nodes.map((n) => n.id));
+  return {
+    pipelineId,
+    sourceNodeIds: sourceIdsOf(live),
+    nodes,
+    edges: live.edges.filter((e) => kept.has(e.from) && kept.has(e.to)),
+    containers: [],
+  };
+}
+
+/** Every node and container id — both addressed as `${nodes.<id>}` (#935). */
+function sourceIdsOf(live: { nodes: Node[]; containers: Container[] }): string[] {
+  return [...live.nodes.map((n) => n.id), ...live.containers.map((c) => c.id)];
+}
+
+/**
  * #935 — the nodes a cross-pipeline paste's copies READ but did not bring:
  * every `${nodes.<id>}` anywhere in a copied node (config, `call`, connection
  * and dataset params — the whole node, as `remapNodeRefs` walks it) naming a
  * node or container of the SOURCE pipeline or of the TARGET that is not in the
- * copied set. Source ids first, in the source's order.
+ * copied set. Source ids first, in the source's order. A copied CONTAINER is
+ * walked too: a foreach's `items` is evaluated outside its box, so it reads an
+ * upstream the copy does not carry.
  *
  * Within one pipeline such a read is correct: the upstream still exists and the
  * copy keeps reading it. Across pipelines it names nothing — or, worse, a node
@@ -592,7 +659,8 @@ function uncopiedReads(
   held: CanvasClipboard,
   target: { nodes: Node[]; containers: Container[] },
 ): string[] {
-  const copied = new Set(held.nodes.map((n) => n.id));
+  const carried = [...held.nodes, ...held.containers];
+  const copied = new Set(carried.map((v) => v.id));
   const outside = [
     ...new Set([
       ...held.sourceNodeIds,
@@ -600,7 +668,7 @@ function uncopiedReads(
       ...target.containers.map((c) => c.id),
     ]),
   ].filter((id) => !copied.has(id));
-  const read = new Set(held.nodes.flatMap((n) => referencedNodeIds(n, outside)));
+  const read = new Set(carried.flatMap((v) => referencedNodeIds(v, outside)));
   return outside.filter((id) => read.has(id));
 }
 
@@ -789,9 +857,13 @@ export interface PendingBindings {
 /** Which of a node's two paired bindings a picker is writing (#1139). */
 export type BindingKind = 'connections' | 'datasets';
 
-/** U21 — what a paste did; `crossPipeline` marks a copy from another pipeline (#935). */
+/**
+ * U21 — what a paste did; `crossPipeline` marks a copy from another pipeline, and
+ * `containerId` is the container's copy when a container was pasted (#935).
+ */
 export type PasteOutcome =
-  { ok: true; count: number; crossPipeline: boolean } | { ok: false; reason: string };
+  | { ok: true; count: number; crossPipeline: boolean; containerId?: string }
+  | { ok: false; reason: string };
 
 export interface CanvasState {
   /**
@@ -976,6 +1048,17 @@ export interface CanvasState {
    */
   duplicateContainer(id: string): string | null;
   /**
+   * #935 — put a container, its whole body and the edges inside it on the
+   * canvas clipboard. `false` when `id` names no current container. Like
+   * `copySelection`, not a doc edit and no undo entry.
+   *
+   * What is copied is exactly what `duplicateContainer` copies (the one
+   * `containerCopySet`), so ⌘C then ⌘V and ⌘D cannot disagree about what "the
+   * container" is — only about where the copy lands, and a paste into the same
+   * pipeline lands where a duplicate would.
+   */
+  copyContainer(id: string, pipelineId: string): boolean;
+  /**
    * U21 — put the selected nodes (and every edge BETWEEN them) on the canvas
    * clipboard. Returns how many nodes were copied; 0 means nothing was selected.
    *
@@ -1000,6 +1083,25 @@ export interface CanvasState {
    * single authority.
    */
   duplicateSelection(): number;
+  /**
+   * #935 — copy the selected ACTIVITIES, then delete them, in ONE undo entry (the
+   * copy records none). Returns how many; 0 means no activity was selected, and
+   * then nothing is copied or deleted.
+   *
+   * It deletes exactly what it copied — the nodes, and the edges that cascade
+   * with them — never a selected edge between two UNselected nodes, which the
+   * clipboard cannot carry and so a paste could never bring back.
+   *
+   * A container is never cut. Its only delete (#748, the confirm-gated ✕) keeps
+   * the body and lifts it to the top level, so "copy then delete the box" is not
+   * a cut, and a delete that also took the body would be a second container
+   * delete path with its own answer to what the box owns.
+   *
+   * What the cut removed around the nodes rides on the clipboard as a
+   * `CutContext`, so a paste in the same pipeline puts the node back where it
+   * was wired rather than as an orphan whose `${}` reads an upstream it lacks.
+   */
+  cutSelection(pipelineId: string): number;
   /**
    * U21 — paste the canvas clipboard into this pipeline, in ONE undo entry.
    *
@@ -1034,7 +1136,8 @@ export interface CanvasState {
    *
    * A selected CONTAINER is never deleted here. Removing one is a structure
    * write that also destroys its config, so it keeps the confirm-gated
-   * affordance (#748) as its only path.
+   * affordance (#748) as its only path — which is also why ⌘X refuses one.
+   * `cutSelection` removes nodes through the same cascade, not through here.
    */
   deleteSelection(): void;
   /**
@@ -1524,12 +1627,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       duplicateContainer(id) {
-        const live = get();
-        const source = live.containers.find((c) => c.id === id);
-        if (source === undefined) return null;
-        const body = live.nodes.filter((n) => source.children.includes(n.id));
-        const members = new Set([id, ...body.map((n) => n.id)]);
-        const internal = live.edges.filter((e) => members.has(e.from) && members.has(e.to));
+        const set = containerCopySet(get(), id);
+        if (set === null) return null;
+        const { source, body, internal } = set;
         let made: string | null = null;
         edit((s) => {
           const cloned = cloneNodesInto(s, body, internal, {
@@ -1557,24 +1657,50 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         );
       },
 
-      copySelection(pipelineId) {
+      copyContainer(id, pipelineId) {
         const live = get();
-        const ids = live.selected.filter((s) => s.kind === 'node').map((s) => s.id);
-        const nodes = live.nodes.filter((n) => ids.includes(n.id));
-        if (nodes.length === 0) return 0;
-        const kept = new Set(nodes.map((n) => n.id));
+        const set = containerCopySet(live, id);
+        if (set === null) return false;
         writeClipboard({
           pipelineId,
-          sourceNodeIds: [...live.nodes.map((n) => n.id), ...live.containers.map((c) => c.id)],
-          nodes,
-          edges: live.edges.filter((e) => kept.has(e.from) && kept.has(e.to)),
+          sourceNodeIds: sourceIdsOf(live),
+          nodes: set.body,
+          edges: set.internal,
+          containers: [set.source],
         });
-        return nodes.length;
+        return true;
+      },
+
+      copySelection(pipelineId) {
+        const copy = selectionCopy(get(), pipelineId);
+        if (copy === null) return 0;
+        writeClipboard(copy);
+        return copy.nodes.length;
+      },
+
+      cutSelection(pipelineId) {
+        const live = get();
+        const copy = selectionCopy(live, pipelineId);
+        if (copy === null) return 0;
+        const ids = copy.nodes.map((n) => n.id);
+        const owners: Record<string, string> = {};
+        for (const c of live.containers) {
+          for (const child of c.children) if (ids.includes(child)) owners[child] = c.id;
+        }
+        writeClipboard({
+          ...copy,
+          cut: {
+            inEdges: live.edges.filter((e) => ids.includes(e.to) && !ids.includes(e.from)),
+            owners,
+          },
+        });
+        get().deleteNodesAndEdges(ids, []);
+        return ids.length;
       },
 
       pasteClipboard(pipelineId) {
         const held = readClipboard();
-        if (held === null || held.nodes.length === 0) {
+        if (held === null || (held.nodes.length === 0 && held.containers.length === 0)) {
           return { ok: false, reason: 'Nothing has been copied yet.' };
         }
         const foreign = held.pipelineId !== pipelineId;
@@ -1588,23 +1714,42 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             };
           }
         }
+        const boxed = held.containers.length > 0;
+        let containerId: string | undefined;
         edit((s) => {
-          const cloned = cloneNodesInto(
-            s,
-            held.nodes,
-            held.edges,
-            foreign ? { foreign, offset: foreignPasteOffset(held.nodes, s) } : {},
-          );
+          // A pasted container lands where `duplicateContainer` puts one, and for
+          // its reason: on the stagger its box would overlap the original's.
+          const offset = foreign
+            ? foreignPasteOffset(held.nodes, s)
+            : boxed
+              ? { x: duplicateContainerShift(held.nodes, s.nodes), y: 0 }
+              : undefined;
+          const cloned = cloneNodesInto(s, held.nodes, held.edges, {
+            containers: held.containers,
+            foreign,
+            ...(offset === undefined ? {} : { offset }),
+            ...(held.cut === undefined ? {} : { restore: held.cut }),
+          });
+          containerId = cloned.newContainerIds[0];
           return {
             nodes: cloned.nodes,
             edges: cloned.edges,
             containers: cloned.containers,
-            selected: cloned.newIds.map((id) => ({ kind: 'node' as const, id })),
+            // A container is selection-EXCLUSIVE, so its copy is the selection.
+            selected:
+              containerId === undefined
+                ? cloned.newIds.map((id) => ({ kind: 'node' as const, id }))
+                : [{ kind: 'container' as const, id: containerId }],
             // The counter advances only when the stagger placed the copies.
-            addCount: foreign ? s.addCount : s.addCount + 1,
+            addCount: offset === undefined ? s.addCount + 1 : s.addCount,
           };
         });
-        return { ok: true, count: held.nodes.length, crossPipeline: foreign };
+        return {
+          ok: true,
+          count: held.nodes.length,
+          crossPipeline: foreign,
+          ...(containerId === undefined ? {} : { containerId }),
+        };
       },
 
       moveNodes(moves) {
