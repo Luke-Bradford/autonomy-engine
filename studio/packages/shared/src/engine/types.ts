@@ -276,6 +276,10 @@ export const RunLifecycleStatusSchema = z.enum([
   'success',
   'failure',
   'interrupted',
+  // CX1 (#1320) — a TERMINAL status: the run was stopped on purpose (D1). Not
+  // `failure` (nothing went wrong) and not `interrupted` (that means frozen,
+  // needs attention). Reached only via `run.finished{outcome:'cancelled'}`.
+  'cancelled',
 ]);
 export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
 
@@ -420,6 +424,21 @@ export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 // re-exported through the package barrel (`schemas/index.ts`), so every existing
 // `import { TriggerContext } from '@autonomy-studio/shared'` keeps resolving.
 
+/**
+ * CX1 (#1320) — WHO asked a run to stop, from a closed, machine-set union (spec
+ * D2). `operator` is the cancel route; the two `parent_*` kinds are the
+ * `call_pipeline` propagation paths (D8, CX3). Deliberately no free-text reason:
+ * an operator-typed string in the append-only log would be a stored-content
+ * surface every viewer renders, and it tells the operator nothing the source
+ * does not.
+ */
+export const CancelSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('operator') }),
+  z.object({ kind: z.literal('parent_cancelled'), parentRunId: z.string() }),
+  z.object({ kind: z.literal('parent_terminal'), parentRunId: z.string() }),
+]);
+export type CancelSource = z.infer<typeof CancelSourceSchema>;
+
 export const RunStateSchema = z.object({
   runId: z.string(),
   pipelineVersionId: z.string(),
@@ -462,6 +481,21 @@ export const RunStateSchema = z.object({
    * `${trigger.*}` reads fall back to `null` deterministically on replay.
    */
   triggerContext: TriggerContextSchema.nullable(),
+  /**
+   * CX1 (#1320) — set by the FIRST `run.cancelRequested` fold, `null` otherwise
+   * (never absent, so every projection is deterministic on replay — the
+   * `triggerContext` pattern). While set, `settle` starts no new work and
+   * finishes the run once nothing is in flight (spec D2).
+   *
+   * `stoppedWork` answers D3's "did the cancel actually prevent work" for the
+   * part the node map cannot: `NodeRunState` does not record a failure's KIND, so
+   * a node that ended `failure{kind:'cancelled'}` (or a retry the cancel
+   * refused, or a retry hold it cancelled) is indistinguishable from any other
+   * failure once folded. It only ever goes false → true.
+   */
+  cancelRequested: z
+    .object({ source: CancelSourceSchema, stoppedWork: z.boolean() })
+    .nullable(),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 
@@ -480,7 +514,10 @@ export type RunState = z.infer<typeof RunStateSchema>;
  *   - `capped`           — the driver's MAX_DRIVER_STEPS fail-safe.
  *   - `invalid_event`    — the reducer refused its own impossible event.
  */
-export const RunOutcomeSchema = z.enum(['success', 'failure']);
+// CX1 (#1320) — `cancelled`: the run finished under `run.cancelRequested` AND the
+// cancel actually stopped work (spec D3). A run whose in-flight work all completed
+// after the cancel finishes with its normal outcome instead.
+export const RunOutcomeSchema = z.enum(['success', 'failure', 'cancelled']);
 export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
 
 /**
@@ -1835,6 +1872,17 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     type: z.literal('container.timedOut'),
     runId: z.string(),
     containerId: z.string(),
+  }),
+  z.object({
+    // CX1 (#1320) — "stop this run". NOT terminal: the run stays live until its
+    // in-flight work drains, and `settle` then emits `finishRun` (spec D2). The
+    // SOURCE is machine-set from a closed union — no free-text reason is ever
+    // accepted into the append-only log (spec D2 + Security model). Legal on a
+    // `pending`, `running` or `waiting` run (it un-parks, see `UNPARK_EVENTS`); a
+    // second one, or one on a terminal run, folds to a no-op.
+    type: z.literal('run.cancelRequested'),
+    runId: z.string(),
+    source: CancelSourceSchema,
   }),
   z.object({
     // The event-sourced representation of the boot reconciler's "this run

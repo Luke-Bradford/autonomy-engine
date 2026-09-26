@@ -306,6 +306,42 @@ function unparkIfWaiting(state: RunState): RunState {
 }
 
 /**
+ * CX1 (#1320) — the ONE terminal command a cancelled run finishes with. Both
+ * finish sites (a `pending` run's cancel, and cancel-mode `settle`) build it here
+ * so the reason cannot drift between them. The reason names the machine-set
+ * source kind and nothing else (spec D2: no free text).
+ */
+function cancelFinish(state: RunState): EngineCommand {
+  return {
+    type: 'finishRun',
+    outcome: 'cancelled',
+    reason: `cancelled:${state.cancelRequested?.source.kind ?? 'operator'}`,
+  };
+}
+
+/**
+ * CX1 (#1320) D3 — record that the cancel actually prevented work (a node that
+ * ended `failure{kind:'cancelled'}`, a retry refused or cancelled, a lost
+ * dispatch not re-derived). A no-op outside cancel mode, and once set it stays
+ * set. See `RunState.cancelRequested` for why this is a flag and not derived.
+ */
+function markStoppedWork(state: RunState): RunState {
+  const cr = state.cancelRequested;
+  if (cr === null || cr.stoppedWork) return state;
+  return { ...state, cancelRequested: { ...cr, stoppedWork: true } };
+}
+
+/**
+ * A `retry_pending` hold whose next attempt will never start: its held failure
+ * stands as terminal `failure`. Shared by the parallel-foreach doom (#4 A4b) and
+ * the run cancel (CX1 D4) — both cancel the retry for the same reason, and the
+ * armed alarm's later `node.retryDue` folds to `onRetryDue`'s status-guard no-op.
+ */
+function heldRetryToFailure(ns: NodeRunState): NodeRunState {
+  return { ...ns, status: 'failure', currentAttemptId: undefined };
+}
+
+/**
  * #5 S3 (#619) — the events that RESUME a parked (`waiting`) run. The top-level
  * fold guard ignores every non-terminal event on a non-`running` run; these are
  * the exceptions, admitted to the switch so the parked node's own handler can
@@ -324,6 +360,11 @@ export const UNPARK_EVENTS = new Set<EngineEvent['type']>([
   'externalWait.completed',
   'externalWait.expired',
   'run.resumed',
+  // CX1 (#1320) D5 — a cancel on a parked run un-parks it. Ignoring it here (as
+  // `run.interrupted` is on a waiting run) would make a cancel a silent no-op.
+  // Nothing is in flight on a parked run, so its cancel-mode `settle` finishes it
+  // in the same fold.
+  'run.cancelRequested',
 ]);
 
 /**
@@ -1473,6 +1514,12 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state: withNode(state, sid, { status: 'skipped' }), changed: true };
     }
     if (r !== 'ready') return { state, changed: false };
+    // CX1 (#1320) D2 — cancel mode starts no work: a node READY to dispatch stays
+    // `pending`. This one guard covers every command this function can emit
+    // (dispatch, child, control, fail, filter, wait, webhook). Skip propagation
+    // above still runs — it starts nothing, and a node really `skipped` left
+    // `pending` would read as work the cancel prevented (D3).
+    if (state.cancelRequested !== null) return { state, changed: false };
 
     const attemptId = `${sid}#${ns.attempts}`;
     const controlEvent = controlBranchEvent(node.type);
@@ -1686,7 +1733,8 @@ export function createEngine(doc: EngineDoc): Engine {
    * and clear their outputs — a fresh round recomputes them. Back-edges are
    * considered in STABLE edgeKey order.
    */
-  function fireBackEdges(state: RunState, diagnostics: string[]): Step {
+  function fireBackEdges(state: RunState, diagnostics: string[]): Step & { suppressed?: true } {
+    let suppressed = false;
     for (const be of [...backEdges].sort((a, b) => cmp(stableEdgeKey(a), stableEdgeKey(b)))) {
       if (edgeState(be, state) !== 'satisfied') continue;
       const key = stableEdgeKey(be);
@@ -1725,9 +1773,18 @@ export function createEngine(doc: EngineDoc): Engine {
           finish: { type: 'finishRun', outcome: 'failure', reason: 'capped' },
         };
       }
+      // CX1 (#1320) D4 — a bounce STARTS a new round, so cancel mode suppresses
+      // it and persists NOTHING (not even the counted `withBounce`: persisting it
+      // would re-count on every walk until the cap fired `capped`). It is
+      // reported as `suppressed` so `settle` can call the run `cancelled` — the
+      // round it prevented is work the cancel stopped (D3).
+      if (state.cancelRequested !== null) {
+        suppressed = true;
+        continue;
+      }
       return { state: resetNodes(withBounce, body), changed: true };
     }
-    return { state, changed: false };
+    return suppressed ? { state, changed: false, suppressed: true } : { state, changed: false };
   }
 
   /**
@@ -1782,6 +1839,10 @@ export function createEngine(doc: EngineDoc): Engine {
         const results = [...(cs.results ?? []), mergeChildOutputs(c, state)];
         const withResults = withContainer(state, c.id, { results });
         if (cs.round + 1 < items.length) {
+          // CX1 (#1320) D4 — no next item under a cancel. `continue`, not
+          // return: the container stays `active` (so the run reads `cancelled`)
+          // and later containers still get their pure exit.
+          if (state.cancelRequested !== null) continue;
           return { state: resetContainerRound(withResults, c), changed: true };
         }
         return { state: exitContainer(withResults, c, 'success'), changed: true };
@@ -1857,6 +1918,8 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics.push(`container '${cid}' capped at maxRounds=${c.maxRounds}`);
         return { state: exitContainer(state, c, 'failure', 'capped'), changed: true };
       }
+      // CX1 (#1320) D4 — no next round under a cancel (see the foreach arm).
+      if (state.cancelRequested !== null) continue;
       return { state: resetContainerRound(state, c), changed: true };
     }
     return { state, changed: false };
@@ -2555,7 +2618,7 @@ export function createEngine(doc: EngineDoc): Engine {
             const ns = nodes[k]!;
             if (ns.status === 'retry_pending') {
               if (nodes === state.nodes) nodes = { ...nodes };
-              nodes[k] = { ...ns, status: 'failure', currentAttemptId: undefined };
+              nodes[k] = heldRetryToFailure(ns);
               continue;
             }
             if (TERMINAL_NODE.has(ns.status) || isNodeInFlight(ns.status)) continue;
@@ -2684,13 +2747,29 @@ export function createEngine(doc: EngineDoc): Engine {
    * change the answer, not just the cost. An operator seeing spend on a doomed
    * run should find this paragraph.
    */
+  /** The terminal verdict of a run whose top level is all terminal (§B.2). */
+  function outcomeFinish(state: RunState): EngineCommand {
+    const blamed = runOutcomeFailure(state);
+    return blamed === null
+      ? { type: 'finishRun', outcome: 'success' }
+      : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` };
+  }
+
   function settle(startState: RunState, diagnostics: string[]): ReduceResult {
     let state = startState;
     const commands: EngineCommand[] = [];
+    // CX1 (#1320) — a back-edge bounce cancel mode refused (see `fireBackEdges`).
+    let preventedBounce = false;
 
     for (;;) {
       const fired = fireBackEdges(state, diagnostics);
-      if (fired.finish) return { state: fired.state, commands: [fired.finish], diagnostics };
+      if (fired.suppressed) preventedBounce = true;
+      if (fired.finish) {
+        // CX1 D3 — under a cancel that already stopped work, the run's outcome is
+        // the cancel's, not the cap's.
+        const finish = state.cancelRequested?.stoppedWork === true ? cancelFinish(state) : fired.finish;
+        return { state: fired.state, commands: [finish], diagnostics };
+      }
       if (fired.changed) {
         state = fired.state;
         continue;
@@ -2718,6 +2797,10 @@ export function createEngine(doc: EngineDoc): Engine {
           const cs = state.containers[id]!;
           if (cs.status !== 'pending') continue;
           const r = computeReadiness(topIncoming.get(id)!, containerJoin(cc), state);
+          // CX1 (#1320) D2 — entering a container starts its work (and a timed
+          // loop's alarm), so cancel mode leaves a READY container `pending`.
+          // `skipped` below still propagates.
+          if (r === 'ready' && state.cancelRequested !== null) continue;
           if (r === 'ready') {
             if (cc.kind === 'foreach') {
               // Foreach entry resolves `items` and may finish (bad items →
@@ -2771,7 +2854,11 @@ export function createEngine(doc: EngineDoc): Engine {
           // in-flight item's children under its ITEM SCOPE (instance state keys,
           // per-item `${item}`/sibling env). The sequential bare-id walk below
           // must never touch this container — its children have no bare entries.
-          const startStep = startParallelItems(state, cc);
+          // CX1 (#1320) D4 — cancel mode starts no new item.
+          const startStep =
+            state.cancelRequested === null
+              ? startParallelItems(state, cc)
+              : { state, changed: false };
           if (startStep.changed) {
             state = startStep.state;
             changed = true;
@@ -2814,13 +2901,28 @@ export function createEngine(doc: EngineDoc): Engine {
       if (!changed) break;
     }
 
+    if (state.cancelRequested !== null) {
+      // CX1 (#1320) D2/D3 — CANCEL MODE's end of walk. It replaces all three
+      // branches below: the run neither parks (`run.waiting`) nor reads as
+      // `stalled` — it finishes once nothing is IN FLIGHT. A parked wait/webhook
+      // is not in flight, so a cancelled run never waits out its timer.
+      //
+      // The outcome is TRUTHFUL (D3): `cancelled` only if the cancel stopped
+      // something — a node it aborted or a retry it refused (`stoppedWork`), a
+      // round it suppressed, or an entity still non-terminal (work it kept from
+      // starting). Otherwise the run really completed, and it finishes with the
+      // verdict it would have reached anyway.
+      if (Object.values(state.nodes).some((ns) => isNodeInFlight(ns.status))) {
+        return { state, commands, diagnostics };
+      }
+      const prevented =
+        state.cancelRequested.stoppedWork || preventedBounce || !allTopLevelTerminal(state);
+      commands.push(prevented ? cancelFinish(state) : outcomeFinish(state));
+      return { state, commands, diagnostics };
+    }
+
     if (allTopLevelTerminal(state)) {
-      const blamed = runOutcomeFailure(state);
-      commands.push(
-        blamed === null
-          ? { type: 'finishRun', outcome: 'success' }
-          : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` },
-      );
+      commands.push(outcomeFinish(state));
     } else if (!Object.values(state.nodes).some((ns) => awaitsExternalEvent(ns.status))) {
       // #491 — THE STALLED BACKSTOP. The walk has reached its fixpoint with the
       // run non-terminal, and no node anywhere awaits an event. Nothing can ever
@@ -3078,6 +3180,10 @@ export function createEngine(doc: EngineDoc): Engine {
       // `RunState` from scratch here would silently drop it, breaking
       // `${trigger.*}` for every node dispatched by the settle below.
       triggerContext: state.triggerContext,
+      // CX1 (#1320) — a cancel folded onto the PENDING run survives its start (a
+      // crash between the cancel and its `run.finished`, or a start racing the
+      // cancel), so cancel-mode `settle` finishes it without dispatching.
+      cancelRequested: state.cancelRequested,
     };
     // RS1 — rerun-from-failed DEFERS dispatch: a `run.started{rerunOf}` seeds the
     // node/container map but must NOT settle, because the immediately-following
@@ -3357,6 +3463,15 @@ export function createEngine(doc: EngineDoc): Engine {
       if (event.attemptId !== ns.currentAttemptId) {
         return { state, commands: [], diagnostics };
       }
+      if (state.cancelRequested !== null) {
+        // CX1 (#1320) D2 — cancel mode schedules no retry: the failure is
+        // terminal. The cancel STOPPED work if this is the abort it caused, or if
+        // it refused a retry the policy would have run (D3).
+        const failedNode = withNode(state, event.nodeId, { status: 'failure' });
+        const stopped =
+          event.kind === 'cancelled' || retryEligible(docNodeFor(event.nodeId)!, ns, event.kind);
+        return settle(stopped ? markStoppedWork(failedNode) : failedNode, diagnostics);
+      }
       if (retryEligible(docNodeFor(event.nodeId)!, ns, event.kind)) {
         // The HOLD (#472, §A). Fold to a NON-terminal status and ask the driver
         // to arm the alarm. Deliberately does NOT call `settle`: the node is not
@@ -3459,7 +3574,14 @@ export function createEngine(doc: EngineDoc): Engine {
         return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
       }
       const stored = storeOutputs(checked, event.outputs);
-      let next = withNode(state, event.callNodeId, { status: event.childOutcome });
+      // CX1 (#1320) — a CANCELLED child fails its call node (`NodeRunStatus` has
+      // no `cancelled`; the parent's failure edges may handle it — an operator
+      // who cancels a child has not cancelled the parent, spec D8). Under the
+      // PARENT's own cancel it is work that cancel stopped (D3).
+      let next = withNode(state, event.callNodeId, {
+        status: event.childOutcome === 'cancelled' ? 'failure' : event.childOutcome,
+      });
+      if (event.childOutcome === 'cancelled') next = markStoppedWork(next);
       next = { ...next, outputs: { ...next.outputs, [event.callNodeId]: stored } };
       return settle(next, diagnostics);
     }
@@ -3886,6 +4008,15 @@ export function createEngine(doc: EngineDoc): Engine {
     if (event.previousAttemptId !== ns.currentAttemptId) {
       return { state, commands: [], diagnostics };
     }
+    if (state.cancelRequested !== null) {
+      // CX1 (#1320) D7 — a cancelled run's in-flight node is never re-dispatched.
+      // Folding it to failure (rather than ignoring the event) is what lets the
+      // run finish: left `dispatched`, it would hold the run live forever.
+      return settle(
+        markStoppedWork(withNode(state, event.nodeId, { status: 'failure' })),
+        diagnostics,
+      );
+    }
     const attemptId = `${event.nodeId}#${ns.attempts}`;
     let next = withNode(state, event.nodeId, {
       status: 'ready',
@@ -3915,6 +4046,30 @@ export function createEngine(doc: EngineDoc): Engine {
       commands: [dispatchNodeCommand(event.nodeId, attemptId, prepared)],
       diagnostics,
     };
+  }
+
+  /**
+   * CX1 (#1320) — `onResumed` for a run whose cancel is already folded. Neither
+   * mechanism below may run: each RE-DERIVES a command that starts work (a
+   * dispatch, a child, a control step, a timer, a loop alarm). But a command lost
+   * with the process cannot simply be dropped either — a `ready` node or a
+   * `waiting` call node left as it is would hold the run live forever, since
+   * nothing will ever resolve it. So each is folded to terminal `failure`: it is
+   * exactly the work the cancel prevented (D3). A live child of a call node is
+   * stopped by the cancel's propagation (D8, CX3), not here.
+   *
+   * `dispatched` nodes stay as they are: the reconciler owns them (D7 folds a
+   * `node.failed{kind:'cancelled'}` for each), and cancel-mode `settle` finishes
+   * the run once they resolve.
+   */
+  function resumeCancelled(state: RunState, diagnostics: string[]): ReduceResult {
+    let next = state;
+    for (const [id, ns] of Object.entries(state.nodes)) {
+      const lost =
+        ns.status === 'ready' || (ns.status === 'waiting' && docNodeFor(id)?.call !== undefined);
+      if (lost) next = markStoppedWork(withNode(next, id, { status: 'failure' }));
+    }
+    return settle(next, diagnostics);
   }
 
   /**
@@ -3974,6 +4129,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // re-execute its side effects. `driveRun` already refuses a terminal LOG
     // (#443); this is the engine-side backstop for a caller that did not.
     if (state.status !== 'running') return { state, commands: [], diagnostics };
+    if (state.cancelRequested !== null) return resumeCancelled(state, diagnostics);
 
     const commands: EngineCommand[] = [];
     // #4 A4b — walk DOC ids first (sorted — the pre-A4b emit order, byte-stable
@@ -4213,6 +4369,31 @@ export function createEngine(doc: EngineDoc): Engine {
 
   // --- the pure reducer (the exact 2-arg contract) --------------------------
 
+  /**
+   * CX1 (#1320) — `run.cancelRequested` on a `running` run (a `waiting` one is
+   * un-parked first; a `pending` one is handled in `reduce`). Records the source,
+   * cancels every retry hold (D4 — its next attempt is what the cancel prevents),
+   * then settles in cancel mode: nothing new starts, and the run finishes once
+   * nothing is in flight. A SECOND cancel is a no-op, so the first source stands
+   * and a replayed duplicate is total (D5).
+   */
+  function onCancelRequested(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'run.cancelRequested' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    if (state.cancelRequested !== null) return { state, commands: [], diagnostics };
+    let next: RunState = {
+      ...unparkIfWaiting(state),
+      cancelRequested: { source: event.source, stoppedWork: false },
+    };
+    for (const [id, ns] of Object.entries(next.nodes)) {
+      if (ns.status !== 'retry_pending') continue;
+      next = markStoppedWork({ ...next, nodes: { ...next.nodes, [id]: heldRetryToFailure(ns) } });
+    }
+    return settle(next, diagnostics);
+  }
+
   function reduce(state: RunState, event: EngineEvent): ReduceResult {
     const diagnostics: string[] = [];
 
@@ -4239,6 +4420,38 @@ export function createEngine(doc: EngineDoc): Engine {
       event.runId === state.runId
     ) {
       return { state: { ...state, status: 'interrupted' }, commands: [], diagnostics };
+    }
+
+    // CX1 (#1320) D5 — a cancel on a PENDING run (seeded, never started) needs no
+    // drain: nothing ran. It records the cancel and asks for the terminal fact
+    // at once, and no `run.started` is written. Unlike `run.interrupted` above,
+    // an EMPTY seed (runId `''`) is accepted and adopts the event's runId, the
+    // way `run.triggerContext` does — a child row can be cancelled before its
+    // first event (CX3), and refusing would leave that cancel with nowhere to go.
+    if (
+      state.status === 'pending' &&
+      event.type === 'run.cancelRequested' &&
+      (state.runId === '' || event.runId === state.runId)
+    ) {
+      if (state.cancelRequested !== null) return { state, commands: [], diagnostics };
+      const next: RunState = {
+        ...state,
+        runId: event.runId,
+        cancelRequested: { source: event.source, stoppedWork: false },
+      };
+      return { state: next, commands: [cancelFinish(next)], diagnostics };
+    }
+    // ...and the terminal fact that cancel asked for. Only `cancelled`, only for
+    // this run, and only after its cancel: every other `run.finished` before
+    // start stays impossible and ignored.
+    if (
+      state.status === 'pending' &&
+      event.type === 'run.finished' &&
+      event.outcome === 'cancelled' &&
+      state.cancelRequested !== null &&
+      event.runId === state.runId
+    ) {
+      return { state: { ...state, status: 'cancelled' }, commands: [], diagnostics };
     }
 
     if (state.status === 'pending') return { state, commands: [], diagnostics };
@@ -4291,8 +4504,19 @@ export function createEngine(doc: EngineDoc): Engine {
             diagnostics,
           };
         }
+        // CX1 (#1320) — a `cancelled` finish is possible only after a cancel.
+        if (event.outcome === 'cancelled' && state.cancelRequested === null) {
+          diagnostics.push(`impossible run.finished{cancelled}: this run was never cancelled`);
+          return {
+            state,
+            commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+            diagnostics,
+          };
+        }
         return { state: { ...state, status: event.outcome }, commands: [], diagnostics };
       }
+      case 'run.cancelRequested':
+        return onCancelRequested(state, event, diagnostics);
       case 'node.output':
         return { state, commands: [], diagnostics };
       case 'activity.metered':
@@ -4431,6 +4655,7 @@ export function createEngine(doc: EngineDoc): Engine {
       branches: {},
       sessions: {},
       triggerContext: null,
+      cancelRequested: null,
     };
   }
 
