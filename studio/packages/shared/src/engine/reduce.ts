@@ -2723,6 +2723,14 @@ export function createEngine(doc: EngineDoc): Engine {
     return touched ? { ...state, nodes, outputs } : state;
   }
 
+  /** The terminal verdict of a run whose top level is all terminal (§B.2). */
+  function outcomeFinish(state: RunState): EngineCommand {
+    const blamed = runOutcomeFailure(state);
+    return blamed === null
+      ? { type: 'finishRun', outcome: 'success' }
+      : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` };
+  }
+
   /**
    * Re-evaluate readiness to a fixpoint. Each pass, in order: fire a satisfied
    * back-edge (a loop iteration); advance an active container (exit/re-round);
@@ -2747,14 +2755,6 @@ export function createEngine(doc: EngineDoc): Engine {
    * change the answer, not just the cost. An operator seeing spend on a doomed
    * run should find this paragraph.
    */
-  /** The terminal verdict of a run whose top level is all terminal (§B.2). */
-  function outcomeFinish(state: RunState): EngineCommand {
-    const blamed = runOutcomeFailure(state);
-    return blamed === null
-      ? { type: 'finishRun', outcome: 'success' }
-      : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` };
-  }
-
   function settle(startState: RunState, diagnostics: string[]): ReduceResult {
     let state = startState;
     const commands: EngineCommand[] = [];
