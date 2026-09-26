@@ -270,10 +270,7 @@ export function NodeActivityPanel({
       )}
 
       {node.datasetAddresses !== undefined && (
-        <DataMovementSection
-          addresses={node.datasetAddresses}
-          instanceId={node.inputInstanceId}
-        />
+        <DataMovementSection addresses={node.datasetAddresses} instanceId={node.inputInstanceId} />
       )}
 
       {node.status === 'failure' && (
