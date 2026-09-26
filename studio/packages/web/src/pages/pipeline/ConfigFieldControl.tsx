@@ -187,11 +187,11 @@ export function ConfigFieldControl({
   } = useCaretInsert<HTMLInputElement | HTMLTextAreaElement>();
   const text = typeof value === 'string' ? value : '';
   const [sawLineBreak, setSawLineBreak] = useState(false);
-  const holdsLineBreak = /[\r\n]/.test(text);
-  // React's derived-state pattern: latch during render, never un-latch.
-  if (holdsLineBreak && !sawLineBreak) setSawLineBreak(true);
-  const oneLine =
-    field.kind === 'text' && field.singleLine === true && !holdsLineBreak && !sawLineBreak;
+  // React's derived-state pattern: latch during render, never un-latch. A
+  // render-phase set re-renders BEFORE anything commits, so a value that
+  // arrives holding a line break never mounts an input even once.
+  if (!sawLineBreak && /[\r\n]/.test(text)) setSawLineBreak(true);
+  const oneLine = field.kind === 'text' && field.singleLine === true && !sawLineBreak;
 
   if (isRowKind(field.kind)) {
     return (
