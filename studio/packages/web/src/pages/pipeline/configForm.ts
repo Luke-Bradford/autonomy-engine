@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { SecretRefSchema } from '@autonomy-studio/shared';
+import { SecretRefSchema, llmMessagesSchema } from '@autonomy-studio/shared';
 
 /**
  * The pure rules behind the per-activity node config form (U7).
@@ -320,22 +320,28 @@ function unwrap(schema: unknown): Unwrapped {
  * `def.catchall` is one more discriminant through the same `defOf` funnel, so
  * no per-activity list is introduced and U7's rule is untouched.
  *
- * It is also what keeps `llm_call` off this control, correctly. `history` is
+ * It is also what keeps `llm_call.history` off this control, correctly. It is
  * typed `z.array(...)` but `validateDoc` refuses any non-string value — "history
  * must be a whole-value ${...} expression" (`engine/params.ts`) — so in every
  * valid doc it holds a STRING. Classified as a row list it would be
  * unrenderable, and ONE unrenderable field puts the whole node in the JSON
  * editor: this ticket's own defect, on the most-used activity in the catalog.
- * The element is open, so the strictness gate excludes it — and excludes
- * `messages` with it, whose `content` is prose that has no business in a cell.
+ *
+ * `messages` shares that open element but NOT that rule, so it is admitted by
+ * IDENTITY with `llmMessagesSchema` (`waived`), the same way `SecretRefSchema`
+ * is recognised below (#852 item 3). Making the shared element `.strict()`
+ * instead would change what dispatch accepts for `history`, a runtime change a
+ * form has no business making. Waiving the gate leaves the VALUE guard in
+ * `formatFieldValue`, which refuses any stored row holding an undeclared key —
+ * so a message carrying one still opens in the JSON editor, unaltered.
  */
-function deriveElementFields(element: unknown): ConfigField[] | null {
+function deriveElementFields(element: unknown, waived = false): ConfigField[] | null {
   const def = defOf(element);
   if (def?.type !== 'object') return null;
   // `.strict()` and nothing else: a `z.object` with no catchall carries
   // `undefined` here, `.catchall(z.string())` a string schema, `.strict()` a
   // `never` one. Verified against the built catalog (zod 4.4.3).
-  if (defOf((def as { catchall?: unknown }).catchall)?.type !== 'never') return null;
+  if (!waived && defOf((def as { catchall?: unknown }).catchall)?.type !== 'never') return null;
   const shape = (element as { shape?: unknown }).shape;
   if (typeof shape !== 'object' || shape === null) return null;
 
@@ -417,7 +423,7 @@ function classify(
         // one-level rule refuses.
         return { kind: defOf(element)?.type === 'object' ? 'objectList' : 'json' };
       }
-      const elementFields = deriveElementFields(element);
+      const elementFields = deriveElementFields(element, schema === llmMessagesSchema);
       return elementFields ? { kind: 'objectList', elementFields } : { kind: 'json' };
     }
     default:

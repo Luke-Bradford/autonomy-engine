@@ -27,6 +27,15 @@ export const llmMessageSchema = z.object({
 export type LlmMessage = z.infer<typeof llmMessageSchema>;
 
 /**
+ * An AUTHORED conversation — `llm_call.messages`. Exported as its own schema so
+ * the node form can recognise it by IDENTITY and give it rows (#852 item 3).
+ * `history` is deliberately NOT this schema, though it validates the same shape
+ * at dispatch: at save it must hold a whole-value `${}` expression, which a row
+ * control cannot render.
+ */
+export const llmMessagesSchema = z.array(llmMessageSchema).min(1);
+
+/**
  * #2 L3 — the cross-provider reasoning-effort vocabulary. This is the SSOT enum
  * the spec's config v2 pins (`low|medium|high|max`); it is deliberately NARROWER
  * than any single provider's native set (Anthropic's `effort` also accepts
@@ -616,7 +625,7 @@ export const llmCallConfigSchema = z
     /** System instruction; folds together with any `role:'system'` messages. */
     system: z.string().optional(),
     /** v2 role-tagged conversation. Mutually exclusive with `prompt`. */
-    messages: z.array(llmMessageSchema).min(1).optional(),
+    messages: llmMessagesSchema.optional(),
     /** Overrides the connection's default model for this node. */
     model: z.string().optional(),
     maxTokens: z.number().int().positive().optional(),
