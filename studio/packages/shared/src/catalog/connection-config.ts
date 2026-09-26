@@ -278,7 +278,7 @@ export const agentConnectionConfigSchema = z.object({
        * CASE-SENSITIVE (no flags): bake any case-insensitivity into the pattern
        * itself (e.g. `[Uu]sage limit`) rather than relying on a flag.
        */
-      exhaustionPattern: z.string().min(1).refine(isCompilableRegex, {
+      exhaustionPattern: singleLine(z.string()).min(1).refine(isCompilableRegex, {
         message: 'exhaustionPattern must be a valid regular expression',
       }),
       /** Conservative reset window (whole seconds) to wait before a retry. */
