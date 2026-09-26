@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { authoredAsExpression, singleLine } from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**
@@ -32,7 +32,7 @@ export type LlmMessage = z.infer<typeof llmMessageSchema>;
  * the node form can recognise it by IDENTITY and give it rows (#852 item 3).
  * `history` is deliberately NOT this schema, though it validates the same shape
  * at dispatch: at save it must hold a whole-value `${}` expression, which a row
- * control cannot render.
+ * control cannot render. It is tagged `authoredAsExpression` instead (#864).
  */
 export const llmMessagesSchema = z.array(llmMessageSchema).min(1);
 
@@ -702,8 +702,10 @@ export const llmCallConfigSchema = z
     // this parse loud at dispatch — never sent to a provider as an inert literal.
     // NOT `llmMessagesSchema`, though the element matches: the node form gives
     // that schema rows by identity (#852), and a row control cannot hold the
-    // `${}` string this field must be at save.
-    history: z.array(llmMessageSchema).optional(),
+    // `${}` string this field must be at save. Tagged `authoredAsExpression`
+    // (#864 item 4), so the form offers one line of expression text with the
+    // reference flyout, and does not check that text against this array type.
+    history: authoredAsExpression(z.array(llmMessageSchema)).optional(),
     // L12 transcript opt-in — lowers an extra `{messages, json}` output row at
     // save (`catalog/lower.ts::lowerLlmEmitMessages`); the executor then augments
     // a successful text completion with the full author-visible transcript

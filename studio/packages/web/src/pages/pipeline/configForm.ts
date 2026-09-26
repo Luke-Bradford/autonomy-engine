@@ -3,6 +3,7 @@ import {
   SecretRefSchema,
   isAddressableOutputName,
   isOptionalProperty,
+  isAuthoredAsExpression,
   isSingleLine,
   llmMessagesSchema,
   llmOutputPropertyTypeSchema,
@@ -392,6 +393,13 @@ export interface ConfigField {
    * other kind.
    */
   readonly singleLine?: true;
+  /**
+   * A field whose schema is tagged `authoredAsExpression` (`shared/schemas/
+   * field-presentation.ts`, #864 item 4). It is authored as `${}` text, and its
+   * schema types only what that text resolves to, so it is a single-line `text`
+   * control and `schemaPrecheckCandidate` keeps its text away from the schema.
+   */
+  readonly authoredAsExpression?: true;
 }
 
 /**
@@ -479,6 +487,8 @@ interface Unwrapped {
   readonly defaultText?: string;
   /** Whether any layer, wrapper or inner, carries the `singleLine` tag. */
   readonly singleLine: boolean;
+  /** Whether any layer carries the `authoredAsExpression` tag. */
+  readonly authoredAsExpression: boolean;
 }
 
 /** Peel the wrappers off a field schema, recording whether the key may be absent. */
@@ -489,6 +499,7 @@ function unwrap(schema: unknown): Unwrapped {
   // Checked on EVERY layer: an `.optional()`/`.default()` wrapper is a new
   // schema that does not inherit its inner string's registry entry.
   let singleLine = isSingleLine(inner);
+  let authoredAsExpression = isAuthoredAsExpression(inner);
 
   // Bounded: each step consumes one wrapper, and a schema nests finitely many.
   for (let depth = 0; depth < 16; depth += 1) {
@@ -505,9 +516,10 @@ function unwrap(schema: unknown): Unwrapped {
     if (def?.innerType === undefined) break;
     inner = def.innerType;
     singleLine ||= isSingleLine(inner);
+    authoredAsExpression ||= isAuthoredAsExpression(inner);
   }
 
-  return { inner, optional, defaultText, singleLine };
+  return { inner, optional, defaultText, singleLine, authoredAsExpression };
 }
 
 /**
@@ -523,12 +535,13 @@ function unwrap(schema: unknown): Unwrapped {
  * field name (`messages`, below); it is not the start of a per-activity list, and
  * a second one should be argued as hard as the first was.
  *
- * It is also what keeps `llm_call.history` off this control, correctly. It is
- * typed `z.array(...)` but `validateDoc` refuses any non-string value — "history
- * must be a whole-value ${...} expression" (`engine/params.ts`) — so in every
- * valid doc it holds a STRING. Classified as a row list it would be
- * unrenderable, and ONE unrenderable field puts the whole node in the JSON
- * editor: this ticket's own defect, on the most-used activity in the catalog.
+ * It also kept `llm_call.history` off this control, correctly. That field is
+ * typed `z.array(...)`, but `validateDoc` refuses any non-string value ("history
+ * must be a whole-value ${...} expression", `engine/params.ts`). So every valid
+ * doc holds a STRING there, and as a row list it would be unrenderable. One
+ * unrenderable field puts the whole node in the JSON editor. Since #864 the
+ * field no longer reaches this function at all: its schema is tagged
+ * `authoredAsExpression`, and `deriveConfigFields` gives it expression text.
  *
  * `messages` shares that open element but NOT that rule, so it is admitted by
  * IDENTITY with `llmMessagesSchema` (`waivedByIdentity`), the same way `SecretRefSchema`
@@ -659,7 +672,19 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
   if (typeof shape !== 'object' || shape === null) return null;
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
-    const { inner, optional, defaultText, singleLine } = unwrap(fieldSchema);
+    const { inner, optional, defaultText, singleLine, authoredAsExpression } = unwrap(fieldSchema);
+    // Never classified: the schema describes the RESOLVED value, and the
+    // control has to take the `${}` text that resolves to it.
+    if (authoredAsExpression) {
+      return {
+        name,
+        kind: 'text' as const,
+        optional,
+        ...(defaultText !== undefined && { defaultText }),
+        singleLine: true as const,
+        authoredAsExpression: true as const,
+      };
+    }
     const { kind, enumOptions, elementFields, recordValue } = classify(inner, true);
     return {
       name,
@@ -1190,6 +1215,29 @@ export function readConfigDraft(
   // config to store and the subset to validate — there is no "keys the form does
   // not own" distinction to preserve, because no form was in the way.
   return { ok: true, config: parsed.config, owned: parsed.config };
+}
+
+/**
+ * `candidate` as the activity's `configSchema` should see it in the node panel's
+ * Apply pre-check (#864 item 4): without any `authoredAsExpression` field that
+ * holds a string.
+ *
+ * Such a field's schema types the value its `${}` text RESOLVES to, so checking
+ * the text against it refuses every value the save gate accepts. That is how
+ * `llm_call.history` ended up unauthorable from the panel, and an llm_call that
+ * already held a history could have no other setting applied either. The text
+ * is left to the save gate, which judges it. A NON-string value is still handed
+ * over, because the schema can judge that.
+ */
+export function schemaPrecheckCandidate(
+  candidate: Record<string, unknown>,
+  fields: readonly ConfigField[] | null,
+): Record<string, unknown> {
+  const out = { ...candidate };
+  for (const f of fields ?? []) {
+    if (f.authoredAsExpression && typeof out[f.name] === 'string') delete out[f.name];
+  }
+  return out;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes } from './support/canvasGraph';
-import { openSeededCanvas } from './support/seedDoc';
+import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
 
 /**
@@ -419,6 +419,69 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(p.getByRole('combobox', { name: 'messages row 2 role', exact: true })).toHaveValue(
       'assistant',
     );
+
+    await expectQuiet(page, problems);
+  });
+
+  // #864 item 4 — `history` is one whole `${}` reference to a turn array. Apply
+  // used to check that text against the dispatch schema (an array) and refuse
+  // it, so no conversation could be continued from the panel at all.
+  test('an llm_call history is picked as a reference and survives a save and reload', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const connectionId = await seedConnection(page, {
+      name: `e2e 864 history ${Date.now()}`,
+      kind: 'ollama',
+      config: {},
+    });
+    const id = await openSeededCanvas(page, 'u8a history reference', {
+      nodes: [
+        {
+          id: 'p',
+          type: 'llm_call',
+          position: { x: 0, y: 0 },
+          connectionId,
+          config: { prompt: 'Start.', emitMessages: true },
+        },
+        {
+          id: 'a',
+          type: 'llm_call',
+          position: { x: 320, y: 0 },
+          connectionId,
+          config: { prompt: 'Continue.' },
+        },
+      ],
+      edges: [{ id: 'e1', from: 'p', to: 'a', on: 'success' }],
+    });
+
+    await nodeById(page, 'a').click();
+    const p = panel(page);
+    const history = p.getByRole('textbox', { name: 'history (optional)', exact: true });
+    await expect(history).toHaveValue('');
+    // The prompt, a template, IS offered the producer's string `text`...
+    const promptPicker = p.getByRole('button', {
+      name: 'Insert reference into prompt',
+      exact: true,
+    });
+    await promptPicker.click();
+    await expect(p.getByRole('button', { name: / → text\b/ })).toBeVisible();
+    await promptPicker.click();
+    await p.getByRole('button', { name: 'Insert reference into history', exact: true }).click();
+    // ...and history is not: it is offered only the transcript, a turn array.
+    await expect(p.getByRole('button', { name: / → text\b/ })).toHaveCount(0);
+    await p.getByRole('button', { name: / → messages\b/ }).click();
+    await expect(history).toHaveValue('${nodes.p.output.messages}');
+    await p.getByRole('button', { name: 'Apply config', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect((await persistedConfig(page, id)).history).toBe('${nodes.p.output.messages}');
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await nodeById(page, 'a').click();
+    await expect(history).toHaveValue('${nodes.p.output.messages}');
 
     await expectQuiet(page, problems);
   });

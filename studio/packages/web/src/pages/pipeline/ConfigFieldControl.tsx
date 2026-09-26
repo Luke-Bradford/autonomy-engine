@@ -308,8 +308,11 @@ export function ConfigFieldControl({
             field takes is not valid JSON and the apply would simply fail. The
             QUOTED form would be right at a value slot and wrong inside an
             existing string literal — a distinction only a JSON-aware caret could
-            make. The four `llm_call` fields this most affects are getting richer
-            editors under #852.
+            make. No top-level activity field needs that caret any more: #852
+            gave `messages`/`tools`/`outputSchema` row editors, and `history`,
+            whose save gate wants one whole `${}`, is expression text
+            (`authoredAsExpression`, #864 item 4). A json CELL inside a row (a
+            tool's `parameters`, a property's `constraints`) still gets none.
           - `stringList` today is `switch.cases` and `llm_call.stop` — an earlier
             version of this comment said `cases` "and nothing else in today's
             catalog (the only `z.array(z.string())` in the registry)", which was

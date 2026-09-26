@@ -270,17 +270,43 @@ describe('ExpressionPicker in NodePanel', () => {
     expect(screen.getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeTruthy();
   });
 
-  it('withholds the control on a JSON field, which could not apply the insert', () => {
-    // A `json` control parses its text with `JSON.parse` on apply, so a bare
-    // `${...}` is not applicable there at all — offering the picker would be a
-    // dead end rather than an affordance.
-    // `history` is the JSON field: `outputSchema` became rows (#852 item 3).
-    const llm: Node = { id: 'llm', type: 'llm_call', config: {}, position: at };
-    mount([FETCH, llm], [{ id: 'e1', from: 'fetch', to: 'llm', on: 'success' }], [], 'llm');
-    expect(screen.getByRole('button', { name: 'Insert reference into system' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Insert reference into history/ })).toBeNull();
-    // The json field itself is still rendered — this is about the picker only.
-    expect(screen.getByRole('textbox', { name: /history/ })).toBeTruthy();
+  it('offers a history only a turn-array reference, and Apply stores it (#864 item 4)', () => {
+    // `history` is authored as one whole `${}`: the save gate refuses anything
+    // but a string, and its type half refuses a reference that is not an array.
+    // Apply used to check that text against the dispatch schema (an array) and
+    // refuse it, so no history could be authored here at all.
+    const src: Node = {
+      id: 'src',
+      type: 'http_request',
+      config: {
+        method: 'GET',
+        url: 'https://a.test',
+        outputs: [
+          { name: 'turns', type: 'json' },
+          { name: 'label', type: 'string' },
+        ],
+      },
+      position: at,
+    };
+    const llm: Node = {
+      id: 'llm',
+      type: 'llm_call',
+      config: { model: 'claude-opus-5', prompt: 'Continue.' },
+      position: at,
+    };
+    const ui = mount([src, llm], [{ id: 'e1', from: 'src', to: 'llm', on: 'success' }], [], 'llm');
+    fireEvent.change(ui.field('history (optional)'), { target: { value: 'stale' } });
+
+    ui.open('history');
+    expect(screen.queryByRole('button', { name: /HTTP Request 1 → label/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^runId/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → turns/ }));
+    // REPLACE, not a splice: `stale${…}` would be an interpolation the gate refuses.
+    expect(ui.field('history (optional)').value).toBe('${nodes.src.output.turns}');
+
+    ui.apply();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(ui.storedConfig()['history']).toBe('${nodes.src.output.turns}');
   });
 
   it('offers a header VALUE a reference, and never its key or a secret name (#852)', () => {
