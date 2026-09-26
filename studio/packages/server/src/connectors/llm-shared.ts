@@ -141,9 +141,10 @@ export function resolveModel(
  * The Claude 4.0 aliases carry a `-0` their dated ids do not:
  * `claude-opus-4-0` ⇄ `claude-opus-4-20250514` (likewise `claude-sonnet-4-0`).
  * So `claude-opus-4-20250514` reduces to `claude-opus-4` — neither the alias nor
- * an id any provider serves. Harmless TODAY, because both aliases are #729
- * known-gap non-members and a non-member normalising to a different non-member
- * changes nothing. It stops being harmless the moment #729 lands: an entry added
+ * an id any provider serves. Harmless, because both aliases are non-members
+ * (#729 closed them out as RETIRED models, see `anthropic-models.ts`) and a
+ * non-member normalising to a different non-member changes nothing. It would stop
+ * being harmless if either were ever added: an entry
  * for `claude-opus-4-0` would NOT be found for its own dated form, which is the
  * exact spelling-dependent divergence this helper exists to remove. **A set entry
  * for either 4.0 alias must therefore list both spellings.** Pinned by test so
