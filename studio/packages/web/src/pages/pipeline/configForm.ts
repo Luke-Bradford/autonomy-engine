@@ -144,6 +144,30 @@ export function rowsToRecord(
   return { ok: true, value: Object.fromEntries(entries) };
 }
 
+/**
+ * The config value a row field would hold with one cell replaced — the
+ * expression flyout's CANDIDATE for that cell (#1178). A row list is read by
+ * `parseRowCells`, keeping the cells that parse; a `keyValue` field stores a
+ * RECORD, so its candidate is one too, read leniently with the probed row
+ * always placed (`rowsToRecord`).
+ */
+export function placeRowCandidate(
+  field: ConfigField,
+  rows: readonly ObjectListRow[],
+  index: number,
+  cell: string,
+  value: string,
+): unknown {
+  const probed = rows.map((row, i) => (i === index ? { ...row, [cell]: value } : row));
+  if (field.kind === 'keyValue') {
+    // Lenient mode never refuses; the `ok` check only narrows the type.
+    const record = rowsToRecord(field, probed, { strict: false, keep: index });
+    return record.ok ? record.value : {};
+  }
+  const cells = field.elementFields ?? [];
+  return probed.map((row) => parseRowCells(cells, row).value);
+}
+
 /** One derived control: a config key, and how to author it. */
 export interface ConfigField {
   readonly name: string;

@@ -17,6 +17,7 @@ import {
   formatFieldValue,
   parseConfigText,
   parseFieldInput,
+  placeRowCandidate,
   readConfigDraft,
   unrepresentableFields,
   type ConfigDraft,
@@ -1041,6 +1042,36 @@ describe('keyValue (#852 item 2)', () => {
     expect(parsed).toEqual({ ok: true, omit: false, value: { Authorization: { $secret: 'tok' } } });
     const marker = (parsed as { value: Record<string, unknown> }).value.Authorization;
     expect(SecretRefSchema.safeParse(marker).success).toBe(true);
+  });
+
+  it('places the probed row in a flyout candidate even while it has no key, or a taken one', () => {
+    // Dropping the probed row would hand the validator a candidate WITHOUT the
+    // cell under test — nothing to refuse, so every reference would be offered.
+    expect(
+      placeRowCandidate(headers, [{ key: 'X-A', value: '1' }, { key: '' }], 1, 'value', '${x}'),
+    ).toEqual({ 'X-A': '1', '': '${x}' });
+    // A draft row with no key that is NOT being probed is left out.
+    expect(
+      placeRowCandidate(headers, [{ key: '', value: 'draft' }, { key: 'X-B' }], 1, 'value', 'v'),
+    ).toEqual({ 'X-B': 'v' });
+    // The probed row wins a duplicate key, wherever it sits.
+    expect(
+      placeRowCandidate(
+        headers,
+        [
+          { key: 'X-A', value: '1' },
+          { key: 'X-A', value: '2' },
+        ],
+        1,
+        'value',
+        '${x}',
+      ),
+    ).toEqual({ 'X-A': '${x}' });
+    // A row list's candidate is still its parsed rows.
+    const rows = field(fieldsOf('copy'), 'mapping');
+    expect(placeRowCandidate(rows, [{}], 0, 'expression', '${x}')).toEqual([
+      { sink: '', expression: '${x}' },
+    ]);
   });
 
   it('keeps a __proto__ key an own key rather than setting the prototype', () => {

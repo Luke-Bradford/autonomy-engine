@@ -1,5 +1,5 @@
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
-import { emptyControlValue, isRowKind, isRowList, parseRowCells, rowsToRecord } from './configForm';
+import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
@@ -271,8 +271,9 @@ export function ConfigFieldControl({
           and Chromium leaves `activeElement` on BODY. An earlier version of this
           comment claimed otherwise — right decision, wrong reason.)
 
-          Offered on `text` fields ONLY, and the two exclusions are refusals
-          rather than oversights:
+          Offered on `text` fields ONLY, never on a `literal` cell (a record
+          key or a secret name, see `ConfigField.literal`), and the two kind
+          exclusions are refusals rather than oversights:
 
           - `json` parses its text with `JSON.parse` on apply
             (`configForm.parseFieldInput`), so the bare `${...}` every other
@@ -377,7 +378,14 @@ export function ConfigFieldControl({
  * apply uses (keeping the cells that parse — see `cellTarget`). Which cells actually receive offers is the
  * validator's answer, not this control's — `source` and `sink` are held to a
  * literal by §8, so their lists come back empty and say so, and `expression` on
- * a row that already reads a `source` is refused by the XOR. No cell-name table.
+ * a row that already reads a `source` is refused by the XOR. No cell-name table:
+ * the one exception is a cell the DERIVATION marks `literal` (a `keyValue`
+ * row's key, or its secret name), which the validator cannot judge because it
+ * never scans a record key.
+ *
+ * A `keyValue` field (#852 item 2) is rendered here too, as rows of key and
+ * value: the same card, add and remove, read back as a record rather than a
+ * list (`rowsToRecord`).
  *
  * Nothing offered is a per-ROW value, and nothing here may suggest one: §8 puts
  * substitution in the reducer, so a mapping's `expression` is one constant per
@@ -419,25 +427,10 @@ export function ObjectListControl({
   // values would not do: a raw row is DENSE, every cell present as `''`, and the
   // XOR rule reads `source !== undefined` as "set".
   const cellTarget = (index: number, cell: string): PickerTarget => ({
-    place: (node, value) => {
-      const probed = rows.map((row, i) => (i === index ? { ...row, [cell]: value } : row));
-      // A `keyValue` field stores a RECORD, so its candidate is one too, read
-      // leniently with the probed row always placed (`rowsToRecord`).
-      const record =
-        field.kind === 'keyValue'
-          ? rowsToRecord(field, probed, { strict: false, keep: index })
-          : null;
-      return {
-        ...node,
-        config: {
-          ...node.config,
-          [field.name]:
-            record?.ok === true
-              ? record.value
-              : probed.map((row) => parseRowCells(cells, row).value),
-        },
-      };
-    },
+    place: (node, value) => ({
+      ...node,
+      config: { ...node.config, [field.name]: placeRowCandidate(field, rows, index, cell, value) },
+    }),
     baseline: 'probed',
   });
 
@@ -445,6 +438,11 @@ export function ObjectListControl({
     <div className="config-field object-list" role="group" aria-label={label}>
       <span className="object-list-label">{label}</span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
+      {field.recordValue === 'secret' ? (
+        <p className="page-hint">
+          Each row names a secret from the Secrets page. Never type the secret&apos;s value here.
+        </p>
+      ) : null}
       {rows.map((row, index) => (
         <div className="contract-row" key={index}>
           {cells.map((cell) => {

@@ -229,4 +229,63 @@ test.describe('U7 — per-activity node config form', () => {
 
     await expectQuiet(page, problems);
   });
+
+  // #852 item 2 — a record of headers is authored as ROWS, and a secret header
+  // as a secret NAME that saves as the strict `{"$secret": name}` marker.
+  test('headers and secret headers are rows that survive a save and reload', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u7 header rows', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: { url: 'https://example.test', headers: { 'X-Keep': '1' } },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    const p = panel(page);
+    // No JSON blob for either record: a row group per field.
+    await expect(p.getByRole('group', { name: 'headers (optional)' })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'secretHeaders (optional)' })).toBeVisible();
+    await expect(p.getByRole('textbox', { name: 'headers row 1 key' })).toHaveValue('X-Keep');
+
+    await p.getByRole('button', { name: 'Add headers row' }).click();
+    await p.getByRole('textbox', { name: 'headers row 2 key' }).fill('X-Trace');
+    await p.getByRole('textbox', { name: 'headers row 2 value' }).fill('${run.runId}');
+    await p.getByRole('button', { name: 'Add secretHeaders row' }).click();
+    await p.getByRole('textbox', { name: 'secretHeaders row 1 key' }).fill('Authorization');
+    await p.getByRole('textbox', { name: 'secretHeaders row 1 secret name' }).fill('api-token');
+    // The value cell takes a reference; the key and secret-name cells do not.
+    await expect(
+      p.getByRole('button', { name: 'Insert reference into headers row 2 value' }),
+    ).toBeVisible();
+    await expect(
+      p.getByRole('button', { name: 'Insert reference into secretHeaders row 1 secret name' }),
+    ).toHaveCount(0);
+    await p.getByRole('button', { name: 'Apply config' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    expect(await persistedConfig(page, id)).toEqual({
+      url: 'https://example.test',
+      headers: { 'X-Keep': '1', 'X-Trace': '${run.runId}' },
+      secretHeaders: { Authorization: { $secret: 'api-token' } },
+    });
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await canvasNodes(page).first().click();
+    await expect(p.getByRole('textbox', { name: 'headers row 2 value' })).toHaveValue(
+      '${run.runId}',
+    );
+    await expect(p.getByRole('textbox', { name: 'secretHeaders row 1 secret name' })).toHaveValue(
+      'api-token',
+    );
+
+    await expectQuiet(page, problems);
+  });
 });

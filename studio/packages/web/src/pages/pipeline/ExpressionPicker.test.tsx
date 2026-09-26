@@ -286,19 +286,7 @@ describe('ExpressionPicker in NodePanel', () => {
     // A record key is copied verbatim by `substitute` and never scanned, so the
     // validator would wave every reference through on it — the false offer.
     // A secret name may not hold `${}` at all.
-    // `later` runs AFTER `call`, so a reference to it is refused in `call`.
-    const later: Node = {
-      id: 'later',
-      type: 'http_request',
-      config: { url: 'https://c.test', outputs: [{ name: 'body', type: 'string' }] },
-      position: at,
-    };
-    const ui = mount(
-      [FETCH, CALL, later],
-      [...CHAIN, { id: 'e2', from: 'call', to: 'later', on: 'success' }],
-      [],
-      'call',
-    );
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
     fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
     expect(
@@ -313,11 +301,9 @@ describe('ExpressionPicker in NodePanel', () => {
       expect(screen.queryByRole('button', { name: `Insert reference into ${cell}` })).toBeNull();
     }
 
-    // The offer is the validator's answer for the probed row even while it has
-    // no key: were a keyless row dropped from the candidate, the validator would
-    // see nothing to refuse and offer `later` too.
+    // Picked while the row has no key yet: the candidate still carries the
+    // probed row (`placeRowCandidate`, unit-tested), so the value lands.
     ui.open('headers row 1 value');
-    expect(screen.queryByRole('button', { name: /HTTP Request 3 → body/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     fireEvent.change(ui.field('headers row 1 key'), { target: { value: 'X-Body' } });
     fireEvent.change(ui.field('secretHeaders row 1 key'), { target: { value: 'Authorization' } });
