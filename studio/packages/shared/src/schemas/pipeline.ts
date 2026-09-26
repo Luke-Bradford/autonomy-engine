@@ -36,6 +36,13 @@ export const ParamSchema = z.object({
    *
    * A default that `coerce` would REJECT is a different matter and IS refused
    * at write (`paramDefaultDefect`, #843) — that run is guaranteed to fail.
+   *
+   * A default is a LITERAL, decided in #844: nothing substitutes it, so a
+   * `${...}` inside one reaches the run as text (and `$${` is not unescaped
+   * either). Interpolating defaults would need a pre-run evaluation phase with
+   * its own scope and ordering (a default reading another param), and a computed
+   * value already has two channels: a trigger binding and a run override. The
+   * params editor notes a `${` in a default rather than refusing it.
    */
   default: z.unknown().optional(),
   description: z.string().optional(),
@@ -102,6 +109,13 @@ const NODE_OUTPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * "declarable" and "referenceable" the same set at BOTH producers, from one
  * predicate (the SSOT reason `refuseDuplicateNames` was extracted for #458). The
  * regex itself stays unexported so the rule has exactly one spelling.
+ *
+ * A third consumer reads it ADVISORILY, for pipeline PARAM names (#844):
+ * `availableRefs` never offers a `${params.<name>}` that fails it, and the params
+ * editor notes such a name on its row. Params are NOT refused at write for it —
+ * some non-identifiers resolve (`${params.my name}` does), and stored versions
+ * may hold them — so for params this is the set the picker can offer safely,
+ * not the set the save gate accepts.
  */
 export function isAddressableOutputName(name: string): boolean {
   return NODE_OUTPUT_NAME_RE.test(name);

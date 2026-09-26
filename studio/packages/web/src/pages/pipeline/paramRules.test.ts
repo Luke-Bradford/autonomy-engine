@@ -6,6 +6,8 @@ import {
   coerceDefaultInput,
   formatDefaultInput,
   nameIssues,
+  paramDefaultNote,
+  paramNameNote,
   withRequired,
 } from './paramRules';
 
@@ -170,6 +172,24 @@ describe('formatDefaultInput — round-trips a stored default back into the fiel
     expect(formatDefaultInput({ a: 1 })).toBe('{"a":1}');
   });
 
+  // #844 — a json param's string default used to show UNQUOTED, so a string
+  // carried over from a `string` param (`'{"a":1}'`) looked like an object on
+  // screen while a run received text, and editing `hello` failed JSON parsing.
+  it("shows a json param's STRING default json-quoted, so it reads as the string it is", () => {
+    expect(formatDefaultInput('{"a":1}', 'json')).toBe('"{\\"a\\":1}"');
+    expect(formatDefaultInput('hello', 'json')).toBe('"hello"');
+    expect(coerceDefaultInput('json', formatDefaultInput('hello', 'json'))).toEqual({
+      ok: true,
+      has: true,
+      value: 'hello',
+    });
+  });
+
+  it('leaves a string default unquoted for every non-json type', () => {
+    expect(formatDefaultInput('hi', 'string')).toBe('hi');
+    expect(formatDefaultInput('label', 'secret')).toBe('label');
+  });
+
   it('round-trips every type through coerce → format unchanged', () => {
     expect(coerceDefaultInput('number', formatDefaultInput(42))).toEqual({
       ok: true,
@@ -203,5 +223,67 @@ describe('withRequired — the toggle means what it says', () => {
     const p = param({ required: false, default: 'x' });
     withRequired(p, true);
     expect(p.default).toBe('x');
+  });
+});
+
+describe('paramNameNote / paramDefaultNote — non-gating notes on a row (#844)', () => {
+  it('say nothing about an ordinary param', () => {
+    const p = param({ name: 'topic_1', default: 'news' });
+    expect(paramNameNote(p)).toBeNull();
+    expect(paramDefaultNote(p)).toBeNull();
+  });
+
+  it('note a name that is not a plain identifier', () => {
+    for (const name of ['a.b', 'my name', 'a-b', '1x']) {
+      const note = paramNameNote(param({ name }));
+      expect(note).toContain(`'${name}'`);
+      expect(note).toContain('Insert reference');
+    }
+  });
+
+  it('say a name is UNREACHABLE only when it holds a character the grammar splits on', () => {
+    // `${params.my name}` and `${params.a-b}` resolve — measured — so claiming
+    // otherwise would be a false note.
+    for (const name of ['my name', 'a-b', '1x']) {
+      expect(paramNameNote(param({ name }))).not.toContain('can reach it');
+    }
+    for (const name of ['a.b', 'a[0]', 'a]', 'x}', "it's", 'say"hi']) {
+      expect(paramNameNote(param({ name }))).toContain('no ${params.…} reference can reach it');
+    }
+  });
+
+  it('leave a blank name to the save gate, which already reports it', () => {
+    expect(paramNameNote(param({ name: '' }))).toBeNull();
+    expect(paramNameNote(param({ name: '   ' }))).toBeNull();
+  });
+
+  it('note a ${} in a default, which is delivered as written and never evaluated', () => {
+    expect(paramDefaultNote(param({ default: 'run-${run.runId}' }))).toContain('not evaluated');
+  });
+
+  it('find a ${} nested inside a json default, arrays included', () => {
+    const p = param({ type: 'json', default: { a: [1, { b: 'x ${params.y}' }] } });
+    expect(paramDefaultNote(p)).toContain('not evaluated');
+    expect(paramDefaultNote(param({ type: 'json', default: [['${x}']] }))).not.toBeNull();
+  });
+
+  it('survive a json default nested far past the call-stack depth', () => {
+    let deep: unknown = '${x}';
+    for (let i = 0; i < 20_000; i += 1) deep = [deep];
+    expect(paramDefaultNote(param({ type: 'json', default: deep }))).not.toBeNull();
+  });
+
+  it('survive a json default far WIDER than a call can take as spread arguments', () => {
+    const wide = [...Array.from({ length: 500_000 }, () => 'x'), '${x}'];
+    expect(paramDefaultNote(param({ type: 'json', default: wide }))).not.toBeNull();
+  });
+
+  it('note an escaped $${ too, because a default never unescapes it either', () => {
+    expect(paramDefaultNote(param({ default: 'cost $${x}' }))).not.toBeNull();
+  });
+
+  it('do not note a lone $ or a { that is not a reference opener', () => {
+    expect(paramDefaultNote(param({ default: '$5 {x}' }))).toBeNull();
+    expect(paramDefaultNote(param({ type: 'json', default: { k: '$ {' } }))).toBeNull();
   });
 });
