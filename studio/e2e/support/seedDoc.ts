@@ -57,6 +57,10 @@ export interface SeedNode {
    * engine, which is why nothing exercised the dispatch path end to end.
    */
   connectionIds?: { source: string; sink: string };
+  /** Per-dispatch overrides of the connection's declared `parameters` (#2 L13b),
+   * a node FIELD like `connectionId` — #890's spec needs one to show the
+   * parameters a dispatch applied. Passed through as authored. */
+  connectionParams?: Record<string, unknown>;
   /** The node's run policy (`schemas/pipeline.ts`) — e.g. `secureInput`, which
    * #890's spec needs to show a withheld input. Passed through as authored. */
   policy?: Record<string, unknown>;

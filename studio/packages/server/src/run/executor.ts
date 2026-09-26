@@ -5,6 +5,7 @@ import {
   AGENT_CLI_CONNECTION_KIND,
   catalog as sharedCatalog,
   captureDispatchInput,
+  captureDispatchParams,
   collectSecretSinkMarkers,
   computeCostEstimate,
   firstParamOverrideViolation,
@@ -215,7 +216,9 @@ function callDetached(
  * NAMES the data, never what unlocks it), and the same path is already embedded
  * in the `DATASET_SELF_COPY` refusal message below. A store whose address ever
  * needed a credential in it would be a schema change, and this is where it
- * would have to be answered. Deep for structured values,
+ * would have to be answered. (`input` and `params`, the node's own config and
+ * parameters, are scrubbed where they are captured, before `node.dispatched` is
+ * built, against the connection secret as well.) Deep for structured values,
  * string for the leaf/message; both reuse the connector redaction helpers.
  * (`node.output` is inert in the reducer — pure observability — so scrubbing its
  * `name` cannot change run semantics; it only keeps a plaintext out of the log.)
@@ -1387,6 +1390,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // stamped on `node.dispatched` so the run log can answer "where did this
     // data go" from itself (§2.1). `undefined` in lockstep with `datasets`.
     let datasetAddresses: { source: DatasetAddress; sink?: DatasetAddress } | undefined;
+    // #890 — the connection parameters this dispatch APPLIES: the overrides
+    // `resolveConnection` merges over the stored config (not the merged result).
+    // `node.dispatched.params` records them from this one binding, so the record
+    // and the merge cannot be handed different values.
+    let appliedConnectionParams: Record<string, unknown> | undefined;
     if (entry.connectionKinds.length > 0) {
       // M1 — a PAIRED activity is one the CATALOG declares a sink for. Read from
       // the catalog, never inferred from the node: a stray `connectionIds` on a
@@ -1396,6 +1404,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // connection-less activity).
       const sinkKinds = entry.sinkConnectionKinds;
       const paired = sinkKinds !== undefined;
+      // A paired node carries no `connectionParams` — `validateDoc` refuses the
+      // combination (they name no side). Dropped explicitly rather than relying
+      // on that, so a doc predating the rule cannot bind them to a guessed end.
+      appliedConnectionParams = paired ? undefined : command.resolvedConnectionParams;
       // Source first, and its failure SHORT-CIRCUITS: a node with both ends
       // misconfigured reports the source only. Deliberate — the alternative is
       // resolving (and decrypting) a sink for a dispatch that cannot happen.
@@ -1404,10 +1416,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         entry.connectionKinds,
         node.type,
         ownerId,
-        // A paired node carries no `connectionParams` — `validateDoc` refuses the
-        // combination (they name no side). Passed explicitly rather than relying
-        // on that, so a doc predating the rule cannot bind them to a guessed end.
-        paired ? undefined : command.resolvedConnectionParams,
+        appliedConnectionParams,
       );
       if ('error' in resolved) {
         yield preflightFailure(
@@ -1699,19 +1708,29 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const inputPlaintexts = [secret, ...Object.values(secretFields), sinkSecret].filter(
       (p): p is string => typeof p === 'string',
     );
-    const input =
+    // The applied PARAMETERS go the same way, recorded beside it: a free-form
+    // setting (`agent_cli` `args`, an `http` header) can be bound to upstream
+    // text, so on an `llm_call` they could carry the prompt too. Dataset ends
+    // are read off `datasets`, which holds an end only if it resolved — a
+    // source-only activity's inert sink parameters were never applied.
+    const scrub = <T>(value: T): T =>
+      inputPlaintexts.length > 0 ? (deepRedactSecrets(value, inputPlaintexts) as T) : value;
+    const withheldFromLlm =
       node.type === LLM_CALL_ACTIVITY_TYPE &&
-      command.preparedInput['capture'] !== llmCaptureModeSchema.enum.full
-        ? undefined
-        : captureDispatchInput(
-            inputPlaintexts.length > 0
-              ? // `walk` rebuilds an object as an object, so the record stays one.
-                (deepRedactSecrets(command.preparedInput, inputPlaintexts) as Record<
-                  string,
-                  unknown
-                >)
-              : command.preparedInput,
-          );
+      command.preparedInput['capture'] !== llmCaptureModeSchema.enum.full;
+    // `walk` rebuilds an object as an object, so each record stays one.
+    const input = withheldFromLlm ? undefined : captureDispatchInput(scrub(command.preparedInput));
+    const params = withheldFromLlm
+      ? undefined
+      : captureDispatchParams(
+          scrub({
+            connectionParams: appliedConnectionParams,
+            datasetParams: {
+              source: datasets !== undefined ? command.resolvedDatasetParams?.source : undefined,
+              sink: datasets?.sink !== undefined ? command.resolvedDatasetParams?.sink : undefined,
+            },
+          }),
+        );
 
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
     // CX2 (#1320) — cancelled during the pre-flight: the attempt never started,
@@ -1732,6 +1751,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // this build wrote before the field existed.
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
       ...(input !== undefined ? { input } : {}),
+      ...(params !== undefined ? { params } : {}),
     };
 
     const ctx: ActivityContext = {

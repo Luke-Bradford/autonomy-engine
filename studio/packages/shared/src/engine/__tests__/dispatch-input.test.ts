@@ -3,7 +3,11 @@
  * node was dispatched with, as `node.dispatched.input` stores it.
  */
 import { describe, expect, it } from 'vitest';
-import { DISPATCH_INPUT_MAX_CHARS, captureDispatchInput } from '../dispatch-input.js';
+import {
+  DISPATCH_INPUT_MAX_CHARS,
+  captureDispatchInput,
+  captureDispatchParams,
+} from '../dispatch-input.js';
 
 describe('#890 captureDispatchInput', () => {
   it('stores compact JSON and its full length, with no truncated flag', () => {
@@ -50,5 +54,45 @@ describe('#890 captureDispatchInput', () => {
     expect(
       captureDispatchInput({ path: '/d', outputs: [{ name: 'entries', type: 'json' }] }),
     ).toEqual({ text: '{"path":"/d"}', chars: 13 });
+  });
+});
+
+describe('#890 captureDispatchParams', () => {
+  it('records the connection and dataset parameters under the doc field names', () => {
+    const got = captureDispatchParams({
+      connectionParams: { model: 'm-2' },
+      datasetParams: { source: { path: 'in.csv' }, sink: { path: 'out.csv' } },
+    });
+    const text =
+      '{"connectionParams":{"model":"m-2"},"datasetParams":{"source":{"path":"in.csv"},"sink":{"path":"out.csv"}}}';
+    expect(got).toEqual({ text, chars: text.length });
+  });
+
+  it('omits an absent or empty part, and an end with no parameters', () => {
+    expect(
+      captureDispatchParams({ connectionParams: {}, datasetParams: { source: { path: 'a' } } }),
+    ).toEqual({ text: '{"datasetParams":{"source":{"path":"a"}}}', chars: 41 });
+    expect(
+      captureDispatchParams({ datasetParams: { source: {}, sink: { path: 'b' } } })?.text,
+    ).toBe('{"datasetParams":{"sink":{"path":"b"}}}');
+  });
+
+  it('is absent when nothing was bound: no invented empty record', () => {
+    expect(captureDispatchParams({})).toBeUndefined();
+    expect(captureDispatchParams({ connectionParams: {} })).toBeUndefined();
+    expect(captureDispatchParams({ datasetParams: { source: {}, sink: {} } })).toBeUndefined();
+  });
+
+  it('is bounded like the input: cut at the cap, flagged, with the whole length', () => {
+    const got = captureDispatchParams({
+      connectionParams: { s: 'a'.repeat(DISPATCH_INPUT_MAX_CHARS) },
+    });
+    expect(got?.text.length).toBe(DISPATCH_INPUT_MAX_CHARS);
+    expect(got?.truncated).toBe(true);
+    expect(got?.chars).toBe(DISPATCH_INPUT_MAX_CHARS + 29);
+  });
+
+  it('is absent when JSON cannot represent a value', () => {
+    expect(captureDispatchParams({ connectionParams: { n: 1n } })).toBeUndefined();
   });
 });

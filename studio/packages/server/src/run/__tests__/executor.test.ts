@@ -2360,6 +2360,65 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     ]);
   });
 
+  it('#890 records the dataset parameters each end APPLIED, on node.dispatched.params', async () => {
+    const { db, run } = await seedParamCopy({
+      source: { path: 'in/2026-09-25.csv' },
+      sink: { path: 'out/2026-09-25.csv' },
+    });
+    await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    const [dispatched] = dispatchesOf(db, run.id);
+    expect(JSON.parse(dispatched!.params!.text)).toEqual({
+      datasetParams: {
+        source: { path: 'in/2026-09-25.csv' },
+        sink: { path: 'out/2026-09-25.csv' },
+      },
+    });
+  });
+
+  it('#890 records no SINK parameters for a source-only activity whose stray sink carries some', async () => {
+    // The catalog declares no sink, so the executor never resolves the node's
+    // (inert) sink dataset and applies nothing there. The record says what was applied.
+    const db = freshDb().db;
+    const conn = await seedConnection(db, 'http', { store: 'S' }, null);
+    const sourceDs = seedDataset(db, conn, {
+      kind: 'delimited',
+      config: { path: 'in.csv', header: true },
+      parameters: ['path'],
+    });
+    const pvId = seedVersion(db, [
+      {
+        ...pairedNode('test_copy', conn, conn, { source: sourceDs, sink: 'ds_ignored' }),
+        datasetParams: { source: { path: 'a.csv' }, sink: { path: 'never-applied.csv' } },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+    const state = await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: datasetCatalog({
+          sinkConnectionKinds: ['http'],
+          datasetKinds: { source: ['delimited'] },
+        }),
+      }),
+      run,
+    );
+    expect(state.status).toBe('success');
+    const [dispatched] = dispatchesOf(db, run.id);
+    expect(JSON.parse(dispatched!.params!.text)).toEqual({
+      datasetParams: { source: { path: 'a.csv' } },
+    });
+  });
+
   it('#1144 REFUSES a key the dataset does not declare, labelled with its end', async () => {
     const { db, run } = await seedParamCopy({ sink: { header: false } });
     const state = await startRun(
@@ -4772,6 +4831,13 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     if (ev?.type !== 'node.dispatched') throw new Error('no node.dispatched');
     return ev.input;
   };
+  const dispatchedParams = (db: Db, runId: string, nodeId = 'n1') => {
+    const ev = loadEngineEvents(db, runId).find(
+      (e) => e.type === 'node.dispatched' && e.nodeId === nodeId,
+    );
+    if (ev?.type !== 'node.dispatched') throw new Error('no node.dispatched');
+    return ev.params;
+  };
   const succeeds = () =>
     fakeHttpAdapter(async function* () {
       yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
@@ -4798,6 +4864,114 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     expect(JSON.parse(input!.text)).toMatchObject({ url: 'https://x/alice' });
     expect(input!.chars).toBe(input!.text.length);
     expect(input).not.toHaveProperty('truncated');
+  });
+
+  it('records NO parameters for a node that bound none — absent, not an empty record', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [
+      { ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }), connectionParams: {} },
+    ]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    expect(dispatchedInput(db, run.id)).toBeDefined();
+    expect(dispatchedParams(db, run.id)).toBeUndefined();
+  });
+
+  it('records the connection parameters the dispatch APPLIED, after ${} substitution', async () => {
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: { baseUrl: 'https://static.example' },
+      parameters: ['baseUrl'],
+      secretRef: null,
+    }).id;
+    const pvId = seedVersion(
+      db,
+      [
+        {
+          ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }),
+          connectionParams: { baseUrl: 'https://${params.host}' },
+        },
+      ],
+      [{ name: 'host', type: 'string', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { host: 'eu.example' },
+    });
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const params = dispatchedParams(db, run.id)!;
+    expect(JSON.parse(params.text)).toEqual({
+      connectionParams: { baseUrl: 'https://eu.example' },
+    });
+    expect(params.chars).toBe(params.text.length);
+    // The config record stays the config: parameters are not folded into it.
+    expect(JSON.parse(dispatchedInput(db, run.id)!.text)).not.toHaveProperty('connectionParams');
+  });
+
+  it("scrubs the connection's own secret out of a PARAMETER value too", async () => {
+    const plain = 'sk-live-param-secret';
+    const db = freshDb().db;
+    const ref = `ref-${(seq += 1)}`;
+    createSecret(db, { ref, ciphertext: await encrypt(plain, KEY) });
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['headers'],
+      secretRef: ref,
+    }).id;
+    const pvId = seedVersion(db, [
+      {
+        ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }),
+        connectionParams: { headers: { 'X-Pasted': plain } },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const params = dispatchedParams(db, run.id)!;
+    expect(params.text).not.toContain(plain);
+    expect(JSON.parse(params.text)).toEqual({
+      connectionParams: { headers: { 'X-Pasted': '***' } },
+    });
+  });
+
+  it("stores a secure node's parameters only as the marker in run_events", async () => {
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['baseUrl'],
+      secretRef: null,
+    }).id;
+    const n = {
+      ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }),
+      connectionParams: { baseUrl: 'https://private-host.example' },
+    };
+    const pvId = seedVersion(db, [{ ...n, policy: { secureOutput: true } }]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const raw = db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(eq(runEvents.runId, run.id))
+      .all()
+      .map((r) => JSON.stringify(r.payload))
+      .join('\n');
+    expect(raw).not.toContain('private-host');
+    expect(dispatchedParams(db, run.id)).toEqual({
+      text: SECURE_REDACTED,
+      chars: expect.any(Number),
+    });
   });
 
   it("scrubs the connection's own secret out of a plain field, as a VALUE (escaped plaintext too)", async () => {
@@ -4837,14 +5011,26 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     });
   });
 
-  it("records an llm_call's input only under capture: 'full' (#605's default promises no prompt text)", async () => {
+  it("records an llm_call's input and parameters only under capture: 'full' (#605's default promises no prompt text)", async () => {
+    // Parameters too: a free-form connection setting (`agent_cli` `args`, an
+    // `http` header) can be bound to upstream text, so they could carry a prompt.
     const db = freshDb().db;
-    const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-test');
+    const ref = `ref-${(seq += 1)}`;
+    createSecret(db, { ref, ciphertext: await encrypt('sk-test', KEY) });
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'A',
+      kind: 'anthropic_api',
+      config: {},
+      parameters: ['model'],
+      secretRef: ref,
+    }).id;
     const llm = (id: string, config: Record<string, unknown>): Node => ({
       id,
       type: 'llm_call',
       config,
       connectionId: connId,
+      connectionParams: { model: 'claude-shared-model' },
       position: { x: (seq += 1), y: 0 },
     });
     const pvId = seedVersion(db, [
@@ -4867,6 +5053,10 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     expect(dispatchedInput(db, run.id, 'meta')).toBeUndefined();
     expect(JSON.parse(dispatchedInput(db, run.id, 'full')!.text)).toMatchObject({
       prompt: 'the shared prompt',
+    });
+    expect(dispatchedParams(db, run.id, 'meta')).toBeUndefined();
+    expect(JSON.parse(dispatchedParams(db, run.id, 'full')!.text)).toEqual({
+      connectionParams: { model: 'claude-shared-model' },
     });
   });
 });

@@ -288,9 +288,9 @@ export const NodePolicySchema = z.object({
   retryIntervalSeconds: z.number().int().min(30).max(MAX_RETRY_INTERVAL_SECONDS).optional(),
   /**
    * #1 F4 (D8) — this node's resolved input must never be persisted. This
-   * withholds the input's own record, `node.dispatched.input` (#890, which
-   * `secureOutput` withholds too), and the places input ECHOES into the log: an
-   * adapter's failure text and warning reason. Refused at save where the input
+   * withholds the input's own records, `node.dispatched.input` and `.params`
+   * (#890, which `secureOutput` withholds too), and the places input ECHOES
+   * into the log: an adapter's failure text and warning reason. Refused at save where the input
    * IS durable (a `call_pipeline`'s child params) or is echoed by an output (an
    * llm transcript without `secureOutput`) — see `validateDoc`.
    */

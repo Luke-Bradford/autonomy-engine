@@ -153,10 +153,19 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
       // #890 — EITHER flag, as for `activity.captured`: a node's outputs, errors
       // and transcript routinely echo its input, so withholding the input on
       // `secureInput` alone would still leave it readable on a `secureOutput`
-      // node through the other half. `chars` stays, as it does there.
-      return event.input !== undefined
-        ? { ...event, input: { text: SECURE_REDACTED, chars: event.input.chars } }
-        : event;
+      // node through the other half. `chars` stays, as it does there. The
+      // resolved parameters (`params`) are input too, and go the same way.
+      return event.input === undefined && event.params === undefined
+        ? event
+        : {
+            ...event,
+            ...(event.input !== undefined
+              ? { input: { text: SECURE_REDACTED, chars: event.input.chars } }
+              : {}),
+            ...(event.params !== undefined
+              ? { params: { text: SECURE_REDACTED, chars: event.params.chars } }
+              : {}),
+          };
     case 'activity.agentTelemetry':
       return event.outputHash !== undefined ? { ...event, outputHash: SECURE_REDACTED } : event;
     case 'activity.toolCalled':

@@ -239,6 +239,7 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     attemptId: `${nodeId}#0`,
     idempotent: false,
     input: { text: '{"to":"alice@example.com","body":"hi"}', chars: 90, truncated: true },
+    params: { text: '{"connectionParams":{"model":"m"}}', chars: 70, truncated: true },
   });
 
   it("#890 withholds a secure node's recorded INPUT text, keeping its length", () => {
@@ -248,6 +249,21 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
       expect(got).toMatchObject({ input: { text: SECURE_REDACTED, chars: 90 } });
       expect(got.type === 'node.dispatched' && got.input?.truncated).toBeUndefined();
     }
+  });
+
+  it("#890 withholds a secure node's recorded PARAMETERS the same way, on either flag", () => {
+    const outOnly = node('o', { policy: { secureOutput: true } });
+    for (const n of [secret, outOnly]) {
+      const got = createEngine({ nodes: [n], edges: [], containers: [] }).redact(dispatched(n.id));
+      expect(got.type === 'node.dispatched' && got.params).toEqual({
+        text: SECURE_REDACTED,
+        chars: 70,
+      });
+    }
+    // Parameters alone (an llm_call under `metadata` records no input) are withheld too.
+    const paramsOnly = { ...dispatched(secret.id), input: undefined } as EngineEvent;
+    const got = createEngine({ nodes: [secret], edges: [], containers: [] }).redact(paramsOnly);
+    expect(got).toEqual({ ...paramsOnly, params: { text: SECURE_REDACTED, chars: 70 } });
   });
 
   it('#890 resolves a foreach instance id on node.dispatched too', () => {

@@ -1139,6 +1139,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * `capture` is not `full`. The reducer never reads it.
      */
     input: DispatchInputSchema.optional(),
+    /**
+     * #890 — the connection and dataset PARAMETERS this dispatch applied over
+     * the stored config (`captureDispatchParams`): what `input` cannot show,
+     * because it is the node's config only. The same contract as `input` in
+     * every respect — bounded, scrubbed, the marker on a secure node, withheld
+     * from an `llm_call` whose `capture` is not `full` — and absent when the
+     * node bound no parameters. The reducer never reads it.
+     */
+    params: DispatchInputSchema.optional(),
   }),
   z.object({
     type: z.literal('node.succeeded'),

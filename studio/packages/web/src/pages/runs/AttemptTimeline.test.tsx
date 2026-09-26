@@ -24,6 +24,7 @@ const node = (over: Partial<NodeActivity> & { nodeId: string }): NodeActivity =>
   failureCode: undefined,
   datasetAddresses: undefined,
   input: undefined,
+  params: undefined,
   inputInstanceId: undefined,
   outputValues: undefined,
   copiedFromRunId: undefined,
