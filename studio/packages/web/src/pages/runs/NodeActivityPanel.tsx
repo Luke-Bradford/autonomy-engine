@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useBusyAction } from '../../hooks/useBusyAction';
-import { describeDatasetAddress, surrogateSafeCut, TERMINAL_NODE } from '@autonomy-studio/shared';
-import type { DatasetAddress, RunStatus } from '@autonomy-studio/shared';
+import {
+  describeDatasetAddress,
+  SECURE_REDACTED,
+  surrogateSafeCut,
+  TERMINAL_NODE,
+} from '@autonomy-studio/shared';
+import type { DatasetAddress, DispatchInput, RunStatus } from '@autonomy-studio/shared';
 import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration, formatOutputValue } from './format';
@@ -48,10 +53,8 @@ import { CaptureSection } from './CaptureSection';
  *    parent page, which is where it lives, and there is still nothing a
  *    node-scoped rerun control could call.
  *
- * Deliberately NOT shown yet, each for a stated reason rather than an oversight:
- *  - the node's INPUT — no event captures the resolved config a node ran with,
- *    so there is nothing truthful to render (the authored template is in the
- *    doc, but that is the un-substituted text, not what executed) — #890;
+ * Every drill-in item the U24 row names is now shown. The ones this list once
+ * deferred, each for a stated reason, have since shipped:
  *
  * COST and TOOL CALLS were on that list and no longer are: #866 shipped both.
  * Neither needed new data — `activity.metered` already carried the money and
@@ -62,6 +65,13 @@ import { CaptureSection } from './CaptureSection';
  * a dollar sign is drawn, so a run of unpriceable exchanges never renders as
  * `$0.00`, a subscription call's known zero never renders as a measurement gap,
  * and an `agent_cli` node's token sums never render as `0` when nobody counted.
+ *
+ * INPUT was on that list and no longer is: #890 records the config each
+ * dispatch ran with, after `${}` substitution, on `node.dispatched`
+ * (`InputSection`). A node the executor never dispatches — a control activity,
+ * a pipeline call, a node a rerun copied — and an `llm_call` not on
+ * `capture: 'full'` still have none, and get no section rather than an
+ * invented one.
  *
  * PROMPT/COMPLETION was on that list and no longer is: #605 (L9b) shipped it
  * for a node whose `capture` setting is `full` (`CaptureSection`). A default
@@ -297,6 +307,10 @@ export function NodeActivityPanel({
           nodes for exactly that reason), so the link explains the section under
           it rather than trailing after it. */}
       <ChildRuns node={node} />
+
+      {node.input !== undefined && (
+        <InputSection input={node.input} instanceId={node.inputInstanceId} />
+      )}
 
       {/* KEYED on the node's identity, which is load-bearing rather than tidy.
           `RunDetailPage` swaps this panel IN PLACE when a different node is
@@ -608,6 +622,54 @@ function CostSection({ node }: { node: NodeActivity }) {
            tail an in-flight node's spend-so-far otherwise reads with exactly the
            confidence of a settled one. */
         <p className="page-hint">{unsettledSentence(reading, 'node')}</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * #890 — the input the node's most recent dispatch ran with: its config after
+ * `${}` substitution, as the run log stored it. A `{$secret}` field shows its
+ * marker (the secret's NAME), because that is what the node was configured
+ * with; the value was resolved after this was recorded.
+ *
+ * No disclosure, unlike `OutputsSection`: the server already stores at most
+ * `DISPATCH_INPUT_MAX_CHARS` (4k units, `MAX_OUTPUT_CHARS`'s size), so the whole
+ * stored text is mounted and can be selected and copied as it stands.
+ * What a cut withholds is not in the log at all, and the hint says so rather
+ * than offering a "show all" that has nothing more to show.
+ */
+function InputSection({
+  input,
+  instanceId,
+}: {
+  input: DispatchInput;
+  instanceId: string | undefined;
+}) {
+  const withheld = input.text === SECURE_REDACTED;
+  return (
+    <section className="contract-section">
+      <h4>Input</h4>
+      {instanceId !== undefined && (
+        <p className="page-hint">
+          The input of <code>{instanceId}</code>: the item whose result is shown, or else the one
+          dispatched most recently.
+        </p>
+      )}
+      {withheld ? (
+        <p className="page-hint">
+          <code>{SECURE_REDACTED}</code> — withheld from the run log: this node&rsquo;s run policy
+          has Secure input or Secure output set ({input.chars} characters).
+        </p>
+      ) : (
+        <>
+          <code className="node-detail-outputs">{input.text}</code>
+          {input.truncated === true && (
+            <p className="page-hint">
+              … the run log stored the first {input.text.length} of {input.chars} characters.
+            </p>
+          )}
+        </>
       )}
     </section>
   );

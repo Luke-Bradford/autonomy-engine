@@ -232,6 +232,41 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     });
   });
 
+  const dispatched = (nodeId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: RUN,
+    nodeId,
+    attemptId: `${nodeId}#0`,
+    idempotent: false,
+    input: { text: '{"to":"alice@example.com","body":"hi"}', chars: 90, truncated: true },
+  });
+
+  it("#890 withholds a secure node's recorded INPUT text, keeping its length", () => {
+    const inOnly = node('i', { policy: { secureInput: true } });
+    for (const n of [secret, inOnly]) {
+      const got = createEngine({ nodes: [n], edges: [], containers: [] }).redact(dispatched(n.id));
+      expect(got).toMatchObject({ input: { text: SECURE_REDACTED, chars: 90 } });
+      expect(got.type === 'node.dispatched' && got.input?.truncated).toBeUndefined();
+    }
+  });
+
+  it('#890 resolves a foreach instance id on node.dispatched too', () => {
+    expect(eng.redact(dispatched('s@3'))).toMatchObject({ input: { text: SECURE_REDACTED } });
+  });
+
+  it("#890 leaves a non-secure node's input, and a dispatch with no input, untouched", () => {
+    const ev = dispatched('p');
+    expect(eng.redact(ev)).toBe(ev);
+    const bare: EngineEvent = {
+      type: 'node.dispatched',
+      runId: RUN,
+      nodeId: 's',
+      attemptId: 's#0',
+      idempotent: false,
+    };
+    expect(eng.redact(bare)).toEqual(bare);
+  });
+
   it('passes a run-level event through (no node to be secure)', () => {
     const ev: EngineEvent = {
       type: 'run.started',

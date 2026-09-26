@@ -57,6 +57,9 @@ export interface SeedNode {
    * engine, which is why nothing exercised the dispatch path end to end.
    */
   connectionIds?: { source: string; sink: string };
+  /** The node's run policy (`schemas/pipeline.ts`) — e.g. `secureInput`, which
+   * #890's spec needs to show a withheld input. Passed through as authored. */
+  policy?: Record<string, unknown>;
   /**
    * The datasets those two ends address — a first-class node FIELD and
    * deliberately not config (data-movement spec §3), so like `connectionId` it

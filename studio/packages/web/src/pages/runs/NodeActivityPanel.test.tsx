@@ -6,7 +6,7 @@ import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import { emptyNodeCost } from './runSummary';
-import type { DatasetAddress, RunStatus } from '@autonomy-studio/shared';
+import { SECURE_REDACTED, type DatasetAddress, type RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -36,6 +36,8 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     failureKind: undefined,
     failureCode: undefined,
     datasetAddresses: undefined,
+    input: undefined,
+    inputInstanceId: undefined,
     outputValues: undefined,
     copiedFromRunId: undefined,
     copiedChildRunId: undefined,
@@ -710,5 +712,42 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
       }),
     );
     expect(panel.textContent).not.toMatch(HINT);
+  });
+});
+
+describe('NodeActivityPanel — the dispatched input (#890)', () => {
+  const inputSection = () => screen.queryByRole('heading', { name: 'Input' })?.closest('section');
+
+  it('shows the recorded input text', () => {
+    renderPanel(row({ nodeId: 'a', input: { text: '{"url":"https://x/alice"}', chars: 25 } }));
+    const section = inputSection();
+    expect(section).toBeTruthy();
+    expect(within(section as HTMLElement).getByText('{"url":"https://x/alice"}')).toBeTruthy();
+    expect(within(section as HTMLElement).queryByText(/stored the first/)).toBeNull();
+  });
+
+  it('has no Input section for a node that recorded none', () => {
+    renderPanel(row({ nodeId: 'a' }));
+    expect(inputSection()).toBeFalsy();
+  });
+
+  it('says how much of a cut input the log kept, and which foreach item it is', () => {
+    renderPanel(
+      row({
+        nodeId: 'w',
+        input: { text: '{"s":"aaa', chars: 9000, truncated: true },
+        inputInstanceId: 'w@2',
+      }),
+    );
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByText(/stored the first 9 of 9000 characters/)).toBeTruthy();
+    expect(within(section).getByText('w@2')).toBeTruthy();
+  });
+
+  it('says a secure input was withheld instead of printing the marker as if it were the input', () => {
+    renderPanel(row({ nodeId: 'a', input: { text: SECURE_REDACTED, chars: 40 } }));
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByText(/withheld from the run log/)).toBeTruthy();
+    expect(section.querySelector('.node-detail-outputs')).toBeNull();
   });
 });

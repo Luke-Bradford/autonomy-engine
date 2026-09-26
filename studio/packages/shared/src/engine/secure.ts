@@ -149,6 +149,14 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         },
         ...(event.completion !== undefined ? { completion: redactCaptured(event.completion) } : {}),
       };
+    case 'node.dispatched':
+      // #890 — EITHER flag, as for `activity.captured`: a node's outputs, errors
+      // and transcript routinely echo its input, so withholding the input on
+      // `secureInput` alone would still leave it readable on a `secureOutput`
+      // node through the other half. `chars` stays, as it does there.
+      return event.input !== undefined
+        ? { ...event, input: { text: SECURE_REDACTED, chars: event.input.chars } }
+        : event;
     case 'activity.agentTelemetry':
       return event.outputHash !== undefined ? { ...event, outputHash: SECURE_REDACTED } : event;
     case 'activity.toolCalled':
@@ -165,6 +173,7 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
 /** The node id an event is ABOUT, for the ones `redactSecureEvent` scrubs. */
 export function secureEventNodeId(event: EngineEvent): string | undefined {
   switch (event.type) {
+    case 'node.dispatched':
     case 'node.succeeded':
     case 'externalWait.completed':
     case 'node.output':

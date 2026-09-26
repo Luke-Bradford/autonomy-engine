@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import {
   AGENT_CLI_CONNECTION_KIND,
   catalog as sharedCatalog,
+  captureDispatchInput,
   collectSecretSinkMarkers,
   computeCostEstimate,
   firstParamOverrideViolation,
@@ -17,6 +18,7 @@ import {
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
   llmCallConfigSchema,
+  llmCaptureModeSchema,
   normalizeLlmRequest,
   parseConnectionPriceTable,
   resolvePrice,
@@ -1684,6 +1686,33 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     const { secretFields } = resolvedSecrets;
 
+    // #890 — the input this attempt is dispatched with, for the run monitor.
+    // `preparedInput` holds `{$secret}` marker NAMES, not values, and no other
+    // secret reaches `${}` output (`dispatch-input.ts`). Scrubbed anyway against
+    // EVERY plaintext this node resolved — the connection's own secret included,
+    // unlike the event scrub below, which leaves that one to the adapter — so an
+    // author who pasted a credential into a plain field does not see it logged.
+    // Scrubbed as a VALUE before it becomes JSON text: a plaintext containing a
+    // quote or backslash is escaped in the text and a string match would miss it.
+    // An `llm_call` records it only under `capture: 'full'` (#605): its input IS
+    // the prompt, and `metadata` — the default — promises no prompt text.
+    const inputPlaintexts = [secret, ...Object.values(secretFields), sinkSecret].filter(
+      (p): p is string => typeof p === 'string',
+    );
+    const input =
+      node.type === LLM_CALL_ACTIVITY_TYPE &&
+      command.preparedInput['capture'] !== llmCaptureModeSchema.enum.full
+        ? undefined
+        : captureDispatchInput(
+            inputPlaintexts.length > 0
+              ? // `walk` rebuilds an object as an object, so the record stays one.
+                (deepRedactSecrets(command.preparedInput, inputPlaintexts) as Record<
+                  string,
+                  unknown
+                >)
+              : command.preparedInput,
+          );
+
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
     // CX2 (#1320) — cancelled during the pre-flight: the attempt never started,
     // so it fails without a `node.dispatched` (the node is still `ready`).
@@ -1702,6 +1731,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // it also keeps a non-copy `node.dispatched` byte-identical to the one
       // this build wrote before the field existed.
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
+      ...(input !== undefined ? { input } : {}),
     };
 
     const ctx: ActivityContext = {
