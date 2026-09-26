@@ -4,11 +4,16 @@ import {
   consequenceMessage,
   containerEditConsequence,
   containerLabels,
+  issueSubject,
+  issuesBySubject,
   readableIssue,
   routingChangeBetween,
+  sameAttribution,
   routingSentence,
+  subjectKey,
   type ContainerEditDoc,
 } from './containerRules';
+import { policyIssues, validateCanvas } from './canvasDoc';
 
 const A: Node = { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } };
 const B: Node = { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } };
@@ -746,5 +751,148 @@ describe('consequenceMessage', () => {
     );
     expect(msg).toContain('parallel roots');
     expect(msg).toContain('unsavable');
+  });
+});
+
+describe('issueSubject (#863)', () => {
+  it.each([
+    ['node.n_a.condition: an if needs a boolean condition expression', 'node', 'n_a'],
+    ['node.n_a: an execute_pipeline needs a call config', 'node', 'n_a'],
+    ['nodes.n_a.config.url: ${nodes.n_b.output.x} does not name an upstream node', 'node', 'n_a'],
+    ['container.loop_1.exitWhen: exitWhen must be a boolean expression', 'container', 'loop_1'],
+    ["node 'n_a': policy.secureInput needs policy.secureOutput here", 'node', 'n_a'],
+    ["duplicate node id 'n_a' (ids must be globally unique)", 'node', 'n_a'],
+    ["container 'loop_1': a loop needs an exitWhen", 'container', 'loop_1'],
+    ["container id 'loop_1' collides with an existing node id", 'container', 'loop_1'],
+    ["edge 'e_ab': to 'n_x' is not a node or container in this pipeline", 'edge', 'e_ab'],
+    ["back-edge 'e_ab': must declare maxBounces", 'edge', 'e_ab'],
+  ])('reads the leading location of %s', (issue, kind, id) => {
+    expect(issueSubject(issue)).toEqual({ kind, id });
+  });
+
+  it.each([
+    // An id AFTER the location names some other element — never the subject.
+    "param 'p': expected a finite number",
+    'forward cycle detected involving {n_a, n_b} — the forward graph must be a DAG',
+    "call_pipeline depth exceeds 3 at version 'pv_1'",
+    "x: ${nodes.n_a.output.v} — node 'n_a' has secure outputs",
+  ])('finds no single subject in %s', (issue) => {
+    expect(issueSubject(issue)).toBeUndefined();
+  });
+});
+
+describe('issuesBySubject (#863)', () => {
+  /** The canvas's own pairing: the real validators, each message with its display text. */
+  function attributed(d: ContainerEditDoc) {
+    const located = [
+      ...validateCanvas(d.nodes, d.edges, d.containers, d.params),
+      ...policyIssues(d.nodes),
+    ].map((raw) => ({ raw, text: readableIssue(raw, d.nodes, d.edges, d.containers) }));
+    return { located, map: issuesBySubject(located, d.nodes, d.edges, d.containers) };
+  }
+
+  it('puts a bad reference on the node whose config holds it, in its readable form', () => {
+    const bad: Node = { ...A, config: { url: '${nodes.ghost.output.body}' } };
+    const { located, map } = attributed(doc({ nodes: [bad, B] }));
+    expect(located.length).toBeGreaterThan(0);
+    const own = map.get(subjectKey('node', 'n_a'));
+    expect(own?.map((i) => i.raw)).toEqual(located.map((i) => i.raw));
+    expect(own?.[0]?.text).toMatch(/^node 'HTTP Request 1' config\.url:/);
+    expect(map.has(subjectKey('node', 'n_b'))).toBe(false);
+  });
+
+  it('never badges the PRODUCER a consumer names mid-sentence', () => {
+    // `n_b` reads an output `n_a` does not declare: the message names `n_a`
+    // twice (in the expression and quoted), and `n_b` only in its location.
+    const producer: Node = { ...A, config: { outputs: [{ name: 'real', type: 'string' }] } };
+    const consumer: Node = { ...B, config: { prompt: '${nodes.n_a.output.missing}' } };
+    const { located, map } = attributed(doc({ nodes: [producer, consumer], edges: [AB] }));
+    expect(located.some((i) => i.raw.includes("'n_a'") || i.raw.includes('nodes.n_a'))).toBe(true);
+    expect(map.has(subjectKey('node', 'n_a'))).toBe(false);
+    expect(map.get(subjectKey('node', 'n_b'))?.length).toBeGreaterThan(0);
+  });
+
+  it('attributes container and edge issues to the container and the edge', () => {
+    const loop: Container = { id: 'loop_1', kind: 'loop', children: ['n_b'] };
+    const dangling: Edge = { id: 'e_x', from: 'n_a', to: 'n_ghost', on: 'success' };
+    const { map } = attributed(doc({ nodes: [A, B], edges: [dangling], containers: [loop] }));
+    expect(map.get(subjectKey('container', 'loop_1'))?.[0]?.text).toMatch(
+      /^container 'loop 1': a loop needs an exitWhen/,
+    );
+    expect(map.get(subjectKey('edge', 'e_x'))?.[0]?.raw).toMatch(/^edge 'e_x': to 'n_ghost'/);
+  });
+
+  it('leaves an issue with no single subject out of the map — it stays in the full list', () => {
+    const cycle: Edge[] = [AB, { id: 'e_ba', from: 'n_b', to: 'n_a', on: 'success' }];
+    const { located, map } = attributed(doc({ nodes: [A, B], edges: cycle }));
+    expect(located.some((i) => i.raw.startsWith('forward cycle detected'))).toBe(true);
+    expect([...map.values()].flat().some((i) => i.raw.startsWith('forward cycle'))).toBe(false);
+  });
+
+  it('drops a subject id that names nothing of that kind in the doc', () => {
+    const map = issuesBySubject(
+      [
+        { raw: "edge 'n_a': not real", text: 'x' },
+        { raw: "container 'n_a': not real", text: 'y' },
+      ],
+      [A],
+      [],
+      [],
+    );
+    expect(map.size).toBe(0);
+  });
+
+  it("attributes a node's policy refusal to that node", () => {
+    const retrying: Node = { ...A, policy: { retryIntervalSeconds: 5 } };
+    const { map } = attributed(doc({ nodes: [retrying] }));
+    expect(
+      map.get(subjectKey('node', 'n_a'))?.some((i) => i.raw.startsWith("node 'n_a': policy")),
+    ).toBe(true);
+  });
+
+  it('reads a dotted id to its real end, not to the first dot', () => {
+    // ids are `z.string().min(1)`: an imported doc can hold both `a` and `a.b`.
+    const a: Node = { ...A, id: 'a' };
+    const ab: Node = { ...B, id: 'a.b' };
+    const map = issuesBySubject(
+      [
+        { raw: 'nodes.a.b.config.url: bad', text: 'x' },
+        { raw: 'node.a: an execute_pipeline needs a call config', text: 'y' },
+      ],
+      [a, ab],
+      [],
+      [],
+    );
+    expect(map.get(subjectKey('node', 'a.b'))?.map((i) => i.text)).toEqual(['x']);
+    expect(map.get(subjectKey('node', 'a'))?.map((i) => i.text)).toEqual(['y']);
+  });
+});
+
+describe('sameAttribution (#863)', () => {
+  const one = (raw: string, text = raw) => ({ raw, text });
+  const map = (entries: Array<[string, Array<{ raw: string; text: string }>]>) => new Map(entries);
+
+  it('is true for equal content held in different objects', () => {
+    expect(sameAttribution(map([['node:a', [one('x')]]]), map([['node:a', [one('x')]]]))).toBe(
+      true,
+    );
+    expect(sameAttribution(map([]), map([]))).toBe(true);
+  });
+
+  it.each([
+    ['a different subject', map([['node:b', [one('x')]]])],
+    [
+      'an extra subject',
+      map([
+        ['node:a', [one('x')]],
+        ['node:b', [one('y')]],
+      ]),
+    ],
+    ['an extra message', map([['node:a', [one('x'), one('y')]]])],
+    ['a different raw message', map([['node:a', [one('z', 'x')]]])],
+    // A rename changes only the READABLE text — the badge's title must follow it.
+    ['the same raw message worded differently', map([['node:a', [one('x', 'renamed')]]])],
+  ])('is false for %s', (_, other) => {
+    expect(sameAttribution(map([['node:a', [one('x')]]]), other)).toBe(false);
   });
 });

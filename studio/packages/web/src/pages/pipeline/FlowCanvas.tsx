@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -94,6 +95,8 @@ import {
   type Selection,
 } from './canvasStore';
 import { namedList } from '../../lib/namedList';
+import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issueContext';
+import { subjectKey, type SubjectIssue } from './containerRules';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -107,6 +110,57 @@ interface ActivityData extends Record<string, unknown> {
   type: string;
   /** U19 — one outgoing port per outcome this source can route. */
   ports: readonly SourcePort[];
+}
+
+/**
+ * #863 — the count of validation issues attributed to one box, drawn on it so
+ * the operator can see WHICH activity or container stops the save without
+ * reading the badge list and matching names.
+ *
+ * Absolutely positioned (see `.flow-issue-badge`): a box's height is
+ * `nodeBoxHeight(ports)` and a container's rect is derived from its children's
+ * measured rects, so a badge in the flow would move ports and resize containers
+ * whenever an issue came or went.
+ *
+ * On an activity: `role="img"` + a label, because a bare digit says nothing to
+ * a screen reader, and the messages on `title` for a pointer. On a container the
+ * badge is DECORATIVE (`aria-hidden`, no `title`): the box is `pointer-events:
+ * none`, so a tooltip could never open, and its count is already in the box's
+ * own accessible name (see `containerNodes`) — exposing both would read it
+ * twice. The property panel lists the messages in full once the element is
+ * selected. Not a live region — the canvas's badge list is
+ * the page's announcer for a blocked save (#1249).
+ */
+function IssueBadge({
+  issues,
+  decorative = false,
+}: {
+  issues: readonly SubjectIssue[];
+  decorative?: boolean;
+}) {
+  if (issues.length === 0) return null;
+  if (decorative) {
+    return (
+      <span className="flow-issue-badge" aria-hidden="true">
+        {issues.length}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="flow-issue-badge"
+      role="img"
+      aria-label={issueCountLabel(issues.length)}
+      title={issues.map((issue) => issue.text).join('\n')}
+    >
+      {issues.length}
+    </span>
+  );
+}
+
+/** An accessible name with the issue count appended when there is one. */
+function withIssueCount(name: string, count: number): string {
+  return count === 0 ? name : `${name}, ${issueCountLabel(count)}`;
 }
 
 /**
@@ -125,6 +179,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      the two kinds cannot drift apart. */
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, handlers } = useNodeFan(boxRef);
+  const issues = useSubjectIssues('node', id);
 
   /* React Flow caches each handle's position in `internals.handleBounds`,
      measured from the DOM once (`getBoundingClientRect`) — it does NOT re-read
@@ -154,7 +209,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
   return (
     <div
       ref={boxRef}
-      className={`flow-node${selected ? ' selected' : ''}`}
+      className={`flow-node${selected ? ' selected' : ''}${issues.length > 0 ? ' flow-node--invalid' : ''}`}
       /* The stylesheet reads this to choose the ports' geometry and opacity.
          An ATTRIBUTE rather than a class so the e2e spec can assert the state
          directly, and so the collapsed case stays the plain default. */
@@ -170,6 +225,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
         <ActivityGlyph type={d.type} category={getActivity(d.type)?.category} />
       </span>
       <strong className="flow-node-title">{d.title}</strong>
+      <IssueBadge issues={issues} />
       {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
           "no connection" or "connection bound" in grey — a per-node CONFIG state
           repeated on every box, which is what turns eight activities into a wall
@@ -242,6 +298,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
      places a hover could ever have meant "I am working on this box". */
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, handlers } = useNodeFan(boxRef);
+  const issues = useSubjectIssues('container', id);
 
   /* Reported UP rather than acted on here, because the bounds this state moves
      are stated where the node object is built — see `onFanChange`'s docblock on
@@ -275,12 +332,13 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   return (
     <div
       ref={boxRef}
-      className={`flow-container${d.selected ? ' flow-container--selected' : ''}`}
+      className={`flow-container${d.selected ? ' flow-container--selected' : ''}${issues.length > 0 ? ' flow-container--invalid' : ''}`}
       data-ports-expanded={expanded ? 'true' : 'false'}
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.label}</span>
+      <IssueBadge issues={issues} decorative />
       {/* #748 — the box's own chrome is inert, and this is the one part of it
           that is not. (The edge HANDLES above are hit-testable too, and predate
           this: two opt-ins, not one.) A container cannot be made `selectable` —
@@ -1058,6 +1116,10 @@ export function FlowCanvas({
     });
   }, []);
 
+  /* #863 — read here only for the containers' accessible names (see below);
+     each box reads its own badge through the same context. */
+  const bySubject = useContext(SubjectIssuesContext);
+
   const containerNodes: FlowNode[] = useMemo(() => {
     // The SAME within-kind ordinals the membership `<select>` offers and
     // `readableIssue` quotes, so "loop 2" names one container everywhere it
@@ -1126,7 +1188,14 @@ export function FlowCanvas({
         ariaRole: 'group',
         // #883 — the ordinal, so two same-kinded boxes are two distinguishable
         // groups to a screen reader, matching the text the box now draws.
-        ariaLabel: containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
+        //
+        // #863 — and the issue count, which is where a container's count is
+        // announced: its badge is `aria-hidden` (see `IssueBadge`). An activity
+        // has no label override and reads its badge directly.
+        ariaLabel: withIssueCount(
+          containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
+          bySubject.get(subjectKey('container', c.id))?.length ?? 0,
+        ),
         /* Still NOT selectable, and that is now a decision rather than a default
            (#748). The box carries one edit — its delete button — and the obvious
            way to have offered that was to make the container selectable and give
@@ -1174,6 +1243,7 @@ export function FlowCanvas({
     selectContainer,
     fannedContainers,
     onContainerFanChange,
+    bySubject,
   ]);
 
   /**

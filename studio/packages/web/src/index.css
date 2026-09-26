@@ -1538,6 +1538,43 @@ td button + button {
   outline-offset: 1px;
 }
 
+/* #863 — a box the validator names as the subject of an issue. `outline`, not
+   `border-color`, for the reason the run canvas records: `.flow-node.selected`
+   owns the border (and a selected box's accent outline wins over this one — the
+   badge keeps saying it). The outline sits outside the box, so no size moves. */
+.flow-node--invalid,
+.flow-container--invalid {
+  outline: 2px solid var(--error);
+  outline-offset: 1px;
+}
+
+/* The count itself. Absolutely positioned on the box's top-right corner so it
+   never takes layout: an activity's height is `nodeBoxHeight(ports)` and a
+   container's rect is derived from its children's, so an in-flow badge would
+   move ports and resize containers as issues come and go. Neither box is
+   positioned by its own rule; the anchor is React Flow's node wrapper, which is
+   absolutely positioned and which both boxes fill. */
+.flow-issue-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: var(--error);
+  color: var(--bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.subject-issues {
+  margin-bottom: 0.75rem;
+}
+
 .flow-node.selected .flow-node-icon {
   color: var(--accent);
 }
