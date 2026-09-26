@@ -2,6 +2,7 @@ import {
   cancelFinish,
   terminalStatusOf,
   type ArmWakeupInput,
+  type CancelSource,
   type Engine,
   type EngineEvent,
   type PipelineVersion,
@@ -17,6 +18,7 @@ import type { Db } from '../repo/types.js';
 import {
   buildEngine,
   DocUnresolvableError,
+  foldCancel,
   foldPendingCancel,
   pump,
   retryArmInput,
@@ -29,7 +31,7 @@ import {
 import type { RunEventBus } from './event-bus.js';
 import type { RunDrives } from './drives.js';
 import { runCancelledFailure, type RunCancels } from './cancel.js';
-import { isDetachedChild } from './child.js';
+import { detachVerdict } from './child.js';
 import {
   appendAndFold,
   appendEngineEvent,
@@ -241,7 +243,7 @@ export interface ReconcileReport {
   /** Runs that got `run.resumed` + `node.retryRequested` and were re-driven. */
   resumed: string[];
   /**
-   * Runs frozen `interrupted`, for one of FOUR reasons — the bucket has four
+   * Runs frozen `interrupted`, for one of THREE reasons — the bucket has three
    * producers and they are not the same story:
    *   - a non-idempotent activity was in flight at crash time
    *     (`non_idempotent_in_flight:<nodes>`); or
@@ -251,12 +253,10 @@ export interface ReconcileReport {
    *   - the run's pipeline version is GONE (`doc_unresolvable:<pvId>` — #508, see
    *     `interruptRun`). Versions are immutable, so it never returns; the run can
    *     never be driven again, so it is frozen rather than left to re-`failed` on
-   *     every boot forever; or
-   *   - it is a `call_pipeline` CHILD whose parent is already over
-   *     (`parent_terminal:<parentRunId>` — #1053). The first three are "nothing
-   *     can ADVANCE this run"; this one is "nothing can CONSUME it", and it is
-   *     the only one where the run was still perfectly resumable — see the guard
-   *     in `reconcileOne` for why it is frozen anyway.
+   *     every boot forever.
+   * (A `call_pipeline` child whose parent is already over was a fourth, #1053's
+   * `parent_terminal:<parentRunId>`. CX3 cancels it instead, and it is reported
+   * `finalized` — see the guard in `reconcileOne`.)
    * The `run.interrupted.reason` distinguishes them; an operator reading a boot
    * report needs to know which.
    */
@@ -961,13 +961,11 @@ function recordSweep(deps: ReconcileDeps, report: ReconcileReport, runId: string
  * durable FACT in the log and the row is synced from `terminalStatusOf` (#443's
  * SSOT for the fact an event records), never from a projection.
  *
- * Two callers, both of which have already PROVEN the log non-terminal via the
- * `terminalFactFromLog` fast path in `reconcileOne`:
- *   - #508, a run whose pipeline version can never be resolved
- *     (`doc_unresolvable:<pvId>`) — doc-free by necessity, the version is gone;
- *   - #1053, a `call_pipeline` child whose parent is already over
- *     (`parent_terminal:<parentRunId>`) — doc-free by choice, since resolving a
- *     doc only to fold nothing would be work for a run that is not going to run.
+ * Its caller has already PROVEN the log non-terminal via the
+ * `terminalFactFromLog` fast path in `reconcileOne`: #508, a run whose pipeline
+ * version can never be resolved (`doc_unresolvable:<pvId>`) — doc-free by
+ * necessity, the version is gone. (#1053's `parent_terminal:` was a second
+ * caller until CX3 made that a cancel.)
  *
  * This is the same primitive `terminalizeInterrupted`'s `foldErr → patchRow`
  * branch reaches when a drive's doc turns out unresolvable (`driver.ts`) —
@@ -978,10 +976,8 @@ function recordSweep(deps: ReconcileDeps, report: ReconcileReport, runId: string
  * `appendAndFold` either: that path HAS an engine and records fold-diagnostics
  * (#497); with no doc there is no fold, and so no diagnostics to record.
  *
- * Takes a `runId` + `reason` rather than a `Run` because the two reasons are
- * derived from DIFFERENT fields (the version id, the parent id) and neither
- * caller wants the other's — passing the row would invite a third caller to
- * derive its reason here instead of at the site that knows why.
+ * Takes a `runId` + `reason` rather than a `Run` so a reason is derived at the
+ * site that knows why, never here.
  *
  * The reason follows the `interrupted` bucket's `<label>:<detail>` convention
  * (`non_idempotent_in_flight:` / `retry_alarm_spent:`).
@@ -1099,29 +1095,6 @@ function parentDocOf(
 }
 
 /**
- * #796 item 2 — did the parent DETACH from `childRunId`? See `isDetachedChild`
- * for why the bound doc is consulted and not only the log.
- *
- * `null` is UNDECIDABLE: the parent announced this child, its log has no
- * `call.detached`, and there is no doc to ask. Both callers resolve that the way
- * #1053's asymmetry does — toward the reversible act. The running scan resumes
- * rather than freezes, and the sweep leaves a never-started child `pending`
- * rather than burying work that may have been asked for.
- */
-function detachVerdict(
-  parentEvents: readonly EngineEvent[],
-  parentDoc: PipelineVersion | null,
-  childRunId: string,
-): boolean | null {
-  if (isDetachedChild(parentEvents, parentDoc, childRunId)) return true;
-  if (parentDoc !== null) return false;
-  const announced = parentEvents.some(
-    (e) => e.type === 'call.started' && e.childRunId === childRunId,
-  );
-  return announced ? null : false;
-}
-
-/**
  * One run's reconcile — the unit #479's fault boundary wraps. Extracted from the
  * loop so that boundary is a `try` around a call rather than a `try` wrapping
  * 130 lines; each of the loop body's `continue`s is a `return` here.
@@ -1163,89 +1136,42 @@ export async function reconcileOne(
     return;
   }
 
-  // #1053 — a `call_pipeline` CHILD whose PARENT is already over. Freeze it
-  // rather than resume it: nothing can consume the result, so every activity a
-  // resume would dispatch is pure cost.
+  // #1053, reworked by CX3 (#1320, spec D8) — a `call_pipeline` CHILD whose
+  // PARENT is already over is CANCELLED, not resumed: nothing can consume its
+  // result, so every activity a resume would dispatch is pure cost. It is folded
+  // `run.cancelRequested{parent_terminal}` and finished by the D7 branch below —
+  // the SAME fact and status the live path gives it (the terminal tap in
+  // `child.ts`), so a crash no longer changes how such a child ends. Logs that
+  // already carry the old `run.interrupted{parent_terminal:…}` stay valid and
+  // keep their `interrupted` status (spec, migration posture).
   //
-  // WHY THIS IS NOT "reconcile must reproduce the no-crash outcome". Absent a
-  // crash this child would run to completion and its result would be discarded
-  // by `returnToParent` all the same — there is no cancel primitive crossing a
-  // run boundary (`kick` is detached on the CHILD's own drive lock, the only
-  // `AbortController` is per-activity/per-run, and `cancelled` is not a legal
-  // `RunStatus`). So this DOES diverge from the live path, deliberately, and the
-  // reason it is still right is that the two acts are not the same act: the live
-  // case is failing to STOP a spend already in flight, which needs a primitive
-  // that does not exist; this is DECLINING TO START one, on work already known
-  // undeliverable, which is precisely reconcile's job. The same trade is already
-  // made twice in this function — `non_idempotent_in_flight` freezes a run that
-  // would otherwise have completed, and `retry_alarm_spent` freezes one nothing
-  // can advance — so "the reconciler may reach a different outcome than an
-  // uncrashed run" is settled policy here, not a new licence.
+  // THE COST, NAMED (unchanged from #1053). A child's nodes may have side
+  // effects that are meaningful in themselves and not only via the value
+  // returned to the parent. Those do not happen once the child is cancelled. The
+  // live path now makes the same trade, so it is policy, not a crash artefact.
   //
-  // THE COST, NAMED. A child's nodes may have side effects that are meaningful
-  // in themselves and not only via the value returned to the parent. Those now
-  // do not happen when a crash lands in this window, where absent the crash they
-  // would have. That is a real inconsistency and it is accepted rather than
-  // hidden: the alternative is to keep paying for every one of them on the
-  // strength of the minority that is independently useful, and an operator can
-  // see exactly which runs were frozen and why (`parent_terminal:<id>` in the
-  // log, `report.interrupted` in the boot log). Making the LIVE path stop too is
-  // the other half of this and needs a cancel primitive — #1056, filed not built.
+  // POSITION. Decided here, below the terminal-fact check above, so a child that
+  // already FINISHED resyncs instead of having a second terminal fact minted over
+  // its first (#443). Applied below `resolveDoc`, because D7 folds the cancel and
+  // pumps to a finish, which needs the doc: a child whose parent is over AND
+  // whose own version is gone is therefore frozen `doc_unresolvable:` there.
+  // Both verdicts stop it; only the reason differs.
   //
-  // POSITION. Below the terminal-fact check above, so a child that already
-  // FINISHED resyncs instead of having a second terminal fact minted over its
-  // first (#443). Above `resolveDoc`, so a frozen child needs no doc — it works
-  // when the version is gone, arms no alarm and re-dispatches no node.
-  // Precedented: `interruptRun`'s other caller also sits above the `pending`
-  // resync branch below.
+  // WHY `hasRunStartedFact` IS PART OF THE CONDITION. Every `running`-status row
+  // reaches this function unconditionally — the started test lives in
+  // `sweepOne`, which guards the `pending` rows only. A never-started child of a
+  // terminal parent is `sweepPendingRuns`' to patch (it appends nothing, #1041),
+  // so the two paths partition the case along #443's own line: STARTED gets a
+  // durable fact, NEVER-STARTED gets a row patch.
   //
-  // Being above `resolveDoc` also fixes a PRECEDENCE: a child whose parent is
-  // over AND whose own version is gone is frozen `parent_terminal:` rather than
-  // `doc_unresolvable:`. Both are truthful, and the order is the useful one —
-  // the parent's death is why this run should not run, whereas the missing
-  // version is only why it could not.
-  //
-  // BOTH BOOT PATHS, which #1048 requires: `sweepOne` delegates every started
-  // `pending` row here, so a started child reaches this guard whichever sub-tick
-  // the crash hit. Its own never-started branch stays as it is, and the two
-  // verdicts agree — differing only in whether a terminal FACT is appended,
-  // which #443 decides from whether the run started.
-  //
-  // A THIRD caller is affected and it is not a boot path at all: S7's lease
-  // reclaim (`scheduler/lease.ts`) runs this same function on a live server.
-  // That composes without special-casing — it already reads `report.interrupted`
-  // as "terminal, nothing further needed", and `syncRunLifecycle` releases the
-  // lease on any terminal transition — and it is a GAIN: a child orphaned by a
-  // parent that died mid-flight is now frozen at reclaim instead of resumed by
-  // whichever worker picks it up.
-  //
-  // The `run.interrupted` append publishes into `subscribeChildReturns`, which
-  // spawns a `returnToParent` microtask that no-ops against the (by definition
-  // terminal) parent. #1041 cites that cost as one reason NOT to append for a
-  // NEVER-started child; here #443 requires the fact, and the no-op is identical
-  // to the one every other `interrupted` verdict for a child already produces.
-  // WHY `hasRunStartedFact` IS PART OF THE CONDITION and not assumed from the
-  // caller. Every `running`-status row reaches this function unconditionally —
-  // the started test lives in `sweepOne`, which guards the `pending` rows only.
-  // So a CORRUPTED row (status `running`, log with no `run.started`; documented
-  // as unreachable via the real callers at the `pending` branch below) would
-  // otherwise be given a `run.interrupted` here, which is precisely the
-  // "minting a terminal fact into a log that never held one is manufacturing,
-  // not deriving" that #443 forbids and that #1041 cites as its reason for
-  // patching the row instead.
-  //
-  // Excluded, such a child falls through to the `pending` resync below and is
-  // then met by `sweepPendingRuns` in the SAME boot, whose child branch patches
-  // the row and appends nothing — the correct primitive for a run with no
-  // event-sourced lifecycle to preserve. So the two paths now partition the case
-  // exactly along #443's own line: STARTED gets a durable fact, NEVER-STARTED
-  // gets a row patch, and neither manufactures. (That run legitimately appears
-  // in `resynced` AND `sweptOrphans`; see the `pending` branch, which already
-  // documents that pair.)
+  // S7's lease reclaim (`scheduler/lease.ts`) runs this same function on a live
+  // server, and reads D7's `finalized` as "done" like any other verdict.
   //
   // #796 item 2 — NOT for a DETACHED child. Its parent never wanted the result,
   // so "nothing can consume it" is not a reason to stop it: its work IS the
-  // point. It resumes like any other crash survivor.
+  // point. It resumes like any other crash survivor, and so does a child whose
+  // detachment is undecidable (`detachVerdict`).
+  let parentTerminalCancel: CancelSource | null = null;
   if (run.parentRunId !== null && hasRunStartedFact(events)) {
     const parentEvents = parentLog(deps, report, run.parentRunId);
     if (
@@ -1257,9 +1183,7 @@ export async function reconcileOne(
         run.id,
       ) === false
     ) {
-      interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
-      report.interrupted.push(run.id);
-      return;
+      parentTerminalCancel = { kind: 'parent_terminal', parentRunId: run.parentRunId };
     }
   }
 
@@ -1303,6 +1227,12 @@ export async function reconcileOne(
   // resume the cancel then contradicts.
   const cancelFold = foldPendingCancel(deps, engine, state, run.id);
   if (cancelFold !== null) state = cancelFold.state;
+  // CX3 — the #1053 verdict above, folded only if no cancel is folded yet, so
+  // an operator's own pending cancel keeps its source.
+  if (parentTerminalCancel !== null) {
+    const derived = foldCancel(deps, engine, state, run.id, parentTerminalCancel);
+    if (derived !== null) state = derived.state;
+  }
 
   // CX2 (#1320, spec D7) — the cancel is already folded: FINISH it, never
   // resume it. Anything that was in flight died with the process, so each

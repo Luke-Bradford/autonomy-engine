@@ -34,7 +34,7 @@ import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
 import { createExternalWaitCompleter } from './run/external-wait-service.js';
 import { createReseedService } from './run/reseed.js';
-import { createRunCanceller } from './run/cancel-service.js';
+import { cancelLiveChildren, createRunCanceller } from './run/cancel-service.js';
 import { createRunCancels } from './run/cancel.js';
 import { deriveExternalWaitToken } from './webhooks/external-wait-token.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
@@ -604,7 +604,15 @@ export async function buildApp(opts?: BuildAppOptions) {
   // CX2 (#1320) — the ONE cancel registry, for the reason `drives` is one: a
   // cancel must reach whichever holder owns the run (a live pump, a drive queued
   // behind the lock, or the boot reconciler), so they all read the same map.
-  const cancels = createRunCancels();
+  // CX3 (#1320, spec D8) — its `cancelChildren` reaches a run's live children
+  // through the canceller below. Lazy, because the canceller is built FROM the
+  // driver boundary that holds this registry; it is declared before anything
+  // can fold a cancel (child spawns, boot reconcile), so the closure never meets
+  // its temporal dead zone.
+  const cancels = createRunCancels({
+    cancelChildren: (parentRunId, source) =>
+      cancelLiveChildren({ db, resolveDoc, canceller, log: fastify.log }, parentRunId, source),
+  });
   const driverBoundary = {
     db,
     resolveDoc,
@@ -616,6 +624,14 @@ export async function buildApp(opts?: BuildAppOptions) {
     log: fastify.log,
     signExternalWaitToken,
   };
+  // CX2 (#1320) — the cancel route's half. Built HERE, before child execution and
+  // boot reconcile, because both can fold a cancel whose propagation (CX3) calls
+  // it. `tumblingService` is declared further down; the closure runs only on a
+  // queued-run cancel, long after this body returns.
+  const canceller = createRunCanceller({
+    ...driverBoundary,
+    onQueuedRunCancelled: (runId) => tumblingService.settleRunWindow(runId),
+  });
   // #796 (P3b) — `call_pipeline` child execution: the spawn seam the executor's
   // lazy closure above resolves to, plus the reactor that returns a finished
   // child's result to its parent. Subscribed BEFORE the boot reconcile below,
@@ -751,13 +767,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // Same driver boundary as `runLauncher`/`externalWaitCompleter` so R2's reseed
   // append + downstream drive run under the shared per-run lock.
   fastify.decorate('reseedService', createReseedService(driverBoundary));
-  fastify.decorate(
-    'runCanceller',
-    createRunCanceller({
-      ...driverBoundary,
-      onQueuedRunCancelled: (runId) => tumblingService.settleRunWindow(runId),
-    }),
-  );
+  fastify.decorate('runCanceller', canceller);
 
   // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
   // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR

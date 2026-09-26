@@ -1,11 +1,14 @@
 import {
   TERMINAL_RUN_ROW_STATUS,
   type CancelSource,
+  type PipelineVersion,
   type RunStatus,
 } from '@autonomy-studio/shared';
-import { cancelQueuedRun, getRun } from '../repo/runs.js';
+import { cancelQueuedRun, getRun, listRuns } from '../repo/runs.js';
+import type { Db } from '../repo/types.js';
 import type { RunCancels } from './cancel.js';
-import { driveCancelIntent, type DriveDeps } from './driver.js';
+import { parentCancelReachesChild } from './child.js';
+import { driveCancelIntent, type DriveDeps, type DriveLog } from './driver.js';
 import { loadEngineEvents, RunLogUnparseableError, terminalFactFromLog } from './events.js';
 
 /**
@@ -99,4 +102,56 @@ export function createRunCanceller(deps: RunCancellerDeps): RunCanceller {
       return { kind: 'accepted', state: 'requested' };
     },
   };
+}
+
+/**
+ * CX3 (#1320, spec D8) — cancel every live child of `parentRunId` that the
+ * parent is still owed a result by, with `source`, through the route's own path
+ * (`RunCanceller.cancel`: intent, poke, serialized drive). Wired as
+ * `RunCancels.cancelChildren`, and called from exactly two places: a parent's
+ * cancel fold (`onCancelFolded`, `parent_cancelled`) and any run's terminal
+ * (`subscribeChildReturns`, `parent_terminal`, #1056).
+ *
+ * A child is reached only when ALL hold:
+ *  - its ROW is not terminal (the canceller re-checks the LOG, #443);
+ *  - the parent's log ANNOUNCES it (`call.started`). An unannounced child was
+ *    never kicked, and a DETACHED one in that state is one the #1041 sweep must
+ *    still be able to start; `kick` applies the parent's cancel to it instead,
+ *    once its announcement is durable (`child.ts`);
+ *  - the parent did NOT detach from it (`parentCancelReachesChild`). A detached
+ *    child exists to outlive its parent, and an undecidable one is left running.
+ *
+ * Best-effort and never throws. A parent log that cannot be read reaches no
+ * child: stopping one on a guess about detachment is the irreversible act.
+ */
+export function cancelLiveChildren(
+  deps: {
+    db: Db;
+    resolveDoc: (pipelineVersionId: string) => PipelineVersion;
+    canceller: RunCanceller;
+    log?: DriveLog;
+  },
+  parentRunId: string,
+  source: CancelSource,
+): void {
+  try {
+    const live = listRuns(deps.db, { parentRunId }).filter(
+      (child) => !TERMINAL_RUN_ROW_STATUS.has(child.status),
+    );
+    if (live.length === 0) return;
+    const parentEvents = loadEngineEvents(deps.db, parentRunId);
+    const announced = new Set<string>();
+    for (const e of parentEvents) if (e.type === 'call.started') announced.add(e.childRunId);
+    for (const child of live) {
+      if (!announced.has(child.id)) continue;
+      try {
+        if (!parentCancelReachesChild(deps, parentRunId, parentEvents, child.id)) continue;
+        deps.canceller.cancel(child.id, source);
+      } catch (err) {
+        deps.log?.error({ err, runId: child.id, parentRunId }, 'run cancel: cancelling a child run failed');
+      }
+    }
+  } catch (err) {
+    deps.log?.error({ err, runId: parentRunId }, 'run cancel: listing child runs failed');
+  }
 }
