@@ -606,7 +606,11 @@ describe('RunDetailPage', () => {
 
         expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
         // The doc-free fold, left to itself, would have said `running` here.
-        expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null, cancelRequested: false });
+        expect(deriveRunLifecycle(events)).toEqual({
+          status: 'running',
+          waitingReason: null,
+          cancelRequested: false,
+        });
       });
 
       /**

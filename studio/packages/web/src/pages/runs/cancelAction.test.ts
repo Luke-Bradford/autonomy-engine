@@ -40,8 +40,6 @@ describe('cancelConfirmMessage (CX4 #1320)', () => {
     expect(cancelConfirmMessage([{ name: 'Call 1', status: 'waiting' }])).toContain(
       'stops only once that child ends',
     );
-    expect(cancelConfirmMessage([{ name: 'HTTP 1', status: 'dispatched' }])).not.toContain(
-      'child',
-    );
+    expect(cancelConfirmMessage([{ name: 'HTTP 1', status: 'dispatched' }])).not.toContain('child');
   });
 });
