@@ -384,6 +384,35 @@ describe('CX1 D4 — containers and back-edges start no new round', () => {
   });
 });
 
+describe('CX1 D3 — a refused bounce survives a later edge’s cap', () => {
+  it('an earlier edge’s suppressed bounce makes a same-walk `capped` finish report `cancelled`', () => {
+    // Two independent self-loops. `b` spends its one bounce before the cancel;
+    // `a` then succeeds after it (its bounce is refused), and `b`'s next success
+    // caps in the SAME walk that re-refuses `a` — the earlier-sorted edge.
+    const eng = engine(
+      [node('a'), node('b')],
+      [
+        edge('a', 'a', 'success', { back: true, maxBounces: 3 }),
+        edge('b', 'b', 'success', { back: true, maxBounces: 1 }),
+      ],
+    );
+    const s = fold(eng, [
+      started(),
+      dispatched('a'),
+      dispatched('b'),
+      succeeded('b'),
+      dispatched('b', 'b#1'),
+      cancel(),
+      succeeded('a'),
+    ]);
+    expect(s.last).toEqual([]); // `b` still in flight
+    const r = eng.reduce(s.state, succeeded('b', 'b#1'));
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
+    ]);
+  });
+});
+
 describe('CX1 D5 — legality', () => {
   it('a PENDING run (seeded, never started) finishes `cancelled` with no `run.started`', () => {
     const eng = engine([node('a')]);

@@ -1768,6 +1768,9 @@ export function createEngine(doc: EngineDoc): Engine {
           state: withBounce,
           changed: false,
           finish: { type: 'finishRun', outcome: 'failure', reason: 'capped' },
+          // CX1 — an EARLIER edge's bounce this cancel refused still counts
+          // (D3), even though a later edge's cap ends the walk.
+          ...(suppressed ? { suppressed: true as const } : {}),
         };
       }
       // CX1 (#1320) D4 — a bounce STARTS a new round, so cancel mode suppresses
@@ -2762,10 +2765,10 @@ export function createEngine(doc: EngineDoc): Engine {
       const fired = fireBackEdges(state, diagnostics);
       if (fired.suppressed) preventedBounce = true;
       if (fired.finish) {
-        // CX1 D3 — under a cancel that already stopped work, the run's outcome is
-        // the cancel's, not the cap's.
+        // CX1 D3 — under a cancel that already stopped work (a node, a retry, or
+        // a bounce it refused), the run's outcome is the cancel's, not the cap's.
         const finish =
-          state.cancelRequested?.stoppedWork === true
+          state.cancelRequested !== null && (state.cancelRequested.stoppedWork || preventedBounce)
             ? cancelFinish(state.cancelRequested.source)
             : fired.finish;
         return { state: fired.state, commands: [finish], diagnostics };
