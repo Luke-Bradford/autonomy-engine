@@ -448,27 +448,27 @@ export function subscribeChildReturns(deps: ChildReturnReactorDeps): () => void 
   let stopped = false;
   const unsubscribe = deps.bus.subscribeAll((event) => {
     if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return;
-    const childRunId = event.runId;
+    const endedRunId = event.runId;
     // Publish is synchronous inside the driver's fold; do the work after it, so
     // this never re-enters a pump mid-turn (the launcher's tap defers the same
     // way, for the same reason).
     queueMicrotask(() => {
       if (stopped) return;
-      void returnToParent(deps, childRunId).catch((err: unknown) => {
-        deps.log?.error?.({ err, runId: childRunId }, 'call_pipeline child return failed');
+      void returnToParent(deps, endedRunId).catch((err: unknown) => {
+        deps.log?.error?.({ err, runId: endedRunId }, 'call_pipeline child return failed');
       });
       // CX3 (#1320, spec D8, #1056's live path) — the same terminal, read as a
       // PARENT's: a live non-detached child of a run that is over can deliver
       // its result to nobody, so it stops spending. A parent cancelled earlier
       // already asked (`onCancelFolded`); asking again records nothing.
       try {
-        deps.cancels?.cancelChildren(childRunId, {
+        deps.cancels?.cancelChildren(endedRunId, {
           kind: 'parent_terminal',
-          parentRunId: childRunId,
+          parentRunId: endedRunId,
         });
       } catch (err) {
         deps.log?.error?.(
-          { err, runId: childRunId },
+          { err, runId: endedRunId },
           'cancelling the child runs of an ended run failed',
         );
       }
