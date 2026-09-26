@@ -26,6 +26,8 @@ import {
 import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated } from './canvasStore';
 import { confirmContainerEdit, containerLabels } from './containerRules';
+import { useSubjectIssues } from './issueContext';
+import { SubjectIssues } from './SubjectIssues';
 
 /**
  * U23 (#839) — the container config form.
@@ -114,6 +116,8 @@ export function ContainerPanel({
   /** U21 (#935) — copy this container and its body; the store owns every rule. */
   onDuplicate: () => void;
 }) {
+  /* #863 — what the validator says is wrong with this container. */
+  const ownIssues = useSubjectIssues('container', container.id);
   const label = containerLabels(containers).get(container.id) ?? container.kind;
   const stored = container as unknown as Record<string, unknown>;
 
@@ -325,6 +329,7 @@ export function ContainerPanel({
        landmark four other specs address the panel by would vanish. */
     <aside className="property-panel" aria-label="Properties">
       <h3>{label}</h3>
+      <SubjectIssues issues={ownIssues} />
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
         inside. Which activity belongs to which container is edited on the activity itself.

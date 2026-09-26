@@ -267,6 +267,20 @@ export function containerLabels(containers: Container[]): Map<string, string> {
 }
 
 /**
+ * The two UNQUOTED location shapes the validator writes, as regex SOURCE so each
+ * reader anchors them its own way: `readableIssue` finds a container location
+ * anywhere (pass 1) and a node location at index 0 (pass 2); `issueSubject`
+ * reads both at index 0 only. One pattern per shape, so the two readers cannot
+ * come to disagree about where an id ends.
+ *
+ * Both stop the id at the first `.` — ids are `z.string().min(1)`, so an
+ * imported doc holding both `a` and `a.b` would read an `a.b` location as `a`.
+ * Canvas-minted ids (`n_`/`c_` uuids) cannot contain one.
+ */
+const CONTAINER_LOCATION = String.raw`container\.([^.\s]+)\.`;
+const NODE_LOCATION = String.raw`nodes?\.([^.\s:]+)(\.?)`;
+
+/**
  * Rewrite a `validatePipelineDoc` message so a human can read it.
  *
  * The validator quotes raw ids, which `newLocalId` mints as
@@ -306,7 +320,7 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * those passes may touch — inside the operator's own expression — which is why
  * it glosses instead.
  *
- * DISPLAY ONLY, and it must stay at the render site. FOUR callers read these
+ * DISPLAY ONLY, and it must stay at the render site. SIX callers read these
  * strings STRUCTURALLY, and the enumeration is what keeps them safe:
  * `ContainerPanel` filters them by matching `container '<id>'` as a raw
  * substring (`ContainerPanel.tsx:143`); the expression-insert probe takes a set
@@ -314,10 +328,12 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * `!baseline.includes(issue)`) — in the very file that
  * now calls this function; `containerEditConsequence` below diffs two issue sets
  * by exact string (`!known.has(issue)`); and `expressionInsert.insertModeFor`
- * does the same against a whole-doc baseline (`expressionInsert.ts:77`). All
- * four call `validateCanvas` DIRECTLY rather than reading the mapped list, which
- * is what keeps them correct; moving this rewrite inside `validateCanvas` would
- * silently break every one of them.
+ * does the same against a whole-doc baseline (`expressionInsert.ts:77`);
+ * `nodePolicyIssues` (`canvasDoc.ts`) matches a node's policy prefix; and
+ * `issuesBySubject` below (#863) reads the leading location to attribute an
+ * issue to its node, container or edge. All six read the RAW strings rather
+ * than the mapped list, which is what keeps them correct; moving this rewrite
+ * inside `validateCanvas` would silently break every one of them.
  */
 /**
  * The CONTAINER labels need no quoting treatment of their own, for a reason worth
@@ -350,10 +366,13 @@ export function readableIssue(
   // form authors, which makes this the first error a beginner meets: without this
   // pass it arrives as a bare uuid, the exact defect the rest of this function
   // exists to prevent.
-  const located = issue.replace(/\bcontainer\.([^.\s]+)\./g, (whole, id: string) => {
-    const l = labels.get(id);
-    return l === undefined ? whole : `container '${l}' `;
-  });
+  const located = issue.replace(
+    new RegExp(`\\b${CONTAINER_LOCATION}`, 'g'),
+    (whole, id: string) => {
+      const l = labels.get(id);
+      return l === undefined ? whole : `container '${l}' `;
+    },
+  );
   // Pass 2 — the NODE half of pass 1, and the reason #884 could not be closed by
   // wiring this function into the badge list unchanged. Every node location in
   // `params.ts` carries the id UNQUOTED too, in two shapes: `node.<id>.<field>`
@@ -375,7 +394,7 @@ export function readableIssue(
   // separating space, while consuming a bare `node.<id>` leaves `: …`, which must
   // NOT gain one.
   const nodeLocated = located.replace(
-    /^nodes?\.([^.\s:]+)(\.?)/,
+    new RegExp(`^${NODE_LOCATION}`),
     (whole, id: string, dot: string) => {
       const l = nodeLabels.get(id);
       return l === undefined ? whole : `node '${l}'${dot === '' ? '' : ' '}`;
@@ -526,6 +545,101 @@ export function readableIssue(
     glossed = `${glossed.slice(0, after)} (${namedList(names)})${glossed.slice(after)}`;
   }
   return glossed;
+}
+
+/** What a validator message is ABOUT — the element that has to change to clear it. */
+export type IssueSubject = { kind: 'node' | 'container' | 'edge'; id: string };
+
+/**
+ * The QUOTED leading locations. The lead phrase is what makes the quoted id the
+ * subject: the same `node '<id>'` mid-sentence (`… — node '<id>' has secure
+ * outputs`) names the PRODUCER a consumer's ref was refused against, which is
+ * why nothing here is read past index 0.
+ */
+const QUOTED_SUBJECT = /^(duplicate node id|node|container id|container|back-edge|edge) '([^']+)'/;
+
+const QUOTED_KIND: Record<string, IssueSubject['kind']> = {
+  'duplicate node id': 'node',
+  node: 'node',
+  'container id': 'container',
+  container: 'container',
+  'back-edge': 'edge',
+  edge: 'edge',
+};
+
+/**
+ * #863 — the element a RAW `validateCanvas`/`policyIssues` message is about, or
+ * `undefined` when it has no single one.
+ *
+ * Only the LEADING location is read, because every per-element message is built
+ * `${where}: …` with `where` first — the premise `readableIssue`'s pass 2 is
+ * anchored on. Everything after it is prose or the operator's own expression,
+ * where an id names some OTHER element: a `${nodes.<X>.output…}` producer, a
+ * `child '<id>'`, a colliding container. Attributing on those would badge the
+ * wrong box.
+ *
+ * `undefined` covers the messages with no one subject — a param's default, the
+ * forward-cycle brace list (every member is equally the cause), a call-graph
+ * refusal naming pipeline VERSIONS — and they stay where they always were: the
+ * canvas's badge list, which lists every issue whether attributed or not.
+ *
+ * This reads the MESSAGE FORMAT, not a structured field (R3, deferred, is what
+ * would replace it), and it must be handed the RAW string: `readableIssue`
+ * swaps ids for names, after which nothing here can match.
+ */
+export function issueSubject(issue: string): IssueSubject | undefined {
+  const node = new RegExp(`^${NODE_LOCATION}`).exec(issue);
+  if (node) return { kind: 'node', id: node[1]! };
+  const container = new RegExp(`^${CONTAINER_LOCATION}`).exec(issue);
+  if (container) return { kind: 'container', id: container[1]! };
+  const quoted = QUOTED_SUBJECT.exec(issue);
+  if (quoted) return { kind: QUOTED_KIND[quoted[1]!]!, id: quoted[2]! };
+  return undefined;
+}
+
+/** The map key for a subject — kinds are separate namespaces here, whatever the doc says. */
+export function subjectKey(kind: IssueSubject['kind'], id: string): string {
+  return `${kind}:${id}`;
+}
+
+/** One attributed issue: the raw string (for structural readers) and the text to show. */
+export interface SubjectIssue {
+  raw: string;
+  text: string;
+}
+
+/**
+ * #863 — issues grouped by the element they are about (`subjectKey`).
+ *
+ * Takes each issue already PAIRED with its `readableIssue` text, so the canvas
+ * rewrites every message once for both surfaces that show it — the full list
+ * and the subject's own — and the two cannot word one issue differently.
+ *
+ * A subject id that names nothing of that kind in the doc is dropped from the
+ * map rather than guessed at — the message is still in the canvas's full list,
+ * so an unattributed issue loses nothing but its badge.
+ */
+export function issuesBySubject(
+  issues: readonly SubjectIssue[],
+  nodes: readonly Node[],
+  edges: readonly Edge[],
+  containers: readonly Container[],
+): Map<string, SubjectIssue[]> {
+  const exists: Record<IssueSubject['kind'], Set<string>> = {
+    node: new Set(nodes.map((n) => n.id)),
+    container: new Set(containers.map((c) => c.id)),
+    edge: new Set(edges.map((e) => e.id)),
+  };
+  const out = new Map<string, SubjectIssue[]>();
+  for (const issue of issues) {
+    const subject = issueSubject(issue.raw);
+    if (subject === undefined || !exists[subject.kind].has(subject.id)) continue;
+    const key = subjectKey(subject.kind, subject.id);
+    const list = out.get(key);
+    if (list) list.push(issue);
+    else out.set(key, [issue]);
+  }
+  return out;
 }
 
 /**

@@ -117,9 +117,18 @@ export function nodePolicyIssues(
   const secureOwners = [nodeId, ...containerIds];
   return issues.filter(
     (issue) =>
-      issue.startsWith(`node '${nodeId}': policy`) ||
+      isOwnPolicyIssue(issue, nodeId) ||
       secureOwners.some((id) => issue.includes(`node '${id}' has secure outputs`)),
   );
+}
+
+/**
+ * Is this RAW issue a refusal of `nodeId`'s own `policy`? `PolicyEditor` lists
+ * these beside the fields that cause them, so the node panel's issue list
+ * (#863) leaves them out rather than showing the same line twice.
+ */
+export function isOwnPolicyIssue(issue: string, nodeId: string): boolean {
+  return issue.startsWith(`node '${nodeId}': policy`);
 }
 
 /**

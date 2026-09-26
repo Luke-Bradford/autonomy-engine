@@ -86,9 +86,22 @@ import {
   type ConfigDraft,
   type ConfigField,
 } from './configForm';
-import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
+import {
+  confirmContainerEdit,
+  containerLabels,
+  issuesBySubject,
+  readableIssue,
+} from './containerRules';
 import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
-import { policyIssues, saveDisabledReason, toVersionBody, validateCanvas } from './canvasDoc';
+import {
+  isOwnPolicyIssue,
+  policyIssues,
+  saveDisabledReason,
+  toVersionBody,
+  validateCanvas,
+} from './canvasDoc';
+import { SubjectIssues } from './SubjectIssues';
+import { SubjectIssuesContext, useSubjectIssues } from './issueContext';
 import { PolicyEditor } from './PolicyEditor';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
@@ -570,16 +583,28 @@ export function PipelineCanvas({
   //
   // Mapping happens here, at the render site, and not inside `validateCanvas` —
   // `ContainerPanel` reads those same strings structurally (see `readableIssue`).
-  const issues = useMemo(
-    () => [
+  //
+  // #863 — each id-bearing issue is rewritten ONCE and kept paired with its raw
+  // string, because the raw form is what `issuesBySubject` attributes on (the
+  // rewrite replaces the ids it reads). `nameIssues` names no element, so it is
+  // never attributed and joins the full list only.
+  const located = useMemo(
+    () =>
       // #1312 — `policyIssues` mirrors a THIRD gate, the write schema's
       // `StrictNodeSchema.policy`, and names nodes, so it is rewritten too.
-      ...[...validateCanvas(nodes, edges, containers, params), ...policyIssues(nodes)].map(
-        (issue) => readableIssue(issue, nodes, edges, containers),
-      ),
-      ...nameIssues(params, outputs),
-    ],
-    [nodes, edges, containers, params, outputs],
+      [...validateCanvas(nodes, edges, containers, params), ...policyIssues(nodes)].map((raw) => ({
+        raw,
+        text: readableIssue(raw, nodes, edges, containers),
+      })),
+    [nodes, edges, containers, params],
+  );
+  const issues = useMemo(
+    () => [...located.map((issue) => issue.text), ...nameIssues(params, outputs)],
+    [located, params, outputs],
+  );
+  const bySubject = useMemo(
+    () => issuesBySubject(located, nodes, edges, containers),
+    [located, nodes, edges, containers],
   );
 
   /**
@@ -1206,23 +1231,31 @@ export function PipelineCanvas({
       )}
 
       {ready && previewed === null && (
-        <div className="canvas-grid">
-          {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
+        /* #863 — one provider over the canvas AND the property panel, so a box's
+           badge and the panel's list read the same attribution. */
+        <SubjectIssuesContext.Provider value={bySubject}>
+          <div className="canvas-grid">
+            {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
-          <ActivityToolbox store={store} />
-          <div className="canvas-wrap">
-            <ReactFlowProvider>
-              <FlowCanvas store={store} fitSignal={fitSignal} measuredSizesRef={measuredSizesRef} />
-            </ReactFlowProvider>
+            <ActivityToolbox store={store} />
+            <div className="canvas-wrap">
+              <ReactFlowProvider>
+                <FlowCanvas
+                  store={store}
+                  fitSignal={fitSignal}
+                  measuredSizesRef={measuredSizesRef}
+                />
+              </ReactFlowProvider>
+            </div>
+            <PropertyPanel
+              store={store}
+              connections={connections}
+              datasets={datasets}
+              pipelineId={pipelineId}
+              onNotice={showCanvasMsg}
+            />
           </div>
-          <PropertyPanel
-            store={store}
-            connections={connections}
-            datasets={datasets}
-            pipelineId={pipelineId}
-            onNotice={showCanvasMsg}
-          />
-        </div>
+        </SubjectIssuesContext.Provider>
       )}
 
       {dirty && previewing === null && (
@@ -1855,6 +1888,7 @@ export function EdgePanel({
   nodes: Node[];
   edges: Edge[];
 }) {
+  const edgeIssues = useSubjectIssues('edge', edge.id);
   const current = conditionOf(edge);
   const currentValue = encodeCondition(current);
   /* U19 — the source is found ONCE and asked to declare itself ONCE, and both
@@ -1913,6 +1947,7 @@ export function EdgePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{edge.back === true ? 'Back-edge' : 'Edge'}</h3>
+      <SubjectIssues issues={edgeIssues} />
       {edge.back === true && <BounceCapField store={store} edge={edge} />}
       {/**
        * U19 slice 2 — the outcome picker, retired as a `<select>`.
@@ -2414,6 +2449,14 @@ export function NodePanel({
    * happen to agree.
    */
   const nodeNames = useMemo(() => activityLabels(docNodes), [docNodes]);
+  /* #863 — what the validator says is wrong with THIS node. Its own policy
+     refusals are left to `PolicyEditor`, which lists them beside the fields
+     that cause them; showing them here too would print each one twice. */
+  const attributed = useSubjectIssues('node', nodeId);
+  const ownIssues = useMemo(
+    () => attributed.filter((issue) => !isOwnPolicyIssue(issue.raw, nodeId)),
+    [attributed, nodeId],
+  );
   const picker = useExpressionPicker(
     docNodes,
     docEdges,
@@ -2722,6 +2765,7 @@ export function NodePanel({
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
+        <SubjectIssues issues={ownIssues} />
         <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
         {/* Membership is orthogonal to the call blob, so this early return must
             not swallow it: a container is exactly the construct that puts a call
@@ -2737,6 +2781,7 @@ export function NodePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
+      <SubjectIssues issues={ownIssues} />
       {entry && !paired && entry.connectionKinds.length > 0 && (
         <LabelledControl label="Connection">
           {(id) => (
