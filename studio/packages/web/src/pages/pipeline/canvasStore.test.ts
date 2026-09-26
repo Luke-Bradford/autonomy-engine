@@ -2739,6 +2739,175 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     const copy = s.getState().nodes[1]!;
     expect(promptOf(copy)).toBe(`was \${nodes.${copy.id}.status}`);
   });
+
+  describe('cut (#935)', () => {
+    it('removes the selection in ONE undo entry, and holds it on the clipboard', () => {
+      const s = loaded();
+      const before = s.getState();
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      expect(s.getState().cutSelection('pl_1')).toBe(1);
+
+      const st = s.getState();
+      expect(st.nodes.map((n) => n.id)).toEqual(['n_a', 'n_b']);
+      expect(st.edges.map((e) => e.id)).toEqual(['e_ab']);
+      expect(readClipboard()!.nodes.map((n) => n.id)).toEqual(['n_c']);
+
+      s.getState().undo();
+      expect(s.getState().nodes).toBe(before.nodes);
+      expect(s.getState().edges).toBe(before.edges);
+    });
+
+    it('a paste after the cut gets back the in-edge the cut removed, and SAVES', () => {
+      // Without it the copy of `n_c` still reads `n_b` but has no upstream, so
+      // the paste reports success and the save gate refuses the doc.
+      const s = loaded();
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      const copy = st.nodes.at(-1)!;
+      expect(promptOf(copy)).toBe('expand ${nodes.n_b.output.text}');
+      expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_b', to: copy.id }));
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+    });
+
+    it('a cut pair keeps the edge BETWEEN them and gets back the edge INTO them', () => {
+      const s = loaded();
+      s.getState().setSelection([
+        { kind: 'node', id: 'n_b' },
+        { kind: 'node', id: 'n_c' },
+      ]);
+      s.getState().cutSelection('pl_1');
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      const [copyB, copyC] = [st.nodes[1]!, st.nodes[2]!];
+      expect(promptOf(copyC)).toBe(`expand \${nodes.${copyB.id}.output.text}`);
+      expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_a', to: copyB.id }));
+      expect(st.edges).toContainEqual(expect.objectContaining({ from: copyB.id, to: copyC.id }));
+      expect(st.edges).toHaveLength(2);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+    });
+
+    it('a node cut out of a container is pasted back INTO it', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_c'] });
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      expect(s.getState().containers[0]!.children).toEqual([]);
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      expect(st.containers[0]!.children).toEqual([st.nodes.at(-1)!.id]);
+    });
+
+    it('never restores what is gone since: a deleted upstream, or a deleted container', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_c'] });
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      s.getState().deleteContainer('stage_1');
+      s.getState().deleteNode('n_b');
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      expect(st.containers).toEqual([]);
+      expect(st.edges.some((e) => e.to === st.nodes.at(-1)!.id)).toBe(false);
+    });
+
+    it('after an undo the originals are LIVE again, so the paste wires off them once', () => {
+      const s = loaded();
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      s.getState().undo();
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      const copy = st.nodes.at(-1)!;
+      expect(copy.id).not.toBe('n_c');
+      expect(st.edges.filter((e) => e.to === copy.id)).toHaveLength(1);
+    });
+
+    it('after an undo, what the LIVE graph says wins over what the cut recorded', () => {
+      // The original is back, then its in-edge is deleted: the paste must not
+      // resurrect that edge from the cut's record.
+      const s = loaded();
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      s.getState().undo();
+      s.getState().setSelection([{ kind: 'edge', id: 'e_bc' }]);
+      s.getState().deleteSelection();
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      expect(st.edges.some((e) => e.to === st.nodes.at(-1)!.id)).toBe(false);
+    });
+
+    it('after an undo, LIVE membership wins too — an original moved out stays out', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_b', 'n_c'] });
+      s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+      s.getState().cutSelection('pl_1');
+      s.getState().undo();
+      s.getState().setNodeContainer('n_c', null);
+      s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      expect(st.containers[0]!.children).toEqual(['n_b']);
+    });
+
+    it('deletes only what it copied — a selected edge between UNselected nodes survives', () => {
+      const s = loaded();
+      s.getState().setSelection([
+        { kind: 'node', id: 'n_c' },
+        { kind: 'edge', id: 'e_ab' },
+      ]);
+      s.getState().cutSelection('pl_1');
+      expect(s.getState().edges.map((e) => e.id)).toEqual(['e_ab']);
+    });
+
+    it('cuts nothing when no activity is selected, and records no history', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_c'] });
+      s.getState().setSelection([{ kind: 'container', id: 'stage_1' }]);
+      const before = s.getState();
+      expect(s.getState().cutSelection('pl_1')).toBe(0);
+      expect(s.getState().containers).toBe(before.containers);
+      expect(s.getState().past).toBe(before.past);
+      expect(readClipboard()).toBeNull();
+    });
+
+    it('a cut pasted into ANOTHER pipeline restores nothing off coincident ids', () => {
+      // `n_q` has an in-edge from `n_p` and sits in `stage_1`, and the target has
+      // an `n_p` and a `stage_1` of its own: restoring either would wire the copy
+      // to nodes that merely share the id.
+      const pq = (pipelineId: string) => {
+        const st = createCanvasStore();
+        st.getState().loadVersion(
+          version({
+            pipelineId,
+            nodes: [
+              { id: 'n_p', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+              { id: 'n_q', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+            ],
+            edges: [{ id: 'e_pq', from: 'n_p', to: 'n_q', on: 'success' }],
+          }),
+        );
+        st.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_q'] });
+        return st;
+      };
+      const s = pq('pl_1');
+      s.getState().setSelection([{ kind: 'node', id: 'n_q' }]);
+      s.getState().cutSelection('pl_1');
+      const t = pq('pl_2');
+      t.getState().deleteNode('n_q');
+      expect(t.getState().pasteClipboard('pl_2')).toMatchObject({ ok: true, crossPipeline: true });
+      const st = t.getState();
+      expect(st.edges).toEqual([]);
+      expect(st.containers[0]!.children).toEqual([]);
+    });
+  });
 });
 
 describe('canvasStore — duplicateNode (U21)', () => {
@@ -3761,6 +3930,151 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     expect(s.getState().duplicateContainer('c_gone')).toBeNull();
     expect(s.getState().containers).toBe(before.containers);
     expect(s.getState().past).toHaveLength(before.past.length);
+  });
+
+  describe('copy and paste a container (#935)', () => {
+    beforeEach(() => {
+      clearClipboard();
+    });
+
+    /** The other pipeline: coincident ids `n_up` and `c_loop`, one in-edge. */
+    function target() {
+      const t = createCanvasStore();
+      t.getState().loadVersion(
+        version({
+          id: 'plv_2',
+          pipelineId: 'pl_2',
+          nodes: [
+            { id: 'n_up', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+            { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+          ],
+          edges: [{ id: 'e_t', from: 'n_up', to: 'c_loop', on: 'success' }],
+          containers: [{ id: 'c_loop', kind: 'stage', children: ['n_x'] }],
+        }),
+      );
+      return t;
+    }
+
+    it('a copy is NOT a doc edit, and an unknown id copies nothing', () => {
+      const s = loaded();
+      const before = s.getState();
+      expect(s.getState().copyContainer('c_gone', 'pl_1')).toBe(false);
+      expect(readClipboard()).toBeNull();
+      expect(s.getState().copyContainer('c_loop', 'pl_1')).toBe(true);
+      expect(s.getState().past).toBe(before.past);
+      expect(s.getState().nodes).toBe(before.nodes);
+      const held = readClipboard()!;
+      expect(held.containers.map((c) => c.id)).toEqual(['c_loop']);
+      expect(held.nodes.map((n) => n.id)).toEqual(['n_x', 'n_y']);
+      expect(held.edges.map((e) => e.id)).toEqual(['e_xy']);
+    });
+
+    it('pastes the box and its body, exiting on its own child, wired from the upstream', () => {
+      const s = loaded();
+      s.getState().copyContainer('c_loop', 'pl_1');
+      const outcome = s.getState().pasteClipboard('pl_1');
+
+      const st = s.getState();
+      expect(st.containers).toHaveLength(2);
+      const copy = st.containers[1]!;
+      expect(outcome).toEqual({ ok: true, count: 2, crossPipeline: false, containerId: copy.id });
+      expect(copy.children.some((id) => ['n_x', 'n_y'].includes(id))).toBe(false);
+      const [copyX, copyY] = copy.children;
+      expect(copy.exitWhen).toBe(`\${equals(nodes.${copyY}.status, "success")}`);
+      expect(st.edges).toContainEqual(expect.objectContaining({ from: copyX, to: copyY }));
+      expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_up', to: copy.id }));
+      expect(st.edges.filter((e) => e.to === 'n_down')).toHaveLength(1);
+      expect(st.selected).toEqual([{ kind: 'container', id: copy.id }]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    });
+
+    it('lands where a duplicate would — clear of the original box, not on the stagger', () => {
+      const pasted = loaded();
+      pasted.getState().copyContainer('c_loop', 'pl_1');
+      pasted.getState().pasteClipboard('pl_1');
+      const duplicated = loaded();
+      duplicated.getState().duplicateContainer('c_loop');
+      const positions = (st: ReturnType<typeof pasted.getState>) =>
+        st.nodes.slice(4).map((n) => n.position);
+      expect(positions(pasted.getState())).toEqual(positions(duplicated.getState()));
+      expect(pasted.getState().addCount).toBe(loaded().getState().addCount);
+    });
+
+    it('ONE undo takes the whole paste back', () => {
+      const s = loaded();
+      const before = s.getState();
+      s.getState().copyContainer('c_loop', 'pl_1');
+      s.getState().pasteClipboard('pl_1');
+      s.getState().undo();
+      const st = s.getState();
+      expect(st.nodes).toBe(before.nodes);
+      expect(st.edges).toBe(before.edges);
+      expect(st.containers).toBe(before.containers);
+    });
+
+    it('an EMPTY container copies and pastes', () => {
+      const s = loaded({ containers: [{ id: 'c_stage', kind: 'stage', children: [] }], edges: [] });
+      s.getState().copyContainer('c_stage', 'pl_1');
+      const outcome = s.getState().pasteClipboard('pl_1');
+      const st = s.getState();
+      expect(st.containers).toHaveLength(2);
+      expect(outcome).toEqual({
+        ok: true,
+        count: 0,
+        crossPipeline: false,
+        containerId: st.containers[1]!.id,
+      });
+      expect(st.containers[1]).toMatchObject({ kind: 'stage', children: [] });
+    });
+
+    it('pastes into ANOTHER pipeline top-level, re-deriving nothing off coincident ids', () => {
+      const s = loaded();
+      s.getState().copyContainer('c_loop', 'pl_1');
+      const t = target();
+      const before = t.getState();
+      const outcome = t.getState().pasteClipboard('pl_2');
+
+      const st = t.getState();
+      const copy = st.containers.find((c) => c.id !== 'c_loop')!;
+      expect(outcome).toEqual({ ok: true, count: 2, crossPipeline: true, containerId: copy.id });
+      // The target's own box is untouched: nothing joined it by a shared id.
+      expect(st.containers[0]).toBe(before.containers[0]);
+      // Only the body edge came across; no `n_up → copy` off the target's `n_up`.
+      expect(st.edges).toHaveLength(2);
+      expect(st.edges.some((e) => e.to === copy.id)).toBe(false);
+      expect(copy.exitWhen).toBe(`\${equals(nodes.${copy.children[1]}.status, "success")}`);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    });
+
+    it('refuses, by name, a foreach whose ITEMS reads an upstream it did not bring', () => {
+      // `items` is evaluated OUTSIDE the box, so it names `n_up`, which the copy
+      // does not carry — and the target has an `n_up` of its own to misread.
+      const s = loaded({
+        nodes: [
+          {
+            id: 'n_up',
+            type: 'http_request',
+            config: { outputs: [{ name: 'rows', type: 'json' }] },
+            position: { x: 0, y: 0 },
+          },
+          { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+        ],
+        edges: [{ id: 'e_in', from: 'n_up', to: 'c_each', on: 'success' }],
+        containers: [
+          { id: 'c_each', kind: 'foreach', children: ['n_x'], items: '${nodes.n_up.output.rows}' },
+        ],
+      });
+      s.getState().copyContainer('c_each', 'pl_1');
+      const t = target();
+      const before = t.getState();
+      expect(t.getState().pasteClipboard('pl_2')).toEqual({
+        ok: false,
+        reason:
+          'Not pasted: the copied activities read from n_up, which was not copied. Copy it too.',
+      });
+      expect(t.getState().containers).toBe(before.containers);
+      expect(t.getState().past).toBe(before.past);
+    });
   });
 });
 

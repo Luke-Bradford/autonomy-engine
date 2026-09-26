@@ -178,8 +178,14 @@ describe('clipboardCommandFor (U21)', () => {
     expect(clipboardCommandFor(key('d', { metaKey: true, shiftKey: true }))).toBeNull();
   });
 
-  it('⌘X is deliberately NOT read — cut is a later slice', () => {
-    expect(clipboardCommandFor(key('x', { metaKey: true }))).toBeNull();
+  it('⌘X and Ctrl+X read as cut, behind the same guards as copy (#935)', () => {
+    expect(clipboardCommandFor(key('x', { metaKey: true }))).toBe('cut');
+    expect(clipboardCommandFor(key('X', { ctrlKey: true }))).toBe('cut');
+    expect(clipboardCommandFor(key('x'))).toBeNull();
+    expect(clipboardCommandFor(key('x', { metaKey: true, shiftKey: true }))).toBeNull();
+    expect(
+      clipboardCommandFor(key('x', { metaKey: true, target: document.createElement('input') })),
+    ).toBeNull();
   });
 
   it('an unrelated key with the same modifiers is not ours', () => {

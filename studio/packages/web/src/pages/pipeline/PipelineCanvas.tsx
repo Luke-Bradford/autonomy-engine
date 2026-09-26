@@ -146,10 +146,16 @@ const CANVAS_NOTICE_MS = 6_000;
  * U21 — the notice a paste leaves, for ⌘V and the Paste button alike. A paste
  * from another pipeline says so (#935): its copies arrive without the in-edges
  * and container a local paste re-derives, and the line is where that shows.
+ *
+ * A pasted container is named by its COPY's label, read off `containers` AFTER
+ * the paste — the name the operator now sees on the new box, as ⌘D's notice does.
  */
-function pasteNotice(outcome: PasteOutcome): string {
+function pasteNotice(outcome: PasteOutcome, containers: Container[]): string {
   if (!outcome.ok) return outcome.reason;
-  const what = `${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}`;
+  const what =
+    outcome.containerId === undefined
+      ? `${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}`
+      : (containerLabels(containers).get(outcome.containerId) ?? 'a container');
   return outcome.crossPipeline ? `Pasted ${what} from another pipeline.` : `Pasted ${what}.`;
 }
 
@@ -379,13 +385,32 @@ export function PipelineCanvas({
       const clip = clipboardCommandFor(e);
       if (clip !== null) {
         if (previewing !== null || previewLocked) return;
-        if (clip === 'copy') {
-          const copied = store.getState().copySelection(pipelineId);
-          // Nothing of OURS to copy — leave ⌘C alone so the browser's own text
-          // copy still works for an operator selecting text on the page.
-          if (copied === 0) return;
+        if (clip === 'copy' || clip === 'cut') {
+          const box = singleSelection(store.getState().selected);
+          if (box?.kind === 'container') {
+            // #935 — a container copies whole. It is never cut: its only delete
+            // (the ✕) keeps the body, so there is no delete a cut could be.
+            if (clip === 'cut') {
+              e.preventDefault();
+              showCanvasMsg('A container cannot be cut. Copy it with ⌘C.');
+              return;
+            }
+            if (!store.getState().copyContainer(box.id, pipelineId)) return;
+            e.preventDefault();
+            const name = containerLabels(store.getState().containers).get(box.id);
+            showCanvasMsg(`Copied ${name ?? 'container'}.`);
+            return;
+          }
+          const n =
+            clip === 'copy'
+              ? store.getState().copySelection(pipelineId)
+              : store.getState().cutSelection(pipelineId);
+          // Nothing of OURS to copy — leave the key alone so the browser's own
+          // text copy/cut still works for an operator selecting text on the page.
+          if (n === 0) return;
           e.preventDefault();
-          showCanvasMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
+          const what = `${n} ${n === 1 ? 'activity' : 'activities'}`;
+          showCanvasMsg(clip === 'copy' ? `Copied ${what}.` : `Cut ${what}.`);
           return;
         }
         if (clip === 'duplicate') {
@@ -406,7 +431,8 @@ export function PipelineCanvas({
           return;
         }
         e.preventDefault();
-        showCanvasMsg(pasteNotice(store.getState().pasteClipboard(pipelineId)));
+        const pasted = store.getState().pasteClipboard(pipelineId);
+        showCanvasMsg(pasteNotice(pasted, store.getState().containers));
         return;
       }
       const command = historyCommandFor(e);
@@ -1269,6 +1295,11 @@ function PropertyPanel({
         containers={containers}
         params={params}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
+        onCopy={() => {
+          if (store.getState().copyContainer(container.id, pipelineId)) {
+            onNotice(`Copied ${containerLabels(containers).get(container.id) ?? container.kind}.`);
+          }
+        }}
         onDuplicate={() => {
           if (store.getState().duplicateContainer(container.id) !== null) {
             onNotice(
@@ -1376,10 +1407,12 @@ export function MultiSelectionPanel({
       <p className="page-hint">
         {parts.join(', ')}. Editing is one at a time — click a single activity to configure it.
       </p>
-      {/* U21 — the three bulk acts, in the order an operator reaches for them.
-          Copy and Duplicate act on the ACTIVITIES only (an edge travels with the
+      {/* U21 — the bulk acts, in the order an operator reaches for them. Copy,
+          Cut and Duplicate act on the ACTIVITIES only (an edge travels with the
           pair it joins, and an edge alone has nothing to copy into), which is
-          why they are disabled when a marquee caught edges and nothing else. */}
+          why they are disabled when a marquee caught edges and nothing else.
+          Cut is not Copy-then-Delete: it records what it removed around the
+          activities, so a paste puts them back wired (#935, `cutSelection`). */}
       <button
         type="button"
         disabled={activities === 0}
@@ -1389,6 +1422,16 @@ export function MultiSelectionPanel({
         }}
       >
         Copy selection
+      </button>
+      <button
+        type="button"
+        disabled={activities === 0}
+        onClick={() => {
+          const cut = store.getState().cutSelection(pipelineId);
+          onNotice(`Cut ${cut} ${cut === 1 ? 'activity' : 'activities'}.`);
+        }}
+      >
+        Cut selection
       </button>
       <button
         type="button"
@@ -1448,7 +1491,8 @@ export function PipelinePanel({
       <button
         type="button"
         onClick={() => {
-          onNotice(pasteNotice(store.getState().pasteClipboard(pipelineId)));
+          const pasted = store.getState().pasteClipboard(pipelineId);
+          onNotice(pasteNotice(pasted, store.getState().containers));
         }}
       >
         Paste

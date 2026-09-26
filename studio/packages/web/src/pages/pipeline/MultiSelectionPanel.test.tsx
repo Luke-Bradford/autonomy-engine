@@ -74,6 +74,30 @@ describe('MultiSelectionPanel (U21)', () => {
     expect(store.getState().past).toEqual([]);
   });
 
+  it('“Cut selection” is ⌘X: copies the activities and removes them in ONE undo entry', () => {
+    clearClipboard();
+    const store = loaded();
+    store.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
+    const notices: string[] = [];
+    render(
+      <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={(m) => notices.push(m)}
+        store={store}
+        selection={[{ kind: 'node', id: 'n_b' }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cut selection' }));
+    expect(readClipboard()?.nodes.map((n) => n.id)).toEqual(['n_b']);
+    // The CUT's record, not a copy's: without it a paste brings `n_b` back
+    // with no upstream — see `CutContext`.
+    expect(readClipboard()?.cut?.inEdges.map((e) => e.id)).toEqual(['e_1']);
+    expect(store.getState().nodes.map((n) => n.id)).toEqual(['n_a']);
+    expect(store.getState().past).toHaveLength(1);
+    expect(notices).toEqual(['Cut 1 activity.']);
+  });
+
   it('“Duplicate selection” clones the activities in ONE undo entry', () => {
     const store = loaded();
     store.getState().setSelection([
@@ -117,6 +141,7 @@ describe('MultiSelectionPanel (U21)', () => {
     // with the pair it joins, and both of those are still where they were.
     expect(screen.getByRole('button', { name: 'Copy selection' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Duplicate selection' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cut selection' })).toBeDisabled();
   });
 
   it('counts the activities AND the connections that came with them', () => {
