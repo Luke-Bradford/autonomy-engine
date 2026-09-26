@@ -261,10 +261,7 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
       });
     }
     // Parameters alone (an llm_call under `metadata` records no input) are withheld too.
-    const { input: _omit, ...paramsOnly } = dispatched(secret.id) as Extract<
-      EngineEvent,
-      { type: 'node.dispatched' }
-    >;
+    const paramsOnly = { ...dispatched(secret.id), input: undefined } as EngineEvent;
     const got = createEngine({ nodes: [secret], edges: [], containers: [] }).redact(paramsOnly);
     expect(got).toEqual({ ...paramsOnly, params: { text: SECURE_REDACTED, chars: 70 } });
   });
