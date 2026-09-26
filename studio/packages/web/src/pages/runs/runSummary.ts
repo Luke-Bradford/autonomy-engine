@@ -7,6 +7,7 @@ import {
   TERMINAL_NODE,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
+  type DispatchInput,
   type EngineEvent,
   type FailureKind,
   type MeteredTotals,
@@ -189,6 +190,27 @@ export interface NodeActivity {
    * the panel says which instance it is looking at when there is one.
    */
   datasetAddresses: Extract<EngineEvent, { type: 'node.dispatched' }>['datasetAddresses'];
+  /**
+   * #890 — the input a dispatch recorded: the node's config after
+   * `${}` substitution, as bounded JSON text (`captureDispatchInput`). The marker
+   * on a secure node. `undefined` is an honest absence, never a default: a log
+   * written before #890, an `llm_call` not on `capture: 'full'`, and every node
+   * the executor never dispatches (control activities, a pipeline call, a node
+   * rerun-from-failed copied) record none.
+   *
+   * Last dispatch wins, and cleared with `datasetAddresses` when a node re-opens,
+   * for the same reason: a retry resolves its input afresh. EXCEPT when the row
+   * shows a settled foreach item's result (`instanceId`): then it is that item's
+   * own input, so a result and an input from different items are never paired.
+   */
+  input: DispatchInput | undefined;
+  /**
+   * #890 — WHICH foreach item `input` belongs to (`'w@2'`, as `instanceId`). Unlike the
+   * dataset address, an item's input genuinely differs from its siblings', and
+   * `instanceId` is stamped by TERMINAL events only — so a parallel item still
+   * running would otherwise label another item's input with the settled one's.
+   */
+  inputInstanceId: string | undefined;
   /**
    * The DECLARED outputs recorded by the node's most recent TERMINAL-SUCCESS
    * event — the node's typed result contract, distinct from
@@ -591,6 +613,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const instanceSpannedCost = new Set<string>();
   const toolCallsByNode = new Map<string, NodeToolCall[]>();
   const capturesByNode = new Map<string, NodeCapture[]>();
+  /* #890 — each dispatch's recorded input, by RAW id (`w@2`), so a row showing
+     a settled foreach item's result can show THAT item's input (see the
+     projection at the end). */
+  const inputByRaw = new Map<string, DispatchInput | undefined>();
   /* Dispatches per RAW node id — `w@1` counted apart from `w@2`, unlike the
      row's own `attempts`, which folds every item's dispatch onto one number.
      A tool call belongs to ONE item's attempt, and saying `w@2`'s first exchange
@@ -642,6 +668,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         failureKind: undefined,
         failureCode: undefined,
         datasetAddresses: undefined,
+        input: undefined,
+        inputInstanceId: undefined,
         outputValues: undefined,
         copiedFromRunId: undefined,
         copiedChildRunId: undefined,
@@ -849,6 +877,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            head of every TERMINAL branch too, which would blank the address of
            precisely the settled copies whose destination anyone reads. */
         n.datasetAddresses = e.datasetAddresses;
+        // #890 — unconditionally too, for the same reason.
+        n.input = e.input;
+        n.inputInstanceId = instanceOf(e.nodeId);
+        inputByRaw.set(e.nodeId, e.input);
         openSpan(n, e.nodeId, row.ts);
         break;
       }
@@ -914,6 +946,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
            last attempt's target standing would name a destination over a node
            that is being sent somewhere else. The re-dispatch sets it again. */
         n.datasetAddresses = undefined;
+        // #890 — and the input: the re-dispatch records its own.
+        n.input = undefined;
+        n.inputInstanceId = undefined;
+        inputByRaw.delete(e.nodeId);
         /* #1299 — and the last progress tick, for the same argument again: the
            status is `dispatched` from here, so the table would show the failed
            attempt's "rows in flight" as live progress of a node that has not
@@ -1293,6 +1329,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       costSpansInstances: instanceSpannedCost.has(n.nodeId),
       toolCalls: toolCallsByNode.get(n.nodeId) ?? [],
       captures: capturesByNode.get(n.nodeId) ?? [],
+      /* #890 — when the row shows a settled foreach ITEM's result, its input is
+         that item's, not whichever item dispatched last: parallel items settle
+         out of order, so `failed w@1` can land after `dispatched w@2`, and the
+         panel would otherwise pair w@1's failure with w@2's input. With no
+         item result on show, the latest dispatch stands. */
+      ...(n.instanceId !== undefined
+        ? { input: inputByRaw.get(n.instanceId), inputInstanceId: n.instanceId }
+        : {}),
     };
   });
 }
@@ -1429,6 +1473,8 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          the fields below make: an absent fact is rendered absent, never
          manufactured. */
       datasetAddresses: undefined,
+      input: undefined,
+      inputInstanceId: undefined,
       outputValues: undefined,
       /* A row reached here because NO event named this node, and a copied
          frontier node is named by `run.reseeded` — so this branch is by

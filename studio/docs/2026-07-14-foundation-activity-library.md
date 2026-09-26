@@ -93,7 +93,7 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
   still-unbuilt rendering of the same fact. **Usage/cost + TOOL CALLS SHIPPED 2026-08-01 (#866)**,
   folded per node from `activity.metered`/`activity.toolCalled` through the same fail-closed
   accumulator the run-level projection uses; the per-run/rollup consumption surface is a separate,
-  still-unbuilt slice (U27). Input remains deferred (#890).
+  still-unbuilt slice (U27). Input shipped 2026-09-26 (#890, `node.dispatched.input` — see the UI spec's U24 AS BUILT rows).
 - **Run-cost surfacing** — the #2 run-cost projection shown per run + pipeline rollup.
 - **Alerts (later)** — ADF's elapsed-time metric analog (#1 pipeline `policy`); a run-exceeds-
   duration or run-failed notification. Deferred to a monitoring/alerting spec.

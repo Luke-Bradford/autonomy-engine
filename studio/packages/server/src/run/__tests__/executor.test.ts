@@ -7,6 +7,7 @@ import { z } from 'zod';
 import {
   BUILTIN_PRICE_TABLE_VERSION,
   CATALOG_VERSION,
+  SECURE_REDACTED,
   type ActivityCatalog,
   type ActivityCatalogEntry,
   type ConnectionKind,
@@ -4760,5 +4761,112 @@ describe("createExecutor — CX2 (#1320): abortRun stops a cancelled run's dispa
     // The skipped attempt's queued slot resolves without ever starting it.
     await sleep(10);
     expect(adapterRuns).toEqual([holder.id]);
+  });
+});
+
+describe('createExecutor — node.dispatched.input, the input a node ran with (#890)', () => {
+  const dispatchedInput = (db: Db, runId: string, nodeId = 'n1') => {
+    const ev = loadEngineEvents(db, runId).find(
+      (e) => e.type === 'node.dispatched' && e.nodeId === nodeId,
+    );
+    if (ev?.type !== 'node.dispatched') throw new Error('no node.dispatched');
+    return ev.input;
+  };
+  const succeeds = () =>
+    fakeHttpAdapter(async function* () {
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+  it('records the config AFTER ${} substitution, not the authored template', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(
+      db,
+      [httpNode('n1', connId, { url: 'https://x/${params.who}', outputs: [] })],
+      [{ name: 'who', type: 'string', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { who: 'alice' },
+    });
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const input = dispatchedInput(db, run.id);
+    expect(input).toBeDefined();
+    expect(JSON.parse(input!.text)).toMatchObject({ url: 'https://x/alice' });
+    expect(input!.chars).toBe(input!.text.length);
+    expect(input).not.toHaveProperty('truncated');
+  });
+
+  it("scrubs the connection's own secret out of a plain field, as a VALUE (escaped plaintext too)", async () => {
+    // A quote makes the JSON text hold `\"`, so a scrub run on the TEXT would
+    // miss it; the value-level scrub is what catches it.
+    const plain = 'sk-live"quoted\\secret';
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, plain);
+    const pvId = seedVersion(db, [
+      httpNode('n1', connId, { url: 'https://x/y', headers: { 'X-Pasted': plain }, outputs: [] }),
+    ]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const input = dispatchedInput(db, run.id)!;
+    expect(input.text).not.toContain(JSON.stringify(plain).slice(1, -1));
+    expect(JSON.parse(input.text)).toMatchObject({ headers: { 'X-Pasted': '***' } });
+  });
+
+  it("stores a secureInput node's input only as the marker in run_events", async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const n = httpNode('n1', connId, { url: 'https://x/private-path', outputs: [] });
+    const pvId = seedVersion(db, [{ ...n, policy: { secureInput: true } }]);
+    const run = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: succeeds() }), run);
+    const raw = db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(eq(runEvents.runId, run.id))
+      .all()
+      .map((r) => JSON.stringify(r.payload))
+      .join('\n');
+    expect(raw).not.toContain('private-path');
+    expect(dispatchedInput(db, run.id)).toEqual({
+      text: SECURE_REDACTED,
+      chars: expect.any(Number),
+    });
+  });
+
+  it("records an llm_call's input only under capture: 'full' (#605's default promises no prompt text)", async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-test');
+    const llm = (id: string, config: Record<string, unknown>): Node => ({
+      id,
+      type: 'llm_call',
+      config,
+      connectionId: connId,
+      position: { x: (seq += 1), y: 0 },
+    });
+    const pvId = seedVersion(db, [
+      llm('meta', { prompt: 'the private prompt' }),
+      llm('full', { prompt: 'the shared prompt', capture: 'full' }),
+    ]);
+    const run = seedRun(db, pvId);
+    const adapter: ConnectorAdapter = {
+      kind: 'anthropic_api',
+      configSchema: testRegistry().get('anthropic_api')!.configSchema,
+      testConnection: () => Promise.resolve({ ok: true, probed: 'config' }),
+      runActivity: async function* () {
+        yield {
+          type: 'succeeded',
+          outputs: { text: 'ok', stopReason: 'end_turn' },
+        } satisfies ActivityEvent;
+      },
+    };
+    await startRun(deps(db, { adapters: new Map([['anthropic_api', adapter]]) }), run);
+    expect(dispatchedInput(db, run.id, 'meta')).toBeUndefined();
+    expect(JSON.parse(dispatchedInput(db, run.id, 'full')!.text)).toMatchObject({
+      prompt: 'the shared prompt',
+    });
   });
 });

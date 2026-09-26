@@ -966,6 +966,18 @@ export const CapturedContentSchema = z.object({
 export type CapturedContent = z.infer<typeof CapturedContentSchema>;
 
 /**
+ * #890 — the input a node was dispatched with, as JSON text
+ * (`captureDispatchInput`): `chars` is the whole length, `truncated` is present
+ * only when the stored `text` was cut. On a secure node `text` is the marker.
+ */
+export const DispatchInputSchema = z.object({
+  text: z.string(),
+  chars: z.number().int().nonnegative(),
+  truncated: z.literal(true).optional(),
+});
+export type DispatchInput = z.infer<typeof DispatchInputSchema>;
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -1117,6 +1129,16 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     datasetAddresses: z
       .object({ source: DatasetAddressSchema, sink: DatasetAddressSchema.optional() })
       .optional(),
+    /**
+     * #890 — the node's config as dispatched: after `${}` substitution, before
+     * any `{$secret}` marker is resolved (`dispatch-input.ts` says why no secret
+     * reaches it). Bounded, and withheld as the marker on a secure node
+     * (`secure.ts`). ADDITIVE and OPTIONAL on the same contract as
+     * `datasetAddresses` above: absent means "not recorded" — a log written
+     * before this field, a value JSON cannot represent, or an `llm_call` whose
+     * `capture` is not `full`. The reducer never reads it.
+     */
+    input: DispatchInputSchema.optional(),
   }),
   z.object({
     type: z.literal('node.succeeded'),
