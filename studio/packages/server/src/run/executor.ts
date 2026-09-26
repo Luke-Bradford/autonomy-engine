@@ -31,6 +31,7 @@ import {
   type WarningCode,
   isNonOverridableConnectionConfigKey,
 } from '@autonomy-studio/shared';
+import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getDataset } from '../repo/datasets.js';
@@ -390,6 +391,28 @@ function mergeParamOverrides(
 export function createExecutor(deps: ExecutorDeps): Executor {
   const limit = pLimit(deps.concurrency ?? 4);
   const catalog = deps.catalog ?? sharedCatalog;
+
+  /**
+   * CX2 (#1320, spec D6) — every live dispatch's abort controller, by run, so a
+   * cancel can reach them. A dispatch adds itself BEFORE its pre-flight and
+   * removes itself once it has settled, so there is no window in which a
+   * started dispatch is out of reach of `abortRun`.
+   */
+  const liveByRun = new Map<string, Set<AbortController>>();
+  function track(runId: string, controller: AbortController): void {
+    let set = liveByRun.get(runId);
+    if (set === undefined) {
+      set = new Set();
+      liveByRun.set(runId, set);
+    }
+    set.add(controller);
+  }
+  function untrack(runId: string, controller: AbortController): void {
+    const set = liveByRun.get(runId);
+    if (set === undefined) return;
+    set.delete(controller);
+    if (set.size === 0) liveByRun.delete(runId);
+  }
 
   /**
    * Resolve the node object AND the run's owner for a dispatch command. The
@@ -1081,6 +1104,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ...priceFields,
       };
     };
+    // CX2 (#1320) — the run was cancelled while this attempt waited for a slot
+    // in the global limit. Never start the adapter: the side effect is exactly
+    // what the cancel exists to prevent.
+    if (controller.signal.aborted && controller.signal.reason === RUN_CANCELLED_REASON) {
+      emit(runCancelledFailure(runId, nodeId, attemptId));
+      controller.abort();
+      return;
+    }
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields, sinkSecret)) {
         if (ev.type === 'output') {
@@ -1245,6 +1276,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       );
       return;
     } catch (err) {
+      // CX2 (#1320) — a throw after the run's cancel aborted this attempt is the
+      // cancel's effect, not an adapter bug: many adapters surface an abort as a
+      // rejected fetch/stream. Reporting it `permanent` would make the run finish
+      // `failure` for a stop the operator asked for (spec D3).
+      if (controller.signal.reason === RUN_CANCELLED_REASON) {
+        emit(runCancelledFailure(runId, nodeId, attemptId));
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       // An unexpected throw is an adapter BUG of unknown cause, not a classified
       // failure — adapters signal a real cancel/transient by yielding a terminal
@@ -1271,6 +1310,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   async function* performDispatch(
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
     runId: string,
+  ): AsyncGenerator<EngineEvent> {
+    // CX2 (#1320) — reachable by `abortRun` from its first line: a cancel that
+    // folds during the pre-flight below must still stop this attempt.
+    const controller = new AbortController();
+    track(runId, controller);
+    try {
+      yield* dispatchUnder(command, runId, controller);
+    } finally {
+      untrack(runId, controller);
+    }
+  }
+
+  async function* dispatchUnder(
+    command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
+    runId: string,
+    controller: AbortController,
   ): AsyncGenerator<EngineEvent> {
     const { nodeId, attemptId } = command;
 
@@ -1638,6 +1693,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const { secretFields } = resolvedSecrets;
 
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
+    // CX2 (#1320) — cancelled during the pre-flight: the attempt never started,
+    // so it fails without a `node.dispatched` (the node is still `ready`).
+    if (controller.signal.aborted) {
+      yield runCancelledFailure(runId, nodeId, attemptId);
+      return;
+    }
     yield {
       type: 'node.dispatched',
       runId,
@@ -1651,7 +1712,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
     };
 
-    const controller = new AbortController();
     const ctx: ActivityContext = {
       runId,
       nodeId,
@@ -1788,6 +1848,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   return {
+    abortRun(runId: string): void {
+      for (const controller of liveByRun.get(runId) ?? []) controller.abort(RUN_CANCELLED_REASON);
+    },
     async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
       if (command.type === 'startChild') {
         // #796 (P3b) — real `call_pipeline` child execution. NOTE this branch

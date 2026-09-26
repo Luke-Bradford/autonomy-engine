@@ -588,6 +588,13 @@ export const FAILURE_CODES = {
   ADAPTER_NO_TERMINAL: 'adapter_no_terminal',
   /** The adapter threw instead of yielding a terminal `failed` (a bug). */
   ADAPTER_THREW: 'adapter_threw',
+  /**
+   * CX2 (#1320) — the run was cancelled, and this attempt is what the cancel
+   * stopped: it was aborted in flight, or it had not started when the cancel
+   * folded. Always paired with `kind: 'cancelled'`. The server mints it; an
+   * adapter aborting on its own signal reports its own code.
+   */
+  RUN_CANCELLED: 'run_cancelled',
   /** The run's doc has no node with the dispatched id. */
   NODE_NOT_FOUND: 'node_not_found',
   /** The node's activity type is absent from the catalog. */
