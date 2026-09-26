@@ -540,6 +540,9 @@ export function PipelineCanvas({
   const params = useStore(store, (s) => s.params);
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
+  // #852 — read by the folded dock's toggle, so a selection made while the
+  // properties are folded away still gets a visible answer.
+  const selectedCount = useStore(store, (s) => s.selected.length);
   const loaded = useStore(store, (s) => s.loaded);
 
   const arrangeReason = arrangeDisabledReason({
@@ -1275,7 +1278,15 @@ export function PipelineCanvas({
                   aria-controls={dockBodyId}
                   onClick={() => setDockOpen((open) => !open)}
                 >
-                  {dockOpen ? 'Hide properties' : 'Show properties'}
+                  {/* Folded, a selection would otherwise change nothing on screen
+                      but the canvas highlight. The dock does NOT reopen by itself:
+                      the operator folded it to look at the graph, and a click or a
+                      drag selects — so the toggle says what is waiting instead. */}
+                  {dockOpen
+                    ? 'Hide properties'
+                    : selectedCount > 0
+                      ? `Show properties (${String(selectedCount)} selected)`
+                      : 'Show properties'}
                 </button>
                 {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
@@ -3196,11 +3207,7 @@ export function NodePanel({
           {
             key: 'general',
             label: 'General',
-            content: (
-              <>
-                <PolicyEditor store={store} nodeId={nodeId} />
-              </>
-            ),
+            content: <PolicyEditor store={store} nodeId={nodeId} />,
           },
         ]}
       />

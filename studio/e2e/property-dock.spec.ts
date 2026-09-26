@@ -87,6 +87,12 @@ test.describe('#852 — the bottom property dock', () => {
       .poll(async () => (await rectOf(page, '.react-flow')).height)
       .toBeGreaterThan(open.height + 150);
 
+    // A selection made while folded is answered on the toggle; the dock stays
+    // folded, because a click or a drag on the canvas selects.
+    await nodeById(page, 'a').click();
+    await expect(show).toHaveText('Show properties (1 selected)');
+    await expect(properties(page)).toBeHidden();
+
     await show.click();
     await expect(properties(page)).toBeVisible();
     await expect
