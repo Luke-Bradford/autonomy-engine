@@ -28,6 +28,7 @@ import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import { makeStubExecutor, type StubExecutorOptions } from '../../run/__tests__/stub-executor.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createContainerTimeoutAlarmHandler } from '../container-timeout-alarm.js';
+import { containerActiveGuard } from '../durable-alarm-handler.js';
 import { silentLog } from './testLog.js';
 
 /**
@@ -348,6 +349,42 @@ describe('A17 — freshness: at-least-once + a stale-delivery check', () => {
 
     expect(listPendingWakeups(db).filter((w) => w.kind === KIND)).toHaveLength(0);
     expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('container.timedOut');
+  });
+
+  it('CX5 (#1320) — SUPPRESSES a timeout on a cancelled run still DRAINING its child (not only the terminal-log arm)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [gate('work')], [], [timedLoop('lp', ['work'], 30)]);
+    const run = seedRun(db, pvId);
+    let t = NOW;
+    const { deps, clock } = harness(db, { nodes: { work: { hang: true } } }, () => t);
+    await startRun(deps, run);
+    t = NOW + 30_000;
+
+    // The cancel is folded but `work` has not yielded its abort yet: the run is
+    // live (no terminal fact) and the loop is still `active`, so layer 1 passes.
+    appendEngineEvent(db, {
+      type: 'run.cancelRequested',
+      runId: run.id,
+      source: { kind: 'operator' },
+    });
+    const draining = getRunState(db, deps, run.id);
+    expect(draining.status).toBe('running');
+    expect(draining.containers.lp!.status).toBe('active');
+    expect(containerActiveGuard('container_not_active')(draining, { containerId: 'lp' })).toEqual({
+      fresh: false,
+      reason: 'run_cancel_requested',
+    });
+
+    clock.tick();
+    await settle();
+
+    // Settled, and nothing appended: the draining child was not abandoned, so its
+    // abort can still finish the run `cancelled` rather than `failure/timeout`.
+    expect(listPendingWakeups(db).filter((w) => w.kind === KIND)).toHaveLength(0);
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('container.timedOut');
+    const after = getRunState(db, deps, run.id);
+    expect(after.nodes.work!.status).toBe('dispatched');
+    expect(after.containers.lp!.status).toBe('active');
   });
 });
 
