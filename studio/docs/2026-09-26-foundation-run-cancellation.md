@@ -1,6 +1,6 @@
 # Foundation sub-spec (CX) — Run cancellation
 
-**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop. **CX1 built** (reducer + schemas); CX2-CX5 open.
+**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop. **CX1 built** (reducer + schemas); **CX2 built** (server producer); CX3-CX5 open.
 **Scope:** a cancel primitive that crosses a run boundary — an operator can stop a run, and a
 `call_pipeline` child stops when its parent no longer wants it. This is the engine-semantics epic the
 UI spec's U28 row and #1056 both name. The UI epic's pre-settled note (operator, 2026-07-23) forbids
@@ -298,6 +298,17 @@ Decisions the reducer had to take that the D-sections left implicit:
 - **Pending:** an EMPTY seed (runId `''`) accepts the cancel and adopts its runId, as `run.triggerContext` does. A `run.started` carries a folded cancel, so a start racing it finishes `cancelled` without dispatching.
 - **`reason`** is `cancelled:<source.kind>` on every cancelled finish.
 - **Web:** `cancelled` is a neutral pill and tone, and it is offered rerun-from-failed. The server's existing rule ("terminated and not `success`") already admits it, per D9.
+
+### CX2 — as built
+
+- **Where things live.** `run/cancel.ts` holds the intent map and poke registry (`RunCancels`), plus the ONE cancelled-failure builder (`runCancelledFailure`, code `run_cancelled`). `run/cancel-service.ts` holds the route's half. `driver.ts` holds `onCancelFolded` (never throws, so a failed abort cannot strand a fold without its finish), `foldPendingCancel` (used by `startRun`, `drive` and `reconcileOne`), and `driveCancelIntent`, the serialized task. It takes the lock, does nothing if the intent is gone, and discards the intent afterwards if the run had already ended.
+- **The pump's poke puts its marker at the FRONT of the inbox**, so a queued `node.succeeded` cannot dispatch a successor before the cancel folds. The pump also pushes a marker at start if an intent is already pending. That covers the boot reconciler, which folds at the top of `reconcileOne` and can `await` before it pumps.
+- **A cancelled attempt never waits for a global adapter slot.** The executor listens for the abort while the attempt is queued behind the global `p-limit`. It fails the attempt at once and skips the adapter, because the slot may belong to other runs' long adapters, and waiting would hold the cancelled run and its drive lock for as long as they take. An attempt aborted during its pre-flight fails without a `node.dispatched`. A stream still queued behind the per-run cap is replaced by the cancelled failure in the pump. A throw from an adapter after the run's abort reports `cancelled`, not `ADAPTER_THREW`.
+- **D7 folds a still-pending intent first**, then finishes: each `dispatched` node fails `run_cancelled`, `resume` fails the lost `ready`/call nodes, and the run settles to D3's finish. A `pending` run whose cancel folded but whose `run.finished` was lost gets `cancelFinish` directly. The boot sweep routes a never-started row whose log holds `run.cancelRequested` into that branch rather than terminalizing it `interrupted`.
+- **`startRun` on a run a cancel already finished** returns the terminal state quietly instead of throwing "already has an event log".
+- **D1 literal-comparison grep:** `scheduler/tumbling.ts` `settleIfTerminal` was the one hang, now fixed under D9, and window `runStatus` gained `cancelled`. `run/child.ts` maps a cancelled child to `failure` for the parent, which is deliberate and is CX3's to revisit. `reseed.ts` already admits `cancelled`. The web had already been updated in CX1. Admission selects `queued` rows only, and a test pins that a cancelled queued row is never admitted.
+- **Known until CX3, and not a hang:** a parent parked on a live child counts that call node as in flight. Cancel mode never parks, so a cancelled parent becomes `running` with no pump until the child ends (or a lease reclaim runs D7). Until then it holds its admission slot. A `startChild` already queued behind the per-run cap when the cancel folds still spawns its child. CX3's propagation closes both, so CX4's UI must not promise an immediate stop for a run waiting on a child.
+- **Deferred:** a queued run cancelled before admission counts as "served" in the S6b fairness order (#1326).
 
 ## Open questions (none block CX1)
 
