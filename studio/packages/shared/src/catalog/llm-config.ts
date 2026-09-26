@@ -56,6 +56,20 @@ export const outputModeSchema = z.enum(['text', 'structured']);
 export type OutputMode = z.infer<typeof outputModeSchema>;
 
 /**
+ * #2 L4a — the TYPES a structured-output property may declare. Exported so the
+ * node panel's `outputSchema` rows (#852 item 3) offer exactly this set rather
+ * than a copy of it.
+ */
+export const llmOutputPropertyTypeSchema = z.enum([
+  'string',
+  'number',
+  'integer',
+  'boolean',
+  'object',
+  'array',
+]);
+
+/**
  * #2 L4a — one restricted property in a structured `outputSchema`. Only the
  * TOP-LEVEL property TYPES are addressable (`${nodes.x.output.<name>}` is a single
  * segment, #6 E7), so only they must map cleanly to an `OutputType`; nested
@@ -68,7 +82,7 @@ export type OutputMode = z.infer<typeof outputModeSchema>;
  */
 const llmOutputPropertySchema = z
   .object({
-    type: z.enum(['string', 'number', 'integer', 'boolean', 'object', 'array']),
+    type: llmOutputPropertyTypeSchema,
     description: z.string().optional(),
     // Present for enum-typed scalars — kept as opaque values; the base `type`
     // still decides the lowered OutputType.
@@ -571,7 +585,10 @@ export function lowerOutputSchema(schema: LlmOutputSchema): Output[] {
  * ONE rule — they can never disagree about which fields are optional (the very
  * lower-vs-validate drift class #594 is about).
  */
-export function isOptionalProperty(schema: LlmOutputSchema, name: string): boolean {
+export function isOptionalProperty(
+  schema: Pick<LlmOutputSchema, 'required'>,
+  name: string,
+): boolean {
   return schema.required !== undefined && !schema.required.includes(name);
 }
 

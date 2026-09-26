@@ -4,8 +4,10 @@ import {
   SecretRefSchema,
   connectionConfigSchema,
   datasetConfigSchema,
+  LLM_RECIPES,
   getActivity,
   llmMessageSchema,
+  llmOutputSchemaSchema,
   singleLine,
 } from '@autonomy-studio/shared';
 import {
@@ -21,6 +23,7 @@ import {
   parseFieldInput,
   placeRowCandidate,
   readConfigDraft,
+  seedFieldInputs,
   unrepresentableFields,
   type ConfigDraft,
   type ConfigField,
@@ -1232,5 +1235,278 @@ describe('singleLine presentation hint (#852 item 4)', () => {
   it('is invisible to z.toJSONSchema, which reads only the global registry', () => {
     const json = JSON.stringify(z.toJSONSchema(z.object({ a: singleLine(z.string()) })));
     expect(json).not.toContain('singleLine');
+  });
+});
+
+describe('outputSchema as rows (#852 item 3)', () => {
+  const llm = fieldsOf('llm_call');
+  const schemaField = field(llm, 'outputSchema');
+  const cell = (row: Record<string, string | boolean>) => ({
+    name: '',
+    type: '',
+    required: false,
+    description: '',
+    constraints: '',
+    ...row,
+  });
+  /** Every stored value must render, then read back to itself. */
+  const roundTrip = (value: unknown) => {
+    const rendered = formatFieldValue(schemaField, value);
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return undefined;
+    return parseFieldInput(schemaField, rendered.value);
+  };
+
+  it('gives outputSchema a row per property, on both activities that declare one', () => {
+    for (const type of ['llm_call', 'agent_task']) {
+      const f = field(fieldsOf(type), 'outputSchema');
+      expect(f.kind).toBe('outputSchema');
+      expect(f.optional).toBe(true);
+      expect(f.elementFields?.map((c) => `${c.name}:${c.kind}`)).toEqual([
+        'name:text',
+        'type:enum',
+        'required:boolean',
+        'description:text',
+        'constraints:json',
+      ]);
+    }
+    expect(schemaField.elementFields?.[1]?.enumOptions).toEqual([
+      'string',
+      'number',
+      'integer',
+      'boolean',
+      'object',
+      'array',
+    ]);
+  });
+
+  /** No cell takes the expression flyout: a property name and its doc string are not substituted. */
+  it('marks every text cell literal', () => {
+    const texts = schemaField.elementFields?.filter((c) => c.kind === 'text') ?? [];
+    expect(texts.map((c) => c.literal)).toEqual([true, true]);
+  });
+
+  it('recognises the schema by IDENTITY, so a structural twin stays JSON', () => {
+    const twin = deriveConfigFields(
+      z.object({ s: llmOutputSchemaSchema.describe('a twin'), t: llmOutputSchemaSchema }),
+    );
+    expect(field(twin, 's').kind).toBe('json');
+    expect(field(twin, 't').kind).toBe('outputSchema');
+  });
+
+  it('round-trips every catalogued recipe schema verbatim, enum included', () => {
+    const schemas = LLM_RECIPES.map((r) => r.config.outputSchema).filter((s) => s !== undefined);
+    expect(schemas.length).toBeGreaterThan(0);
+    for (const stored of schemas) {
+      expect(roundTrip(stored)).toEqual({ ok: true, omit: false, value: stored });
+    }
+  });
+
+  it('renders a property row with its remaining keywords as constraints JSON', () => {
+    const rendered = formatFieldValue(schemaField, {
+      type: 'object',
+      properties: {
+        tags: { type: 'array', items: { type: 'string' }, description: 'Labels.' },
+        ok: { type: 'boolean' },
+      },
+      required: ['ok'],
+    });
+    expect(rendered).toEqual({
+      ok: true,
+      value: [
+        cell({
+          name: 'tags',
+          type: 'array',
+          description: 'Labels.',
+          constraints: JSON.stringify({ items: { type: 'string' } }, null, 2),
+        }),
+        cell({ name: 'ok', type: 'boolean', required: true }),
+      ],
+    });
+  });
+
+  // #594: an ABSENT `required` list means EVERY property is required. Reading it
+  // as "none ticked" would flip them all to optional on the next apply.
+  it('ticks every row when the stored schema has no required list', () => {
+    const rendered = formatFieldValue(schemaField, {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+    });
+    expect(rendered.ok && rendered.value).toEqual([
+      cell({ name: 'a', type: 'string', required: true }),
+      cell({ name: 'b', type: 'number', required: true }),
+    ]);
+  });
+
+  it('writes an explicit empty required list when no row is ticked — absent would mean all', () => {
+    expect(parseFieldInput(schemaField, [cell({ name: 'a', type: 'string' })])).toEqual({
+      ok: true,
+      omit: false,
+      value: {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        required: [],
+        additionalProperties: false,
+      },
+    });
+  });
+
+  it('writes rows in row order, with required in row order too', () => {
+    const parsed = parseFieldInput(schemaField, [
+      cell({ name: 'z', type: 'integer', required: true, description: 'Last.' }),
+      cell({ name: 'a', type: 'string', constraints: '{"enum": ["x", "y"]}' }),
+      cell({ name: 'm', type: 'boolean', required: true }),
+    ]);
+    expect(parsed).toEqual({
+      ok: true,
+      omit: false,
+      value: {
+        type: 'object',
+        properties: {
+          z: { type: 'integer', description: 'Last.' },
+          a: { type: 'string', enum: ['x', 'y'] },
+          m: { type: 'boolean' },
+        },
+        required: ['z', 'm'],
+        additionalProperties: false,
+      },
+    });
+    if (parsed.ok && !parsed.omit) {
+      expect(Object.keys((parsed.value as { properties: object }).properties)).toEqual([
+        'z',
+        'a',
+        'm',
+      ]);
+    }
+  });
+
+  // Zod's record parser skips a `__proto__` key, so the saved schema would lose
+  // the row silently. Refused here, where the author can still rename it.
+  it('refuses a __proto__ property name, which the save would drop', () => {
+    expect(parseFieldInput(schemaField, [cell({ name: '__proto__', type: 'string' })])).toEqual({
+      ok: false,
+      message: "row 1 name: '__proto__' is reserved",
+    });
+  });
+
+  it('answers a flyout candidate with a schema, not a row list', () => {
+    const rows = [cell({ name: 'a', type: 'string' })];
+    expect(placeRowCandidate(schemaField, rows, 0, 'description', 'The a.')).toEqual({
+      type: 'object',
+      properties: { a: { type: 'string', description: 'The a.' } },
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  // The untouched rule is written for every kind. A record control rebuilds its
+  // object on every read, so identity is what proves the stored one was kept.
+  it('keeps an untouched field of another kind as the stored object itself', () => {
+    const http = fieldsOf('http_request');
+    const headers = { 'X-A': '1' };
+    const original = { url: 'https://x', headers };
+    const result = assembleConfig(original, http, {
+      ...seedFieldInputs(http, original),
+      url: 'https://y',
+    });
+    expect(result.ok && result.config.headers).toBe(headers);
+  });
+
+  it.each([
+    ['an empty name', [cell({ type: 'string' })], /row 1 name: required/],
+    [
+      'a duplicate name',
+      [cell({ name: 'a', type: 'string' }), cell({ name: 'a', type: 'number' })],
+      /row 2: duplicate property 'a'/,
+    ],
+    ['a missing type', [cell({ name: 'a' })], /row 1 type: required/],
+    [
+      'a name no reference can reach',
+      [cell({ name: 'my name', type: 'string' })],
+      /row 1 name: .*not addressable/,
+    ],
+    [
+      'constraints that are not JSON',
+      [cell({ name: 'a', type: 'string', constraints: '{x' })],
+      /row 1 constraints: .*JSON/,
+    ],
+    [
+      'constraints that are not an object',
+      [cell({ name: 'a', type: 'string', constraints: '[1]' })],
+      /row 1 constraints: .*object/,
+    ],
+    [
+      'constraints that restate a column',
+      [cell({ name: 'a', type: 'string', constraints: '{"type": "number"}' })],
+      /row 1 constraints: .*'type'/,
+    ],
+  ])('refuses %s, naming the row', (_label, rows, message) => {
+    expect(parseFieldInput(schemaField, rows)).toEqual({
+      ok: false,
+      message: expect.stringMatching(message),
+    });
+  });
+
+  it('omits the key when every row is removed', () => {
+    expect(parseFieldInput(schemaField, [])).toEqual({ ok: true, omit: true });
+  });
+
+  it.each([
+    [
+      'a root description',
+      { type: 'object', properties: { a: { type: 'string' } }, description: 'd' },
+    ],
+    ['a root title', { type: 'object', properties: { a: { type: 'string' } }, title: 't' }],
+    [
+      'an open object',
+      { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: true },
+    ],
+    [
+      'a required name nothing declares',
+      { type: 'object', properties: { a: { type: 'string' } }, required: ['b'] },
+    ],
+    [
+      'a duplicated required name',
+      { type: 'object', properties: { a: { type: 'string' } }, required: ['a', 'a'] },
+    ],
+    ['a property type outside the subset', { type: 'object', properties: { a: { type: 'null' } } }],
+    [
+      'an empty stored description',
+      { type: 'object', properties: { a: { type: 'string', description: '' } } },
+    ],
+    ['an empty property name', { type: 'object', properties: { '': { type: 'string' } } }],
+    ['a non-object root', { type: 'array', properties: {} }],
+    ['a non-object value', 'nope'],
+  ])('refuses to render %s, so the node opens in JSON rather than losing it', (_label, value) => {
+    expect(formatFieldValue(schemaField, value).ok).toBe(false);
+  });
+
+  it('keeps an UNTOUCHED schema byte-for-byte, even where an edit would normalise it', () => {
+    // No `required` (all required) and no `additionalProperties`: an edit writes
+    // both explicitly, but an apply that only changed `system` must not.
+    const outputSchema = { type: 'object', properties: { a: { type: 'string' } } };
+    const original = { outputMode: 'structured', system: 'old', outputSchema };
+    const inputs = seedFieldInputs(llm, original);
+    const result = assembleConfig(original, llm, { ...inputs, system: 'new' });
+    expect(result.ok && result.config.outputSchema).toBe(outputSchema);
+  });
+
+  it('writes the canonical form once a row is edited', () => {
+    const original = {
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+    };
+    const inputs = seedFieldInputs(llm, original);
+    const rows = inputs.outputSchema as readonly Record<string, string | boolean>[];
+    const result = assembleConfig(original, llm, {
+      ...inputs,
+      outputSchema: [{ ...rows[0]!, description: 'The a.' }],
+    });
+    expect(result.ok && result.config.outputSchema).toEqual({
+      type: 'object',
+      properties: { a: { type: 'string', description: 'The a.' } },
+      required: ['a'],
+      additionalProperties: false,
+    });
   });
 });

@@ -414,7 +414,8 @@ export function ConfigFieldControl({
  *
  * A `keyValue` field (#852 item 2) is rendered here too, as rows of key and
  * value: the same card, add and remove, read back as a record rather than a
- * list (`rowsToRecord`).
+ * list (`rowsToRecord`). So is an `outputSchema` (#852 item 3), one row per
+ * property, read back as a schema (`rowsToOutputSchema`).
  *
  * Nothing offered is a per-ROW value, and nothing here may suggest one: §8 puts
  * substitution in the reducer, so a mapping's `expression` is one constant per
@@ -505,6 +506,12 @@ export function ObjectListControl({
       {field.recordValue === 'secret' ? (
         <p className="page-hint">
           Each row names a secret from the Secrets page. Never type the secret&apos;s value here.
+        </p>
+      ) : null}
+      {field.kind === 'outputSchema' ? (
+        <p className="page-hint">
+          Each row is one field of the structured output. Constraints take the rest of the
+          field&apos;s JSON Schema, such as <code>{'{"enum": ["a", "b"]}'}</code>.
         </p>
       ) : null}
       {rows.map((row, index) => (

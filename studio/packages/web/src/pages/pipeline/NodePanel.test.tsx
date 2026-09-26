@@ -75,7 +75,7 @@ const node = (id: string, type: string, config: Record<string, unknown>): Node =
 });
 
 const httpNode = (config: Record<string, unknown>): Node => node('n_http', 'http_request', config);
-/** `agent_task` keeps a top-level `json` field (`outputSchema`) now that `headers` is rows. */
+/** `agent_task`'s `outputSchema` rows hold a `json` cell (`constraints`, #852 item 3). */
 const agentNode = (config: Record<string, unknown>): Node => node('n_agent', 'agent_task', config);
 /** The shared editor's mode toggle (#1088) — one button whose caption names the mode it goes TO. */
 const toJson = () => screen.getByRole('button', { name: 'Edit as JSON' });
@@ -293,15 +293,16 @@ describe('NodePanel (U7 per-activity config form)', () => {
   });
 
   it('reports a field it cannot parse and writes nothing', () => {
-    const panel = mountOver(agentNode({ task: 'x' }));
+    const outputSchema = { type: 'object', properties: { a: { type: 'string' } } };
+    const panel = mountOver(agentNode({ task: 'x', outputSchema }));
 
-    fireEvent.change(screen.getByLabelText('outputSchema (optional) — JSON'), {
+    fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
     panel.apply();
 
     expect(screen.getByRole('alert').textContent).toMatch(/outputSchema: .*JSON/);
-    expect(panel.storedConfig()).toEqual({ task: 'x' });
+    expect(panel.storedConfig()).toEqual({ task: 'x', outputSchema });
   });
 
   it('authors headers as rows, and a secret header as a secret NAME (#852)', () => {
@@ -498,9 +499,14 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // The textarea opens on what Apply would write, so a control that cannot be
     // read has no such value — opening anyway would show a config silently
     // missing the author's edit.
-    mountOver(agentNode({ task: 'x' }));
+    mountOver(
+      agentNode({
+        task: 'x',
+        outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+      }),
+    );
 
-    fireEvent.change(screen.getByLabelText('outputSchema (optional) — JSON'), {
+    fireEvent.change(screen.getByRole('textbox', { name: /outputSchema row 1 constraints/ }), {
       target: { value: '{not json}' },
     });
     fireEvent.click(toJson());
