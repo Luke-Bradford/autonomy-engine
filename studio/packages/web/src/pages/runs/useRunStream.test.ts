@@ -21,12 +21,20 @@ class FakeSocket implements SocketLike {
   onclose: ((ev: { code?: number; reason?: string }) => void) | null = null;
   onerror: ((ev: unknown) => void) | null = null;
   closed = false;
+  /** 0 CONNECTING · 1 OPEN · 3 CLOSED — the subset of the DOM's states the hook reads. */
+  readyState = 0;
   constructor(readonly url: string) {}
   close() {
+    // Chromium logs "closed before the connection is established" for exactly
+    // this call; the fake records it so a test can refuse it (#1342).
+    if (this.readyState === 0) this.closedWhileConnecting = true;
     this.closed = true;
+    this.readyState = 3;
   }
+  closedWhileConnecting = false;
   // ---- test drivers (wrapped in act by callers) ----
   open() {
+    this.readyState = 1;
     this.onopen?.({});
   }
   send(msg: unknown) {
@@ -36,6 +44,7 @@ class FakeSocket implements SocketLike {
     this.onmessage?.({ data });
   }
   fireClose(code?: number) {
+    this.readyState = 3;
     this.onclose?.({ code, reason: '' });
   }
   fireError() {
@@ -151,6 +160,39 @@ describe('useRunStream', () => {
       }),
     );
     expect(result.current.events).toHaveLength(0);
+  });
+
+  it('an unmount mid-handshake defers the close until the socket opens (#1342)', () => {
+    const { factory, sockets } = makeFactory();
+    const { result, unmount } = renderHook(() => useRunStream('run_1', factory));
+    unmount();
+    // Closing a CONNECTING socket is what makes the browser log a warning on
+    // every fast navigation away from a run page; the close waits for open.
+    expect(sockets[0]!.closed).toBe(false);
+    act(() => sockets[0]!.open());
+    expect(sockets[0]!.closed).toBe(true);
+    expect(sockets[0]!.closedWhileConnecting).toBe(false);
+    // The torn-down socket still drops everything it delivers.
+    act(() =>
+      sockets[0]!.send({
+        kind: 'event',
+        event: envelope({ type: 'run.finished', runId: 'run_1', outcome: 'success' }),
+      }),
+    );
+    expect(result.current.events).toHaveLength(0);
+  });
+
+  it('a pending socket that never opens is left to close itself', () => {
+    const { factory, sockets } = makeFactory();
+    const { result, unmount } = renderHook(() => useRunStream('run_1', factory));
+    const before = result.current;
+    unmount();
+    act(() => {
+      sockets[0]!.fireError();
+      sockets[0]!.fireClose(1006);
+    });
+    expect(sockets[0]!.closedWhileConnecting).toBe(false);
+    expect(result.current).toBe(before);
   });
 
   it('reconnects a fresh socket when runId changes', () => {

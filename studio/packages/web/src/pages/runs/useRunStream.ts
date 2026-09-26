@@ -52,8 +52,12 @@ export interface SocketLike {
   onmessage: ((ev: { data: unknown }) => void) | null;
   onclose: ((ev: { code?: number; reason?: string }) => void) | null;
   onerror: ((ev: unknown) => void) | null;
+  readonly readyState: number;
   close: () => void;
 }
+
+/** `WebSocket.CONNECTING`, named here so the hook reads no DOM global. */
+const SOCKET_CONNECTING = 0;
 
 export type SocketFactory = (url: string) => SocketLike;
 
@@ -160,13 +164,27 @@ export function useRunStream(
       });
     };
 
-    return () => {
-      disposed = true;
+    const closeQuietly = () => {
       try {
         socket.close();
       } catch {
         // best-effort teardown
       }
+    };
+
+    return () => {
+      disposed = true;
+      // Closing a socket that is still CONNECTING makes the browser log
+      // "closed before the connection is established" — on every fast
+      // navigation away from a run page, and as a console warning the e2e
+      // guard rightly counts (#1342). So a pending socket is closed the moment
+      // it opens instead; one that never opens closes itself. Every other
+      // handler is already inert behind `disposed`.
+      if (socket.readyState === SOCKET_CONNECTING) {
+        socket.onopen = closeQuietly;
+        return;
+      }
+      closeQuietly();
     };
   }, [runId, makeSocket]);
 
