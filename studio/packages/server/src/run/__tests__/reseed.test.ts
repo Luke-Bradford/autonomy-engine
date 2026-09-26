@@ -24,7 +24,7 @@ import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-v
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { DocUnresolvableError, startRun, type DocResolver, type DriveDeps } from '../driver.js';
-import { loadEngineEvents } from '../events.js';
+import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from '../events.js';
 import { createRunDrives } from '../drives.js';
 import { createRunEventBus, type RunEventBus } from '../event-bus.js';
 import { createReseedService, RerunNotEligibleError } from '../reseed.js';
@@ -315,6 +315,51 @@ describe('RS4 producer — a copied call node links its child; a re-run one gets
     const [r2Call] = returned(r2Events, 'call');
     expect(r2Call!.childOutcome).toBe('success');
     expect(r2Call!.childRunId).not.toBe(r1Call!.childRunId);
+  });
+});
+
+describe('CX5 (#1320) D9 — a CANCELLED run is rerun-from-failed eligible', () => {
+  it('resumes it: the strict-prefix frontier is copied, and the node the cancel aborted re-runs', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('b'), node('c')],
+      [edge('a', 'b'), edge('b', 'c')],
+    );
+    // `b` is in flight when the operator cancels; its abort yields
+    // `node.failed{cancelled}` and the run finishes `cancelled` — the exact tail
+    // the CX2 driver writes (see driver-cancel.test.ts).
+    const r1 = await seedRun(db, pvId, { nodes: { b: { hang: true } } });
+    for (const e of [
+      { type: 'run.cancelRequested', runId: r1, source: { kind: 'operator' } },
+      {
+        type: 'node.failed',
+        runId: r1,
+        nodeId: 'b',
+        attemptId: 'b#0',
+        error: 'x',
+        kind: 'cancelled',
+      },
+      { type: 'run.finished', runId: r1, outcome: 'cancelled', reason: 'cancelled:operator' },
+    ] satisfies EngineEvent[]) {
+      appendEngineEvent(db, e);
+    }
+    expect(terminalFactFromLog(loadEngineEvents(db, r1))).toBe('cancelled');
+
+    const svc = createReseedService(deps(db, {}));
+    const { runId: r2, drive } = await svc.rerunFromFailed(r1);
+    await drive;
+
+    const r2Events = loadEngineEvents(db, r2);
+    const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+    expect(reseeded.frontier).toEqual(['a']);
+    const dispatched = r2Events
+      .filter(
+        (e): e is Extract<EngineEvent, { type: 'node.dispatched' }> => e.type === 'node.dispatched',
+      )
+      .map((e) => e.nodeId);
+    expect(dispatched).toEqual(['b', 'c']);
+    expect(getRun(db, r2)!.status).toBe('success');
   });
 });
 

@@ -3872,6 +3872,17 @@ export function createEngine(doc: EngineDoc): Engine {
    * Guarded on `active`: an at-least-once redelivery, or a timeout for a loop that
    * already exited via `exitWhen`/`maxRounds`/a child failure BEFORE the alarm
    * fired, folds as a no-op (the second layer behind the handler's `active` guard).
+   *
+   * CX5 (#1320) — also a no-op once a cancel is folded. A timeout can only land on
+   * a cancelled run while some node is still in flight (with nothing in flight the
+   * cancel already finished the run). Folding it there would abandon the loop's
+   * live children, exit the loop `failure`, and can finish the run `failure`
+   * although the operator cancelled it. The in-flight node's own
+   * `node.failed{cancelled}` finishes the run `cancelled` instead. The cost, which
+   * spec D9 accepts: an adapter that ignores its abort signal now keeps the run
+   * live, where the timeout would have ended the loop (it kills nothing either
+   * way — it only abandons in the fold). The handler's guard suppresses it first;
+   * this is the replay-total second layer.
    */
   function onContainerTimedOut(
     state: RunState,
@@ -3879,7 +3890,7 @@ export function createEngine(doc: EngineDoc): Engine {
     diagnostics: string[],
   ): ReduceResult {
     const cs = state.containers[event.containerId];
-    if (cs === undefined || cs.status !== 'active') {
+    if (cs === undefined || cs.status !== 'active' || state.cancelRequested !== null) {
       return { state, commands: [], diagnostics };
     }
     const c = containerById.get(event.containerId);

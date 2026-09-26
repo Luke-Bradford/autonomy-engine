@@ -1,6 +1,6 @@
 # Foundation sub-spec (CX) — Run cancellation
 
-**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop. **CX1 built** (reducer + schemas); **CX2 built** (server producer); **CX4 built** (UI); **CX3 built** (children); CX5 open.
+**Status:** proposed 2026-09-26 (#1320). Written by the headless build loop. **CX1 built** (reducer + schemas); **CX2 built** (server producer); **CX4 built** (UI); **CX3 built** (children); **CX5 built** (consumer audit). The CX series is complete.
 **Scope:** a cancel primitive that crosses a run boundary — an operator can stop a run, and a
 `call_pipeline` child stops when its parent no longer wants it. This is the engine-semantics epic the
 UI spec's U28 row and #1056 both name. The UI epic's pre-settled note (operator, 2026-07-23) forbids
@@ -332,6 +332,50 @@ Decisions the reducer had to take that the D-sections left implicit:
 - **A parent parked on its child finishes at once.** A parent with no live pump folds its cancel through the serialized drive, and `resumeCancelled` fails its `waiting` call node at once. So it finishes `cancelled` without waiting for the child, whose own cancel lands on its own drive (D8, best-effort). Only a parent whose pump is still draining a sibling waits for the child's `call.returned`. That is the one case where the run page's "child is being cancelled too" hint shows.
 - **Out-of-band `call.returned` beside a live pump.** When a cancel reaches a child while the parent's pump is still draining a sibling, the child's result arrives through `returnToParent`'s out-of-band append (#1021). This is harmless in cancel mode. The pump cannot finish while its in-memory call node is still `waiting`, and the `driveRun` queued behind it finishes the run.
 - **Not changed:** `sweepOne` still row-patches a never-started child of a terminal parent to `interrupted` (#1041). That child never ran, so no cancel fact is owed.
+
+### CX5 — as built
+
+Each D9 consumer that does not hang, walked and pinned:
+
+- **Rerun-from-failed.** `reseed.ts` already admitted `cancelled` ("terminated and not `success`").
+  Pinned server-side (`reseed.test.ts`, CX5): the strict-prefix frontier is copied and the node the
+  cancel aborted re-runs. The web half was already pinned in `rerunAction.test.ts`.
+- **Tumbling window.** Nothing new: CX2 landed the rule and its test (`tumbling.test.ts`, "a
+  CANCELLED run fails its window and never retries, even with budget left").
+- **External-wait completion.** Refused against the log's terminal fact, like any terminal run. The
+  owner route answers **409** `external_wait_settled`, and the anonymous token route answers its one
+  fail-closed **404**. Both append nothing (`external-wait.test.ts`, CX5, through the real cancel
+  route).
+- **Retry alarm mid-drain.** The cancel folds every `retry_pending` hold to failure (D4), so
+  `nodeParkedAtAttemptGuard` refuses the alarm (`node_not_held_at_attempt`) even while a sibling is
+  still draining. No `node.retryDue` is written (`retry-alarm.test.ts`, CX5).
+- **Container timeout mid-drain: a defect, fixed here.** Measured before the fix: with a loop's child
+  still in flight after the cancel, the timeout alarm was *fresh* (the loop is still `active`). It
+  abandoned the child, exited the loop `failure/timeout`, and finished the run **`failure`** although
+  the operator had cancelled it. Now both layers refuse it. `containerActiveGuard` answers
+  `run_cancel_requested`, so nothing is appended, and `onContainerTimedOut` is a no-op under a
+  cancel, so a replay stays total. The in-flight node's `node.failed{cancelled}` finishes the run
+  `cancelled`.
+  **Migration posture (#443):** this changes how an existing event folds, so it matters whether a
+  log already holds a `container.timedOut` after a `run.cancelRequested`. Measured on the live
+  service database when this landed: it had **no** `run.cancelRequested` at all, since CX2 shipped
+  the same day. So no bound log changes meaning. A crash between such a timeout and its finish would
+  leave the child `dispatched`, and D7 ends that (`node.retryRequested` folds it to failure under a
+  cancel), so it cannot hang.
+  **The trade-off, accepted by D9's "is suppressed":** a timeout kills nothing, but it does end the
+  loop in the fold. An adapter that ignores its abort signal (the executor does not race
+  `ctx.signal` once the adapter has started) therefore keeps a cancelled run live, where the timeout
+  would have ended it. That failure belongs to the adapter's abort contract, and the crash path
+  still has D7.
+- **Wait and external-wait alarms mid-drain: deliberately NOT suppressed.** A `timer.due` completes
+  its wait, and an expiry fails its webhook. Neither starts work under cancel mode, and the outcome
+  stays truthful (D3), so refusing them would add a guard with nothing to protect (pinned in
+  `run-cancel.test.ts`, CX5).
+- **Cancelled `copy` (open question 2).** Already pinned at the adapter:
+  `copy-delimited.test.ts` ("names the COPY when an already-cancelled dispatch aborts"). CX adds
+  nothing.
+- **Admission / cost / run list:** unchanged from CX2/CX4. A cancelled run frees its slot at
+  terminal like any terminal, and a cancelled `queued` row is never admitted (CX2).
 
 ## Open questions (none block CX1)
 

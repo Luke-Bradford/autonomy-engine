@@ -370,6 +370,40 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
     expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('node.retryDue');
   });
 
+  it('CX5 (#1320) — SUPPRESSES a retry alarm on a cancelled run still DRAINING a sibling (not only the terminal-log arm)', async () => {
+    const { db } = freshDb();
+    // `a` fails transiently and is HELD for its retry; `b` hangs, so the cancel
+    // cannot finish the run — it stays live, draining `b`.
+    const pvId = seedVersion(db, [node('a', { retry: 2 }), node('b')]);
+    const run = seedRun(db, pvId);
+    let t = NOW;
+    const { deps, clock } = harness(
+      db,
+      { nodes: { a: { outcome: 'failure', kind: 'transient' }, b: { hang: true } } },
+      () => t,
+    );
+    await startRun(deps, run);
+    expect(listPendingWakeups(db)).toHaveLength(1);
+    t = NOW + 60_000;
+
+    appendEngineEvent(db, {
+      type: 'run.cancelRequested',
+      runId: run.id,
+      source: { kind: 'operator' },
+    });
+
+    clock.tick();
+    await settle();
+
+    // The cancel folded the hold to failure, so the node-at-attempt guard refuses
+    // the alarm: settled, no `node.retryDue`, and `a` is never dispatched again.
+    const events = loadEngineEvents(db, run.id);
+    expect(listPendingWakeups(db)).toHaveLength(0);
+    expect(events.map((e) => e.type)).not.toContain('node.retryDue');
+    expect(events.filter((e) => e.type === 'node.dispatched' && e.nodeId === 'a')).toHaveLength(1);
+    expect(events.map((e) => e.type)).not.toContain('run.finished'); // still draining `b`
+  });
+
   it('SUPPRESSES an alarm whose node is no longer held at that attempt', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a', { retry: 2 })]);

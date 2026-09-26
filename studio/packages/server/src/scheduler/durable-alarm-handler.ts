@@ -251,16 +251,27 @@ export function nodeParkedAtAttemptGuard(
   };
 }
 
+/** CX5 (#1320) — the freshness reason for an alarm refused because the run's cancel is folded. */
+export const RUN_CANCEL_REQUESTED = 'run_cancel_requested';
+
 /**
  * A layer-2 guard for a CONTAINER still `active` (container-timeout): the whole
  * (runId, containerId) pair is the freshness handle — a container timeout is armed
  * ONCE per run at enter, so there is no attempt to match. An exited loop
  * (`exitWhen`/`maxRounds`/a child failure) or an already-fired timeout is stale.
+ *
+ * CX5 (#1320) — a run whose cancel is folded but which is still draining is stale
+ * too (`RUN_CANCEL_REQUESTED`): the loop may still be `active`, but a timeout
+ * folded now would abandon its live children and can finish the run `failure`
+ * instead of `cancelled`. The reducer's `onContainerTimedOut` ignores it as well.
+ * Wait and external-wait alarms are deliberately NOT refused this way: they start
+ * nothing under a cancel and the outcome stays truthful (spec CX5 as-built).
  */
 export function containerActiveGuard(
   reason: string,
 ): (state: RunState, ref: { containerId: string }) => FreshnessVerdict {
   return (state, ref) => {
+    if (state.cancelRequested !== null) return { fresh: false, reason: RUN_CANCEL_REQUESTED };
     const cs = state.containers[ref.containerId];
     if (cs === undefined || cs.status !== 'active') {
       return { fresh: false, reason };

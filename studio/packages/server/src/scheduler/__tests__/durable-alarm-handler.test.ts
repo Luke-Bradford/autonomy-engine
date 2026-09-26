@@ -31,6 +31,7 @@ import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import { makeStubExecutor } from '../../run/__tests__/stub-executor.js';
 import {
   containerActiveGuard,
+  RUN_CANCEL_REQUESTED,
   createDurableAlarmHandler,
   nodeParkedAtAttemptGuard,
   type DurableAlarmConfig,
@@ -377,8 +378,8 @@ describe('#585 guard factories — pure freshness verdicts', () => {
 
   it('containerActiveGuard: fresh only when the container exists and is active', () => {
     const guard = containerActiveGuard('container_not_active');
-    const withContainer = (status: string): RunState =>
-      ({ nodes: {}, containers: { c: { status } } }) as unknown as RunState;
+    const withContainer = (status: string, cancelRequested: unknown = null): RunState =>
+      ({ nodes: {}, containers: { c: { status } }, cancelRequested }) as unknown as RunState;
 
     expect(guard(withContainer('active'), { containerId: 'c' })).toEqual({ fresh: true });
     expect(guard(withContainer('failure'), { containerId: 'c' })).toEqual({
@@ -388,6 +389,12 @@ describe('#585 guard factories — pure freshness verdicts', () => {
     expect(guard(withContainer('active'), { containerId: 'missing' })).toEqual({
       fresh: false,
       reason: 'container_not_active',
+    });
+    // CX5 (#1320) — an ACTIVE loop on a run whose cancel is folded is stale too.
+    const cancelled = withContainer('active', { source: { kind: 'operator' }, stoppedWork: false });
+    expect(guard(cancelled, { containerId: 'c' })).toEqual({
+      fresh: false,
+      reason: RUN_CANCEL_REQUESTED,
     });
   });
 });
