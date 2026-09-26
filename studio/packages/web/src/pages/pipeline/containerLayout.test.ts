@@ -8,6 +8,8 @@ import {
   EMPTY_CONTAINER_SIZE,
   REVEAL_MARGIN,
   appearedIds,
+  appearedSelected,
+  onScreen,
   revealReady,
   containerRects,
   emptyContainerIds,
@@ -474,6 +476,71 @@ describe('the reveal trigger', () => {
 
     it('reports several at once when one delete empties more than one', () => {
       expect(appearedIds(new Set(), new Set(['a', 'b']))).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('onScreen (#1336)', () => {
+    const r = { x: 100, y: 100, width: 150, height: 52 };
+
+    it('is true for a rect wholly inside the pane', () => {
+      expect(onScreen(r, [0, 0, 1], 800, 600)).toBe(true);
+    });
+
+    it('is true for a rect only PARTLY inside — part of a copy is enough', () => {
+      // Left edge at 700 of an 800 pane: 100 of its 150 px are visible.
+      expect(onScreen(r, [600, 0, 1], 800, 600)).toBe(true);
+      expect(onScreen(r, [0, -130, 1], 800, 600)).toBe(true);
+    });
+
+    it('is false for a rect wholly below, right of, above or left of the pane', () => {
+      expect(onScreen(r, [0, 500, 1], 800, 600)).toBe(false);
+      // Left edge exactly ON the pane's right edge: nothing of it is visible.
+      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [699, 0, 1], 800, 600)).toBe(true);
+      expect(onScreen(r, [0, -152, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [-250, 0, 1], 800, 600)).toBe(false);
+    });
+
+    it('applies the zoom to position AND size', () => {
+      // At zoom 2 the rect starts at 200,200 and ends at 500,304.
+      expect(onScreen(r, [0, 0, 2], 199, 600)).toBe(false);
+      expect(onScreen(r, [0, 0, 2], 201, 600)).toBe(true);
+      expect(onScreen(r, [-499, 0, 2], 800, 600)).toBe(true);
+      expect(onScreen(r, [-500, 0, 2], 800, 600)).toBe(false);
+    });
+  });
+
+  describe('appearedSelected (#1336)', () => {
+    const sel = (kind: 'node' | 'container' | 'edge', id: string) => ({ kind, id });
+
+    it('reports nothing on the first observation, even for a selected id', () => {
+      expect(appearedSelected(null, new Set(['a']), [sel('node', 'a')], 'node')).toEqual([]);
+    });
+
+    /* A paste or a duplicate: the copies are new AND selected. */
+    it('reports an id that is new and selected as the asked kind', () => {
+      expect(
+        appearedSelected(new Set(['a']), new Set(['a', 'b', 'c']), [sel('node', 'b')], 'node'),
+      ).toEqual(['b']);
+    });
+
+    /* An undo restores no selection, and a toolbox add selects nothing: neither
+       may move the viewport. */
+    it('ignores an id that is new but not selected', () => {
+      expect(appearedSelected(new Set(['a']), new Set(['a', 'b']), [], 'node')).toEqual([]);
+    });
+
+    it('ignores an id that is selected but was already there', () => {
+      expect(appearedSelected(new Set(['a']), new Set(['a']), [sel('node', 'a')], 'node')).toEqual(
+        [],
+      );
+    });
+
+    /* Nodes and containers share one id namespace, so the kind has to match. */
+    it('ignores a selection of a different kind with the same id', () => {
+      expect(appearedSelected(new Set(), new Set(['b']), [sel('container', 'b')], 'node')).toEqual(
+        [],
+      );
     });
   });
 

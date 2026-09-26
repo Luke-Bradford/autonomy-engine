@@ -7,6 +7,7 @@ import {
   TARGET_PORT_ID,
   type SourcePort,
 } from './ports';
+import type { Selection } from './canvasStore';
 
 /**
  * U6c — where a container is DRAWN.
@@ -299,6 +300,29 @@ export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<
 }
 
 /**
+ * #935 / #1336 — the ids of `kind` that APPEARED already SELECTED: new in `now`
+ * since `known`, and in the selection as that kind.
+ *
+ * That combination is what a paste or a duplicate produces, and nothing else
+ * that adds an element does: an undo restores no selection, and a toolbox add
+ * selects nothing. It is the canvas's cue to bring the new copies on screen —
+ * they are the property panel's subject, and a copy placed off-screen is culled
+ * out of the DOM by `onlyRenderVisibleElements`. The kind is matched because
+ * nodes and containers share one id namespace. `null` is the mount case, as for
+ * `appearedIds`.
+ */
+export function appearedSelected(
+  known: ReadonlySet<string> | null,
+  now: ReadonlySet<string>,
+  selected: readonly Selection[],
+  kind: Selection['kind'],
+): string[] {
+  return appearedIds(known, now).filter((id) =>
+    selected.some((sel) => sel.kind === kind && sel.id === id),
+  );
+}
+
+/**
  * U21 (#935) — which newly APPEARED containers can be revealed now, and which
  * must wait.
  *
@@ -335,6 +359,30 @@ export function revealReady(
     (box.childCount > 0 || !expectsChildren ? ready : waiting).push(id);
   }
   return { ready, waiting };
+}
+
+/**
+ * #1336 — is ANY part of `rect` (flow coordinates) inside a `width`×`height`
+ * pane under React Flow's `[x, y, zoom]` transform?
+ *
+ * The reveal's test for copies that appeared selected: a copy the operator can
+ * see even part of already shows where the paste went, and panning to show the
+ * rest would be the cosmetic nudge `axisPan` refuses — measured, it pushed an
+ * original out of a fitted row and culled it. Only copies that are ALL off
+ * screen are lost, and only those are worth moving the viewport for.
+ */
+export function onScreen(
+  rect: Rect,
+  transform: readonly [number, number, number],
+  width: number,
+  height: number,
+): boolean {
+  const [tx, ty, zoom] = transform;
+  const left = rect.x * zoom + tx;
+  const top = rect.y * zoom + ty;
+  return (
+    left < width && left + rect.width * zoom > 0 && top < height && top + rect.height * zoom > 0
+  );
 }
 
 /**
