@@ -148,7 +148,10 @@ export function cancelLiveChildren(
         if (!parentCancelReachesChild(deps, parentRunId, parentEvents, child.id)) continue;
         deps.canceller.cancel(child.id, source);
       } catch (err) {
-        deps.log?.error({ err, runId: child.id, parentRunId }, 'run cancel: cancelling a child run failed');
+        deps.log?.error(
+          { err, runId: child.id, parentRunId },
+          'run cancel: cancelling a child run failed',
+        );
       }
     }
   } catch (err) {

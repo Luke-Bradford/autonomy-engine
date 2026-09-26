@@ -70,10 +70,7 @@ export function cancelConfirmMessage(targets: readonly CancelTarget[]): string {
   }
   lines.push('Work already sent (a request made, rows written) is not undone.');
   if (live.some((t) => t.status === 'waiting')) {
-    lines.push(
-      '',
-      'A child run is still live. It is cancelled too.',
-    );
+    lines.push('', 'A child run is still live. It is cancelled too.');
   }
   return lines.join('\n');
 }

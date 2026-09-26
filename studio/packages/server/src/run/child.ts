@@ -290,9 +290,7 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     const parentRunId = run.parentRunId;
     try {
       const parentEvents = loadEngineEvents(db, parentRunId);
-      const source: CancelSource | null = parentEvents.some(
-        (e) => e.type === 'run.cancelRequested',
-      )
+      const source: CancelSource | null = parentEvents.some((e) => e.type === 'run.cancelRequested')
         ? { kind: 'parent_cancelled', parentRunId }
         : terminalFactFromLog(parentEvents) !== null
           ? { kind: 'parent_terminal', parentRunId }
@@ -469,7 +467,10 @@ export function subscribeChildReturns(deps: ChildReturnReactorDeps): () => void 
           parentRunId: childRunId,
         });
       } catch (err) {
-        deps.log?.error?.({ err, runId: childRunId }, 'cancelling the child runs of an ended run failed');
+        deps.log?.error?.(
+          { err, runId: childRunId },
+          'cancelling the child runs of an ended run failed',
+        );
       }
     });
   });
