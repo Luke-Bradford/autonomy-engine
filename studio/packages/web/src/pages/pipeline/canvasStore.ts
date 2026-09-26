@@ -770,6 +770,11 @@ export interface PendingBindings {
 /** Which of a node's two paired bindings a picker is writing (#1139). */
 export type BindingKind = 'connections' | 'datasets';
 
+/** U21 — what a paste did; `crossPipeline` marks a copy from another pipeline (#935). */
+export type PasteOutcome =
+  | { ok: true; count: number; crossPipeline: boolean }
+  | { ok: false; reason: string };
+
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
@@ -985,9 +990,7 @@ export interface CanvasState {
    * them — see `uncopiedReads`. A cross-pipeline paste that is accepted lands
    * without re-derived in-edges or container membership (`CloneOptions.foreign`).
    */
-  pasteClipboard(
-    pipelineId: string,
-  ): { ok: true; count: number; crossPipeline: boolean } | { ok: false; reason: string };
+  pasteClipboard(pipelineId: string): PasteOutcome;
   /**
    * U21 — move nodes, in ONE undo entry.
    *

@@ -57,6 +57,7 @@ import {
   containersWithNew,
   createCanvasStore,
   singleSelection,
+  type PasteOutcome,
   type Selection,
 } from './canvasStore';
 import { useExpressionPicker } from './useExpressionPicker';
@@ -146,7 +147,7 @@ const CANVAS_NOTICE_MS = 6_000;
  * from another pipeline says so (#935): its copies arrive without the in-edges
  * and container a local paste re-derives, and the line is where that shows.
  */
-function pasteNotice(outcome: ReturnType<CanvasState['pasteClipboard']>): string {
+function pasteNotice(outcome: PasteOutcome): string {
   if (!outcome.ok) return outcome.reason;
   const what = `${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}`;
   return outcome.crossPipeline ? `Pasted ${what} from another pipeline.` : `Pasted ${what}.`;
