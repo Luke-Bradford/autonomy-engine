@@ -948,6 +948,27 @@ describe('NodePanel (the objectList control, #1169)', () => {
     });
   });
 
+  it('keeps focus on the row it moved, so a second press moves it again', () => {
+    // The buttons are index-keyed, so without this the focused `move row 2 up`
+    // would be the row that just shifted DOWN, and a second press would undo
+    // the first. At the top the `up` is disabled, so focus takes `down`.
+    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 3 up' }));
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'move mapping row 2 up' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 up' }));
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'move mapping row 1 down' }),
+    );
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [threeRows[2], threeRows[0], threeRows[1]],
+    });
+  });
+
   it('offers no move past either end of the list', () => {
     mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
 

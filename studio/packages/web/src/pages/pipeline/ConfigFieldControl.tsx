@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -424,14 +424,35 @@ export function ObjectListControl({
 }) {
   const cells = field.elementFields ?? [];
   const [moves, setMoves] = useState(0);
+  const groupRef = useRef<HTMLDivElement>(null);
+  // Where the last move put its row. The buttons are index-keyed, so the
+  // focused one now belongs to the row that shifted the other way; focus
+  // follows the moved row instead, so pressing again keeps moving it.
+  const moved = useRef<{ index: number; direction: 'up' | 'down' } | null>(null);
   const move = (from: number, to: number) => {
     const next = [...rows];
     const [row] = next.splice(from, 1);
     if (row === undefined) return;
     next.splice(to, 0, row);
+    moved.current = { index: to, direction: to < from ? 'up' : 'down' };
     setMoves((n) => n + 1);
     onChange(next);
   };
+  useEffect(() => {
+    const target = moved.current;
+    moved.current = null;
+    if (target === null) return;
+    const byName = (direction: 'up' | 'down') =>
+      Array.from(groupRef.current?.querySelectorAll('button') ?? []).find(
+        (b) =>
+          b.getAttribute('aria-label') ===
+          `move ${field.name} row ${target.index + 1} ${direction}`,
+      );
+    // At either end the same direction is disabled, and a disabled button
+    // cannot hold focus; the other direction is the row's only move left.
+    const same = byName(target.direction);
+    (same && !same.disabled ? same : byName(target.direction === 'up' ? 'down' : 'up'))?.focus();
+  }, [moves, field.name]);
 
   // Each row is read by `parseRowCells`, the reader an apply uses, keeping the
   // cells that parse. An apply refuses the whole list on one bad cell; a
@@ -450,7 +471,7 @@ export function ObjectListControl({
   });
 
   return (
-    <div className="config-field object-list" role="group" aria-label={label}>
+    <div className="config-field object-list" role="group" aria-label={label} ref={groupRef}>
       <span className="object-list-label">{label}</span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
