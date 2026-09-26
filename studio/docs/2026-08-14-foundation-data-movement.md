@@ -1665,9 +1665,9 @@ would have inflicted it on the catalog's most-used activity. The same gate keeps
 through the existing `defOf` funnel, so no per-activity list is introduced.
 
 **It is a stack of cards, not a `<table>`.** The property panel is a fixed 320px
-column (`web/src/index.css`, `grid-template-columns: 180px 1fr 320px`) and every
-string control in it is a `<textarea>` — five columns of textarea in that width is
-about 60px each. §13's requirement is the SHAPE of the surface (a row per mapping
+column (`web/src/index.css`, `grid-template-columns: 180px 1fr 320px`), and a
+string control in it is a `<textarea>` or at best a full-width `<input>` (#852
+item 4) — five columns of either in that width is about 60px each. §13's requirement is the SHAPE of the surface (a row per mapping
 carrying its own target type and `onError`), and `.contract-row`, already carrying
 `ParamRow` and `OutputRow`, is the panel's idiom for it.
 
