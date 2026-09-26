@@ -55,6 +55,11 @@ import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-stu
  * have thrown information away to buy a symmetry the spec explicitly does not
  * ask for — it records that the palette mapping "is NOT injective ACROSS
  * surfaces". The WORD is what U25 reconciles; the hue stays each surface's own.
+ *
+ * The one exception is a CANCELLED run (#1329): there the retry-vs-park
+ * distinction #483 protects no longer exists — neither is coming back — so
+ * every live status takes one muted pill and the `neutral` tone (see
+ * `nodeStatusTone` / `nodeStatusPillClass`).
  */
 export const ALL_TONES = [
   'neutral',

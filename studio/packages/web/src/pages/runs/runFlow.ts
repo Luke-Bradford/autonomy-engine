@@ -237,7 +237,7 @@ export function runFlowNodes(
        box and its accessible name below cannot come to disagree about WHICH WORD
        a status gets, and so nothing has to cast `data.status` back to
        `ContainerRunStatus` to word it. Same shape as the activity branch above;
-       the TONE still reads the raw status.
+       the TONE still reads the raw status, except under a cancel (#1329).
 
        They do still differ on the NULL path, and that is pre-existing rather
        than introduced here: `RunCanvas` drops the whole ` · <status>` fragment

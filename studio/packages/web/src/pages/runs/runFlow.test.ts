@@ -451,8 +451,8 @@ describe('U25 — the graph words a status for an operator', () => {
     // visible text rather than in addition to it.
     expect(a.data.status).not.toBe('dispatched');
     expect(a.ariaLabel).not.toContain('dispatched');
-    // The TONE still comes off the raw status, so wording it must not have
-    // changed which hue family the node is drawn in.
+    // Under a live run the TONE still comes off the raw status, so wording it
+    // must not have changed which hue family the node is drawn in.
     expect(a.data.tone).toBe('running');
   });
 
