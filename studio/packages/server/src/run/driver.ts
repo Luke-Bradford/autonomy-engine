@@ -8,6 +8,7 @@ import {
   FAILURE_CODES,
   MAX_WAIT_SECONDS,
   type ArmWakeupInput,
+  type CancelSource,
   type Engine,
   type EngineCommand,
   type EngineEvent,
@@ -29,7 +30,7 @@ import { recordExternalWait } from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
-import { runCancelledFailure, type RunCancels } from './cancel.js';
+import { childNeverStarted, runCancelledFailure, type RunCancels } from './cancel.js';
 import type { RunEventBus } from './event-bus.js';
 import {
   appendAndFold,
@@ -925,23 +926,24 @@ const PER_RUN_DISPATCH_CONCURRENCY = 4;
 /** CX2 (#1320) — a pump inbox entry that stands for "fold the cancel intent". */
 const CANCEL_MARKER = Symbol('cancel-marker');
 
-/** CX2 — the stream a dispatch gets when the cancel folded before it started. */
-async function* cancelledStream(
-  runId: string,
-  nodeId: string,
-  attemptId: string,
-): AsyncGenerator<EngineEvent> {
-  yield runCancelledFailure(runId, nodeId, attemptId);
+/** CX2/CX3 (#1320) — a stream of exactly one event: the answer a command gets
+ * when the cancel folded before it started. */
+async function* oneEvent(event: EngineEvent): AsyncGenerator<EngineEvent> {
+  yield event;
 }
 
 /**
  * CX2 (#1320, spec D6) — the ONE hook every fold of `run.cancelRequested` calls:
  * the pump's marker, a starting drive, `startRun`, and the boot reconciler.
- * It aborts the run's live dispatches. CX3 adds child propagation (D8) HERE,
- * and nowhere else calls either.
+ * It aborts the run's live dispatches, then (CX3, D8) asks the run's live
+ * non-detached children to cancel too. Nowhere else calls either.
  */
 export function onCancelFolded(
-  deps: { executor?: Pick<Executor, 'abortRun'>; log?: DriveLog },
+  deps: {
+    executor?: Pick<Executor, 'abortRun'>;
+    cancels?: Pick<RunCancels, 'cancelChildren'>;
+    log?: DriveLog;
+  },
   runId: string,
 ): void {
   // NEVER throws. It runs right after the fold, and a throw here would stop the
@@ -954,6 +956,14 @@ export function onCancelFolded(
     deps.executor?.abortRun?.(runId);
   } catch (err) {
     deps.log?.error({ err, runId }, 'run cancel: aborting live dispatches failed');
+  }
+  // Separately caught: a failed abort must not cost the children their cancel,
+  // nor the other way round. Not awaited — the parent never waits on its
+  // children's cancels (D8, best-effort).
+  try {
+    deps.cancels?.cancelChildren(runId, { kind: 'parent_cancelled', parentRunId: runId });
+  } catch (err) {
+    deps.log?.error({ err, runId }, 'run cancel: reaching child runs failed');
   }
 }
 
@@ -971,11 +981,27 @@ export function foldPendingCancel(
 ): ReturnType<typeof appendAndFold> | null {
   const cancels = deps.cancels;
   if (cancels?.pending(runId) !== true) return null;
-  const source = cancels.peek(runId)!;
-  // Already folded (a duplicate request that raced the first): the reducer would
-  // ignore a second `run.cancelRequested` too, but appending one is noise.
+  return foldCancel(deps, engine, state, runId, cancels.peek(runId)!);
+}
+
+/**
+ * Append and fold `run.cancelRequested{source}` — the one body behind a pending
+ * intent (`foldPendingCancel`) and a cancel the reconciler derives itself (CX3,
+ * #1053's `parent_terminal`). Any pending intent is consumed with it, so an
+ * intent and a derived cancel can never both be folded. `null` when a cancel is
+ * already folded: the reducer would ignore a second, but appending one is noise.
+ */
+export function foldCancel(
+  deps: Pick<DriverDeps, 'db' | 'bus' | 'cancels' | 'log'> & { executor?: Executor },
+  engine: Engine,
+  state: RunState,
+  runId: string,
+  source: CancelSource,
+): ReturnType<typeof appendAndFold> | null {
+  const cancels = deps.cancels;
+  // Already folded (a duplicate request that raced the first).
   if (state.cancelRequested !== null) {
-    cancels.take(runId);
+    cancels?.take(runId);
     return null;
   }
   const result = appendAndFold(
@@ -988,7 +1014,7 @@ export function foldPendingCancel(
   );
   // Consumed only once the fact is durable: an append that threw leaves the
   // intent for the next holder.
-  cancels.take(runId);
+  cancels?.take(runId);
   syncRunLifecycle(deps.db, runId, result.state.status);
   onCancelFolded(deps, runId);
   return result;
@@ -1070,10 +1096,14 @@ export async function pump(
       // cap's queue. Its attempt never started, but the reducer counts its node
       // as in flight, so dropping the stream would hold the run live forever:
       // it ends with the cancelled failure instead, and the adapter never runs.
+      // CX3 — a `startChild` in the same position never creates its child: the
+      // call node resolves as a child the cancel stopped.
       const streamed =
-        command.type === 'dispatchNode' && state.cancelRequested !== null
-          ? cancelledStream(state.runId, command.nodeId, command.attemptId)
-          : deps.executor.perform(command, state.runId);
+        state.cancelRequested === null
+          ? deps.executor.perform(command, state.runId)
+          : command.type === 'dispatchNode'
+            ? oneEvent(runCancelledFailure(state.runId, command.nodeId, command.attemptId))
+            : oneEvent(childNeverStarted(state.runId, command));
       for await (const event of streamed) {
         const outcome = await new Promise<SinkOutcome>((settle) => {
           if (dropped) {

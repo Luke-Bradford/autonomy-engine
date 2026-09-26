@@ -3575,7 +3575,14 @@ export function createEngine(doc: EngineDoc): Engine {
             ? `call node '${event.callNodeId}' has invalid config: ${errs.join('; ')}`
             : `call node '${event.callNodeId}' child returned invalid outputs: ${errs.join('; ')}`,
         );
-        return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
+        // CX3 (#1320) — a cancelled child usually returns nothing, so a call
+        // node declaring required outputs lands HERE rather than below; under
+        // the parent's own cancel it is still work that cancel stopped (D3).
+        const failed = withNode(state, event.callNodeId, { status: 'failure' });
+        return settle(
+          event.childOutcome === 'cancelled' ? markStoppedWork(failed) : failed,
+          diagnostics,
+        );
       }
       const stored = storeOutputs(checked, event.outputs);
       // CX1 (#1320) — a CANCELLED child fails its call node (`NodeRunStatus` has

@@ -54,10 +54,9 @@ export interface CancelTarget {
  *  - that work already SENT is not undone (the spec's open question 1: a cancel
  *    cannot un-send an `http` POST or un-write rows a `copy` already wrote), so
  *    nobody reads "cancel" as "roll back";
- *  - when a node is waiting on a CHILD run, that the stop is not immediate:
- *    until CX3 propagates the cancel to children, the parent finishes only when
- *    the child ends (CX2 as-built, "known until CX3"). CX4 must not promise an
- *    immediate stop for that run, so it says so.
+ *  - when a node is waiting on a CHILD run, that the cancel reaches the child
+ *    too (CX3, spec D8), so nobody expects the child to run on. A DETACHED
+ *    child is never waited on, so it never triggers this line.
  */
 export function cancelConfirmMessage(targets: readonly CancelTarget[]): string {
   const live = targets.filter((t) => IN_PROGRESS.has(t.status));
@@ -71,10 +70,7 @@ export function cancelConfirmMessage(targets: readonly CancelTarget[]): string {
   }
   lines.push('Work already sent (a request made, rows written) is not undone.');
   if (live.some((t) => t.status === 'waiting')) {
-    lines.push(
-      '',
-      'A child run is still live. This run stops only once that child ends — cancelling it does not cancel the child.',
-    );
+    lines.push('', 'A child run is still live. It is cancelled too.');
   }
   return lines.join('\n');
 }

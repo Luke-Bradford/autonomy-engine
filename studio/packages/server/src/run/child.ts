@@ -1,4 +1,10 @@
-import type { EngineEvent, PipelineVersion, Run, RunOutcome } from '@autonomy-studio/shared';
+import type {
+  CancelSource,
+  EngineEvent,
+  PipelineVersion,
+  Run,
+  RunOutcome,
+} from '@autonomy-studio/shared';
 import { callDetaches, resolveDocNode } from '@autonomy-studio/shared';
 import {
   assertJsonReplaySafe,
@@ -263,6 +269,40 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     );
   }
 
+  /**
+   * CX3 (#1320, spec D8) — a child about to START whose parent is already being
+   * cancelled, or already over, starts with that cancel pending, so `startRun`
+   * folds it first and the child finishes `cancelled` without doing any work.
+   *
+   * This is the one child a parent's propagation cannot reach. `ensure` creates
+   * the child's row BEFORE the parent's `call.started` is appended, and
+   * `cancelLiveChildren` skips a child the parent has not announced (an
+   * unannounced child was never kicked, and a detached one must not be buried).
+   * By the time `kick` runs the announcement is durable, so the parent's log is
+   * complete enough to decide.
+   *
+   * Never throws: a parent log that cannot be read leaves the child to start as
+   * it would have, the reversible act, rather than terminalizing it in `kick`'s
+   * catch.
+   */
+  function requestCancelFromParent(run: Run): void {
+    if (run.parentRunId === null || deps.cancels === undefined) return;
+    const parentRunId = run.parentRunId;
+    try {
+      const parentEvents = loadEngineEvents(db, parentRunId);
+      const source: CancelSource | null = parentEvents.some((e) => e.type === 'run.cancelRequested')
+        ? { kind: 'parent_cancelled', parentRunId }
+        : terminalFactFromLog(parentEvents) !== null
+          ? { kind: 'parent_terminal', parentRunId }
+          : null;
+      if (source === null) return;
+      if (!parentCancelReachesChild(deps, parentRunId, parentEvents, run.id)) return;
+      deps.cancels.request(run.id, source);
+    } catch (err) {
+      deps.log?.error?.({ err, runId: run.id }, 'reading the parent of a starting child failed');
+    }
+  }
+
   function kick(run: Run): void {
     // Deliberately NOT awaited: see the module doc. Failures are contained here
     // rather than surfacing as an unhandled rejection — the parent learns of them
@@ -291,6 +331,7 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
         const row = getRun(db, run.id);
         if (row === null || TERMINAL_RUN_ROW_STATUS.has(row.status)) return 'settled';
         if (events.length === 0) {
+          requestCancelFromParent(run);
           await startRun(deps, run);
           return 'settled';
         }
@@ -336,12 +377,18 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     }
     // The LOG decides what a run ended as (#443), never a re-fold — so the
     // OUTCOME comes from `terminalFactFromLog`, and only the OUTPUTS come from a
-    // projection. `RunOutcome` is `success | failure`: an `interrupted` or
-    // `cancelled` child is a FAILURE to its parent, which is the fail-safe
-    // direction (an unfinished child must never read as success) and leaves the
-    // child's own row carrying the more precise status for the operator.
+    // projection. An `interrupted` child is a FAILURE to its parent, which is the
+    // fail-safe direction (an unfinished child must never read as success) and
+    // leaves the child's own row carrying the more precise status.
+    //
+    // CX3 (#1320) — a `cancelled` child is passed through as `cancelled`. The
+    // reducer still fails the call node (`NodeRunStatus` has no `cancelled`), but
+    // under the parent's OWN cancel it must count as work that cancel stopped
+    // (D3): flattened to `failure`, a parent whose cancel reached its child would
+    // finish `failure` instead of `cancelled`.
     const fact = terminalFactFromLog(events);
-    const outcome: RunOutcome = fact === 'success' ? 'success' : 'failure';
+    const outcome: RunOutcome =
+      fact === 'success' ? 'success' : fact === 'cancelled' ? 'cancelled' : 'failure';
     if (run === null || run === undefined) return { outcome, outputs: {} };
     let outputs: Record<string, unknown> = {};
     try {
@@ -401,15 +448,30 @@ export function subscribeChildReturns(deps: ChildReturnReactorDeps): () => void 
   let stopped = false;
   const unsubscribe = deps.bus.subscribeAll((event) => {
     if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return;
-    const childRunId = event.runId;
+    const endedRunId = event.runId;
     // Publish is synchronous inside the driver's fold; do the work after it, so
     // this never re-enters a pump mid-turn (the launcher's tap defers the same
     // way, for the same reason).
     queueMicrotask(() => {
       if (stopped) return;
-      void returnToParent(deps, childRunId).catch((err: unknown) => {
-        deps.log?.error?.({ err, runId: childRunId }, 'call_pipeline child return failed');
+      void returnToParent(deps, endedRunId).catch((err: unknown) => {
+        deps.log?.error?.({ err, runId: endedRunId }, 'call_pipeline child return failed');
       });
+      // CX3 (#1320, spec D8, #1056's live path) — the same terminal, read as a
+      // PARENT's: a live non-detached child of a run that is over can deliver
+      // its result to nobody, so it stops spending. A parent cancelled earlier
+      // already asked (`onCancelFolded`); asking again records nothing.
+      try {
+        deps.cancels?.cancelChildren(endedRunId, {
+          kind: 'parent_terminal',
+          parentRunId: endedRunId,
+        });
+      } catch (err) {
+        deps.log?.error?.(
+          { err, runId: endedRunId },
+          'cancelling the child runs of an ended run failed',
+        );
+      }
     });
   });
   return () => {
@@ -451,6 +513,55 @@ export function isDetachedChild(
   if (callNodeId === undefined || parentDoc === null) return false;
   const node = resolveDocNode(parentDoc.nodes, callNodeId);
   return node?.call !== undefined && callDetaches(node.call);
+}
+
+/**
+ * #796 item 2 — did the parent DETACH from `childRunId`? See `isDetachedChild`
+ * for why the bound doc is consulted and not only the log.
+ *
+ * `null` is UNDECIDABLE: the parent announced this child, its log has no
+ * `call.detached`, and there is no doc to ask. Every caller resolves that the
+ * way #1053's asymmetry does — toward the reversible act. The running scan
+ * resumes rather than freezes, the sweep leaves a never-started child `pending`
+ * rather than burying work that may have been asked for, and a parent's cancel
+ * (CX3) leaves the child running rather than stopping work that may be the point.
+ */
+export function detachVerdict(
+  parentEvents: readonly EngineEvent[],
+  parentDoc: Pick<PipelineVersion, 'nodes'> | null,
+  childRunId: string,
+): boolean | null {
+  if (isDetachedChild(parentEvents, parentDoc, childRunId)) return true;
+  if (parentDoc !== null) return false;
+  const announced = parentEvents.some(
+    (e) => e.type === 'call.started' && e.childRunId === childRunId,
+  );
+  return announced ? null : false;
+}
+
+/**
+ * CX3 (#1320, spec D8) — does a cancel of `parentRunId` (its own, or its ending)
+ * reach this child? Only when the parent is known NOT to have detached from it:
+ * a detached child exists to outlive its parent, and an undecidable one is left
+ * running (see `detachVerdict`). The parent's doc is resolved here; a version
+ * that cannot be resolved is simply not consulted.
+ */
+export function parentCancelReachesChild(
+  deps: { db: Db; resolveDoc: (pipelineVersionId: string) => PipelineVersion },
+  parentRunId: string,
+  parentEvents: readonly EngineEvent[],
+  childRunId: string,
+): boolean {
+  let parentDoc: PipelineVersion | null = null;
+  const parent = getRun(deps.db, parentRunId);
+  if (parent !== null) {
+    try {
+      parentDoc = deps.resolveDoc(parent.pipelineVersionId);
+    } catch {
+      parentDoc = null;
+    }
+  }
+  return detachVerdict(parentEvents, parentDoc, childRunId) === false;
 }
 
 async function returnToParent(deps: ChildReturnReactorDeps, childRunId: string): Promise<void> {

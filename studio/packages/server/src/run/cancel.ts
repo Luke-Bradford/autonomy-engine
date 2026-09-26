@@ -41,9 +41,27 @@ export interface RunCancels {
   registerPoke(runId: string, poke: () => void): () => void;
   /** Wake the run's live pump, if there is one. True when a pump was poked. */
   poke(runId: string): boolean;
+  /**
+   * CX3 (#1320, spec D8) — ask every live, announced, non-detached child of
+   * `parentRunId` to cancel, with `source`. Best-effort and never throws: the
+   * parent's own fold or terminal must not wait on, or fail for, its children.
+   * Each child folds its own cancel, whose own fold reaches ITS children, so this
+   * needs no recursion.
+   *
+   * On the registry, not threaded as a separate dependency, because every holder
+   * that folds a cancel already holds this registry (the intent it folds came
+   * from here), so no holder can fold a cancel and miss the propagation.
+   */
+  cancelChildren(parentRunId: string, source: CancelSource): void;
 }
 
-export function createRunCancels(): RunCancels {
+export interface RunCancelsOptions {
+  /** What `cancelChildren` does. Absent means children are not reached (tests
+   * that exercise one run). Production wires `cancelLiveChildren`. */
+  cancelChildren?: (parentRunId: string, source: CancelSource) => void;
+}
+
+export function createRunCancels(options: RunCancelsOptions = {}): RunCancels {
   const intents = new Map<string, CancelSource>();
   const pokes = new Map<string, () => void>();
 
@@ -73,6 +91,9 @@ export function createRunCancels(): RunCancels {
       poke();
       return true;
     },
+    cancelChildren(parentRunId, source) {
+      options.cancelChildren?.(parentRunId, source);
+    },
   };
 }
 
@@ -101,5 +122,28 @@ export function runCancelledFailure(
     error: 'run cancelled',
     kind: 'cancelled',
     code: FAILURE_CODES.RUN_CANCELLED,
+  };
+}
+
+/**
+ * CX3 (#1320) — the answer a `startChild` gets when the cancel folded while it
+ * sat in the per-run cap's queue: its child was never created, so it never ran,
+ * and the call node (already `waiting` on this attempt) resolves as a child that
+ * the cancel stopped. `node.failed` cannot do this: a `waiting` call node takes
+ * only `call.returned`/`call.detached`. `childRunId` is the command's own, the
+ * deterministic id the reducer checks.
+ */
+export function childNeverStarted(
+  runId: string,
+  command: { callNodeId: string; attemptId: string; childRunId: string },
+): Extract<EngineEvent, { type: 'call.returned' }> {
+  return {
+    type: 'call.returned',
+    runId,
+    callNodeId: command.callNodeId,
+    attemptId: command.attemptId,
+    childRunId: command.childRunId,
+    childOutcome: 'cancelled',
+    outputs: {},
   };
 }

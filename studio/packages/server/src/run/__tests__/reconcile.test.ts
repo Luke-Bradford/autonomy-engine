@@ -1992,16 +1992,17 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(report.sweptOrphans).toEqual([]);
 
     // #1053 — and `reconcileOne`'s verdict for a started child of a TERMINAL
-    // parent is now `interrupted`, not "drive it to completion". Before #1053
-    // this line read `success`: the child was resumed, its activities re-billed,
-    // and its result then discarded by `returnToParent` against the dead parent.
+    // parent is to STOP it, not "drive it to completion". Before #1053 this line
+    // read `success`: the child was resumed, its activities re-billed, and its
+    // result then discarded by `returnToParent` against the dead parent. Since
+    // CX3 (#1320) the stop is a cancel (`parent_terminal`), finished by D7.
     //
     // The two boot paths still agree, which is #1048's requirement: a
-    // never-started child is swept by `sweepOne` and a started one is frozen by
+    // never-started child is swept by `sweepOne` and a started one is stopped by
     // `reconcileOne`. They differ only in whether a terminal FACT is appended,
     // and #443 is what decides that — the run started, so it gets one.
-    expect(report.interrupted).toEqual([child.id]);
-    expect(getRun(db, child.id)!.status).toBe('interrupted');
+    expect(report.finalized).toEqual([child.id]);
+    expect(getRun(db, child.id)!.status).toBe('cancelled');
     expect(getRun(db, parent.id)!.status).toBe('failure');
   });
 
@@ -2353,10 +2354,11 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
       alarms: stubAlarms(),
     });
 
-    expect(report.interrupted).toEqual([child.id]);
+    expect(report.finalized).toEqual([child.id]);
+    expect(report.interrupted).toEqual([]);
     expect(report.resumed).toEqual([]);
     const frozen = getRun(db, child.id)!;
-    expect(frozen.status).toBe('interrupted');
+    expect(frozen.status).toBe('cancelled');
     // #5 S4 — a terminal run holds no execution lease, or S7's expiry reconciler
     // reads it as a phantom live worker.
     expect(frozen.leaseUntil).toBeNull();
@@ -2369,11 +2371,25 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
 
     // A STARTED run's terminality must be a durable FACT, not a row patch
     // (#443) — unlike #1041's never-started child, which correctly appends
-    // nothing because it has no event-sourced lifecycle to preserve.
-    expect(types(loadEngineEvents(db, child.id))).not.toContain('run.resumed');
-    expect(loadEngineEvents(db, child.id).filter((e) => e.type === 'run.interrupted')).toEqual([
-      { type: 'run.interrupted', runId: child.id, reason: `parent_terminal:${parent.id}` },
+    // nothing because it has no event-sourced lifecycle to preserve. CX3 (#1320):
+    // the fact is the SAME one the live path writes — a `parent_terminal` cancel
+    // — and D7 finishes it: the in-flight node fails `cancelled`, no resume, no
+    // interrupt.
+    const log = loadEngineEvents(db, child.id);
+    expect(types(log)).not.toContain('run.resumed');
+    expect(types(log)).not.toContain('run.interrupted');
+    expect(log.filter((e) => e.type === 'run.cancelRequested')).toEqual([
+      {
+        type: 'run.cancelRequested',
+        runId: child.id,
+        source: { kind: 'parent_terminal', parentRunId: parent.id },
+      },
     ]);
+    expect(log.find((e) => e.type === 'node.failed')).toMatchObject({
+      nodeId: 'c',
+      kind: 'cancelled',
+    });
+    expect(log.at(-1)).toMatchObject({ type: 'run.finished', outcome: 'cancelled' });
   });
 
   it('resumes it when the parent log holds NO terminal fact — the guard does not over-fire', async () => {
@@ -2429,9 +2445,69 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
       childRow,
     );
 
-    expect(report.interrupted).toEqual([child.id]);
+    expect(report.finalized).toEqual([child.id]);
     expect(report.resumed).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('cancelled');
+  });
+
+  it('keeps an operator cancel already pending for the child — its source wins over `parent_terminal` (CX3)', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    const { child } = await seedCrashedChild(db, parent.id);
+    const cancels = createRunCancels();
+    cancels.request(child.id, { kind: 'operator' });
+
+    const report = emptyReconcileReport();
+    await reconcileOne(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor(),
+        alarms: stubAlarms(),
+        cancels,
+      },
+      report,
+      getRun(db, child.id)!,
+    );
+
+    expect(report.finalized).toEqual([child.id]);
+    const folded = loadEngineEvents(db, child.id).filter((e) => e.type === 'run.cancelRequested');
+    expect(folded).toEqual([
+      { type: 'run.cancelRequested', runId: child.id, source: { kind: 'operator' } },
+    ]);
+    expect(cancels.pending(child.id)).toBe(false);
+  });
+
+  it('freezes a child whose parent is over AND whose own version is gone `doc_unresolvable:` — a cancel needs the doc to finish (CX3)', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    const { child } = await seedCrashedChild(db, parent.id);
+    const resolve = resolveDocFor(db);
+
+    const report = emptyReconcileReport();
+    await reconcileOne(
+      {
+        db,
+        resolveDoc: (pvId) => {
+          if (pvId === child.pipelineVersionId) throw new DocUnresolvableError(pvId);
+          return resolve(pvId);
+        },
+        executor: makeStubExecutor(),
+        alarms: stubAlarms(),
+      },
+      report,
+      getRun(db, child.id)!,
+    );
+
+    expect(report.interrupted).toEqual([child.id]);
     expect(getRun(db, child.id)!.status).toBe('interrupted');
+    const log = loadEngineEvents(db, child.id);
+    expect(types(log)).not.toContain('run.cancelRequested');
+    expect(log.at(-1)).toEqual({
+      type: 'run.interrupted',
+      runId: child.id,
+      reason: `doc_unresolvable:${child.pipelineVersionId}`,
+    });
   });
 
   it('resyncs a child whose OWN log already ended terminal, rather than interrupting it again', async () => {
