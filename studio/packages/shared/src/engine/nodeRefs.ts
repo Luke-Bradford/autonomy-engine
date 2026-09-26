@@ -136,7 +136,11 @@ function matchMappedId(s: string, i: number, idMap: ReadonlyMap<string, string>)
  * so an id that appears inside a literal is never touched. Returns the body
  * unchanged when nothing matched.
  */
-function remapBody(body: string, idMap: ReadonlyMap<string, string>): string {
+function remapBody(
+  body: string,
+  idMap: ReadonlyMap<string, string>,
+  seen?: Set<string>,
+): string {
   let out = '';
   let cut = 0;
   let i = 0;
@@ -160,6 +164,7 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>): string {
       i = idStart;
       continue;
     }
+    seen?.add(oldId);
     out += body.slice(cut, idStart) + (idMap.get(oldId) as string);
     cut = idStart + oldId.length;
     i = cut;
@@ -178,6 +183,11 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>): string {
  * the thing that reports the defect.
  */
 export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, string>): string {
+  return rewriteString(s, idMap);
+}
+
+/** `remapNodeRefsInString`, recording each id it matched in `seen` when given. */
+function rewriteString(s: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
   if (idMap.size === 0 || !s.includes('${') || s.includes(MASK_CHAR)) return s;
   const scanned = s.split(ESCAPED_OPEN).join(MASK_OPEN);
   const { matches, unterminatedAt } = scanTemplateRefs(scanned);
@@ -187,7 +197,7 @@ export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, stri
   let out = scanned;
   for (let k = matches.length - 1; k >= 0; k -= 1) {
     const m = matches[k] as { start: number; end: number; body: string };
-    const body = remapBody(m.body, idMap);
+    const body = remapBody(m.body, idMap, seen);
     if (body === m.body) continue;
     out = `${out.slice(0, m.start + 2)}${body}${out.slice(m.end)}`;
   }
@@ -213,12 +223,36 @@ export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, stri
  * left alone — only values are rewritten.
  */
 export function remapNodeRefs<T>(value: T, idMap: ReadonlyMap<string, string>): T {
+  return walkConfig(value, idMap);
+}
+
+/**
+ * #935 — which of `ids` a config tree READS through a `${nodes.<id>…}` reference.
+ *
+ * The same scanner and the same walk as `remapNodeRefs`, run with an identity
+ * map and a record of what matched, rather than a fourth reader of the grammar:
+ * "which node ids does this reference" and "rewrite these node ids" have to agree
+ * on what a reference IS, or a paste could clear a ref the remap would have
+ * rewritten. So the answer inherits that walk's scope exactly — deferred-eval
+ * subtrees included, quoted literals, prose and `$${` escapes excluded, and a
+ * subtree past `MAX_CONFIG_DEPTH` not read at all (the save gate refuses such a
+ * config regardless).
+ */
+export function referencedNodeIds(value: unknown, ids: Iterable<string>): string[] {
+  const identity = new Map<string, string>();
+  for (const id of ids) identity.set(id, id);
+  const seen = new Set<string>();
+  walkConfig(value, identity, seen);
+  return [...seen];
+}
+
+function walkConfig<T>(value: T, idMap: ReadonlyMap<string, string>, seen?: Set<string>): T {
   // The walk itself is the clone — it rebuilds every array and object it meets,
   // so an empty map still yields a fresh structure and callers need no second
   // copy. (`structuredClone` is not reachable here: `shared` compiles without
   // the DOM lib, and the input is parsed JSON regardless.)
   const walk = (v: unknown, depth: number): unknown => {
-    if (typeof v === 'string') return remapNodeRefsInString(v, idMap);
+    if (typeof v === 'string') return rewriteString(v, idMap, seen);
     if (depth > MAX_CONFIG_DEPTH) return v;
     if (Array.isArray(v)) return v.map((child) => walk(child, depth + 1));
     if (v !== null && typeof v === 'object') {

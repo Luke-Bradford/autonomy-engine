@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseExpr, protectEscapes, scanTemplateRefs } from './expr.js';
-import { remapNodeRefs, remapNodeRefsInString } from './nodeRefs.js';
+import { referencedNodeIds, remapNodeRefs, remapNodeRefsInString } from './nodeRefs.js';
 
 // The ids a real paste carries. `newLocalId` is `${prefix}_${crypto.randomUUID()}`,
 // so EVERY canvas-minted id contains hyphens — a scanner that reads "identifier
@@ -188,5 +188,37 @@ describe('remapNodeRefs (config tree)', () => {
   it('rewrites an OBJECT KEY never — only values', () => {
     const before = { [`nodes.${A}`]: `\${nodes.${A}.status}` };
     expect(remapNodeRefs(before, MAP)).toEqual({ [`nodes.${A}`]: `\${nodes.${A2}.status}` });
+  });
+});
+
+describe('referencedNodeIds (#935 — which of these nodes does a config read?)', () => {
+  const C = 'n_3c3c3c3c-0000-4000-8000-00000000000c';
+
+  it('names every candidate a `${nodes.<id>…}` ref reads, at any depth, once each', () => {
+    const config = {
+      url: `https://x.test/\${nodes.${A}.output.body}`,
+      headers: [{ value: `\${nodes.${A}.status}` }, { value: `\${add(nodes.${B}.output.n, 1)}` }],
+    };
+    expect(referencedNodeIds(config, [A, B, C]).sort()).toEqual([A, B].sort());
+  });
+
+  it('ignores a candidate that is only named in a quoted literal, in prose, or behind `$${`', () => {
+    const config = {
+      a: `\${concat('nodes.${A}.output', 'x')}`,
+      b: `plain nodes.${A}.output.body prose`,
+      c: `$\${nodes.${A}.output.body}`,
+    };
+    expect(referencedNodeIds(config, [A])).toEqual([]);
+  });
+
+  it('reads the LONGER id when one candidate is a prefix of another', () => {
+    const short = 'n_1';
+    const long = 'n_1-extra';
+    expect(referencedNodeIds({ x: `\${nodes.${long}.output.y}` }, [short, long])).toEqual([long]);
+  });
+
+  it('is empty for no candidates and for a config with no refs', () => {
+    expect(referencedNodeIds({ x: `\${nodes.${A}.output.y}` }, [])).toEqual([]);
+    expect(referencedNodeIds({ x: 'nothing here', n: 3, b: null }, [A])).toEqual([]);
   });
 });
