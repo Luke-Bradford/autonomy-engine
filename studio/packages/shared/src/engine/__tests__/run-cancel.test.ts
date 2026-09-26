@@ -482,6 +482,26 @@ describe('CX1 — resume and children under a cancel', () => {
     ]);
   });
 
+  it('under the PARENT’s cancel, a child returning `cancelled` is stopped work → the parent finishes `cancelled`', () => {
+    const eng = engine([callNode('c')]);
+    const start = eng.reduce(eng.seedState(), started()).commands[0]!;
+    const childRunId = start.type === 'startChild' ? start.childRunId : '';
+    const s = fold(eng, [started(), cancel()]);
+    expect(s.last).toEqual([]); // the call node's child is in flight
+    const r = eng.reduce(s.state, {
+      type: 'call.returned',
+      runId: RUN,
+      callNodeId: 'c',
+      attemptId: 'c#0',
+      childRunId,
+      childOutcome: 'cancelled',
+      outputs: {},
+    });
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
+    ]);
+  });
+
   it('a `call.returned{cancelled}` fails the call node (a child cancelled directly)', () => {
     const eng = engine([callNode('c')]);
     const s = fold(eng, [started()]);
