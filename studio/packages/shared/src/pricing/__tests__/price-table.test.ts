@@ -39,7 +39,7 @@ describe('#2 L5 — resolvePrice', () => {
     });
   });
 
-  it('#1323 prices the post-4.8 models that have a sourced list price', () => {
+  it('#1323 prices the 5.x-generation models that have a sourced list price', () => {
     // The capability sets knew these ids (#729) while the table did not, so an
     // llm_call on them ran and stamped no cost at all.
     expect(resolvePrice('anthropic_api', 'claude-opus-5-5', null)).toEqual({

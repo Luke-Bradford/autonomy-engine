@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gte, inArray, not, notExists, sql } from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,
@@ -676,6 +676,11 @@ export function admitQueuedRun(db: Db, id: string): Run | null {
  * to have) a log, so the caller must cancel it the event-sourced way instead. And
  * a row this patched can never be admitted afterwards, because admission only
  * selects and flips `queued` rows.
+ *
+ * It is the ONLY writer that leaves a `cancelled` row with no event log, and
+ * `queuedTriggerCandidatesForPipeline` relies on that to keep such a row off a
+ * trigger's service record (#1326). A second row-only terminal writer must be
+ * accounted for there too.
  */
 export function cancelQueuedRun(db: Db, id: string): boolean {
   const result = db
@@ -717,7 +722,8 @@ export interface QueuedTriggerCandidate {
   /** The trigger's oldest waiting fire (its next-to-admit, FIFO within the trigger). */
   oldestQueuedAt: number;
   /** When the trigger was last SERVED — MAX(started_at) over its non-queued
-   * runs (`admitQueuedRun`/`createRun` stamp admission time). `null` = never. */
+   * runs (`admitQueuedRun`/`createRun` stamp admission time), less any run
+   * cancelled before admission (#1326). `null` = never. */
   lastAdmittedAt: number | null;
 }
 
@@ -779,7 +785,17 @@ export function queuedTriggerCandidatesForPipeline(
         eq(pipelineVersions.pipelineId, pipelineId),
         inArray(runs.triggerId, triggerIds),
         sql`${runs.status} != 'queued'`,
-        sql`not (${runs.status} = 'cancelled' and not exists (select 1 from ${runEvents} where ${runEvents.runId} = ${runs.id}))`,
+        not(
+          and(
+            eq(runs.status, 'cancelled'),
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(runEvents)
+                .where(eq(runEvents.runId, runs.id)),
+            ),
+          )!,
+        ),
       ),
     )
     .groupBy(runs.triggerId)
