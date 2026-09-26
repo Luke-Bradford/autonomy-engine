@@ -10,6 +10,8 @@ import { NodePanel } from './PipelineCanvas';
 import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
 import { deriveConfigFields } from './configForm';
+import { subjectKey } from './containerRules';
+import { SubjectIssuesContext } from './issueContext';
 
 // `CallPanel` lists pipelines on mount. This suite is about which PANEL NodePanel
 // routes to, not about the call editor's own behaviour (`CallPanel.test.tsx` owns
@@ -1451,5 +1453,48 @@ describe('NodePanel — run policy (#1312)', () => {
     expect(store.getState().nodes[0]?.policy).toEqual({ secureOutput: true });
     // Straight to the store: the config form's Apply is not involved.
     expect(store.getState().nodes[0]?.config).toEqual({ url: 'https://example.test' });
+  });
+});
+
+describe('NodePanel — the issues on this node (#863)', () => {
+  it("lists this node's issues, leaving its own policy refusals to PolicyEditor", () => {
+    const target: Node = { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } };
+    const store = createCanvasStore();
+    store.setState({ nodes: [target] });
+    render(
+      <SubjectIssuesContext.Provider
+        value={
+          new Map([
+            [
+              subjectKey('node', 'n_a'),
+              [
+                { raw: 'nodes.n_a.config.url: bad ref', text: 'readable bad ref' },
+                { raw: "node 'n_a': policy.retry: nope", text: 'readable policy refusal' },
+              ],
+            ],
+          ])
+        }
+      >
+        <NodePanel
+          store={store}
+          connections={[]}
+          datasets={[]}
+          nodeId="n_a"
+          nodeType="http_request"
+          config={{}}
+          connectionId={undefined}
+          call={undefined}
+        />
+      </SubjectIssuesContext.Provider>,
+    );
+    expect(screen.getByText('1 validation issue')).toBeTruthy();
+    expect(screen.getByText('readable bad ref')).toBeTruthy();
+    expect(screen.queryByText('readable policy refusal')).toBeNull();
+  });
+
+  it('shows no issue section for a node with none', () => {
+    const target: Node = { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } };
+    mountOver(target);
+    expect(screen.queryByText(/validation issue/)).toBeNull();
   });
 });

@@ -6,6 +6,8 @@ import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
 import { createCanvasStore } from './canvasStore';
+import { subjectKey, type SubjectIssue } from './containerRules';
+import { SubjectIssuesContext } from './issueContext';
 
 /**
  * The DROP half of U5's drag-and-drop, unit-tested.
@@ -1259,5 +1261,80 @@ describe('FlowCanvas click-to-connect refusal (#941)', () => {
     clickConnect(source, source);
 
     expect(refusal(container)).toBeNull();
+  });
+});
+
+describe('FlowCanvas — issues drawn on the box they are about (#863)', () => {
+  function mountWithIssues(issues: Map<string, SubjectIssue[]>) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
+        ],
+        edges: [],
+        containers: [{ id: 'c_1', kind: 'stage', children: ['n_b'] }],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <SubjectIssuesContext.Provider value={issues}>
+        <ReactFlowProvider>
+          <FlowCanvas store={store} />
+        </ReactFlowProvider>
+      </SubjectIssuesContext.Provider>,
+    );
+    const wrapper = (id: string) => {
+      const el = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+      expect(el, `no rendered node ${id}`).not.toBeNull();
+      return el!;
+    };
+    return { wrapper };
+  }
+
+  const issue = (raw: string, text = raw): SubjectIssue => ({ raw, text });
+
+  it('badges the attributed activity with its count, and leaves the others plain', () => {
+    const { wrapper } = mountWithIssues(
+      new Map([
+        [
+          subjectKey('node', 'n_a'),
+          [issue('nodes.n_a.config.url: one', 'first'), issue('node.n_a: two', 'second')],
+        ],
+      ]),
+    );
+    const a = wrapper('n_a');
+    expect(a.querySelector('.flow-node')?.classList.contains('flow-node--invalid')).toBe(true);
+    // Read as attributes, not `getByRole`: jsdom never measures a node, so React
+    // Flow leaves its wrapper `visibility: hidden` and the a11y query skips it.
+    const badge = a.querySelector<HTMLElement>('.flow-issue-badge');
+    expect(badge?.getAttribute('role')).toBe('img');
+    expect(badge?.getAttribute('aria-label')).toBe('2 validation issues');
+    expect(badge!.textContent).toBe('2');
+    expect(badge!.getAttribute('title')).toBe('first\nsecond');
+
+    const b = wrapper('n_b');
+    expect(b.querySelector('.flow-issue-badge')).toBeNull();
+    expect(b.querySelector('.flow-node')?.classList.contains('flow-node--invalid')).toBe(false);
+  });
+
+  it("puts a container's count in its accessible name, which replaces the box's content", () => {
+    const { wrapper } = mountWithIssues(
+      new Map([[subjectKey('container', 'c_1'), [issue("container 'c_1': bad")]]]),
+    );
+    const box = wrapper('c_1');
+    expect(box.getAttribute('aria-label')).toBe('stage 1 container, 1 activity, 1 validation issue');
+    expect(box.querySelector('.flow-container')?.classList.contains('flow-container--invalid')).toBe(
+      true,
+    );
+    expect(box.querySelector('.flow-issue-badge')?.textContent).toBe('1');
   });
 });
