@@ -18,6 +18,9 @@ export type DraftNumberParse<V extends number | undefined> =
  * input reports text it rejects as `''`, which a blank-means-unset field would
  * read as "delete the setting". A refused value KEEPS the operator's text on
  * screen and says why, rather than reverting and losing what they typed.
+ *
+ * `parse` must round-trip the stored value — `parse(String(stored))` yields
+ * `stored` — because a blur on the untouched text is not parsed at all.
  */
 export function DraftNumberField<V extends number | undefined>({
   label,

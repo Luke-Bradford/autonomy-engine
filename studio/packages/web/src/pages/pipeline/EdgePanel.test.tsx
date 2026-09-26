@@ -403,8 +403,8 @@ describe('EdgePanel — a back-edge bounce cap', () => {
    * A back-edge that declares NO cap — the imported / pre-#444 doc this feature
    * keeps invoking. The field must not show `10` for it: that states a cap the
    * doc does not hold (against the canvas' own `×?` and the aria-label's "no
-   * bounce cap declared"), and because `commit` early-returns on
-   * `text === stored` it made the field a DEAD END — the operator sees `10`,
+   * bounce cap declared"), and because a blur equal to the stored text is a
+   * no-op it made the field a DEAD END — the operator sees `10`,
    * types `10`, nothing is written, and the doc stays unsavable.
    */
   describe('a back-edge with no declared cap', () => {
