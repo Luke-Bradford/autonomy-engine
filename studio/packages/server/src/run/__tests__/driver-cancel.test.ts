@@ -20,10 +20,10 @@ import {
   type DocResolver,
   type DriveDeps,
   type Executor,
-  type ExecutorCommand,
 } from '../driver.js';
 import { createRunDrives } from '../drives.js';
 import { loadEngineEvents } from '../events.js';
+import { abortableExecutor } from './abortable-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
 /**
@@ -61,66 +61,6 @@ function seedRun(db: Db, nodes: Node[], edges: Edge[]) {
     parentRunId: null,
     params: {},
   });
-}
-
-interface AbortableExecutor extends Executor {
-  /** Node ids whose attempt reached the executor. */
-  readonly dispatched: string[];
-  /** Resolves once `n` hanging attempts are blocked. */
-  hanging(n: number): Promise<void>;
-  readonly aborts: string[];
-}
-
-function abortableExecutor(hang: ReadonlySet<string>): AbortableExecutor {
-  const live = new Map<string, Set<() => void>>();
-  const dispatched: string[] = [];
-  const aborts: string[] = [];
-  let blocked = 0;
-  const waiters: { n: number; resolve: () => void }[] = [];
-  const notify = (): void => {
-    for (const w of waiters.filter((x) => blocked >= x.n)) {
-      waiters.splice(waiters.indexOf(w), 1);
-      w.resolve();
-    }
-  };
-  return {
-    dispatched,
-    aborts,
-    hanging: (n) =>
-      new Promise((resolve) => {
-        waiters.push({ n, resolve });
-        notify();
-      }),
-    abortRun(runId) {
-      aborts.push(runId);
-      for (const release of live.get(runId) ?? []) release();
-    },
-    async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
-      if (command.type !== 'dispatchNode') throw new Error('unexpected command');
-      const { nodeId, attemptId } = command;
-      dispatched.push(nodeId);
-      yield { type: 'node.dispatched', runId, nodeId, attemptId, idempotent: false };
-      if (hang.has(nodeId)) {
-        await new Promise<void>((resolve) => {
-          let set = live.get(runId);
-          if (set === undefined) live.set(runId, (set = new Set()));
-          set.add(resolve);
-          blocked += 1;
-          notify();
-        });
-        yield {
-          type: 'node.failed',
-          runId,
-          nodeId,
-          attemptId,
-          error: 'aborted',
-          kind: 'cancelled',
-        };
-        return;
-      }
-      yield { type: 'node.succeeded', runId, nodeId, attemptId, outputs: {} };
-    },
-  };
 }
 
 function deps(db: Db, executor: Executor, cancels: RunCancels): DriveDeps {

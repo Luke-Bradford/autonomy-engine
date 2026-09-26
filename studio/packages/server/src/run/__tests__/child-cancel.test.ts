@@ -19,6 +19,7 @@ import { createRunCancels } from '../cancel.js';
 import { cancelLiveChildren, createRunCanceller, type RunCanceller } from '../cancel-service.js';
 import { createChildRuns, subscribeChildReturns, type ChildRuns } from '../child.js';
 import {
+  onCancelFolded,
   startRun,
   type DocResolver,
   type DriveDeps,
@@ -30,6 +31,7 @@ import { createRunDrives } from '../drives.js';
 import { createRunEventBus } from '../event-bus.js';
 import { createExecutor } from '../executor.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
+import { abortableExecutor } from './abortable-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
 /**
@@ -122,80 +124,6 @@ function resolveDocFor(db: Db): DocResolver {
   };
 }
 
-interface LeafExecutor extends Executor {
-  /** `runId:nodeId` of every leaf attempt that reached the executor. */
-  readonly dispatched: string[];
-  /** Run ids `abortRun` was called for, in order. */
-  readonly aborts: string[];
-  abortRun(runId: string): void;
-  /** Resolves once `n` hanging attempts (in total) are blocked. */
-  hanging(n: number): Promise<void>;
-  /** Let a hanging leaf of `runId` SUCCEED — work that runs on. */
-  complete(runId: string, nodeId: string): void;
-}
-
-/** The leaf half of the executor (driver-cancel.test.ts's `abortableExecutor`,
- * extended with `complete` so a run that must NOT be cancelled can finish). */
-function leafExecutor(hang: ReadonlySet<string>): LeafExecutor {
-  const live = new Map<string, Map<string, (how: 'aborted' | 'completed') => void>>();
-  const dispatched: string[] = [];
-  const aborts: string[] = [];
-  let blocked = 0;
-  const waiters: { n: number; resolve: () => void }[] = [];
-  const notify = (): void => {
-    for (const w of waiters.filter((x) => blocked >= x.n)) {
-      waiters.splice(waiters.indexOf(w), 1);
-      w.resolve();
-    }
-  };
-  return {
-    dispatched,
-    aborts,
-    hanging: (n) =>
-      new Promise((resolve) => {
-        waiters.push({ n, resolve });
-        notify();
-      }),
-    abortRun(runId) {
-      aborts.push(runId);
-      for (const release of live.get(runId)?.values() ?? []) release('aborted');
-    },
-    complete(runId, nodeId) {
-      const release = live.get(runId)?.get(nodeId);
-      if (release === undefined) throw new Error(`${runId}:${nodeId} is not hanging`);
-      release('completed');
-    },
-    async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
-      if (command.type !== 'dispatchNode') throw new Error('leafExecutor: dispatchNode only');
-      const { nodeId, attemptId } = command;
-      dispatched.push(`${runId}:${nodeId}`);
-      yield { type: 'node.dispatched', runId, nodeId, attemptId, idempotent: false };
-      if (hang.has(nodeId)) {
-        const how = await new Promise<'aborted' | 'completed'>((resolve) => {
-          let byNode = live.get(runId);
-          if (byNode === undefined) live.set(runId, (byNode = new Map()));
-          byNode.set(nodeId, resolve);
-          blocked += 1;
-          notify();
-        });
-        live.get(runId)?.delete(nodeId);
-        if (how === 'aborted') {
-          yield {
-            type: 'node.failed',
-            runId,
-            nodeId,
-            attemptId,
-            error: 'aborted',
-            kind: 'cancelled',
-          };
-          return;
-        }
-      }
-      yield { type: 'node.succeeded', runId, nodeId, attemptId, outputs: {} };
-    },
-  };
-}
-
 interface BoundaryOptions {
   /** Hold the parent's `call.started` (the child ROW already exists) until this
    * resolves: the window where a parent's cancel cannot yet see its child. */
@@ -220,7 +148,7 @@ function boundary(db: Db, hang: ReadonlySet<string>, opts: BoundaryOptions = {})
       errors.push({ obj, msg });
     },
   };
-  const leaves = leafExecutor(hang);
+  const leaves = abortableExecutor(hang);
 
   // Assigned once, below; the closures resolve them long after this returns.
   // eslint-disable-next-line prefer-const
@@ -608,7 +536,7 @@ describe('CX3 — a child that STARTS after its parent was cancelled or ended', 
     await started;
     await flush();
 
-    expect(b.leaves.dispatched).toEqual(['root', ...siblings].map((id) => `${parent.id}:${id}`));
+    expect(b.leaves.dispatched).toEqual(['root', ...siblings]);
     expect(listRuns(db, { parentRunId: parent.id })).toEqual([]);
     expect(types(db, parent.id)).not.toContain('call.started');
     const returned = eventsOf(db, parent.id, 'call.returned');
@@ -644,5 +572,136 @@ describe("CX3 — result() passes a child's cancelled outcome through", () => {
     expect(childRuns.result(cancelled.id).outcome).toBe('cancelled');
     expect(childRuns.result(interrupted.id).outcome).toBe('failure');
     b.unsubscribe();
+  });
+});
+
+describe('CX3 — the propagation is best-effort: nothing it calls can throw into its caller', () => {
+  function capture(): { log: DriveLog; errors: string[] } {
+    const errors: string[] = [];
+    return { log: { error: (_obj, msg) => errors.push(msg ?? '') }, errors };
+  }
+
+  /** A parent that ANNOUNCED two live children, so both are reachable. */
+  function parentWithTwoChildren(db: Db) {
+    const childPv = seedVersion(db, [leaf('w')]);
+    const parent = seedRun(db, seedVersion(db, [callNode('c1', childPv), callNode('c2', childPv)]));
+    const kids = ['c1', 'c2'].map((callNodeId) => {
+      const child = seedRun(db, childPv, parent.id);
+      appendEngineEvent(db, {
+        type: 'call.started',
+        runId: parent.id,
+        callNodeId,
+        attemptId: `${callNodeId}#0`,
+        childRunId: child.id,
+      });
+      return child;
+    });
+    return { parent, kids };
+  }
+
+  it('cancelLiveChildren: a child whose cancel THROWS is logged, and the next child is still asked', () => {
+    const { db } = freshDb();
+    const { parent, kids } = parentWithTwoChildren(db);
+    const { log, errors } = capture();
+    const asked: string[] = [];
+    const canceller: RunCanceller = {
+      cancel(runId) {
+        asked.push(runId);
+        if (asked.length === 1) throw new Error('boom');
+        return { kind: 'accepted', state: 'requested' };
+      },
+    };
+
+    expect(() =>
+      cancelLiveChildren({ db, resolveDoc: resolveDocFor(db), canceller, log }, parent.id, {
+        kind: 'parent_cancelled',
+        parentRunId: parent.id,
+      }),
+    ).not.toThrow();
+    expect([...asked].sort()).toEqual(kids.map((k) => k.id).sort());
+    expect(errors).toEqual(['run cancel: cancelling a child run failed']);
+  });
+
+  it('cancelLiveChildren: a parent log that cannot be read reaches NO child, and does not throw', () => {
+    const { db, sqlite } = freshDb();
+    const { parent } = parentWithTwoChildren(db);
+    // The log is APPEND-ONLY, so the corruption is a poison APPENDED row (the
+    // `events.test.ts` precedent).
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison', parent.id, 999, 'x', 'not json', 1_700_000_000_000);
+    const { log, errors } = capture();
+    const asked: string[] = [];
+    const canceller: RunCanceller = {
+      cancel(runId) {
+        asked.push(runId);
+        return { kind: 'accepted', state: 'requested' };
+      },
+    };
+
+    expect(() =>
+      cancelLiveChildren({ db, resolveDoc: resolveDocFor(db), canceller, log }, parent.id, {
+        kind: 'parent_terminal',
+        parentRunId: parent.id,
+      }),
+    ).not.toThrow();
+    expect(asked).toEqual([]);
+    expect(errors).toEqual(['run cancel: listing child runs failed']);
+  });
+
+  it('onCancelFolded: a throwing child propagation neither throws nor stops the abort', () => {
+    const { log, errors } = capture();
+    const aborted: string[] = [];
+    expect(() =>
+      onCancelFolded(
+        {
+          executor: { abortRun: (runId) => aborted.push(runId) },
+          cancels: {
+            cancelChildren: () => {
+              throw new Error('boom');
+            },
+          },
+          log,
+        },
+        'r1',
+      ),
+    ).not.toThrow();
+    expect(aborted).toEqual(['r1']);
+    expect(errors).toEqual(['run cancel: reaching child runs failed']);
+  });
+
+  it('the terminal tap: a throwing child propagation is logged, never thrown out of its microtask', async () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [leaf('w')]));
+    const bus = createRunEventBus();
+    const errors: string[] = [];
+    const unsubscribe = subscribeChildReturns({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: abortableExecutor(new Set()),
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+      bus,
+      log: { error: (_obj, msg) => errors.push(msg ?? '') },
+      cancels: {
+        ...createRunCancels(),
+        cancelChildren: () => {
+          throw new Error('boom');
+        },
+      },
+      childRuns: createChildRuns({
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: abortableExecutor(new Set()),
+        alarms: stubAlarms(),
+        drives: createRunDrives(),
+      }),
+    });
+    appendEngineEvent(db, { type: 'run.interrupted', runId: run.id, reason: 'test' }, bus);
+    await flush();
+    unsubscribe();
+    expect(errors).toEqual(['cancelling the child runs of an ended run failed']);
   });
 });
