@@ -682,6 +682,9 @@ export const llmCallConfigSchema = z
     // substitution's whole-value native-type preservation resolves it to the
     // ARRAY validated here. A still-string value (a pre-gate stored doc) fails
     // this parse loud at dispatch — never sent to a provider as an inert literal.
+    // NOT `llmMessagesSchema`, though the element matches: the node form gives
+    // that schema rows by identity (#852), and a row control cannot hold the
+    // `${}` string this field must be at save.
     history: z.array(llmMessageSchema).optional(),
     // L12 transcript opt-in — lowers an extra `{messages, json}` output row at
     // save (`catalog/lower.ts::lowerLlmEmitMessages`); the executor then augments

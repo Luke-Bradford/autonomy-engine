@@ -330,20 +330,21 @@ function unwrap(schema: unknown): Unwrapped {
  * editor: this ticket's own defect, on the most-used activity in the catalog.
  *
  * `messages` shares that open element but NOT that rule, so it is admitted by
- * IDENTITY with `llmMessagesSchema` (`waived`), the same way `SecretRefSchema`
+ * IDENTITY with `llmMessagesSchema` (`waivedByIdentity`), the same way `SecretRefSchema`
  * is recognised below (#852 item 3). Making the shared element `.strict()`
  * instead would change what dispatch accepts for `history`, a runtime change a
  * form has no business making. Waiving the gate leaves the VALUE guard in
  * `formatFieldValue`, which refuses any stored row holding an undeclared key —
  * so a message carrying one still opens in the JSON editor, unaltered.
  */
-function deriveElementFields(element: unknown, waived = false): ConfigField[] | null {
+function deriveElementFields(element: unknown, waivedByIdentity = false): ConfigField[] | null {
   const def = defOf(element);
   if (def?.type !== 'object') return null;
   // `.strict()` and nothing else: a `z.object` with no catchall carries
   // `undefined` here, `.catchall(z.string())` a string schema, `.strict()` a
   // `never` one. Verified against the built catalog (zod 4.4.3).
-  if (!waived && defOf((def as { catchall?: unknown }).catchall)?.type !== 'never') return null;
+  if (!waivedByIdentity && defOf((def as { catchall?: unknown }).catchall)?.type !== 'never')
+    return null;
   const shape = (element as { shape?: unknown }).shape;
   if (typeof shape !== 'object' || shape === null) return null;
 
