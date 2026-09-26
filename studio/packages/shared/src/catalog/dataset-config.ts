@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
@@ -52,7 +53,7 @@ export function isSqlIdentifier(value: string): boolean {
 }
 
 const sqlIdentifier = (label: string) =>
-  z.string().refine(isSqlIdentifier, {
+  singleLine(z.string()).refine(isSqlIdentifier, {
     message: `${label} must be a bare SQL identifier (letters, digits, _ or $; not starting with a digit)`,
   });
 
@@ -137,8 +138,7 @@ const DELIMITED_ROLES = ['delimiter', 'quote', 'escape'] as const;
  * the end of a field indistinguishable from the end of a row.
  */
 const delimitedChar = (role: string) =>
-  z
-    .string()
+  singleLine(z.string())
     .length(1, { message: `${role} must be exactly one character` })
     .refine((c) => c !== '\n' && c !== '\r', {
       message: `${role} cannot be a line terminator`,
@@ -183,7 +183,7 @@ export const delimitedDatasetConfigSchema = z
   .object({
     /** Confined against the `fs` connection's `roots` at DISPATCH, never here
      * (§8) — this schema is shared with the browser and knows no filesystem. */
-    path: z.string().min(1),
+    path: singleLine(z.string()).min(1),
     delimiter: delimitedChar('delimiter').default(','),
     quote: delimitedChar('quote').default('"'),
     /** Absent means RFC 4180: a doubled quote is the only escape. Declaring one
@@ -193,11 +193,10 @@ export const delimitedDatasetConfigSchema = z
     encoding: DelimitedEncodingSchema.default('utf-8'),
     /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
      * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */
-    nullValue: z.string().optional(),
+    nullValue: singleLine(z.string()).optional(),
     /** §6.2 — the ONLY way a textual date is read. Absent plus a `date`/
      * `timestamp` target is a refusal (`no_date_format`), never a guess. */
-    dateFormat: z
-      .string()
+    dateFormat: singleLine(z.string())
       .refine(isValidDateFormat, {
         message:
           `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
@@ -280,9 +279,9 @@ export const excelDatasetConfigSchema = z
   .object({
     /** Confined against the `fs` connection's `roots` at DISPATCH, never here
      * (§8) — this schema is shared with the browser and knows no filesystem. */
-    path: z.string().min(1),
+    path: singleLine(z.string()).min(1),
     /** The worksheet BY NAME. Mutually exclusive with `sheetIndex`. */
-    sheet: z.string().min(1).optional(),
+    sheet: singleLine(z.string()).min(1).optional(),
     /** The worksheet by 1-BASED position, for a workbook whose sheet names are
      * unstable or unprintable. Mutually exclusive with `sheet`. */
     sheetIndex: z.int().min(1).optional(),
@@ -290,10 +289,9 @@ export const excelDatasetConfigSchema = z
     /** 1-based; only meaningful with `header: true`. */
     headerRow: z.int().min(1).default(1),
     /** §6.4 — the NULL sentinel, for TEXT cells that spell null out. */
-    nullValue: z.string().optional(),
+    nullValue: singleLine(z.string()).optional(),
     /** §6.2 — the ONLY way a TEXTUAL date is read. A date-typed CELL needs none. */
-    dateFormat: z
-      .string()
+    dateFormat: singleLine(z.string())
       .refine(isValidDateFormat, {
         message:
           `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +

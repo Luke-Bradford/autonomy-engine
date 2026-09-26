@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { ConfigFieldControl } from './ConfigFieldControl';
 import type { ConfigField } from './configForm';
 
@@ -55,5 +55,50 @@ describe('ConfigFieldControl — a label names its control and nothing else (#12
     );
     expect(labelTextOf(container.querySelector('textarea')!)).toEqual(['sheet (optional)']);
     expect(labelTextOf(container.querySelector('select')!)).toEqual(['Sheet in this workbook']);
+  });
+});
+
+describe('ConfigFieldControl — a single-line field is an input (#852 item 4)', () => {
+  const url: ConfigField = { name: 'url', kind: 'text', optional: false, singleLine: true };
+
+  it('renders a tagged text field as a one-line input, labelled by its name', () => {
+    const { container } = render(
+      <ConfigFieldControl field={url} value="https://example.test" onChange={noop} />,
+    );
+    expect(container.querySelector('textarea')).toBeNull();
+    const input = container.querySelector('input.config-field-line') as HTMLInputElement;
+    expect(input.type).toBe('text');
+    expect(input.value).toBe('https://example.test');
+    expect(labelTextOf(input)).toEqual(['url']);
+  });
+
+  it('keeps an untagged text field a textarea', () => {
+    const body: ConfigField = { name: 'body', kind: 'text', optional: true };
+    const { container } = render(<ConfigFieldControl field={body} value="" onChange={noop} />);
+    expect(container.querySelector('textarea')).not.toBeNull();
+    expect(container.querySelector('input.config-field-line')).toBeNull();
+  });
+
+  it('keeps a stored line break: such a value stays in a textarea, verbatim', () => {
+    const { container } = render(
+      <ConfigFieldControl field={url} value={'https://a.test\n/path'} onChange={noop} />,
+    );
+    expect(container.querySelector('input.config-field-line')).toBeNull();
+    expect(container.querySelector('textarea')!.value).toBe('https://a.test\n/path');
+  });
+
+  it('stays a textarea for the mount once the line break is deleted', () => {
+    let value = 'a\nb';
+    const onChange = (next: unknown): void => {
+      value = next as string;
+    };
+    const { container, rerender } = render(
+      <ConfigFieldControl field={url} value={value} onChange={onChange} />,
+    );
+    fireEvent.change(container.querySelector('textarea')!, { target: { value: 'ab' } });
+    rerender(<ConfigFieldControl field={url} value={value} onChange={onChange} />);
+    expect(value).toBe('ab');
+    expect(container.querySelector('textarea')).not.toBeNull();
+    expect(container.querySelector('input.config-field-line')).toBeNull();
   });
 });

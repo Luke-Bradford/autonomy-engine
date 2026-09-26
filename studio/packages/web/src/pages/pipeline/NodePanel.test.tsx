@@ -1631,3 +1631,20 @@ describe('NodePanel — the issues on this node (#863)', () => {
     expect(screen.queryByText(/validation issue/)).toBeNull();
   });
 });
+
+describe('NodePanel — a single-line field takes a reference at its caret (#852 item 4)', () => {
+  it('inserts into the one-line url input where the caret sits, not at the end', () => {
+    const params: Param[] = [{ name: 'limit', type: 'number', required: true }];
+    const panel = mountOver(httpNode({ url: 'https://api.test/?n=&x=1' }), [], [], params);
+
+    const url = screen.getByLabelText('url') as HTMLInputElement;
+    expect(url.tagName).toBe('INPUT');
+    url.setSelectionRange(20, 20);
+    fireEvent.select(url);
+    fireEvent.click(screen.getByRole('button', { name: 'Insert reference into url' }));
+    fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://api.test/?n=${params.limit}&x=1' });
+  });
+});

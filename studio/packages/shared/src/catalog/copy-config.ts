@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 
 /**
@@ -34,12 +35,12 @@ import { DataTypeSchema } from '../schemas/dataset.js';
  */
 const copyMappingEntryShape = {
   /** A source column name — XOR `expression`. */
-  source: z.string().min(1).optional(),
+  source: singleLine(z.string()).min(1).optional(),
   // `expression` — `source`'s XOR partner — is NOT declared here. It is the one
   // field whose TYPE differs between the two shapes, so `mappingArray` below
   // splices it in and documents it.
   /** The sink column this row writes. */
-  sink: z.string().min(1),
+  sink: singleLine(z.string()).min(1),
   /**
    * The TARGET type, declared and never inferred. Drawn from the closed
    * `DataTypeSchema` set (`schemas/dataset.ts`) precisely because §6.2 defines

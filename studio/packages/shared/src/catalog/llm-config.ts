@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**
@@ -252,7 +253,7 @@ export type LlmToolChoice = z.infer<typeof llmToolChoiceSchema>;
 export const llmToolDefSchema = z
   .object({
     /** Addressable identifier — the name the model calls the tool by. */
-    name: z.string().refine(isAddressableOutputName, {
+    name: singleLine(z.string()).refine(isAddressableOutputName, {
       message:
         'tool name must be a plain identifier (letters, digits, _; not starting with a digit)',
     }),
@@ -627,7 +628,7 @@ export const llmCallConfigSchema = z
     /** v2 role-tagged conversation. Mutually exclusive with `prompt`. */
     messages: llmMessagesSchema.optional(),
     /** Overrides the connection's default model for this node. */
-    model: z.string().optional(),
+    model: singleLine(z.string()).optional(),
     maxTokens: z.number().int().positive().optional(),
     // Only the UNIVERSAL lower bound (0) is enforced here; the upper bound is
     // provider-specific (Anthropic 0–1, OpenAI/Ollama 0–2) so the adapters own

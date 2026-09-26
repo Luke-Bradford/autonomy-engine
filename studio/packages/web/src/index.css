@@ -1448,6 +1448,14 @@ td button + button {
   resize: vertical;
 }
 
+/* #852 item 4 — a single-line config field is an <input>, but it holds the same
+   kind of text as the textareas above (a path, a URL, a `${}`), so it wears the
+   same face. Scoped by class: a blanket `.config-field input` would also
+   restyle PickableInput. */
+.config-field input.config-field-line {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
 /* React Flow needs a parent with a resolved height — but DEFINITE is not the
    same as CONSTANT, which is what the old `--canvas-height: 620px` literal
    conflated.

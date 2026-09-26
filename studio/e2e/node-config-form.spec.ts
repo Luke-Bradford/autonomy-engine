@@ -113,6 +113,65 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
+  // #852 item 4 — a field whose SCHEMA is tagged `singleLine` is a one-line
+  // input, everything else keeps the textarea, and a stored value holding a
+  // line break keeps the textarea too (an input would strip the break).
+  test('a short setting is a one-line input; prose and a multi-line value stay textareas', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u7 single line', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: { url: 'https://example.test', method: 'GET\nPOST' },
+        },
+      ],
+    });
+    await canvasNodes(page).first().click();
+
+    const facts = await panel(page).evaluate((root) => {
+      const byLabel = (name: string) =>
+        Array.from(
+          root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+        ).find((el) => Array.from(el.labels ?? []).some((l) => l.textContent === name));
+      const url = byLabel('url');
+      const textareaFont = byLabel('body (optional)')
+        ? getComputedStyle(byLabel('body (optional)')!).fontFamily
+        : null;
+      return {
+        url: url?.tagName,
+        urlFont: url ? getComputedStyle(url).fontFamily : null,
+        textareaFont,
+        method: byLabel('method (optional)')?.tagName,
+        methodValue: byLabel('method (optional)')?.value,
+        body: byLabel('body (optional)')?.tagName,
+      };
+    });
+    expect(facts).toEqual({
+      url: 'INPUT',
+      // The same face as the textareas beside it, not the page's proportional one.
+      urlFont: facts.textareaFont,
+      textareaFont: expect.stringContaining('monospace'),
+      method: 'TEXTAREA',
+      methodValue: 'GET\nPOST',
+      body: 'TEXTAREA',
+    });
+
+    // The input still round-trips through a save.
+    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/one-line');
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id)).toMatchObject({
+      url: 'https://example.test/one-line',
+      method: 'GET\nPOST',
+    });
+    await expectQuiet(page, problems);
+  });
+
   test('applying the form does NOT drop the outputs contract it cannot see', async ({ page }) => {
     // The data-integrity half, and the reason the apply path merges over the
     // original config instead of storing a parse result. `config.outputs` is the

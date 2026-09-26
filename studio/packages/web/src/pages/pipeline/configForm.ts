@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { SecretRefSchema, llmMessagesSchema } from '@autonomy-studio/shared';
+import { SecretRefSchema, isSingleLine, llmMessagesSchema } from '@autonomy-studio/shared';
 
 /**
  * The pure rules behind the per-activity node config form (U7).
@@ -83,9 +83,12 @@ const KEY_CELL = 'key';
  */
 function keyValueCells(recordValue: 'text' | 'secret'): ConfigField[] {
   return [
-    { name: KEY_CELL, kind: 'text', optional: false, literal: true },
+    // Both literal cells are identifiers, so they are single-line too. Built
+    // here rather than read off a schema, because a record's key and a
+    // secret's name have no field schema of their own to carry the tag.
+    { name: KEY_CELL, kind: 'text', optional: false, literal: true, singleLine: true },
     recordValue === 'secret'
-      ? { name: 'secret name', kind: 'text', optional: false, literal: true }
+      ? { name: 'secret name', kind: 'text', optional: false, literal: true, singleLine: true }
       : { name: 'value', kind: 'text', optional: false },
   ];
 }
@@ -197,6 +200,13 @@ export interface ConfigField {
    * offer the flyout exists to avoid.
    */
   readonly literal?: true;
+  /**
+   * A `text` field whose schema is tagged `singleLine` (`shared/schemas/
+   * field-presentation.ts`, #852 item 4): an identifier, path, URL or short
+   * literal, offered a one-line input rather than a textarea. Never set on any
+   * other kind.
+   */
+  readonly singleLine?: true;
 }
 
 /**
@@ -282,6 +292,8 @@ interface Unwrapped {
   readonly inner: unknown;
   readonly optional: boolean;
   readonly defaultText?: string;
+  /** Whether any layer, wrapper or inner, carries the `singleLine` tag. */
+  readonly singleLine: boolean;
 }
 
 /** Peel the wrappers off a field schema, recording whether the key may be absent. */
@@ -289,6 +301,9 @@ function unwrap(schema: unknown): Unwrapped {
   let inner = schema;
   let optional = false;
   let defaultText: string | undefined;
+  // Checked on EVERY layer: an `.optional()`/`.default()` wrapper is a new
+  // schema that does not inherit its inner string's registry entry.
+  let singleLine = isSingleLine(inner);
 
   // Bounded: each step consumes one wrapper, and a schema nests finitely many.
   for (let depth = 0; depth < 16; depth += 1) {
@@ -304,9 +319,10 @@ function unwrap(schema: unknown): Unwrapped {
     }
     if (def?.innerType === undefined) break;
     inner = def.innerType;
+    singleLine ||= isSingleLine(inner);
   }
 
-  return { inner, optional, defaultText };
+  return { inner, optional, defaultText, singleLine };
 }
 
 /**
@@ -350,7 +366,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
 
   const cells: ConfigField[] = [];
   for (const [name, cellSchema] of Object.entries(shape as Record<string, unknown>)) {
-    const { inner, optional, defaultText } = unwrap(cellSchema);
+    const { inner, optional, defaultText, singleLine } = unwrap(cellSchema);
     // Classified WITHOUT recursion: a cell that is itself a row list or a
     // one-per-line list degrades the whole field to JSON rather than nesting.
     // Neither has a designed shape inside a row card, and `stringList`'s
@@ -373,6 +389,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
       optional,
       ...(enumOptions && { enumOptions }),
       ...(defaultText !== undefined && { defaultText }),
+      ...(singleLine && kind === 'text' && { singleLine: true as const }),
     });
   }
   // An element declaring no columns has no control to render.
@@ -450,7 +467,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
   if (typeof shape !== 'object' || shape === null) return null;
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
-    const { inner, optional, defaultText } = unwrap(fieldSchema);
+    const { inner, optional, defaultText, singleLine } = unwrap(fieldSchema);
     const { kind, enumOptions, elementFields, recordValue } = classify(inner, true);
     return {
       name,
@@ -460,6 +477,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
       ...(defaultText !== undefined && { defaultText }),
       ...(elementFields && { elementFields }),
       ...(recordValue && { recordValue }),
+      ...(singleLine && kind === 'text' && { singleLine: true as const }),
     };
   });
 }

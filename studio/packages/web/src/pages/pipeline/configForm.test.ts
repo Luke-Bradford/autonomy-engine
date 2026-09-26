@@ -6,6 +6,7 @@ import {
   datasetConfigSchema,
   getActivity,
   llmMessageSchema,
+  singleLine,
 } from '@autonomy-studio/shared';
 import {
   assembleConfig,
@@ -1175,5 +1176,61 @@ describe('keyValue (#852 item 2)', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.ok && 'headers' in result.config).toBe(false);
+  });
+});
+
+describe('singleLine presentation hint (#852 item 4)', () => {
+  const flagged = (fields: ConfigField[] | null): string[] =>
+    (fields ?? []).filter((f) => f.singleLine).map((f) => f.name);
+
+  it('marks the tagged short strings of a catalogued activity, and only those', () => {
+    expect(flagged(fieldsOf('http_request'))).toEqual(['url', 'method']);
+    expect(flagged(fieldsOf('llm_call'))).toEqual(['model']);
+    expect(flagged(fieldsOf('file_write'))).toEqual(['path']);
+    expect(field(fieldsOf('agent_task'), 'task').singleLine).toBeUndefined();
+  });
+
+  it('marks tagged connection and dataset fields, through `.extend` and a factory', () => {
+    expect(flagged(deriveConfigFields(connectionConfigSchema('anthropic_api')))).toEqual([
+      'baseUrl',
+      'model',
+      'anthropicVersion',
+    ]);
+    expect(flagged(deriveConfigFields(datasetConfigSchema('delimited')))).toEqual(
+      expect.arrayContaining(['path', 'delimiter', 'quote', 'escape', 'nullValue', 'dateFormat']),
+    );
+  });
+
+  it('reads the tag through an optional/default wrapper and past a refine clone', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        wrapped: singleLine(z.string()).optional(),
+        defaulted: singleLine(z.string()).default('x'),
+        refined: singleLine(z.string()).refine((v) => v !== 'no'),
+        untagged: z.string(),
+      }),
+    );
+    expect(flagged(fields)).toEqual(['wrapped', 'defaulted', 'refined']);
+  });
+
+  it('ignores the tag on anything that is not a text control', () => {
+    const fields = deriveConfigFields(
+      z.object({ count: singleLine(z.number()), list: singleLine(z.array(z.string())) }),
+    );
+    expect(flagged(fields)).toEqual([]);
+  });
+
+  it('marks row cells: copy mapping columns, and a key/value row’s literal cells', () => {
+    const mapping = field(fieldsOf('copy'), 'mapping');
+    expect(flagged(mapping.elementFields as ConfigField[])).toEqual(['source', 'sink']);
+    const secretHeaders = field(fieldsOf('http_request'), 'secretHeaders');
+    expect(flagged(secretHeaders.elementFields as ConfigField[])).toEqual(['key', 'secret name']);
+    const headers = field(fieldsOf('http_request'), 'headers');
+    expect(flagged(headers.elementFields as ConfigField[])).toEqual(['key']);
+  });
+
+  it('is invisible to z.toJSONSchema, which reads only the global registry', () => {
+    const json = JSON.stringify(z.toJSONSchema(z.object({ a: singleLine(z.string()) })));
+    expect(json).not.toContain('singleLine');
   });
 });

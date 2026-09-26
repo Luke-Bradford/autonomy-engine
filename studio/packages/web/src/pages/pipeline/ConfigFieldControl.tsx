@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -120,17 +120,18 @@ export type FieldChoices = {
 /**
  * One derived config control (U7).
  *
- * Every string field renders as a `<textarea>` rather than an `<input>`, and that
- * is a TRADEOFF taken knowingly rather than the only option. Any string setting
- * here may hold a multi-line `${}` expression or prose (`prompt`, `body`,
- * `content`, `task`), and nothing in a Zod `z.string()` distinguishes those from
- * a short one like `url` or `method` — so the uniform choice serves the fields
- * that need it and costs the short ones some vertical space. The alternatives
- * both have a real price: a per-field-name list of which strings are "long" is
- * the magic-string table that deriving the form from the schema exists to avoid,
- * and switching element on the CURRENT value's length would move focus as the
- * author types. A presentation hint on the schema is the principled fix if the
- * space ever bothers anyone (#852).
+ * A string field renders as a `<textarea>`, because it may hold a multi-line
+ * `${}` expression or prose (`prompt`, `body`, `content`, `task`). A field whose
+ * SCHEMA is tagged `singleLine` (`shared/schemas/field-presentation.ts`, #852
+ * item 4) — a `url`, a `path`, a model name — gets a one-line `<input>` instead.
+ * The hint lives on the schema, not in a per-field-name list here, because that
+ * list would be the magic-string table deriving the form exists to avoid.
+ *
+ * One exception keeps the textarea: a value that already holds a line break.
+ * An `<input>`'s value sanitisation STRIPS line breaks, so showing such a value
+ * (imported, or written through the JSON editor) in one would silently rewrite
+ * it on the next keystroke. The choice is LATCHED for the mount, so deleting
+ * that last line break does not swap the element out from under the caret.
  *
  * The label carries the field NAME, not a prettified one: the name is what the
  * author writes in a `${nodes.x.config…}` reference and what the server's
@@ -175,12 +176,22 @@ export function ConfigFieldControl({
 }) {
   const shown = name ?? field.name;
   const label = field.optional ? `${shown} (optional)` : shown;
+  // ONE caret hook for whichever element renders, so its caret and `touched`
+  // state survive the latch below; the casts at the JSX sites only narrow the
+  // union to the element each site mounts.
   const {
     ref: inputRef,
     onSelect,
     insert: insertAtCaret,
     wrapOptions,
-  } = useCaretInsert<HTMLTextAreaElement>();
+  } = useCaretInsert<HTMLInputElement | HTMLTextAreaElement>();
+  const text = typeof value === 'string' ? value : '';
+  const [sawLineBreak, setSawLineBreak] = useState(false);
+  // React's derived-state pattern: latch during render, never un-latch. A
+  // render-phase set re-renders BEFORE anything commits, so a value that
+  // arrives holding a line break never mounts an input even once.
+  if (!sawLineBreak && /[\r\n]/.test(text)) setSawLineBreak(true);
+  const oneLine = field.kind === 'text' && field.singleLine === true && !sawLineBreak;
 
   if (isRowKind(field.kind)) {
     return (
@@ -248,24 +259,40 @@ export function ConfigFieldControl({
   }
 
   const hint = field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
-  const text = typeof value === 'string' ? value : '';
 
   return (
     <LabelledControl className="config-field" label={hint === null ? label : `${label} — ${hint}`}>
       {(id) => (
         <>
-          <textarea
-            id={id}
-            ref={inputRef}
-            value={text}
-            onSelect={onSelect}
-            rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
-            spellCheck={false}
-            placeholder={field.defaultText}
-            onChange={(e) => onChange(e.target.value)}
-          />
+          {oneLine ? (
+            <input
+              id={id}
+              type="text"
+              className="config-field-line"
+              ref={inputRef as RefObject<HTMLInputElement | null>}
+              value={text}
+              onSelect={onSelect}
+              spellCheck={false}
+              // A connection form's `user`/`host`/`url` is not the operator's
+              // own login, and a textarea never offered autofill for it.
+              autoComplete="off"
+              placeholder={field.defaultText}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          ) : (
+            <textarea
+              id={id}
+              ref={inputRef as RefObject<HTMLTextAreaElement | null>}
+              value={text}
+              onSelect={onSelect}
+              rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+              spellCheck={false}
+              placeholder={field.defaultText}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          )}
           {/* A SIBLING of the label, not a child, because a button INSIDE the label
-          contaminates the textarea's accessible name — which is exactly why
+          contaminates the text box's accessible name — which is exactly why
           `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
           NOT steal focus: per the HTML standard a label's activation behaviour
           does nothing for an event targeted at interactive content inside it,
@@ -298,14 +325,14 @@ export function ConfigFieldControl({
             run looking like a benign fallthrough.
 
           Both are recorded on #864. */}
-          {/* #1218 — a chooser BESIDE the textarea, never instead of it.
+          {/* #1218 — a chooser BESIDE the text box, never instead of it.
           The free-text box always survives: a workbook whose path is not
           readable yet has no list to offer, and a control that replaced the box
           would make such a dataset unauthorable. So this is purely additive, and
           its absence is the ordinary case rather than a failure.
 
           A `<select>` and not a `datalist`: `datalist` does not attach to a
-          `<textarea>` (which every text field here is, for the reason argued at
+          `<textarea>` (which most text fields here are, for the reason argued at
           the top of this file), and its options are unreachable by keyboard on
           several engines. A select is focusable, arrow-key navigable, and
           announces its own name — the accessibility floor this has to clear.
@@ -364,8 +391,9 @@ export function ConfigFieldControl({
  *
  * §13 calls this a "table", and a `<table>` is what it is NOT. The property
  * panel is a fixed 320px column (`index.css`, `grid-template-columns: 180px 1fr
- * 320px`) and every string control in it is a `<textarea>` — five columns of
- * textarea in that width is about 60px each, which is not an authoring surface.
+ * 320px`) and a string control in it is a `<textarea>` or at best a full-width
+ * `<input>` — five columns of either in that width is about 60px each, which is
+ * not an authoring surface.
  * §13's requirement is the SHAPE of the surface (a row per mapping, carrying its
  * own target type and `onError`), and at this width a stacked row card is that
  * shape. `.contract-row` is the panel's existing idiom for it, already carrying
