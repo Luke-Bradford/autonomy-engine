@@ -1334,6 +1334,22 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     open('prompt');
     expect(offered()).toBeTruthy();
   });
+
+  it("offers a message's content the references its prompt would take (#852 item 3)", () => {
+    // Dispatch substitutes into `messages[].content` exactly as into `prompt`,
+    // so a row cell offering less than the field it replaces would be a
+    // regression wearing a nicer control.
+    mountOver(
+      node('n_llm', 'llm_call', { messages: [{ role: 'user', content: 'hi' }] }),
+      [],
+      [],
+      params,
+    );
+
+    open('messages row 1 content');
+
+    expect(offered()).toBeTruthy();
+  });
 });
 
 /**

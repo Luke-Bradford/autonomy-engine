@@ -5,6 +5,7 @@ import {
   connectionConfigSchema,
   datasetConfigSchema,
   getActivity,
+  llmMessageSchema,
 } from '@autonomy-studio/shared';
 import {
   assembleConfig,
@@ -800,6 +801,12 @@ describe('llm_call messages as rows (#852 item 3)', () => {
       'content:text',
     ]);
     expect(messages.elementFields?.[0]?.enumOptions).toEqual(['system', 'user', 'assistant']);
+  });
+
+  /** The waiver is IDENTITY, not shape: a structural twin keeps the strictness gate. */
+  it('refuses a lookalike conversation schema built separately', () => {
+    const twin = deriveConfigFields(z.object({ turns: z.array(llmMessageSchema).min(1) }));
+    expect(field(twin, 'turns').kind).toBe('json');
   });
 
   /** Same element schema, opposite answer: `history` must hold a `${}` string. */

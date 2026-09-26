@@ -317,8 +317,10 @@ function unwrap(schema: unknown): Unwrapped {
  * renders exactly the columns the element declares, so an OPEN element permits
  * keys it would not show — and a control that silently drops what it cannot see
  * is the loss `formatFieldValue`'s refusals exist to prevent. Reading
- * `def.catchall` is one more discriminant through the same `defOf` funnel, so
- * no per-activity list is introduced and U7's rule is untouched.
+ * `def.catchall` is one more discriminant through the same `defOf` funnel. There
+ * is exactly ONE exception, keyed on a shared schema's identity rather than on a
+ * field name (`messages`, below); it is not the start of a per-activity list, and
+ * a second one should be argued as hard as the first was.
  *
  * It is also what keeps `llm_call.history` off this control, correctly. It is
  * typed `z.array(...)` but `validateDoc` refuses any non-string value — "history
