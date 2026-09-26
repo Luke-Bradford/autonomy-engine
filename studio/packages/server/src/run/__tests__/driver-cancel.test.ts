@@ -13,7 +13,9 @@ import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { createRunCancels, type RunCancels } from '../cancel.js';
 import {
+  buildEngine,
   driveCancelIntent,
+  foldPendingCancel,
   startRun,
   type DocResolver,
   type DriveDeps,
@@ -288,6 +290,24 @@ describe('CX2 — cancelling a run through the server driver', () => {
 
     expect(getRun(db, run.id)?.status).toBe('success');
     expect(types(db, run.id)).not.toContain('run.cancelRequested');
+    expect(cancels.pending(run.id)).toBe(false);
+  });
+
+  it('an append that throws leaves the intent in the map for the next holder', () => {
+    const { db } = freshDb();
+    const run = seedRun(db, [node('a')], []);
+    const cancels = createRunCancels();
+    const d = deps(db, abortableExecutor(new Set()), cancels);
+    const engine = buildEngine(getPipelineVersion(db, run.pipelineVersionId)!);
+    cancels.request('run_with_no_row', { kind: 'operator' });
+
+    // No `runs` row: the `run_events` FK refuses the append.
+    expect(() => foldPendingCancel(d, engine, engine.seedState(), 'run_with_no_row')).toThrow();
+    expect(cancels.pending('run_with_no_row')).toBe(true);
+
+    // ...and a fold that lands consumes it in the same call.
+    cancels.request(run.id, { kind: 'operator' });
+    expect(foldPendingCancel(d, engine, engine.seedState(), run.id)).not.toBeNull();
     expect(cancels.pending(run.id)).toBe(false);
   });
 });

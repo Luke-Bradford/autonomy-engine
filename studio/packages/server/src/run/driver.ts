@@ -971,10 +971,13 @@ export function foldPendingCancel(
 ): ReturnType<typeof appendAndFold> | null {
   const cancels = deps.cancels;
   if (cancels?.pending(runId) !== true) return null;
-  const source = cancels.take(runId)!;
+  const source = cancels.peek(runId)!;
   // Already folded (a duplicate request that raced the first): the reducer would
   // ignore a second `run.cancelRequested` too, but appending one is noise.
-  if (state.cancelRequested !== null) return null;
+  if (state.cancelRequested !== null) {
+    cancels.take(runId);
+    return null;
+  }
   const result = appendAndFold(
     deps.db,
     deps.bus,
@@ -983,6 +986,9 @@ export function foldPendingCancel(
     { type: 'run.cancelRequested', runId, source },
     deps.log,
   );
+  // Consumed only once the fact is durable: an append that threw leaves the
+  // intent for the next holder.
+  cancels.take(runId);
   syncRunLifecycle(deps.db, runId, result.state.status);
   onCancelFolded(deps, runId);
   return result;
@@ -1113,10 +1119,14 @@ export async function pump(
   // Take + append + fold run in ONE tick (`cancel.ts`), then the abort follows
   // the fold, never precedes it.
   const foldCancelIntent = (): boolean => {
-    const source = deps.cancels?.take(state.runId);
+    const source = deps.cancels?.peek(state.runId);
     if (source === undefined) return false;
-    if (state.cancelRequested !== null) return false;
+    if (state.cancelRequested !== null) {
+      deps.cancels?.take(state.runId);
+      return false;
+    }
     const terminal = fold({ type: 'run.cancelRequested', runId: state.runId, source });
+    deps.cancels?.take(state.runId);
     onCancelFolded(deps, state.runId);
     return terminal;
   };

@@ -12,9 +12,10 @@ import { FAILURE_CODES, type CancelSource, type EngineEvent } from '@autonomy-st
  * INTENT, and exactly one holder turns it into the durable fact: the live pump
  * (through its poke), or, once no pump holds the run, a drive under the run's lock.
  *
- * **An intent is consumed only at the moment it is folded.** `take` is called in
- * the same synchronous tick as the append that records it, so an intent is either
- * still here or already in the log — never neither. Node is single-threaded, so
+ * **An intent is consumed only at the moment it is folded.** A holder `peek`s it,
+ * appends and folds the fact, then `take`s it, all in one synchronous tick, so an
+ * intent is either still here or already in the log — never neither. An append
+ * that throws leaves it here for the next holder. Node is single-threaded, so
  * that is what gives an intent exactly one consumer.
  *
  * In memory only, deliberately, and the crash window this leaves fails SAFE: an
@@ -27,7 +28,9 @@ export interface RunCancels {
   request(runId: string, source: CancelSource): void;
   /** Is a cancel waiting to be folded for this run? */
   pending(runId: string): boolean;
-  /** Consume the intent. Call only in the tick that folds it. */
+  /** Read the intent without consuming it. */
+  peek(runId: string): CancelSource | undefined;
+  /** Consume the intent. Call only in the tick that folds it, AFTER the append. */
   take(runId: string): CancelSource | undefined;
   /**
    * A live pump publishes how to wake it, for as long as it holds the run.
@@ -49,6 +52,7 @@ export function createRunCancels(): RunCancels {
       if (!intents.has(runId)) intents.set(runId, source);
     },
     pending: (runId) => intents.has(runId),
+    peek: (runId) => intents.get(runId),
     take(runId) {
       const source = intents.get(runId);
       intents.delete(runId);

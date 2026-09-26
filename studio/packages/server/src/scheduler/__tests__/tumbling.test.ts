@@ -2491,6 +2491,28 @@ describe('#5 S11c — per-trigger window retry', () => {
       });
     });
 
+    it('settleRunWindow settles a window whose run ended WITHOUT a bus event (a queued run cancelled by row patch, CX2)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv, 'cancelled');
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+
+      service.settleRunWindow(run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(listWindowEvents(db, key).at(-1)).toEqual({
+        type: 'window.failed',
+        payload: { runId: run.id, runStatus: 'cancelled' },
+      });
+    });
+
     it('budget EXHAUSTED → terminal window.failed exactly as before', async () => {
       const { db } = freshDb();
       const pv = seedVersion(db);

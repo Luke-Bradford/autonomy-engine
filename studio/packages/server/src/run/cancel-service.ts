@@ -40,14 +40,29 @@ export interface RunCanceller {
  * Authorization is the CALLER's: the route resolves the run through
  * `requireOwned` before calling this, and this takes no owner.
  */
-export function createRunCanceller(deps: DriveDeps & { cancels: RunCancels }): RunCanceller {
+export interface RunCancellerDeps extends DriveDeps {
+  cancels: RunCancels;
+  /**
+   * Called after a `queued` run is ended by row patch. That terminal is written
+   * without a run event, so nothing on the bus announces it, and whoever settles
+   * work on a run-terminal event must be told directly. Production wires the
+   * tumbling-window settle here: a window links its run while the run is still
+   * queued, and would otherwise stay `running` until the next boot reconcile.
+   */
+  onQueuedRunCancelled?: (runId: string) => void;
+}
+
+export function createRunCanceller(deps: RunCancellerDeps): RunCanceller {
   return {
     cancel(runId, source = { kind: 'operator' }) {
       let run = getRun(deps.db, runId);
       if (run === null) return { kind: 'not_found' };
 
       if (run.status === 'queued') {
-        if (cancelQueuedRun(deps.db, runId)) return { kind: 'accepted', state: 'cancelled' };
+        if (cancelQueuedRun(deps.db, runId)) {
+          deps.onQueuedRunCancelled?.(runId);
+          return { kind: 'accepted', state: 'cancelled' };
+        }
         // Admission won the race: the run is now `pending` (or further), and is
         // cancelled the event-sourced way below.
         run = getRun(deps.db, runId);

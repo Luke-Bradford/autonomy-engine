@@ -751,7 +751,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   // Same driver boundary as `runLauncher`/`externalWaitCompleter` so R2's reseed
   // append + downstream drive run under the shared per-run lock.
   fastify.decorate('reseedService', createReseedService(driverBoundary));
-  fastify.decorate('runCanceller', createRunCanceller(driverBoundary));
+  fastify.decorate(
+    'runCanceller',
+    createRunCanceller({
+      ...driverBoundary,
+      onQueuedRunCancelled: (runId) => tumblingService.settleRunWindow(runId),
+    }),
+  );
 
   // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
   // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR

@@ -17,6 +17,12 @@ import {
 } from '../../repo/index.js';
 import { runs } from '../../db/schema.js';
 import { loadEngineEvents } from '../../run/events.js';
+import { createRunCanceller } from '../../run/cancel-service.js';
+import { createRunCancels } from '../../run/cancel.js';
+import { createRunDrives } from '../../run/drives.js';
+import { makeStubExecutor } from '../../run/__tests__/stub-executor.js';
+import { stubAlarms } from '../../run/__tests__/stub-alarms.js';
+import { getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 import { until } from '../../__tests__/poll-until.js';
 
@@ -99,6 +105,27 @@ describe('POST /api/runs/:id/cancel', () => {
     expect(eventCount(run.id)).toBe(0);
     expect(admitQueuedRun(app.db, run.id)).toBeNull();
     expect(getRun(app.db, run.id)?.status).toBe('cancelled');
+  });
+
+  it('tells onQueuedRunCancelled about a row-patched run (its terminal has no bus event), and only then', () => {
+    const told: string[] = [];
+    const canceller = createRunCanceller({
+      db: app.db,
+      resolveDoc: (id) => getPipelineVersion(app.db, id)!,
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+      cancels: createRunCancels(),
+      onQueuedRunCancelled: (runId) => told.push(runId),
+    });
+    const queued = seed();
+    app.db.update(runs).set({ status: 'queued', queuedAt: 1 }).where(eq(runs.id, queued.id)).run();
+    const failed = seed();
+    app.db.update(runs).set({ status: 'failure' }).where(eq(runs.id, failed.id)).run();
+
+    expect(canceller.cancel(queued.id)).toEqual({ kind: 'accepted', state: 'cancelled' });
+    expect(canceller.cancel(failed.id).kind).toBe('terminal');
+    expect(told).toEqual([queued.id]);
   });
 
   it('the queued row patch never touches a row admission already took (the race D5 relies on)', () => {
