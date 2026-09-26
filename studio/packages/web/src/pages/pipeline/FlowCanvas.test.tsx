@@ -1331,10 +1331,12 @@ describe('FlowCanvas — issues drawn on the box they are about (#863)', () => {
       new Map([[subjectKey('container', 'c_1'), [issue("container 'c_1': bad")]]]),
     );
     const box = wrapper('c_1');
-    expect(box.getAttribute('aria-label')).toBe('stage 1 container, 1 activity, 1 validation issue');
-    expect(box.querySelector('.flow-container')?.classList.contains('flow-container--invalid')).toBe(
-      true,
+    expect(box.getAttribute('aria-label')).toBe(
+      'stage 1 container, 1 activity, 1 validation issue',
     );
+    expect(
+      box.querySelector('.flow-container')?.classList.contains('flow-container--invalid'),
+    ).toBe(true);
     expect(box.querySelector('.flow-issue-badge')?.textContent).toBe('1');
   });
 });

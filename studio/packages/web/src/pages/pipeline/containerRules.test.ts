@@ -844,8 +844,8 @@ describe('issuesBySubject (#863)', () => {
   it("attributes a node's policy refusal to that node", () => {
     const retrying: Node = { ...A, policy: { retryIntervalSeconds: 5 } };
     const { map } = attributed(doc({ nodes: [retrying] }));
-    expect(map.get(subjectKey('node', 'n_a'))?.some((i) => i.raw.startsWith("node 'n_a': policy"))).toBe(
-      true,
-    );
+    expect(
+      map.get(subjectKey('node', 'n_a'))?.some((i) => i.raw.startsWith("node 'n_a': policy")),
+    ).toBe(true);
   });
 });
