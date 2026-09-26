@@ -164,6 +164,36 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
   await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
   // D5 — the run finished with the park still on the node; it is not still waiting.
   await expect(nodeRowStatus(page, 'Wait')).toHaveText('stopped (cancelled)');
+  /* #1329 — and its COLOUR says stopped on every surface, not the `holding` hue
+     of a park still due: the table pill, the graph node and the open span on
+     the attempt timeline. One read, every assertion. */
+  const stopped = await page.evaluate(() => {
+    const pill = [...document.querySelectorAll<HTMLElement>('tr .node-status')].find(
+      (el) => el.textContent?.trim() === 'stopped (cancelled)',
+    );
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--muted)';
+    pill?.parentElement?.appendChild(probe);
+    const muted = getComputedStyle(probe).color;
+    probe.remove();
+    const node = document.querySelector<HTMLElement>('.run-node');
+    const span = document.querySelector<HTMLElement>('.timeline-span[data-open="true"]');
+    return {
+      pillClass: pill?.className ?? null,
+      pillIsMuted: pill !== undefined && getComputedStyle(pill).color === muted,
+      nodeClass: node?.className ?? null,
+      nodeStatus: node?.querySelector('.run-node-status')?.textContent?.trim() ?? null,
+      spanTone: span?.getAttribute('data-tone') ?? null,
+      spanText: span?.textContent ?? null,
+    };
+  });
+  expect(stopped.pillClass).toBe('node-status node-status-cancelled');
+  expect(stopped.pillIsMuted).toBe(true);
+  expect(stopped.nodeClass).toContain('run-node-neutral');
+  expect(stopped.nodeClass).not.toContain('run-node-holding');
+  expect(stopped.nodeStatus).toBe('stopped (cancelled)');
+  expect(stopped.spanTone).toBe('neutral');
+  expect(stopped.spanText).toContain('stopped (cancelled)');
 
   await expectQuiet(page, problems);
 });

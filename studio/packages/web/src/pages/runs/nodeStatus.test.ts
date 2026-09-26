@@ -4,6 +4,7 @@ import {
   containerStatusLabel,
   containerStatusTone,
   nodeStatusLabel,
+  nodeStatusPillClass,
   nodeStatusTone,
 } from './nodeStatus';
 
@@ -89,6 +90,33 @@ describe('nodeStatusLabel', () => {
     expect(nodeStatusLabel('pending')).toBe('pending');
   });
 
+  /* #1329 — the COLOUR follows the word. A node a cancel left live must not be
+     drawn in the hue of a live node beside a `cancelled` run pill. */
+  it('#1329 — under a cancelled run, a node left non-terminal takes the neutral tone and the stopped pill', () => {
+    for (const live of NodeRunStatusSchema.options.filter(
+      (s) => !['success', 'failure', 'skipped'].includes(s),
+    )) {
+      expect(nodeStatusTone(live, 'cancelled'), live).toBe('neutral');
+      expect(nodeStatusPillClass(live, 'cancelled'), live).toBe(
+        'node-status node-status-cancelled',
+      );
+    }
+    for (const done of ['success', 'failure', 'skipped'] as const) {
+      expect(nodeStatusTone(done, 'cancelled')).toBe(nodeStatusTone(done));
+      expect(nodeStatusPillClass(done, 'cancelled')).toBe(`node-status node-status-${done}`);
+    }
+    // Only under a CANCELLED run — anything else keeps the raw status's hue.
+    for (const run of ['running', 'waiting', 'failure', 'interrupted', 'success'] as const) {
+      expect(nodeStatusTone('wait_pending', run)).toBe('holding');
+      expect(nodeStatusPillClass('retry_pending', run)).toBe(
+        'node-status node-status-retry_pending',
+      );
+    }
+    expect(nodeStatusPillClass('dispatched')).toBe('node-status node-status-dispatched');
+    // The pill's suffix can never collide with a raw status's own rule.
+    expect(NodeRunStatusSchema.options).not.toContain('cancelled');
+  });
+
   it('words no two statuses the same — a label an operator cannot invert is not a label', () => {
     const labels = NodeRunStatusSchema.options.map((s) => nodeStatusLabel(s));
     expect(new Set(labels).size).toBe(labels.length);
@@ -101,6 +129,14 @@ describe('containerStatusLabel', () => {
     expect(containerStatusLabel('active', 'cancelled')).toBe('stopped (cancelled)');
     expect(containerStatusLabel('success', 'cancelled')).toBe('success');
     expect(containerStatusLabel('active', 'running')).toBe('running');
+  });
+
+  it('#1329 — under a cancelled run, a container left non-terminal takes the neutral tone', () => {
+    expect(containerStatusTone('active', 'cancelled')).toBe('neutral');
+    expect(containerStatusTone('pending', 'cancelled')).toBe('neutral');
+    expect(containerStatusTone('success', 'cancelled')).toBe('success');
+    expect(containerStatusTone('failure', 'cancelled')).toBe('failure');
+    expect(containerStatusTone('active', 'running')).toBe('running');
   });
 
   it('words every engine container status — none reaches the screen as an identifier', () => {

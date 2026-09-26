@@ -134,7 +134,8 @@ describe('U6a edge variant hues', () => {
    * U25 — the same argument one level down, for the TABLE's pills.
    *
    * `RunDetailPage` and `NodeActivityPanel` build their class the same way
-   * (`node-status-${status}`), and the status is now the engine's full
+   * (`node-status-${status}`, or `node-status-cancelled` for a node a cancel
+   * stopped — #1329, asserted by its own case below), and the status is now the engine's full
    * `NodeRunStatus` rather than the five words the table used to fold for
    * itself. A member with no rule is a pill that silently falls through to the
    * unstyled default — which is exactly what would have happened to `pending`,
@@ -175,12 +176,22 @@ describe('U6a edge variant hues', () => {
     }
   });
 
+  /* #1329 — the pill a node a cancel left live takes (`nodeStatusPillClass`).
+     Not an engine status, so the loop above cannot see it. */
+  it('has a node-status pill rule for a node a cancelled run stopped, and it is muted', () => {
+    expect(/\.node-status-cancelled\s*[,{]/.test(css), 'no .node-status-cancelled rule').toBe(true);
+    const group = css.slice(css.indexOf('.node-status-cancelled'));
+    expect(group.slice(group.indexOf('{'), group.indexOf('}'))).toContain('color: var(--muted)');
+  });
+
   it('has a run-overlay rule for every tone the projection can emit, and no others', () => {
-    const nodeTones = new Set(NodeRunStatusSchema.options.map(nodeStatusTone));
+    const nodeTones = new Set(NodeRunStatusSchema.options.map((s) => nodeStatusTone(s)));
     for (const tone of nodeTones) {
       expect(ruleBody(css, `.run-node-${tone}`), `no .run-node-${tone} rule`).not.toBe('');
     }
-    const containerTones = new Set(ContainerRunStatusSchema.options.map(containerStatusTone));
+    const containerTones = new Set(
+      ContainerRunStatusSchema.options.map((s) => containerStatusTone(s)),
+    );
     for (const tone of containerTones) {
       expect(ruleBody(css, `.run-container-${tone}`), `no .run-container-${tone} rule`).not.toBe(
         '',

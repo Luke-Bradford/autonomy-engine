@@ -270,8 +270,8 @@ describe('runFlowNodes', () => {
     const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
     expect(box.data.status).toBe('stopped (cancelled)');
     expect(box.ariaLabel).toContain('stopped (cancelled)');
-    // The TONE stays keyed on the raw status, as for every other label.
-    expect(box.data.tone).toBe('running');
+    // #1329 — and the COLOUR follows: not the accent of a live box.
+    expect(box.data.tone).toBe('neutral');
   });
 
   /* #886 — the run graph names a container the way the AUTHOR canvas does.
@@ -451,8 +451,8 @@ describe('U25 — the graph words a status for an operator', () => {
     // visible text rather than in addition to it.
     expect(a.data.status).not.toBe('dispatched');
     expect(a.ariaLabel).not.toContain('dispatched');
-    // The TONE still comes off the raw status, so wording it must not have
-    // changed which hue family the node is drawn in.
+    // Under a live run the TONE still comes off the raw status, so wording it
+    // must not have changed which hue family the node is drawn in.
     expect(a.data.tone).toBe('running');
   });
 
@@ -466,6 +466,20 @@ describe('U25 — the graph words a status for an operator', () => {
 
     expect(a.data.status).toBe('waiting (timer)');
     expect(a.ariaLabel).toContain('waiting (timer)');
+  });
+
+  /* #1329 — a park a cancel left on the node (spec D5) is drawn neutral, not in
+     the `holding` hue of a run still advancing. */
+  it('draws a node a cancelled run left parked in the neutral tone', () => {
+    const state = projected();
+    const stopped: RunState = {
+      ...state,
+      status: 'cancelled',
+      nodes: { ...state.nodes, a: { status: 'wait_pending' as const, attempts: 1, retries: 0 } },
+    };
+    const a = runFlowNodes(DOC, stopped).find((n) => n.id === 'a')!;
+    expect(a.data.status).toBe('stopped (cancelled)');
+    expect(a.data.tone).toBe('neutral');
   });
 });
 

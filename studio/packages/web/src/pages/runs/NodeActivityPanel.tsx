@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { useBusyAction } from '../../hooks/useBusyAction';
 import { describeDatasetAddress, surrogateSafeCut, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { DatasetAddress, RunStatus } from '@autonomy-studio/shared';
-import { nodeStatusLabel } from './nodeStatus';
+import { nodeStatusLabel, nodeStatusPillClass, nodeStoppedByCancel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration, formatOutputValue } from './format';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
@@ -125,7 +125,7 @@ export function NodeActivityPanel({
       <p>
         {/* U25 — one status vocabulary for the whole Monitor: the same word
             the table and the graph show, sourced from `nodeStatus.ts`. */}
-        <span className={`node-status node-status-${node.status}`}>
+        <span className={nodeStatusPillClass(node.status, runStatus)}>
           {nodeStatusLabel(node.status, runStatus)}
         </span>{' '}
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
@@ -216,7 +216,7 @@ export function NodeActivityPanel({
                  these arms are standalone sentences. */
               node.status === 'skipped' && node.attempts === 0
               ? 'This node was routed around, so it was never going to run and there is nothing to measure.'
-              : node.attempts === 0 && runStatus === 'cancelled' && !TERMINAL_NODE.has(node.status)
+              : node.attempts === 0 && nodeStoppedByCancel(node.status, runStatus)
                 ? /* CX4 (#1320) — not "yet": the run ended, and this node never will start. */
                   'The run was cancelled before this node started, so there is nothing to measure.'
                 : node.attempts === 0
@@ -224,7 +224,11 @@ export function NodeActivityPanel({
                   : 'No span was recorded for this attempt.')}
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
-          'This attempt has not settled yet, so its span is not complete.'}
+          (nodeStoppedByCancel(node.status, runStatus)
+            ? /* #1329 — the started counterpart of the CX4 arm above: the run
+                 ended, so this attempt never will settle. */
+              'The run was cancelled while this attempt was live, so its span never closed.'
+            : 'This attempt has not settled yet, so its span is not complete.')}
         {/* The corrupt-log case. `formatNodeDuration` renders it as unmeasured
             rather than clamping to `0ms`, and without this arm it would be the
             ONE em-dash on this panel with no sentence explaining it — which

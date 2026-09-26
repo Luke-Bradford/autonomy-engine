@@ -36,7 +36,8 @@ import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-stu
  *
  * Chosen so the canvas and the run table cannot come to disagree
  * (`index.css` records the same commitment for the edge hues):
- *   - `neutral`  — nothing has happened to this node (`pending`, `ready`).
+ *   - `neutral`  — nothing has happened to this node (`pending`, `ready`), or
+ *     a cancelled run stopped it, whatever live status it kept (#1329).
  *   - `running`  — the engine has dispatched it.
  *   - `holding`  — dispatched-and-parked: a retry backoff, a timer, an external
  *     callback, or a child run in flight. Distinct from `neutral` because the
@@ -54,6 +55,11 @@ import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-stu
  * have thrown information away to buy a symmetry the spec explicitly does not
  * ask for — it records that the palette mapping "is NOT injective ACROSS
  * surfaces". The WORD is what U25 reconciles; the hue stays each surface's own.
+ *
+ * The one exception is a CANCELLED run (#1329): there the retry-vs-park
+ * distinction #483 protects no longer exists — neither is coming back — so
+ * every live status takes one muted pill and the `neutral` tone (see
+ * `nodeStatusTone` / `nodeStatusPillClass`).
  */
 export const ALL_TONES = [
   'neutral',
@@ -94,12 +100,33 @@ const CONTAINER_TONES: Record<ContainerRunStatus, StatusTone> = {
   skipped: 'skipped',
 };
 
-export function nodeStatusTone(status: NodeRunStatus): StatusTone {
-  return NODE_TONES[status];
+/**
+ * #1329 — the COLOUR follows the CX4 word (see `nodeStatusLabel`): a node or
+ * container a cancelled run left non-terminal is drawn `neutral`, the run's own
+ * tone. Keyed on the raw status it kept the hue of something still live — a
+ * stopped park in `holding`, a stopped container in the accent of `running` —
+ * beside a `cancelled` run pill. Its `holding`/`running` distinction no longer
+ * means anything, because nothing is advancing.
+ */
+export function nodeStatusTone(status: NodeRunStatus, runStatus?: RunStatus | null): StatusTone {
+  return nodeStoppedByCancel(status, runStatus) ? 'neutral' : NODE_TONES[status];
 }
 
-export function containerStatusTone(status: ContainerRunStatus): StatusTone {
-  return CONTAINER_TONES[status];
+export function containerStatusTone(
+  status: ContainerRunStatus,
+  runStatus?: RunStatus | null,
+): StatusTone {
+  return containerStoppedByCancel(status, runStatus) ? 'neutral' : CONTAINER_TONES[status];
+}
+
+/**
+ * #1329 — the node table's and drill-in's pill class. Keyed by the raw status
+ * (#483: a retry backoff and a routine park must not share a hue there), EXCEPT
+ * where the cancel stopped the node: then every live status takes one muted
+ * `node-status-cancelled` pill, for the reason `nodeStatusTone` gives.
+ */
+export function nodeStatusPillClass(status: NodeRunStatus, runStatus?: RunStatus | null): string {
+  return `node-status node-status-${nodeStoppedByCancel(status, runStatus) ? 'cancelled' : status}`;
 }
 
 /**
@@ -158,8 +185,23 @@ const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
 const NOT_RUN_CANCELLED = 'not run (cancelled)';
 const STOPPED_CANCELLED = 'stopped (cancelled)';
 
+/** The one CX4 predicate every word, tone and pill class above and below reads. */
+export function nodeStoppedByCancel(
+  status: NodeRunStatus,
+  runStatus: RunStatus | null | undefined,
+): boolean {
+  return runStatus === 'cancelled' && !TERMINAL_NODE.has(status);
+}
+
+function containerStoppedByCancel(
+  status: ContainerRunStatus,
+  runStatus: RunStatus | null | undefined,
+): boolean {
+  return runStatus === 'cancelled' && !TERMINAL_CONTAINER.has(status);
+}
+
 export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
-  if (runStatus === 'cancelled' && !TERMINAL_NODE.has(status)) {
+  if (nodeStoppedByCancel(status, runStatus)) {
     // `ready` was queued for dispatch and never began, so it did not run either.
     return status === 'pending' || status === 'ready' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
   }
@@ -203,7 +245,7 @@ export function containerStatusLabel(
   status: ContainerRunStatus,
   runStatus?: RunStatus | null,
 ): string {
-  if (runStatus === 'cancelled' && !TERMINAL_CONTAINER.has(status)) {
+  if (containerStoppedByCancel(status, runStatus)) {
     return status === 'pending' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
   }
   return CONTAINER_STATUS_LABELS[status];
