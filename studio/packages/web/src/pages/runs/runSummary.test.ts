@@ -2882,12 +2882,16 @@ describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
     return row;
   };
 
-  const dispatch = (attempt: number, addresses?: NodeActivity['datasetAddresses']): RunEvent =>
+  const dispatch = (
+    attempt: number,
+    addresses?: NodeActivity['datasetAddresses'],
+    nodeId = 'c',
+  ): RunEvent =>
     envelope({
       type: 'node.dispatched',
       runId: 'r',
-      nodeId: 'c',
-      attemptId: `c#${attempt}`,
+      nodeId,
+      attemptId: `${nodeId}#${attempt}`,
       idempotent: false,
       ...(addresses === undefined ? {} : { datasetAddresses: addresses }),
     });
@@ -3051,6 +3055,91 @@ describe('deriveNodeActivity — the resolved dataset address (#1162)', () => {
     const [row] = reconcileNodeActivity([], projection.state);
     expect(row?.nodeId).toBe('c');
     expect(row?.datasetAddresses).toBeUndefined();
+  });
+
+  /* #1340 — a parallel foreach's items fold onto one row, and each item
+     resolves its OWN address: `datasetParams` are `${item}`-substituted per
+     item, and `path` is an overridable dataset parameter. So the pairing rule
+     #890 gave `input` applies here too. */
+  const failedItem = (nodeId: string, attempt: number): RunEvent =>
+    envelope({
+      type: 'node.failed',
+      runId: 'r',
+      nodeId,
+      attemptId: `${nodeId}#${attempt}`,
+      error: 'boom',
+      kind: 'transient',
+    });
+
+  it("pairs a late-settling item's result with THAT item's address, not the latest dispatch", () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }, 'w@1'),
+        dispatch(0, { source: SOURCE, sink: OTHER_SINK }, 'w@2'),
+        failedItem('w@1', 0),
+      ],
+      'w',
+    );
+    expect(row.instanceId).toBe('w@1');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: SINK });
+  });
+
+  it('shows the latest dispatch while no item has settled', () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }, 'w@1'),
+        dispatch(0, { source: SOURCE, sink: OTHER_SINK }, 'w@2'),
+      ],
+      'w',
+    );
+    expect(row.instanceId).toBeUndefined();
+    expect(row.inputInstanceId).toBe('w@2');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: OTHER_SINK });
+  });
+
+  /* One item re-opening retracts ITS dispatch, not a sibling's: the row keeps
+     showing the latest dispatch that still stands. */
+  it("keeps a sibling's standing dispatch when another item re-opens", () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }, 'w@1'),
+        dispatch(0, { source: SOURCE, sink: OTHER_SINK }, 'w@2'),
+        failedItem('w@1', 0),
+        envelope({
+          type: 'node.retryDue',
+          runId: 'r',
+          nodeId: 'w@1',
+          previousAttemptId: 'w@1#0',
+        }),
+      ],
+      'w',
+    );
+    expect(row.instanceId).toBeUndefined();
+    expect(row.inputInstanceId).toBe('w@2');
+    expect(row.datasetAddresses).toEqual({ source: SOURCE, sink: OTHER_SINK });
+  });
+
+  /* The settled item was re-opened and has not dispatched again, so it has no
+     address of its own on record. Absent is the honest answer; the sibling's
+     would be exactly the wrong pairing this ticket removes. */
+  it("shows NO address for a settled item whose own dispatch was re-opened, never a sibling's", () => {
+    const row = rowFor(
+      [
+        dispatch(0, { source: SOURCE, sink: SINK }, 'w@1'),
+        failedItem('w@1', 0),
+        envelope({
+          type: 'node.retryDue',
+          runId: 'r',
+          nodeId: 'w@1',
+          previousAttemptId: 'w@1#0',
+        }),
+        dispatch(0, { source: SOURCE, sink: OTHER_SINK }, 'w@2'),
+        failedItem('w@1', 0),
+      ],
+      'w',
+    );
+    expect(row.instanceId).toBe('w@1');
+    expect(row.datasetAddresses).toBeUndefined();
   });
 });
 

@@ -270,7 +270,7 @@ export function NodeActivityPanel({
       )}
 
       {node.datasetAddresses !== undefined && (
-        <DataMovementSection addresses={node.datasetAddresses} />
+        <DataMovementSection addresses={node.datasetAddresses} instanceId={node.inputInstanceId} />
       )}
 
       {node.status === 'failure' && (
@@ -500,15 +500,18 @@ function ChildRuns({ node }: { node: NodeActivity }) {
  * identifies a store, it does not address one, and on screen it would read as
  * part of the path.
  *
- * NOT restated here: that a parallel foreach folds its items onto one row and
- * this is the last item's address. The panel already says exactly that, once,
- * above every section (`node.instanceId`), and a second copy beside this one
- * would be a second thing to keep true.
+ * A parallel foreach folds its items onto one row, and each item can resolve a
+ * different address (#1340), so the section names WHICH item's dispatch this
+ * is — `inputInstanceId`, the same label `InputSection` shows. The hint above
+ * every section (`node.instanceId`) cannot do it alone: it is stamped by
+ * terminal events only, so while no item has settled it says nothing.
  */
 function DataMovementSection({
   addresses,
+  instanceId,
 }: {
   addresses: NonNullable<NodeActivity['datasetAddresses']>;
+  instanceId: string | undefined;
 }) {
   const { source, sink } = addresses;
   /* A `query` dataset's `object` is `null` BY DESIGN — it is a SELECT over an
@@ -539,6 +542,12 @@ function DataMovementSection({
         the version was minted — so this is where the data actually went, which a rerun may not
         repeat.
       </p>
+      {instanceId !== undefined && (
+        <p className="page-hint">
+          The address of <code>{instanceId}</code>: the item whose result is shown, or else the one
+          dispatched most recently.
+        </p>
+      )}
       <dl className="run-meta">
         <dt>Source</dt>
         <dd>
