@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
+import { resolvedPaletteColor, setTheme } from './support/theme';
 
 /**
  * #884 — the validation badge list names what it is asking the operator to fix.
@@ -190,4 +191,78 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
 
     await expectQuiet(page, problems);
   });
+});
+
+/**
+ * #863 — an issue is drawn on the box it is about, and listed in that box's
+ * panel.
+ *
+ * Built by the GESTURE for the reason the #884 block gives: canvas-minted ids are
+ * the ones the attribution has to parse. Two activities of one type, so a badge
+ * that landed on the wrong one would not be rescued by the type name.
+ */
+test.describe('#863 — an issue is shown on the node it is about', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`the refused node carries the badge and lists the issue; its neighbour does not (${theme})`, async ({
+      page,
+    }) => {
+      const problems = collectPageProblems(page);
+      await openSeededCanvas(page, `e2e 863 node issues ${theme}`, { nodes: [] });
+      await setTheme(page, theme);
+
+      await addActivity(page, 'HTTP Request');
+      await addActivity(page, 'HTTP Request');
+      await expect(canvasNodes(page)).toHaveCount(2);
+
+      const [first, second] = [canvasNodes(page).nth(0), canvasNodes(page).nth(1)];
+      await second.click();
+      await panel(page).getByRole('textbox', { name: 'url' }).fill('${nodes.ghost.output.body}');
+      await panel(page).getByRole('button', { name: 'Apply config' }).click();
+
+      const issues = await validationIssues(page);
+      const own = issues.filter((m) => m.startsWith("node 'HTTP Request 2' "));
+      expect(own.length, 'the refusal is about the second node').toBeGreaterThan(0);
+
+      // The badge: on the second box only, counting exactly its own issues.
+      const badge = second.locator('.flow-issue-badge');
+      await expect(badge).toHaveText(String(own.length));
+      await expect(badge).toHaveAttribute('role', 'img');
+      await expect(badge).toHaveAttribute(
+        'aria-label',
+        `${String(own.length)} validation issue${own.length === 1 ? '' : 's'}`,
+      );
+      await expect(first.locator('.flow-issue-badge')).toHaveCount(0);
+
+      // A COMPUTED value, not a class name: the badge is painted in the theme's
+      // error colour, which is what a stale or unresolved token would break.
+      const painted = await badge.evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(painted).toBe(await resolvedPaletteColor(page, '--error'));
+      const ring = await second
+        .locator('.flow-node')
+        .evaluate((el) => getComputedStyle(el).outlineStyle);
+      // Selected, so the accent ring owns the outline; the badge still says it.
+      expect(['solid']).toContain(ring);
+
+      // The panel of the node it is about lists the same text as the full list.
+      await expect(panel(page).locator('.subject-issues li')).toHaveText(own);
+
+      // …and the neighbour's panel does not.
+      await first.click();
+      await expect(panel(page).locator('.subject-issues')).toHaveCount(0);
+      // Deselected, the refused box's own outline is the error colour.
+      const outline = await second
+        .locator('.flow-node')
+        .evaluate((el) => getComputedStyle(el).outlineColor);
+      expect(outline).toBe(await resolvedPaletteColor(page, '--error'));
+
+      // Fixing the config clears the badge — it tracks the doc, not a snapshot.
+      await second.click();
+      await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test');
+      await panel(page).getByRole('button', { name: 'Apply config' }).click();
+      await expect(second.locator('.flow-issue-badge')).toHaveCount(0);
+      await expect(panel(page).locator('.subject-issues')).toHaveCount(0);
+
+      await expectQuiet(page, problems);
+    });
+  }
 });
