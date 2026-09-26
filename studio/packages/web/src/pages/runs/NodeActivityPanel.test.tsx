@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -210,6 +210,25 @@ describe('NodeActivityPanel — the resolved dataset address', () => {
   it('renders no section at all for a node that resolved no dataset', () => {
     const panel = renderPanel(row({ nodeId: 'a', status: 'success' }));
     expect(panel.textContent).not.toMatch(/Data movement/);
+  });
+
+  /* #1340 — a parallel foreach's items resolve their own addresses, so the
+     section says which item's dispatch it is showing. */
+  it('names the foreach item whose address it shows, and names none for a plain node', () => {
+    const labelled = renderPanel(
+      row({
+        nodeId: 'w',
+        status: 'dispatched',
+        datasetAddresses: { source: SOURCE, sink: SINK },
+        inputInstanceId: 'w@2',
+      }),
+    );
+    expect(labelled.textContent).toMatch(/The address of w@2/);
+    cleanup();
+    const plain = renderPanel(
+      row({ nodeId: 'c', status: 'success', datasetAddresses: { source: SOURCE, sink: SINK } }),
+    );
+    expect(plain.textContent).not.toMatch(/The address of/);
   });
 
   /** Source-only is real (a read-only dataset activity), and an absent sink is
