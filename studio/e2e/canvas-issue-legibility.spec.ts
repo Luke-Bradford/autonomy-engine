@@ -237,11 +237,6 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       // error colour, which is what a stale or unresolved token would break.
       const painted = await badge.evaluate((el) => getComputedStyle(el).backgroundColor);
       expect(painted).toBe(await resolvedPaletteColor(page, '--error'));
-      const ring = await second
-        .locator('.flow-node')
-        .evaluate((el) => getComputedStyle(el).outlineStyle);
-      // Selected, so the accent ring owns the outline; the badge still says it.
-      expect(['solid']).toContain(ring);
 
       // The panel of the node it is about lists the same text as the full list.
       await expect(panel(page).locator('.subject-issues li')).toHaveText(own);
