@@ -8,6 +8,7 @@ import {
   EMPTY_CONTAINER_SIZE,
   REVEAL_MARGIN,
   appearedIds,
+  appearedSelected,
   revealReady,
   containerRects,
   emptyContainerIds,
@@ -474,6 +475,40 @@ describe('the reveal trigger', () => {
 
     it('reports several at once when one delete empties more than one', () => {
       expect(appearedIds(new Set(), new Set(['a', 'b']))).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('appearedSelected (#1336)', () => {
+    const sel = (kind: 'node' | 'container' | 'edge', id: string) => ({ kind, id });
+
+    it('reports nothing on the first observation, even for a selected id', () => {
+      expect(appearedSelected(null, new Set(['a']), [sel('node', 'a')], 'node')).toEqual([]);
+    });
+
+    /* A paste or a duplicate: the copies are new AND selected. */
+    it('reports an id that is new and selected as the asked kind', () => {
+      expect(
+        appearedSelected(new Set(['a']), new Set(['a', 'b', 'c']), [sel('node', 'b')], 'node'),
+      ).toEqual(['b']);
+    });
+
+    /* An undo restores no selection, and a toolbox add selects nothing: neither
+       may move the viewport. */
+    it('ignores an id that is new but not selected', () => {
+      expect(appearedSelected(new Set(['a']), new Set(['a', 'b']), [], 'node')).toEqual([]);
+    });
+
+    it('ignores an id that is selected but was already there', () => {
+      expect(appearedSelected(new Set(['a']), new Set(['a']), [sel('node', 'a')], 'node')).toEqual(
+        [],
+      );
+    });
+
+    /* Nodes and containers share one id namespace, so the kind has to match. */
+    it('ignores a selection of a different kind with the same id', () => {
+      expect(
+        appearedSelected(new Set(), new Set(['b']), [sel('container', 'b')], 'node'),
+      ).toEqual([]);
     });
   });
 

@@ -59,6 +59,7 @@ import {
 } from './connectRules';
 import {
   appearedIds,
+  appearedSelected,
   revealReady,
   containerAriaLabel,
   containerHandles,
@@ -69,6 +70,7 @@ import {
   usableExtent,
   unmeasuredNodeSize,
   type ContainerBox,
+  type Rect,
 } from './containerLayout';
 import type { MeasuredSizes } from './autoLayout';
 import {
@@ -1213,9 +1215,20 @@ export function FlowCanvas({
    * is kept out of the empty diff above: its one-render "empty" is a transient
    * of the view lagging the store, not an emptying. The first run records only,
    * for the mount reason above.
+   *
+   * #1336 — ACTIVITIES that appear already selected are revealed too, on the same
+   * rule and for the same reason: that is a paste or a ⌘D duplicate, and a paste
+   * from ANOTHER pipeline lands below everything in the target
+   * (`foreignPasteOffset`), which in a pipeline taller than the pane is
+   * off-screen and culled. Their rects come from the STORE's positions at the
+   * nominal size, not from React Flow: the view nodes lag the store by a render,
+   * and a node that has just appeared has never been measured anyway. Nothing
+   * waits for them the way a container waits for its children, because a node's
+   * position is its own and is already final.
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
   const knownContainers = useRef<Set<string> | null>(null);
+  const knownNodes = useRef<Set<string> | null>(null);
   const pendingReveal = useRef<Set<string>>(new Set());
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
@@ -1245,16 +1258,17 @@ export function FlowCanvas({
     knownEmptyContainers.current = empty;
     const knownPresent = knownContainers.current;
     knownContainers.current = present;
+    const docNodeIds = new Set(nodes.map((n) => n.id));
+    const knownDocNodes = knownNodes.current;
+    knownNodes.current = docNodeIds;
     const { ready, waiting } = revealReady(
       new Set([
         ...pendingReveal.current,
-        ...appearedIds(knownPresent, present).filter((id) =>
-          selected.some((sel) => sel.kind === 'container' && sel.id === id),
-        ),
+        ...appearedSelected(knownPresent, present, selected, 'container'),
       ]),
       containerBoxes,
       containers,
-      new Set(nodes.map((n) => n.id)),
+      docNodeIds,
     );
     pendingReveal.current = new Set(waiting);
     const appeared = [
@@ -1263,11 +1277,17 @@ export function FlowCanvas({
         ...ready,
       ]),
     ];
-    if (appeared.length === 0) return;
+    const copies = new Set(appearedSelected(knownDocNodes, docNodeIds, selected, 'node'));
+    if (appeared.length === 0 && copies.size === 0) return;
 
-    const boxes = appeared
-      .map((id) => containerBoxes.get(id))
-      .filter((box): box is ContainerBox => box !== undefined);
+    const boxes: Rect[] = [
+      ...appeared
+        .map((id) => containerBoxes.get(id))
+        .filter((box): box is ContainerBox => box !== undefined),
+      ...nodes
+        .filter((n) => copies.has(n.id))
+        .map((n) => ({ ...n.position, ...unmeasuredNodeSize(portsOf(n.id).length) })),
+    ];
     /* `usableExtent`, not the raw pane: the MiniMap and Controls are drawn INSIDE
        it with `pointer-events: all`, and a box landed flush against the
        bottom-right edge can have its delete control underneath them — revealed
@@ -1282,6 +1302,7 @@ export function FlowCanvas({
     containers,
     nodes,
     selected,
+    portsOf,
     paneWidth,
     paneHeight,
     reactFlowStore,

@@ -7,6 +7,7 @@ import {
   TARGET_PORT_ID,
   type SourcePort,
 } from './ports';
+import type { Selection } from './canvasStore';
 
 /**
  * U6c — where a container is DRAWN.
@@ -296,6 +297,29 @@ export function emptyContainerIds(boxes: ReadonlyMap<string, ContainerBox>): Set
 export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<string>): string[] {
   if (known === null) return [];
   return [...now].filter((id) => !known.has(id));
+}
+
+/**
+ * #935 / #1336 — the ids of `kind` that APPEARED already SELECTED: new in `now`
+ * since `known`, and in the selection as that kind.
+ *
+ * That combination is what a paste or a duplicate produces, and nothing else
+ * that adds an element does: an undo restores no selection, and a toolbox add
+ * selects nothing. It is the canvas's cue to bring the new copies on screen —
+ * they are the property panel's subject, and a copy placed off-screen is culled
+ * out of the DOM by `onlyRenderVisibleElements`. The kind is matched because
+ * nodes and containers share one id namespace. `null` is the mount case, as for
+ * `appearedIds`.
+ */
+export function appearedSelected(
+  known: ReadonlySet<string> | null,
+  now: ReadonlySet<string>,
+  selected: readonly Selection[],
+  kind: Selection['kind'],
+): string[] {
+  return appearedIds(known, now).filter((id) =>
+    selected.some((sel) => sel.kind === kind && sel.id === id),
+  );
 }
 
 /**

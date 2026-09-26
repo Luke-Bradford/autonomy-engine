@@ -245,6 +245,46 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await expectQuiet(page, problems);
   });
 
+  /* #1336 — a foreign paste lands BELOW everything in the target. Here the
+     target is a tall column, so after the load-time fit that spot is off-screen,
+     and with `onlyRenderVisibleElements` an off-screen copy is not even in the
+     DOM. The canvas must pan to the copies — without zooming. */
+  const TALL_TARGET = {
+    nodes: [
+      { id: 'z', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'a', type: 'http_request', position: { x: 0, y: 600 }, config: {} },
+    ],
+    edges: [{ id: 'ez', from: 'z', to: 'a', on: 'success' as const }],
+  };
+
+  test('a paste from another pipeline that lands off-screen is panned into view', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId: targetId } = await seedVersion(page, 'u21 tall target', TALL_TARGET);
+    await openSeededCanvas(page, 'u21 reveal source', SOURCE);
+
+    await marqueeAllNodes(page, 2);
+    await page.keyboard.press('Meta+c');
+    await expect(page.getByText('Copied 2 activities.')).toBeVisible();
+
+    await openInApp(page, targetId, ['z', 'a']);
+    const before = await viewportSettled(page);
+    await page.keyboard.press('Meta+v');
+    await expect(page.getByText('Pasted 2 activities from another pipeline.')).toBeVisible();
+
+    const copies = page.locator('.react-flow__node:not([data-id="z"]):not([data-id="a"])');
+    await expect(copies).toHaveCount(2);
+    for (const copy of await copies.all()) await expect(copy).toBeInViewport({ ratio: 1 });
+    const after = await viewportSettled(page);
+    // It PANNED: the viewport moved, and the zoom the operator had is kept.
+    expect(after).not.toBe(before);
+    const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
+    expect(scale(after)).toBe(scale(before));
+
+    await expectQuiet(page, problems);
+  });
+
   test('a copy that reads an UN-copied node is refused in another pipeline, by name', async ({
     page,
   }) => {
