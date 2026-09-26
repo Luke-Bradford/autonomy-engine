@@ -274,11 +274,46 @@ describe('ExpressionPicker in NodePanel', () => {
     // A `json` control parses its text with `JSON.parse` on apply, so a bare
     // `${...}` is not applicable there at all — offering the picker would be a
     // dead end rather than an affordance.
-    mount([FETCH, CALL], CHAIN, [], 'call');
-    expect(screen.getByRole('button', { name: 'Insert reference into url' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Insert reference into headers' })).toBeNull();
+    const agent: Node = { id: 'agent', type: 'agent_task', config: {}, position: at };
+    mount([FETCH, agent], [{ id: 'e1', from: 'fetch', to: 'agent', on: 'success' }], [], 'agent');
+    expect(screen.getByRole('button', { name: 'Insert reference into task' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Insert reference into outputSchema/ })).toBeNull();
     // The json field itself is still rendered — this is about the picker only.
-    expect(screen.getByRole('textbox', { name: /headers/ })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /outputSchema/ })).toBeTruthy();
+  });
+
+  it('offers a header VALUE a reference, and never its key or a secret name (#852)', () => {
+    // A record key is copied verbatim by `substitute` and never scanned, so the
+    // validator would wave every reference through on it — the false offer.
+    // A secret name may not hold `${}` at all.
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
+    expect(
+      screen.getByRole('button', { name: 'Insert reference into headers row 1 value' }),
+    ).toBeTruthy();
+    for (const cell of [
+      'headers row 1 key',
+      'secretHeaders row 1 key',
+      'secretHeaders row 1 secret name',
+    ]) {
+      expect(screen.getByRole('textbox', { name: cell })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: `Insert reference into ${cell}` })).toBeNull();
+    }
+
+    // Picked while the row has no key yet: the candidate still carries the
+    // probed row (`placeRowCandidate`, unit-tested), so the value lands.
+    ui.open('headers row 1 value');
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
+    fireEvent.change(ui.field('headers row 1 key'), { target: { value: 'X-Body' } });
+    fireEvent.change(ui.field('secretHeaders row 1 key'), { target: { value: 'Authorization' } });
+    fireEvent.change(ui.field('secretHeaders row 1 secret name'), { target: { value: 'tok' } });
+    fireEvent.change(ui.field('url'), { target: { value: 'https://b.test' } });
+    ui.apply();
+    expect(ui.storedConfig()).toMatchObject({
+      headers: { 'X-Body': '${nodes.fetch.output.body}' },
+      secretHeaders: { Authorization: { $secret: 'tok' } },
+    });
   });
 
   it('withholds the control on a switch case list, which the engine matches LITERALLY', () => {

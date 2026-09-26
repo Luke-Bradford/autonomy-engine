@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { getActivity } from '@autonomy-studio/shared';
+import {
+  SecretRefSchema,
+  connectionConfigSchema,
+  datasetConfigSchema,
+  getActivity,
+} from '@autonomy-studio/shared';
 import {
   assembleConfig,
   changeConfigKind,
@@ -12,6 +17,7 @@ import {
   formatFieldValue,
   parseConfigText,
   parseFieldInput,
+  placeRowCandidate,
   readConfigDraft,
   unrepresentableFields,
   type ConfigDraft,
@@ -99,7 +105,6 @@ describe('deriveConfigFields', () => {
     const fields = deriveConfigFields(
       z.object({
         nested: z.object({ x: z.string() }),
-        rec: z.record(z.string(), z.string()),
         rows: z.array(z.object({ x: z.string() })),
         nums: z.array(z.number()),
         either: z.union([z.string(), z.number()]),
@@ -107,7 +112,7 @@ describe('deriveConfigFields', () => {
       }),
     );
 
-    for (const name of ['nested', 'rec', 'rows', 'nums', 'either', 'anything']) {
+    for (const name of ['nested', 'rows', 'nums', 'either', 'anything']) {
       expect(field(fields, name).kind).toBe('json');
     }
   });
@@ -125,11 +130,19 @@ describe('deriveConfigFields', () => {
     expect(field(fields, 'url')).toMatchObject({ kind: 'text', optional: false });
     expect(field(fields, 'method')).toMatchObject({ kind: 'text', optional: true });
     expect(field(fields, 'body')).toMatchObject({ kind: 'text', optional: true });
-    // A record of headers has no typed control this ticket — it authors as JSON.
-    expect(field(fields, 'headers')).toMatchObject({ kind: 'json', optional: true });
-    // The secret SINK authors as an inert `{$secret:name}` marker, which is a
-    // credential NAME and never the credential — safe to render as JSON.
-    expect(field(fields, 'secretHeaders')).toMatchObject({ kind: 'json', optional: true });
+    // #852 item 2 — a record of headers authors as name/value ROWS.
+    expect(field(fields, 'headers')).toMatchObject({
+      kind: 'keyValue',
+      recordValue: 'text',
+      optional: true,
+    });
+    // The secret SINK authors as rows of header name → secret NAME, which the
+    // form writes back as the inert `{$secret:name}` marker.
+    expect(field(fields, 'secretHeaders')).toMatchObject({
+      kind: 'keyValue',
+      recordValue: 'secret',
+      optional: true,
+    });
   });
 
   it('derives a control activity too, whose loose schema is a UX pre-check only', () => {
@@ -909,5 +922,202 @@ describe('configToJson / configToFields (#1146)', () => {
     expect(
       configToFields(draft({ kind: 'b', jsonMode: true, jsonText: '{"n": 1}' }), fieldsFor),
     ).toMatchObject({ ok: false, error: 'These settings have no form control: n.' });
+  });
+});
+
+describe('keyValue (#852 item 2)', () => {
+  const headers = field(fieldsOf('http_request'), 'headers');
+  const secretHeaders = field(fieldsOf('http_request'), 'secretHeaders');
+  const required: ConfigField = { ...headers, optional: false };
+
+  it('derives a string-keyed record of strings, or of secret markers, as rows', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        text: z.record(z.string(), z.string()),
+        minKey: z.record(z.string().min(1), z.string()),
+        secret: z.record(z.string(), SecretRefSchema),
+      }),
+    );
+    expect(field(fields, 'text')).toMatchObject({ kind: 'keyValue', recordValue: 'text' });
+    expect(field(fields, 'minKey')).toMatchObject({ kind: 'keyValue', recordValue: 'text' });
+    expect(field(fields, 'secret')).toMatchObject({ kind: 'keyValue', recordValue: 'secret' });
+  });
+
+  it('leaves every other record as JSON — the value or key is not a row cell', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        unknownValue: z.record(z.string(), z.unknown()),
+        numberValue: z.record(z.string(), z.number()),
+        enumKey: z.record(z.enum(['a', 'b']), z.string()),
+        partial: z.partialRecord(z.enum(['a', 'b']), z.string()),
+        // A COPY of the marker schema is not the marker: identity fails, and
+        // failing safe means JSON, never a secret row that writes the wrong shape.
+        lookalike: z.record(z.string(), SecretRefSchema.describe('x')),
+      }),
+    );
+    for (const name of ['unknownValue', 'numberValue', 'enumKey', 'partial', 'lookalike']) {
+      expect(field(fields, name).kind).toBe('json');
+    }
+    // The real catalog's non-string record stays JSON too.
+    const dataset = deriveConfigFields(datasetConfigSchema('query'));
+    expect(field(dataset, 'parameters').kind).toBe('json');
+  });
+
+  it('gives a connection kind rows for its headers and env, from the same derivation', () => {
+    expect(field(deriveConfigFields(connectionConfigSchema('http')), 'headers').kind).toBe(
+      'keyValue',
+    );
+    expect(field(deriveConfigFields(connectionConfigSchema('agent_cli')), 'env').kind).toBe(
+      'keyValue',
+    );
+  });
+
+  it('keeps a record inside a row element a JSON cell, not a nested row list', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        rows: z.array(
+          z.object({ name: z.string(), tags: z.record(z.string(), z.string()) }).strict(),
+        ),
+      }),
+    );
+    const rows = field(fields, 'rows');
+    expect(rows.kind).toBe('objectList');
+    expect(field([...(rows.elementFields ?? [])], 'tags').kind).toBe('json');
+  });
+
+  it('holds the key and secret-name cells to a literal, and only the text value to an expression', () => {
+    const cells = (f: ConfigField) =>
+      (f.elementFields ?? []).map((c) => ({ name: c.name, literal: c.literal === true }));
+    expect(cells(headers)).toEqual([
+      { name: 'key', literal: true },
+      { name: 'value', literal: false },
+    ]);
+    expect(cells(secretHeaders)).toEqual([
+      { name: 'key', literal: true },
+      { name: 'secret name', literal: true },
+    ]);
+  });
+
+  it('renders a stored record as rows in its own order, empty values included', () => {
+    expect(formatFieldValue(headers, { 'X-B': '2', 'X-A': '' })).toEqual({
+      ok: true,
+      value: [
+        { key: 'X-B', value: '2' },
+        { key: 'X-A', value: '' },
+      ],
+    });
+    expect(formatFieldValue(secretHeaders, { Authorization: { $secret: 'api-token' } })).toEqual({
+      ok: true,
+      value: [{ key: 'Authorization', 'secret name': 'api-token' }],
+    });
+    // A `${}` in a secret name is rendered as stored: the save gate's badge
+    // explains that refusal in its own words.
+    expect(formatFieldValue(secretHeaders, { A: { $secret: '${params.x}' } }).ok).toBe(true);
+  });
+
+  it('refuses a stored record its rows cannot carry, so the node falls back to JSON', () => {
+    for (const bad of [[], 'x', null, { A: 1 }, { '': 'x' }]) {
+      expect(formatFieldValue(headers, bad).ok, JSON.stringify(bad)).toBe(false);
+    }
+    // A malformed marker must stay VISIBLE in JSON, never be repaired by a row.
+    for (const bad of [
+      { A: { $secret: 1 } },
+      { A: { $secret: 'x', y: 1 } },
+      { A: 'plain' },
+      { A: { $secret: '' } },
+    ]) {
+      expect(formatFieldValue(secretHeaders, bad).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('reads rows back as a record, and a secret row as exactly the strict marker', () => {
+    expect(
+      parseFieldInput(headers, [
+        { key: 'X-A', value: '${params.a}' },
+        { key: 'X-B', value: '' },
+      ]),
+    ).toEqual({ ok: true, omit: false, value: { 'X-A': '${params.a}', 'X-B': '' } });
+
+    const parsed = parseFieldInput(secretHeaders, [{ key: 'Authorization', 'secret name': 'tok' }]);
+    expect(parsed).toEqual({ ok: true, omit: false, value: { Authorization: { $secret: 'tok' } } });
+    const marker = (parsed as { value: Record<string, unknown> }).value.Authorization;
+    expect(SecretRefSchema.safeParse(marker).success).toBe(true);
+  });
+
+  it('places the probed row in a flyout candidate even while it has no key, or a taken one', () => {
+    // Dropping the probed row would hand the validator a candidate WITHOUT the
+    // cell under test — nothing to refuse, so every reference would be offered.
+    expect(
+      placeRowCandidate(headers, [{ key: 'X-A', value: '1' }, { key: '' }], 1, 'value', '${x}'),
+    ).toEqual({ 'X-A': '1', '': '${x}' });
+    // A draft row with no key that is NOT being probed is left out.
+    expect(
+      placeRowCandidate(headers, [{ key: '', value: 'draft' }, { key: 'X-B' }], 1, 'value', 'v'),
+    ).toEqual({ 'X-B': 'v' });
+    // The probed row wins a duplicate key, wherever it sits.
+    expect(
+      placeRowCandidate(
+        headers,
+        [
+          { key: 'X-A', value: '1' },
+          { key: 'X-A', value: '2' },
+        ],
+        1,
+        'value',
+        '${x}',
+      ),
+    ).toEqual({ 'X-A': '${x}' });
+    // A row list's candidate is still its parsed rows.
+    const rows = field(fieldsOf('copy'), 'mapping');
+    expect(placeRowCandidate(rows, [{}], 0, 'expression', '${x}')).toEqual([
+      { sink: '', expression: '${x}' },
+    ]);
+  });
+
+  it('keeps a __proto__ key an own key rather than setting the prototype', () => {
+    const parsed = parseFieldInput(headers, [{ key: '__proto__', value: 'x' }]);
+    const value = (parsed as { value: Record<string, unknown> }).value;
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(value, '__proto__')).toBe(true);
+  });
+
+  it('refuses a row with no key, a duplicate key, or no secret name', () => {
+    expect(parseFieldInput(headers, [{ key: '', value: 'x' }])).toMatchObject({ ok: false });
+    expect(parseFieldInput(headers, [{ value: 'x' }])).toMatchObject({ ok: false });
+    // A duplicate would silently overwrite the first row's value.
+    expect(
+      parseFieldInput(headers, [
+        { key: 'X-A', value: '1' },
+        { key: 'X-A', value: '2' },
+      ]),
+    ).toMatchObject({ ok: false, message: expect.stringContaining("duplicate key 'X-A'") });
+    expect(parseFieldInput(secretHeaders, [{ key: 'A', 'secret name': '' }])).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('reads no rows as not set when optional, and as an empty record when required', () => {
+    expect(parseFieldInput(headers, [])).toEqual({ ok: true, omit: true });
+    expect(parseFieldInput(required, [])).toEqual({ ok: true, omit: false, value: {} });
+  });
+
+  it('keeps a stored empty record through an apply that touched another field', () => {
+    const fields = fieldsOf('http_request');
+    const original = { url: 'https://a.test', headers: {} };
+    const result = assembleConfig(original, fields, {
+      url: 'https://b.test',
+      headers: [],
+    });
+    expect(result).toMatchObject({ ok: true, config: { url: 'https://b.test', headers: {} } });
+  });
+
+  it('deletes the key when the author removes every row', () => {
+    const fields = fieldsOf('http_request');
+    const result = assembleConfig({ url: 'https://a.test', headers: { 'X-A': '1' } }, fields, {
+      url: 'https://a.test',
+      headers: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && 'headers' in result.config).toBe(false);
   });
 });

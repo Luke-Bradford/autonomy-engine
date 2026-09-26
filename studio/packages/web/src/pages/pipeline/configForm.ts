@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { SecretRefSchema } from '@autonomy-studio/shared';
 
 /**
  * The pure rules behind the per-activity node config form (U7).
@@ -38,7 +39,7 @@ import type { z } from 'zod';
 
 /** The controls this form can render. Anything else authors as JSON. */
 export type ConfigFieldKind =
-  'text' | 'number' | 'boolean' | 'enum' | 'stringList' | 'json' | 'objectList';
+  'text' | 'number' | 'boolean' | 'enum' | 'stringList' | 'json' | 'objectList' | 'keyValue';
 
 /**
  * One row of an `objectList` control: the same cell-input map the top-level
@@ -50,7 +51,7 @@ export type ConfigFieldKind =
  */
 export type ObjectListRow = Readonly<Record<string, string | boolean>>;
 
-/** What one control holds. `objectList` is the only kind that is not a scalar. */
+/** What one control holds. `objectList` and `keyValue` are the kinds that hold rows. */
 export type FieldInput = string | boolean | readonly ObjectListRow[];
 
 /**
@@ -64,6 +65,112 @@ export function isRowList(value: FieldInput | undefined): value is readonly Obje
   return Array.isArray(value);
 }
 
+/** The kinds whose control holds a list of rows rather than one scalar. */
+export function isRowKind(kind: ConfigFieldKind): kind is 'objectList' | 'keyValue' {
+  return kind === 'objectList' || kind === 'keyValue';
+}
+
+/** A `keyValue` row's key cell, the same for both value shapes. */
+const KEY_CELL = 'key';
+
+/**
+ * The two cells of a `keyValue` row. Both required: a row without a key has
+ * nowhere to go in a record, and a secret row without a name is not a marker.
+ * The second cell is called `secret name` rather than `secret` on purpose: a
+ * box labelled "secret" invites pasting the credential itself, which would save
+ * cleanly (the gate checks the marker's SHAPE only) and then sit in immutable
+ * version history and git export.
+ */
+function keyValueCells(recordValue: 'text' | 'secret'): ConfigField[] {
+  return [
+    { name: KEY_CELL, kind: 'text', optional: false, literal: true },
+    recordValue === 'secret'
+      ? { name: 'secret name', kind: 'text', optional: false, literal: true }
+      : { name: 'value', kind: 'text', optional: false },
+  ];
+}
+
+/** The name of a `keyValue` row's value cell. */
+function valueCell(field: ConfigField): string {
+  return field.elementFields?.[1]?.name ?? 'value';
+}
+
+/**
+ * A `keyValue` field's rows as the record they stand for.
+ *
+ * STRICT (an apply) refuses a row with no key, a duplicate key — which would
+ * otherwise silently overwrite the earlier row's value — and a secret row with
+ * no name. LENIENT is the expression flyout's candidate placement: a draft row
+ * is routinely half-filled, so nothing is refused, but the row being PROBED
+ * (`keep`) is always placed and wins a duplicate. Skipping it would hand the
+ * validator a candidate without the cell under test, and every reference would
+ * then be offered — including ones the save gate refuses.
+ *
+ * Built with `Object.fromEntries`, which defines each key as an OWN property, so
+ * a `__proto__` key is data rather than a prototype assignment.
+ */
+export function rowsToRecord(
+  field: ConfigField,
+  rows: readonly ObjectListRow[],
+  mode: { strict: true } | { strict: false; keep: number },
+): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
+  const secret = field.recordValue === 'secret';
+  const second = valueCell(field);
+  const entries: [string, unknown][] = [];
+  const seen = new Map<string, number>();
+  for (const [index, row] of rows.entries()) {
+    const key = typeof row[KEY_CELL] === 'string' ? row[KEY_CELL] : '';
+    const held = typeof row[second] === 'string' ? row[second] : '';
+    const keep = !mode.strict && index === mode.keep;
+    if (mode.strict) {
+      if (key === '') return { ok: false, message: `row ${index + 1} key: required` };
+      if (seen.has(key)) return { ok: false, message: `row ${index + 1}: duplicate key '${key}'` };
+      if (secret && held === '') {
+        return { ok: false, message: `row ${index + 1} ${second}: required` };
+      }
+    } else if (key === '' && !keep) {
+      continue;
+    }
+    // Lenient mode can build `{ $secret: '' }` for a half-filled secret row. It is
+    // a flyout candidate only, and no secret-row cell is offered the flyout (both
+    // are `literal`), so it never reaches the validator; the apply is strict.
+    const value = secret ? { $secret: held } : held;
+    const earlier = seen.get(key);
+    if (earlier !== undefined) {
+      // Lenient only — strict returned above. The probed row wins its key.
+      if (keep) entries[earlier] = [key, value];
+      continue;
+    }
+    seen.set(key, entries.length);
+    entries.push([key, value]);
+  }
+  return { ok: true, value: Object.fromEntries(entries) };
+}
+
+/**
+ * The config value a row field would hold with one cell replaced — the
+ * expression flyout's CANDIDATE for that cell (#1178). A row list is read by
+ * `parseRowCells`, keeping the cells that parse; a `keyValue` field stores a
+ * RECORD, so its candidate is one too, read leniently with the probed row
+ * always placed (`rowsToRecord`).
+ */
+export function placeRowCandidate(
+  field: ConfigField,
+  rows: readonly ObjectListRow[],
+  index: number,
+  cell: string,
+  value: string,
+): unknown {
+  const probed = rows.map((row, i) => (i === index ? { ...row, [cell]: value } : row));
+  if (field.kind === 'keyValue') {
+    // Lenient mode never refuses; the `ok` check only narrows the type.
+    const record = rowsToRecord(field, probed, { strict: false, keep: index });
+    return record.ok ? record.value : {};
+  }
+  const cells = field.elementFields ?? [];
+  return probed.map((row) => parseRowCells(cells, row).value);
+}
+
 /** One derived control: a config key, and how to author it. */
 export interface ConfigField {
   readonly name: string;
@@ -74,8 +181,22 @@ export interface ConfigField {
   readonly enumOptions?: readonly string[];
   /** A defaulted key's default, offered as a placeholder — never written in. */
   readonly defaultText?: string;
-  /** The per-column controls, for `kind: 'objectList'` only. */
+  /** The per-column controls, for `kind: 'objectList'` and `kind: 'keyValue'`. */
   readonly elementFields?: readonly ConfigField[];
+  /**
+   * What a `keyValue` row's second cell holds (#852 item 2): a plain string, or
+   * the NAME of a secret, which is written back as the inert `{$secret:name}`
+   * marker (`shared/schemas/secret-ref.ts`).
+   */
+  readonly recordValue?: 'text' | 'secret';
+  /**
+   * A cell whose text is never substituted, so the expression flyout must not
+   * be offered on it. A record KEY is copied verbatim by `substitute`, and a
+   * `$secret` name may not hold a `${}` at all — the whole-doc validator cannot
+   * see the first (it never scans keys), so offering there would be the false
+   * offer the flyout exists to avoid.
+   */
+  readonly literal?: true;
 }
 
 /**
@@ -87,7 +208,7 @@ export interface ConfigField {
  * would hand a row control the string `''` and render nothing.
  */
 export function emptyControlValue(field: ConfigField): FieldInput {
-  if (field.kind === 'objectList') return [];
+  if (isRowKind(field.kind)) return [];
   return field.kind === 'boolean' ? false : '';
 }
 
@@ -236,7 +357,7 @@ function deriveElementFields(element: unknown): ConfigField[] | null {
     // acting on it, someone could teach `unwrap` to follow `getter` believing
     // recursion was already handled elsewhere.)
     const { kind, enumOptions } = classify(inner, false);
-    if (kind === 'objectList' || kind === 'stringList') return null;
+    if (isRowKind(kind) || kind === 'stringList') return null;
     cells.push({
       name,
       kind,
@@ -253,8 +374,26 @@ function deriveElementFields(element: unknown): ConfigField[] | null {
 function classify(
   schema: unknown,
   nestable: boolean,
-): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields'> {
+): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields' | 'recordValue'> {
   switch (defOf(schema)?.type) {
+    case 'record': {
+      // A record inside a row stays a JSON cell: rows do not nest.
+      if (!nestable) return { kind: 'json' };
+      const def = defOf(schema) as { keyType?: unknown; valueType?: unknown };
+      // Only a free STRING key can be typed into a key cell. An enum key (and
+      // `partialRecord`, which is a record over one) constrains the key set,
+      // which a free-text cell would not honour.
+      if (defOf(unwrap(def.keyType).inner)?.type !== 'string') return { kind: 'json' };
+      const value = unwrap(def.valueType).inner;
+      // IDENTITY with the shared marker schema, not a structural guess: a
+      // lookalike falls to JSON, which is the safe direction — a secret row
+      // writing the wrong shape would be a marker the gate refuses at best.
+      const recordValue =
+        value === SecretRefSchema ? 'secret' : defOf(value)?.type === 'string' ? 'text' : null;
+      return recordValue === null
+        ? { kind: 'json' }
+        : { kind: 'keyValue', recordValue, elementFields: keyValueCells(recordValue) };
+    }
     case 'string':
       return { kind: 'text' };
     case 'number':
@@ -303,7 +442,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
     const { inner, optional, defaultText } = unwrap(fieldSchema);
-    const { kind, enumOptions, elementFields } = classify(inner, true);
+    const { kind, enumOptions, elementFields, recordValue } = classify(inner, true);
     return {
       name,
       kind,
@@ -311,6 +450,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
       ...(enumOptions && { enumOptions }),
       ...(defaultText !== undefined && { defaultText }),
       ...(elementFields && { elementFields }),
+      ...(recordValue && { recordValue }),
     };
   });
 }
@@ -320,6 +460,31 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
   if (value === undefined) return { ok: true, value: emptyControlValue(field) };
 
   switch (field.kind) {
+    case 'keyValue': {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return { ok: false, reason: 'not a record' };
+      }
+      const second = valueCell(field);
+      const rows: ObjectListRow[] = [];
+      for (const [key, held] of Object.entries(value)) {
+        // A deliberate exception to "never refuse what the server accepts":
+        // `z.record(z.string(), …)` admits a `''` key, but a row cannot be read
+        // back without one, and no header or env var is named ''. Refusing here
+        // routes the node to the JSON editor, where it round-trips.
+        if (key === '') return { ok: false, reason: 'holds an empty key' };
+        if (field.recordValue === 'secret') {
+          // A malformed marker stays visible in JSON rather than being
+          // "repaired" into a valid one by an apply that touched another field.
+          const marker = SecretRefSchema.safeParse(held);
+          if (!marker.success) return { ok: false, reason: `'${key}' is not a secret reference` };
+          rows.push({ [KEY_CELL]: key, [second]: marker.data.$secret });
+        } else {
+          if (typeof held !== 'string') return { ok: false, reason: `'${key}' is not a string` };
+          rows.push({ [KEY_CELL]: key, [second]: held });
+        }
+      }
+      return { ok: true, value: rows };
+    }
     case 'objectList': {
       if (!Array.isArray(value)) return { ok: false, reason: 'not a list of rows' };
       const cells = field.elementFields ?? [];
@@ -528,6 +693,15 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
     return { ok: true, omit: false, value: rows };
   }
 
+  if (field.kind === 'keyValue') {
+    if (!isRowList(raw)) return { ok: false, message: 'expected a row list' };
+    const record = rowsToRecord(field, raw, { strict: true });
+    if (!record.ok) return record;
+    // No rows: `objectList`'s rule — "not set" when optional, `{}` when required.
+    if (raw.length === 0 && field.optional) return { ok: true, omit: true };
+    return { ok: true, omit: false, value: record.value };
+  }
+
   if (isRowList(raw)) return { ok: false, message: 'expected a single value, not a row list' };
 
   if (field.kind === 'boolean') {
@@ -599,7 +773,7 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
       } catch {
         return { ok: false, message: 'is not valid JSON' };
       }
-    // No `boolean` or `objectList` case: the guards above return for both, and
+    // No `boolean`, `objectList` or `keyValue` case: the guards above return for them, and
     // the compiler proves this switch is exhaustive without them.
   }
 }
