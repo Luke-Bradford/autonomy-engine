@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { seedConnection } from './support/seedResources';
 
 /**
  * U7 — authoring an activity's settings through NAMED controls.
@@ -296,6 +297,69 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(
       p.getByRole('textbox', { name: 'secretHeaders row 1 secret name', exact: true }),
     ).toHaveValue('api-token');
+
+    await expectQuiet(page, problems);
+  });
+  // #852 item 3 — an llm_call's conversation is authored as ROWS of role and
+  // content, where it used to be one JSON blob.
+  test('llm_call messages are rows that survive a save and reload', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const connectionId = await seedConnection(page, {
+      name: `e2e 852 messages ${Date.now()}`,
+      kind: 'ollama',
+      config: {},
+    });
+    const id = await openSeededCanvas(page, 'u7 message rows', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'llm_call',
+          position: { x: 0, y: 0 },
+          connectionId,
+          config: { messages: [{ role: 'user', content: 'Summarise this.' }] },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    const p = panel(page);
+    await expect(p.getByRole('group', { name: 'messages (optional)', exact: true })).toBeVisible();
+    await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
+      'user',
+    );
+    await expect(
+      p.getByRole('textbox', { name: 'messages row 1 content', exact: true }),
+    ).toHaveValue('Summarise this.');
+
+    await p.getByRole('button', { name: 'Add messages row', exact: true }).click();
+    await p
+      .getByRole('combobox', { name: 'messages row 2 role', exact: true })
+      .selectOption('assistant');
+    await p
+      .getByRole('textbox', { name: 'messages row 2 content', exact: true })
+      .fill('Earlier answer for ${run.runId}:\nnone.');
+    // Content takes a reference, like the prompt it replaces.
+    await expect(
+      p.getByRole('button', { name: 'Insert reference into messages row 2 content', exact: true }),
+    ).toBeVisible();
+    await p.getByRole('button', { name: 'Apply config', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    // Exact: a row control that wrote any extra key, or reordered, fails here.
+    const saved = await persistedConfig(page, id);
+    expect(saved.messages).toEqual([
+      { role: 'user', content: 'Summarise this.' },
+      { role: 'assistant', content: 'Earlier answer for ${run.runId}:\nnone.' },
+    ]);
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await canvasNodes(page).first().click();
+    await expect(p.getByRole('combobox', { name: 'messages row 2 role', exact: true })).toHaveValue(
+      'assistant',
+    );
 
     await expectQuiet(page, problems);
   });

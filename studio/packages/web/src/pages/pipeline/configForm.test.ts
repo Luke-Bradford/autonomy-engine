@@ -5,6 +5,7 @@ import {
   connectionConfigSchema,
   datasetConfigSchema,
   getActivity,
+  llmMessageSchema,
 } from '@autonomy-studio/shared';
 import {
   assembleConfig,
@@ -783,6 +784,61 @@ function draft(over: Partial<ConfigDraft<Kind>> = {}): ConfigDraft<Kind> {
     ...over,
   };
 }
+
+describe('llm_call messages as rows (#852 item 3)', () => {
+  const llm = fieldsOf('llm_call');
+  const messages = field(llm, 'messages');
+  const stored = [
+    { role: 'system', content: 'Be terse.' },
+    { role: 'user', content: 'Summarise ${nodes.fetch.outputs.body}\nin one line.' },
+  ];
+
+  it('gives messages a row control with a role select and a content box', () => {
+    expect(messages.kind).toBe('objectList');
+    expect(messages.optional).toBe(true);
+    expect(messages.elementFields?.map((f) => `${f.name}:${f.kind}`)).toEqual([
+      'role:enum',
+      'content:text',
+    ]);
+    expect(messages.elementFields?.[0]?.enumOptions).toEqual(['system', 'user', 'assistant']);
+  });
+
+  /** The waiver is IDENTITY, not shape: a structural twin keeps the strictness gate. */
+  it('refuses a lookalike conversation schema built separately', () => {
+    const twin = deriveConfigFields(z.object({ turns: z.array(llmMessageSchema).min(1) }));
+    expect(field(twin, 'turns').kind).toBe('json');
+  });
+
+  /** Same element schema, opposite answer: `history` must hold a `${}` string. */
+  it('leaves history on the JSON control its save gate needs', () => {
+    expect(field(llm, 'history').kind).toBe('json');
+  });
+
+  it('round-trips a stored conversation verbatim, multi-line content included', () => {
+    const rendered = formatFieldValue(messages, stored);
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    expect(parseFieldInput(messages, rendered.value)).toEqual({
+      ok: true,
+      omit: false,
+      value: stored,
+    });
+  });
+
+  /** The strictness gate is waived for this one schema, so the VALUE guard is the whole guard. */
+  it('refuses a stored message carrying a key the rows would drop', () => {
+    expect(
+      unrepresentableFields(llm, {
+        model: 'claude-opus-5',
+        messages: [{ role: 'user', content: 'hi', name: 'alice' }],
+      }),
+    ).toEqual(['messages']);
+  });
+
+  it('omits the key when every row is removed, so a prompt-only node stays valid', () => {
+    expect(parseFieldInput(messages, [])).toEqual({ ok: true, omit: true });
+  });
+});
 
 describe('configEditorView (#1146)', () => {
   it('derives JSON mode from all three reasons, and only from them', () => {
