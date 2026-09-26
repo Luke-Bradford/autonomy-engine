@@ -356,6 +356,12 @@ Each D9 consumer that does not hang, walked and pinned:
   `run_cancel_requested`, so nothing is appended, and `onContainerTimedOut` is a no-op under a
   cancel, so a replay stays total. The in-flight node's `node.failed{cancelled}` finishes the run
   `cancelled`.
+  **Migration posture (#443):** this changes how an existing event folds, so it matters whether a
+  log already holds a `container.timedOut` after a `run.cancelRequested`. Measured on the live
+  service database when this landed: it had **no** `run.cancelRequested` at all, since CX2 shipped
+  the same day. So no bound log changes meaning. A crash between such a timeout and its finish would
+  leave the child `dispatched`, and D7 ends that (`node.retryRequested` folds it to failure under a
+  cancel), so it cannot hang.
   **The trade-off, accepted by D9's "is suppressed":** a timeout kills nothing, but it does end the
   loop in the fold. An adapter that ignores its abort signal (the executor does not race
   `ctx.signal` once the adapter has started) therefore keeps a cancelled run live, where the timeout
