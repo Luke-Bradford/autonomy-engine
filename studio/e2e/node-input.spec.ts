@@ -79,7 +79,10 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
       (e) => e.payload['type'] === 'node.dispatched' && e.payload['nodeId'] === 'secure',
     );
     expect(JSON.stringify(secureDispatch)).not.toContain('hidden-890-dir');
-    expect(JSON.stringify(secureDispatch)).not.toContain('4321');
+    // The two records only: the envelope's ids and timestamps could contain the digits.
+    expect(
+      JSON.stringify([secureDispatch?.payload['input'], secureDispatch?.payload['params']]),
+    ).not.toContain('4321');
 
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
