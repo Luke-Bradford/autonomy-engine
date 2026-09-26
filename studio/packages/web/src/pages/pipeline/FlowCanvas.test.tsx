@@ -1337,6 +1337,10 @@ describe('FlowCanvas — issues drawn on the box they are about (#863)', () => {
     expect(
       box.querySelector('.flow-container')?.classList.contains('flow-container--invalid'),
     ).toBe(true);
-    expect(box.querySelector('.flow-issue-badge')?.textContent).toBe('1');
+    // Decorative here: the count is announced by the box's name, not twice.
+    const badge = box.querySelector('.flow-issue-badge');
+    expect(badge?.textContent).toBe('1');
+    expect(badge?.getAttribute('aria-hidden')).toBe('true');
+    expect(badge?.getAttribute('role')).toBeNull();
   });
 });

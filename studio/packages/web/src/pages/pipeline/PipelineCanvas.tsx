@@ -2457,6 +2457,10 @@ export function NodePanel({
     () => attributed.filter((issue) => !isOwnPolicyIssue(issue.raw, nodeId)),
     [attributed, nodeId],
   );
+  const policyElsewhere = {
+    count: attributed.length - ownIssues.length,
+    where: 'Run policy',
+  };
   const picker = useExpressionPicker(
     docNodes,
     docEdges,
@@ -2765,7 +2769,7 @@ export function NodePanel({
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
-        <SubjectIssues issues={ownIssues} />
+        <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
         <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
         {/* Membership is orthogonal to the call blob, so this early return must
             not swallow it: a container is exactly the construct that puts a call
@@ -2781,7 +2785,7 @@ export function NodePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
-      <SubjectIssues issues={ownIssues} />
+      <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
       {entry && !paired && entry.connectionKinds.length > 0 && (
         <LabelledControl label="Connection">
           {(id) => (

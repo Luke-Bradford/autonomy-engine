@@ -1487,9 +1487,12 @@ describe('NodePanel — the issues on this node (#863)', () => {
         />
       </SubjectIssuesContext.Provider>,
     );
-    expect(screen.getByText('1 validation issue')).toBeTruthy();
+    // COUNTED like the canvas badge (2), listed once: the policy refusal is
+    // pointed at rather than repeated.
+    expect(screen.getByText('2 validation issues')).toBeTruthy();
     expect(screen.getByText('readable bad ref')).toBeTruthy();
     expect(screen.queryByText('readable policy refusal')).toBeNull();
+    expect(screen.getByText('1 more under Run policy, below.')).toBeTruthy();
   });
 
   it('shows no issue section for a node with none', () => {

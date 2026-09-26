@@ -275,7 +275,9 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  *
  * Both stop the id at the first `.` — ids are `z.string().min(1)`, so an
  * imported doc holding both `a` and `a.b` would read an `a.b` location as `a`.
- * Canvas-minted ids (`n_`/`c_` uuids) cannot contain one.
+ * Canvas-minted ids (`n_`/`c_` uuids) cannot contain one. `readableIssue` only
+ * mis-NAMES in that case; `issuesBySubject` would mis-ATTRIBUTE, so it widens
+ * the capture against the doc's real ids (`widenedId`).
  */
 const CONTAINER_LOCATION = String.raw`container\.([^.\s]+)\.`;
 const NODE_LOCATION = String.raw`nodes?\.([^.\s:]+)(\.?)`;
@@ -588,13 +590,39 @@ const QUOTED_KIND: Record<string, IssueSubject['kind']> = {
  * swaps ids for names, after which nothing here can match.
  */
 export function issueSubject(issue: string): IssueSubject | undefined {
+  return locate(issue)?.subject;
+}
+
+/** `issueSubject`, plus whether the id was QUOTED — only an unquoted one can be cut short. */
+function locate(issue: string): { subject: IssueSubject; quoted: boolean } | undefined {
   const node = new RegExp(`^${NODE_LOCATION}`).exec(issue);
-  if (node) return { kind: 'node', id: node[1]! };
+  if (node) return { subject: { kind: 'node', id: node[1]! }, quoted: false };
   const container = new RegExp(`^${CONTAINER_LOCATION}`).exec(issue);
-  if (container) return { kind: 'container', id: container[1]! };
+  if (container) return { subject: { kind: 'container', id: container[1]! }, quoted: false };
   const quoted = QUOTED_SUBJECT.exec(issue);
-  if (quoted) return { kind: QUOTED_KIND[quoted[1]!]!, id: quoted[2]! };
+  if (quoted) return { subject: { kind: QUOTED_KIND[quoted[1]!]!, id: quoted[2]! }, quoted: true };
   return undefined;
+}
+
+/**
+ * The longest real id that the location in `raw` actually spells, starting from
+ * the regex's capture. The capture stops at the first `.`, so for a doc holding
+ * both `a` and `a.b` the location `nodes.a.b.config…` captures `a`; this reads
+ * on past the `.` against the ids that exist and returns `a.b`. An id counts
+ * only if the location ends right after it (`.`, `:`, `[`, space or the end).
+ */
+function widenedId(raw: string, captured: string, ids: ReadonlySet<string>): string {
+  // The capture follows the location's `node.`/`nodes.`/`container.` prefix,
+  // which is the first `.` in the string.
+  const at = raw.indexOf('.') + 1;
+  let best = captured;
+  for (const id of ids) {
+    if (id.length <= best.length || !id.startsWith(`${captured}.`)) continue;
+    if (!raw.startsWith(id, at)) continue;
+    const next = raw.charAt(at + id.length);
+    if (next === '' || next === '.' || next === ':' || next === '[' || next === ' ') best = id;
+  }
+  return best;
 }
 
 /** The map key for a subject — kinds are separate namespaces here, whatever the doc says. */
@@ -632,9 +660,13 @@ export function issuesBySubject(
   };
   const out = new Map<string, SubjectIssue[]>();
   for (const issue of issues) {
-    const subject = issueSubject(issue.raw);
-    if (subject === undefined || !exists[subject.kind].has(subject.id)) continue;
-    const key = subjectKey(subject.kind, subject.id);
+    const located = locate(issue.raw);
+    if (located === undefined) continue;
+    const { subject, quoted } = located;
+    const ids = exists[subject.kind];
+    const id = quoted ? subject.id : widenedId(issue.raw, subject.id, ids);
+    if (!ids.has(id)) continue;
+    const key = subjectKey(subject.kind, id);
     const list = out.get(key);
     if (list) list.push(issue);
     else out.set(key, [issue]);

@@ -122,15 +122,30 @@ interface ActivityData extends Record<string, unknown> {
  * measured rects, so a badge in the flow would move ports and resize containers
  * whenever an issue came or went.
  *
- * `role="img"` + a label, because a bare digit says nothing to a screen reader.
- * On an activity the messages also ride on `title` for a pointer; a container
- * box is `pointer-events: none`, so its badge is visual only and its count is
- * carried by the box's own accessible name instead. The property panel lists
- * the messages in full once the element is selected. Not a live region — the canvas's badge list is
+ * On an activity: `role="img"` + a label, because a bare digit says nothing to
+ * a screen reader, and the messages on `title` for a pointer. On a container the
+ * badge is DECORATIVE (`aria-hidden`, no `title`): the box is `pointer-events:
+ * none`, so a tooltip could never open, and its count is already in the box's
+ * own accessible name (see `containerNodes`) — exposing both would read it
+ * twice. The property panel lists the messages in full once the element is
+ * selected. Not a live region — the canvas's badge list is
  * the page's announcer for a blocked save (#1249).
  */
-function IssueBadge({ issues }: { issues: readonly SubjectIssue[] }) {
+function IssueBadge({
+  issues,
+  decorative = false,
+}: {
+  issues: readonly SubjectIssue[];
+  decorative?: boolean;
+}) {
   if (issues.length === 0) return null;
+  if (decorative) {
+    return (
+      <span className="flow-issue-badge" aria-hidden="true">
+        {issues.length}
+      </span>
+    );
+  }
   return (
     <span
       className="flow-issue-badge"
@@ -323,7 +338,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.label}</span>
-      <IssueBadge issues={issues} />
+      <IssueBadge issues={issues} decorative />
       {/* #748 — the box's own chrome is inert, and this is the one part of it
           that is not. (The edge HANDLES above are hit-testable too, and predate
           this: two opt-ins, not one.) A container cannot be made `selectable` —
@@ -1174,9 +1189,9 @@ export function FlowCanvas({
         // #883 — the ordinal, so two same-kinded boxes are two distinguishable
         // groups to a screen reader, matching the text the box now draws.
         //
-        // #863 — and the issue count, because this label REPLACES the box's
-        // content for a screen reader, so the badge's own label never reaches
-        // one. An activity has no such override and reads its badge directly.
+        // #863 — and the issue count, which is where a container's count is
+        // announced: its badge is `aria-hidden` (see `IssueBadge`). An activity
+        // has no label override and reads its badge directly.
         ariaLabel: withIssueCount(
           containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
           bySubject.get(subjectKey('container', c.id))?.length ?? 0,

@@ -848,4 +848,21 @@ describe('issuesBySubject (#863)', () => {
       map.get(subjectKey('node', 'n_a'))?.some((i) => i.raw.startsWith("node 'n_a': policy")),
     ).toBe(true);
   });
+
+  it('reads a dotted id to its real end, not to the first dot', () => {
+    // ids are `z.string().min(1)`: an imported doc can hold both `a` and `a.b`.
+    const a: Node = { ...A, id: 'a' };
+    const ab: Node = { ...B, id: 'a.b' };
+    const map = issuesBySubject(
+      [
+        { raw: 'nodes.a.b.config.url: bad', text: 'x' },
+        { raw: 'node.a: an execute_pipeline needs a call config', text: 'y' },
+      ],
+      [a, ab],
+      [],
+      [],
+    );
+    expect(map.get(subjectKey('node', 'a.b'))?.map((i) => i.text)).toEqual(['x']);
+    expect(map.get(subjectKey('node', 'a'))?.map((i) => i.text)).toEqual(['y']);
+  });
 });
