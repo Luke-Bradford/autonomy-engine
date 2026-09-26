@@ -3,6 +3,7 @@ import {
   paginatedResponseSchema,
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
+  RunCancelAcceptedSchema,
   RunDetailSchema,
   RunDiagnosticSchema,
   RunSchema,
@@ -11,6 +12,7 @@ import {
   type CompleteExternalWaitBody,
   type PendingExternalWait,
   type RerunAccepted,
+  type RunCancelAccepted,
   type Run,
   type RunDiagnostic,
   type RunSummary,
@@ -295,6 +297,27 @@ export function rerunFromFailed(id: string, signal?: AbortSignal): Promise<Rerun
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/rerun-from-failed`, {
     method: 'POST',
     schema: RerunAcceptedSchema,
+    signal,
+  });
+}
+
+/**
+ * CX4 (#1320) — ask the server to cancel a run (`POST /api/runs/:id/cancel`).
+ *
+ * No body: the cancel's source is set by the server, never typed by the
+ * operator (cancel spec D2). `202` resolves with `state`:
+ *  - `requested` — the fact is (or is about to be) on the run's log; in-flight
+ *    work drains and the run then finishes. The live tail shows both.
+ *  - `cancelled` — a still-`queued` run was cancelled by a row patch. It has no
+ *    event log, so nothing will tail in: the caller re-reads the row.
+ * A run that already ended, or whose log is unreadable, is refused as
+ * `ApiError(409)` with the server's own sentence; surface it verbatim. A second
+ * cancel of a run already cancelling is a `202` and appends nothing (D5).
+ */
+export function cancelRun(id: string, signal?: AbortSignal): Promise<RunCancelAccepted> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    schema: RunCancelAcceptedSchema,
     signal,
   });
 }

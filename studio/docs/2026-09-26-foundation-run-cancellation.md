@@ -311,11 +311,22 @@ Decisions the reducer had to take that the D-sections left implicit:
 - **Known until CX3, and not a hang:** a parent parked on a live child counts that call node as in flight. Cancel mode never parks, so a cancelled parent becomes `running` with no pump until the child ends (or a lease reclaim runs D7). Until then it holds its admission slot. A `startChild` already queued behind the per-run cap when the cancel folds still spawns its child. CX3's propagation closes both, so CX4's UI must not promise an immediate stop for a run waiting on a child.
 - **Deferred:** a queued run cancelled before admission counts as "served" in the S6b fairness order (#1326).
 
+### CX4 — as built
+
+- **Where things live.** `web/src/pages/runs/cancelAction.ts` holds the offer test (`canCancelRun`: `pending`/`queued`/`running`/`waiting`, D5) and the confirmation text. The page wires it the way it wires rerun: `window.confirm`, then `cancelRun` (`api/runs.ts`), with the server's `409` sentence shown verbatim.
+- **"Cancelling…" is read off the LOG, never the `202`.** `deriveRunLifecycle` gained `cancelRequested`, set by a folded `run.cancelRequested`. A `requested` answer means only that the intent was accepted, and an intent lost with a crashed process leaves the run running (D6/D7). So the header says "Cancelling…" only once the fact is on the log, and the Cancel control is withdrawn at that point. A run whose node is waiting on a child also gets a hint that it stops only once the child ends, until CX3.
+- **Queued.** A `cancelled` answer is the D5 row patch, and no event will tail in, so the page re-reads the row. If that re-read fails, the page patches the row to `cancelled` itself, because the `202` already said so. It does not raise a "cancel failed" alert over a cancel that worked.
+- **The node words depend on the run.** Under a `cancelled` run, a node or container left non-terminal keeps its live status in the log (D2/D4, and a parked node under D5). Its word changes, but its tone does not. It reads "not run (cancelled)" if it never started and "stopped (cancelled)" if it was live. `nodeStatusLabel`/`containerStatusLabel` take the run status (a `ready` node never began, so it reads "not run"), and the table, the drill-in panel and the graph all pass it, so the three surfaces keep one vocabulary (U25).
+- **The confirmation** names every node in progress (dispatched, ready, retrying or parked) in the table's words. It always says that work already sent is not undone (open question 1), and it adds the child caveat when a call node is waiting on a child.
+- **e2e** (`e2e/run-cancel.spec.ts`) cancels a real in-flight `agent_task` subprocess (`sh -c 'sleep 120'`) and a run parked on a one-hour `wait`. The first asserts that the run is `cancelled` well inside the subprocess's lifetime, so the kill is real. It also checks that the pill is the neutral muted colour, not red. Both assert the node words.
+
 ## Open questions (none block CX1)
 
 1. **Confirmation copy for a run with an in-flight side-effecting node** (an `http` POST, a `copy`
    into a sink). A cancel cannot un-send a request. CX4 should say "work already sent is not undone"
    rather than imply a rollback. That is wording to settle in CX4, not a design fork.
+   **Settled in CX4:** the confirmation always says *"Work already sent (a request made, rows
+   written) is not undone."*
 2. **Should a cancelled `copy` report `rowsWritten`?** The data-movement spec §10 already says a
    cancel must never leave a silent partial, and the copy adapter already implements that. CX adds
    nothing and only checks it end to end in CX5.

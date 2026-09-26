@@ -2720,9 +2720,13 @@ td button + button {
    Muted, matching the pre-`run.started`/inert family beside them. */
 /* CX1 (#1320) — `cancelled` joins them: the cancel spec (D9) makes it NEUTRAL,
    never red. The operator stopped the run on purpose, so nothing went wrong. */
+/* CX4 (#1320) — "Cancelling…", the header's word while a folded cancel drains
+   in-flight work. Muted like the `cancelled` it is becoming, not the accent of a
+   run still doing what it was asked. */
 .run-status-queued,
 .run-status-skipped,
-.run-status-cancelled {
+.run-status-cancelled,
+.run-status-cancelling {
   color: var(--muted);
   border-color: var(--muted);
 }

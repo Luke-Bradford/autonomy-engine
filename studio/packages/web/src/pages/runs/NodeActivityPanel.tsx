@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useBusyAction } from '../../hooks/useBusyAction';
 import { describeDatasetAddress, surrogateSafeCut, TERMINAL_NODE } from '@autonomy-studio/shared';
-import type { DatasetAddress } from '@autonomy-studio/shared';
+import type { DatasetAddress, RunStatus } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { formatNodeDuration, formatOutputValue } from './format';
@@ -34,12 +34,15 @@ import { CaptureSection } from './CaptureSection';
  * source run rather than passing them off as this run's work.
  *
  * READ-ONLY by design (U28): no cancel, no retry, and no NODE-level rerun. The
- * reason is per-control, and one of the three has since changed, so it is worth
+ * reason is per-control, and two of the three have since changed, so it is worth
  * stating precisely rather than as one blanket claim:
- *  - cancel and retry still have no engine primitive at all — the only
- *    cancellation in the tree is connector-level `AbortSignal` plumbing, there is
- *    no cancel command, route or event — so inventing either control here would
- *    cross the "no engine execution-semantics changes" boundary the UI epic draws.
+ *  - cancel DOES now have a primitive (the CX epic, #1320), but it cancels a
+ *    RUN: `POST /api/runs/:id/cancel`. There is no per-node cancel in the engine
+ *    (the cancel spec deliberately has none), so the control lives on the parent
+ *    page (CX4), beside rerun.
+ *  - retry still has no engine primitive — a node's retries are its policy's,
+ *    applied by the reducer — so inventing a retry control here would cross the
+ *    "no engine execution-semantics changes" boundary the UI epic draws.
  *  - rerun DOES now have a primitive (RS2), but it reruns a RUN, not a node:
  *    it resumes from the run's failure frontier. It therefore belongs to the
  *    parent page, which is where it lives, and there is still nothing a
@@ -91,10 +94,13 @@ export const PANEL_ID = 'node-activity-panel';
 export function NodeActivityPanel({
   node,
   name,
+  runStatus,
   onClose,
 }: {
   node: NodeActivity;
   name: string | null;
+  /** The run's status, for the one node word that depends on it (CX4). */
+  runStatus: RunStatus;
   onClose: () => void;
 }) {
   return (
@@ -120,7 +126,7 @@ export function NodeActivityPanel({
         {/* U25 — one status vocabulary for the whole Monitor: the same word
             the table and the graph show, sourced from `nodeStatus.ts`. */}
         <span className={`node-status node-status-${node.status}`}>
-          {nodeStatusLabel(node.status)}
+          {nodeStatusLabel(node.status, runStatus)}
         </span>{' '}
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
       </p>
@@ -210,9 +216,12 @@ export function NodeActivityPanel({
                  these arms are standalone sentences. */
               node.status === 'skipped' && node.attempts === 0
               ? 'This node was routed around, so it was never going to run and there is nothing to measure.'
-              : node.attempts === 0
-                ? 'This node has not started, so there is nothing to measure yet.'
-                : 'No span was recorded for this attempt.')}
+              : node.attempts === 0 && runStatus === 'cancelled' && !TERMINAL_NODE.has(node.status)
+                ? /* CX4 (#1320) — not "yet": the run ended, and this node never will start. */
+                  'The run was cancelled before this node started, so there is nothing to measure.'
+                : node.attempts === 0
+                  ? 'This node has not started, so there is nothing to measure yet.'
+                  : 'No span was recorded for this attempt.')}
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
           'This attempt has not settled yet, so its span is not complete.'}

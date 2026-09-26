@@ -450,13 +450,25 @@ describe('deriveRunLifecycle', () => {
   });
   it('tracks started → finished', () => {
     const events = [started()];
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: false,
+    });
     events.push(envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }));
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'success', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'success',
+      waitingReason: null,
+      cancelRequested: false,
+    });
   });
   it('maps run.interrupted', () => {
     const events = [envelope({ type: 'run.interrupted', runId: 'r', reason: 'boot' })];
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'interrupted', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'interrupted',
+      waitingReason: null,
+      cancelRequested: false,
+    });
   });
   it('CX1 (#1320) — a cancel un-parks a waiting run in the live view, then its finish reads `cancelled`', () => {
     const events = [
@@ -465,7 +477,11 @@ describe('deriveRunLifecycle', () => {
       envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }),
     ];
     // The reducer un-parks on the cancel (it joins UNPARK_EVENTS), so the view must too.
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: true,
+    });
     events.push(
       envelope({
         type: 'run.finished',
@@ -474,7 +490,25 @@ describe('deriveRunLifecycle', () => {
         reason: 'cancelled:operator',
       }),
     );
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'cancelled', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'cancelled',
+      waitingReason: null,
+      cancelRequested: true,
+    });
+  });
+  it('CX4 (#1320) — records a folded cancel on a RUNNING run, so the page can say "Cancelling…"', () => {
+    const events = [started()];
+    expect(deriveRunLifecycle(events)?.cancelRequested).toBe(false);
+    events.push(
+      envelope({ type: 'run.cancelRequested', runId: 'r', source: { kind: 'operator' } }),
+    );
+    // Still running — in-flight work drains before the finish (spec D2) — but
+    // the cancel is on record.
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: true,
+    });
   });
   it('#5 S3 — a run.waiting tailing after run.started shows `waiting` (live park view)', () => {
     const events = [
@@ -485,6 +519,7 @@ describe('deriveRunLifecycle', () => {
     expect(deriveRunLifecycle(events)).toEqual({
       status: 'waiting',
       waitingReason: 'waiting_external',
+      cancelRequested: false,
     });
   });
   it('#5 S3 — a run.resumed/started after a run.waiting returns the VIEW to running', () => {
@@ -497,7 +532,11 @@ describe('deriveRunLifecycle', () => {
     ];
     // #870 — the reason is cleared with the status. A stale reason surviving an
     // unpark is how a running run comes to be labelled "waiting (timer)".
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: false,
+    });
   });
   it('a resume AFTER a terminal shows running again — the VIEW rule, not the log rule', () => {
     // This is the deliberate divergence from the server's `terminalFactFromLog`
@@ -509,7 +548,11 @@ describe('deriveRunLifecycle', () => {
       envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }),
       envelope({ type: 'run.resumed', runId: 'r', reason: 'boot_reconcile' }),
     ];
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: false,
+    });
   });
 
   /**
@@ -542,6 +585,7 @@ describe('deriveRunLifecycle', () => {
       expect(deriveRunLifecycle(events)).toEqual({
         status: 'waiting',
         waitingReason: 'waiting_timer',
+        cancelRequested: false,
       });
     });
 
@@ -551,7 +595,11 @@ describe('deriveRunLifecycle', () => {
         envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }),
         envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
       ];
-      expect(deriveRunLifecycle(events)).toEqual({ status: 'success', waitingReason: null });
+      expect(deriveRunLifecycle(events)).toEqual({
+        status: 'success',
+        waitingReason: null,
+        cancelRequested: false,
+      });
     });
 
     const parkedNode = { runId: 'r', nodeId: 'n', previousAttemptId: 'n#0' };
@@ -572,7 +620,11 @@ describe('deriveRunLifecycle', () => {
         envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
         unpark,
       ];
-      expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+      expect(deriveRunLifecycle(events)).toEqual({
+        status: 'running',
+        waitingReason: null,
+        cancelRequested: false,
+      });
     });
 
     it('does not let an unpark event resurrect a terminal run', () => {
@@ -583,7 +635,11 @@ describe('deriveRunLifecycle', () => {
         envelope({ type: 'run.finished', runId: 'r', outcome: 'failure' }),
         envelope({ type: 'timer.due', runId: 'r', nodeId: 'n', previousAttemptId: 'n#0' }),
       ];
-      expect(deriveRunLifecycle(events)).toEqual({ status: 'failure', waitingReason: null });
+      expect(deriveRunLifecycle(events)).toEqual({
+        status: 'failure',
+        waitingReason: null,
+        cancelRequested: false,
+      });
     });
 
     it('does not let an unpark event start a run that never started', () => {
@@ -1098,7 +1154,11 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
       envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
       envelope(warned),
     ];
-    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'running',
+      waitingReason: null,
+      cancelRequested: false,
+    });
   });
 });
 

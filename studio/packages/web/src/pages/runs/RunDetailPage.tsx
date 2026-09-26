@@ -6,11 +6,12 @@ import {
 } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { Link, useNavigate } from 'react-router';
-import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
+import { cancelRun, getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
 import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
+import { canCancelRun, cancelConfirmMessage } from './cancelAction';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
@@ -80,6 +81,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   /* Whether this mount is still on screen, read by the rerun settle handlers.
      Set on mount rather than only cleared on unmount, so a StrictMode
@@ -299,7 +302,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const view = useMemo((): RunLifecycle | null => {
     if (lifecycle !== null && TERMINAL_RUN_STATUS.has(lifecycle.status)) return lifecycle;
     if (overlay.ready && overlay.state.status === 'waiting') {
-      return { status: 'waiting', waitingReason: overlay.state.waitingReason };
+      return {
+        status: 'waiting',
+        waitingReason: overlay.state.waitingReason,
+        cancelRequested: lifecycle?.cancelRequested ?? false,
+      };
     }
     return lifecycle;
   }, [lifecycle, overlay]);
@@ -311,6 +318,63 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* Bound once so the lineage row below narrows without a non-null assertion —
      `run.rerunOf` inside a callback would not stay narrowed. */
   const rerunOf = run?.rerunOf ?? null;
+
+  /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries
+     `run.cancelRequested`) but the run has not finished, because in-flight work
+     drains first (spec D2). Read off the log, never off the 202: a `requested`
+     answer means the intent was accepted, and only the fold means the run will
+     actually stop — an intent lost with a crashed process leaves the run
+     running exactly as if nobody had cancelled (D6/D7), and the page must not
+     claim otherwise. */
+  const cancelling = canCancelRun(status) && view?.cancelRequested === true;
+  /* A parent parked on a live child does not stop until that child ends (CX2
+     as-built, "known until CX3"), so the page says so rather than letting
+     "Cancelling…" read as an imminent stop. */
+  const cancelWaitsOnChild = cancelling && nodes.some((n) => n.status === 'waiting');
+
+  /**
+   * CX4 (#1320) — cancel THIS run, after a confirmation that names what stops.
+   *
+   * `window.confirm`, as every other destructive action in the app does
+   * (`PipelinesPage`, `TriggersPage`, `DatasetsPage`). The text is built from
+   * the node table's own rows, so it names exactly what the operator sees in
+   * progress, in the table's words.
+   *
+   * A second cancel is harmless — the server answers `202` and appends nothing
+   * (D5) — so `cancelBusy` only keeps one mount from sending two requests and
+   * shows the pending state; it is not guarding money the way `rerunning` is.
+   *
+   * `cancelled` is the QUEUED case: the server cancelled the row by a patch and
+   * no event will ever tail in, so the row is re-read to show it. `requested`
+   * needs nothing — the fold arrives over the stream.
+   *
+   * The re-read is NOT part of the cancel's success. If it fails, the cancel
+   * still happened — the `202` said so — so the row is patched to the status the
+   * server reported rather than raising a "cancel failed" alert over a cancel
+   * that worked and putting the button back on a run that is gone.
+   */
+  const onCancel = async () => {
+    if (cancelBusy) return;
+    const message = cancelConfirmMessage(
+      nodes.map((n) => ({ name: nameOf(n.nodeId) ?? n.nodeId, status: n.status })),
+    );
+    if (!window.confirm(message)) return;
+    setCancelBusy(true);
+    setCancelError(null);
+    try {
+      const { state } = await cancelRun(runId);
+      if (state === 'cancelled') {
+        const fresh = await getRun(runId).catch(() => null);
+        if (live.current) {
+          setRun((prev) => fresh ?? (prev && { ...prev, status: 'cancelled' }));
+        }
+      }
+    } catch (err: unknown) {
+      if (live.current) setCancelError(messageOf(err));
+    } finally {
+      if (live.current) setCancelBusy(false);
+    }
+  };
 
   /* #900 — whether this run owes an inbound callback, and a tick that changes
      whenever the set of pending ones does.
@@ -396,9 +460,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
       </div>
 
       <p className="page-hint">
-        <span className={`run-status run-status-${status}`}>
-          {runStatusLabel(status, waitingReason)}
-        </span>{' '}
+        {cancelling ? (
+          <span className="run-status run-status-cancelling">Cancelling…</span>
+        ) : (
+          <span className={`run-status run-status-${status}`}>
+            {runStatusLabel(status, waitingReason)}
+          </span>
+        )}{' '}
         <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
           {phaseLabel(stream.phase)}
         </span>
@@ -417,6 +485,27 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </button>
           <span className="page-hint">{RERUN_COST_WARNING}</span>
         </div>
+      )}
+      {/* CX4 (#1320) — the cancel action, on any run that has not ended (D5),
+          and withdrawn once the cancel is folded: the run is then already
+          stopping, and the header says so. */}
+      {canCancelRun(status) && !cancelling && (
+        <div className="run-actions">
+          <button type="button" onClick={() => void onCancel()} disabled={cancelBusy}>
+            {cancelBusy ? 'Cancelling…' : 'Cancel run'}
+          </button>
+        </div>
+      )}
+      {cancelWaitsOnChild && (
+        <p className="page-hint">
+          Waiting for a child run to end — this run stops once it does. Cancelling a run does not
+          cancel its child runs yet.
+        </p>
+      )}
+      {cancelError && (
+        <p role="alert" className="error">
+          {cancelError}
+        </p>
       )}
       {rerunError && (
         <p role="alert" className="error">
@@ -647,7 +736,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         routine park in one `holding` hue, and #483 established
                         that those must not share a colour here. */}
                     <span className={`node-status node-status-${n.status}`}>
-                      {nodeStatusLabel(n.status)}
+                      {nodeStatusLabel(n.status, status)}
                     </span>
                   </td>
                   <td>{n.attempts}</td>
@@ -696,6 +785,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <NodeActivityPanel
           node={openNode}
           name={nameOf(openNode.nodeId)}
+          runStatus={status}
           onClose={() => setOpenNodeId(null)}
         />
       )}

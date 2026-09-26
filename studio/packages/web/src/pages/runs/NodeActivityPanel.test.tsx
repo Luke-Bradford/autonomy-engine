@@ -6,7 +6,7 @@ import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import { emptyNodeCost } from './runSummary';
-import type { DatasetAddress } from '@autonomy-studio/shared';
+import type { DatasetAddress, RunStatus } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -54,8 +54,10 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
  * the one `RunDetailPage.test.tsx` already uses, so there is no second opinion
  * here about what "a router that exists and goes nowhere" means.
  */
-function renderPanel(node: NodeActivity): HTMLElement {
-  renderWithRouter(<NodeActivityPanel node={node} name={null} onClose={vi.fn()} />);
+function renderPanel(node: NodeActivity, runStatus: RunStatus = 'running'): HTMLElement {
+  renderWithRouter(
+    <NodeActivityPanel node={node} name={null} runStatus={runStatus} onClose={vi.fn()} />,
+  );
   return screen.getByRole('complementary');
 }
 
@@ -93,6 +95,16 @@ describe('NodeActivityPanel — why there is no duration', () => {
     const panel = renderPanel(row({ nodeId: 'a', status: 'pending', attempts: 0 }));
     expect(panel.textContent).toMatch(/has not started, so there is nothing to measure yet/);
   });
+
+  it.each(['pending', 'ready'] as const)(
+    'CX4 (#1320) — a %s node a cancel stopped from starting is "not run", with no "yet"',
+    (status) => {
+      const panel = renderPanel(row({ nodeId: 'a', status, attempts: 0 }), 'cancelled');
+      expect(panel.textContent).toContain('not run (cancelled)');
+      expect(panel.textContent).toMatch(/cancelled before this node started/);
+      expect(panel.textContent).not.toMatch(/nothing to measure yet/);
+    },
+  );
 
   it('keeps the copied-node sentence ahead of both', () => {
     const panel = renderPanel(
@@ -584,7 +596,12 @@ describe('NodeActivityPanel — the outputs payload is bounded in the DOM', () =
           <button type="button" onClick={() => setI(1)}>
             open the next node
           </button>
-          <NodeActivityPanel node={nodes[i] as NodeActivity} name={null} onClose={vi.fn()} />
+          <NodeActivityPanel
+            node={nodes[i] as NodeActivity}
+            name={null}
+            runStatus="running"
+            onClose={vi.fn()}
+          />
         </>
       );
     }
