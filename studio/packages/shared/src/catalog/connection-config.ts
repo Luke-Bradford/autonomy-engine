@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { ConnectionKindSchema, type ConnectionKind } from '../schemas/connection.js';
@@ -38,9 +39,9 @@ export const DEFAULT_LLM_TIMEOUT_MS = 120_000;
 /** The non-secret Connection config common to every LLM adapter. */
 export const llmConnectionConfigSchema = z.object({
   /** Provider base URL override (self-hosted / gateway / local). */
-  baseUrl: z.string().optional(),
+  baseUrl: singleLine(z.string()).optional(),
   /** Default model, used when the node's activity config sets none. */
-  model: z.string().optional(),
+  model: singleLine(z.string()).optional(),
   /** Per-request timeout in ms (whole exchange). Defaults to 120s. */
   timeoutMs: z.number().int().positive().optional(),
 });
@@ -48,12 +49,12 @@ export const llmConnectionConfigSchema = z.object({
 /** `anthropic_api`: the LLM shape plus the API version header. */
 export const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
   /** The `anthropic-version` header value. Defaults to `2023-06-01`. */
-  anthropicVersion: z.string().optional(),
+  anthropicVersion: singleLine(z.string()).optional(),
 });
 
 /** The Connection-level (non-secret) config for an `http` connection. */
 export const httpConnectionConfigSchema = z.object({
-  baseUrl: z.string().optional(),
+  baseUrl: singleLine(z.string()).optional(),
   headers: z.record(z.string(), z.string()).optional(),
   /** Per-request timeout in ms (whole exchange). Defaults to 30s. */
   timeoutMs: z.number().int().positive().optional(),
@@ -107,7 +108,7 @@ export const sqliteConnectionConfigSchema = z.object({
   roots: z.array(z.string().min(1)).min(1, 'a sqlite connection needs at least one allowed root'),
   /** The database file, confined to `roots` at dispatch by the SAME extracted
    * `resolveWithinRoots` guard the `fs` connector uses — not a second copy. */
-  path: z.string().min(1),
+  path: singleLine(z.string()).min(1),
   /** Whether this store may be used as a copy SINK (M5). Absent = read-only. */
   writable: z.boolean().optional(),
 });
@@ -166,10 +167,10 @@ export type PostgresSslMode = z.infer<typeof PostgresSslModeSchema>;
  * `routes/connections.ts` runs no per-kind validation.
  */
 export const postgresConnectionConfigSchema = z.object({
-  host: z.string().min(1, 'a postgres connection needs a host'),
+  host: singleLine(z.string()).min(1, 'a postgres connection needs a host'),
   port: z.number().int().min(1).max(65535).optional(),
-  database: z.string().min(1, 'a postgres connection needs a database'),
-  user: z.string().min(1, 'a postgres connection needs a user'),
+  database: singleLine(z.string()).min(1, 'a postgres connection needs a database'),
+  user: singleLine(z.string()).min(1, 'a postgres connection needs a user'),
   /** Required — see `PostgresSslModeSchema` on why there is no default. */
   sslmode: PostgresSslModeSchema,
   /** How long to wait for the CONNECTION itself (`connectionTimeoutMillis`). */
@@ -215,15 +216,15 @@ function isCompilableRegex(pattern: string): boolean {
  */
 export const agentConnectionConfigSchema = z.object({
   /** The executable to run (e.g. `claude`, `codex`). */
-  command: z.string().min(1),
+  command: singleLine(z.string()).min(1),
   /** Static leading args; the `task` is appended as the final argv element. */
   args: z.array(z.string()).optional(),
   /** Non-secret environment for the child. */
   env: z.record(z.string(), z.string()).optional(),
   /** The env var NAME the resolved secret is injected into (never in argv). */
-  secretEnv: z.string().optional(),
+  secretEnv: singleLine(z.string()).optional(),
   /** Default working directory; the activity `cwd` overrides it. */
-  cwd: z.string().optional(),
+  cwd: singleLine(z.string()).optional(),
   /**
    * #2 L14b — the default model this CLI connection reports for any metered
    * invocation (node `config.model` < this < the `cli` fallback). An `agent_task`
@@ -233,7 +234,7 @@ export const agentConnectionConfigSchema = z.object({
    * configures any real `--model` flag statically via `args`; this only names
    * the model for observability/audit.
    */
-  model: z.string().optional(),
+  model: singleLine(z.string()).optional(),
   /** Hard wall-clock timeout (ms). Exceeding it tree-kills the process. */
   timeoutMs: z.number().int().positive().optional(),
   /** Combined stdout+stderr byte cap before output is truncated. */

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { llmOutputSchemaSchema } from './llm-config.js';
 
 /**
@@ -25,7 +26,7 @@ import { llmOutputSchemaSchema } from './llm-config.js';
  */
 export const agentTaskConfigSchema = z.object({
   task: z.string().min(1),
-  cwd: z.string().optional(),
+  cwd: singleLine(z.string()).optional(),
   outputSchema: llmOutputSchemaSchema.optional(),
 });
 

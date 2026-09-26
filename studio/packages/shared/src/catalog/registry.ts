@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { singleLine } from '../schemas/field-presentation.js';
 import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
@@ -88,8 +89,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // sends the dispatch-resolved plaintext as that header, LAST, never echoed.
     secretSinkFields: [HTTP_SECRET_HEADERS_FIELD],
     configSchema: z.object({
-      url: z.string().min(1),
-      method: z.string().optional(),
+      url: singleLine(z.string()).min(1),
+      method: singleLine(z.string()).optional(),
       headers: z.record(z.string(), z.string()).optional(),
       body: z.string().optional(),
       // Metadata only (catalog `configSchema` is not a save-time validator — the
@@ -247,7 +248,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ seconds: z.string().min(1) }),
+    configSchema: z.object({ seconds: singleLine(z.string()).min(1) }),
   },
   {
     // #4 A13 — the `webhook` external-wait CONTROL activity. Engine-evaluated like
@@ -285,7 +286,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ timeoutSeconds: z.string().min(1) }),
+    configSchema: z.object({ timeoutSeconds: singleLine(z.string()).min(1) }),
   },
   {
     // #4 A9 — the `execute_pipeline` CONTROL activity. It does NOT introduce a new
