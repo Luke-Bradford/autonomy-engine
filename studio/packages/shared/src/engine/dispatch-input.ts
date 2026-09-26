@@ -25,9 +25,9 @@ export const DISPATCH_INPUT_MAX_CHARS = 4_000;
 /**
  * Compact JSON of `config` minus its `outputs` key, cut at
  * `DISPATCH_INPUT_MAX_CHARS` without splitting a surrogate pair. `chars` is
- * always the WHOLE length and `truncated` is present only when the text was cut. `undefined` when JSON cannot represent the value
- * (a cycle, a bigint): absent means "not recorded", and a substitute would be
- * an invented input.
+ * always the WHOLE length and `truncated` is present only when the text was cut.
+ * `undefined` when JSON cannot represent the value (a cycle, a bigint): absent
+ * means "not recorded", and a substitute would be an invented input.
  *
  * `outputs` is dropped because it is not an input: it is the node's declared
  * RESULT contract (`config.outputs`, #1 F13, read by `engine/outputs.ts`), which
