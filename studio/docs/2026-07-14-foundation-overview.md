@@ -34,6 +34,7 @@ L3  P7 packaging (Docker / OSS self-host)
 | `2026-07-14-foundation-challenge-findings.md` | review | T1–T14 |
 | `2026-07-14-adf-grade-ui-design.md` | L2 | U0–U15 (+R1/R2) |
 | `2026-08-14-foundation-data-movement.md` | L1 | M1–M12 |
+| `2026-09-26-foundation-run-cancellation.md` | L1 | CX1–CX5 |
 | `2026-07-12-target-architecture.md` | ref | — |
 
 **#9 data movement (M-series) postdates this index and its build order.** It was added 2026-08-14 by
@@ -41,6 +42,12 @@ operator decision #993, which retracted the activity-library spec's "no dataset/
 abstraction" non-goal. It does not reorder anything below — its M1 widens #1's D6 contract (a node
 binds ONE connection today, and a heterogeneous `copy` needs a source/sink pair), so read that ticket
 as an amendment to the ActivityDefinition seam rather than as a leaf.
+
+**CX run cancellation postdates this index too** (2026-09-26, #1320). It is the separate
+engine-semantics epic that the UI spec's U28 pre-settled note carved cancel-run out into, and #1056
+needs the same primitive. It reorders nothing above: it adds a terminal `cancelled` outcome beside
+F0's failure `kind` (which already had `cancelled`, but nothing produced it) and gives the executor's
+existing per-dispatch `AbortSignal` a producer.
 
 ## Cross-cutting systems (the interlocks — one design, many specs)
 
