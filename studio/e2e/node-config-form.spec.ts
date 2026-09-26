@@ -363,4 +363,50 @@ test.describe('U7 — per-activity node config form', () => {
 
     await expectQuiet(page, problems);
   });
+
+  test('a moved message row saves in its new place (#1347)', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const connectionId = await seedConnection(page, {
+      name: `e2e 1347 message order ${Date.now()}`,
+      kind: 'ollama',
+      config: {},
+    });
+    const id = await openSeededCanvas(page, 'u7 message order', {
+      nodes: [
+        {
+          id: 'a',
+          type: 'llm_call',
+          position: { x: 0, y: 0 },
+          connectionId,
+          config: {
+            messages: [
+              { role: 'user', content: 'Summarise this.' },
+              { role: 'system', content: 'Be brief.' },
+            ],
+          },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+    const p = panel(page);
+    await expect(
+      p.getByRole('button', { name: 'move messages row 1 up', exact: true }),
+    ).toBeDisabled();
+    await p.getByRole('button', { name: 'move messages row 2 up', exact: true }).click();
+    await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
+      'system',
+    );
+    await p.getByRole('button', { name: 'Apply config', exact: true }).click();
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    const saved = await persistedConfig(page, id);
+    expect(saved.messages).toEqual([
+      { role: 'system', content: 'Be brief.' },
+      { role: 'user', content: 'Summarise this.' },
+    ]);
+
+    await expectQuiet(page, problems);
+  });
 });

@@ -924,6 +924,40 @@ describe('NodePanel (the objectList control, #1169)', () => {
     expect(panel.storedConfig()).toMatchObject({ mapping: [threeRows[0], threeRows[2]] });
   });
 
+  // #1347. The middle row again, for the same reason as above: a move that
+  // hardcoded either neighbour would pass on a two-row list.
+  it('moves the MIDDLE row up, swapping it with the row above and no other', () => {
+    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 up' }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [threeRows[1], threeRows[0], threeRows[2]],
+    });
+  });
+
+  it('moves the MIDDLE row down, swapping it with the row below and no other', () => {
+    const panel = mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 2 down' }));
+    panel.apply();
+
+    expect(panel.storedConfig()).toMatchObject({
+      mapping: [threeRows[0], threeRows[2], threeRows[1]],
+    });
+  });
+
+  it('offers no move past either end of the list', () => {
+    mountOver(copyNode({ mapping: threeRows, mode: 'append' }));
+
+    const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
+    expect(button('move mapping row 1 up').disabled).toBe(true);
+    expect(button('move mapping row 1 down').disabled).toBe(false);
+    expect(button('move mapping row 3 up').disabled).toBe(false);
+    expect(button('move mapping row 3 down').disabled).toBe(true);
+  });
+
   it('refuses a mapping whose LAST row was removed, rather than saving a copy that moves nothing', () => {
     // #1172. `mapping` is required, so `parseFieldInput` writes `[]` rather than
     // omitting the key (deliberately — omitting it fails every apply with
@@ -1290,6 +1324,19 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     open('mapping row 2 expression');
     expect(offered()).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'remove mapping row 1' }));
+
+    expect(offered()).toBeNull();
+  });
+
+  it('closes an open list when its row is moved, since the count alone does not change (#1347)', () => {
+    // Moving row 1 down puts row 2 in row 1's slot with the list count
+    // unchanged. A list keyed on the count alone would stay open there, aimed at
+    // a row it was never resolved against.
+    mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
+
+    open('mapping row 2 expression');
+    expect(offered()).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'move mapping row 1 down' }));
 
     expect(offered()).toBeNull();
   });
