@@ -205,7 +205,12 @@ describe('CX1 D2/D3 — in-flight work drains, then the run finishes', () => {
   });
 
   it('the run waits for EVERY in-flight node before finishing — exactly one finish', () => {
-    const eng = engine([node('a'), node('b')]);
+    // Explicit edges: an edgeless doc gets an implicit chain, which would make
+    // `b` a successor of `a` rather than its parallel sibling.
+    const eng = engine(
+      [node('a'), node('b'), node('c')],
+      [edge('a', 'c', 'success'), edge('b', 'c', 'success')],
+    );
     const s = fold(eng, [started(), dispatched('a'), dispatched('b'), cancel()]);
     const one = eng.reduce(s.state, failed('a', 'cancelled'));
     expect(one.commands).toEqual([]);
@@ -337,17 +342,20 @@ describe('CX1 D4 — containers and back-edges start no new round', () => {
     const eng = engine(
       [node('w')],
       [],
-      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 1 }],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 2 }],
     );
     const r = fold(eng, [
       started({ list: [1, 2, 3] }),
       dispatched('w@0', 'w@0#0'),
+      dispatched('w@1', 'w@1#0'),
       cancel(),
       succeeded('w@0', 'w@0#0'),
     ]);
-    expect(r.state.containers.fe!.nextItem).toBe(1);
-    expect(starting(r.last)).toEqual([]);
-    expect(r.last).toEqual([
+    // Item 0's slot freed, but item 2 never starts; item 1 still drains.
+    expect(r.state.containers.fe!.nextItem).toBe(2);
+    expect(r.last).toEqual([]); // no dispatch for item 2, and item 1 still in flight
+    const last = eng.reduce(r.state, succeeded('w@1', 'w@1#0'));
+    expect(last.commands).toEqual([
       { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
     ]);
   });
