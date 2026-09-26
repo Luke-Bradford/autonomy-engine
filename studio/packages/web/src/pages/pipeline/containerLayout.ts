@@ -362,6 +362,30 @@ export function revealReady(
 }
 
 /**
+ * #1336 — is ANY part of `rect` (flow coordinates) inside a `width`×`height`
+ * pane under React Flow's `[x, y, zoom]` transform?
+ *
+ * The reveal's test for copies that appeared selected: a copy the operator can
+ * see even part of already shows where the paste went, and panning to show the
+ * rest would be the cosmetic nudge `axisPan` refuses — measured, it pushed an
+ * original out of a fitted row and culled it. Only copies that are ALL off
+ * screen are lost, and only those are worth moving the viewport for.
+ */
+export function onScreen(
+  rect: Rect,
+  transform: readonly [number, number, number],
+  width: number,
+  height: number,
+): boolean {
+  const [tx, ty, zoom] = transform;
+  const left = rect.x * zoom + tx;
+  const top = rect.y * zoom + ty;
+  return (
+    left < width && left + rect.width * zoom > 0 && top < height && top + rect.height * zoom > 0
+  );
+}
+
+/**
  * The minimum pan that brings every rect in `boxes` on screen — or `null` if
  * they are already visible, so "nothing to do" is a distinct answer and the
  * caller issues no viewport write at all.

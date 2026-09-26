@@ -9,6 +9,7 @@ import {
   REVEAL_MARGIN,
   appearedIds,
   appearedSelected,
+  onScreen,
   revealReady,
   containerRects,
   emptyContainerIds,
@@ -478,6 +479,35 @@ describe('the reveal trigger', () => {
     });
   });
 
+  describe('onScreen (#1336)', () => {
+    const r = { x: 100, y: 100, width: 150, height: 52 };
+
+    it('is true for a rect wholly inside the pane', () => {
+      expect(onScreen(r, [0, 0, 1], 800, 600)).toBe(true);
+    });
+
+    it('is true for a rect only PARTLY inside — part of a copy is enough', () => {
+      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(true);
+      expect(onScreen(r, [0, -130, 1], 800, 600)).toBe(true);
+    });
+
+    it('is false for a rect wholly below, right of, above or left of the pane', () => {
+      expect(onScreen(r, [0, 500, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(true);
+      expect(onScreen(r, [701, 0, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [0, -152, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [-250, 0, 1], 800, 600)).toBe(false);
+    });
+
+    it('applies the zoom to position AND size', () => {
+      // At zoom 2 the rect starts at 200,200 and ends at 500,304.
+      expect(onScreen(r, [0, 0, 2], 199, 600)).toBe(false);
+      expect(onScreen(r, [0, 0, 2], 201, 600)).toBe(true);
+      expect(onScreen(r, [-499, 0, 2], 800, 600)).toBe(true);
+      expect(onScreen(r, [-500, 0, 2], 800, 600)).toBe(false);
+    });
+  });
+
   describe('appearedSelected (#1336)', () => {
     const sel = (kind: 'node' | 'container' | 'edge', id: string) => ({ kind, id });
 
@@ -506,9 +536,9 @@ describe('the reveal trigger', () => {
 
     /* Nodes and containers share one id namespace, so the kind has to match. */
     it('ignores a selection of a different kind with the same id', () => {
-      expect(
-        appearedSelected(new Set(), new Set(['b']), [sel('container', 'b')], 'node'),
-      ).toEqual([]);
+      expect(appearedSelected(new Set(), new Set(['b']), [sel('container', 'b')], 'node')).toEqual(
+        [],
+      );
     });
   });
 

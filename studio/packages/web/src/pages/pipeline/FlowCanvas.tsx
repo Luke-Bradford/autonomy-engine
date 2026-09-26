@@ -60,6 +60,7 @@ import {
 import {
   appearedIds,
   appearedSelected,
+  onScreen,
   revealReady,
   containerAriaLabel,
   containerHandles,
@@ -1224,7 +1225,9 @@ export function FlowCanvas({
    * nominal size, not from React Flow: the view nodes lag the store by a render,
    * and a node that has just appeared has never been measured anyway. Nothing
    * waits for them the way a container waits for its children, because a node's
-   * position is its own and is already final.
+   * position is its own and is already final. And only copies that are ALL off
+   * screen are revealed (`onScreen` says why): a local paste or a duplicate lands
+   * beside its source, where the operator can already see where it went.
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
   const knownContainers = useRef<Set<string> | null>(null);
@@ -1277,24 +1280,29 @@ export function FlowCanvas({
         ...ready,
       ]),
     ];
+    /* `usableExtent`, not the raw pane: the MiniMap and Controls are drawn INSIDE
+       it with `pointer-events: all`, and a box landed flush against the
+       bottom-right edge can have its delete control underneath them — revealed
+       and still unclickable, which is the trap unfixed.
+       `null` = already visible (and a copy counts as seen if any part is on
+       screen). Not writing at all is the point: a box the
+       operator can already see must not have their viewport moved under them. */
+    const usable = usableExtent(paneWidth, paneHeight);
     const copies = new Set(appearedSelected(knownDocNodes, docNodeIds, selected, 'node'));
-    if (appeared.length === 0 && copies.size === 0) return;
+    const copyRects = nodes
+      .filter((n) => copies.has(n.id))
+      .map((n) => ({ ...n.position, ...unmeasuredNodeSize(portsOf(n.id).length) }));
+    const lostCopies = copyRects.some((r) => onScreen(r, transform, usable.width, usable.height))
+      ? []
+      : copyRects;
+    if (appeared.length === 0 && lostCopies.length === 0) return;
 
     const boxes: Rect[] = [
       ...appeared
         .map((id) => containerBoxes.get(id))
         .filter((box): box is ContainerBox => box !== undefined),
-      ...nodes
-        .filter((n) => copies.has(n.id))
-        .map((n) => ({ ...n.position, ...unmeasuredNodeSize(portsOf(n.id).length) })),
+      ...lostCopies,
     ];
-    /* `usableExtent`, not the raw pane: the MiniMap and Controls are drawn INSIDE
-       it with `pointer-events: all`, and a box landed flush against the
-       bottom-right edge can have its delete control underneath them — revealed
-       and still unclickable, which is the trap unfixed.
-       `null` = already visible. Not writing at all is the point: a box the
-       operator can already see must not have their viewport moved under them. */
-    const usable = usableExtent(paneWidth, paneHeight);
     const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
   }, [

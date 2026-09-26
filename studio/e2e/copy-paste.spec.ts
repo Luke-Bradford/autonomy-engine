@@ -275,8 +275,18 @@ test.describe('copy/paste on the canvas (U21)', () => {
 
     const copies = page.locator('.react-flow__node:not([data-id="z"]):not([data-id="a"])');
     await expect(copies).toHaveCount(2);
-    for (const copy of await copies.all()) await expect(copy).toBeInViewport({ ratio: 1 });
     const after = await viewportSettled(page);
+    /* Inside the canvas PANE, not merely the browser window: the pane is what
+       React Flow culls against, and it is smaller than the page. */
+    const pane = await page.locator('.react-flow').boundingBox();
+    for (const copy of await copies.all()) {
+      const box = await copy.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.y).toBeGreaterThanOrEqual(pane!.y);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(pane!.y + pane!.height);
+      expect(box!.x).toBeGreaterThanOrEqual(pane!.x);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(pane!.x + pane!.width);
+    }
     // It PANNED: the viewport moved, and the zoom the operator had is kept.
     expect(after).not.toBe(before);
     const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
