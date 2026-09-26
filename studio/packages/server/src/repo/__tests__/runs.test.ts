@@ -1261,7 +1261,7 @@ describe('runs repo — findLiveRerunOf (#896)', () => {
    * in neither list and the union stops covering `RunStatusSchema`.
    */
   it('LIVE_RUN_STATUSES and the terminal statuses partition RunStatusSchema exactly', () => {
-    const terminal: RunStatus[] = ['success', 'failure', 'skipped', 'interrupted'];
+    const terminal: RunStatus[] = ['success', 'failure', 'skipped', 'interrupted', 'cancelled'];
     expect([...LIVE_RUN_STATUSES, ...terminal].sort()).toEqual([...RunStatusSchema.options].sort());
   });
 });

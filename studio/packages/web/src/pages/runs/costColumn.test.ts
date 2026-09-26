@@ -78,7 +78,7 @@ describe('costCell — the unsettled qualifier', () => {
      Enumerated rather than derived so a new status has to be classified here on
      purpose. */
   const live: RunStatus[] = ['pending', 'queued', 'running', 'waiting'];
-  const settled: RunStatus[] = ['success', 'failure', 'skipped', 'interrupted'];
+  const settled: RunStatus[] = ['success', 'failure', 'skipped', 'interrupted', 'cancelled'];
 
   it('the two lists PARTITION every run status — a new one cannot go unclassified', () => {
     expect([...live, ...settled].sort()).toEqual([...RunStatusSchema.options].sort());

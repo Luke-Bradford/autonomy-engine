@@ -2718,8 +2718,11 @@ td button + button {
    `skipped` has no server producer yet but is in the enum, and the pill is
    keyed by string concat, so leaving it out would just be the same hole waiting.
    Muted, matching the pre-`run.started`/inert family beside them. */
+/* CX1 (#1320) — `cancelled` joins them: the cancel spec (D9) makes it NEUTRAL,
+   never red. The operator stopped the run on purpose, so nothing went wrong. */
 .run-status-queued,
-.run-status-skipped {
+.run-status-skipped,
+.run-status-cancelled {
   color: var(--muted);
   border-color: var(--muted);
 }

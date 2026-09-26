@@ -108,6 +108,8 @@ describe('#443 — terminalStatusOf', () => {
       // resumes to `running` when the event lands, so it must never read as a
       // terminal fact (else `runs.status` would freeze `waiting` forever).
       { type: 'run.waiting', ...run, reason: 'waiting_external' },
+      // CX1 (#1320) — a cancel is a REQUEST: the run ends on the later `run.finished`.
+      { type: 'run.cancelRequested', ...run, source: { kind: 'operator' } },
       { type: 'node.retryRequested', ...run, nodeId: 'n1', previousAttemptId: 'n1#0', reason: 'r' },
       // F2b/F2c's retry pair. NON-terminal, and §E of the joint spec depends on
       // that being deliberate: its invariant is "no TERMINAL event is appended

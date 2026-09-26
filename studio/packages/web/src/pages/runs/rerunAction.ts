@@ -61,6 +61,10 @@ import type { RunStatus } from '@autonomy-studio/shared';
 export const RERUNNABLE_RUN_STATUS: ReadonlySet<RunStatus> = new Set<RunStatus>([
   'failure',
   'interrupted',
+  // CX1 (#1320) — the cancel spec's D9: a cancelled run terminated without
+  // succeeding, so the server's rule above already admits it, and the work it
+  // stopped is exactly what a rerun-from-failed resumes.
+  'cancelled',
 ]);
 
 /** Whether the monitor should show the rerun-from-failed control for this run. */

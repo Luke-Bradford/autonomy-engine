@@ -18,6 +18,7 @@ describe('canRerunFromFailed', () => {
      is exactly the edit that would leave a new status silently unclassified. */
   it('covers every status the schema declares', () => {
     expect([...ALL].sort()).toEqual([
+      'cancelled',
       'failure',
       'interrupted',
       'pending',
@@ -29,7 +30,7 @@ describe('canRerunFromFailed', () => {
     ]);
   });
 
-  it.each(['failure', 'interrupted'] as const)('offers the action for %s', (status) => {
+  it.each(['failure', 'interrupted', 'cancelled'] as const)('offers the action for %s', (status) => {
     expect(canRerunFromFailed(status)).toBe(true);
   });
 
@@ -48,11 +49,11 @@ describe('canRerunFromFailed', () => {
     // failures; the rest have not terminated at all.
     // Sorted, so the assertion does not silently depend on the order
     // `RunStatusSchema.options` happens to declare its members in.
-    expect(ALL.filter(canRerunFromFailed).sort()).toEqual(['failure', 'interrupted']);
+    expect(ALL.filter(canRerunFromFailed).sort()).toEqual(['cancelled', 'failure', 'interrupted']);
   });
 
   it('exposes the same set it decides with', () => {
-    expect([...RERUNNABLE_RUN_STATUS].sort()).toEqual(['failure', 'interrupted']);
+    expect([...RERUNNABLE_RUN_STATUS].sort()).toEqual(['cancelled', 'failure', 'interrupted']);
   });
 });
 
