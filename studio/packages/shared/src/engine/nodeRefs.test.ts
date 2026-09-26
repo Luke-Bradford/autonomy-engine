@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseExpr, protectEscapes, scanTemplateRefs } from './expr.js';
+import { MAX_CONFIG_DEPTH } from './params.js';
 import { referencedNodeIds, remapNodeRefs, remapNodeRefsInString } from './nodeRefs.js';
 
 // The ids a real paste carries. `newLocalId` is `${prefix}_${crypto.randomUUID()}`,
@@ -230,5 +231,13 @@ describe('referencedNodeIds is a GUARD, so it reads what the rewriter may skip',
 
   it('still reads every span before an UNTERMINATED `${`', () => {
     expect(referencedNodeIds({ x: `\${nodes.${A}.output.y} then \${oops` }, [A])).toEqual([A]);
+  });
+});
+
+describe('referencedNodeIds reads at ANY depth', () => {
+  it('reads a ref nested past MAX_CONFIG_DEPTH, where the rewriter stops', () => {
+    let deep: unknown = `\${nodes.${A}.output.y}`;
+    for (let i = 0; i < MAX_CONFIG_DEPTH + 5; i += 1) deep = { d: deep };
+    expect(referencedNodeIds(deep, [A])).toEqual([A]);
   });
 });
