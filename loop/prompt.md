@@ -406,7 +406,9 @@ Board mirror (close each on phase completion via `gh issue close`, never a PR-bo
     work only this fire knows about.**
 
 4c. **NEVER END YOUR TURN WITH A BASH TASK STILL RUNNING (#1261).** You are `claude -p`. A pending
-    background *agent* keeps this session alive; a pending background *Bash* task does NOT. If you
+    background *agent* keeps this session alive — but only for about **10 minutes** after your last
+    turn ends (measured 2026-09-26, fire 46: its correctness lens was killed 600s after the final
+    turn, "I'm now waiting on the correctness lens"); a pending background *Bash* task does NOT. If you
     end a turn to "wait for the notification" while only a Bash task is running, the CLI exits and
     KILLS it, and the fire ends with the work thrown away. Measured 2026-09-24: fires 3 and 6 both
     lost their unit+e2e run exactly this way ("E2E is partway through: 78 specs passed…" → `killed`),
@@ -419,6 +421,9 @@ Board mirror (close each on phase completion via `gh issue close`, never a PR-bo
     into successive foreground calls if needed). Running a suite in the background *while you do
     other work in the same turn* is fine; ending the turn while it runs is not. 4b still applies —
     commit before the wait.
+    **Review lenses (step 6) and plan reviews (step 3): dispatch them as FOREGROUND Agent calls, all
+    in ONE message** so they still run in parallel but the turn blocks until every one returns. A
+    background lens that outlives the ~10-minute post-turn window is killed and its review lost.
 
 4d. **NEVER TOUCH ANOTHER PROJECT'S CONTAINERS OR DATABASES (#1271).** This machine also runs the
     eBull loop and its services. Never `docker exec` into, `psql`/connect to, stop, or remove a
