@@ -487,14 +487,16 @@ describe('the reveal trigger', () => {
     });
 
     it('is true for a rect only PARTLY inside — part of a copy is enough', () => {
-      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(true);
+      // Left edge at 700 of an 800 pane: 100 of its 150 px are visible.
+      expect(onScreen(r, [600, 0, 1], 800, 600)).toBe(true);
       expect(onScreen(r, [0, -130, 1], 800, 600)).toBe(true);
     });
 
     it('is false for a rect wholly below, right of, above or left of the pane', () => {
       expect(onScreen(r, [0, 500, 1], 800, 600)).toBe(false);
-      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(true);
-      expect(onScreen(r, [701, 0, 1], 800, 600)).toBe(false);
+      // Left edge exactly ON the pane's right edge: nothing of it is visible.
+      expect(onScreen(r, [700, 0, 1], 800, 600)).toBe(false);
+      expect(onScreen(r, [699, 0, 1], 800, 600)).toBe(true);
       expect(onScreen(r, [0, -152, 1], 800, 600)).toBe(false);
       expect(onScreen(r, [-250, 0, 1], 800, 600)).toBe(false);
     });
