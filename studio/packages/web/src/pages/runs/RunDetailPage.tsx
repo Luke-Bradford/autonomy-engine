@@ -327,9 +327,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
      running exactly as if nobody had cancelled (D6/D7), and the page must not
      claim otherwise. */
   const cancelling = canCancelRun(status) && view?.cancelRequested === true;
-  /* A parent parked on a live child does not stop until that child ends (CX2
-     as-built, "known until CX3"), so the page says so rather than letting
-     "Cancelling…" read as an imminent stop. */
+  /* A parent parked on a live child finishes once that child's own cancel has
+     (CX3, spec D8), so the page says why "Cancelling…" may last a moment. */
   const cancelWaitsOnChild = cancelling && nodes.some((n) => n.status === 'waiting');
 
   /**
@@ -498,8 +497,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
       )}
       {cancelWaitsOnChild && (
         <p className="page-hint">
-          Waiting for a child run to end — this run stops once it does. Cancelling a run does not
-          cancel its child runs yet.
+          Waiting for a child run to stop — it is being cancelled too, and this run stops once it
+          has.
         </p>
       )}
       {cancelError && (

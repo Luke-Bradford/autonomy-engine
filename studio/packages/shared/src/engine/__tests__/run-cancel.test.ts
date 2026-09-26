@@ -531,6 +531,34 @@ describe('CX1 — resume and children under a cancel', () => {
     ]);
   });
 
+  it('CX3 — a cancelled child that returns none of the call node’s REQUIRED outputs is still stopped work', () => {
+    // A cancelled child usually returns `{}`, so a call node that declares a
+    // required output takes the invalid-outputs arm rather than the normal one.
+    // Without the stopped-work mark there, the parent's cancel reports `failure`.
+    const declared = {
+      ...callNode('c'),
+      config: { outputs: [{ name: 'answer', type: 'number' }] },
+    } as Node;
+    const eng = engine([declared]);
+    const start = eng.reduce(eng.seedState(), started()).commands[0]!;
+    const childRunId = start.type === 'startChild' ? start.childRunId : '';
+    const s = fold(eng, [started(), cancel()]);
+    const r = eng.reduce(s.state, {
+      type: 'call.returned',
+      runId: RUN,
+      callNodeId: 'c',
+      attemptId: 'c#0',
+      childRunId,
+      childOutcome: 'cancelled',
+      outputs: {},
+    });
+    expect(r.state.nodes.c!.status).toBe('failure');
+    expect(r.state.outputs.c).toBeUndefined();
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'cancelled', reason: 'cancelled:operator' },
+    ]);
+  });
+
   it('a `call.returned{cancelled}` fails the call node (a child cancelled directly)', () => {
     const eng = engine([callNode('c')]);
     const s = fold(eng, [started()]);

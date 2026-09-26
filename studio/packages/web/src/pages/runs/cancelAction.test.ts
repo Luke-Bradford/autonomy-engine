@@ -36,10 +36,10 @@ describe('cancelConfirmMessage (CX4 #1320)', () => {
     expect(text).not.toContain('This stops:');
   });
 
-  it('does not promise an immediate stop while a node waits on a child run (until CX3)', () => {
-    expect(cancelConfirmMessage([{ name: 'Call 1', status: 'waiting' }])).toContain(
-      'stops only once that child ends',
-    );
+  it('says the cancel reaches a child run a node is waiting on (CX3)', () => {
+    const text = cancelConfirmMessage([{ name: 'Call 1', status: 'waiting' }]);
+    expect(text).toContain('A child run is still live. It is cancelled too.');
+    expect(text).not.toContain('does not cancel');
     expect(cancelConfirmMessage([{ name: 'HTTP 1', status: 'dispatched' }])).not.toContain('child');
   });
 });
