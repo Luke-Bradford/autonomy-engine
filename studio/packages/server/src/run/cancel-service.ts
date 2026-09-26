@@ -75,8 +75,12 @@ export function createRunCanceller(deps: DriveDeps & { cancels: RunCancels }): R
       deps.cancels.request(runId, source);
       deps.cancels.poke(runId);
       // Not awaited: the answer is "requested", and in-flight work stops only
-      // cooperatively. The drive owns its own faults (`driveLocked`).
-      void driveCancelIntent(deps, runId);
+      // cooperatively. The drive owns its own faults (`driveLocked`); the catch
+      // is for anything outside it, which has no other handler once this route
+      // has answered.
+      driveCancelIntent(deps, runId).catch((err: unknown) => {
+        deps.log?.error({ err, runId }, 'run cancel: the serialized drive failed');
+      });
       return { kind: 'accepted', state: 'requested' };
     },
   };
