@@ -22,6 +22,8 @@ import {
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { clearClipboard, readClipboard } from './clipboard';
 import { DEFAULT_MAX_BOUNCES, type EdgeCondition } from './edgeCondition';
+import { unmeasuredNodeSize } from './containerLayout';
+import { sourcePortsOf } from './ports';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -2601,6 +2603,36 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(copyA.position.x).toBe(Math.min(...st.nodes.slice(0, 3).map((n) => n.position.x)));
     expect(copyB.position.x - copyA.position.x).toBe(100);
     expect(copyB.position.y).toBe(copyA.position.y);
+  });
+
+  /* #1336 — the lowest node's REAL height, not the flat 52: a switch grows a
+     port per case, and a tall one reached down past the old fixed margin, so
+     the paste landed on top of it. */
+  it('lands a foreign paste below the lowest node at its PORT-DERIVED height', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_a' }]);
+    s.getState().copySelection('pl_1');
+    const cases = Array.from({ length: 10 }, (_, i) => `case_${i}`);
+    const t = createCanvasStore();
+    t.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_sw',
+            type: 'switch',
+            config: { on: '${params.x}', cases },
+            position: { x: 0, y: 300 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    t.getState().pasteClipboard('pl_2');
+
+    const [sw, copy] = t.getState().nodes;
+    const height = unmeasuredNodeSize(sourcePortsOf(sw!, []).length).height;
+    expect(height).toBeGreaterThan(300);
+    expect(copy!.position.y).toBeGreaterThanOrEqual(sw!.position.y + height);
   });
 
   it('refuses a paste with nothing copied, and a copy with nothing selected', () => {

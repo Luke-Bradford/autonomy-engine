@@ -35,7 +35,9 @@ import {
   CONTAINER_HEADER_HEIGHT,
   CONTAINER_PADDING,
   UNMEASURED_NODE_SIZE,
+  unmeasuredNodeSize,
 } from './containerLayout';
+import { sourcePortsOf, usedConditionsBySource } from './ports';
 
 /** How a connection differs from an ordinary forward edge (U6e). */
 export interface ConnectOptions {
@@ -612,11 +614,28 @@ function uncopiedReads(
  * same header+padding+gap margin `duplicateContainerShift` clears boxes by, is
  * clear of every node and every container box. An empty target keeps the
  * source positions.
+ *
+ * "The lowest node" is by its BOTTOM edge at the height its ports give it
+ * (#1336), not at the flat 52: a `switch` grows a port per case, and one tall
+ * enough reached past the margin, so the paste landed on it. It is still the
+ * store's estimate, since the store holds no measurements. In a pipeline taller
+ * than the pane this spot is off screen; `FlowCanvas`'s reveal effect pans to
+ * the copies, because they appear selected and wholly out of view.
  */
-function foreignPasteOffset(sources: Node[], targetNodes: Node[]): { x: number; y: number } {
+function foreignPasteOffset(
+  sources: Node[],
+  target: { nodes: Node[]; edges: Edge[] },
+): { x: number; y: number } {
+  const targetNodes = target.nodes;
   if (targetNodes.length === 0 || sources.length === 0) return { x: 0, y: 0 };
   const margin = CONTAINER_PADDING + CONTAINER_GAP;
-  const bottom = Math.max(...targetNodes.map((n) => n.position.y)) + UNMEASURED_NODE_SIZE.height;
+  const used = usedConditionsBySource(target.edges);
+  const bottom = Math.max(
+    ...targetNodes.map(
+      (n) =>
+        n.position.y + unmeasuredNodeSize(sourcePortsOf(n, used.get(n.id) ?? []).length).height,
+    ),
+  );
   const top = bottom + 2 * margin + CONTAINER_HEADER_HEIGHT;
   return {
     x:
@@ -1574,7 +1593,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             s,
             held.nodes,
             held.edges,
-            foreign ? { foreign, offset: foreignPasteOffset(held.nodes, s.nodes) } : {},
+            foreign ? { foreign, offset: foreignPasteOffset(held.nodes, s) } : {},
           );
           return {
             nodes: cloned.nodes,
