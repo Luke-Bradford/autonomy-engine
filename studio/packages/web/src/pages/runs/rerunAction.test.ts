@@ -30,9 +30,12 @@ describe('canRerunFromFailed', () => {
     ]);
   });
 
-  it.each(['failure', 'interrupted', 'cancelled'] as const)('offers the action for %s', (status) => {
-    expect(canRerunFromFailed(status)).toBe(true);
-  });
+  it.each(['failure', 'interrupted', 'cancelled'] as const)(
+    'offers the action for %s',
+    (status) => {
+      expect(canRerunFromFailed(status)).toBe(true);
+    },
+  );
 
   it.each(['pending', 'queued', 'running', 'success', 'skipped', 'waiting'] as const)(
     'withholds the action for %s',

@@ -2767,7 +2767,8 @@ export function createEngine(doc: EngineDoc): Engine {
       if (fired.finish) {
         // CX1 D3 — under a cancel that already stopped work, the run's outcome is
         // the cancel's, not the cap's.
-        const finish = state.cancelRequested?.stoppedWork === true ? cancelFinish(state) : fired.finish;
+        const finish =
+          state.cancelRequested?.stoppedWork === true ? cancelFinish(state) : fired.finish;
         return { state: fired.state, commands: [finish], diagnostics };
       }
       if (fired.changed) {

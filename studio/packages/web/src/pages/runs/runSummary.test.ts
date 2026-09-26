@@ -467,7 +467,12 @@ describe('deriveRunLifecycle', () => {
     // The reducer un-parks on the cancel (it joins UNPARK_EVENTS), so the view must too.
     expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
     events.push(
-      envelope({ type: 'run.finished', runId: 'r', outcome: 'cancelled', reason: 'cancelled:operator' }),
+      envelope({
+        type: 'run.finished',
+        runId: 'r',
+        outcome: 'cancelled',
+        reason: 'cancelled:operator',
+      }),
     );
     expect(deriveRunLifecycle(events)).toEqual({ status: 'cancelled', waitingReason: null });
   });

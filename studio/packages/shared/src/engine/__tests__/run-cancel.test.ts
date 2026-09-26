@@ -326,12 +326,7 @@ describe('CX1 D4 — containers and back-edges start no new round', () => {
       [],
       [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
     );
-    const r = fold(eng, [
-      started({ list: [1, 2, 3] }),
-      dispatched('w'),
-      cancel(),
-      succeeded('w'),
-    ]);
+    const r = fold(eng, [started({ list: [1, 2, 3] }), dispatched('w'), cancel(), succeeded('w')]);
     expect(r.state.containers.fe!.round).toBe(0);
     expect(r.state.containers.fe!.status).toBe('active');
     expect(starting(r.last)).toEqual([]);
@@ -466,7 +461,9 @@ describe('CX1 D5 — legality', () => {
     const s = fold(eng, [started(), dispatched('a')]);
     const r = eng.reduce(s.state, finished('cancelled'));
     expect(r.state.status).toBe('running');
-    expect(r.commands).toEqual([{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }]);
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+    ]);
   });
 });
 
@@ -501,6 +498,8 @@ describe('CX1 — resume and children under a cancel', () => {
       outputs: {},
     });
     expect(r.state.nodes.c!.status).toBe('failure');
-    expect(r.commands).toEqual([{ type: 'finishRun', outcome: 'failure', reason: 'node_failed:c' }]);
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'failure', reason: 'node_failed:c' },
+    ]);
   });
 });

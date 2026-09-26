@@ -493,9 +493,7 @@ export const RunStateSchema = z.object({
    * refused, or a retry hold it cancelled) is indistinguishable from any other
    * failure once folded. It only ever goes false → true.
    */
-  cancelRequested: z
-    .object({ source: CancelSourceSchema, stoppedWork: z.boolean() })
-    .nullable(),
+  cancelRequested: z.object({ source: CancelSourceSchema, stoppedWork: z.boolean() }).nullable(),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 
