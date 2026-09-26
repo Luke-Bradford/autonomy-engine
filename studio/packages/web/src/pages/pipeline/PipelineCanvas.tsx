@@ -66,6 +66,8 @@ import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
 import type { FieldPicker } from './ConfigFieldControl';
 import { ParamOverridesEditor } from './ParamOverridesEditor';
+import { DraftNumberField, type DraftNumberParse } from './DraftNumberField';
+import { parseWholeNumber } from '../triggers/formFields';
 import {
   connectionOverrideResource,
   datasetOverrideResource,
@@ -1938,12 +1940,9 @@ export function EdgePanel({
  * The one number that decides whether an authored loop terminates, so it is
  * first in the panel rather than tucked under the condition picker.
  *
- * Holds a DRAFT and commits on blur, the `ParamRow` idiom and for the same
- * reason: a numeric field cannot commit per keystroke, because clearing it to
- * retype gives `''`, which `Number('')` reads as `0` — a legal, silently
- * different cap. Committing that would rewrite the operator's loop mid-edit.
- * A refused value KEEPS the text on screen and says why, rather than reverting
- * to the stored value and losing what they typed.
+ * A `DraftNumberField` (#1315). The cap is REQUIRED: blank is refused, never
+ * read as unset — a back-edge with no `maxBounces` is refused by the save gate,
+ * and `Number('')` would have made clearing the box a silent cap of zero.
  */
 function BounceCapField({
   store,
@@ -1956,79 +1955,35 @@ function BounceCapField({
      Showing `10` for an absent value was wrong twice over. It stated a cap the
      doc does not hold — a third answer for one undefined value, against the
      canvas label's `×?` and the aria-label's "no bounce cap declared" — and,
-     because `commit` early-returns on `text === stored`, it made the field a
+     because a blur equal to the stored text is a no-op, it made the field a
      DEAD END: the operator sees `10`, types `10`, and nothing is written, so
      the doc stays unsavable ("must declare maxBounces") and the only way out is
      to type some other number and then type 10 back. Reachable for exactly the
      imported / pre-#444 doc this feature keeps invoking. Empty is the honest
-     rendering, and the blank branch of `commit` already says a cap is required. */
-  const stored = edge.maxBounces === undefined ? '' : String(edge.maxBounces);
-  const [draft, setDraft] = useState(stored);
-  const [error, setError] = useState<string | null>(null);
-  /* U17 — re-seed when the STORED cap changes underneath the draft. The panel is
-     keyed by `edge.id`, so switching edges remounts; an undo changes the cap of
-     the SAME edge, which remounts nothing, and without this the field would go
-     on showing the value the operator had just undone. Render-phase derived
-     state, not an effect — `NodePanel`'s precedent, which this repo's React 19
-     lint permits where `useEffect` + setState would not be. */
-  const [syncedCap, setSyncedCap] = useState(stored);
-  if (syncedCap !== stored) {
-    setSyncedCap(stored);
-    setDraft(stored);
-    setError(null);
-  }
-
-  function commit(text: string) {
-    // A blur that changed nothing must not write — tabbing THROUGH the field
-    // would otherwise mark the canvas dirty on an untouched doc.
-    //
-    // It must still CLEAR a standing error, though, and that ordering is the
-    // whole point: type `1.5`, blur (error shown), retype the original value,
-    // blur — and an early return that skipped this would leave the banner
-    // asserting "not a whole number" over a field showing a perfectly valid,
-    // unchanged cap. The write is what a no-op blur must skip, not the
-    // acknowledgement that the value on screen is now fine.
-    if (text === stored) {
-      setError(null);
-      return;
-    }
-    const n = Number(text.trim());
-    // `Number('')` is 0 and `Number('  ')` is 0, so an EMPTY field has to be
-    // caught before the numeric test or clearing the box would silently store
-    // a cap of zero.
-    if (text.trim() === '' || !isMaxBounces(n)) {
-      setError('A bounce cap must be a whole number, 0 or more');
-      return;
-    }
-    setError(null);
-    store.getState().updateEdgeBounces(edge.id, n);
-  }
-
+     rendering, and `parseBounceCap` already says a cap is required. */
   return (
-    <>
-      <label>
-        Bounce cap
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={(e) => commit(e.target.value)}
-        />
-      </label>
-      {error !== null ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : (
-        <p className="page-hint">
+    <DraftNumberField
+      label="Bounce cap"
+      stored={edge.maxBounces}
+      parse={parseBounceCap}
+      onCommit={(n) => store.getState().updateEdgeBounces(edge.id, n)}
+      hint={
+        <>
           How many times this loop may repeat before the run fails as <code>capped</code>. Zero
           never bounces.
-        </p>
-      )}
-    </>
+        </>
+      }
+    />
   );
+}
+
+/** A bounce cap: a whole number, 0 or more, and never blank. */
+function parseBounceCap(raw: string): DraftNumberParse<number> {
+  const parsed = parseWholeNumber(raw);
+  if (parsed.ok && parsed.value !== undefined && isMaxBounces(parsed.value)) {
+    return { ok: true, value: parsed.value };
+  }
+  return { ok: false, reason: 'A bounce cap must be a whole number, 0 or more' };
 }
 
 /** One condition option, disabled (with the reason) when it cannot be chosen. */
