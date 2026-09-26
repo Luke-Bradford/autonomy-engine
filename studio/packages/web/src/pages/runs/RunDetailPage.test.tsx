@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
-import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
-import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
+import type {
+  EngineEvent,
+  PipelineVersion,
+  Run,
+  RunEvent,
+  RunSummary,
+} from '@autonomy-studio/shared';
+import { CATALOG_VERSION, computeRunCost, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
+import { RERUN_HISTORY_LIMIT } from './RerunHistory';
 import { projectRun } from './runProjection';
 import { deriveRunLifecycle } from './runSummary';
 import * as runsApi from '../../api/runs';
@@ -2853,5 +2860,84 @@ describe('RunDetailPage — a secure node says its output is withheld (#1312)', 
     // recorded event verbatim by design.
     expect(screen.queryByText('output: [redacted: secure]')).not.toBeInTheDocument();
     expect(screen.queryByText('[redacted: secure]: [redacted: secure]')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * RS6 — the rerun-history grouping: the DOWNWARD half of the lineage. `Rerun of`
+ * walks from a rerun to its source; this row walks from a source to its reruns,
+ * so a chain R1 → R2 → R3 is navigable in both directions. Direct reruns only —
+ * each rerun's own page carries the next link.
+ */
+describe('RunDetailPage — the reruns of this run', () => {
+  const listRunsMock = vi.mocked(runsApi.listRuns);
+
+  async function mountRun() {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'failure', finishedAt: 1_700_000_001_000 }),
+      pipelineVersion: version(),
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByText('pv_1');
+  }
+
+  function rerun(id: string): RunSummary {
+    return {
+      ...run({ id, status: 'running', triggerId: null, rerunOf: 'run_1' }),
+      pipelineName: 'P',
+      pipelineVersion: 1,
+      triggerName: null,
+      cost: computeRunCost([]),
+    } as RunSummary;
+  }
+
+  it("asks the server for this run's reruns, and links to each", async () => {
+    listRunsMock.mockResolvedValue({ items: [rerun('run_3'), rerun('run_2')], nextCursor: null });
+    await mountRun();
+    expect(await screen.findByText('Reruns')).toBeInTheDocument();
+    expect(listRunsMock).toHaveBeenCalledWith(
+      { rerunOf: 'run_1' },
+      undefined,
+      expect.any(AbortSignal),
+      RERUN_HISTORY_LIMIT,
+    );
+    const links = screen.getAllByRole('link', { name: /^Rerun run run_/ });
+    // The server's order — newest first — is kept, not re-derived.
+    expect(links.map((l) => l.textContent)).toEqual(['run_3', 'run_2']);
+    expect(links[0]).toHaveAttribute('href', '/monitor/runs/run_3');
+    expectAccessibleNameContainsText(links[0] as HTMLElement);
+    expect(screen.queryByText(/newest/)).not.toBeInTheDocument();
+  });
+
+  /* The ABSENCE of the row is what "never rerun" looks like — the rule the
+     `Rerun of` and `Called by` rows already set. */
+  it('shows no row on a run nothing has rerun', async () => {
+    listRunsMock.mockResolvedValue({ items: [], nextCursor: null });
+    await mountRun();
+    await vi.waitFor(() => expect(listRunsMock).toHaveBeenCalled());
+    /* Asserting absence before the read SETTLES would pass whatever the row
+       does with an empty page — let the load land first. */
+    await act(async () => {
+      await listRunsMock.mock.results.at(-1)?.value;
+    });
+    expect(screen.queryByText('Reruns')).not.toBeInTheDocument();
+  });
+
+  it('says the list is bounded when the server has more', async () => {
+    listRunsMock.mockResolvedValue({ items: [rerun('run_2')], nextCursor: 'c1' });
+    await mountRun();
+    expect(
+      await screen.findByText(`Showing the ${RERUN_HISTORY_LIMIT} newest reruns.`),
+    ).toBeInTheDocument();
+  });
+
+  /* A failed read must not read as "no reruns" — that is the one thing hiding
+     the row would say. Plain text, not an alert: the page already carries its
+     own error regions, and a lineage lookup is not an event to announce. */
+  it('says so when the reruns could not be loaded, without announcing it', async () => {
+    listRunsMock.mockRejectedValue(new Error('boom'));
+    await mountRun();
+    const note = await screen.findByText("Couldn't load this run's reruns.");
+    expect(note.closest('[role="alert"],[role="status"],[aria-live]')).toBeNull();
   });
 });

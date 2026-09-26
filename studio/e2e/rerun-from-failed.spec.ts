@@ -105,6 +105,59 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
   await expectQuiet(page, problems);
 });
 
+/**
+ * RS6 — the rerun-history grouping and the Run-type column. The #895 walk above
+ * proves the UPWARD link (a rerun names its source); this proves the DOWNWARD
+ * one (a source lists its reruns) and that the runs list says which rows are
+ * reruns at all. Both read the durable `runs.rerun_of` column the real reseed
+ * producer writes, so neither can pass unless a rerun was actually minted.
+ */
+test('RS6 — a failed run lists its reruns, and the runs list says which runs are reruns', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, 'RS6 history', FAILING_DOC);
+  const sourceRunId = await fireAndSettle(page, pipelineVersionId, 'RS6 history');
+
+  /* The absence is asserted only once the lineage read has LANDED — before it,
+     the row is absent whatever the answer, and the check would prove nothing. */
+  const reruns = page.waitForResponse((r) => r.url().includes('rerunOf='));
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(sourceRunId)}`);
+  await fluentRootReady(page);
+  expect((await reruns).status()).toBe(200);
+  await expect(page.getByText('Reruns', { exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Rerun from failed' }).click();
+  await expect(page.getByText('Rerun of')).toBeVisible();
+  const rerunId = decodeURIComponent(page.url().split('/monitor/runs/')[1]!);
+  expect(rerunId).not.toBe(sourceRunId);
+
+  // Back up to the source: it now lists the rerun, as a link that resolves.
+  await page.getByRole('link', { name: `Source run ${sourceRunId}` }).click();
+  await expect(page.getByRole('heading', { name: new RegExp(sourceRunId) })).toBeVisible();
+  await expect(page.getByText('Reruns', { exact: true })).toBeVisible();
+  const rerunLink = page.getByRole('link', { name: `Rerun run ${rerunId}` });
+  await expect(rerunLink).toHaveAttribute('href', new RegExp(`/monitor/runs/${rerunId}$`));
+  await rerunLink.click();
+  await expect(page.getByRole('heading', { name: new RegExp(rerunId) })).toBeVisible();
+
+  // The runs list: the rerun's Type cell says so and names its source; the
+  // source reads Original.
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  const headers = await page.getByRole('columnheader').allTextContents();
+  const typeColumn = headers.indexOf('Type');
+  expect(typeColumn, 'the runs list has a Type column').toBeGreaterThanOrEqual(0);
+  const typeOf = (runId: string) =>
+    page.getByRole('row').filter({ hasText: runId }).getByRole('cell').nth(typeColumn);
+  await expect(typeOf(rerunId)).toHaveText('Rerun from failed');
+  await expect(typeOf(rerunId)).toHaveAttribute('title', `Rerun of run ${sourceRunId}`);
+  await expect(typeOf(sourceRunId)).toHaveText('Original');
+
+  await expectQuiet(page, problems);
+});
+
 test('#895 — a run that SUCCEEDED is offered no rerun-from-failed', async ({ page }) => {
   const problems = collectPageProblems(page);
 

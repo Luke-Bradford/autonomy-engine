@@ -11,6 +11,7 @@ import { messageOf } from '../../api/client';
 import { owesCallback } from './externalWaits';
 import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
+import { RerunHistory } from './RerunHistory';
 import { canCancelRun, cancelConfirmMessage } from './cancelAction';
 import { runDetailPath, runLinkLabel } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
@@ -560,6 +561,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
               </dd>
             </>
           )}
+          {/* RS6 — the rerun-history grouping, the DOWNWARD half of the
+              lineage `Rerun of` starts: this run's own reruns, each a link.
+              Absent when there are none; `RerunHistory` owns why. */}
+          <RerunHistory runId={run.id} />
           {/* #1231 / U20 — the drill UP, and the only place a child run says it
               IS one. `parentRunId` has been on the row since #796 stamped it and
               was read by nothing: the runs list's Child tab could say a run was
