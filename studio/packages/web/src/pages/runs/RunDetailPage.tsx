@@ -21,19 +21,13 @@ import {
   reconcileNodeActivity,
   type RunLifecycle,
 } from './runSummary';
-import {
-  eventGloss,
-  failureClass,
-  formatClock,
-  formatNodeDuration,
-  formatOutputValue,
-  formatWhen,
-} from './format';
+import { eventGloss, failureClass, formatClock, formatOutputValue, formatWhen } from './format';
 import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel, nodeStatusPillClass } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
+import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
@@ -319,6 +313,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* Bound once so the lineage row below narrows without a non-null assertion —
      `run.rerunOf` inside a callback would not stay narrowed. */
   const rerunOf = run?.rerunOf ?? null;
+  /* #890 — whether a running node's Duration may COUNT UP. Only while this page
+     would hear the node settle: the socket open with its replay complete
+     (`live` is set only after `replay_complete`, so a truncated log never
+     counts), and the run not yet terminal. The run clause covers the moment
+     between a terminal event and the server's close, and a finished or
+     cancelled run's never-closed span, which must not tick forever. The ROW
+     set, as `RunCostSummary`'s `settled` below, because `status` can fall back
+     to the REST row's `queued`/`skipped`. */
+  const countingLive = stream.phase === 'live' && !TERMINAL_RUN_ROW_STATUS.has(status);
 
   /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries
      `run.cancelRequested`) but the run has not finished, because in-flight work
@@ -745,7 +748,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                     </span>
                   </td>
                   <td>{n.attempts}</td>
-                  <td className="node-duration">{formatNodeDuration(n)}</td>
+                  <td className="node-duration">
+                    <NodeDuration node={n} live={countingLive} />
+                  </td>
                   <td>{n.outputs}</td>
                   <td>
                     {/* #918 / RS6 — the copied-frontier reading goes FIRST, and
@@ -791,6 +796,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           node={openNode}
           name={nameOf(openNode.nodeId)}
           runStatus={status}
+          live={countingLive}
           onClose={() => setOpenNodeId(null)}
         />
       )}

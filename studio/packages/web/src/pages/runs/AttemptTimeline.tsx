@@ -17,11 +17,10 @@ import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
  * can lie more convincingly than a table:
  *
  *  1. **No clock.** An open span has no length and is drawn claiming none: a
- *     hatched bar running to the right edge, labelled with its start only. This
- *     page has no ticking clock BY DESIGN (#867's finding, and the live counter
- *     it deferred is #890) — and here the cost of pretending would be worse than
- *     in a cell, because a frozen `now` would rescale EVERY bar, not just the
- *     stale one.
+ *     hatched bar running to the right edge, labelled with its start only. The
+ *     table's Duration cell does count up (#890's `NodeDuration`), but a cell's
+ *     tick moves one number; here a moving `now` would rescale EVERY bar, not
+ *     just the open one, so the chart deliberately keeps no clock.
  *  2. **The axis is the measured window, not the run's.** `run.startedAt` is an
  *     enqueue placeholder for a queued run (U10), so the origin is the earliest
  *     instant the log actually recorded and the end is the latest one.

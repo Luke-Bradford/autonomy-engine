@@ -22,7 +22,8 @@ import { runDetailPath } from './runPath';
  *
  *  1. **No clock.** A run with no `finishedAt` is drawn hatched to the right
  *     edge, claiming no length. A frozen `now` would rescale EVERY other bar
- *     too, not just the stale one. (The live counter is #890, still deferred.)
+ *     too, not just the stale one. (#890's live counter ticks a single CELL on
+ *     the run page, where no other value rescales; a chart keeps no clock.)
  *  2. **The axis is the measured window of the ROWS SHOWN** — not `now`, and
  *     not the `?since=` filter bound, which is a request for rows rather than a
  *     statement about when anything ran.

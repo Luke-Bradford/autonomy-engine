@@ -65,13 +65,13 @@ export function formatRunDuration(
  *    state a measurement nobody took: the difference between "instant" and
  *    "not measured", and only one of them is true.
  * 2. **No end stamp.** The attempt has not settled (or the run died mid-flight
- *    and never will). Deliberately NOT rendered as a live "3s so far": this
- *    page has no ticking clock by design, so such a counter could only be
- *    re-read when a FRAME lands — and for the node an operator actually watches
- *    (dispatched, grinding, emitting nothing) the dispatch IS the last frame,
- *    so it would sit at ~0ms while the node ran for minutes. A wrong number is
- *    worse than an absent one, which is the whole premise of this ticket. #890
- *    tracks the live counter, which needs a clock, not a format change.
+ *    and never will). This function has no clock, so it cannot say how long
+ *    so far — and a figure recomputed only when a FRAME lands would sit at
+ *    ~0ms for the node an operator actually watches (dispatched, grinding,
+ *    emitting nothing), because its dispatch IS the last frame. A wrong number
+ *    is worse than an absent one, which is the whole premise of #867. The live
+ *    counter is #890's `NodeDuration`, which owns a clock and decides when
+ *    ticking is honest; this stays the settled answer it falls back to.
  *
  * The number is WALL CLOCK for the latest attempt, from start to settle. That
  * INCLUDES a `wait`/`webhook` park (for those nodes waiting is the work) and
@@ -112,6 +112,54 @@ export function isMeasurableSpan<
 >(span: T): span is T & { startedAtMs: number; endedAtMs: number } {
   if (span.startedAtMs === undefined || span.endedAtMs === undefined) return false;
   return span.endedAtMs >= span.startedAtMs;
+}
+
+/**
+ * #890 — the start a LIVE counter may count from, or `undefined` when there is
+ * no span it could honestly count.
+ *
+ * An open span on the canvas node itself qualifies: a start stamp, no end. A
+ * span opened by a foreach ITEM (`w@2`) does not, even though its scalars look
+ * the same. Every item's dispatch overwrites the row's one start
+ * (`deriveNodeActivity`'s `openSpan`), so a count from it would drop back to
+ * zero on each new item while earlier items were still running — a number that
+ * is neither item's runtime nor the node's. That row keeps the em-dash, as its
+ * settled form already does when a terminal lands from a different item.
+ *
+ * Whether the PAGE can hear a settle at all (socket open, replay complete, run
+ * not terminal) is the caller's question, not this one's — this reads one row.
+ */
+export function liveSpanStart(
+  node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs' | 'spans'>,
+): number | undefined {
+  if (node.startedAtMs === undefined || node.endedAtMs !== undefined) return undefined;
+  if (node.spans[node.spans.length - 1]?.instanceId !== undefined) return undefined;
+  return node.startedAtMs;
+}
+
+/**
+ * #890 — how long an unsettled attempt has been running, against the caller's
+ * clock, marked "so far" in the same words `formatRunDuration` uses for a run.
+ *
+ * Under a second it says `<1s` rather than `437ms`: the counter ticks once a
+ * second, so a millisecond figure would be stale the moment it rendered and
+ * would change UNIT on the next tick.
+ *
+ * It CLAMPS, which `isMeasurableSpan` above refuses to do for a settled span,
+ * and the two causes differ. A settled span's two stamps come from one
+ * single-writer append path, so an end before its start is a corrupt log and is
+ * reported as one. Here the start is the server's stamp and `now` is the
+ * browser's, so a negative difference is clock SKEW between two machines (or a
+ * tick up to a second old meeting a just-dispatched attempt) — not a finding
+ * about the log. The residual cost is accepted exactly as the runs list accepts
+ * it, in both directions: a client clock running AHEAD inflates the figure by
+ * the skew, and one running BEHIND holds it at `<1s` for the length of the skew
+ * before it starts counting (short by the skew thereafter). For the local-first
+ * install the two clocks are the same machine's.
+ */
+export function formatLiveElapsed(startedAtMs: number, now: number): string {
+  const ms = Math.max(0, now - startedAtMs);
+  return `${ms < 1_000 ? '<1s' : formatElapsed(ms)} so far`;
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

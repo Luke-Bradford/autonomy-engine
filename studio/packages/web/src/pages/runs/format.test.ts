@@ -3,11 +3,14 @@ import type { RunEvent } from '@autonomy-studio/shared';
 import {
   eventGloss,
   failureClass,
+  formatLiveElapsed,
   formatNodeDuration,
   formatOutputValue,
   formatRunDuration,
+  liveSpanStart,
   MAX_INLINE_OUTPUT_CHARS,
 } from './format';
+import type { AttemptSpan } from './runSummary';
 
 function evt(payload: unknown): RunEvent {
   return { id: 'e', runId: 'r', seq: 1, type: 'x', payload, ts: 0 } as RunEvent;
@@ -259,5 +262,63 @@ describe('formatOutputValue (#1299)', () => {
     const text = `${'x'.repeat(MAX_INLINE_OUTPUT_CHARS - 1)}😀tail`;
     const out = formatOutputValue(text);
     expect(out).toBe(`${'x'.repeat(MAX_INLINE_OUTPUT_CHARS - 1)}…`);
+  });
+});
+
+describe('formatLiveElapsed (#890)', () => {
+  it("counts from the start to the caller's clock and says it is unfinished", () => {
+    expect(formatLiveElapsed(1_000, 13_500)).toBe('12s so far');
+    expect(formatLiveElapsed(0, 125_000)).toBe('2m 05s so far');
+  });
+
+  it('says "<1s" under a second rather than a millisecond figure that changes unit on the next tick', () => {
+    expect(formatLiveElapsed(1_000, 1_437)).toBe('<1s so far');
+  });
+
+  it('clamps a client clock that is behind the server stamp to "<1s", never a negative span', () => {
+    expect(formatLiveElapsed(5_000, 2_000)).toBe('<1s so far');
+  });
+});
+
+describe('liveSpanStart (#890)', () => {
+  const span = (over: Partial<AttemptSpan>): AttemptSpan => ({
+    startedAtMs: 1_000,
+    endedAtMs: undefined,
+    startedAs: 'dispatched',
+    endedAs: undefined,
+    instanceId: undefined,
+    ...over,
+  });
+
+  it('is the start of an open span on the canvas node itself', () => {
+    expect(liveSpanStart({ startedAtMs: 1_000, endedAtMs: undefined, spans: [span({})] })).toBe(
+      1_000,
+    );
+  });
+
+  it('is undefined once the span has closed — a settled node shows its measured duration', () => {
+    expect(
+      liveSpanStart({
+        startedAtMs: 1_000,
+        endedAtMs: 4_000,
+        spans: [span({ endedAtMs: 4_000, endedAs: 'success' })],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('is undefined with no start at all', () => {
+    expect(
+      liveSpanStart({ startedAtMs: undefined, endedAtMs: undefined, spans: [] }),
+    ).toBeUndefined();
+  });
+
+  it("is undefined for a foreach ITEM's span: every new item overwrites the start, so a count from it would jump back to zero", () => {
+    expect(
+      liveSpanStart({
+        startedAtMs: 1_000,
+        endedAtMs: undefined,
+        spans: [span({ instanceId: 'w@2' })],
+      }),
+    ).toBeUndefined();
   });
 });
