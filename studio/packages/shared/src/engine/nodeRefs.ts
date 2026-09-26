@@ -136,7 +136,7 @@ function matchMappedId(s: string, i: number, idMap: ReadonlyMap<string, string>)
  * so an id that appears inside a literal is never touched. Returns the body
  * unchanged when nothing matched.
  */
-function remapBody(body: string, idMap: ReadonlyMap<string, string>): string {
+function remapBody(body: string, idMap: ReadonlyMap<string, string>, seen?: Set<string>): string {
   let out = '';
   let cut = 0;
   let i = 0;
@@ -160,6 +160,7 @@ function remapBody(body: string, idMap: ReadonlyMap<string, string>): string {
       i = idStart;
       continue;
     }
+    seen?.add(oldId);
     out += body.slice(cut, idStart) + (idMap.get(oldId) as string);
     cut = idStart + oldId.length;
     i = cut;
@@ -231,4 +232,47 @@ export function remapNodeRefs<T>(value: T, idMap: ReadonlyMap<string, string>): 
     return v;
   };
   return walk(value, 0) as T;
+}
+
+/**
+ * #935 — which of `ids` a config tree READS through a `${nodes.<id>…}` reference.
+ *
+ * The same body scanner (`remapBody`, run with an identity map and a record of
+ * what matched) as `remapNodeRefs`, rather than a fourth reader of the grammar:
+ * "which node ids does this reference" and "rewrite these node ids" have to
+ * agree on what a reference IS. So quoted literals, prose and `$${` escapes are
+ * excluded, and deferred-eval subtrees are included.
+ *
+ * It does NOT share `remapNodeRefs`'s bail-outs, and that is the point of having
+ * its own walk and string step. A rewriter may leave a string it cannot safely
+ * round-trip untouched — one holding the NUL mask char, or with an unterminated
+ * `${` — because an unrewritten string is reported by the save gate. This answer
+ * is a GUARD: a paste is refused on it, so a string skipped here is a read that
+ * silently passes. The mask only has to be reversible when output is produced,
+ * and nothing is produced here; an unterminated span still yields every span
+ * before it. Nor does it stop at `MAX_CONFIG_DEPTH`: that cap is counted from
+ * wherever the save gate starts (a node's config, a param bag), and a caller
+ * handing in a whole node would start the count levels higher, so a ref the gate
+ * accepts could sit past the cutoff unread. The walk is ITERATIVE instead, so no
+ * depth can overflow the stack, and every string leaf is read.
+ */
+export function referencedNodeIds(value: unknown, ids: Iterable<string>): string[] {
+  const identity = new Map<string, string>();
+  for (const id of ids) identity.set(id, id);
+  const seen = new Set<string>();
+  if (identity.size === 0) return [];
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const v = pending.pop();
+    if (typeof v === 'string') {
+      if (!v.includes('${')) continue;
+      const { matches } = scanTemplateRefs(v.split(ESCAPED_OPEN).join(MASK_OPEN));
+      for (const m of matches) remapBody(m.body, identity, seen);
+    } else if (Array.isArray(v)) {
+      for (const child of v) pending.push(child);
+    } else if (v !== null && typeof v === 'object') {
+      for (const child of Object.values(v as Record<string, unknown>)) pending.push(child);
+    }
+  }
+  return [...seen];
 }

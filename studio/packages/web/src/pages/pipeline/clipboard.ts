@@ -9,15 +9,16 @@ import type { Edge, Node } from '@autonomy-studio/shared';
  * and a stale endpoint cannot be resurrected from a clipboard written minutes
  * ago. Same reasoning for container membership, which is likewise re-derived.
  *
- * `pipelineId` is STAMPED so a paste can refuse a clipboard from another
- * pipeline. Cross-pipeline paste is a later slice and it is not a matter of
- * copying more state: a pasted node's refs to nodes it did NOT bring with it
- * have no meaning in the target doc, and its incoming edges have no source
- * there, so the save gate refuses it with "does not name an upstream node".
- * Refusing loudly at the gesture is the honest form of that.
+ * `pipelineId` is STAMPED so a paste can tell a copy from ANOTHER pipeline, and
+ * `sourceNodeIds` is every node AND container id that pipeline had at copy time
+ * (both are addressed as `${nodes.<id>}`), so such a paste can tell which of a
+ * copy's reads name something it did not bring (#935, `uncopiedReads` in the
+ * canvas store). The ids, not the nodes: nothing but membership is asked of them.
+ * The edge and membership re-derivation above is within ONE pipeline only.
  */
 export interface CanvasClipboard {
   pipelineId: string;
+  sourceNodeIds: string[];
   nodes: Node[];
   edges: Edge[];
 }

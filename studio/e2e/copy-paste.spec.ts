@@ -1,11 +1,13 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes, edgeGroup, marqueeAllNodes, viewportSettled } from './support/canvasGraph';
-import { openSeededCanvas } from './support/seedDoc';
+import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 
 /**
  * U21 slice 3 — copy/paste on the authoring canvas, and the ref remapping that
  * makes a MULTI-node copy correct rather than merely plausible.
+ * Slice 5 (#935) adds the paste into ANOTHER pipeline, reached client-side so
+ * the module-level clipboard survives the move.
  *
  * The rewriter and the store rules are unit-tested (`nodeRefs.test.ts`,
  * `canvasStore.test.ts`). What only a real browser and a real server can prove
@@ -156,6 +158,113 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await page.keyboard.press('Meta+d');
     await expect(page.getByText('Duplicated 2 activities.')).toBeVisible();
     await expect(canvasNodes(page)).toHaveCount(4);
+
+    await expectQuiet(page, problems);
+  });
+
+  /* #935 — the SECOND pipeline shares the id `a` with the first, as two docs
+     cut from one import do. A paste that re-derived edges from the target, or
+     let a copy keep reading an un-copied `a`, would bind to THIS `a` silently. */
+  const TARGET = {
+    nodes: [
+      { id: 'z', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'a', type: 'http_request', position: { x: 240, y: 0 }, config: {} },
+    ],
+    edges: [{ id: 'ez', from: 'z', to: 'a', on: 'success' as const }],
+  };
+  const SOURCE = {
+    nodes: [
+      {
+        id: 'a',
+        type: 'http_request',
+        position: { x: 0, y: 0 },
+        config: { outputs: [{ name: 'body', type: 'string' }] },
+      },
+      {
+        id: 'b',
+        type: 'http_request',
+        position: { x: 240, y: 0 },
+        config: { url: 'https://example.test/${nodes.a.output.body}' },
+      },
+    ],
+    edges: [{ id: 'e1', from: 'a', to: 'b', on: 'success' as const }],
+  };
+
+  /* Client-side, never `page.goto`: the clipboard is module state, so a reload
+     empties it and the spec would be testing the empty-clipboard refusal. */
+  async function openInApp(page: Page, pipelineId: string, expectIds: string[]): Promise<void> {
+    await page.evaluate(
+      (h) => {
+        window.location.hash = h;
+      },
+      `#/author/pipelines/${encodeURIComponent(pipelineId)}`,
+    );
+    for (const id of expectIds) await expect(nodeById(page, id)).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+  }
+
+  test('a self-contained copy pastes into ANOTHER pipeline and saves there', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId: targetId } = await seedVersion(page, 'u21 paste target', TARGET);
+    await openSeededCanvas(page, 'u21 paste source', SOURCE);
+
+    await marqueeAllNodes(page, 2);
+    await page.keyboard.press('Meta+c');
+    await expect(page.getByText('Copied 2 activities.')).toBeVisible();
+
+    await openInApp(page, targetId, ['z', 'a']);
+    await expect(canvasNodes(page)).toHaveCount(2);
+    await page.keyboard.press('Meta+v');
+    await expect(page.getByText('Pasted 2 activities from another pipeline.')).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(4);
+    // z→a, and the copied a'→b'. NOT a re-derived z→a' off the coincident id.
+    await expect(edgeGroup(page)).toHaveCount(2);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.getByText(/^Saved v2\.$/)).toBeVisible();
+
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(targetId)}/versions`);
+    expect(res.status()).toBe(200);
+    const versions = (await res.json()) as {
+      version: number;
+      nodes: { id: string; config: Record<string, unknown> }[];
+      edges: { from: string; to: string }[];
+    }[];
+    const latest = versions.reduce((x, y) => (x.version > y.version ? x : y));
+    const copies = latest.nodes.filter((n) => n.id !== 'z' && n.id !== 'a');
+    expect(copies).toHaveLength(2);
+    const copyB = copies.find((n) => typeof n.config['url'] === 'string');
+    const copyA = copies.find((n) => n !== copyB);
+    // THE POINT: the copy of b reads the copy of a — not the target's own `a`.
+    expect(copyB!.config['url']).toBe(`https://example.test/\${nodes.${copyA!.id}.output.body}`);
+    expect(latest.edges).toHaveLength(2);
+    expect(latest.edges).toContainEqual(
+      expect.objectContaining({ from: copyA!.id, to: copyB!.id }),
+    );
+
+    await expectQuiet(page, problems);
+  });
+
+  test('a copy that reads an UN-copied node is refused in another pipeline, by name', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const { pipelineId: targetId } = await seedVersion(page, 'u21 refused target', TARGET);
+    await openSeededCanvas(page, 'u21 refused source', SOURCE);
+
+    await page.getByTestId('rf__node-b').click();
+    await page.keyboard.press('Meta+c');
+    await expect(page.getByText('Copied 1 activity.')).toBeVisible();
+
+    await openInApp(page, targetId, ['z', 'a']);
+    const panel = page.getByRole('complementary', { name: 'Properties' });
+    await panel.getByRole('button', { name: 'Paste' }).click();
+    await expect(
+      page.getByText(
+        'Not pasted: the copied activities read from a, which was not copied. Copy it too.',
+      ),
+    ).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });

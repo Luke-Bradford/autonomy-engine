@@ -2330,7 +2330,11 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       { kind: 'node', id: 'n_c' },
     ]);
     expect(s.getState().copySelection('pl_1')).toBe(2);
-    expect(s.getState().pasteClipboard('pl_1')).toEqual({ ok: true, count: 2 });
+    expect(s.getState().pasteClipboard('pl_1')).toEqual({
+      ok: true,
+      count: 2,
+      crossPipeline: false,
+    });
 
     const st = s.getState();
     expect(st.nodes).toHaveLength(5);
@@ -2404,19 +2408,199 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(after.containers).toEqual([]);
   });
 
-  it('refuses a paste from a DIFFERENT pipeline, and touches nothing', () => {
-    const s = loaded();
-    s.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
-    s.getState().copySelection('pl_1');
-    const before = s.getState();
+  /**
+   * #935 — a SECOND pipeline whose ids COINCIDE with the first's. Realistic, not
+   * contrived: an imported or seeded doc carries authored ids (`a`, `b`), and two
+   * pipelines cut from one file share them. `n_z → n_b` and the stage holding
+   * `n_b` are exactly what the same-pipeline rules would re-derive onto a copy
+   * of the OTHER pipeline's `n_b`.
+   */
+  function otherPipeline() {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_z', type: 'http_request', config: {}, position: { x: 0, y: 300 } },
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 100, y: 300 } },
+          { id: 'n_b', type: 'http_request', config: {}, position: { x: 200, y: 300 } },
+        ],
+        edges: [{ id: 'e_zb', from: 'n_z', to: 'n_b', on: 'success' }],
+      }),
+    );
+    s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_b'] });
+    return s;
+  }
 
-    expect(s.getState().pasteClipboard('pl_OTHER')).toEqual({
+  it('pastes a SELF-CONTAINED copy into another pipeline, refs and edges following the copies', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+
+    const t = otherPipeline();
+    expect(t.getState().pasteClipboard('pl_2')).toEqual({
+      ok: true,
+      count: 3,
+      crossPipeline: true,
+    });
+
+    const st = t.getState();
+    const [copyA, copyB, copyC] = [st.nodes[3]!, st.nodes[4]!, st.nodes[5]!];
+    expect(promptOf(copyB)).toBe(`summarise \${nodes.${copyA.id}.output.body}`);
+    expect(promptOf(copyC)).toBe(`expand \${nodes.${copyB.id}.output.text}`);
+    expect(st.edges.filter((e) => e.from === copyA.id || e.from === copyB.id)).toEqual([
+      expect.objectContaining({ from: copyA.id, to: copyB.id }),
+      expect.objectContaining({ from: copyB.id, to: copyC.id }),
+    ]);
+    expect(t.getState().past).toHaveLength(2);
+  });
+
+  it("does NOT re-derive in-edges or container membership from the target's coincident ids", () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+    ]);
+    s.getState().copySelection('pl_1');
+
+    const t = otherPipeline();
+    t.getState().pasteClipboard('pl_2');
+
+    const st = t.getState();
+    const copies = new Set(st.nodes.slice(3).map((n) => n.id));
+    // The target's `n_z → n_b` is an edge into ITS `n_b`, not into the copy of
+    // the source's — and its stage holds its own node, not the paste.
+    expect(st.edges.filter((e) => copies.has(e.to) && !copies.has(e.from))).toEqual([]);
+    expect(st.containers[0]!.children).toEqual(['n_b']);
+  });
+
+  it('refuses a cross-pipeline paste that reads an UN-copied node, naming it, and touches nothing', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+
+    // The target HAS an `n_a`, so the copy of `n_b` would validate and save —
+    // reading a node that has nothing to do with the one it was authored against.
+    const t = otherPipeline();
+    const before = t.getState();
+    expect(t.getState().pasteClipboard('pl_2')).toEqual({
+      ok: false,
+      reason: 'Not pasted: the copied activities read from n_a, which was not copied. Copy it too.',
+    });
+    expect(t.getState().nodes).toBe(before.nodes);
+    expect(t.getState().past).toBe(before.past);
+  });
+
+  it('names EVERY un-copied node read, in the source order', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    // Make the lone copy read two outsiders.
+    s.getState().updateNodeConfig('n_c', {
+      prompt: '${nodes.n_b.output.text} ${nodes.n_a.output.body}',
+    });
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toEqual({
       ok: false,
       reason:
-        'That was copied from a different pipeline. Pasting across pipelines is not supported yet.',
+        'Not pasted: the copied activities read from n_a, n_b, which were not copied. Copy them too.',
     });
-    expect(s.getState().nodes).toBe(before.nodes);
-    expect(s.getState().past).toBe(before.past);
+  });
+
+  it('refuses a read ANYWHERE in the node — a call param, not only config', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          {
+            id: 'n_call',
+            type: 'call_pipeline',
+            config: {},
+            call: { pipelineVersionId: 'pv_child', params: { p: '${nodes.n_a.output.body}' } },
+            position: { x: 100, y: 0 },
+          },
+        ],
+        edges: [{ id: 'e_1', from: 'n_a', to: 'n_call', on: 'success' }],
+      }),
+    );
+    s.getState().setSelection([{ kind: 'node', id: 'n_call' }]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('read from n_a,'),
+    });
+  });
+
+  it('refuses a read of an un-copied CONTAINER, which shares the `nodes.` namespace', () => {
+    const s = loaded();
+    s.getState().createContainer({ id: 'loop_1', kind: 'stage', children: ['n_a'] });
+    s.getState().updateNodeConfig('n_c', { prompt: '${nodes.loop_1.status}' });
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('read from loop_1,'),
+    });
+  });
+
+  it('refuses a ref the source left DANGLING when it names a node of the target', () => {
+    const s = loaded();
+    // `n_z` is in no source doc — a mid-edit dangling ref. In the target it names
+    // a real node, which the paste would silently make it read.
+    s.getState().updateNodeConfig('n_c', { prompt: '${nodes.n_z.output.body}' });
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('read from n_z,'),
+    });
+  });
+
+  it("refuses a dangling ref that lands on the TARGET's container", () => {
+    const s = loaded();
+    // `stage_1` exists only in the target, and only as a container.
+    s.getState().updateNodeConfig('n_c', { prompt: '${nodes.stage_1.status}' });
+    s.getState().setSelection([{ kind: 'node', id: 'n_c' }]);
+    s.getState().copySelection('pl_1');
+    expect(otherPipeline().getState().pasteClipboard('pl_2')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('read from stage_1,'),
+    });
+  });
+
+  it('keeps the source positions when the target pipeline is EMPTY', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_a' }]);
+    s.getState().copySelection('pl_1');
+    const t = createCanvasStore();
+    t.getState().loadVersion(null);
+    expect(t.getState().pasteClipboard('pl_2')).toMatchObject({ ok: true, crossPipeline: true });
+    expect(t.getState().nodes[0]!.position).toEqual({ x: 0, y: 0 });
+  });
+
+  it('lands a foreign paste BELOW the target, keeping the copied layout', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+    ]);
+    s.getState().copySelection('pl_1');
+    const t = otherPipeline();
+    t.getState().pasteClipboard('pl_2');
+
+    const st = t.getState();
+    const [copyA, copyB] = [st.nodes[3]!, st.nodes[4]!];
+    const lowest = Math.max(...st.nodes.slice(0, 3).map((n) => n.position.y));
+    expect(copyA.position.y).toBeGreaterThan(lowest);
+    expect(copyA.position.x).toBe(Math.min(...st.nodes.slice(0, 3).map((n) => n.position.x)));
+    expect(copyB.position.x - copyA.position.x).toBe(100);
+    expect(copyB.position.y).toBe(copyA.position.y);
   });
 
   it('refuses a paste with nothing copied, and a copy with nothing selected', () => {

@@ -5,6 +5,7 @@ import {
   getActivity,
   authorsCallBlob,
   lowerPipelineNodes,
+  referencedNodeIds,
   remapNodeRefs,
   type CallConfig,
   type Container,
@@ -28,7 +29,7 @@ import {
 } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
-import { readClipboard, writeClipboard } from './clipboard';
+import { readClipboard, writeClipboard, type CanvasClipboard } from './clipboard';
 import {
   CONTAINER_GAP,
   CONTAINER_HEADER_HEIGHT,
@@ -404,6 +405,15 @@ interface CloneOptions {
   containers?: Container[];
   /** Replaces the per-gesture stagger — see `duplicateContainer`. */
   offset?: { x: number; y: number };
+  /**
+   * #935 — the sources came from ANOTHER pipeline, so rules 3 and 4 are off.
+   * Both read the TARGET's live graph by SOURCE id, and ids coincide across
+   * pipelines (an imported or seeded doc carries authored ids like `a`, and two
+   * pipelines cut from one file share them): re-deriving would wire the target's
+   * own edges into the copies and drop them into an unrelated container. The
+   * copies land top-level with only their internal edges.
+   */
+  foreign?: boolean;
 }
 
 /**
@@ -436,14 +446,16 @@ interface CloneOptions {
  *    whose config references an un-copied upstream has no upstream in scope and
  *    `validateRefs` refuses the save. Re-deriving (rather than carrying them on
  *    the clipboard) is what makes ⌘V and ⌘D agree, and it drops an edge whose
- *    source has since been deleted instead of resurrecting it.
+ *    source has since been deleted instead of resurrecting it. NOT for a paste
+ *    from another pipeline (`CloneOptions.foreign`), where the live graph is a
+ *    different doc whose ids only coincide.
  *
  * 4. **Container membership is re-derived from the LIVE containers** by SOURCE
  *    id, for the same reason: a clipboard written before the container was
  *    deleted must not put its copies back into a container that is gone. The
  *    one exception is a node whose container is being copied WITH it: that copy
  *    belongs to the container's copy, and re-deriving would put it back into
- *    the original.
+ *    the original. Off for a foreign paste, for rule 3's reason.
  *
  * A copied CONTAINER is an endpoint like any node, so it rides the same rules
  * rather than a second set: its id is in the one id map, so rule 2 copies an
@@ -486,7 +498,7 @@ function cloneNodesInto(
 
   let containers = [...target.containers, ...containerCopies];
   for (const source of sources) {
-    if (claimed.has(source.id)) continue;
+    if (claimed.has(source.id) || options.foreign === true) continue;
     const owner = containers.find((c) => c.children.includes(source.id))?.id ?? null;
     containers = assignContainerChild(containers, idMap.get(source.id) as string, owner);
   }
@@ -500,7 +512,7 @@ function cloneNodesInto(
   }
 
   const nodes = [...target.nodes, ...copies];
-  for (const e of target.edges) {
+  for (const e of options.foreign === true ? [] : target.edges) {
     const to = idMap.get(e.to);
     if (to === undefined || idMap.has(e.from)) continue;
     const candidate = { from: e.from, to, condition: conditionOf(e), back: e.back === true };
@@ -552,6 +564,66 @@ function duplicateContainerShift(body: Node[], nodes: Node[]): number {
   const rightmost = Math.max(...band.map((n) => n.position.x));
   const left = Math.min(...body.map((n) => n.position.x));
   return rightmost + width + 2 * margin - left;
+}
+
+/**
+ * #935 — the nodes a cross-pipeline paste's copies READ but did not bring:
+ * every `${nodes.<id>}` anywhere in a copied node (config, `call`, connection
+ * and dataset params — the whole node, as `remapNodeRefs` walks it) naming a
+ * node or container of the SOURCE pipeline or of the TARGET that is not in the
+ * copied set. Source ids first, in the source's order.
+ *
+ * Within one pipeline such a read is correct: the upstream still exists and the
+ * copy keeps reading it. Across pipelines it names nothing — or, worse, a node
+ * that merely shares the id (ids coincide across imported and seeded docs),
+ * which validates, saves and runs while reading the wrong node. The TARGET's ids
+ * are in the set for that reason: a ref the source doc left dangling can still
+ * land on one of them. Containers are in it because a container is addressed in
+ * the same `nodes.` namespace.
+ *
+ * `${params.x}` is deliberately NOT refused: a param is a by-name interface, so
+ * a copy reading `x` reads the target's `x` — the meaning a name carries — and a
+ * target without one is reported by the validation badge. A copied call node
+ * that calls the target's own version is refused at save as a call cycle.
+ */
+function uncopiedReads(
+  held: CanvasClipboard,
+  target: { nodes: Node[]; containers: Container[] },
+): string[] {
+  const copied = new Set(held.nodes.map((n) => n.id));
+  const outside = [
+    ...new Set([
+      ...held.sourceNodeIds,
+      ...target.nodes.map((n) => n.id),
+      ...target.containers.map((c) => c.id),
+    ]),
+  ].filter((id) => !copied.has(id));
+  const read = new Set(held.nodes.flatMap((n) => referencedNodeIds(n, outside)));
+  return outside.filter((id) => read.has(id));
+}
+
+/**
+ * #935 — where a cross-pipeline paste lands: BELOW everything already in the
+ * target, left-aligned with it, keeping the copied subgraph's own layout.
+ *
+ * The source's coordinates mean nothing in the target, and kept as they are
+ * (plus the local stagger) they routinely land ON the target's nodes — a copy
+ * drawn over another reads as one activity. Below the lowest node, with the
+ * same header+padding+gap margin `duplicateContainerShift` clears boxes by, is
+ * clear of every node and every container box. An empty target keeps the
+ * source positions.
+ */
+function foreignPasteOffset(sources: Node[], targetNodes: Node[]): { x: number; y: number } {
+  if (targetNodes.length === 0 || sources.length === 0) return { x: 0, y: 0 };
+  const margin = CONTAINER_PADDING + CONTAINER_GAP;
+  const bottom = Math.max(...targetNodes.map((n) => n.position.y)) + UNMEASURED_NODE_SIZE.height;
+  const top = bottom + 2 * margin + CONTAINER_HEADER_HEIGHT;
+  return {
+    x:
+      Math.min(...targetNodes.map((n) => n.position.x)) -
+      Math.min(...sources.map((n) => n.position.x)),
+    y: top - Math.min(...sources.map((n) => n.position.y)),
+  };
 }
 
 /**
@@ -697,6 +769,10 @@ export interface PendingBindings {
 
 /** Which of a node's two paired bindings a picker is writing (#1139). */
 export type BindingKind = 'connections' | 'datasets';
+
+/** U21 — what a paste did; `crossPipeline` marks a copy from another pipeline (#935). */
+export type PasteOutcome =
+  { ok: true; count: number; crossPipeline: boolean } | { ok: false; reason: string };
 
 export interface CanvasState {
   /**
@@ -890,8 +966,9 @@ export interface CanvasState {
    * `pipelineId` is a parameter rather than store state on purpose: it is a
    * `PipelineCanvas` prop, and deriving it from `loaded` would read `null` for a
    * never-saved pipeline, so two unsaved pipelines would compare EQUAL and the
-   * cross-pipeline refusal — the guard standing in for the deferred slice —
-   * would fail open into exactly the dangling-ref doc it exists to prevent.
+   * cross-pipeline rules (#935: refuse a read of an un-copied node, re-derive
+   * nothing from the target) would fail open — a paste between them would
+   * re-derive edges and membership from coincident ids, as if it were local.
    */
   copySelection(pipelineId: string): number;
   /**
@@ -908,10 +985,11 @@ export interface CanvasState {
    * U21 — paste the canvas clipboard into this pipeline, in ONE undo entry.
    *
    * Refuses (without touching the doc) an empty clipboard, or one copied from
-   * another pipeline — see `CanvasClipboard` for why cross-pipeline paste is a
-   * later slice rather than a matter of copying more state.
+   * another pipeline whose activities read a node that was not copied with
+   * them — see `uncopiedReads`. A cross-pipeline paste that is accepted lands
+   * without re-derived in-edges or container membership (`CloneOptions.foreign`).
    */
-  pasteClipboard(pipelineId: string): { ok: true; count: number } | { ok: false; reason: string };
+  pasteClipboard(pipelineId: string): PasteOutcome;
   /**
    * U21 — move nodes, in ONE undo entry.
    *
@@ -1468,6 +1546,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const kept = new Set(nodes.map((n) => n.id));
         writeClipboard({
           pipelineId,
+          sourceNodeIds: [...live.nodes.map((n) => n.id), ...live.containers.map((c) => c.id)],
           nodes,
           edges: live.edges.filter((e) => kept.has(e.from) && kept.has(e.to)),
         });
@@ -1479,24 +1558,34 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (held === null || held.nodes.length === 0) {
           return { ok: false, reason: 'Nothing has been copied yet.' };
         }
-        if (held.pipelineId !== pipelineId) {
-          return {
-            ok: false,
-            reason:
-              'That was copied from a different pipeline. Pasting across pipelines is not supported yet.',
-          };
+        const foreign = held.pipelineId !== pipelineId;
+        if (foreign) {
+          const unread = uncopiedReads(held, get());
+          if (unread.length > 0) {
+            const one = unread.length === 1;
+            return {
+              ok: false,
+              reason: `Not pasted: the copied activities read from ${unread.join(', ')}, which ${one ? 'was' : 'were'} not copied. Copy ${one ? 'it' : 'them'} too.`,
+            };
+          }
         }
         edit((s) => {
-          const cloned = cloneNodesInto(s, held.nodes, held.edges);
+          const cloned = cloneNodesInto(
+            s,
+            held.nodes,
+            held.edges,
+            foreign ? { foreign, offset: foreignPasteOffset(held.nodes, s.nodes) } : {},
+          );
           return {
             nodes: cloned.nodes,
             edges: cloned.edges,
             containers: cloned.containers,
             selected: cloned.newIds.map((id) => ({ kind: 'node' as const, id })),
-            addCount: s.addCount + 1,
+            // The counter advances only when the stagger placed the copies.
+            addCount: foreign ? s.addCount : s.addCount + 1,
           };
         });
-        return { ok: true, count: held.nodes.length };
+        return { ok: true, count: held.nodes.length, crossPipeline: foreign };
       },
 
       moveNodes(moves) {

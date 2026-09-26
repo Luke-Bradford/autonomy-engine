@@ -57,6 +57,7 @@ import {
   containersWithNew,
   createCanvasStore,
   singleSelection,
+  type PasteOutcome,
   type Selection,
 } from './canvasStore';
 import { useExpressionPicker } from './useExpressionPicker';
@@ -140,6 +141,17 @@ import { LabelledControl } from '../../lib/LabelledControl';
  * the third.
  */
 const CANVAS_NOTICE_MS = 6_000;
+
+/**
+ * U21 — the notice a paste leaves, for ⌘V and the Paste button alike. A paste
+ * from another pipeline says so (#935): its copies arrive without the in-edges
+ * and container a local paste re-derives, and the line is where that shows.
+ */
+function pasteNotice(outcome: PasteOutcome): string {
+  if (!outcome.ok) return outcome.reason;
+  const what = `${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}`;
+  return outcome.crossPipeline ? `Pasted ${what} from another pipeline.` : `Pasted ${what}.`;
+}
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -394,12 +406,7 @@ export function PipelineCanvas({
           return;
         }
         e.preventDefault();
-        const outcome = store.getState().pasteClipboard(pipelineId);
-        showCanvasMsg(
-          outcome.ok
-            ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
-            : outcome.reason,
-        );
+        showCanvasMsg(pasteNotice(store.getState().pasteClipboard(pipelineId)));
         return;
       }
       const command = historyCommandFor(e);
@@ -1435,18 +1442,13 @@ export function PipelinePanel({
       {/* U21 — Paste lives in the NOTHING-selected panel because that is where an
           operator is standing when they want it: they have just clicked the
           background to deselect, and ⌘V is otherwise invisible. It is always
-          enabled — the refusal reason (empty clipboard, or one copied from
-          another pipeline) is more useful said than hidden behind a grey
-          button. */}
+          enabled — the refusal reason (empty clipboard, or a copy from another
+          pipeline that reads a node it did not bring) is more useful said than
+          hidden behind a grey button. */}
       <button
         type="button"
         onClick={() => {
-          const outcome = store.getState().pasteClipboard(pipelineId);
-          onNotice(
-            outcome.ok
-              ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
-              : outcome.reason,
-          );
+          onNotice(pasteNotice(store.getState().pasteClipboard(pipelineId)));
         }}
       >
         Paste
