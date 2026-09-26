@@ -68,16 +68,21 @@ describe('nodeStatusLabel', () => {
     expect(nodeStatusLabel('retry_pending')).toBe('retrying');
   });
 
-  it('CX4 (#1320) — a node a cancel stopped from starting says so, instead of "pending"', () => {
+  it('CX4 (#1320) — under a cancelled run, a node left non-terminal says the cancel stopped it', () => {
     expect(nodeStatusLabel('pending', 'cancelled')).toBe('not run (cancelled)');
-    // Only `pending` changes: a node the cancel caught mid-flight failed, and one
-    // that finished before it keeps what it did.
-    expect(nodeStatusLabel('success', 'cancelled')).toBe('success');
-    expect(nodeStatusLabel('failure', 'cancelled')).toBe('failure');
+    // D5 — a parked run's cancel finishes it with the park still on the node.
+    for (const live of ['wait_pending', 'external_wait_pending', 'waiting', 'ready'] as const) {
+      expect(nodeStatusLabel(live, 'cancelled')).toBe('stopped (cancelled)');
+    }
+    // A terminal node keeps what it actually did.
+    for (const done of ['success', 'failure', 'skipped'] as const) {
+      expect(nodeStatusLabel(done, 'cancelled')).toBe(nodeStatusLabel(done));
+    }
     // And only under a CANCELLED run: a live run's pending node may yet run, and
-    // a failed run's pending node was routed nowhere by the failure, not a cancel.
+    // a failed run's pending node was left by the failure, not a cancel.
     for (const run of ['running', 'waiting', 'failure', 'interrupted', 'success'] as const) {
       expect(nodeStatusLabel('pending', run)).toBe('pending');
+      expect(nodeStatusLabel('wait_pending', run)).toBe('waiting (timer)');
     }
     expect(nodeStatusLabel('pending')).toBe('pending');
   });
@@ -89,6 +94,13 @@ describe('nodeStatusLabel', () => {
 });
 
 describe('containerStatusLabel', () => {
+  it('CX4 (#1320) — under a cancelled run, a container left non-terminal says the cancel stopped it', () => {
+    expect(containerStatusLabel('pending', 'cancelled')).toBe('not run (cancelled)');
+    expect(containerStatusLabel('active', 'cancelled')).toBe('stopped (cancelled)');
+    expect(containerStatusLabel('success', 'cancelled')).toBe('success');
+    expect(containerStatusLabel('active', 'running')).toBe('running');
+  });
+
   it('words every engine container status — none reaches the screen as an identifier', () => {
     for (const status of ContainerRunStatusSchema.options) {
       const label = containerStatusLabel(status);

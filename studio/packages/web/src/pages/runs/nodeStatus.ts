@@ -1,3 +1,4 @@
+import { TERMINAL_CONTAINER, TERMINAL_NODE } from '@autonomy-studio/shared';
 import type { ContainerRunStatus, NodeRunStatus, RunStatus } from '@autonomy-studio/shared';
 
 /**
@@ -143,16 +144,24 @@ const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
 };
 
 /**
- * CX4 (#1320) — the one wording that depends on the RUN, not just the node.
- * A node still `pending` when its run finished `cancelled` is not waiting its
- * turn: the cancel stopped it from ever starting (spec D2/D3 — cancel mode keeps
- * a READY node `pending`). Printing "pending" under a terminal run would claim
- * it may yet run. Every other status says the same thing whatever the run did.
+ * CX4 (#1320) — the wording that depends on the RUN, not just the node. When a
+ * run finished `cancelled`, a node or container it left NON-TERMINAL keeps that
+ * live status in the log (spec D2/D4: cancel mode keeps a ready node `pending`,
+ * a parked node keeps its park, and there is deliberately no "abandoned" node
+ * state). Printed as-is under a cancelled run, "pending" would claim it may yet
+ * run and "waiting (timer)" that a timer is still due. So:
+ *  - never started → "not run (cancelled)";
+ *  - live when the run stopped → "stopped (cancelled)".
+ * A terminal status is what the node or container actually did, and keeps its
+ * own word whatever the run did.
  */
-export const NOT_RUN_CANCELLED_LABEL = 'not run (cancelled)';
+const NOT_RUN_CANCELLED = 'not run (cancelled)';
+const STOPPED_CANCELLED = 'stopped (cancelled)';
 
 export function nodeStatusLabel(status: NodeRunStatus, runStatus?: RunStatus | null): string {
-  if (status === 'pending' && runStatus === 'cancelled') return NOT_RUN_CANCELLED_LABEL;
+  if (runStatus === 'cancelled' && !TERMINAL_NODE.has(status)) {
+    return status === 'pending' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
+  }
   return NODE_STATUS_LABELS[status];
 }
 
@@ -188,6 +197,13 @@ const CONTAINER_STATUS_LABELS: Record<ContainerRunStatus, string> = {
   skipped: 'skipped',
 };
 
-export function containerStatusLabel(status: ContainerRunStatus): string {
+/** As `nodeStatusLabel`, and for the same CX4 reason (see there). */
+export function containerStatusLabel(
+  status: ContainerRunStatus,
+  runStatus?: RunStatus | null,
+): string {
+  if (runStatus === 'cancelled' && !TERMINAL_CONTAINER.has(status)) {
+    return status === 'pending' ? NOT_RUN_CANCELLED : STOPPED_CANCELLED;
+  }
   return CONTAINER_STATUS_LABELS[status];
 }

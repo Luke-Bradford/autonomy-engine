@@ -259,6 +259,21 @@ describe('runFlowNodes', () => {
     expect(box.data.round).toBe(2);
   });
 
+  /* CX4 (#1320) — the graph words a cancelled run's leftovers as the table
+     does: it reads the projection's own run status, not the page's. */
+  it('says a cancelled run stopped what it left live, on the box and its accessible name', () => {
+    const state: RunState = {
+      ...projected(),
+      status: 'cancelled',
+      containers: { stg: { status: 'active', round: 1, outputs: {} } },
+    };
+    const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
+    expect(box.data.status).toBe('stopped (cancelled)');
+    expect(box.ariaLabel).toContain('stopped (cancelled)');
+    // The TONE stays keyed on the raw status, as for every other label.
+    expect(box.data.tone).toBe('running');
+  });
+
   /* #886 — the run graph names a container the way the AUTHOR canvas does.
      Before this, its box drew and announced the bare `kind`, so a pipeline
      authored as `loop 1` / `loop 2` ran as `loop` / `loop`: the two halves of

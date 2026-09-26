@@ -32,8 +32,15 @@ async function eventTypes(page: Page, runId: string): Promise<string[]> {
   return ((await res.json()) as { type: string }[]).map((e) => e.type);
 }
 
-/** Open the run's page, accept the confirmation, click Cancel; return the prompt's text. */
-async function cancelFromPage(page: Page, runId: string): Promise<string> {
+/**
+ * Open the run's page, accept the confirmation, click Cancel. Returns the
+ * prompt's text and when the click happened — the clock starts HERE, not before
+ * the navigation, so the elapsed-time bound measures the stop and not page load.
+ */
+async function cancelFromPage(
+  page: Page,
+  runId: string,
+): Promise<{ prompt: string; clickedAt: number }> {
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   let prompt = '';
@@ -41,10 +48,17 @@ async function cancelFromPage(page: Page, runId: string): Promise<string> {
     prompt = dialog.message();
     void dialog.accept();
   });
-  await page.getByRole('button', { name: 'Cancel run' }).click();
+  const button = page.getByRole('button', { name: 'Cancel run' });
+  await expect(button).toBeEnabled();
+  const clickedAt = Date.now();
+  await button.click();
   await expect.poll(() => prompt, { message: 'no confirmation was shown' }).not.toBe('');
-  return prompt;
+  return { prompt, clickedAt };
 }
+
+/** The status word in the node table's row for the node whose name contains `name`. */
+const nodeRowStatus = (page: Page, name: string) =>
+  page.locator('tr', { has: page.getByRole('button', { name }) }).locator('.node-status');
 
 const headerPill = (page: Page) => page.locator('.page-hint .run-status');
 
@@ -86,7 +100,13 @@ test('CX4 — cancelling a run with work IN FLIGHT stops it, and the page says c
         connectionId,
         position: { x: 0, y: 0 },
       },
+      /* The agent's FAILURE handler. The cancel fails the agent, which would make
+         this READY — and cancel mode starts no new work, failure handlers
+         included (spec D2), so it stays `pending`. (A SUCCESS successor would
+         be `skipped` instead: the pure fixpoint still runs under a cancel.) */
+      { id: 'after', type: 'wait', config: { seconds: '${0}' }, position: { x: 240, y: 0 } },
     ],
+    edges: [{ from: 'agent', to: 'after', on: 'failure' as const }],
   };
   const { pipelineVersionId } = await seedVersion(page, 'CX4 in-flight', doc);
   const runId = await fireManualTrigger(page, pipelineVersionId, 'CX4 in-flight');
@@ -97,20 +117,22 @@ test('CX4 — cancelling a run with work IN FLIGHT stops it, and the page says c
     .toContain('node.dispatched');
   expect(await runStatus(page, runId)).toBe('running');
 
-  const cancelledAt = Date.now();
-  const prompt = await cancelFromPage(page, runId);
+  const { prompt, clickedAt } = await cancelFromPage(page, runId);
   // The confirmation names what stops, and never implies a rollback.
   expect(prompt).toMatch(/— running/);
   expect(prompt).toContain('is not undone');
 
   await expect(headerPill(page)).toHaveText('cancelled', { timeout: 20_000 });
   // Far inside the subprocess's 120s: the cancel KILLED it, it did not wait it out.
-  expect(Date.now() - cancelledAt).toBeLessThan(30_000);
+  expect(Date.now() - clickedAt).toBeLessThan(30_000);
   expect(await runStatus(page, runId)).toBe('cancelled');
   expect(await eventTypes(page, runId)).toEqual(
     expect.arrayContaining(['run.cancelRequested', 'node.failed', 'run.finished']),
   );
   await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
+  // The in-flight node failed under the cancel; its successor never started.
+  await expect(nodeRowStatus(page, 'Agent')).toHaveText('failure');
+  await expect(nodeRowStatus(page, 'Wait')).toHaveText('not run (cancelled)');
 
   // D9 — NEUTRAL, not red: the operator stopped it, nothing went wrong.
   const colours = await pillColours(page);
@@ -134,12 +156,14 @@ test('CX4 — cancelling a PARKED run finishes it at once, and the page says can
     .poll(() => runStatus(page, runId), { message: 'run never parked', timeout: 20_000 })
     .toBe('waiting');
 
-  const prompt = await cancelFromPage(page, runId);
+  const { prompt } = await cancelFromPage(page, runId);
   expect(prompt).toContain('waiting (timer)');
 
   await expect(headerPill(page)).toHaveText('cancelled', { timeout: 20_000 });
   expect(await runStatus(page, runId)).toBe('cancelled');
   await expect(page.getByRole('button', { name: 'Cancel run' })).toHaveCount(0);
+  // D5 — the run finished with the park still on the node; it is not still waiting.
+  await expect(nodeRowStatus(page, 'Wait')).toHaveText('stopped (cancelled)');
 
   await expectQuiet(page, problems);
 });

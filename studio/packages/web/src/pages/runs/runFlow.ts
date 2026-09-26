@@ -243,7 +243,7 @@ export function runFlowNodes(
        when `status` is null, so an unprojected box reads `stage` while its
        accessible name reads `…, not projected`. Worth knowing before reading the
        sentence above as stronger than it is. */
-    const label = status === null ? null : containerStatusLabel(status);
+    const label = status === null ? null : containerStatusLabel(status, state?.status);
     return {
       id: c.id,
       type: 'runContainer',

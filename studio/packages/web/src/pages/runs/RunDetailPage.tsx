@@ -347,6 +347,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
    * `cancelled` is the QUEUED case: the server cancelled the row by a patch and
    * no event will ever tail in, so the row is re-read to show it. `requested`
    * needs nothing — the fold arrives over the stream.
+   *
+   * The re-read is NOT part of the cancel's success. If it fails, the cancel
+   * still happened — the `202` said so — so the row is patched to the status the
+   * server reported rather than raising a "cancel failed" alert over a cancel
+   * that worked and putting the button back on a run that is gone.
    */
   const onCancel = async () => {
     if (cancelBusy) return;
@@ -359,8 +364,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
     try {
       const { state } = await cancelRun(runId);
       if (state === 'cancelled') {
-        const fresh = await getRun(runId);
-        if (live.current) setRun(fresh);
+        const fresh = await getRun(runId).catch(() => null);
+        if (live.current) {
+          setRun((prev) => fresh ?? (prev && { ...prev, status: 'cancelled' }));
+        }
       }
     } catch (err: unknown) {
       if (live.current) setCancelError(messageOf(err));

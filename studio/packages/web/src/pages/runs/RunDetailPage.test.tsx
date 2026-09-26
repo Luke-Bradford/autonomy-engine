@@ -1938,7 +1938,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     },
   );
 
-  it.each(['success', 'failure', 'interrupted', 'cancelled'] as const)(
+  it.each(['success', 'failure', 'interrupted', 'skipped', 'cancelled'] as const)(
     'withholds the action on a %s run',
     async (s) => {
       await mountWithStatus(s);
@@ -1983,6 +1983,18 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     expect(
       await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
     ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
+  });
+
+  it('still shows a QUEUED cancel as done when the re-read fails — the 202 already said so', async () => {
+    cancelRunMock.mockResolvedValue({ runId: 'run_1', state: 'cancelled' });
+    vi.mocked(runsApi.getRun).mockRejectedValue(new Error('network blip'));
+    await mountWithStatus('queued');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(
+      await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
   });
 
