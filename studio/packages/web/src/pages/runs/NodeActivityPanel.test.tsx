@@ -96,12 +96,15 @@ describe('NodeActivityPanel — why there is no duration', () => {
     expect(panel.textContent).toMatch(/has not started, so there is nothing to measure yet/);
   });
 
-  it('CX4 (#1320) — a node a cancel stopped from starting is "not run", with no "yet"', () => {
-    const panel = renderPanel(row({ nodeId: 'a', status: 'pending', attempts: 0 }), 'cancelled');
-    expect(panel.textContent).toContain('not run (cancelled)');
-    expect(panel.textContent).toMatch(/cancelled before this node started/);
-    expect(panel.textContent).not.toMatch(/nothing to measure yet/);
-  });
+  it.each(['pending', 'ready'] as const)(
+    'CX4 (#1320) — a %s node a cancel stopped from starting is "not run", with no "yet"',
+    (status) => {
+      const panel = renderPanel(row({ nodeId: 'a', status, attempts: 0 }), 'cancelled');
+      expect(panel.textContent).toContain('not run (cancelled)');
+      expect(panel.textContent).toMatch(/cancelled before this node started/);
+      expect(panel.textContent).not.toMatch(/nothing to measure yet/);
+    },
+  );
 
   it('keeps the copied-node sentence ahead of both', () => {
     const panel = renderPanel(

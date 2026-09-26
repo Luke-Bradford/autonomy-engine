@@ -216,7 +216,7 @@ export function NodeActivityPanel({
                  these arms are standalone sentences. */
               node.status === 'skipped' && node.attempts === 0
               ? 'This node was routed around, so it was never going to run and there is nothing to measure.'
-              : node.attempts === 0 && node.status === 'pending' && runStatus === 'cancelled'
+              : node.attempts === 0 && runStatus === 'cancelled' && !TERMINAL_NODE.has(node.status)
                 ? /* CX4 (#1320) — not "yet": the run ended, and this node never will start. */
                   'The run was cancelled before this node started, so there is nothing to measure.'
                 : node.attempts === 0
