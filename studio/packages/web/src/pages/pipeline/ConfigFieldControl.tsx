@@ -1,5 +1,5 @@
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
-import { emptyControlValue, isRowList, parseRowCells } from './configForm';
+import { emptyControlValue, isRowKind, isRowList, parseRowCells, rowsToRecord } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
@@ -181,7 +181,7 @@ export function ConfigFieldControl({
     wrapOptions,
   } = useCaretInsert<HTMLTextAreaElement>();
 
-  if (field.kind === 'objectList') {
+  if (isRowKind(field.kind)) {
     return (
       <ObjectListControl
         field={field}
@@ -333,7 +333,7 @@ export function ConfigFieldControl({
               )}
             </LabelledControl>
           )}
-          {picker && field.kind === 'text' && (
+          {picker && field.kind === 'text' && !field.literal && (
             <ExpressionPicker
               fieldName={shown}
               describe={picker.describe}
@@ -419,15 +419,25 @@ export function ObjectListControl({
   // values would not do: a raw row is DENSE, every cell present as `''`, and the
   // XOR rule reads `source !== undefined` as "set".
   const cellTarget = (index: number, cell: string): PickerTarget => ({
-    place: (node, value) => ({
-      ...node,
-      config: {
-        ...node.config,
-        [field.name]: rows.map(
-          (row, i) => parseRowCells(cells, i === index ? { ...row, [cell]: value } : row).value,
-        ),
-      },
-    }),
+    place: (node, value) => {
+      const probed = rows.map((row, i) => (i === index ? { ...row, [cell]: value } : row));
+      // A `keyValue` field stores a RECORD, so its candidate is one too, read
+      // leniently with the probed row always placed (`rowsToRecord`).
+      const record =
+        field.kind === 'keyValue'
+          ? rowsToRecord(field, probed, { strict: false, keep: index })
+          : null;
+      return {
+        ...node,
+        config: {
+          ...node.config,
+          [field.name]:
+            record?.ok === true
+              ? record.value
+              : probed.map((row) => parseRowCells(cells, row).value),
+        },
+      };
+    },
     baseline: 'probed',
   });
 

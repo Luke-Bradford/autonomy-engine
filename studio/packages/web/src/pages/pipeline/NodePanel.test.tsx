@@ -75,6 +75,8 @@ const node = (id: string, type: string, config: Record<string, unknown>): Node =
 });
 
 const httpNode = (config: Record<string, unknown>): Node => node('n_http', 'http_request', config);
+/** `agent_task` keeps a top-level `json` field (`outputSchema`) now that `headers` is rows. */
+const agentNode = (config: Record<string, unknown>): Node => node('n_agent', 'agent_task', config);
 /** The shared editor's mode toggle (#1088) — one button whose caption names the mode it goes TO. */
 const toJson = () => screen.getByRole('button', { name: 'Edit as JSON' });
 const toFields = () => screen.getByRole('button', { name: 'Edit as fields' });
@@ -239,9 +241,8 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(screen.getByLabelText('url')).toBeTruthy();
     expect(screen.getByLabelText('method (optional)')).toBeTruthy();
     expect(screen.getByLabelText('body (optional)')).toBeTruthy();
-    // A record has no typed control this ticket, so it authors as JSON — but as
-    // its OWN named field, not buried in a blob.
-    expect(screen.getByLabelText('headers (optional) — JSON')).toBeTruthy();
+    // A record of headers authors as ROWS (#852), under its own name.
+    expect(screen.getByRole('group', { name: 'headers (optional)' })).toBeTruthy();
     // The blob editor is gone by default.
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
@@ -290,15 +291,60 @@ describe('NodePanel (U7 per-activity config form)', () => {
   });
 
   it('reports a field it cannot parse and writes nothing', () => {
-    const panel = mountOver(httpNode({ url: 'https://x' }));
+    const panel = mountOver(agentNode({ task: 'x' }));
 
-    fireEvent.change(screen.getByLabelText('headers (optional) — JSON'), {
+    fireEvent.change(screen.getByLabelText('outputSchema (optional) — JSON'), {
       target: { value: '{not json}' },
     });
     panel.apply();
 
-    expect(screen.getByRole('alert').textContent).toMatch(/headers: .*JSON/);
-    expect(panel.storedConfig()).toEqual({ url: 'https://x' });
+    expect(screen.getByRole('alert').textContent).toMatch(/outputSchema: .*JSON/);
+    expect(panel.storedConfig()).toEqual({ task: 'x' });
+  });
+
+  it('authors headers as rows, and a secret header as a secret NAME (#852)', () => {
+    const panel = mountOver(httpNode({ url: 'https://x', headers: { 'X-Keep': '1' } }));
+
+    // The stored record renders as a row, so an apply that touches it keeps it.
+    expect((screen.getByLabelText('headers row 1 key') as HTMLTextAreaElement).value).toBe(
+      'X-Keep',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
+    fireEvent.change(screen.getByLabelText('headers row 2 key'), { target: { value: 'X-New' } });
+    fireEvent.change(screen.getByLabelText('headers row 2 value'), { target: { value: 'v' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add secretHeaders row' }));
+    fireEvent.change(screen.getByLabelText('secretHeaders row 1 key'), {
+      target: { value: 'Authorization' },
+    });
+    fireEvent.change(screen.getByLabelText('secretHeaders row 1 secret name'), {
+      target: { value: 'api-token' },
+    });
+    panel.apply();
+
+    expect(panel.storedConfig()).toEqual({
+      url: 'https://x',
+      headers: { 'X-Keep': '1', 'X-New': 'v' },
+      secretHeaders: { Authorization: { $secret: 'api-token' } },
+    });
+  });
+
+  it('refuses a duplicate header name rather than letting one row overwrite the other', () => {
+    const panel = mountOver(httpNode({ url: 'https://x', headers: { 'X-A': '1' } }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add headers row' }));
+    fireEvent.change(screen.getByLabelText('headers row 2 key'), { target: { value: 'X-A' } });
+    fireEvent.change(screen.getByLabelText('headers row 2 value'), { target: { value: '2' } });
+    panel.apply();
+
+    expect(screen.getByRole('alert').textContent).toMatch(/headers: row 2: duplicate key 'X-A'/);
+    expect(panel.storedConfig()).toEqual({ url: 'https://x', headers: { 'X-A': '1' } });
+  });
+
+  it('sends a malformed secret marker to the JSON editor instead of repairing it', () => {
+    mountOver(httpNode({ url: 'https://x', secretHeaders: { A: { $secret: 'x', extra: 1 } } }));
+
+    expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'secretHeaders (optional)' })).toBeNull();
   });
 
   it('surfaces the activity schema its own refusal, without saving', () => {
@@ -450,14 +496,14 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // The textarea opens on what Apply would write, so a control that cannot be
     // read has no such value — opening anyway would show a config silently
     // missing the author's edit.
-    mountOver(httpNode({ url: 'https://x' }));
+    mountOver(agentNode({ task: 'x' }));
 
-    fireEvent.change(screen.getByLabelText('headers (optional) — JSON'), {
+    fireEvent.change(screen.getByLabelText('outputSchema (optional) — JSON'), {
       target: { value: '{not json}' },
     });
     fireEvent.click(toJson());
 
-    expect(screen.getByRole('alert').textContent).toMatch(/headers: .*JSON/);
+    expect(screen.getByRole('alert').textContent).toMatch(/outputSchema: .*JSON/);
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
 
