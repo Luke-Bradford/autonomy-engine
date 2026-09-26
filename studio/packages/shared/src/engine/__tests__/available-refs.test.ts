@@ -205,6 +205,27 @@ describe('availableRefs — the catalog', () => {
   it('returns nothing for a node id the doc does not contain', () => {
     expect(availableRefs(CHAIN, { kind: 'node', nodeId: 'ghost' })).toEqual([]);
   });
+
+  // #844 — a param name the ref grammar SPLITS is never offered. Alone, `a.b`
+  // would be dropped anyway by the picker's validate-probe (`${params.a}` is
+  // undeclared), so the fixture is the case that probe CANNOT catch: a json
+  // param `a` also exists, `${params.a.b}` validates, and it reads field `b` of
+  // `a` — a different value from the param the author picked.
+  it('never offers a param whose name is not an identifier, even when the split ref validates', () => {
+    const d = doc({
+      params: [
+        { name: 'a', type: 'json', required: true },
+        { name: 'a.b', type: 'string', required: true },
+        { name: 'my name', type: 'string', required: true },
+      ],
+      nodes: [node('n')],
+    });
+    expect(validatePipelineDoc(withProbe(d, 'n', '${params.a.b}'))).toEqual(validatePipelineDoc(d));
+    const refs = availableRefs(d, { kind: 'node', nodeId: 'n' }).map((s) => s.ref);
+    expect(refs).toContain('params.a');
+    expect(refs).not.toContain('params.a.b');
+    expect(refs).not.toContain('params.my name');
+  });
 });
 
 // --- container expression fields (#864) --------------------------------------

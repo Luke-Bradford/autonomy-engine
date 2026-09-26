@@ -144,6 +144,33 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expectQuiet(page, problems);
   });
 
+  test('#844 — a non-identifier name and a ${} default are NOTED on the row, and Save stays open', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'u16 advisories', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      params: [{ name: 'topic', type: 'string', required: false }],
+    });
+
+    await page.getByLabel('param 1 name').fill('topic.id');
+    const dflt = page.getByLabel('param 1 default');
+    await dflt.fill('run-${run.runId}');
+    await dflt.blur();
+
+    await expect(panel(page).getByText("'topic.id' is not a plain identifier")).toBeVisible();
+    await expect(panel(page).getByText('used exactly as written')).toBeVisible();
+    // Notes, not gates: the doc is legal and the server takes it.
+    expect(await validationIssues(page)).toEqual([]);
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
+
+    // A string default carried into a json param now reads as the string it is.
+    await page.getByLabel('param 1 type').selectOption('json');
+    await expect(dflt).toHaveValue('"run-${run.runId}"');
+
+    await expectQuiet(page, problems);
+  });
+
   test('a type-mismatched default BLOCKS the save, and the editor is the exit', async ({
     page,
   }) => {

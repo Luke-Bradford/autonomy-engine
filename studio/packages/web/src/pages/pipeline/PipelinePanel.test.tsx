@@ -69,6 +69,44 @@ describe('PipelinePanel (U16) — params', () => {
     });
   });
 
+  it('a string default carried into a json param shows QUOTED, and a blur leaves it alone', () => {
+    // #844 — unquoted, `{"a":1}` read as the object a run never receives.
+    const store = mount(
+      version({ params: [{ name: 'a', type: 'string', required: false, default: '{"a":1}' }] }),
+    );
+    fireEvent.change(screen.getByLabelText('param 1 type'), { target: { value: 'json' } });
+    const field = screen.getByLabelText('param 1 default');
+    expect(field).toHaveValue('"{\\"a\\":1}"');
+    // Identity, not equality: the no-op guard compares the field against the
+    // SAME formatting, so an untouched blur must not write at all.
+    const before = store.getState().params[0];
+    fireEvent.blur(field);
+    expect(store.getState().params[0]).toBe(before);
+    expect(before!.default).toBe('{"a":1}');
+  });
+
+  it('notes a non-identifier name and a ${} default on the row, without blocking anything', () => {
+    mount(
+      version({
+        params: [{ name: 'a.b', type: 'string', required: false, default: 'id-${run.runId}' }],
+      }),
+    );
+    expect(screen.getByText(/'a\.b' is not a plain identifier/)).toBeInTheDocument();
+    expect(screen.getByText(/used exactly as written/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('holds the DEFAULT note back while the field shows a parse error, but not the name note', () => {
+    mount(version({ params: [{ name: 'a b', type: 'json', required: false, default: '${x}' }] }));
+    expect(screen.getByText(/used exactly as written/)).toBeInTheDocument();
+    const field = screen.getByLabelText('param 1 default');
+    fireEvent.change(field, { target: { value: '{' } });
+    fireEvent.blur(field);
+    expect(screen.getByRole('alert')).toHaveTextContent('expected valid JSON');
+    expect(screen.queryByText(/used exactly as written/)).toBeNull();
+    expect(screen.getByText(/'a b' is not a plain identifier/)).toBeInTheDocument();
+  });
+
   it('SHOWS a required param’s stored default instead of claiming a run must supply it', () => {
     // W1. `resolveRunParams` reads `hasOwnProperty(p,'default')` before
     // `p.required`, so this param resolves from its default and is never asked

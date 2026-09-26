@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Param } from '@autonomy-studio/shared';
-import { buildParams, sameSeed, storedBlankKeys, type Seed } from './callRules';
+import { buildParams, rowsFrom, sameSeed, storedBlankKeys, type Seed } from './callRules';
 
 /**
  * #425 — the call editor's pure half, tested directly, on the
@@ -84,6 +84,29 @@ describe('buildParams', () => {
     const built = buildParams({ limit: 'nope' }, DECLARED);
     expect(built.ok).toBe(false);
     expect(built.ok === false && built.error).toContain('limit');
+  });
+});
+
+describe('rowsFrom → buildParams round-trips a json param (#844)', () => {
+  const JSON_DECLARED = new Map([['doc', param('doc', 'json')]]);
+
+  // Unquoted, a bound STRING that looks like JSON came back from Apply as the
+  // object: `rowsFrom` showed `{"a":1}` and `buildParams` JSON-parsed it.
+  it('keeps a string bound to a json param a string', () => {
+    for (const stored of ['{"a":1}', 'hello', '']) {
+      const rows = rowsFrom({ doc: stored }, JSON_DECLARED);
+      const built = buildParams(
+        rows,
+        JSON_DECLARED,
+        storedBlankKeys({ pipelineId: 'p', params: { doc: stored } } as never),
+      );
+      expect(built).toEqual({ ok: true, value: { doc: stored } });
+    }
+  });
+
+  it('keeps an object an object, and leaves a ${} binding unquoted', () => {
+    expect(rowsFrom({ doc: { a: 1 } }, JSON_DECLARED)).toEqual({ doc: '{"a":1}' });
+    expect(rowsFrom({ doc: '${params.x}' }, JSON_DECLARED)).toEqual({ doc: '${params.x}' });
   });
 });
 

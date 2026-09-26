@@ -93,7 +93,14 @@ import {
   readableIssue,
   sameAttribution,
 } from './containerRules';
-import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
+import {
+  coerceDefaultInput,
+  formatDefaultInput,
+  nameIssues,
+  paramDefaultNote,
+  paramNameNote,
+  withRequired,
+} from './paramRules';
 import {
   isOwnPolicyIssue,
   policyIssues,
@@ -1677,7 +1684,7 @@ function ParamRow({
   // half-typed JSON is not JSON, so a commit-per-character would either reject
   // every intermediate state or store garbage. It holds a draft and commits on
   // blur; every other control writes straight through to the store.
-  const stored = formatDefaultInput(param.default);
+  const stored = formatDefaultInput(param.default, param.type);
   const [draft, setDraft] = useState(stored);
   const [syncedParam, setSyncedParam] = useState(param);
   const [error, setError] = useState<string | null>(null);
@@ -1705,11 +1712,13 @@ function ParamRow({
   // uncommitted draft cannot survive an edit to a sibling field anyway.
   if (syncedParam !== param) {
     setSyncedParam(param);
-    setDraft(formatDefaultInput(param.default));
+    setDraft(formatDefaultInput(param.default, param.type));
     setError(null);
   }
 
   const defect = paramDefaultDefect(param);
+  const nameNote = paramNameNote(param);
+  const defaultNote = paramDefaultNote(param);
 
   function commitDefault(text: string) {
     // A blur that changed nothing must not write. Tabbing THROUGH the field
@@ -1838,6 +1847,12 @@ function ParamRow({
           {defect}
         </p>
       ) : null}
+      {/* #844 — notes, not errors: each describes a doc that saves and runs.
+          The default note is held back while the field shows a parse error,
+          because it reads the STORED default the draft is replacing. No
+          live-region role (#1249). */}
+      {nameNote ? <p className="contract-advisory">{nameNote}</p> : null}
+      {!error && defaultNote ? <p className="contract-advisory">{defaultNote}</p> : null}
       <label>
         Description
         <input

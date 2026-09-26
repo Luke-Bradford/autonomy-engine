@@ -121,7 +121,14 @@ export function rowsFrom(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of declared.keys()) out[name] = '';
-  for (const [k, v] of Object.entries(stored)) out[k] = formatDefaultInput(v);
+  // Formatted under the DECLARED type, because `buildParams` coerces the row
+  // back under it (#844): unquoted, a string bound to a `json` param came back
+  // from Apply as whatever it parsed to — `'{"a":1}'` as an object. A `${}`
+  // binding stays as written, since `buildParams` stores one verbatim.
+  for (const [k, v] of Object.entries(stored)) {
+    const expression = typeof v === 'string' && isExpressionText(v);
+    out[k] = formatDefaultInput(v, expression ? undefined : declared.get(k)?.type);
+  }
   return out;
 }
 

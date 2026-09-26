@@ -1,5 +1,6 @@
 import {
   NewPipelineVersionSchema,
+  isAddressableOutputName,
   type Output,
   type Param,
   type ParamType,
@@ -190,11 +191,70 @@ export function coerceDefaultInput(type: ParamType, raw: string): DefaultParse {
  * A string is shown as ITSELF rather than JSON-quoted, so the field round-trips
  * through `coerceDefaultInput` unchanged instead of accreting a pair of quotes
  * on every open-and-save cycle.
+ *
+ * Except under `type: 'json'`, where the field is parsed as JSON and a string
+ * must therefore be shown QUOTED to round-trip (#844). Unquoted, a string that a
+ * type switch carried over from a `string` param (`'{"a":1}'`) looked exactly
+ * like the object a run would never receive, and editing `hello` failed parsing.
+ * `type` is optional because the run-override editor still formats untyped;
+ * whether a JSON-looking string round-trips there is #1353.
  */
-export function formatDefaultInput(value: unknown): string {
+export function formatDefaultInput(value: unknown, type?: ParamType): string {
   if (value === undefined) return '';
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string' && type !== 'json') return value;
   return JSON.stringify(value) ?? '';
+}
+
+/**
+ * Whether any string anywhere inside `value` (arrays included) opens a `${`.
+ * Iterative, so a deeply nested json default cannot overflow the stack while
+ * the row renders.
+ */
+function holdsReferenceOpener(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const v = pending.pop();
+    if (typeof v === 'string') {
+      if (v.includes('${')) return true;
+    } else if (v !== null && typeof v === 'object') {
+      pending.push(...Object.values(v));
+    }
+  }
+  return false;
+}
+
+/** Characters the ref grammar splits or quotes on, so `${params.<name>}` can never reach the name. */
+const UNREACHABLE_NAME_CHARS = /[.[\]}'"]/;
+
+/**
+ * A NON-gating note for a param name that is not a plain identifier (#844), or
+ * `null`. The server accepts such a name and some resolve (`${params.my name}`
+ * does), but `availableRefs` will not offer one, and a name holding a character
+ * the grammar splits on is never reachable at all. Blank names are left to
+ * `nameIssues`, which already gates on them.
+ */
+export function paramNameNote(p: Param): string | null {
+  if (!p.name.trim() || isAddressableOutputName(p.name)) return null;
+  const reach = UNREACHABLE_NAME_CHARS.test(p.name)
+    ? ', and no ${params.…} reference can reach it'
+    : '';
+  return (
+    `'${p.name}' is not a plain identifier, so Insert reference will not offer it${reach}. ` +
+    'Use letters, digits and _, not starting with a digit.'
+  );
+}
+
+/**
+ * A NON-gating note for a `${` anywhere in a param's default, or `null`.
+ * Defaults are literal (`ParamSchema.default`), so the run receives the text;
+ * an escaped `$${` is not unescaped either.
+ */
+export function paramDefaultNote(p: Param): string | null {
+  if (!holdsReferenceOpener(p.default)) return null;
+  return (
+    'This default is used exactly as written: a ${…} in it is not evaluated. ' +
+    'To pass a computed value, bind it on the trigger or override it on the run.'
+  );
 }
 
 /**

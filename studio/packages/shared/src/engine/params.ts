@@ -9,7 +9,7 @@ import type {
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
 import type { OutputType, ParamType } from '../schemas/pipeline.js';
-import { callDetaches } from '../schemas/pipeline.js';
+import { callDetaches, isAddressableOutputName } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import { hasSecureOutput } from './secure.js';
@@ -1711,8 +1711,16 @@ function refsInScope(
 
   // A secret-typed param is REFUSED by `checkRefRoot`, not merely discouraged:
   // a secret's only sink is the executor env channel.
+  //
+  // A name that is not a plain identifier is skipped too (#844). The ref grammar
+  // splits a field at `.`/`[`/`]`, so `${params.a.b}` names param `a` — and when
+  // a json param `a` also exists that ref VALIDATES and reads `a`'s field `b`, a
+  // different value from the one picked. The picker's validate-probe cannot see
+  // that, so the catalog must not make the offer. Some non-identifiers do resolve
+  // (`my name`, `a-b`), so this also drops offers that would have worked: a
+  // missed offer, never a wrong one, which is the flyout's rule.
   for (const p of doc.params) {
-    if (p.type === 'secret') continue;
+    if (p.type === 'secret' || !isAddressableOutputName(p.name)) continue;
     out.push({
       ref: `params.${p.name}`,
       insert: `\${params.${p.name}}`,
