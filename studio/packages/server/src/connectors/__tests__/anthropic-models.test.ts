@@ -299,7 +299,7 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     ]);
   });
 
-  it('leaves the #729 known-gap ids permitted — including their DATED forms', () => {
+  it('leaves the #729 retired ids permitted — including their DATED forms', () => {
     // #751 must not quietly settle #729. The dated forms are the point of this
     // test: the bare aliases contain no date, so on their own they never reach
     // the new code path at all and would pin nothing (an earlier version of this
@@ -309,7 +309,7 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     // `claude-3-haiku-20240307` carries its date as part of the published id, and
     // the two 4.0 full ids miss their own `-0` alias when the date is stripped
     // (see `normalizeModelId`). Every one of these lands on a NON-member either
-    // way, so #729's deliberate omission survives this change untouched.
+    // way, so the retired ids' deliberate omission holds for every spelling.
     for (const model of [
       'claude-opus-4-0',
       'claude-sonnet-4-0',

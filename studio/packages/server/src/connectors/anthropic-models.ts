@@ -166,8 +166,8 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * rows; what changed is that the page CAN now settle any id it lists, which is
  * how the other four were closed without it.
  *
- * The trap that cost two prior passes, kept because it is the one a future
- * model's classification will meet: the tempting citation is the migration guide's heading "Effort
+ * The trap that cost two prior passes, kept for whoever classifies the next
+ * model: the tempting citation is the migration guide's heading "Effort
  * parameter (Opus 4.5, Opus 4.6, Sonnet 4.6 only)", read as a global list of
  * what supports `effort`. It is not one — it sits under "Migrating to Opus 4.6 /
  * Sonnet 4.6" and is scoped to that era. Read globally it would also exclude
