@@ -1390,9 +1390,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // stamped on `node.dispatched` so the run log can answer "where did this
     // data go" from itself (§2.1). `undefined` in lockstep with `datasets`.
     let datasetAddresses: { source: DatasetAddress; sink?: DatasetAddress } | undefined;
-    // #890 — the connection parameters this dispatch APPLIES, recorded on
-    // `node.dispatched.params` from this one binding, so the record cannot drift
-    // from what `resolveConnection` merged.
+    // #890 — the connection parameters this dispatch APPLIES: the overrides
+    // `resolveConnection` merges over the stored config (not the merged result).
+    // `node.dispatched.params` records them from this one binding, so the record
+    // and the merge cannot be handed different values.
     let appliedConnectionParams: Record<string, unknown> | undefined;
     if (entry.connectionKinds.length > 0) {
       // M1 — a PAIRED activity is one the CATALOG declares a sink for. Read from

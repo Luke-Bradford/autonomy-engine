@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -786,7 +786,7 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     expect(within(section).getByText('{"connectionParams":{"m":1}}')).toBeTruthy();
   });
 
-  it('withholds secure parameters with the same wording, and cuts them with the same hint', () => {
+  it('withholds secure parameters with the same wording as the input', () => {
     renderPanel(
       row({
         nodeId: 'a',
@@ -798,7 +798,9 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     expect(within(section).getAllByText(/withheld from the run log/)).toHaveLength(2);
     expect(within(section).getByText(/\(50 characters\)/)).toBeTruthy();
     expect(section.querySelector('.node-detail-outputs')).toBeNull();
-    cleanup();
+  });
+
+  it('says how much of cut parameters the log kept', () => {
     renderPanel(
       row({ nodeId: 'a', params: { text: '{"connectionParams"', chars: 9000, truncated: true } }),
     );

@@ -355,8 +355,9 @@ ticket must not re-litigate:
 
 - **Emit-time redaction** (never persist secrets to `run_events`/backups/exports).
   `secureInput` is cheap (prepared input is a command, not a durable event). *(As built, #890,
-  2026-09-26: the prepared input IS now recorded on `node.dispatched.input` for the run monitor, so
-  `secureInput` also withholds that record — emit-time, as the marker. The save-time refusals below
+  2026-09-26: the prepared input IS now recorded on `node.dispatched.input` for the run monitor, and
+  the applied connection/dataset parameters on `node.dispatched.params`, so `secureInput` also
+  withholds both records — emit-time, as the marker. The save-time refusals below
   still stand: they are about OUTPUTS that echo the input.)* **`secureOutput`
   is hard:** a redacted output cannot feed downstream `${nodes.x.output}` — either
   **prohibit downstream refs to a secure output** (validateDoc) or store an **opaque secret

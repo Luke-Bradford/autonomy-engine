@@ -3221,7 +3221,7 @@ describe('deriveNodeActivity — captured prompt/completion text (#605)', () => 
  * #890 — the input a node was dispatched with (`node.dispatched.input`).
  */
 describe('deriveNodeActivity — the dispatched input (#890)', () => {
-  const inputOf = (text: string) => ({ text, chars: text.length });
+  const recordOf = (text: string) => ({ text, chars: text.length });
   const dispatched = (nodeId: string, attempt: number, input?: { text: string; chars: number }) =>
     envelope({
       type: 'node.dispatched',
@@ -3247,15 +3247,15 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
   };
 
   it('projects the input and KEEPS it through the terminal event', () => {
-    const r = row([dispatched('a', 0, inputOf('{"u":1}')), failed('a', 0)], 'a');
-    expect(r.input).toEqual(inputOf('{"u":1}'));
+    const r = row([dispatched('a', 0, recordOf('{"u":1}')), failed('a', 0)], 'a');
+    expect(r.input).toEqual(recordOf('{"u":1}'));
     expect(r.inputInstanceId).toBeUndefined();
   });
 
   it('a retry replaces the previous attempt input, and a dispatch recording none clears it', () => {
-    const events = [dispatched('a', 0, inputOf('{"u":1}')), failed('a', 0)];
-    expect(row([...events, dispatched('a', 1, inputOf('{"u":2}'))], 'a').input).toEqual(
-      inputOf('{"u":2}'),
+    const events = [dispatched('a', 0, recordOf('{"u":1}')), failed('a', 0)];
+    expect(row([...events, dispatched('a', 1, recordOf('{"u":2}'))], 'a').input).toEqual(
+      recordOf('{"u":2}'),
     );
     expect(row([...events, dispatched('a', 1)], 'a').input).toBeUndefined();
   });
@@ -3263,7 +3263,7 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
   it('drops the input when a retry re-opens the node, before the re-dispatch', () => {
     const r = row(
       [
-        dispatched('a', 0, inputOf('{"u":1}')),
+        dispatched('a', 0, recordOf('{"u":1}')),
         failed('a', 0),
         envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }),
       ],
@@ -3276,8 +3276,8 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
   it("pairs a late-settling item's result with THAT item's input, not the latest dispatch", () => {
     const r = row(
       [
-        dispatched('w@1', 0, inputOf('{"i":1}')),
-        dispatched('w@2', 0, inputOf('{"i":2}')),
+        dispatched('w@1', 0, recordOf('{"i":1}')),
+        dispatched('w@2', 0, recordOf('{"i":2}')),
         envelope({
           type: 'node.succeeded',
           runId: 'r',
@@ -3290,20 +3290,20 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
       'w',
     );
     expect(r.instanceId).toBe('w@1');
-    expect(r.input).toEqual(inputOf('{"i":1}'));
+    expect(r.input).toEqual(recordOf('{"i":1}'));
     expect(r.inputInstanceId).toBe('w@1');
   });
 
   it('names the foreach item the input belongs to, even while that item is unsettled', () => {
     const r = row(
       [
-        dispatched('w@1', 0, inputOf('{"i":1}')),
+        dispatched('w@1', 0, recordOf('{"i":1}')),
         failed('w@1', 0),
-        dispatched('w@2', 0, inputOf('{"i":2}')),
+        dispatched('w@2', 0, recordOf('{"i":2}')),
       ],
       'w',
     );
-    expect(r.input).toEqual(inputOf('{"i":2}'));
+    expect(r.input).toEqual(recordOf('{"i":2}'));
     expect(r.inputInstanceId).toBe('w@2');
   });
 
@@ -3320,8 +3320,8 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
     });
 
   it('projects the parameters; a retry replaces them, and a re-open drops them', () => {
-    const p1 = inputOf('{"connectionParams":{"m":1}}');
-    const p2 = inputOf('{"connectionParams":{"m":2}}');
+    const p1 = recordOf('{"connectionParams":{"m":1}}');
+    const p2 = recordOf('{"connectionParams":{"m":2}}');
     expect(row([withParams('a', 0, p1), failed('a', 0)], 'a').params).toEqual(p1);
     const events = [withParams('a', 0, p1), failed('a', 0)];
     expect(row([...events, withParams('a', 1, p2)], 'a').params).toEqual(p2);
@@ -3339,8 +3339,8 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
   it("pairs a late-settling item's result with THAT item's parameters", () => {
     const r = row(
       [
-        withParams('w@1', 0, inputOf('{"i":1}')),
-        withParams('w@2', 0, inputOf('{"i":2}')),
+        withParams('w@1', 0, recordOf('{"i":1}')),
+        withParams('w@2', 0, recordOf('{"i":2}')),
         envelope({
           type: 'node.succeeded',
           runId: 'r',
@@ -3352,6 +3352,6 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
       ],
       'w',
     );
-    expect(r.params).toEqual(inputOf('{"i":1}'));
+    expect(r.params).toEqual(recordOf('{"i":1}'));
   });
 });
