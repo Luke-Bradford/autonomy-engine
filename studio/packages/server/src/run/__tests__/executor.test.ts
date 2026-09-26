@@ -4677,7 +4677,7 @@ describe('createExecutor — events stream while the activity runs (#1135)', () 
   });
 });
 
-describe('createExecutor — CX2 (#1320): abortRun stops a cancelled run\'s dispatches', () => {
+describe("createExecutor — CX2 (#1320): abortRun stops a cancelled run's dispatches", () => {
   /** Resolves when `signal` aborts. */
   const aborted = (signal: AbortSignal) =>
     new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
@@ -4694,6 +4694,7 @@ describe('createExecutor — CX2 (#1320): abortRun stops a cancelled run\'s disp
     const started = gate();
     // Many real adapters surface an abort as a rejected fetch/stream rather
     // than a terminal of their own. That is the cancel's effect, not a bug.
+    // eslint-disable-next-line require-yield -- this adapter's whole point is that it only throws
     const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
       started.open();
       await aborted(ctx.signal);

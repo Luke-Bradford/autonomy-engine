@@ -46,7 +46,13 @@ describe('POST /api/runs/:id/cancel', () => {
   });
 
   const seed = (ownerId = 'local') =>
-    createRun(app.db, { ownerId, pipelineVersionId, triggerId: null, parentRunId: null, params: {} });
+    createRun(app.db, {
+      ownerId,
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
   const cancel = (id: string) => app.inject({ method: 'POST', url: `/api/runs/${id}/cancel` });
   const eventCount = (id: string) => loadEngineEvents(app.db, id).length;
   const started = (runId: string) =>
@@ -62,8 +68,14 @@ describe('POST /api/runs/:id/cancel', () => {
     const res = await cancel(run.id);
 
     expect(res.statusCode).toBe(202);
-    expect(RunCancelAcceptedSchema.parse(res.json())).toEqual({ runId: run.id, state: 'requested' });
-    await until(() => getRun(app.db, run.id)?.status === 'cancelled', 'the run to finish cancelled');
+    expect(RunCancelAcceptedSchema.parse(res.json())).toEqual({
+      runId: run.id,
+      state: 'requested',
+    });
+    await until(
+      () => getRun(app.db, run.id)?.status === 'cancelled',
+      'the run to finish cancelled',
+    );
     expect(loadEngineEvents(app.db, run.id).map((e) => e.type)).toEqual([
       'run.cancelRequested',
       'run.finished',
@@ -77,7 +89,10 @@ describe('POST /api/runs/:id/cancel', () => {
     const res = await cancel(run.id);
 
     expect(res.statusCode).toBe(202);
-    expect(RunCancelAcceptedSchema.parse(res.json())).toEqual({ runId: run.id, state: 'cancelled' });
+    expect(RunCancelAcceptedSchema.parse(res.json())).toEqual({
+      runId: run.id,
+      state: 'cancelled',
+    });
     const row = getRun(app.db, run.id);
     expect(row?.status).toBe('cancelled');
     expect(row?.finishedAt).not.toBeNull();

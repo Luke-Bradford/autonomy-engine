@@ -925,7 +925,6 @@ const PER_RUN_DISPATCH_CONCURRENCY = 4;
 const CANCEL_MARKER = Symbol('cancel-marker');
 
 /** CX2 — the stream a dispatch gets when the cancel folded before it started. */
-// eslint-disable-next-line @typescript-eslint/require-await -- an async generator is the stream shape
 async function* cancelledStream(
   runId: string,
   nodeId: string,

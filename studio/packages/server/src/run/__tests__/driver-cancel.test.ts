@@ -106,7 +106,14 @@ function abortableExecutor(hang: ReadonlySet<string>): AbortableExecutor {
           blocked += 1;
           notify();
         });
-        yield { type: 'node.failed', runId, nodeId, attemptId, error: 'aborted', kind: 'cancelled' };
+        yield {
+          type: 'node.failed',
+          runId,
+          nodeId,
+          attemptId,
+          error: 'aborted',
+          kind: 'cancelled',
+        };
         return;
       }
       yield { type: 'node.succeeded', runId, nodeId, attemptId, outputs: {} };
@@ -123,8 +130,7 @@ function deps(db: Db, executor: Executor, cancels: RunCancels): DriveDeps {
   return { db, resolveDoc, executor, alarms: stubAlarms(), drives: createRunDrives(), cancels };
 }
 
-const types = (db: Db, runId: string): string[] =>
-  loadEngineEvents(db, runId).map((e) => e.type);
+const types = (db: Db, runId: string): string[] => loadEngineEvents(db, runId).map((e) => e.type);
 
 describe('CX2 — cancelling a run through the server driver', () => {
   it('a live pump folds the cancel through its poke, aborts in-flight work and finishes cancelled', async () => {

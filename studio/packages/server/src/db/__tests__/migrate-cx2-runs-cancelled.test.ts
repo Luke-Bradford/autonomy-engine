@@ -128,7 +128,9 @@ describe('0039 migration: runs.status accepts cancelled on an upgrading DB', () 
     sqlite.prepare(`DELETE FROM runs WHERE id = 'run_parent'`).run();
 
     const rows = sqlite
-      .prepare(`SELECT id, parent_run_id, rerun_of FROM runs WHERE id IN ('run_child', 'run_rerun') ORDER BY id`)
+      .prepare(
+        `SELECT id, parent_run_id, rerun_of FROM runs WHERE id IN ('run_child', 'run_rerun') ORDER BY id`,
+      )
       .all();
     expect(rows).toEqual([
       { id: 'run_child', parent_run_id: null, rerun_of: null },
