@@ -111,11 +111,14 @@ test.describe('#852 — the bottom property dock', () => {
     await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeVisible();
     await expect(properties(page).getByRole('group', { name: 'Run policy' })).toHaveCount(0);
 
-    await properties(page).getByRole('tab', { name: 'General' }).click();
-    await expect(properties(page).getByRole('group', { name: 'Run policy' })).toBeVisible();
+    // Membership stays on Settings: it is also where a container is CREATED.
     await expect(
       properties(page).getByRole('combobox', { name: 'Container membership' }),
     ).toBeVisible();
+
+    await properties(page).getByRole('tab', { name: 'General' }).click();
+    await expect(properties(page).getByRole('group', { name: 'Run policy' })).toBeVisible();
+    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toBeHidden();
 
     // Another activity: the panel remounts (it is keyed per node) and must land
     // on the tab the operator was using, not snap back to Settings.

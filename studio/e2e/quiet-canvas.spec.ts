@@ -338,8 +338,19 @@ test.describe('#1066 — a container collapses its ports too', () => {
     await nodeById(page, 'a').click();
     await page.getByRole('button', { name: 'Delete node' }).click();
     await expect(nodeById(page, 'a')).toHaveCount(0);
+    // In FLOW units (screen height / zoom): the fitted zoom depends on the
+    // canvas's shape, which the #852 bottom dock changed, while the box, its
+    // ports and its ✕ all scale together — so the relation under test does not.
     await expect
-      .poll(async () => (await page.locator('.flow-container').boundingBox())?.height)
+      .poll(async () => {
+        const height = (await page.locator('.flow-container').boundingBox())?.height ?? Infinity;
+        const zoom = await page.evaluate(() => {
+          const t = (document.querySelector('.react-flow__viewport') as HTMLElement).style
+            .transform;
+          return Number(/scale\(([^)]+)\)/.exec(t)?.[1] ?? 'NaN');
+        });
+        return height / zoom;
+      })
       .toBeLessThan(140);
 
     const remove = page

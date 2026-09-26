@@ -206,6 +206,10 @@ test.describe('copy/paste on the canvas (U21)', () => {
 
   test('a self-contained copy pastes into ANOTHER pipeline and saves there', async ({ page }) => {
     const problems = collectPageProblems(page);
+    // #852 — the property dock sits UNDER the canvas, so at the default 720px
+    // viewport the canvas is short enough to cull part of this fixture. A taller
+    // viewport restores the room the fixture was laid out for.
+    await page.setViewportSize({ width: 1280, height: 1000 });
     const { pipelineId: targetId } = await seedVersion(page, 'u21 paste target', TARGET);
     await openSeededCanvas(page, 'u21 paste source', SOURCE);
 

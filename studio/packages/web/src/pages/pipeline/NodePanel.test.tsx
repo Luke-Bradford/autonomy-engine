@@ -1590,7 +1590,7 @@ describe('NodePanel — run policy (#1312)', () => {
 });
 
 describe('NodePanel — the dock tabs (#852)', () => {
-  it('opens on Settings, with policy and membership behind General', () => {
+  it('opens on Settings, with run policy behind General', () => {
     mountOver(httpNode({ url: 'https://example.test' }));
     expect(screen.getByRole('tab', { name: 'Settings', selected: true })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();

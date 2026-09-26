@@ -1550,7 +1550,7 @@ export function MultiSelectionPanel({
  */
 /** #844 — the pipeline-level panel's tabs. */
 export type PipelineTab = 'params' | 'outputs';
-/** #852 — an activity's tabs: its configuration, then ADF's "General" (policy, membership). */
+/** #852 — an activity's tabs: its configuration, then ADF's "General" (run policy). */
 export type NodeTab = 'settings' | 'general';
 
 export function PipelinePanel({
@@ -2866,23 +2866,25 @@ export function NodePanel({
             {
               key: 'settings',
               label: 'Settings',
-              content: <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />,
-            },
-            {
-              key: 'general',
-              label: 'General',
               content: (
                 <>
+                  <CallPanel store={store} nodeId={nodeId} call={call} picker={picker} />
                   {/* Membership is orthogonal to the call blob, so this early
                       return must not swallow it: a container is exactly the
                       construct that puts a call node in one, and this is the
                       only panel such a node ever gets. */}
                   <ContainerSection store={store} nodeId={nodeId} />
-                  {/* #1312 — likewise policy: retry applies to a call, and a
-                      secure flag is refused on one, which is explained only if
-                      the section is here. */}
-                  <PolicyEditor store={store} nodeId={nodeId} />
                 </>
+              ),
+            },
+            {
+              key: 'general',
+              label: 'General',
+              content: (
+                // #1312 — likewise policy: retry applies to a call, and a secure
+                // flag is refused on one, which is explained only if the section
+                // is here.
+                <PolicyEditor store={store} nodeId={nodeId} />
               ),
             },
           ]}
@@ -2895,10 +2897,12 @@ export function NodePanel({
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
       <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
-      {/* #852 — ADF's split: what the activity DOES under Settings, and how it
-          RUNS (policy) and where it sits (container membership) under General.
-          Policy was already outside the config form's Apply draft (#1312), so
-          the tab boundary follows a line the panel already drew. */}
+      {/* #852 — ADF's split: what the activity DOES under Settings, how it RUNS
+          (retry, timeout, secure input/output) under General. Policy was already
+          outside the config form's Apply draft (#1312), so the tab boundary
+          follows a line the panel already drew. Container MEMBERSHIP stays on
+          Settings: it is also where a container is CREATED (U6d), an authoring
+          act that must not hide behind a second tab. */}
       <PanelTabs
         label="Activity properties"
         selected={tab}
@@ -3066,6 +3070,8 @@ export function NodePanel({
                     </button>
                   </p>
                 )}
+                <ContainerSection store={store} nodeId={nodeId} />
+
                 <ConfigEditor
                   editor={editor}
                   className="contract-section"
@@ -3192,7 +3198,6 @@ export function NodePanel({
             label: 'General',
             content: (
               <>
-                <ContainerSection store={store} nodeId={nodeId} />
                 <PolicyEditor store={store} nodeId={nodeId} />
               </>
             ),
