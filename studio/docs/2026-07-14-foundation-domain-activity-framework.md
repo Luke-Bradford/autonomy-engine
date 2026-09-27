@@ -72,6 +72,23 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 > fields (`description`/`annotations`/`folder` on the version doc) must NOT re-add `concurrency`
 > there — one home only. Enforcement (F8b) shipped in the same S6b slice (launcher both-must-pass
 > admission + pipeline-scoped fair drain).
+>
+> **`description` + `annotations` SHIPPED 2026-09-27 (F8a) on the IMMUTABLE VERSION DOC**, as D1
+> says, because a run binds a version: the run list's annotation filter (U26) and grouping (U29)
+> then read the annotations a run actually ran under, not whatever the pipeline carries today.
+> Three consequences, all intended: editing only the description mints a new version; a
+> trigger bound to an older version (or the active one) keeps running under THAT version's
+> annotations until it is re-bound or re-published; and
+> an older studio build importing a newer file drops both keys silently (`z.object` strips
+> unknown keys, and there is no `SCHEMA_VERSION` bump — `variables` has the same exposure).
+> Bounds on the WRITE schema only (`PIPELINE_DESCRIPTION_MAX_CHARS` 4000, `ANNOTATION_MAX_CHARS`
+> 100, `MAX_ANNOTATIONS` 50); an annotation with surrounding space or a control character is
+> REFUSED, never trimmed, and duplicates are refused case-insensitively (`Prod`/`prod` would
+> split one U29 group in two). Empty values are omitted from the serialized file and the content
+> form (`omitEmptyLateFields`), so every file committed before F8a keeps its bytes. These are
+> NOT carried by the git-publish spec's `workspace.json` (G-model). **`folder` is deferred to
+> #1380**: the pane tree lists pipeline ROWS, and moving a pipeline between folders minting a
+> version looks wrong, so its home is an open question rather than a copy of this one.
 
 ### D2 — Parameters vs Variables
 
@@ -410,7 +427,7 @@ rerun (gated).**
 | F7a | global_params table + REST — **superseded by GL1** ([`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md)) |
 | F7b | `${global}` resolver + explicit-namespace validation — **superseded by GL3** |
 | F7c | secure globals → secret store — **superseded by F15; not built** (GL-D5) |
-| F8a | pipeline props schema (desc/annotations/folder/concurrency) |
+| F8a | pipeline props schema (desc/annotations/folder/concurrency) — **`description` + `annotations` SHIPPED 2026-09-27** on the version doc (see the D1 note above); `concurrency` shipped with F8b; **`folder` is #1380** (its home is an open question) |
 | F8b | per-pipeline concurrency enforcement (scheduler/launcher) — **SHIPPED 2026-07-22 with #5 S6b** (see the D1 note above: the cap lives on the mutable `pipelines` row; launcher both-must-pass admission + pipeline-scoped fair drain) |
 | F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) — **MINIMAL SHIPPED 2026-07-15** (build-order item 3: "minimal contract EARLY, migrations later"). The existing `ActivityCatalogEntry` IS the ActivityDefinition; it gained `kind: 'execution'\|'control'` (the dispatch discriminant — now the executor's PRIMARY branch, checked ahead of the retained `connectionKinds.length > 0` proxy, with a distinct `CONTROL_NOT_DISPATCHABLE` code) + `category`/`ACTIVITY_CATEGORIES` (U5's palette groups, values per spec #4's headings — `agent_task` is `ai`, there is no `agent` class) + an `ActivityDefinition` alias. `cancel`/`timeoutScope`/`secure`/`errorMap`/`inputs` are deliberately NOT declared — each is sequencing behind a named owner (F2a/F3/F4/F15/F9b-d), not an open question. **Production delta is ZERO** and the reducer does not read `kind` yet: **whether A1/A2 route control via this `kind` or a structural discriminant (the `call_pipeline` precedent) is an OPEN FORK no spec settles — #4 owns it.** See the F9a spike-hardened block under D6. |
 | F9b | migrate `http_request` onto it |
