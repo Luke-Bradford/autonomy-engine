@@ -223,3 +223,39 @@ describe('parseWorkspaceFiles', () => {
     expect(parsed.pipelines[0]!.resourceId).toBeNull();
   });
 });
+
+describe('parseWorkspaceFiles — global parameters (#844 GL6)', () => {
+  const globalFile = (path: string, name: string) => ({
+    path,
+    contents: canonicalStringify({
+      schemaVersion: SCHEMA_VERSION,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'global-param',
+      exportedAt: 0,
+      data: { name, type: 'string', value: 'v', description: '' },
+    }),
+  });
+
+  it('derives the identity from the name, since the file holds no id', () => {
+    const parsed = parseWorkspaceFiles([globalFile('global-params/apiurl.json', 'apiUrl')]);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.globalParams).toEqual([
+      expect.objectContaining({ path: 'global-params/apiurl.json', resourceId: 'apiurl' }),
+    ]);
+  });
+
+  it('refuses two files whose names differ only in case, and says so', () => {
+    const parsed = parseWorkspaceFiles([
+      globalFile('global-params/apiurl.json', 'apiUrl'),
+      globalFile('global-params/apiurl-2.json', 'APIURL'),
+    ]);
+    expect(parsed.globalParams).toHaveLength(1);
+    expect(parsed.diagnostics).toEqual([
+      {
+        path: 'global-params/apiurl-2.json',
+        code: 'duplicate_resource_id',
+        message: expect.stringContaining('differ only in case'),
+      },
+    ]);
+  });
+});

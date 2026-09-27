@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { globalParamResourceId } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
   DatasetExportData,
   NodeExport,
   PipelineExportData,
   TriggerExportData,
+  GlobalParamExportData,
 } from '@autonomy-studio/shared';
 import { computeDrift } from '../workspace-drift.js';
 import type {
   ParsedConnection,
   ParsedDataset,
+  ParsedGlobalParam,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -369,6 +372,43 @@ describe('computeDrift — datasets (#1114)', () => {
       computeDrift(
         ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
         ws({ datasets: [parsedDataset('res_1', 'Customers')] }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+// #844 GL6 — a stored global the branch lacks is `added` drift: the apply does
+// not delete it, and the next Commit writes it back (spec GL-D6, rule 1).
+describe('computeDrift — global parameters (#844 GL6)', () => {
+  const parsedGlobal = (
+    name: string,
+    type: GlobalParamExportData['type'],
+    value: unknown,
+  ): ParsedGlobalParam => ({
+    path: `global-params/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`,
+    resourceId: globalParamResourceId(name),
+    data: { name, type, value, description: '' },
+  });
+
+  it('reports a stored global the branch lacks as added, and the reverse as removed', () => {
+    const added = computeDrift(ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }), ws());
+    expect(added).toEqual([
+      expect.objectContaining({ kind: 'global-param', resourceId: 'apiurl', change: 'added' }),
+    ]);
+    const removed = computeDrift(ws(), ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }));
+    expect(removed[0]).toMatchObject({ kind: 'global-param', change: 'removed' });
+  });
+
+  it('reports an edited value as modified, and an unchanged global as clean', () => {
+    const modified = computeDrift(
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'b')] }),
+    );
+    expect(modified[0]).toMatchObject({ kind: 'global-param', change: 'modified' });
+    expect(
+      computeDrift(
+        ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+        ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
       ),
     ).toEqual([]);
   });

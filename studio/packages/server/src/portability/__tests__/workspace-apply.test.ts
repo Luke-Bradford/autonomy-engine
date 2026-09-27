@@ -20,6 +20,7 @@ import {
   archivePipeline,
   createConnection,
   createDataset,
+  createGlobalParam,
   createPipeline,
   createPipelineVersion,
   createSecret,
@@ -34,11 +35,13 @@ import {
   getTriggerByResourceId,
   listConnections,
   listDatasets,
+  listOwnerGlobalParams,
   listPipelineVersions,
   listPipelines,
   listTriggers,
   updateConnection,
   updateDataset,
+  updateGlobalParam,
   updatePipeline,
   updateTrigger,
 } from '../../repo/index.js';
@@ -141,6 +144,13 @@ describe('APPLY_ORDER (#1112 — the apply phase order)', () => {
   it('applies datasets after connections and before pipelines', () => {
     expect(APPLY_ORDER.indexOf('connection')).toBeLessThan(APPLY_ORDER.indexOf('dataset'));
     expect(APPLY_ORDER.indexOf('dataset')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
+  });
+
+  // #844 GL6 — a pulled pipeline version is minted through the save gate, which
+  // types `${global.x}` against the STORED globals. The functional test below
+  // ("a pulled pipeline that reads a pulled global") exercises it too.
+  it('applies global parameters before pipelines', () => {
+    expect(APPLY_ORDER.indexOf('global-param')).toBeLessThan(APPLY_ORDER.indexOf('pipeline'));
   });
 });
 
@@ -2425,5 +2435,201 @@ describe("#1137 — a server-supplied field is OUR fault, not the branch file's"
       }
     }
     expect(uncovered).toEqual([]);
+  });
+});
+
+describe('applyWorkspace — global parameters (#844 GL6)', () => {
+  type TestDb = ReturnType<typeof freshDb>['db'];
+
+  function global(db: TestDb, name: string, type: 'string' | 'number' | 'json', value: unknown) {
+    return createGlobalParam(db, { ownerId: 'local', name, type, value, description: 'd' });
+  }
+
+  function globalsOf(db: TestDb) {
+    return listOwnerGlobalParams(db, 'local').map(({ name, type, value, description }) => ({
+      name,
+      type,
+      value,
+      description,
+    }));
+  }
+
+  it('commits name, type, value and description only, one file per global', () => {
+    const src = freshDb().db;
+    global(src, 'apiUrl', 'string', 'https://prod');
+    const branch = snapshot(src);
+
+    expect(branch.globalParams).toHaveLength(1);
+    const committed = branch.globalParams[0]!;
+    expect(committed.path).toBe('global-params/apiurl.json');
+    expect(committed.resourceId).toBe('apiurl');
+    expect(committed.data).toEqual({
+      name: 'apiUrl',
+      type: 'string',
+      value: 'https://prod',
+      description: 'd',
+    });
+    const file = serializeWorkspace(src, 'local').find((f) => f.path === committed.path)!;
+    expect(file.contents).not.toMatch(/"(id|ownerId|createdAt|updatedAt|resourceId)"/);
+  });
+
+  // A row stored before GL3 reserved `__proto__`: no version can read it, and a
+  // committed file holding it would be refused by every collaborator's apply.
+  it('does not commit a global whose name breaks the rule', () => {
+    const src = freshDb().db;
+    global(src, '__proto__', 'string', 'x');
+    global(src, 'ok', 'string', 'y');
+    expect(snapshot(src).globalParams.map((g) => g.data.name)).toEqual(['ok']);
+  });
+
+  it('round-trips into a DIFFERENT workspace', () => {
+    const src = freshDb().db;
+    global(src, 'apiUrl', 'string', 'https://prod');
+    global(src, 'cfg', 'json', { a: [1, null] });
+    const dst = freshDb().db;
+
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(result.refused).toBe(false);
+    expect(result.diagnostics).toEqual([]);
+    expect(
+      result.applied.filter((a) => a.kind === 'global-param').map((a) => a.action),
+    ).toEqual(['created', 'created']);
+    expect(globalsOf(dst)).toEqual(globalsOf(src));
+  });
+
+  it('re-applying an unchanged branch reports `unchanged`', () => {
+    const src = freshDb().db;
+    global(src, 'apiUrl', 'string', 'https://prod');
+    const dst = freshDb().db;
+    applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+    const before = listOwnerGlobalParams(dst, 'local')[0]!;
+
+    const second = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(second.applied.map((a) => [a.kind, a.action])).toEqual([['global-param', 'unchanged']]);
+    expect(listOwnerGlobalParams(dst, 'local')[0]!.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('an edited value or description re-applies as `updated`', () => {
+    const src = freshDb().db;
+    const g = global(src, 'apiUrl', 'string', 'https://prod');
+    const dst = freshDb().db;
+    applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    updateGlobalParam(src, g.id, { value: 'https://staging', description: 'moved' });
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head2', 'main');
+
+    expect(result.applied.map((a) => a.action)).toEqual(['updated']);
+    expect(globalsOf(dst)).toEqual([
+      { name: 'apiUrl', type: 'string', value: 'https://staging', description: 'moved' },
+    ]);
+  });
+
+  // Spec GL-D6 drift rule 1: the DB is the runtime source of truth.
+  it('never deletes a stored global the branch lacks', () => {
+    const src = freshDb().db;
+    const dst = freshDb().db;
+    global(dst, 'localOnly', 'string', 'kept');
+
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(result.refused).toBe(false);
+    expect(globalsOf(dst).map((g) => g.name)).toEqual(['localOnly']);
+  });
+
+  // Spec GL-D6 drift rule 2: a retype would break every version typed against
+  // the stored type, so the file is reported and not written — and the rest of
+  // the branch still applies.
+  it('skips a branch global whose type differs, reports it, and applies the rest', () => {
+    const src = freshDb().db;
+    global(src, 'limit', 'string', '10');
+    global(src, 'apiUrl', 'string', 'https://prod');
+    const dst = freshDb().db;
+    global(dst, 'limit', 'number', 5);
+
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(result.refused).toBe(false);
+    expect(result.diagnostics).toEqual([
+      {
+        path: 'global-params/limit.json',
+        code: 'global_param_conflict',
+        message: expect.stringContaining('"limit" is a number here but a string on the branch'),
+      },
+    ]);
+    expect(result.applied.map((a) => [a.path, a.action])).toEqual([
+      ['global-params/apiurl.json', 'created'],
+    ]);
+    expect(globalsOf(dst).find((g) => g.name === 'limit')).toMatchObject({
+      type: 'number',
+      value: 5,
+    });
+  });
+
+  // GL-D6: names match case-insensitively, and a name is immutable, so the
+  // stored spelling stays while the value is written.
+  it('matches a name case-insensitively and keeps the stored spelling', () => {
+    const src = freshDb().db;
+    global(src, 'APIURL', 'string', 'https://staging');
+    const dst = freshDb().db;
+    global(dst, 'apiUrl', 'string', 'https://prod');
+
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(result.applied.map((a) => [a.resourceId, a.action])).toEqual([['apiurl', 'updated']]);
+    expect(globalsOf(dst)).toEqual([
+      { name: 'apiUrl', type: 'string', value: 'https://staging', description: 'd' },
+    ]);
+  });
+
+  // A hand-edited file meets the rules `POST /api/global-params` applies, and a
+  // refusal refuses the whole atomic apply.
+  it('refuses the whole apply when a branch value does not match its type', () => {
+    const src = freshDb().db;
+    global(src, 'apiUrl', 'string', 'https://prod');
+    global(src, 'limit', 'number', 5);
+    const branch = snapshot(src);
+    const bad = branch.globalParams.find((g) => g.data.name === 'limit')!;
+    bad.data = { ...bad.data, value: 'five' };
+    const dst = freshDb().db;
+
+    expect(() => applyWorkspace(dst, 'local', branch, 'head1', 'main')).toThrow(
+      /global-params\/limit\.json/,
+    );
+    expect(globalsOf(dst)).toEqual([]);
+
+    // The same rule on an UPDATE of a matched global.
+    global(dst, 'limit', 'number', 1);
+    expect(() => applyWorkspace(dst, 'local', branch, 'head1', 'main')).toThrow(
+      /global-params\/limit\.json/,
+    );
+    expect(globalsOf(dst).find((g) => g.name === 'limit')!.value).toBe(1);
+  });
+
+  it('a pulled pipeline that reads a pulled global passes the save gate', () => {
+    const src = freshDb().db;
+    global(src, 'apiUrl', 'string', 'https://prod');
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'call ${global.apiUrl}' },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const dst = freshDb().db;
+
+    const result = applyWorkspace(dst, 'local', snapshot(src), 'head1', 'main');
+
+    expect(result.refused).toBe(false);
+    expect(result.applied.map((a) => [a.kind, a.action])).toEqual([
+      ['global-param', 'created'],
+      ['pipeline', 'created'],
+    ]);
   });
 });

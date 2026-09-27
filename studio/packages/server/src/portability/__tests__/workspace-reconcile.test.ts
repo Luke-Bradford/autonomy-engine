@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { pipelineVersionContentForm } from '@autonomy-studio/shared';
+import { globalParamResourceId, pipelineVersionContentForm } from '@autonomy-studio/shared';
 import type { PipelineVersionExport } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
   DatasetExportData,
+  GlobalParamExportData,
   NodeExport,
   PipelineExportData,
   TriggerExportData,
@@ -13,6 +14,7 @@ import type { OwnedVersionForm } from '../workspace-serialize.js';
 import type {
   ParsedConnection,
   ParsedDataset,
+  ParsedGlobalParam,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -611,5 +613,81 @@ describe('classifyWorkspace — datasets (#1114)', () => {
       kind: 'dataset',
       disposition: 'unchanged',
     });
+  });
+});
+
+// #844 GL6 — the preview must say exactly what the apply writes (#3 G7 parity):
+// a type conflict is left out and reported, a case-only name difference is NOT
+// a rename (the apply keeps the stored spelling).
+describe('classifyWorkspace — global parameters (#844 GL6)', () => {
+  const parsedGlobal = (
+    name: string,
+    type: GlobalParamExportData['type'],
+    value: unknown,
+  ): ParsedGlobalParam => ({
+    path: `global-params/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`,
+    resourceId: globalParamResourceId(name),
+    data: { name, type, value, description: '' },
+  });
+
+  it('classifies a new global as create, and an edited value as update', () => {
+    const created = classify(ws(), ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }));
+    expect(dispositionOf(created, 'apiurl')).toMatchObject({
+      kind: 'global-param',
+      disposition: 'create',
+    });
+
+    const updated = classify(
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'b')] }),
+    );
+    expect(dispositionOf(updated, 'apiurl')).toMatchObject({
+      disposition: 'update',
+      contentChanged: true,
+    });
+  });
+
+  it('classifies an unchanged global as unchanged', () => {
+    const plan = classify(
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+    );
+    expect(dispositionOf(plan, 'apiurl')).toMatchObject({ disposition: 'unchanged' });
+  });
+
+  it('does not preview a case-only name difference as a rename', () => {
+    const plan = classify(
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+      ws({ globalParams: [parsedGlobal('APIURL', 'string', 'a')] }),
+    );
+    expect(dispositionOf(plan, 'apiurl')).toMatchObject({
+      name: 'apiUrl',
+      disposition: 'unchanged',
+      nameChanged: false,
+    });
+  });
+
+  it('leaves a type conflict out of the resources and reports it', () => {
+    const plan = classify(
+      ws({ globalParams: [parsedGlobal('limit', 'number', 5)] }),
+      ws({ globalParams: [parsedGlobal('limit', 'string', '5')] }),
+    );
+    expect(plan.resources).toEqual([]);
+    expect(plan.diagnostics).toEqual([
+      expect.objectContaining({ path: 'global-params/limit.json', code: 'global_param_conflict' }),
+    ]);
+  });
+
+  // It is not a corrupt branch, so it must not take the corrupt-branch path that
+  // withholds every archive proposal.
+  it('a type conflict does not suppress the archive proposals', () => {
+    const plan = classify(
+      ws({
+        pipelines: [parsedPipeline('res_gone', 'Gone')],
+        globalParams: [parsedGlobal('limit', 'number', 5)],
+      }),
+      ws({ globalParams: [parsedGlobal('limit', 'string', '5')] }),
+    );
+    expect(plan.archive.map((a) => a.resourceId)).toEqual(['res_gone']);
   });
 });
