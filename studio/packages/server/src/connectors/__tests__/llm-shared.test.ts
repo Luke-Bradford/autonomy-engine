@@ -1369,6 +1369,36 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
       expect(capturesOf(events)[1]!.request.messages[2]!.toolTurn).toBe('error');
     });
 
+    it('records an unserializable call as args: null without blanking the others', async () => {
+      let n = 0;
+      const events = await drain(
+        runTextWithTools('anthropic_api', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () => {
+          n += 1;
+          return n === 1
+            ? Promise.resolve({
+                type: 'toolUse' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                calls: [
+                  { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
+                  { id: 't2', name: 'adder', args: { a: 10n } },
+                ],
+                buildNext: () => 'next',
+              })
+            : Promise.resolve({
+                type: 'text' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                completionText: 'done',
+                succeeded: SUCCEEDED,
+              });
+        }),
+      );
+      expect(capturesOf(events)[1]!.request.messages[1]!.text).toBe(
+        '[{"name":"adder","args":{"a":1,"b":2}},{"name":"adder","args":null}]',
+      );
+    });
+
     it('captures a later round that ends in a terminal, before the failure', async () => {
       let n = 0;
       const events = await drain(

@@ -965,13 +965,18 @@ function jsonOrEmpty(value: unknown): string {
  * `calls` turn holding the JSON of `[{name, args}]`, then one user turn per
  * result holding exactly its `resultText` (`error` for an error result).
  *
- * So a non-empty result turn's `contentHash` IS that call's `activity.toolCalled`
- * `resultHash` (which is absent for an empty result); the calls turn serializes the whole round, so its hash matches
- * no single `argsHash`. Two things are not the wire bytes: prose a provider
- * returned BESIDE its tool calls is not recorded, and OpenAI arguments that were
- * not valid JSON stay the raw string the model sent, so they serialize as a
- * JSON string. The result turns take role `user`, as Anthropic sends them
- * (OpenAI and Ollama send role `tool`); `toolTurn` is what says what they are.
+ * A non-empty result turn's `contentHash` IS that call's `activity.toolCalled`
+ * `resultHash` (absent for an empty result). The calls turn serializes the
+ * whole round, so its hash matches no single `argsHash`. Each call is
+ * serialized on its own: one whose `args` cannot be (BigInt/circular — not
+ * reachable from a parsed provider response, but guarded) records `args: null`
+ * rather than blanking the round's other calls.
+ *
+ * Two things are not the wire bytes: prose a provider returned BESIDE its tool
+ * calls is not recorded, and OpenAI arguments that were not valid JSON stay the
+ * raw string the model sent, so they serialize as a JSON string. The result
+ * turns take role `user`, as Anthropic sends them (OpenAI and Ollama send role
+ * `tool`); `toolTurn` is what says what they are.
  */
 export function toolRoundTurns(
   calls: readonly ToolCallRequest[],
@@ -981,7 +986,13 @@ export function toolRoundTurns(
     {
       role: 'assistant',
       toolTurn: 'calls',
-      content: jsonOrEmpty(calls.map((c) => ({ name: c.name, args: c.args }))),
+      content: `[${calls
+        .map(
+          (c) =>
+            jsonOrEmpty({ name: c.name, args: c.args }) ||
+            JSON.stringify({ name: c.name, args: null }),
+        )
+        .join(',')}]`,
     },
     ...results.map((r): CaptureTurn => ({
       role: 'user',
