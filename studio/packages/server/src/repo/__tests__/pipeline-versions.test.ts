@@ -753,10 +753,10 @@ describe('pipeline-versions repo', () => {
     it('leaves an uncatalogued type absent — no catalog default to seed', () => {
       const { db } = freshDb();
       const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-      // `set_variable` is not in the MVP catalog, so it has no default contract.
+      // `not_a_catalogued_type` is in no catalog, so it has no default contract.
       const created = createPipelineVersion(db, {
         ...buildVersionInput(pipeline.id),
-        nodes: [{ id: 'u', type: 'set_variable', config: {}, position: { x: 0, y: 0 } }],
+        nodes: [{ id: 'u', type: 'not_a_catalogued_type', config: {}, position: { x: 0, y: 0 } }],
       });
       const node = getPipelineVersion(db, created.id)!.nodes.find((n) => n.id === 'u')!;
       expect(node.config['outputs']).toBeUndefined();
