@@ -325,6 +325,40 @@ describe('FactoryResources — folders', () => {
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 
+  it('joins an existing folder whatever case it is typed in, rather than splitting it', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ALPHA, NIGHTLY]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to folder…' }));
+    await user.type(screen.getByRole('combobox', { name: 'Folder' }), 'nIGHTLY');
+    await user.click(screen.getByRole('button', { name: 'Move' }));
+
+    await waitFor(() => expect(moveMock).toHaveBeenCalledWith('pl_1', 'Nightly'));
+  });
+
+  it('opens a collapsed folder when a pipeline is moved into it', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ALPHA, NIGHTLY]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Gamma' });
+    await user.click(screen.getByRole('button', { name: 'Collapse folder Nightly' }));
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to folder…' }));
+    await user.type(screen.getByRole('combobox', { name: 'Folder' }), 'Nightly');
+    await user.click(screen.getByRole('button', { name: 'Move' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Collapse folder Nightly' })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      ),
+    );
+  });
+
   it('moves a pipeline back to the top level by clearing the folder', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([ALPHA, NIGHTLY]);

@@ -589,6 +589,26 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(getPipeline(tgt, tgtPipe.id)!.folder).toBeNull();
   });
 
+  it('#1380 REFUSES a bad folder in a branch file on the CREATE path, writing nothing', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+    const incoming = snapshot(src);
+    incoming.pipelines[0]!.data.pipeline.folder = 'a/b';
+
+    const tgt = freshDb().db;
+    let thrown: unknown;
+    try {
+      applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`pipeline ${incoming.pipelines[0]!.path}.folder`);
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
   it('#1380 REFUSES a bad folder in a branch file on the UPDATE path, naming the file', () => {
     const db = freshDb().db;
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });

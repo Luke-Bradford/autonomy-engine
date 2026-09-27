@@ -368,21 +368,39 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     const draft = activeDraft;
     const name = draft.name.trim();
     if (name === '' && draft.kind !== 'move') return;
+    /* A move into an EXISTING folder takes that folder's spelling: the pane
+       groups by exact name, so `ops` typed beside `Ops` would otherwise split one
+       folder in two — the same reason annotations refuse case-only duplicates. */
+    const folder =
+      draft.kind === 'move'
+        ? (folderNames.find((f) => f.toLowerCase() === name.toLowerCase()) ?? name)
+        : name;
 
     const ok = await run(
       () => {
         if (draft.kind === 'create') return createPipeline({ name });
         if (draft.kind === 'duplicate') return duplicatePipeline(draft.source, name);
-        if (draft.kind === 'move') return movePipelineToFolder(draft.pipelineId, name || null);
+        if (draft.kind === 'move') return movePipelineToFolder(draft.pipelineId, folder || null);
         return renamePipeline(draft.pipelineId, name);
       },
       (err) =>
         draft.kind === 'move'
-          ? `Could not move to ${name === '' ? 'the top level' : `“${name}”`}: ${messageOf(err)}`
+          ? `Could not move to ${folder === '' ? 'the top level' : `“${folder}”`}: ${messageOf(err)}`
           : `Could not ${draft.kind} “${name}”: ${messageOf(err)}`,
     );
-    if (ok) closeDraft();
-  }, [activeDraft, closeDraft, run]);
+    if (!ok) return;
+    closeDraft();
+    /* A pipeline moved into a folder the user had collapsed would vanish from
+       view the moment it arrived; open the folder it went to. */
+    if (draft.kind === 'move' && folder !== '') {
+      setCollapsedFolders((closed) => {
+        if (!closed.has(folder)) return closed;
+        const next = new Set(closed);
+        next.delete(folder);
+        return next;
+      });
+    }
+  }, [activeDraft, closeDraft, folderNames, run]);
 
   /**
    * Export (#959). Deliberately NOT routed through `run`: `run` refreshes the
