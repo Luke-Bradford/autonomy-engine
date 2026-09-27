@@ -8,6 +8,7 @@ import {
   type Node,
   type NewPipelineVersion,
   type Param,
+  ParamResolveError,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -18,6 +19,7 @@ import { eq } from 'drizzle-orm';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import {
   buildEngine,
+  DocUnresolvableError,
   pump,
   retryArmInput,
   startRun,
@@ -536,6 +538,76 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     const after = getRun(db, run.id);
     expect(after?.status).toBe('interrupted');
     expect(after?.leaseUntil).toBeNull();
+  });
+
+  // #1367 — a start refused before anything was appended leaves no event to carry
+  // its reason, so the reason goes to the diagnostics channel the run page reads.
+  it('records WHY a start was refused, as a `start` diagnostic (#1367)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new ParamResolveError("override for undeclared param 'nope'"),
+    });
+
+    expect(getRun(db, run.id)?.status).toBe('interrupted');
+    expect(loadEngineEvents(db, run.id)).toHaveLength(0);
+    expect(
+      listRunDiagnostics(db, run.id).map(({ seq, phase, message }) => ({ seq, phase, message })),
+    ).toEqual([
+      {
+        seq: 0,
+        phase: 'start',
+        message: "The run did not start: override for undeclared param 'nope'",
+      },
+    ]);
+  });
+
+  it('names a missing pipeline version as the reason a start was refused (#1367)', () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new DocUnresolvableError("pipeline version 'pv-x' not found"),
+    });
+
+    expect(listRunDiagnostics(db, run.id).map((d) => d.message)).toEqual([
+      "The run did not start: pipeline version 'pv-x' not found",
+    ]);
+  });
+
+  // An UNEXPECTED error's message is internal (SQL, paths, a stack's worth of
+  // detail) and the diagnostics table is owner-visible, so only its existence is
+  // stated there; the detail stays in the server log that already carries it.
+  it('never copies an unexpected error’s message into the diagnostic (#1367)', () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new Error('SQLITE_IOERR at /private/state/db'),
+    });
+
+    const messages = listRunDiagnostics(db, run.id).map((d) => d.message);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/^The run did not start: an unexpected server error/);
+    expect(messages[0]).not.toContain('SQLITE_IOERR');
+  });
+
+  it('records no `start` diagnostic when the run had already started, or with no cause (#1367)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const started = seedRun(db, pvId);
+    const bus = createRunEventBus();
+    appendEngineEvent(db, { type: 'run.triggerContext', runId: started.id, triggerId: 't' }, bus);
+    terminalizeInterrupted({ ...deps(db), bus }, started.id, { cause: new Error('mid-pump') });
+    expect(listRunDiagnostics(db, started.id)).toEqual([]);
+
+    // The boot sweep's caller: no error exists, so there is nothing to explain.
+    const swept = seedRun(db, pvId);
+    terminalizeInterrupted(deps(db), swept.id, { reason: 'never_started' });
+    expect(getRun(db, swept.id)?.status).toBe('interrupted');
+    expect(listRunDiagnostics(db, swept.id)).toEqual([]);
   });
 });
 

@@ -22,6 +22,7 @@ import {
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
 import { triggers } from '../../db/schema.js';
 import { listRunEvents } from '../../repo/run-events.js';
+import { listRunDiagnostics } from '../../repo/run-diagnostics.js';
 import {
   countActiveRunsForPipeline,
   countActiveRunsForTrigger,
@@ -997,6 +998,35 @@ describe('RunLauncher — background failure', () => {
     expect(getRun(db, result.runId!)?.status).toBe('interrupted');
     // No run.started ever landed, so the log stays empty (nothing to diverge).
     expect(loadEngineEvents(db, result.runId!)).toHaveLength(0);
+  });
+
+  // #1367 — the launcher hands its drive's error to the cleanup, so a refused
+  // start says WHY on the run rather than only in the server log.
+  it('records the refusal reason when a run-now override is refused at start (#1367)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    const resolveDoc: DocResolver = (id) => {
+      const pv = getPipelineVersion(db, id);
+      if (pv === null) throw new Error(`no pv ${id}`);
+      return pv;
+    };
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+    });
+
+    const result = launcher.fire(trigger, { runNowParams: { nope: 1 } });
+    expect(result.outcome).toBe('started');
+    await launcher.whenIdle();
+
+    expect(getRun(db, result.runId!)?.status).toBe('interrupted');
+    expect(listRunDiagnostics(db, result.runId!).map((d) => [d.phase, d.message])).toEqual([
+      ['start', "The run did not start: override for undeclared param 'nope'"],
+    ]);
   });
 
   it('APPENDS run.interrupted (log stays authoritative) when the drive throws AFTER run.started', async () => {

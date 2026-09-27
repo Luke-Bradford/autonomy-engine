@@ -164,6 +164,10 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
  * rather than from the event itself, which is why they can exist at a seq whose
  * event looks unremarkable.
  *
+ * `start` (#1367) is the other marked phase: a start refused before any event was
+ * written. Its stored `seq` points at no event, so the Seq cell shows a dash
+ * rather than a cross-reference into an Events table that is empty.
+ *
  * `ts` is deliberately not shown. It is stamped when the row was RECORDED
  * (`Date.now()` in the writer), not when the explained decision happened, so
  * presenting it as the diagnostic's moment would be quietly false. `seq` is the
@@ -172,9 +176,15 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
 function DiagnosticRow({ diagnostic }: { diagnostic: RunDiagnostic }) {
   return (
     <tr>
-      <td>{diagnostic.seq}</td>
+      <td>{diagnostic.phase === 'start' ? '—' : diagnostic.seq}</td>
       <td>
         {diagnostic.message}
+        {diagnostic.phase === 'start' && (
+          <>
+            {' '}
+            <span className="page-hint">(the run was refused before it started)</span>
+          </>
+        )}
         {diagnostic.phase === 'resume' && (
           <>
             {' '}

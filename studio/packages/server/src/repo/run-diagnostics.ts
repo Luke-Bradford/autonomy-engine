@@ -21,6 +21,11 @@ import type { Db } from './types.js';
  * an EXPLANATION of a decision, never the decision. The decisions are durable in
  * `run_events` and the `runs` row. So nothing here may ever break a drive — see
  * `recordRunDiagnostics`.
+ *
+ * One phase is not a derivation of the log: `start` (#1367) explains a start that
+ * was refused before any event existed. It is still an explanation of a decision
+ * already made durable elsewhere (the row's `interrupted`), which is what belongs
+ * here, and it still never feeds anything the engine gates on.
  */
 
 /** `seq` of the `cap` marker. BELOW every real seq (which start at 0) so the
