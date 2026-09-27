@@ -214,6 +214,22 @@ describe('RunState.variables', () => {
     expect(eng.projectRunState([startedEv])).toEqual(eng.projectRunState([startedEv]));
   });
 
+  // The name rule admits `__proto__`. An assignment would set the seed's
+  // prototype instead, and the variable would silently not exist.
+  it('seeds a variable named __proto__ as a variable', () => {
+    const eng = createEngine({
+      nodes: [node('a', { v: '${vars.__proto__}' })],
+      edges: [],
+      variables: [{ name: '__proto__', type: 'string', default: 'x' }],
+    });
+    const r = eng.reduce(eng.seedState(), startedEv);
+    expect(Object.prototype.hasOwnProperty.call(r.state.variables, '__proto__')).toBe(true);
+    const cmd = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(cmd.preparedInput).toEqual({ v: 'x' });
+  });
+
   // The state must not alias the doc: V5's writes replace values, but a caller
   // mutating a prepared input must never be able to reach the immutable doc.
   it('does not alias a default into state', () => {
