@@ -54,7 +54,10 @@ same walk as a normal run.
   to the failed node(s) is via successful predecessors** — i.e. the successful "prefix" whose outputs
   the resumed run needs. Failed / downstream / skipped nodes are NOT copied; they re-run.
 - **Copied:** frontier nodes' `status=success` + their `outputs`; `run.variables` as of the last
-  successful write before the failure; container states for fully-completed containers.
+  successful write before the failure *(2026-09-27: superseded by V-D7 of
+  [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md).
+  Variables are carried as the copied nodes' writes in log order, `copiedVariableWrites`, not as a
+  "before the failure" cut, which has no single meaning under the drain model)*; container states for fully-completed containers.
 - **Attempts reset** for re-executed nodes (fresh `attemptId` sequence in R2); copied nodes keep no
   live attempt (they don't execute).
 - **Determinism:** the frontier is computed from R1's event log (pure function of the log), so it is

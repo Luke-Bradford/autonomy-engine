@@ -88,15 +88,21 @@ after the join. ADF's answer is pipeline variables, and ours is the same, specif
   `PipelineVersionExportSchema` derives from it. This default is not the #473 hazard. The DB read path
   never sees an absent key, because the column is `NOT NULL`. On the import path, "absent" can only
   mean "no variables".
-- **Content form: `scrubVersion` (`portability/content-form.ts`) deletes `variables` when it is an
-  empty array.** It must happen there, not at export. `dbVersionForm` spreads the stored version,
-  which will carry `variables: []`, into the same `pipelineVersionContentForm` that hashes the branch
-  side. Normalising at export alone would make every DB-side form differ from its branch-side form.
-  Advisory drift would then call every committed version uncommitted, and a re-pull would mint a
-  duplicate of each one. `scrubVersion` is the single definition shared by both sides and by
-  `pipelineContentForm`. With the delete there, "absent" and "empty" are the same content.
-  Tests: an existing version's content form is byte-identical before and after V1, and a version with
-  variables survives export → import → export unchanged.
+- **An empty `variables` is OMITTED from both the serialized version file and the content form.**
+  The serializer skips the key when the array is empty, and `scrubVersion`
+  (`portability/content-form.ts`), the single definition of a version's content shared by
+  `pipelineVersionContentForm`, `pipelineContentForm` and `dbVersionForm`, deletes it when empty.
+  The reason is byte-identity. Every version that exists today must serialize and hash exactly as it
+  did before V1:
+  - `sourceBlobSha` records the git blob of the file as it was imported;
+  - committed branch files have no `variables` key;
+  - drift and the reconcile's `superseded` decision compare content forms.
+
+  A new `variables: []` in either form would make every committed pipeline look changed, and the next
+  Commit would rewrite every file for no content change. (`containers` never needed this, because it
+  predates git serialization.) With the omission, "absent" and "empty" are the same content.
+  Tests: an existing version's serialized file and content form are byte-identical before and after
+  V1, and a version with variables survives export → import → export unchanged.
 
 ### V-D3 — Run state and lifetime
 
@@ -161,14 +167,19 @@ cannot diverge, even if a function's behaviour changes later.
   (256 KiB, exported once from `engine/types.ts`). A larger value is **not written**; the node fails.
   It is never truncated: truncating would silently corrupt the value. The bound protects RunState,
   which is held in memory and carried into every later dispatch's scope.
-- **Crash resume.** `projectRunState`'s resume path gains a branch that re-emits `writeVariable` for
-  a `ready` `set`/`append` node, like every other control type. Without it, a crash between the
-  command and its event leaves the node `ready` forever.
+- **Crash resume.** `projectRunState`'s resume path gains a branch for a `ready` `set`/`append`
+  node. Without it, a crash between the command and its event leaves the node `ready` forever. **It
+  must run the SAME evaluation and checks as dispatch**, through one shared function, and route to
+  `failNode` or `writeVariable` accordingly. This is unlike the other control types' resume branches,
+  whose single evaluation either throws or pushes one command. A blind re-emit would let a value that
+  fails the type, size or replay-safety check be durably written, because the fold trusts what it is
+  given.
 - **Save-time rules** (in `validateDoc`):
   - `variable` names a declared variable.
   - `append_variable` targets an `array` variable.
   - `value` does not read the variable it writes. This is D2's settled no-self-reference rule (ADF
-    parity; see open question 1).
+    parity; see open question 1). D2 named only `set_variable`; this spec extends it to
+    `append_variable`, where an array appending itself is the same hazard.
   - `set`/`append` nodes may not carry `policy.secureInput`/`secureOutput`. This is one more arm of
     `validateSecurePolicy`, beside its `if`/`switch` arm. A value that lands in `RunState.variables`
     can be read everywhere through `${vars}`, and redaction does not cover these events, so a "secure"
@@ -274,6 +285,9 @@ which has no single meaning under the drain model.
   events for them; their writes arrived in R1's own `run.reseeded`. The source sequence is therefore
   R1's `copiedVariableWrites` followed by R1's own `variable.*` events, filtered to R2's `copiedIds`.
   The copied writes logically precede everything R1 ran. A test runs two reruns in a row.
+- **Bare back-edge bodies are never partially copied.** `reseedFrontier` already excludes every
+  `backEdgeLoopNodes` member from copy-eligibility, so such a body always re-runs whole. That
+  composes with V-D6's back-edge rule without extra work here.
 - **Why the reseed event carries the list instead of the fold recomputing it.** R2's log must replay
   on its own, the same reason `copiedOutputs` is carried.
 - **Old `run.reseeded` events.** They have no `copiedVariableWrites`, and the fold reads that as "no
@@ -331,7 +345,7 @@ node changes meaning. `CATALOG_VERSION` is bumped in the slice that first accept
 | **V2** | Read: the `vars` root in `refRoot`, `SubstitutionContext.variables`, `RunState.variables` seeded from defaults, `checkRefRoot`/`inferExprType`, `refsInScope` `kind:'variable'`, and the test pinning the trigger-binding and tool exclusions. Until V5, reads see defaults only. | — |
 | **V3** | UI: the Variables tab, built by generalising the params row editor (V-D9). The first user-visible slice. | — |
 | **V4** | Pure, unwired, unit-tested: the V-D6 guard as a function over a doc (including `settledRaw` exposed from `computeGraph`, reader collection from the `validateRefs` scan, scope lifting, the back-edge rule and exclusivity), plus `copiedVariableWritesOf` (V-D7). No doc can contain a `set`/`append` node yet, so nothing is reachable from a save or a run. | — |
-| **V5** | Accept the types, atomically: the `set_variable`/`append_variable` catalog entries + `CATALOG_VERSION` bump + every V-D4 save-time rule + **wiring V4's guard into `validateDoc`** + `allowNondeterministicVars` on `foreach` + the `writeVariable` command, `variable.*` events, fold, resume branch and driver pump branch + `failNode.code` + the new `FAILURE_CODES` + `secureEventNodeId` totality + **the `copiedVariableWrites` reseed**. Tests include a `variable.*` event for a node a loop timeout abandoned (`abandonLiveChildren`), which must fold as a no-op. | **V4 on `main`.** Everything here is **inseparable**. A type the save path accepts but the fixpoint cannot run would fail as an executor "routing bug". Writes without the guard admit timing-dependent runs. Writes without the reseed make a rerun-from-failed silently start from defaults, a wrong value (the #1150 class). |
+| **V5** | Accept the types, atomically: the `set_variable`/`append_variable` catalog entries + `CATALOG_VERSION` bump + every V-D4 save-time rule + **wiring V4's guard into `validateDoc`** + `allowNondeterministicVars` on `foreach` + the `writeVariable` command, `variable.*` events, fold, resume branch and driver pump branch + `failNode.code` + the new `FAILURE_CODES` + `secureEventNodeId` totality + **the `copiedVariableWrites` reseed**. Tests include a `variable.*` event for a node a loop timeout abandoned (`abandonLiveChildren`), which must fold as a no-op. | **V4 on `main`.** Everything here is **inseparable**. A type the save path accepts but the fixpoint cannot run would fail as an executor "routing bug". Writes without the guard admit timing-dependent runs. Writes without the reseed make a rerun-from-failed silently start from defaults, a silently wrong value, the class of #1150 (which wrote a wrong value into a store). |
 | **V6** | UI: the palette and config form for `set`/`append` (V-D9). | after V5 |
 | **V7** | Run page: variable values and the `set`/`append` drill-in (V-D9). | after V5 |
 
