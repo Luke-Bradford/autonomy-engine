@@ -10,6 +10,7 @@ import {
   type Node,
   type Param,
   type VariableDef,
+  type GlobalRead,
 } from '@autonomy-studio/shared';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { activityLabels } from './activityLabel';
@@ -103,6 +104,7 @@ export function ContainerPanel({
   containers,
   params,
   variables,
+  globals,
   onApply,
   onCopy,
   onDuplicate,
@@ -113,6 +115,8 @@ export function ContainerPanel({
   containers: Container[];
   params: Param[];
   variables: VariableDef[];
+  /** #844 GL3 — the workspace's global parameters, for the validator. */
+  globals: GlobalRead[];
   onApply: (next: Container) => void;
   /** #935 — put this container and its body on the canvas clipboard. */
   onCopy: () => void;
@@ -134,6 +138,7 @@ export function ContainerPanel({
     containers,
     params,
     variables,
+    globals,
     { kind: 'container', containerId: container.id, field: 'exitWhen' },
     nodeNames,
   );
@@ -143,6 +148,7 @@ export function ContainerPanel({
     containers,
     params,
     variables,
+    globals,
     { kind: 'container', containerId: container.id, field: 'items' },
     nodeNames,
   );
@@ -220,11 +226,11 @@ export function ContainerPanel({
     // report an issue. Memoised because it re-runs the whole doc validator.
     if (unrenderable.length > 0 || illegal.length === 0) return new Set<string>();
     return new Set(
-      validateCanvas(nodes, edges, containers, params, variables)
+      validateCanvas(nodes, edges, containers, params, variables, globals)
         .filter((issue) => issue.includes(`container '${container.id}'`))
         .flatMap((issue) => illegal.filter((name) => issue.includes(name))),
     );
-  }, [unrenderable, illegal, nodes, edges, containers, params, variables, container.id]);
+  }, [unrenderable, illegal, nodes, edges, containers, params, variables, globals, container.id]);
 
   /**
    * Seeded on mount, and re-seeded when the stored CONFIG changes (U17).
@@ -311,7 +317,7 @@ export function ContainerPanel({
     // any rule written here.
     if (
       !confirmContainerEdit(
-        { nodes, edges, containers, params, variables },
+        { nodes, edges, containers, params, variables, globals },
         containersWithUpdated(containers, next),
         recovery(stored, next),
       )

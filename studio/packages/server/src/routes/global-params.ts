@@ -12,14 +12,15 @@ import {
   listGlobalParamsPage,
   updateGlobalParam,
 } from '../repo/index.js';
+import { globalParamUsage } from '../repo/global-param-usage.js';
 import { NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 
 /**
  * #844 GL1 — the global-params store's REST surface (spec
- * `studio/docs/2026-09-27-foundation-global-params.md` GL-D1/GL-D7). INERT:
- * nothing reads a global until GL3 adds the `${global.<name>}` root, and the
- * `usage` route ships with GL3 because it answers from the reads GL3 records.
+ * `studio/docs/2026-09-27-foundation-global-params.md` GL-D1/GL-D7). Pipelines
+ * read a global as `${global.<name>}` (GL3); the `usage` route answers from the
+ * reads each version recorded when it was saved.
  *
  * Security model: every by-id route passes `requireOwned`, so another owner's
  * global and a missing one are the same 404. The list is owner-scoped in SQL.
@@ -71,6 +72,16 @@ export const globalParamsRoutes: FastifyPluginAsync = async (fastify) => {
     const updated = updateGlobalParam(db, existing.id, patch);
     if (!updated) throw new NotFoundError('global parameter', existing.id);
     return updated;
+  });
+
+  /**
+   * #844 GL3 (GL-D4) — what reads this global: the pipelines whose latest
+   * version reads it, and the triggers whose pinned version does. Advisory, for
+   * the delete confirmation; it never gates the delete.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/global-params/:id/usage', async (request) => {
+    const existing = requireOwnedGlobalParam(request);
+    return globalParamUsage(db, existing.ownerId, existing.name);
   });
 
   /**

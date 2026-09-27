@@ -93,3 +93,47 @@ export type GlobalParamPatchBody = z.infer<typeof GlobalParamPatchBodySchema>;
 export const GlobalParamValueSchema = z
   .object({ type: GlobalParamTypeSchema, value: z.unknown() })
   .superRefine((v, ctx) => refineValue(v.type, v.value, ctx));
+
+/**
+ * #844 GL3 — one global a pipeline version reads, as its save gate typed it.
+ * The version's derived, write-once `global_reads` column holds a list of these
+ * (spec GL-D3); the run's start check compares the live row against it without
+ * re-running the validator. Server-side only: not part of the version's content
+ * form, its git file or its export.
+ */
+export const GlobalReadSchema = z.object({
+  name: z.string().min(1),
+  type: GlobalParamTypeSchema,
+});
+export type GlobalRead = z.infer<typeof GlobalReadSchema>;
+
+/**
+ * #844 GL3 — what reads a global (spec GL-D4), for the delete confirmation. It
+ * is advisory, never a gate: a version is immutable, so blocking the delete on
+ * every version that ever read it would make it undeletable.
+ *  - `pipelines`: each pipeline whose LATEST version reads it.
+ *  - `triggers`: each trigger whose PINNED version reads it. A trigger runs its
+ *    pin, not the latest. A disabled one is listed too, flagged, because Run now
+ *    fires it regardless.
+ */
+export const GlobalParamUsageSchema = z.object({
+  pipelines: z.array(
+    z.object({
+      pipelineId: z.string(),
+      pipelineName: z.string(),
+      versionId: z.string(),
+      version: z.number().int(),
+    }),
+  ),
+  triggers: z.array(
+    z.object({
+      triggerId: z.string(),
+      triggerName: z.string(),
+      enabled: z.boolean(),
+      pipelineName: z.string(),
+      versionId: z.string(),
+      version: z.number().int(),
+    }),
+  ),
+});
+export type GlobalParamUsage = z.infer<typeof GlobalParamUsageSchema>;

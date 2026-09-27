@@ -1,6 +1,8 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   GlobalParamSchema,
+  globalParamNameDefect,
+  type GlobalParamType,
   NewGlobalParamSchema,
   type GlobalParam,
   type GlobalParamPatchBody,
@@ -100,4 +102,44 @@ export function updateGlobalParam(
 export function deleteGlobalParam(db: Db, id: string): boolean {
   const result = db.delete(globalParams).where(eq(globalParams.id, id)).run();
   return result.changes > 0;
+}
+
+/**
+ * #844 GL3 — the names and types of one owner's globals, for the save gate
+ * (spec GL-D2). Values are never read here: the gate types a reference, it does
+ * not resolve one, and a value may be 64 KiB. A null owner has none. A row
+ * whose name breaks today's rule (a `__proto__` stored before GL3 reserved it)
+ * is left out, so no version can come to read it.
+ */
+export function listOwnerGlobalTypes(db: Db, ownerId: string | null): Map<string, GlobalParamType> {
+  const out = new Map<string, GlobalParamType>();
+  if (ownerId === null) return out;
+  const rows = db
+    .select({ name: globalParams.name, type: globalParams.type })
+    .from(globalParams)
+    .where(eq(globalParams.ownerId, ownerId))
+    .all();
+  for (const r of rows) {
+    if (globalParamNameDefect(r.name) === null) out.set(r.name, r.type);
+  }
+  return out;
+}
+
+/**
+ * #844 GL3 — one owner's globals whose name is one of `names`, for a run's
+ * start check (GL-D3). A null owner has none. The `name` column compares
+ * BINARY, so this matches exactly, as a reference does.
+ */
+export function listOwnerGlobalParamsNamed(
+  db: Db,
+  ownerId: string | null,
+  names: readonly string[],
+): GlobalParam[] {
+  if (ownerId === null || names.length === 0) return [];
+  return db
+    .select()
+    .from(globalParams)
+    .where(and(eq(globalParams.ownerId, ownerId), inArray(globalParams.name, [...names])))
+    .all()
+    .map(decode);
 }

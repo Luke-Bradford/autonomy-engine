@@ -7,6 +7,7 @@ import {
   type Node,
   type Param,
   type VariableDef,
+  type GlobalRead,
   type RoutingPartition,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
@@ -47,6 +48,8 @@ export interface ContainerEditDoc {
   containers: Container[];
   params: Param[];
   variables: VariableDef[];
+  /** #844 GL3 — the workspace's global parameters. */
+  globals: readonly GlobalRead[];
 }
 
 /**
@@ -221,9 +224,16 @@ export function containerEditConsequence(
   nextContainers: Container[],
 ): ContainerEditConsequence {
   const known = new Set(
-    validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params, doc.variables),
+    validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params, doc.variables, doc.globals),
   );
-  const after = validateCanvas(doc.nodes, doc.edges, nextContainers, doc.params, doc.variables);
+  const after = validateCanvas(
+    doc.nodes,
+    doc.edges,
+    nextContainers,
+    doc.params,
+    doc.variables,
+    doc.globals,
+  );
   return {
     newIssues: after.filter((issue) => !known.has(issue)),
     routingChange: routingChangeBetween(doc, { ...doc, containers: nextContainers }),

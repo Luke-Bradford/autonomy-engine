@@ -14,10 +14,12 @@ import { ApiError, messageOf } from '../api/client';
 import {
   createGlobalParam,
   deleteGlobalParam,
+  getGlobalParamUsage,
   listGlobalParams,
   updateGlobalParam,
 } from '../api/globalParams';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import { deleteConfirmText } from './globalParamDeleteText';
 import { ContractRow } from './pipeline/ContractEditor';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 
@@ -93,12 +95,10 @@ export function GlobalParamsPage() {
 
   const onDelete = useCallback(
     async (global: GlobalParam) => {
-      if (
-        !window.confirm(
-          `Delete global parameter "${global.name}"?\n\n` +
-            `Its value is lost. A global of the same name can be created again.`,
-        )
-      ) {
+      // #844 GL3 (GL-D4) — what reads it, shown before the choice. Advisory: a
+      // failed read says so and still lets the operator decide.
+      const usage = await getGlobalParamUsage(global.id).catch(() => null);
+      if (!window.confirm(deleteConfirmText(global.name, usage))) {
         return;
       }
       try {
@@ -130,9 +130,9 @@ export function GlobalParamsPage() {
 
       <p className="page-hint">
         A global parameter is a named value every pipeline in this workspace shares, to be read as{' '}
-        <code>{'${global.<name>}'}</code>. Pipelines cannot read them yet — until they can, nothing
-        uses these values. A name and type are fixed once created: to change either, delete the
-        global and create it again.
+        <code>{'${global.<name>}'}</code>. A run records the values it read, so editing a global
+        changes later runs, never one already started. A name and type are fixed once created: to
+        change either, delete the global and create it again.
       </p>
       <p className="page-hint">
         Values are <strong>cleartext</strong>: they are shown here and will be copied into run logs,

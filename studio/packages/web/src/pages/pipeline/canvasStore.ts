@@ -16,6 +16,7 @@ import {
   type Output,
   type Param,
   type VariableDef,
+  type GlobalRead,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
@@ -953,6 +954,14 @@ export interface CanvasState {
    */
   variables: VariableDef[];
   /**
+   * #844 GL3 — the WORKSPACE's global parameters, name and type, which the
+   * canvas validates `${global.<name>}` against as the server's gate does.
+   * NOT document state: never in `CanvasDocSnapshot`, never written through
+   * `edit()`, and left alone by `loadVersion`, so a refetch neither dirties the
+   * doc nor pushes an undo entry, and survives opening another version.
+   */
+  globals: GlobalRead[];
+  /**
    * U21 — what is selected, as a SET. Empty is "nothing selected".
    *
    * An array rather than a `Set<string>` keyed `kind:id`: `Selection` is the
@@ -983,6 +992,8 @@ export interface CanvasState {
   future: CanvasDocSnapshot[];
 
   loadVersion(v: PipelineVersion | null): void;
+  /** #844 GL3 — replace the workspace's globals (see `globals`). */
+  setGlobals(globals: GlobalRead[]): void;
   /**
    * Point `loaded` at a new version WITHOUT touching the working graph or the
    * dirty flag — used after a save when the operator kept editing during the
@@ -1466,11 +1477,16 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       params: [],
       outputs: [],
       variables: [],
+      globals: [],
       selected: [],
       dirty: false,
       addCount: 0,
       past: [],
       future: [],
+
+      setGlobals(globals) {
+        set({ globals });
+      },
 
       loadVersion(v) {
         // U17 — opening a document is not an edit of the one that was open, so

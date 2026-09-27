@@ -48,7 +48,15 @@ function errorsOf(nodes: Node[], over: Parameters<typeof doc>[1] = {}): string {
 }
 
 function ctx(variables: Record<string, unknown>): SubstitutionContext {
-  return { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {}, variables };
+  return {
+    params: {},
+    nodeOutputs: {},
+    nodeStatuses: {},
+    run: {},
+    trigger: {},
+    variables,
+    globals: {},
+  };
 }
 
 describe('${vars.<name>} at run time', () => {

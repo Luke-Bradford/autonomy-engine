@@ -39,6 +39,7 @@ function ctx(over: Partial<SubstitutionContext> = {}): SubstitutionContext {
     run: over.run ?? {},
     trigger: over.trigger ?? {},
     variables: over.variables ?? {},
+    globals: {},
   };
 }
 

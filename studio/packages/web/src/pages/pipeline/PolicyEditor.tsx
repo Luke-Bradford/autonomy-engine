@@ -42,6 +42,7 @@ export function PolicyEditor({
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
   const variables = useStore(store, (s) => s.variables);
+  const globals = useStore(store, (s) => s.globals);
   const policy = nodes.find((n) => n.id === nodeId)?.policy;
 
   // Filtered BEFORE `readableIssue`: the filter reads the validators' quoted ids,
@@ -50,11 +51,14 @@ export function PolicyEditor({
   const issues = useMemo(
     () =>
       nodePolicyIssues(
-        [...validateCanvas(nodes, edges, containers, params, variables), ...policyIssues(nodes)],
+        [
+          ...validateCanvas(nodes, edges, containers, params, variables, globals),
+          ...policyIssues(nodes),
+        ],
         nodeId,
         enclosingContainers(nodeId, containers),
       ).map((issue) => readableIssue(issue, nodes, edges, containers)),
-    [nodes, edges, containers, params, variables, nodeId],
+    [nodes, edges, containers, params, variables, globals, nodeId],
   );
 
   function set(patch: Partial<NodePolicy>) {

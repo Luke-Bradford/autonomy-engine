@@ -39,6 +39,7 @@ import { unreadyConnectionsForVersion } from '../run/connection-readiness.js';
 import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
+import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
 
 /*
  * `TriggerWriteBodySchema` (the write body, `ownerId` stamped server-side) and
@@ -458,6 +459,24 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     );
     // A body is optional; `{}` (or none) means a plain "run now".
     const body = FireRequestSchema.parse(request.body ?? {});
+    // #844 GL3 (spec GL-D3) — the start's globals check, run here FIRST, before
+    // `fire()` creates a row: a global the version reads that was deleted or
+    // retyped is a 400 naming it, not an `interrupted` run. The start check still
+    // runs (a global can be deleted between the two); scheduled, webhook and
+    // child starts meet it there. The snapshot taken here is discarded.
+    if (trigger.pipelineVersionId !== null) {
+      try {
+        resolveRunGlobals(db, {
+          ownerId: trigger.ownerId,
+          pipelineVersionId: trigger.pipelineVersionId,
+        });
+      } catch (err) {
+        if (err instanceof GlobalStartError) {
+          throw new BadRequestError(`the run cannot start: ${err.message}`);
+        }
+        throw err;
+      }
+    }
     try {
       const result = fastify.runLauncher.fire(trigger, { runNowParams: body.params });
       reply.status(202).send(result);

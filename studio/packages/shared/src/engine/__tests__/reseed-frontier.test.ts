@@ -87,6 +87,7 @@ function state(fields: {
     triggerContext: null,
     cancelRequested: null,
     variables: {},
+    globals: {},
   };
 }
 

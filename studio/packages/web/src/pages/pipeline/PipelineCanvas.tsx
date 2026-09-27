@@ -42,6 +42,8 @@ import {
 } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { listDatasets } from '../../api/datasets';
+import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
+import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { eligibleForBinding } from './bindingPickers';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -483,12 +485,19 @@ export function PipelineCanvas({
     // that renders empty because its fetch failed is indistinguishable from a
     // workspace with no datasets. An author who read it that way would conclude
     // there is nothing to bind. Failing the page loudly is the honest outcome.
+    //
+    // #844 GL3 — the workspace's global parameters join it for the same reason:
+    // without them every `${global.x}` would badge unknown, and any badge blocks
+    // Save, so a canvas that could not read them could not save a pipeline that
+    // uses one.
     Promise.all([
       listPipelineVersions(pipelineId, ctrl.signal),
       listConnections(ctrl.signal),
       listDatasets(ctrl.signal),
+      listGlobalParams(ctrl.signal),
     ])
-      .then(([loadedVersions, conns, sets]) => {
+      .then(([loadedVersions, conns, sets, globals]) => {
+        store.getState().setGlobals(toGlobalReads(globals));
         store.getState().loadVersion(latestVersion(loadedVersions));
         setVersions(loadedVersions);
         setConnections(conns);
@@ -501,6 +510,29 @@ export function PipelineCanvas({
       });
     return () => ctrl.abort();
   }, [pipelineId, store]);
+
+  /**
+   * #844 GL3 (spec GL-D8) — the globals change in ANOTHER page (Manage → Global
+   * parameters), so the canvas re-reads them when the window regains focus, and
+   * after a save the server refused (its gate reads the live list, which may be
+   * newer than ours). Latest-wins, so a slow older answer cannot overwrite a
+   * newer one. A failed re-read keeps the last list: the server's gate is the
+   * authority either way, and a Save it would refuse still says why.
+   */
+  const guardedLoad = useGuardedLoad();
+  const refreshGlobals = useCallback(
+    () =>
+      guardedLoad(listGlobalParams, {
+        onData: (globals) => store.getState().setGlobals(toGlobalReads(globals)),
+        onError: () => {},
+      }),
+    [guardedLoad, store],
+  );
+  useEffect(() => {
+    const onFocus = () => void refreshGlobals();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshGlobals]);
 
   /**
    * #979 — the publish state, read SEPARATELY from the load above and never
@@ -535,6 +567,7 @@ export function PipelineCanvas({
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
   const variables = useStore(store, (s) => s.variables);
+  const globals = useStore(store, (s) => s.globals);
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
   // #852 — read by the folded dock's toggle, so a selection made while the
@@ -597,13 +630,14 @@ export function PipelineCanvas({
     () =>
       // #1312 — `policyIssues` mirrors a THIRD gate, the write schema's
       // `StrictNodeSchema.policy`, and names nodes, so it is rewritten too.
-      [...validateCanvas(nodes, edges, containers, params, variables), ...policyIssues(nodes)].map(
-        (raw) => ({
-          raw,
-          text: readableIssue(raw, nodes, edges, containers),
-        }),
-      ),
-    [nodes, edges, containers, params, variables],
+      [
+        ...validateCanvas(nodes, edges, containers, params, variables, globals),
+        ...policyIssues(nodes),
+      ].map((raw) => ({
+        raw,
+        text: readableIssue(raw, nodes, edges, containers),
+      })),
+    [nodes, edges, containers, params, variables, globals],
   );
   const issues = useMemo(
     () => [...located.map((issue) => issue.text), ...nameIssues(params, outputs, variables)],
@@ -757,6 +791,9 @@ export function PipelineCanvas({
             // button offers a basis we failed to read.
           }
         }
+        // #844 GL3 — a refusal may be over a global renamed or deleted since the
+        // canvas read the list; re-read it so the badges catch up.
+        if (!isStaleWrite(err)) void refreshGlobals();
         setConflict(null);
         setSaveMsg(
           // A stale write we could not describe (the refetch above threw) must
@@ -771,7 +808,7 @@ export function PipelineCanvas({
         setSaving(false);
       }
     },
-    [pipelineId, store],
+    [pipelineId, store, refreshGlobals],
   );
 
   /** An ordinary Save: the basis is the version this canvas is open on. */
@@ -1335,6 +1372,7 @@ function PropertyPanel({
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
   const variables = useStore(store, (s) => s.variables);
+  const globals = useStore(store, (s) => s.globals);
   // #852 / #844 — the dock's tab choices live HERE, above the panels, because
   // `NodePanel` is keyed per node: selecting another activity remounts it, and
   // the operator should land on the tab they were using, as ADF does.
@@ -1392,6 +1430,7 @@ function PropertyPanel({
         containers={containers}
         params={params}
         variables={variables}
+        globals={globals}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
         onCopy={() => {
           if (store.getState().copyContainer(container.id, pipelineId)) {
@@ -1966,6 +2005,7 @@ function ContainerSection({
   // has already changed.
   const params = useStore(store, (s) => s.params);
   const variables = useStore(store, (s) => s.variables);
+  const globals = useStore(store, (s) => s.globals);
 
   const [kind, setKind] = useState<ContainerKind>('stage');
   const [exitWhen, setExitWhen] = useState('');
@@ -1995,7 +2035,7 @@ function ContainerSection({
     // the "and then apply it" half, which the two callers below share.
     if (
       !confirmContainerEdit(
-        { nodes, edges, containers, params, variables },
+        { nodes, edges, containers, params, variables, globals },
         nextContainers,
         recovery,
       )
@@ -2277,6 +2317,7 @@ export function NodePanel({
   const docContainers = useStore(store, (s) => s.containers);
   const docParams = useStore(store, (s) => s.params);
   const docVariables = useStore(store, (s) => s.variables);
+  const docGlobals = useStore(store, (s) => s.globals);
   /**
    * Every activity's identifying name (#878), built ONCE for this panel and read
    * by both surfaces that need one — the heading below and the expression
@@ -2302,6 +2343,7 @@ export function NodePanel({
     docContainers,
     docParams,
     docVariables,
+    docGlobals,
     { kind: 'node', nodeId },
     nodeNames,
   );
