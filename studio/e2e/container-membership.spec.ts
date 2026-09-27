@@ -349,3 +349,55 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     await expectQuiet(page, problems);
   });
 });
+
+test.describe('#794 a revealed container lands below the routing advisory', () => {
+  /* The #788 advisory shows for an edge-less doc, and the #785 reveal fires when
+     a container empties — so an edge-less doc with a container meets both at
+     once. The advisory is `pointer-events: none`, so the overlap never blocked
+     a click; what it did was draw the one sentence explaining the graph over the
+     box the reveal had just brought into view for the operator to act on. */
+  test('emptying a container in an edge-less doc does not park its box under the advisory', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1000, height: 1000 });
+    await openSeededCanvas(page, 'reveal-under-advisory', {
+      nodes: [
+        { id: 'only', position: { x: 0, y: 0 } },
+        { id: 'after', type: 'file_write', position: { x: 420, y: 0 } },
+        // Two activities outside the loop: the advisory needs something to
+        // chain once the loop's only child is gone.
+        { id: 'more', type: 'file_write', position: { x: 420, y: 200 } },
+      ],
+      containers: [
+        {
+          id: 'loop_1',
+          kind: 'loop',
+          children: ['only'],
+          exitWhen: '${equals(nodes.only.status, "success")}',
+          maxRounds: 3,
+        },
+      ],
+    });
+
+    await deleteActivity(page, 'only');
+    await expect(nodeById(page, 'loop_1')).toHaveCount(1);
+    await expect(page.locator('.canvas-advisory')).toBeVisible();
+
+    // One read of both boxes, polled: the reveal writes the viewport in an
+    // effect after the delete commits.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const box = document
+            .querySelector('.react-flow__node[data-id="loop_1"]')!
+            .getBoundingClientRect();
+          const advisory = document.querySelector('.canvas-advisory')!.getBoundingClientRect();
+          return Math.round(box.top - advisory.bottom);
+        }),
+      )
+      .toBeGreaterThanOrEqual(0);
+
+    await expectQuiet(page, problems);
+  });
+});

@@ -1303,6 +1303,8 @@ export function FlowCanvas({
   const knownContainers = useRef<Set<string> | null>(null);
   const knownNodes = useRef<Set<string> | null>(null);
   const pendingReveal = useRef<Set<string>>(new Set());
+  /** The #788 routing advisory, measured by the reveal below (#794). */
+  const advisoryRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
     const present = new Set(containerBoxes.keys());
@@ -1358,11 +1360,33 @@ export function FlowCanvas({
        screen). Not writing at all is the point: a box the
        operator can already see must not have their viewport moved under them. */
     const usable = usableExtent(paneWidth, paneHeight);
+    /* #794 — the routing advisory is drawn over the top of the pane, and shows in
+       exactly the doc shape (edge-less, with containers) that empties a
+       container and triggers this reveal. Measured, not assumed: it wraps to a
+       second line on a narrow pane, and is `max-width`-bounded and centred, so a
+       box in a top corner is beside it, not under it. Bounding rects rather than
+       `offset*`, because React Flow centres the panel with a CSS transform that
+       `offsetLeft` does not see; its offset parent is the React Flow wrapper,
+       whose origin is the pane's. A copy wholly under it is covered, not seen,
+       so the copy check takes it too. */
+    const advisory = advisoryRef.current;
+    const frame = advisory?.offsetParent?.getBoundingClientRect();
+    const drawn = advisory?.getBoundingClientRect();
+    const cover =
+      frame === undefined || drawn === undefined
+        ? null
+        : {
+            left: drawn.left - frame.left,
+            right: drawn.right - frame.left,
+            bottom: drawn.bottom - frame.top,
+          };
     const copies = new Set(appearedSelected(knownDocNodes, docNodeIds, selected, 'node'));
     const copyRects = nodes
       .filter((n) => copies.has(n.id))
       .map((n) => ({ ...n.position, ...unmeasuredNodeSize(portsOf(n.id).length) }));
-    const lostCopies = copyRects.some((r) => onScreen(r, transform, usable.width, usable.height))
+    const lostCopies = copyRects.some((r) =>
+      onScreen(r, transform, usable.width, usable.height, cover),
+    )
       ? []
       : copyRects;
     if (appeared.length === 0 && lostCopies.length === 0) return;
@@ -1373,7 +1397,7 @@ export function FlowCanvas({
         .filter((box): box is ContainerBox => box !== undefined),
       ...lostCopies,
     ];
-    const next = revealTransform(boxes, transform, usable.width, usable.height);
+    const next = revealTransform(boxes, transform, usable.width, usable.height, cover);
     if (next !== null) void setViewport(next);
   }, [
     containerBoxes,
@@ -2244,14 +2268,13 @@ export function FlowCanvas({
              ticket's.
 
              Top, so it does not fight the refusal toast at bottom-center when
-             both are up. It can overlap a container the #785 reveal just panned
-             into view (both need an edge-less doc WITH containers) — visual only,
-             `pointer-events: none` keeps it non-blocking. Filed as #794.
+             both are up. The #785 reveal measures it and lands a container
+             BELOW it (#794) — both need an edge-less doc WITH containers.
 
              Both copies end on what SAVING does, because that is the actual cost
              in the ticket: the inferred routing is what gets minted into the next
              immutable version, and a version cannot be edited afterwards. */
-          <Panel position="top-center" className="canvas-advisory">
+          <Panel ref={advisoryRef} position="top-center" className="canvas-advisory">
             {routing.kind === 'chain' ? (
               <>
                 No edges authored — these {routing.order.length} activities run in one sequence, in

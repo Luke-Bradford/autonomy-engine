@@ -6,6 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 import { seedVersion } from './support/seedDoc';
 
 /**
@@ -33,15 +34,6 @@ import { seedVersion } from './support/seedDoc';
 test.describe.configure({ mode: 'serial' });
 
 let repoDir: string;
-
-/** The scratch bare repo, outside the harness's own data dir. */
-function makeBareRepo(): string {
-  // NOT under `data/e2e`: `reset-state.mjs` wipes that tree, and putting
-  // spec-authored content inside it invites a future widening of that delete.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-git-e2e-'));
-  execFileSync('git', ['init', '--bare', '--initial-branch=main', dir], { stdio: 'ignore' });
-  return dir;
-}
 
 /**
  * #979 — push a pipeline file the workspace has never seen, so importing it
@@ -133,8 +125,11 @@ test.beforeAll(() => {
 test.afterAll(async ({ request }) => {
   // Unconditional: a failure above must not leave the workspace in git mode for
   // whatever spec file runs next.
-  await request.delete('/api/workspace/git').catch(() => undefined);
-  if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  try {
+    await disconnectWorkspaceGit(request);
+  } finally {
+    if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
