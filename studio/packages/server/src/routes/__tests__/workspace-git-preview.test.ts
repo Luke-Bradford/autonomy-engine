@@ -3,12 +3,19 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  SCHEMA_VERSION,
+  canonicalStringify,
+  type NewPipelineVersion,
+} from '@autonomy-studio/shared';
 import {
   createConnection,
+  createGlobalParam,
   createPipeline,
   createPipelineVersion,
   deleteConnection,
+  listOwnerGlobalParams,
 } from '../../repo/index.js';
 import { fixtureGit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
@@ -242,6 +249,59 @@ describe('workspace-git import-preview route', () => {
     const res = await preview();
     expect(res.statusCode).toBe(200);
     expect(res.json().preview).toEqual({ head: null, resources: [], archive: [], diagnostics: [] });
+  });
+
+  // #844 GL6 — a branch global retyped against this workspace's is reported by
+  // BOTH the preview and the apply, left out of what either says it writes, and
+  // does not refuse the rest of the import (spec GL-D6 drift rule 2).
+  it('reports a retyped branch global in the preview and the import, and writes neither', async () => {
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    createGlobalParam(app.db, {
+      ownerId: 'local',
+      name: 'limit',
+      type: 'number',
+      value: 5,
+      description: '',
+    });
+
+    mkdirSync(join(work, 'global-params'), { recursive: true });
+    const file = (name: string, type: string, value: unknown) =>
+      canonicalStringify({
+        schemaVersion: SCHEMA_VERSION,
+        catalogVersion: CATALOG_VERSION,
+        kind: 'global-param',
+        exportedAt: 0,
+        data: { name, type, value, description: '' },
+      });
+    writeFileSync(join(work, 'global-params/limit.json'), file('limit', 'string', '5'));
+    writeFileSync(join(work, 'global-params/region.json'), file('region', 'string', 'eu'));
+    fixtureGit(work, ['add', '.']);
+    fixtureGit(work, ['commit', '-m', 'globals']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+
+    const conflict = {
+      path: 'global-params/limit.json',
+      code: 'global_param_conflict',
+      message: expect.stringContaining('"limit" is a number here but a string on the branch'),
+    };
+    const { preview: result } = (await preview()).json();
+    expect(result.resources.map((r: { path: string }) => r.path)).toEqual([
+      'global-params/region.json',
+    ]);
+    expect(result.diagnostics).toEqual([conflict]);
+
+    const applied = (
+      await app.inject({ method: 'POST', url: '/api/workspace/git/import' })
+    ).json().import;
+    expect(applied.refused).toBe(false);
+    expect(applied.diagnostics).toEqual([conflict]);
+    expect(
+      listOwnerGlobalParams(app.db, 'local').map((g) => [g.name, g.type, g.value]),
+    ).toEqual([
+      ['limit', 'number', 5],
+      ['region', 'string', 'eu'],
+    ]);
   });
 
   it('surfaces a malformed committed file as a diagnostic (not dropped, not a throw)', async () => {
