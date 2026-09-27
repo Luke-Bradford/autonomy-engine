@@ -29,7 +29,7 @@ import {
   type EdgeCondition,
 } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
-import { blankOutput, blankParam } from './paramRules';
+import { blankOutput, blankParam, blankVariable } from './paramRules';
 import { readClipboard, writeClipboard, type CanvasClipboard, type CutContext } from './clipboard';
 import {
   CONTAINER_GAP,
@@ -794,7 +794,7 @@ function snapshotOf(s: CanvasState): CanvasDocSnapshot {
  * reads as changed — again, an extra step rather than a swallowed one.
  */
 function rowCoalesceKey(
-  kind: 'param' | 'output',
+  kind: 'param' | 'output' | 'variable',
   index: number,
   current: Record<string, unknown>,
   next: Record<string, unknown>,
@@ -1368,6 +1368,10 @@ export interface CanvasState {
   addOutput(): void;
   updateOutput(index: number, next: Output): void;
   removeOutput(index: number): void;
+  /** #844 V3 — the Variables tab's rows, addressed by index like the two above. */
+  addVariable(): void;
+  updateVariable(index: number, next: VariableDef): void;
+  removeVariable(index: number): void;
   /** Select exactly one element, or nothing. Sugar over `setSelection`. */
   select(sel: Selection | null): void;
   /**
@@ -2376,6 +2380,24 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       removeOutput(index) {
         if (!inRange(index, get().outputs.length)) return;
         edit((s) => ({ outputs: s.outputs.filter((_, i) => i !== index) }));
+      },
+
+      addVariable() {
+        edit((s) => ({ variables: [...s.variables, blankVariable(s.variables)] }));
+      },
+
+      updateVariable(index, next) {
+        if (!inRange(index, get().variables.length)) return;
+        const current = get().variables[index]!;
+        edit(
+          (s) => ({ variables: s.variables.map((v, i) => (i === index ? next : v)) }),
+          rowCoalesceKey('variable', index, current, next),
+        );
+      },
+
+      removeVariable(index) {
+        if (!inRange(index, get().variables.length)) return;
+        edit((s) => ({ variables: s.variables.filter((_, i) => i !== index) }));
       },
 
       /**

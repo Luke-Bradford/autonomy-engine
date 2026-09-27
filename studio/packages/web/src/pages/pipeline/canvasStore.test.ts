@@ -1817,6 +1817,42 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
     expect(s.getState().outputs).toEqual([]);
   });
 
+  it('#844 V3 — variables get the same add/update/remove treatment, and undo reverses it', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ variables: [{ name: 'a', type: 'number', default: 1 }] }));
+    expect(s.getState().dirty).toBe(false);
+
+    s.getState().addVariable();
+    expect(s.getState().variables).toEqual([
+      { name: 'a', type: 'number', default: 1 },
+      { name: 'var_2', type: 'string', default: '' },
+    ]);
+    expect(s.getState().dirty).toBe(true);
+
+    s.getState().updateVariable(1, { name: 'rows', type: 'array', default: [] });
+    expect(s.getState().variables[1]).toEqual({ name: 'rows', type: 'array', default: [] });
+    // An index nothing is at records nothing.
+    s.getState().updateVariable(5, { name: 'x', type: 'string', default: '' });
+    expect(s.getState().variables).toHaveLength(2);
+
+    s.getState().removeVariable(0);
+    expect(s.getState().variables.map((v) => v.name)).toEqual(['rows']);
+
+    s.getState().undo();
+    s.getState().undo();
+    s.getState().undo();
+    expect(s.getState().variables).toEqual([{ name: 'a', type: 'number', default: 1 }]);
+  });
+
+  it('#844 V3 — a burst of edits to ONE variable field coalesces into a single undo', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ variables: [{ name: 'a', type: 'string', default: '' }] }));
+    s.getState().updateVariable(0, { name: 'ab', type: 'string', default: '' });
+    s.getState().updateVariable(0, { name: 'abc', type: 'string', default: '' });
+    s.getState().undo();
+    expect(s.getState().variables[0]!.name).toBe('a');
+  });
+
   it('every contract action marks the canvas dirty', () => {
     const acts: ((s: ReturnType<typeof createCanvasStore>) => void)[] = [
       (s) => s.getState().addParam(),

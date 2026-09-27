@@ -4,6 +4,8 @@ import {
   type Output,
   type Param,
   type ParamType,
+  type VariableDef,
+  type VariableType,
 } from '@autonomy-studio/shared';
 
 /**
@@ -75,6 +77,79 @@ export function blankOutput(existing: readonly Output[]): Output {
 }
 
 /**
+ * #844 V3 — each variable type's ZERO value: what a new row, or a type change
+ * that cannot carry the old default across, writes. A variable's default is
+ * REQUIRED and checked strictly (spec V-D1), so the doc always states the
+ * starting value rather than leaving the run to invent one.
+ */
+export const VARIABLE_ZERO: Readonly<Record<VariableType, string | number | boolean | []>> = {
+  string: '',
+  number: 0,
+  boolean: false,
+  array: [],
+};
+
+/** A fresh zero value — `array`'s must not be a SHARED `[]` two rows could alias. */
+function zeroOf(type: VariableType): unknown {
+  return type === 'array' ? [] : VARIABLE_ZERO[type];
+}
+
+/** A new variable row, stating its starting value (V-D1). */
+export function blankVariable(existing: readonly VariableDef[]): VariableDef {
+  return { name: freshName('var', existing), type: 'string', default: '' };
+}
+
+/**
+ * Turn a variable default field's text into the typed value the doc stores.
+ *
+ * Unlike a param (`coerceDefaultInput`), BLANK is not "no default": a variable
+ * always has one. For a `string` it is the empty string, stored verbatim; for
+ * any other type it is refused, because inventing `0` or `false` from an
+ * emptied field would store a value the author never typed.
+ */
+export function coerceVariableDefault(
+  type: VariableType,
+  raw: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  if (type === 'string') return { ok: true, value: raw };
+  if (!raw.trim()) return { ok: false, error: `a ${type} variable needs a starting value` };
+  if (type === 'array') {
+    const parsed = coerceDefaultInput('json', raw);
+    if (!parsed.ok) return { ok: false, error: 'expected a JSON array, e.g. [1, 2]' };
+    if (!parsed.has || !Array.isArray(parsed.value)) {
+      return { ok: false, error: 'expected a JSON array, e.g. [1, 2]' };
+    }
+    return { ok: true, value: parsed.value };
+  }
+  const parsed = coerceDefaultInput(type, raw);
+  if (!parsed.ok) return parsed;
+  // Unreachable — the blank case returned above — but narrowing beats a cast.
+  if (!parsed.has) return { ok: false, error: `a ${type} variable needs a starting value` };
+  return { ok: true, value: parsed.value };
+}
+
+/** Render a stored variable default as its field's text (the inverse of the above). */
+export function formatVariableDefault(value: unknown, type: VariableType): string {
+  return formatDefaultInput(value, type === 'array' ? 'json' : type);
+}
+
+/**
+ * Change a variable's type, carrying the default across when it CONVERTS.
+ *
+ * Not ParamRow's "keep the default and let the gate name the mismatch": a
+ * variable default is checked strictly, so a kept `5` under `string` would be a
+ * standing error whose field already shows `5`, and a blur that changes nothing
+ * cannot repair it. So the default is re-read under the new type from its own
+ * text (`5` → `'5'`, `'5'` → `5`, `'true'` → `true`), and where that fails it
+ * becomes the new type's zero value. A mis-click is one undo away.
+ */
+export function withVariableType(v: VariableDef, type: VariableType): VariableDef {
+  if (type === v.type) return v;
+  const carried = coerceVariableDefault(type, formatVariableDefault(v.default, v.type));
+  return { ...v, type, default: carried.ok ? carried.value : zeroOf(type) };
+}
+
+/**
  * Run one declaration list through the SERVER'S OWN write-schema field, and
  * report what it refuses.
  *
@@ -95,11 +170,16 @@ export function blankOutput(existing: readonly Output[]): Output {
  *    that shows it — but it is a real divergence, so it is stated rather than
  *    buried.
  */
-function schemaNameIssues(label: 'param' | 'output', items: readonly { name: string }[]): string[] {
+function schemaNameIssues(
+  label: 'param' | 'output' | 'variable',
+  items: readonly { name: string }[],
+): string[] {
   const field =
     label === 'param'
       ? NewPipelineVersionSchema.shape.params
-      : NewPipelineVersionSchema.shape.outputs;
+      : label === 'output'
+        ? NewPipelineVersionSchema.shape.outputs
+        : NewPipelineVersionSchema.shape.variables;
   const out: string[] = [];
 
   items.forEach((item, i) => {
@@ -118,11 +198,12 @@ function schemaNameIssues(label: 'param' | 'output', items: readonly { name: str
 }
 
 /**
- * The SAVE-GATING issues for the declared params and outputs.
+ * The SAVE-GATING issues for the declared params, outputs and variables.
  *
- * Params and outputs are checked in SEPARATE namespaces, because the schema
- * keeps them separate: a param `x` and an output `x` are different declarations
- * and a doc holding both is legal. Merging them would refuse a valid pipeline.
+ * Each list is checked in its OWN namespace, because the schema keeps them
+ * separate: a param `x`, an output `x` and a variable `x` are different
+ * declarations and a doc holding all three is legal. Merging them would refuse a
+ * valid pipeline.
  *
  * Kept OUT of `validateCanvas` on purpose. That function's contract is that it
  * delegates to `validatePipelineDoc`, the exact function the server's write gate
@@ -130,8 +211,16 @@ function schemaNameIssues(label: 'param' | 'output', items: readonly { name: str
  * instead, a different (and equally real) server gate, so they are concatenated
  * at the call site rather than smuggled inside a function that promises one SSOT.
  */
-export function nameIssues(params: readonly Param[], outputs: readonly Output[]): string[] {
-  return [...schemaNameIssues('param', params), ...schemaNameIssues('output', outputs)];
+export function nameIssues(
+  params: readonly Param[],
+  outputs: readonly Output[],
+  variables: readonly VariableDef[],
+): string[] {
+  return [
+    ...schemaNameIssues('param', params),
+    ...schemaNameIssues('output', outputs),
+    ...schemaNameIssues('variable', variables),
+  ];
 }
 
 /** What a default field's text means: absent, a typed value, or a parse failure. */
