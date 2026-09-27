@@ -242,14 +242,31 @@ variable, which is exactly the dependency edge the author needs to add.
   round 2's, depending on timing. So a writer inside a bare back-edge body is rejected unless every
   accessor of that variable is inside the same body. This is the same conservatism as RS's
   `backEdgeLoopNodes`.
+  - *(V4, found in planning)* **The mirror case too.** A bounce fires on its source's outcome while
+    that source's forward edges release what lies downstream, so a READER inside a body can run again
+    beside a writer ordered after it. "`p` before `q`" therefore holds only if no bare body holds `p`
+    without `q`; a writer that finishes before the reader (outside the body) stays legal.
+  - *(V4)* **A decision inside a bare body decides again on every bounce**, so it proves two
+    accessors exclusive only when both are inside that body. Otherwise round 1 can take `true` and
+    round 2 `false`, and the two branch writers both run.
+  - A container-targeted back-edge needs none of this: `validateDoc` requires its source inside the
+    container, so its body is every child, and lifting orders everything outside the container.
 - **Exclusive:** both sit under **different outcomes of one decision node `n`** in the same scope.
-  - The outcome classes are each branch key of an `if`/`switch` (from `declaredBranchesOf`), and
-    `success` / `failure` / `skipped` of any node. `completion` overlaps all of them and is never
-    exclusive.
-  - "`a` sits under `n`'s class-`c` edges" means two things together. First, removing `n`'s class-`c`
-    out-edges makes `a` unreachable from the scope's roots. Second, no path from those edges to `a`
-    crosses a `skipped` edge. A skipped edge inverts the implication: `n →(false) F →(skipped) G` runs
-    `G` exactly when `n` took `true`.
+  - The atomic outcomes are `success` / `failure` / `skipped` of any node, except that an `if`/`switch`
+    has one outcome per branch key (from `declaredBranchesOf`) instead of `success`. **A branching
+    node's `success` edge is the union of its branches** *(V4 correction: an `if` terminates `success`
+    whichever branch it took, so its `success` edge fires beside every branch edge — treating the two
+    as disjoint was a false accept)*. `completion` is success-or-failure and so overlaps both.
+  - *(V4: implemented as a must-analysis, which the wording below was a sufficient case of.)* For each
+    entity, the analysis computes what its DISPATCH implies about each earlier decision's outcome, over
+    the reducer's own readiness rule: an edge that fires implies its source's outcome is one the edge
+    accepts, plus everything the source's own dispatch implied; conditions on one predecessor OR
+    together; predecessors AND under an `all` join and OR under `any`. Two accessors are exclusive when
+    some decision's implied outcome sets are disjoint. This keeps the rule's two halves — every path to
+    `a` must pass `n` (an `any`-join path around `n` removes the implication), and a `skipped` edge
+    inverts it (`n →(false) F →(skipped) G` runs `G` exactly when `n` took `true`, so a skipped edge
+    implies only that its source was skipped) — and additionally accepts an `all`-join writer that
+    also takes a data edge from upstream of `n`, which pure reachability would reject.
   - `n` decides once per round, so exclusivity holds within a round, and rounds are sequential.
   - This keeps the two canonical patterns legal: set `status` on an `if`'s true and false branches,
     and set it on a node's success and failure edges.
@@ -344,8 +361,8 @@ node changes meaning. `CATALOG_VERSION` is bumped in the slice that first accept
 | **V1** | Declare: `VariableTypeSchema` + `VariableDefSchema` + `PipelineVersion.variables` + migration + the `scrubVersion` empty-delete + content-form byte-identity and round-trip tests + `validateDoc` name/type/strict-default rules + **the web carry**: `canvasStore` holds `variables` as working state and `toVersionBody`, version restore and copy-pipeline send it. Every one of those builds the write body field by field, so without the carry a canvas Save of a version that declares variables (through the API or a git import) would silently default them to `[]`. Inert. | — |
 | **V2** | Read: the `vars` root in `refRoot`, `SubstitutionContext.variables`, `RunState.variables` seeded from defaults, `checkRefRoot`/`inferExprType`, `refsInScope` `kind:'variable'`, and the test pinning the trigger-binding and tool exclusions. Until V5, reads see defaults only. **Built with the web half of the read:** `validateCanvas` and the expression picker are handed `variables`, because a canvas that did not know them would badge a server-valid `${vars.x}` as undeclared and its validate-probe would drop every variable offer. That is the `validateCanvas` half of #1359; making `ValidatedDoc.variables` required stays with V3. An `array` variable may be indexed (`${vars.rows[0].id}`), never field-stepped. | — |
 | **V3** | UI: the Variables tab, built by generalising the params row editor (V-D9). The first user-visible slice. | — |
-| **V4** | Pure, unwired, unit-tested: the V-D6 guard as a function over a doc (including `settledRaw` exposed from `computeGraph`, reader collection from the `validateRefs` scan, scope lifting, the back-edge rule and exclusivity), plus `copiedVariableWritesOf` (V-D7). No doc can contain a `set`/`append` node yet, so nothing is reachable from a save or a run. | — |
-| **V5** | Accept the types, atomically: the `set_variable`/`append_variable` catalog entries + `CATALOG_VERSION` bump + every V-D4 save-time rule + **wiring V4's guard into `validateDoc`** + `allowNondeterministicVars` on `foreach` + the `writeVariable` command, `variable.*` events, fold, resume branch and driver pump branch + `failNode.code` + the new `FAILURE_CODES` + `secureEventNodeId` totality + **the `copiedVariableWrites` reseed**. Tests include a `variable.*` event for a node a loop timeout abandoned (`abandonLiveChildren`), which must fold as a no-op. | **V4 on `main`.** Everything here is **inseparable**. A type the save path accepts but the fixpoint cannot run would fail as an executor "routing bug". Writes without the guard admit timing-dependent runs. Writes without the reseed make a rerun-from-failed silently start from defaults, a silently wrong value, the class of #1150 (which wrote a wrong value into a store). |
+| **V4** | Pure, unwired, unit-tested: the V-D6 guard as a function over a doc (including `settledRaw` exposed from `computeGraph`, reader collection from the validators' own scans (`validateRefs` for nodes, `validateDoc` for a container's `items`/`exitWhen`), scope lifting, the back-edge rule and exclusivity), plus `copiedVariableWritesOf` (V-D7). No doc can contain a `set`/`append` node yet, so nothing is reachable from a save or a run. | — |
+| **V5** | *(V4 notes: the guard's reader list is complete only for a doc both validators accept, so wire it beside them; refuse a `${}` in `config.variable`, which the guard matches literally; add the `allowNondeterministicVars` exemption to the parallel-foreach rule; pin that `copiedVariableWritesOf`, which takes one write per `(nodeId, attemptId)`, equals what the fold applied.)* Accept the types, atomically: the `set_variable`/`append_variable` catalog entries + `CATALOG_VERSION` bump + every V-D4 save-time rule + **wiring V4's guard into `validateDoc`** + `allowNondeterministicVars` on `foreach` + the `writeVariable` command, `variable.*` events, fold, resume branch and driver pump branch + `failNode.code` + the new `FAILURE_CODES` + `secureEventNodeId` totality + **the `copiedVariableWrites` reseed**. Tests include a `variable.*` event for a node a loop timeout abandoned (`abandonLiveChildren`), which must fold as a no-op. | **V4 on `main`.** Everything here is **inseparable**. A type the save path accepts but the fixpoint cannot run would fail as an executor "routing bug". Writes without the guard admit timing-dependent runs. Writes without the reseed make a rerun-from-failed silently start from defaults, a silently wrong value, the class of #1150 (which wrote a wrong value into a store). |
 | **V6** | UI: the palette and config form for `set`/`append` (V-D9). | after V5 |
 | **V7** | Run page: variable values and the `set`/`append` drill-in (V-D9). | after V5 |
 
