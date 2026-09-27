@@ -42,6 +42,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     outputValues: undefined,
     copiedFromRunId: undefined,
     copiedChildRunId: undefined,
+    variableWrite: undefined,
     instanceId: undefined,
     startedAtMs: undefined,
     endedAtMs: undefined,
@@ -826,5 +827,48 @@ describe('NodeActivityPanel — the dispatched input (#890)', () => {
     expect(
       within(inputSection() as HTMLElement).getByText(/stored the first 19 of 9000 characters/),
     ).toBeTruthy();
+  });
+});
+
+describe('NodeActivityPanel — the variable a writer wrote (#844 V7)', () => {
+  function writeSection(panel: HTMLElement): HTMLElement | null {
+    const heading = within(panel).queryByRole('heading', { name: 'Variable write' });
+    return heading?.closest('section') ?? null;
+  }
+
+  it('says a `set` REPLACED the named variable, with the value from its event', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 's',
+        status: 'success',
+        outputValues: {},
+        variableWrite: { op: 'set', name: 'count', value: 5 },
+      }),
+    );
+    const section = writeSection(panel);
+    expect(section?.textContent).toContain('Set count to:');
+    expect(section?.querySelector('code.node-detail-outputs')?.textContent).toBe('5');
+    cleanup();
+  });
+
+  it('says an `append` added ONE element, shown as JSON', () => {
+    const panel = renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'success',
+        outputValues: {},
+        variableWrite: { op: 'append', name: 'rows', value: 'x' },
+      }),
+    );
+    const section = writeSection(panel);
+    expect(section?.textContent).toContain('Appended to rows:');
+    expect(section?.querySelector('code.node-detail-outputs')?.textContent).toBe('"x"');
+    cleanup();
+  });
+
+  it('has no such section on a node that wrote nothing', () => {
+    const panel = renderPanel(row({ nodeId: 'n', status: 'success', outputValues: {} }));
+    expect(writeSection(panel)).toBeNull();
+    cleanup();
   });
 });

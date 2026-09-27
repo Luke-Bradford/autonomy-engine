@@ -29,6 +29,7 @@ const node = (over: Partial<NodeActivity> & { nodeId: string }): NodeActivity =>
   outputValues: undefined,
   copiedFromRunId: undefined,
   copiedChildRunId: undefined,
+  variableWrite: undefined,
   instanceId: undefined,
   startedAtMs: undefined,
   endedAtMs: undefined,

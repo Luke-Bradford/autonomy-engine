@@ -29,6 +29,7 @@ import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
+import { RunVariables } from './RunVariables';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
@@ -656,6 +657,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
         logTruncated={
           (stream.phase === 'closed' || stream.phase === 'error') && !stream.replayComplete
         }
+      />
+
+      {/* #844 V7 — the run's variables, from the same one projection the graph
+          and table read, so they update live and agree with the drill-in's
+          writes. Beside the run-level spend and before the graph: both are
+          facts about the whole run. Renders nothing for a pipeline that
+          declares no variables, or while the version doc is unavailable. */}
+      <RunVariables
+        declared={doc?.variables}
+        overlay={overlay}
+        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
       />
 
       <h3>Graph</h3>
