@@ -8,7 +8,7 @@ import {
 } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
-import { listRuns } from '../../api/runs';
+import { listRunAnnotations, listRuns } from '../../api/runs';
 import { usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
@@ -200,7 +200,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   }
 
   const filters = useMemo(() => readRunFilters(searchParams), [searchParams]);
-  const { status: statusFilter, pipelineId, triggerId, since } = filters;
+  const { status: statusFilter, pipelineId, triggerId, since, annotation } = filters;
   const filtered = hasActiveRunFilters(filters);
 
   function setFilter(param: string, next: string) {
@@ -237,8 +237,8 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    */
   const fetchPage = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
-      listRuns({ status: statusFilter, pipelineId, triggerId, since }, cursor, signal),
-    [statusFilter, pipelineId, triggerId, since],
+      listRuns({ status: statusFilter, pipelineId, triggerId, since, annotation }, cursor, signal),
+    [statusFilter, pipelineId, triggerId, since, annotation],
   );
   const {
     items: runs,
@@ -329,6 +329,17 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     const controller = new AbortController();
     listTriggers(controller.signal)
       .then(setTriggers)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  // U26 — the annotation picker's options, the annotations of versions the
+  // caller's runs are bound to. Fails silently for the triggers picker's reason.
+  const [annotations, setAnnotations] = useState<string[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    listRunAnnotations(controller.signal)
+      .then(setAnnotations)
       .catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -444,6 +455,28 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
               {pipelineId !== undefined && !pipelines.some((p) => p.id === pipelineId) && (
                 <option value={pipelineId} disabled>
                   {pipelineId} (unavailable)
+                </option>
+              )}
+            </select>
+          )}
+        </LabelledControl>
+
+        <LabelledControl label="Annotation">
+          {(id) => (
+            <select
+              id={id}
+              value={annotation ?? ''}
+              onChange={(e) => setFilter(RUN_FILTER_PARAMS.annotation, e.target.value)}
+            >
+              <option value="">All annotations</option>
+              {annotations.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+              {annotation !== undefined && !annotations.includes(annotation) && (
+                <option value={annotation} disabled>
+                  {annotation} (unavailable)
                 </option>
               )}
             </select>
