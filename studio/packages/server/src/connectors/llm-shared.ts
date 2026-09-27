@@ -965,8 +965,8 @@ function jsonOrEmpty(value: unknown): string {
  * `calls` turn holding the JSON of `[{name, args}]`, then one user turn per
  * result holding exactly its `resultText` (`error` for an error result).
  *
- * So a result turn's `contentHash` IS that call's `activity.toolCalled`
- * `resultHash`; the calls turn serializes the whole round, so its hash matches
+ * So a non-empty result turn's `contentHash` IS that call's `activity.toolCalled`
+ * `resultHash` (which is absent for an empty result); the calls turn serializes the whole round, so its hash matches
  * no single `argsHash`. Two things are not the wire bytes: prose a provider
  * returned BESIDE its tool calls is not recorded, and OpenAI arguments that were
  * not valid JSON stay the raw string the model sent, so they serialize as a

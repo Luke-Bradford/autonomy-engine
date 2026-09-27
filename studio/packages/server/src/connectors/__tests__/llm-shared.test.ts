@@ -995,9 +995,16 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
     const last = events[events.length - 1]!;
     expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
     if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
-    // Both billed responses are metered, and each is captured (#605).
-    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
-    expect(events.filter((e) => e.type === 'captured')).toHaveLength(2);
+    // Both billed responses are metered, and each is captured before the
+    // budget terminal (#605).
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'captured',
+      'failed',
+    ]);
   });
 
   it('yields a first-exchange capture before a terminal failure (L9a invariant)', async () => {
