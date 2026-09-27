@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useStore } from 'zustand';
-import { listFunctions, type Edge, type Node, type Param } from '@autonomy-studio/shared';
+import {
+  listFunctions,
+  type Edge,
+  type Node,
+  type Param,
+  type VariableDef,
+} from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
 import { validateCanvas } from './canvasDoc';
@@ -19,9 +25,15 @@ import { applyWrap, wrapTarget } from './expressionInsert';
 
 const at = { x: 0, y: 0 };
 
-function mount(nodes: Node[], edges: Edge[], params: Param[], selected: string) {
+function mount(
+  nodes: Node[],
+  edges: Edge[],
+  params: Param[],
+  selected: string,
+  variables: VariableDef[] = [],
+) {
   const store = createCanvasStore();
-  store.setState({ nodes, edges, params });
+  store.setState({ nodes, edges, params, variables });
 
   function Harness() {
     const node = useStore(store, (s) => s.nodes.find((n) => n.id === selected));
@@ -177,6 +189,18 @@ describe('ExpressionPicker in NodePanel', () => {
     // A secret's only sink is the executor env channel — it never enters the
     // `${}` language, so offering it would be a reference the doc refuses.
     expect(screen.queryByRole('button', { name: /^apiKey/ })).toBeNull();
+  });
+
+  // #844 V2 — a declared variable is offered, under its own heading, and the
+  // pick writes `${vars.<name>}`. The offer survives the picker's validate
+  // probe only because the canvas validator is handed the variables too.
+  it('offers a declared pipeline variable and writes ${vars.<name>}', () => {
+    const variables: VariableDef[] = [{ name: 'attempts', type: 'number', default: 0 }];
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call', variables);
+    ui.open('url');
+    expect(screen.getByText('Pipeline variables')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^attempts/ }));
+    expect(ui.field('url').value).toContain('${vars.attempts}');
   });
 
   it('closes on Escape without touching the field', () => {
@@ -393,7 +417,7 @@ describe('ExpressionPicker — wrap in a function', () => {
     const url = READS.config['url'] as string;
     const span = wrapTarget(url, url.length, url.length)!;
     const issues = (value: string) =>
-      validateCanvas([FETCH, { ...READS, config: { ...READS.config, url: value } }], CHAIN, [], []);
+      validateCanvas([FETCH, { ...READS, config: { ...READS.config, url: value } }], CHAIN, [], [], []);
     const baseline = issues(url);
     for (const name of offered) {
       const after = issues(applyWrap(url, span, name).value);

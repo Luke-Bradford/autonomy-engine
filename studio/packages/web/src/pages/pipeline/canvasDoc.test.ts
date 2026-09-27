@@ -105,25 +105,36 @@ describe('validateCanvas', () => {
   it('a valid two-node success chain has no issues', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e', 'a', 'b')];
-    expect(validateCanvas(nodes, edges, [], [])).toEqual([]);
+    expect(validateCanvas(nodes, edges, [], [], [])).toEqual([]);
   });
 
   it('an empty doc has no issues', () => {
-    expect(validateCanvas([], [], [], [])).toEqual([]);
+    expect(validateCanvas([], [], [], [], [])).toEqual([]);
+  });
+
+  // #844 V2 — the badge must agree with the server gate about `${vars.x}`,
+  // which it can only do when it is handed the declared variables.
+  it('accepts a declared ${vars.x} read, and badges an undeclared one', () => {
+    const nodes = [{ ...node('a'), config: { url: '${vars.base}' } }];
+    const base = [{ name: 'base', type: 'string' as const, default: 'https://a.test' }];
+    expect(validateCanvas(nodes, [], [], [], base)).toEqual([]);
+    expect(validateCanvas(nodes, [], [], [], [])).toEqual([
+      expect.stringMatching(/\$\{vars\.base\} is not a declared variable/),
+    ]);
   });
 
   it('surfaces a validateRefs error — a config ref to a non-existent node output', () => {
     // `a` references the output of a node that does not exist: validateRefs
     // rejects the ref ("does not name an upstream node").
     const nodes = [node('a', { url: '${nodes.ghost.output.body}' })];
-    const issues = validateCanvas(nodes, [], [], []);
+    const issues = validateCanvas(nodes, [], [], [], []);
     expect(issues.length).toBeGreaterThan(0);
   });
 
   it('surfaces a validateDoc error — a forward cycle is refused', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e1', 'a', 'b'), edge('e2', 'b', 'a')];
-    const issues = validateCanvas(nodes, edges, [], []);
+    const issues = validateCanvas(nodes, edges, [], [], []);
     expect(issues.length).toBeGreaterThan(0);
   });
 
@@ -133,14 +144,14 @@ describe('validateCanvas', () => {
   // the canvas gains a server rule without a line of client code.
   it('bars a param default the run would reject (#843)', () => {
     const bad: Param[] = [{ name: 'n', type: 'number', required: false, default: 'abc' }];
-    expect(validateCanvas([node('a')], [], [], bad)).toEqual([
+    expect(validateCanvas([node('a')], [], [], bad, [])).toEqual([
       "param 'n': expected a finite number",
     ]);
   });
 
   it('does NOT bar a numeric string, which `coerce` accepts', () => {
     const fine: Param[] = [{ name: 'n', type: 'number', required: false, default: '5' }];
-    expect(validateCanvas([node('a')], [], [], fine)).toEqual([]);
+    expect(validateCanvas([node('a')], [], [], fine, [])).toEqual([]);
   });
 });
 
@@ -257,7 +268,7 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
   // refusal fails here instead of silently emptying the panel's list.
   it('picks out the secure-policy refusal validateDoc raises for this node', () => {
     const nodes = [withPolicy('i', { secureOutput: true }, 'if'), node('x')];
-    const issues = validateCanvas(nodes, [], [], []);
+    const issues = validateCanvas(nodes, [], [], [], []);
     expect(nodePolicyIssues(issues, 'i', [])).toEqual([
       expect.stringMatching(/^node 'i': policy\.secureOutput is not supported on 'if'/),
     ]);
@@ -267,7 +278,7 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
   it('picks out a downstream ref refused because this node (or its container) is secure', () => {
     const producer = withPolicy('p', { secureOutput: true });
     const consumer = node('c', { url: '${nodes.p.output.body}' });
-    const issues = validateCanvas([producer, consumer], [edge('e', 'p', 'c')], [], []);
+    const issues = validateCanvas([producer, consumer], [edge('e', 'p', 'c')], [], [], []);
     expect(nodePolicyIssues(issues, 'p', [])).toEqual([
       expect.stringContaining("node 'p' has secure outputs"),
     ]);

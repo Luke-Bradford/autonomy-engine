@@ -7,6 +7,7 @@ import {
   type Edge,
   type Node,
   type Param,
+  type VariableDef,
   type RefSite,
   type RefSuggestion,
 } from '@autonomy-studio/shared';
@@ -48,6 +49,7 @@ export function useExpressionPicker(
   edges: Edge[],
   containers: Container[],
   params: Param[],
+  variables: VariableDef[],
   site: RefSite,
   /** The panel's ONE answer to "what is each activity called" — see `nodeName`. */
   nodeNames: ReadonlyMap<string, string>,
@@ -57,7 +59,7 @@ export function useExpressionPicker(
   const subjectId = site.kind === 'node' ? site.nodeId : site.containerId;
   const field = site.kind === 'container' ? site.field : undefined;
   return useMemo(() => {
-    const doc = { params, nodes, edges, containers };
+    const doc = { params, nodes, edges, containers, variables };
     // Asked per TARGET, because a node's scope can differ by field — a
     // `filter`'s predicate binds `${item}`, its items does not (#864). A
     // container site already names its one field.
@@ -95,12 +97,14 @@ export function useExpressionPicker(
             edges,
             containers,
             params,
+            variables,
           )
         : validateCanvas(
             nodes,
             edges,
             containers.map((c) => (c.id === subjectId ? { ...c, [field]: value } : c)),
             params,
+            variables,
           );
 
     // What a candidate is compared against — see `PickerTarget.baseline`. ONE
@@ -108,7 +112,7 @@ export function useExpressionPicker(
     // what the field's position raises whatever it holds.
     const baselineFor = (target: PickerTarget) =>
       target.baseline === 'stored'
-        ? validateCanvas(nodes, edges, containers, params)
+        ? validateCanvas(nodes, edges, containers, params, variables)
         : (() => {
             const literal = issuesWith(target, LITERAL_PROBE);
             return issuesWith(target, '').filter((issue) => literal.includes(issue));

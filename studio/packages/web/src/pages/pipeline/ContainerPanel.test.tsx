@@ -37,6 +37,7 @@ function mount(container: Container, before: Container[] = []) {
       edges={[]}
       containers={containers}
       params={[]}
+      variables={[]}
       onApply={onApply}
       onCopy={() => {}}
       onDuplicate={() => {}}
@@ -275,6 +276,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
         edges={[]}
         containers={[container]}
         params={[]}
+        variables={[]}
         onApply={onApply}
         onCopy={() => {}}
         onDuplicate={() => {}}
@@ -288,6 +290,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
           edges={[]}
           containers={[next]}
           params={[]}
+          variables={[]}
           onApply={onApply}
           onCopy={() => {}}
           onDuplicate={() => {}}
@@ -353,6 +356,7 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
         edges={[{ id: 'e', from: 'n_src', to: container.id, on: 'success' }]}
         containers={[container]}
         params={PARAMS}
+        variables={[]}
         onApply={onApply}
         onCopy={() => {}}
         onDuplicate={() => {}}
@@ -423,6 +427,7 @@ describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
         edges={[]}
         containers={[LOOP]}
         params={[]}
+        variables={[]}
         {...handlers}
       />,
     );
