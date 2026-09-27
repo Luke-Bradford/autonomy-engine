@@ -32,7 +32,7 @@ function engine(nodes: Node[], edges: Edge[] = [], containers: Container[] = [])
   return createEngine({ nodes, edges, containers });
 }
 function doc(nodes: Node[], edges: Edge[] = [], containers: Container[] = []) {
-  return { params: [], nodes, edges, containers };
+  return { params: [], variables: [], nodes, edges, containers };
 }
 const succeeded = (nodeId: string, outputs: Record<string, unknown>): EngineEvent => ({
   type: 'node.succeeded',

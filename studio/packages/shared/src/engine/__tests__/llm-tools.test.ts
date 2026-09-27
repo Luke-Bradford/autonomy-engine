@@ -27,8 +27,8 @@ function doc(
   edges: Edge[] = [],
   params: Param[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 
 /** A valid tool over two number args + one json arg. */

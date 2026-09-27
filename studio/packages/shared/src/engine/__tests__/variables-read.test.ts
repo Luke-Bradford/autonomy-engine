@@ -36,7 +36,7 @@ function doc(
     edges?: Edge[];
     params?: Param[];
     containers?: Container[];
-    variables?: VariableDef[] | undefined;
+    variables?: VariableDef[];
   } = {},
 ) {
   return {
@@ -44,7 +44,7 @@ function doc(
     nodes,
     edges: over.edges ?? [],
     containers: over.containers ?? [],
-    ...('variables' in over ? { variables: over.variables } : { variables: VARS }),
+    variables: over.variables ?? VARS,
   };
 }
 
@@ -89,12 +89,13 @@ describe('${vars.<name>} at save time', () => {
     );
   });
 
-  // `ValidatedDoc.variables` is optional until V3 (#1359). Absent must mean
-  // "none declared", which REFUSES a read, never "anything goes".
+  // Post-#1359, `ValidatedDoc.variables` is required, so "none declared" is
+  // expressed as `[]` rather than an absent key — but the refusal it pins is
+  // unchanged: a doc with no variables REFUSES a read, never "anything goes".
   it('refuses a variable read when the doc declares none', () => {
-    expect(
-      validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: undefined })),
-    ).toEqual([expect.stringMatching(/is not a declared variable/)]);
+    expect(validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: [] }))).toEqual([
+      expect.stringMatching(/is not a declared variable/),
+    ]);
   });
 
   it('types a read by its declared type', () => {

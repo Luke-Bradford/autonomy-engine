@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { availableRefs, validatePipelineDoc, type RefSuggestion } from '../params.js';
-import type { Container, Edge, Node, Param } from '../../index.js';
+import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
 
 /**
  * U8a — the reference CATALOG behind the expression-insert flyout.
@@ -20,6 +20,7 @@ import type { Container, Edge, Node, Param } from '../../index.js';
 
 type Doc = {
   params: Param[];
+  variables: VariableDef[];
   nodes: Node[];
   edges: Edge[];
   containers: Container[];
@@ -39,7 +40,7 @@ function edge(from: string, to: string, on: 'success' | 'failure' = 'success'): 
 }
 
 function doc(over: Partial<Doc> = {}): Doc {
-  return { params: [], nodes: [], edges: [], containers: [], ...over };
+  return { params: [], variables: [], nodes: [], edges: [], containers: [], ...over };
 }
 
 /** Every suggestion offered to every node of `d`, as `[nodeId, suggestion]` pairs. */

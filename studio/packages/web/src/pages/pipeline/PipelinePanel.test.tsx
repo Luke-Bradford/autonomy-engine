@@ -39,7 +39,8 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('says so plainly when nothing is declared', () => {
     mount(version());
-    expect(screen.getAllByText('None declared.')).toHaveLength(2); // params and outputs
+    // params, variables and outputs
+    expect(screen.getAllByText('None declared.')).toHaveLength(3);
   });
 
   it('"Add param" puts a new row in the store', () => {
@@ -317,6 +318,127 @@ describe('PipelinePanel (U16) — outputs', () => {
     );
     fireEvent.change(screen.getByLabelText('output 1 description'), { target: { value: '' } });
     expect('description' in store.getState().outputs[0]!).toBe(false);
+  });
+});
+
+describe('PipelinePanel (#844 V3) — variables', () => {
+  /** Mount with the Variables tab open: role queries skip a hidden tab panel. */
+  function mountVariables(v: PipelineVersion) {
+    const store = mount(v);
+    fireEvent.click(screen.getByRole('tab', { name: 'Variables' }));
+    return store;
+  }
+
+  it('is its own tab, between Parameters and Outputs', () => {
+    mount(version());
+    // By accessible name: Fluent's Tab renders its label twice in the DOM.
+    const tabs = screen.getAllByRole('tab');
+    expect(
+      ['Parameters', 'Variables', 'Outputs'].map((name) =>
+        tabs.indexOf(screen.getByRole('tab', { name })),
+      ),
+    ).toEqual([0, 1, 2]);
+  });
+
+  it('renders a row per declared variable, its default shown as text', () => {
+    mountVariables(version({ variables: [{ name: 'rows', type: 'array', default: [1, 2] }] }));
+    expect(screen.getByLabelText('variable 1 name')).toHaveValue('rows');
+    expect(screen.getByLabelText('variable 1 type')).toHaveValue('array');
+    expect(screen.getByLabelText('variable 1 default')).toHaveValue('[1,2]');
+  });
+
+  it('"Add variable" puts a row in the store that states its starting value', () => {
+    const store = mountVariables(version());
+    fireEvent.click(screen.getByRole('button', { name: 'Add variable' }));
+    expect(store.getState().variables).toEqual([{ name: 'var_1', type: 'string', default: '' }]);
+  });
+
+  it('offers exactly the variable types — no json, no secret', () => {
+    mountVariables(version({ variables: [{ name: 'v', type: 'string', default: '' }] }));
+    const options = [...(screen.getByLabelText('variable 1 type') as HTMLSelectElement).options];
+    expect(options.map((o) => o.value)).toEqual(['string', 'number', 'boolean', 'array']);
+  });
+
+  it('commits a TYPED default on blur', () => {
+    const store = mountVariables(
+      version({ variables: [{ name: 'n', type: 'number', default: 0 }] }),
+    );
+    const field = screen.getByLabelText('variable 1 default');
+    fireEvent.change(field, { target: { value: '12' } });
+    fireEvent.blur(field);
+    expect(store.getState().variables[0]!.default).toBe(12);
+  });
+
+  it('refuses a blank number default, keeping the stored value', () => {
+    const store = mountVariables(
+      version({ variables: [{ name: 'n', type: 'number', default: 3 }] }),
+    );
+    const field = screen.getByLabelText('variable 1 default');
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.blur(field);
+    expect(screen.getByRole('alert')).toHaveTextContent('a number variable needs a starting value');
+    expect(store.getState().variables[0]!.default).toBe(3);
+  });
+
+  it('a blank STRING default is the empty string, not an error', () => {
+    const store = mountVariables(
+      version({ variables: [{ name: 's', type: 'string', default: 'x' }] }),
+    );
+    const field = screen.getByLabelText('variable 1 default');
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.blur(field);
+    expect(store.getState().variables[0]!.default).toBe('');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a type change converts the default it can, so the doc never holds a mismatch', () => {
+    const store = mountVariables(
+      version({ variables: [{ name: 'n', type: 'number', default: 5 }] }),
+    );
+    fireEvent.change(screen.getByLabelText('variable 1 type'), { target: { value: 'string' } });
+    expect(store.getState().variables[0]).toEqual({ name: 'n', type: 'string', default: '5' });
+  });
+
+  it('an untouched blur REPAIRS an imported default the gate refuses', () => {
+    // `"5"` under `number` shows as `5`. Skipping the no-op blur, as a param
+    // row does, would leave the field and the badge disagreeing for good.
+    const store = mountVariables(
+      version({ variables: [{ name: 'n', type: 'number', default: '5' }] }),
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "variable 'n' default must be a number, got string",
+    );
+    fireEvent.blur(screen.getByLabelText('variable 1 default'));
+    expect(store.getState().variables[0]!.default).toBe(5);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an untouched blur of a LEGAL default writes nothing', () => {
+    const store = mountVariables(
+      version({ variables: [{ name: 'n', type: 'number', default: 5 }] }),
+    );
+    fireEvent.blur(screen.getByLabelText('variable 1 default'));
+    expect(store.getState().dirty).toBe(false);
+  });
+
+  it('names an unaddressable name on the row, in the save gate’s words', () => {
+    mountVariables(version({ variables: [{ name: 'a-b', type: 'string', default: '' }] }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "variable 'a-b' cannot be referenced as ${vars.<name>}",
+    );
+  });
+
+  it('Remove drops the row', () => {
+    const store = mountVariables(
+      version({
+        variables: [
+          { name: 'a', type: 'string', default: '' },
+          { name: 'b', type: 'string', default: '' },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'remove variable 1' }));
+    expect(store.getState().variables.map((v) => v.name)).toEqual(['b']);
   });
 });
 

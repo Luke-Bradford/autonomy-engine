@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateDoc, validatePipelineDoc, validateRefs } from '../params.js';
-import type { Container, Edge, Node, Param } from '../../index.js';
+import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
 
 /**
  * `validatePipelineDoc` is the ONE composition of the two pure validators
@@ -15,9 +15,15 @@ import type { Container, Edge, Node, Param } from '../../index.js';
 const NODE: Node = { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };
 
 function doc(
-  over: Partial<{ params: Param[]; nodes: Node[]; edges: Edge[]; containers: Container[] }> = {},
+  over: Partial<{
+    params: Param[];
+    variables: VariableDef[];
+    nodes: Node[];
+    edges: Edge[];
+    containers: Container[];
+  }> = {},
 ) {
-  return { params: [], nodes: [NODE], edges: [], containers: [], ...over };
+  return { params: [], variables: [], nodes: [NODE], edges: [], containers: [], ...over };
 }
 
 describe('validatePipelineDoc — the one composition (#444)', () => {

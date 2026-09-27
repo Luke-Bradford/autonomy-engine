@@ -216,6 +216,88 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expectQuiet(page, problems);
   });
 
+  test('#844 V3 — a variable authored in its tab SURVIVES a save and reload, typed', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'v3 round trip', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+    });
+
+    await page.getByRole('tab', { name: 'Variables' }).click();
+    await page.getByRole('button', { name: 'Add variable' }).click();
+    await page.getByLabel('variable 1 name').fill('count');
+    // A type change converts the new row's '' default to the number's zero, so
+    // the doc is legal before the author types a value at all.
+    await page.getByLabel('variable 1 type').selectOption('number');
+    await expect(page.getByLabel('variable 1 default')).toHaveValue('0');
+    await page.getByLabel('variable 1 default').fill('5');
+    await page.getByLabel('variable 1 name').click(); // blur commits the default
+
+    await page.getByRole('button', { name: 'Add variable' }).click();
+    await page.getByLabel('variable 2 name').fill('rows');
+    await page.getByLabel('variable 2 type').selectOption('array');
+    await page.getByLabel('variable 2 default').fill('[1, "a"]');
+    await page.getByLabel('variable 2 name').click();
+
+    expect(await validationIssues(page), 'the variables left the doc invalid').toEqual([]);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await page.getByRole('tab', { name: 'Variables' }).click();
+    await expect(page.getByLabel('variable 1 name')).toHaveValue('count');
+    await expect(page.getByLabel('variable 1 type')).toHaveValue('number');
+    await expect(page.getByLabel('variable 2 default')).toHaveValue('[1,"a"]');
+
+    // The field text cannot tell 5 from '5'; the persisted version can.
+    const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+    expect(versions.status()).toBe(200);
+    const items = (await versions.json()) as {
+      version: number;
+      variables: { name: string; type: string; default: unknown }[];
+    }[];
+    const latest = items.reduce((a, b) => (a.version > b.version ? a : b));
+    expect(latest.variables).toEqual([
+      { name: 'count', type: 'number', default: 5 },
+      { name: 'rows', type: 'array', default: [1, 'a'] },
+    ]);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('#844 V3 — an unreferenceable or duplicate variable name BLOCKS Save, and the row repairs it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'v3 names', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      variables: [{ name: 'total', type: 'number', default: 0 }],
+    });
+    await page.getByRole('tab', { name: 'Variables' }).click();
+
+    await page.getByLabel('variable 1 name').fill('my-total');
+    expect((await validationIssues(page)).join('\n')).toContain(
+      "variable 'my-total' cannot be referenced",
+    );
+    // The row states the same sentence, where the fix is made.
+    await expect(panel(page).getByRole('alert')).toContainText("'my-total' cannot be referenced");
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    await page.getByLabel('variable 1 name').fill('total');
+    await page.getByRole('button', { name: 'Add variable' }).click();
+    await page.getByLabel('variable 2 name').fill('total');
+    expect((await validationIssues(page)).join('\n')).toContain('duplicate variable name');
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    await page.getByLabel('variable 2 name').fill('other');
+    expect(await validationIssues(page)).toEqual([]);
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
+
+    await expectQuiet(page, problems);
+  });
+
   test('the panel is reachable by deselecting, and yields to a selected node', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u16 reachable', {

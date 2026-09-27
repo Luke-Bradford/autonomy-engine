@@ -42,6 +42,7 @@ describe('LLM_RECIPES', () => {
     for (const r of LLM_RECIPES) {
       const errors = validateRefs({
         params: [],
+        variables: [],
         nodes: [
           {
             id: 'n1',

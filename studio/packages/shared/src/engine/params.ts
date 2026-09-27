@@ -2148,16 +2148,15 @@ export function validatePipelineDoc(doc: ValidatedDoc, options: ValidateDocOptio
 // --- validateDoc (structural static validation, run at pipeline-SAVE time) --
 
 /**
- * The doc shape the save-time validators read. `variables` (#844 V1) is
- * OPTIONAL here, and only here: the server gate hands over the parsed write doc,
- * which always carries it (the schema defaults it to `[]`), so absence can only
- * come from a caller that has no variables to check, and is read as NONE: a
- * `${vars.x}` read is then refused, never waved through (`variableMapOf`). The
- * canvas passes them since V2 (`validateCanvas`); making the field required is
- * #1359, with V3's editor.
+ * The doc shape the save-time validators read. `variables` is REQUIRED (#1359):
+ * while it was optional, any caller that omitted it compiled cleanly and silently
+ * skipped the variable declaration rules, and read every `${vars.x}` as
+ * undeclared. The server gate hands over the parsed write doc (the schema
+ * defaults it to `[]`) and the canvas passes its working state, so a caller
+ * with genuinely no variables says so with `[]`.
  */
 export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> & {
-  variables?: readonly VariableDef[];
+  variables: readonly VariableDef[];
 };
 
 /**
@@ -2176,36 +2175,51 @@ export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 
  *    walked for a nested non-finite, which would `JSON.stringify` to `null` in
  *    the run log and replay as a different value (#547).
  */
-function variableDeclarationErrors(variables: readonly VariableDef[]): string[] {
-  const errors: string[] = [];
-  for (const v of variables) {
-    if (!isAddressableOutputName(v.name)) {
-      errors.push(
-        `variable '${v.name}' cannot be referenced as \${vars.<name>} ` +
-          '(a name is a letter or underscore, then letters, digits or underscores)',
-      );
-    }
-    if (!matchesSig(v.default, v.type)) {
-      const article = v.type === 'array' ? 'an' : 'a';
-      errors.push(
-        `variable '${v.name}' default must be ${article} ${v.type}, got ${typeName(v.default)}`,
-      );
-    } else if (v.type === 'array') {
-      errors.push(...jsonReplaySafetyErrors(`variable '${v.name}' default`, v.default));
-    }
-  }
-  return errors;
+export function variableDeclarationErrors(variables: readonly VariableDef[]): string[] {
+  return variables.flatMap((v) => {
+    const name = variableNameDefect(v);
+    const def = variableDefaultDefects(v);
+    return name === null ? def : [name, ...def];
+  });
 }
 
 /**
- * #844 V2 — the declared variables by name, for a `ScanScope`. Absent (a caller
- * with no variables, see `ValidatedDoc`) is an EMPTY map, so a `${vars.x}` read
- * is refused as undeclared — never waved through.
+ * #844 V3 — the name half of `variableDeclarationErrors` for ONE variable, or
+ * `null`. Exported so the Variables tab states the badge's own sentence on the
+ * row it is about, rather than a second wording that could drift.
  */
-function variableMapOf(
-  variables: readonly VariableDef[] | undefined,
-): ReadonlyMap<string, VariableDef> {
-  return new Map((variables ?? []).map((v) => [v.name, v]));
+export function variableNameDefect(v: VariableDef): string | null {
+  if (isAddressableOutputName(v.name)) return null;
+  return (
+    `variable '${v.name}' cannot be referenced as \${vars.<name>} ` +
+    '(a name is a letter or underscore, then letters, digits or underscores)'
+  );
+}
+
+/**
+ * #844 V3 — the default half of `variableDeclarationErrors` for ONE variable:
+ * empty when the default is legal. Exported for the same reason as
+ * `variableNameDefect`, and so the editor can tell a stored default that already
+ * passes from one that must be rewritten.
+ */
+export function variableDefaultDefects(v: VariableDef): string[] {
+  if (!matchesSig(v.default, v.type)) {
+    const article = v.type === 'array' ? 'an' : 'a';
+    return [
+      `variable '${v.name}' default must be ${article} ${v.type}, got ${typeName(v.default)}`,
+    ];
+  }
+  return v.type === 'array'
+    ? jsonReplaySafetyErrors(`variable '${v.name}' default`, v.default)
+    : [];
+}
+
+/**
+ * #844 V2 — the declared variables by name, for a `ScanScope`. A `${vars.x}`
+ * read of a name not in it is refused as undeclared — never waved through.
+ */
+function variableMapOf(variables: readonly VariableDef[]): ReadonlyMap<string, VariableDef> {
+  return new Map(variables.map((v) => [v.name, v]));
 }
 
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
@@ -2314,7 +2328,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       else errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
     }
   }
-  errors.push(...variableDeclarationErrors(doc.variables ?? []));
+  errors.push(...variableDeclarationErrors(doc.variables));
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
   const secureOutputIds = secureOutputIdsOf(doc.nodes, doc.containers ?? []);
   // #567 — a `foreach`'s `items` is validated against the container ENDPOINT's real

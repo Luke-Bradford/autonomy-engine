@@ -57,8 +57,8 @@ function doc(
   edges: Edge[] = [],
   containers: Container[] = [],
   params: Param[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 const foreach = (id: string, children: string[], items: string): Container => ({
   id,

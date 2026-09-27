@@ -15,8 +15,10 @@ function node(type: string, config: Record<string, unknown>): Node {
   return { id: `n${seq}`, type, config, position: { x: seq, y: 0 } };
 }
 
-function doc(nodes: Node[]): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params: [], nodes, edges: [], containers: [] };
+function doc(
+  nodes: Node[],
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params: [], variables: [], nodes, edges: [], containers: [] };
 }
 
 /** Collect errors from a direct `scanSecretSinks` call with an explicit sink allow-list. */

@@ -29,12 +29,14 @@ function doc(
   nodes: Node[],
   edges: Edge[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params: [], nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params: [], nodes, edges, containers, variables: [] };
 }
 
 /** Does `validatePipelineDoc` — the save gate — report a forward cycle here? */
-function gateSeesCycle(d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>) {
+function gateSeesCycle(
+  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>,
+) {
   return validatePipelineDoc(d).some((e) => e.includes('forward cycle'));
 }
 

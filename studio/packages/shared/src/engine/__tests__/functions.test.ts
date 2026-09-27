@@ -41,8 +41,8 @@ function doc(
   nodes: Node[],
   edges: Edge[],
   params: Param[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers: [] };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers: [], variables: [] };
 }
 
 // ===========================================================================

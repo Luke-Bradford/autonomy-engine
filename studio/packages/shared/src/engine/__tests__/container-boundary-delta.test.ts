@@ -38,12 +38,14 @@ function doc(
   nodes: Node[],
   edges: Edge[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params: [], nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params: [], nodes, edges, containers, variables: [] };
 }
 
 /** Does the save gate report a boundary crossing here? */
-function gateSeesCrossing(d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>) {
+function gateSeesCrossing(
+  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>,
+) {
   return validatePipelineDoc(d).some((e) => e.includes('crosses a container boundary'));
 }
 
