@@ -1,6 +1,7 @@
 import {
   NewPipelineVersionSchema,
   isAddressableOutputName,
+  type GlobalParamType,
   type Output,
   type Param,
   type ParamType,
@@ -111,9 +112,9 @@ export function coerceVariableDefault(
   type: VariableType,
   raw: string,
 ): { ok: true; value: unknown } | { ok: false; error: string } {
-  if (type === 'string') return { ok: true, value: raw };
-  if (!raw.trim()) return { ok: false, error: `a ${type} variable needs a starting value` };
+  const missing = `a ${type} variable needs a starting value`;
   if (type === 'array') {
+    if (!raw.trim()) return { ok: false, error: missing };
     const parsed = coerceDefaultInput('json', raw);
     if (!parsed.ok) return { ok: false, error: 'expected a JSON array, e.g. [1, 2]' };
     if (!parsed.has || !Array.isArray(parsed.value)) {
@@ -121,11 +122,37 @@ export function coerceVariableDefault(
     }
     return { ok: true, value: parsed.value };
   }
+  return coerceRequiredValue(type, raw, missing);
+}
+
+/**
+ * The value-is-REQUIRED read both a variable default and a global's value
+ * share: blank is `''` for a `string`, stored verbatim, and refused (with
+ * `missing`) for any other type rather than invented as `0` or `false`.
+ */
+function coerceRequiredValue(
+  type: 'string' | 'number' | 'boolean' | 'json',
+  raw: string,
+  missing: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  if (type === 'string') return { ok: true, value: raw };
   const parsed = coerceDefaultInput(type, raw);
   if (!parsed.ok) return parsed;
-  // Unreachable — the blank case returned above — but narrowing beats a cast.
-  if (!parsed.has) return { ok: false, error: `a ${type} variable needs a starting value` };
+  if (!parsed.has) return { ok: false, error: missing };
   return { ok: true, value: parsed.value };
+}
+
+/**
+ * #844 GL2 — a global's value field, read under its declared type. A global
+ * always has a value (GL-D1: `value` is required), so this is the variable
+ * rule, not the param one: blank is not "none". The server re-checks with
+ * `globalParamValueDefects`, which adds the byte bound and json replay safety.
+ */
+export function coerceGlobalValue(
+  type: GlobalParamType,
+  raw: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  return coerceRequiredValue(type, raw, `a ${type} global needs a value`);
 }
 
 /** Render a stored variable default as its field's text (the inverse of the above). */

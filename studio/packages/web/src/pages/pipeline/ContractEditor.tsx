@@ -39,7 +39,7 @@ import {
  */
 
 type Store = ReturnType<typeof createCanvasStore>;
-type Kind = 'param' | 'output' | 'variable';
+type Kind = 'param' | 'output' | 'variable' | 'global';
 
 /** The row fields every declaration kind shares. */
 interface Declared {
@@ -89,12 +89,21 @@ export function ContractSection({
  * then Description and Remove. `onType` receives the raw option text, and each
  * kind parses it with its OWN schema — parsing rather than casting is what
  * enforces, for example, that no output can be typed `secret`.
+ *
+ * `locked` (#844 GL2) freezes Name and Type on a row whose identity is already
+ * stored — a saved global, whose name and type are immutable (GL-D1). Both
+ * render READ-ONLY rather than disabled: a disabled control is skipped by
+ * keyboard navigation and by some screen readers, and which global a row is
+ * remains information worth reaching (the SecretsPage precedent). A `<select>`
+ * has no read-only state, so a locked Type is a read-only input.
  */
-function ContractRow<R extends Declared>({
+export function ContractRow<R extends Declared>({
   kind,
   index,
   row,
   types,
+  locked = false,
+  removeLabel = 'Remove',
   onChange,
   onType,
   onRemove,
@@ -104,6 +113,9 @@ function ContractRow<R extends Declared>({
   index: number;
   row: R;
   types: readonly string[];
+  locked?: boolean;
+  /** What Remove says — e.g. `Delete` where removing the row deletes a stored resource, as the Manage pages word it. */
+  removeLabel?: string;
   onChange: (next: R) => void;
   onType: (raw: string) => void;
   onRemove: () => void;
@@ -117,24 +129,29 @@ function ContractRow<R extends Declared>({
         <input
           aria-label={`${kind} ${n} name`}
           value={row.name}
+          readOnly={locked}
           onChange={(e) => onChange({ ...row, name: e.target.value })}
         />
       </label>
       <LabelledControl label="Type">
-        {(id) => (
-          <select
-            id={id}
-            aria-label={`${kind} ${n} type`}
-            value={row.type}
-            onChange={(e) => onType(e.target.value)}
-          >
-            {types.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        )}
+        {(id) =>
+          locked ? (
+            <input id={id} aria-label={`${kind} ${n} type`} value={row.type} readOnly />
+          ) : (
+            <select
+              id={id}
+              aria-label={`${kind} ${n} type`}
+              value={row.type}
+              onChange={(e) => onType(e.target.value)}
+            >
+              {types.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )
+        }
       </LabelledControl>
       {children}
       <label>
@@ -145,8 +162,12 @@ function ContractRow<R extends Declared>({
           onChange={(e) => onChange(withDescription(row, e.target.value))}
         />
       </label>
-      <button type="button" aria-label={`remove ${kind} ${n}`} onClick={onRemove}>
-        Remove
+      <button
+        type="button"
+        aria-label={`${removeLabel.toLowerCase()} ${kind} ${n}`}
+        onClick={onRemove}
+      >
+        {removeLabel}
       </button>
     </div>
   );

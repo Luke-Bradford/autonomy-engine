@@ -37,6 +37,7 @@ describe('SecondaryPane', () => {
       'Connections',
       'Datasets',
       'Secrets',
+      'Global parameters',
       'Triggers',
       'Git',
     ]);
@@ -44,6 +45,7 @@ describe('SecondaryPane', () => {
       '/manage/connections',
       '/manage/datasets',
       '/manage/secrets',
+      '/manage/global-params',
       '/manage/triggers',
       '/manage/git',
     ]);

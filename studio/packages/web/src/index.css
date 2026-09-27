@@ -3899,3 +3899,23 @@ td button + button {
   color: var(--warning);
   max-width: 60ch;
 }
+
+/* #844 GL2 — Manage › Global parameters. The `ContractRow` shell is written for
+   the property panel, whose `.property-panel label` rule stacks each label over
+   its control; on a hub page nothing does, so this page supplies the stacking
+   the Manage forms use (`.connection-form label`) and a readable width. */
+.global-params {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 42rem;
+}
+
+.global-params .contract-row label,
+.global-params .contract-row .labelled-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}

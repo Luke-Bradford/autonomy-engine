@@ -149,6 +149,10 @@ export const HUBS: readonly Hub[] = [
       // standalone and addressed by NAME, which is what `{"$secret":"<name>"}`
       // resolves at dispatch.
       { label: 'Secrets', path: '/manage/secrets' },
+      // #844 GL2 — beside Secrets, because the two are the answer to one
+      // question ("where does a value every pipeline shares live?") and the
+      // Global parameters page sends a credential to Secrets by name.
+      { label: 'Global parameters', path: '/manage/global-params' },
       { label: 'Triggers', path: '/manage/triggers' },
       { label: 'Git', path: '/manage/git' },
     ],
