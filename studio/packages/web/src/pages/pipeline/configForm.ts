@@ -4,6 +4,7 @@ import {
   isAddressableOutputName,
   isOptionalProperty,
   isAuthoredAsExpression,
+  isLiteralText,
   isSingleLine,
   llmMessagesSchema,
   llmOutputPropertyTypeSchema,
@@ -383,7 +384,8 @@ export interface ConfigField {
    * be offered on it. A record KEY is copied verbatim by `substitute`, and a
    * `$secret` name may not hold a `${}` at all — the whole-doc validator cannot
    * see the first (it never scans keys), so offering there would be the false
-   * offer the flyout exists to avoid.
+   * offer the flyout exists to avoid. A top-level field gets it from a schema
+   * tagged `literalText` (#844 V6), for the reason that tag's docblock gives.
    */
   readonly literal?: true;
   /**
@@ -489,6 +491,8 @@ interface Unwrapped {
   readonly singleLine: boolean;
   /** Whether any layer carries the `authoredAsExpression` tag. */
   readonly authoredAsExpression: boolean;
+  /** Whether any layer carries the `literal` tag (#844 V6). */
+  readonly literal: boolean;
 }
 
 /** Peel the wrappers off a field schema, recording whether the key may be absent. */
@@ -500,6 +504,7 @@ function unwrap(schema: unknown): Unwrapped {
   // schema that does not inherit its inner string's registry entry.
   let singleLine = isSingleLine(inner);
   let authoredAsExpression = isAuthoredAsExpression(inner);
+  let literal = isLiteralText(inner);
 
   // Bounded: each step consumes one wrapper, and a schema nests finitely many.
   for (let depth = 0; depth < 16; depth += 1) {
@@ -517,9 +522,10 @@ function unwrap(schema: unknown): Unwrapped {
     inner = def.innerType;
     singleLine ||= isSingleLine(inner);
     authoredAsExpression ||= isAuthoredAsExpression(inner);
+    literal ||= isLiteralText(inner);
   }
 
-  return { inner, optional, defaultText, singleLine, authoredAsExpression };
+  return { inner, optional, defaultText, singleLine, authoredAsExpression, literal };
 }
 
 /**
@@ -672,7 +678,8 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
   if (typeof shape !== 'object' || shape === null) return null;
 
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
-    const { inner, optional, defaultText, singleLine, authoredAsExpression } = unwrap(fieldSchema);
+    const { inner, optional, defaultText, singleLine, authoredAsExpression, literal } =
+      unwrap(fieldSchema);
     // Never classified: the schema describes the RESOLVED value, and the
     // control has to take the `${}` text that resolves to it.
     if (authoredAsExpression) {
@@ -695,6 +702,7 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
       ...(elementFields && { elementFields }),
       ...(recordValue && { recordValue }),
       ...(singleLine && kind === 'text' && { singleLine: true as const }),
+      ...(literal && kind === 'text' && { literal: true as const }),
     };
   });
 }

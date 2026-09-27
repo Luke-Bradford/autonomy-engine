@@ -58,6 +58,59 @@ describe('ConfigFieldControl — a label names its control and nothing else (#12
   });
 });
 
+describe('ConfigFieldControl — choices say what they are, and why there are none (#844 V6)', () => {
+  const variable: ConfigField = {
+    name: 'variable',
+    kind: 'text',
+    optional: false,
+    singleLine: true,
+    literal: true,
+  };
+
+  it('labels each option through the panel’s describe, while its value stays the literal', () => {
+    const { container } = render(
+      <ConfigFieldControl
+        field={variable}
+        value="rows"
+        onChange={noop}
+        choices={{
+          label: 'Declared variable',
+          values: ['count', 'rows'],
+          describe: (name) => `${name} (${name === 'rows' ? 'array' : 'number'})`,
+          onChoose: noop,
+        }}
+      />,
+    );
+    const select = container.querySelector('select')!;
+    expect(select.value).toBe('rows');
+    expect(Array.from(select.options, (o) => [o.value, o.textContent])).toEqual([
+      ['', '— choose —'],
+      ['count', 'count (number)'],
+      ['rows', 'rows (array)'],
+    ]);
+  });
+
+  it('an EMPTY list shows the panel’s hint instead of silently rendering nothing', () => {
+    const { container } = render(
+      <ConfigFieldControl
+        field={variable}
+        value=""
+        onChange={noop}
+        choices={{
+          label: 'Declared variable',
+          values: [],
+          emptyHint: 'No variables are declared.',
+          onChoose: noop,
+        }}
+      />,
+    );
+    expect(container.querySelector('select')).toBeNull();
+    expect(container.querySelector('.config-field-choices-empty')?.textContent).toBe(
+      'No variables are declared.',
+    );
+  });
+});
+
 describe('ConfigFieldControl — a single-line field is an input (#852 item 4)', () => {
   const url: ConfigField = { name: 'url', kind: 'text', optional: false, singleLine: true };
 

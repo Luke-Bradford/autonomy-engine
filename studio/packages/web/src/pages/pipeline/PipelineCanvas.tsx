@@ -58,7 +58,8 @@ import { ConfigEditor } from './ConfigEditor';
 import { useConfigEditor } from './useConfigEditor';
 import { autoMappableField, describeSkips } from './copyMappingAids';
 import { CallPanel } from './CallPanel';
-import type { FieldPicker } from './ConfigFieldControl';
+import type { FieldChoices, FieldPicker } from './ConfigFieldControl';
+import { variableWriteChoices } from './variableChoices';
 import { ParamOverridesEditor } from './ParamOverridesEditor';
 import { DraftNumberField, type DraftNumberParse } from './DraftNumberField';
 import { parseWholeNumber } from '../triggers/formFields';
@@ -2347,6 +2348,25 @@ export function NodePanel({
     forcedJson,
   });
 
+  // #844 V6 — a variable writer names its variable from the DECLARED list, the
+  // one thing its `variable` field may hold. The chooser only fills the draft,
+  // exactly as typing would; Apply is still the act that writes the node. A
+  // name that is no longer declared (renamed or deleted on the Variables tab)
+  // leaves the chooser on its placeholder, and the node's own issue list says
+  // why.
+  const variableChoices = useMemo(
+    () => variableWriteChoices(nodeType, docVariables),
+    [nodeType, docVariables],
+  );
+  const choicesFor = (fieldName: string): FieldChoices | undefined =>
+    fieldName === 'variable' && variableChoices !== undefined
+      ? {
+          label: 'Declared variable',
+          ...variableChoices,
+          onChoose: (value) => editor.setInput('variable', value),
+        }
+      : undefined;
+
   // Re-seed the draft whenever a DIFFERENT config object arrives.
   //
   // Without this, applying in JSON mode and then switching back to the form
@@ -2825,6 +2845,7 @@ export function NodePanel({
                   rows={10}
                   advisory={null}
                   picker={picker}
+                  choicesFor={choicesFor}
                   emptyHint="This activity has no settings."
                   fieldModeExtra={
                     /* #1170 M8 slice 2 — Auto-map (§6.3) and §13's explicit *unmapped*
