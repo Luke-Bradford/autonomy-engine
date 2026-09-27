@@ -339,6 +339,14 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
  *   the node and the dangling id — the OWNER'S OWN DB values, not committed file
  *   bytes, so the echo rule above is not crossed. Unlike the branch-side codes
  *   it does NOT refuse an apply: see `WorkspaceGitApplyResultSchema`.
+ *
+ * #844 GL6 added a seventh, `global_param_conflict`: a branch global whose
+ * `type` differs from the same-named global in this workspace. A global's type
+ * is immutable (GL-D1) — a retype in place would break every saved version that
+ * reads it — so the apply does NOT write that file and reports it here instead
+ * (spec GL-D6). It does not refuse the import: the rest of the branch is sound.
+ * Its message names the workspace's own global and the two types, both closed
+ * enum values, so it echoes no free-form committed content.
  */
 export const WorkspaceParseDiagnosticCodeSchema = z.enum([
   'unparseable',
@@ -347,8 +355,27 @@ export const WorkspaceParseDiagnosticCodeSchema = z.enum([
   'unknown_dir',
   'unreadable',
   'unserializable_ref',
+  'global_param_conflict',
 ]);
 export type WorkspaceParseDiagnosticCode = z.infer<typeof WorkspaceParseDiagnosticCodeSchema>;
+
+/**
+ * Does a diagnostic of this code make a workspace import REFUSE? The branch-side
+ * parse codes do (an incomplete or corrupt snapshot must never be applied); the
+ * two that describe ONE resource the import could not write, while everything
+ * else is sound, do not. Exhaustive over the codes, so a new code is a compile
+ * error here rather than a silent default. Shared so the UI's "would be
+ * refused" and the server agree.
+ */
+export const DIAGNOSTIC_REFUSES_IMPORT: Record<WorkspaceParseDiagnosticCode, boolean> = {
+  unparseable: true,
+  kind_mismatch: true,
+  duplicate_resource_id: true,
+  unknown_dir: true,
+  unreadable: true,
+  unserializable_ref: false,
+  global_param_conflict: false,
+};
 
 export const WorkspaceParseDiagnosticSchema = z.object({
   path: z.string().min(1),
@@ -727,12 +754,15 @@ export type WorkspaceGitArchivedResult = z.infer<typeof WorkspaceGitArchivedResu
  * fail-closed, the merge-gate "a `gh` failure is never CI-green" posture.
  *
  * #1043 — a NOT-refused result may nonetheless carry `diagnostics`, and only of
- * code `unserializable_ref`: DB-side resources this import could not compare
+ * the codes `DIAGNOSTIC_REFUSES_IMPORT` marks non-refusing. `unserializable_ref`:
+ * DB-side resources this import could not compare
  * (and so did not consider for archive). They do not refuse, because a DB-side
  * gap can only make the apply archive LESS — it cannot cause the destructive act
  * the branch-side refusal exists to prevent — and refusing would block the
  * import that repairs the dangling ref. So: `refused` ⇒ every diagnostic is
- * branch-side; a diagnostic does NOT imply `refused`.
+ * branch-side; a diagnostic does NOT imply `refused`. #844 GL6 —
+ * `global_param_conflict`: a branch global the apply did not write because its
+ * type differs from the workspace's (spec GL-D6).
  *
  * When not refused, `applied`/`archived` describe every write
  * (connections, pipelines, AND triggers as of G5c-2 #670); `deferred` now has no

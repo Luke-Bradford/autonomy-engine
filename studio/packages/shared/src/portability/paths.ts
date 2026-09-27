@@ -38,7 +38,7 @@
  * Note this is deliberately NOT the apply order — that is `APPLY_RANK`'s job,
  * and a dataset must be applied AFTER the connection it names.
  */
-export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger', 'dataset'] as const;
+export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger', 'dataset', 'global-param'] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
@@ -53,6 +53,7 @@ export const RESOURCE_KIND_DIRS: Record<ResourceKind, string> = {
   connection: 'connections',
   trigger: 'triggers',
   dataset: 'datasets',
+  'global-param': 'global-params',
 };
 
 /** The studio-managed repo directories, in `RESOURCE_KINDS` order. */
@@ -71,6 +72,21 @@ const DIR_TO_KIND: Record<string, ResourceKind> = Object.fromEntries(
  */
 export function kindForDir(dir: string): ResourceKind | null {
   return DIR_TO_KIND[dir] ?? null;
+}
+
+/**
+ * #844 GL6 — the stable identity of a global parameter in export space. A
+ * global has no `resourceId` column: its NAME is its identity (unique per owner
+ * case-insensitively, immutable after creation, spec GL-D1), so the identity is
+ * the name with its case folded, and its file carries no id at all (GL-D6).
+ *
+ * Folds ASCII ONLY, to match SQLite's `COLLATE NOCASE` on the unique index.
+ * `toLowerCase()` would not: it maps the Kelvin sign U+212A to `k`, so a
+ * hand-edited branch file could claim the identity of a DB global `k` that the
+ * index considers a different name.
+ */
+export function globalParamResourceId(name: string): string {
+  return name.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
 /**

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { DatasetSchema } from '../schemas/dataset.js';
+import { GlobalParamSchema } from '../schemas/global-param.js';
 import { PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 
@@ -82,6 +83,13 @@ export const ImportResultSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('dataset'),
     dataset: DatasetSchema,
+    attention: z.array(ImportAttentionItemSchema),
+  }),
+  /** #844 GL6 — a global parameter holds no reference to rebind, so there is
+   * never anything to attend to. */
+  z.object({
+    kind: z.literal('global-param'),
+    globalParam: GlobalParamSchema,
     attention: z.array(ImportAttentionItemSchema),
   }),
 ]);
