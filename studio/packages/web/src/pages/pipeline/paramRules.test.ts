@@ -10,6 +10,7 @@ import {
   formatDefaultInput,
   formatVariableDefault,
   nameIssues,
+  propertyIssues,
   paramDefaultNote,
   paramNameNote,
   withRequired,
@@ -51,6 +52,38 @@ describe('blankParam / blankOutput', () => {
 
   it('mints an output with no `optional` key, which the schema reads as required', () => {
     expect('optional' in blankOutput([])).toBe(false);
+  });
+});
+
+describe('propertyIssues — the General tab’s save gate (#1 F8a)', () => {
+  it('passes an empty description and no annotations', () => {
+    expect(propertyIssues('', [])).toEqual([]);
+    expect(propertyIssues('Nightly', ['prod', 'finance'])).toEqual([]);
+  });
+
+  it('names the annotation row a refusal is about, in the write schema’s words', () => {
+    expect(propertyIssues('', ['prod', ''])).toEqual([
+      'annotation 2: an annotation cannot be empty',
+    ]);
+    expect(propertyIssues('', ['prod', 'Prod'])).toEqual([
+      "annotation 2: duplicate annotation 'Prod' (annotations must be unique, ignoring case)",
+    ]);
+    expect(propertyIssues('', ['prod '])).toEqual([
+      'annotation 1: an annotation cannot start or end with a space',
+    ]);
+    // An ordinary interior space is fine; a no-break one is not.
+    expect(propertyIssues('', ['data platform'])).toEqual([]);
+    expect(propertyIssues('', ['data\u00a0platform'])).toEqual([
+      'annotation 1: an annotation cannot contain a line break, an invisible character, or a space other than an ordinary one',
+    ]);
+  });
+
+  it('refuses an over-long description and too many annotations', () => {
+    expect(propertyIssues('x'.repeat(4001), [])).toEqual([
+      'the description can be at most 4000 characters',
+    ]);
+    const many = Array.from({ length: 51 }, (_, i) => `t${i}`);
+    expect(propertyIssues('', many)).toEqual(['a pipeline can have at most 50 annotations']);
   });
 });
 

@@ -165,6 +165,8 @@ const version: PipelineVersion = {
   edges: [],
   containers: [],
   variables: [],
+  description: '',
+  annotations: [],
   catalogVersion: 1,
   createdAt: 1,
   sourceCommit: null,

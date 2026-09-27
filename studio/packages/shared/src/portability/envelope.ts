@@ -127,11 +127,16 @@ export const PipelineVersionExportSchema = PipelineVersionSchema.omit({
   nodes: z.array(NodeExportSchema),
   resourceId: exportResourceId,
   // #844 V1 (spec V-D2) — OPTIONAL in the export, with no default: an empty list
-  // is omitted from the file (`omitEmptyVariables`) so every pre-V1 file keeps
+  // is omitted from the file (`omitEmptyLateFields`) so every pre-V1 file keeps
   // its bytes, and a version exported that way must parse back WITHOUT the key
   // being re-manufactured. Absent means "no variables", and the write schema
   // (`NewPipelineVersionSchema`) turns it back into `[]` on import.
   variables: z.array(VariableDefSchema).optional(),
+  // #1 F8a — the same, for the same reason: an empty value is omitted from the
+  // file, and must not be put back by the read schema's default on the way in
+  // (`serializePipeline` parses this schema AFTER the omission).
+  description: z.string().optional(),
+  annotations: z.array(z.string()).optional(),
 });
 export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
 

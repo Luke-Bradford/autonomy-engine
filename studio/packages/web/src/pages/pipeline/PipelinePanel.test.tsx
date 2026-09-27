@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { PipelinePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
@@ -39,8 +39,8 @@ describe('PipelinePanel (U16) — params', () => {
 
   it('says so plainly when nothing is declared', () => {
     mount(version());
-    // params, variables and outputs
-    expect(screen.getAllByText('None declared.')).toHaveLength(3);
+    // params, variables, outputs and (#1 F8a) annotations
+    expect(screen.getAllByText('None declared.')).toHaveLength(4);
   });
 
   it('"Add param" puts a new row in the store', () => {
@@ -551,5 +551,45 @@ describe('PipelinePanel — Paste (U21)', () => {
     // A greyed button cannot explain WHY it is grey, and "nothing copied yet"
     // and "copied from another pipeline" are different answers.
     expect(screen.getByRole('button', { name: 'Paste' })).toBeEnabled();
+  });
+});
+
+describe('PipelinePanel (#1 F8a) — General', () => {
+  function mountGeneral(v: PipelineVersion) {
+    const store = mount(v);
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    return store;
+  }
+
+  it('is the LAST tab, so the dock still opens on Parameters', () => {
+    mount(version());
+    const tabs = screen.getAllByRole('tab');
+    expect(
+      ['Parameters', 'Variables', 'Outputs', 'General'].map((name) =>
+        tabs.indexOf(screen.getByRole('tab', { name })),
+      ),
+    ).toEqual([0, 1, 2, 3]);
+  });
+
+  it('shows the version’s description and one row per annotation', () => {
+    mountGeneral(version({ description: 'Nightly load', annotations: ['prod', 'finance'] }));
+    expect(screen.getByLabelText('pipeline description')).toHaveValue('Nightly load');
+    expect(screen.getByLabelText('annotation 1')).toHaveValue('prod');
+    expect(screen.getByLabelText('annotation 2')).toHaveValue('finance');
+  });
+
+  it('writes edits straight to the store — no draft that an undo could leave stale', () => {
+    const store = mountGeneral(version({ annotations: ['prod'] }));
+    fireEvent.change(screen.getByLabelText('pipeline description'), {
+      target: { value: 'Nightly' },
+    });
+    fireEvent.change(screen.getByLabelText('annotation 1'), { target: { value: 'staging' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
+    expect(store.getState().description).toBe('Nightly');
+    expect(store.getState().annotations).toEqual(['staging', '']);
+    fireEvent.click(screen.getByRole('button', { name: 'remove annotation 1' }));
+    expect(store.getState().annotations).toEqual(['']);
+    act(() => store.getState().undo());
+    expect(screen.getByLabelText('annotation 1')).toHaveValue('staging');
   });
 });

@@ -702,6 +702,9 @@ describe('importEnvelope: pipeline', () => {
       ],
       // #844 V1 — non-empty for the same reason: a dropped column reads back `[]`.
       variables: [{ name: 'tally', type: 'number', default: 3, description: 'kept' }],
+      // #1 F8a — non-empty for the same reason: dropped columns read back `''` / `[]`.
+      description: 'Loads the nightly batch',
+      annotations: ['prod', 'finance'],
       // NOT CATALOG_VERSION — import is an "upgrade path can still set an older
       // value" (see `NewPipelineVersionSchema`), so a preserved older value is
       // the meaningful assertion; a re-stamped one would silently equal the default.

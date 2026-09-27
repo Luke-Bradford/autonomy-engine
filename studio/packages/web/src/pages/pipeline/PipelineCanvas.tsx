@@ -90,7 +90,8 @@ import {
   readableIssue,
   sameAttribution,
 } from './containerRules';
-import { nameIssues } from './paramRules';
+import { nameIssues, propertyIssues } from './paramRules';
+import { PipelineGeneral } from './PipelineGeneral';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
 import {
   isOwnPolicyIssue,
@@ -569,6 +570,8 @@ export function PipelineCanvas({
   const variables = useStore(store, (s) => s.variables);
   const globals = useStore(store, (s) => s.globals);
   const outputs = useStore(store, (s) => s.outputs);
+  const description = useStore(store, (s) => s.description);
+  const annotations = useStore(store, (s) => s.annotations);
   const dirty = useStore(store, (s) => s.dirty);
   // #852 — read by the folded dock's toggle, so a selection made while the
   // properties are folded away still gets a visible answer.
@@ -640,8 +643,12 @@ export function PipelineCanvas({
     [nodes, edges, containers, params, variables, globals],
   );
   const issues = useMemo(
-    () => [...located.map((issue) => issue.text), ...nameIssues(params, outputs, variables)],
-    [located, params, outputs, variables],
+    () => [
+      ...located.map((issue) => issue.text),
+      ...nameIssues(params, outputs, variables),
+      ...propertyIssues(description, annotations),
+    ],
+    [located, params, outputs, variables, description, annotations],
   );
   const attribution = useMemo(
     () => issuesBySubject(located, nodes, edges, containers),
@@ -712,13 +719,15 @@ export function PipelineCanvas({
       //
       // It is NOT the first such writer, though an earlier draft of this comment
       // claimed so: `createContainer` and `setNodeContainer` both write
-      // `containers` alone. What the five checks together now assert is the
+      // `containers` alone. What the checks together now assert is the
       // property that actually matters — they cover every doc field the store
       // owns, and every action mints a fresh array reference, so no concurrent
       // edit can be silently overwritten by the rebase.
       const savedParams = store.getState().params;
       const savedOutputs = store.getState().outputs;
       const savedVariables = store.getState().variables;
+      const savedDescription = store.getState().description;
+      const savedAnnotations = store.getState().annotations;
       try {
         const created = await createPipelineVersion(
           pipelineId,
@@ -729,6 +738,8 @@ export function PipelineCanvas({
             savedParams,
             savedOutputs,
             savedVariables,
+            savedDescription,
+            savedAnnotations,
             basedOnVersionId,
           ),
         );
@@ -742,6 +753,8 @@ export function PipelineCanvas({
               params: savedParams,
               outputs: savedOutputs,
               variables: savedVariables,
+              description: savedDescription,
+              annotations: savedAnnotations,
             },
             s,
           )
@@ -1603,7 +1616,7 @@ export function MultiSelectionPanel({
  * Exported for its own tests, the same reason `EdgePanel`/`NodePanel` are.
  */
 /** #844 — the pipeline-level panel's tabs. */
-export type PipelineTab = 'params' | 'variables' | 'outputs';
+export type PipelineTab = 'params' | 'variables' | 'outputs' | 'general';
 /** #852 — an activity's tabs: its configuration, then ADF's "General" (run policy). */
 export type NodeTab = 'settings' | 'general';
 
@@ -1718,6 +1731,13 @@ export function PipelinePanel({
                 ))}
               </ContractSection>
             ),
+          },
+          {
+            // #1 F8a — ADF's pipeline properties (description, annotations).
+            // Last, so the dock still opens on Parameters.
+            key: 'general',
+            label: 'General',
+            content: <PipelineGeneral store={store} />,
           },
         ]}
       />

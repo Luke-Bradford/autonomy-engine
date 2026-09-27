@@ -1696,6 +1696,8 @@ describe('canvasStore — variables ride through a canvas save (#844 V1)', () =>
       st.params,
       st.outputs,
       st.variables,
+      st.description,
+      st.annotations,
       st.loaded?.id ?? null,
     );
     expect(body.variables).toEqual(variables);
@@ -1869,6 +1871,60 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
     expect(s.getState().variables[0]!.name).toBe('a');
   });
 
+  it('#1 F8a — loads a version’s description and annotations, and a typing burst is ONE undo', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ description: 'Old', annotations: ['prod'] }));
+    expect(s.getState().description).toBe('Old');
+    expect(s.getState().annotations).toEqual(['prod']);
+    s.getState().setDescription('Ol');
+    s.getState().setDescription('O');
+    s.getState().updateAnnotation(0, 'pro');
+    s.getState().updateAnnotation(0, 'pr');
+    expect(s.getState().dirty).toBe(true);
+    s.getState().undo();
+    expect(s.getState().annotations).toEqual(['prod']);
+    expect(s.getState().description).toBe('O');
+    s.getState().undo();
+    expect(s.getState().description).toBe('Old');
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('#1 F8a — annotations add, update and remove by index; an out-of-range index is a no-op', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ annotations: ['prod'] }));
+    s.getState().addAnnotation();
+    s.getState().updateAnnotation(1, 'finance');
+    expect(s.getState().annotations).toEqual(['prod', 'finance']);
+    s.getState().removeAnnotation(0);
+    expect(s.getState().annotations).toEqual(['finance']);
+    const before = s.getState().annotations;
+    s.getState().updateAnnotation(4, 'x');
+    s.getState().removeAnnotation(4);
+    expect(s.getState().annotations).toBe(before);
+  });
+
+  it('#1 F8a — Save carries the description and annotations the store holds', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().setDescription('Nightly');
+    s.getState().addAnnotation();
+    s.getState().updateAnnotation(0, 'prod');
+    const st = s.getState();
+    const body = toVersionBody(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.params,
+      st.outputs,
+      st.variables,
+      st.description,
+      st.annotations,
+      null,
+    );
+    expect(body.description).toBe('Nightly');
+    expect(body.annotations).toEqual(['prod']);
+  });
+
   it('every contract action marks the canvas dirty', () => {
     const acts: ((s: ReturnType<typeof createCanvasStore>) => void)[] = [
       (s) => s.getState().addParam(),
@@ -1880,6 +1936,10 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
       (s) => s.getState().addVariable(),
       (s) => s.getState().updateVariable(0, { name: 'z', type: 'string', default: '' }),
       (s) => s.getState().removeVariable(0),
+      (s) => s.getState().setDescription('changed'),
+      (s) => s.getState().addAnnotation(),
+      (s) => s.getState().updateAnnotation(0, 'changed'),
+      (s) => s.getState().removeAnnotation(0),
     ];
     for (const act of acts) {
       const s = createCanvasStore();
@@ -1888,6 +1948,7 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
           params: [{ name: 'a', type: 'string', required: false }],
           outputs: [{ name: 'o', type: 'string' }],
           variables: [{ name: 'v', type: 'number', default: 1 }],
+          annotations: ['a'],
         }),
       );
       expect(s.getState().dirty).toBe(false);
@@ -2130,6 +2191,8 @@ describe('canvasStore — back-edges (U6e)', () => {
       st.params,
       st.outputs,
       st.variables,
+      st.description,
+      st.annotations,
       st.loaded?.id ?? null,
     );
     const persisted = body.edges.find((e) => e.from === 'n_b');
@@ -3316,6 +3379,8 @@ describe('canvasStore — duplicateNode (U21)', () => {
       st.params,
       st.outputs,
       st.variables,
+      st.description,
+      st.annotations,
       null,
     );
     expect(body.nodes).toHaveLength(3);

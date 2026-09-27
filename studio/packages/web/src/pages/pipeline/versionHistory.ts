@@ -187,18 +187,21 @@ export function restoreBodyFrom(
     v.params,
     v.outputs,
     v.variables,
+    v.description,
+    v.annotations,
     basedOnVersionId,
   );
 }
 
 /**
- * The five doc fields the canvas store owns, snapshotted before an in-flight
+ * The doc fields the canvas store owns, snapshotted before an in-flight
  * version write so the write can tell whether the operator edited underneath it.
  *
  * The element type is `unknown` on purpose: only reference identity is ever
  * compared. Every store action mints a fresh array, so a CHANGED reference is a
  * concurrent edit and an UNCHANGED one is the absence of one — reading into the
- * elements would add precision this decision does not use.
+ * elements would add precision this decision does not use. `description` is the
+ * one string, compared by value: equal text is no edit, whoever typed it.
  */
 export interface DocSnapshot {
   readonly nodes: readonly unknown[];
@@ -207,6 +210,8 @@ export interface DocSnapshot {
   readonly params: readonly unknown[];
   readonly outputs: readonly unknown[];
   readonly variables: readonly unknown[];
+  readonly description: string;
+  readonly annotations: readonly unknown[];
 }
 
 /**
@@ -217,7 +222,7 @@ export interface DocSnapshot {
  * silently destroys work. Both version writers ask this: `onSave` (which keeps
  * the edits and re-points `loaded`) and `onRestore`.
  *
- * All five fields are checked because each can move alone — `createContainer`
+ * Every field is checked because each can move alone — `createContainer`
  * and `setNodeContainer` write only `containers`, the param/output actions
  * write only `params`/`outputs`. Checking a subset would let those edits
  * through invisibly.
@@ -229,7 +234,9 @@ export function docUnchanged(before: DocSnapshot, after: DocSnapshot): boolean {
     before.containers === after.containers &&
     before.params === after.params &&
     before.outputs === after.outputs &&
-    before.variables === after.variables
+    before.variables === after.variables &&
+    before.description === after.description &&
+    before.annotations === after.annotations
   );
 }
 

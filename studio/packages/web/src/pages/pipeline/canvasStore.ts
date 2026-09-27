@@ -760,6 +760,8 @@ interface CanvasDocSnapshot {
   params: Param[];
   outputs: Output[];
   variables: VariableDef[];
+  description: string;
+  annotations: string[];
   dirty: boolean;
   /** The id of the version this doc was last reconciled against, or `null`. */
   loadedId: string | null;
@@ -773,6 +775,8 @@ function snapshotOf(s: CanvasState): CanvasDocSnapshot {
     params: s.params,
     outputs: s.outputs,
     variables: s.variables,
+    description: s.description,
+    annotations: s.annotations,
     dirty: s.dirty,
     loadedId: s.loaded?.id ?? null,
   };
@@ -845,6 +849,8 @@ function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasSta
     params: snap.params,
     outputs: snap.outputs,
     variables: snap.variables,
+    description: snap.description,
+    annotations: snap.annotations,
     dirty: snap.dirty || snap.loadedId !== (s.loaded?.id ?? null),
     // Pruned member-wise: undoing an add removes one node of a marquee'd set and
     // leaves the others genuinely selected, so dropping the whole set would be a
@@ -953,6 +959,13 @@ export interface CanvasState {
    * or a git import) would otherwise lose them on the next canvas Save.
    */
   variables: VariableDef[];
+  /**
+   * #1 F8a — what the pipeline is for, and its tags (the General tab). WORKING
+   * state like everything above: `toVersionBody` builds the save body from this
+   * store alone, so a field not held here would be dropped on the next Save.
+   */
+  description: string;
+  annotations: string[];
   /**
    * #844 GL3 — the WORKSPACE's global parameters, name and type, which the
    * canvas validates `${global.<name>}` against as the server's gate does.
@@ -1383,6 +1396,11 @@ export interface CanvasState {
   addVariable(): void;
   updateVariable(index: number, next: VariableDef): void;
   removeVariable(index: number): void;
+  /** #1 F8a — the General tab. A typing burst in one field is one undo step. */
+  setDescription(text: string): void;
+  addAnnotation(): void;
+  updateAnnotation(index: number, text: string): void;
+  removeAnnotation(index: number): void;
   /** Select exactly one element, or nothing. Sugar over `setSelection`. */
   select(sel: Selection | null): void;
   /**
@@ -1477,6 +1495,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       params: [],
       outputs: [],
       variables: [],
+      description: '',
+      annotations: [],
       globals: [],
       selected: [],
       dirty: false,
@@ -1584,6 +1604,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
           // #844 V1 — deep for the reason `params` is: an `array` default nests.
           variables: v ? v.variables.map((d) => structuredClone(d)) : [],
+          description: v ? v.description : '',
+          annotations: v ? [...v.annotations] : [],
           selected: [],
           dirty: false,
           addCount: 0,
@@ -2414,6 +2436,29 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       removeVariable(index) {
         if (!inRange(index, get().variables.length)) return;
         edit((s) => ({ variables: s.variables.filter((_, i) => i !== index) }));
+      },
+
+      setDescription(text) {
+        if (text === get().description) return;
+        edit(() => ({ description: text }), 'pipeline:description');
+      },
+
+      addAnnotation() {
+        edit((s) => ({ annotations: [...s.annotations, ''] }));
+      },
+
+      updateAnnotation(index, text) {
+        if (!inRange(index, get().annotations.length)) return;
+        if (text === get().annotations[index]) return;
+        edit(
+          (s) => ({ annotations: s.annotations.map((a, i) => (i === index ? text : a)) }),
+          `annotation:${index}`,
+        );
+      },
+
+      removeAnnotation(index) {
+        if (!inRange(index, get().annotations.length)) return;
+        edit((s) => ({ annotations: s.annotations.filter((_, i) => i !== index) }));
       },
 
       /**

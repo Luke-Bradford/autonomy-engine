@@ -1073,6 +1073,8 @@ describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boo
         edges: [edge('a', 'b'), edge('b', 'a')],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })
@@ -1420,6 +1422,8 @@ describe('makeDocResolver — the production resolver classifies a gone version 
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })
@@ -1516,6 +1520,8 @@ describe('reconcileOnBoot — #515 a present-but-unparseable version terminalize
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })

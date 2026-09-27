@@ -238,6 +238,10 @@ export const pipelineVersions = sqliteTable(
     // `containers` has above: NOT NULL with no drizzle-level default, so a raw
     // insert that omits the key does not compile.
     variables: text('variables', { mode: 'json' }).notNull().$type<VariableDef[]>(),
+    // #1 F8a — added by 0043 with the same pairing: NOT NULL with no drizzle-level
+    // default, so a raw insert that omits either key does not compile.
+    description: text('description').notNull(),
+    annotations: text('annotations', { mode: 'json' }).notNull().$type<string[]>(),
     // #844 GL3 — the globals this version reads, as JSON `GlobalRead[]` text
     // serialized by the repo (0042). Server-only and DERIVED: deliberately not a
     // `PipelineVersionSchema` field, so it never reaches the content form, git or

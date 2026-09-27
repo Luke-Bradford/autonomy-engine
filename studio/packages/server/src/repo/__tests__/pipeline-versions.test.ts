@@ -191,6 +191,36 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
   });
 
+  it('PERSISTS a description and annotations — the RE-READ carries them (#1 F8a)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const created = createPipelineVersion(db, {
+      ...buildVersionInput(pipeline.id),
+      description: 'Loads the nightly batch',
+      annotations: ['prod', 'finance'],
+    });
+    const reread = getPipelineVersion(db, created.id);
+    expect(reread?.description).toBe('Loads the nightly batch');
+    expect(reread?.annotations).toEqual(['prod', 'finance']);
+  });
+
+  it.each([
+    [['prod', 'Prod'], "duplicate annotation 'Prod'"],
+    [[' prod'], 'cannot start or end with a space'],
+    [['a\nb'], 'line break'],
+    [['a\u2028b'], 'line break'],
+    [['a\u200bb'], 'invisible character'],
+    [['a\u00a0b'], 'other than an ordinary one'],
+    [[''], 'cannot be empty'],
+  ])('REFUSES annotations %j (#1 F8a) — nothing is written', (annotations, message) => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, { ...buildVersionInput(pipeline.id), annotations }),
+    ).toThrow(message);
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+  });
+
   it('PERSISTS declared variables — the RE-READ carries them (#844 V1, the #473 shape)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -661,6 +691,9 @@ describe('pipeline-versions repo', () => {
       ],
       // #844 V1 — non-empty for the same reason: a dropped column reads back `[]`.
       variables: [{ name: 'tally', type: 'number', default: 3, description: 'kept' }],
+      // #1 F8a — non-empty for the same reason: dropped columns read back `''` / `[]`.
+      description: 'Loads the nightly batch',
+      annotations: ['prod', 'finance'],
       // Deliberately NOT CATALOG_VERSION — a dropped `catalogVersion` defaults to
       // the current one, so an equal read-back would prove nothing. The write
       // gate does not constrain this value (no catalog refs in `validatePipelineDoc`).
@@ -845,6 +878,8 @@ describe('pipeline-versions repo', () => {
       // must name it — the repo path gets it from Zod's default instead.
       containers: input.containers ?? [],
       variables: input.variables ?? [],
+      description: input.description ?? '',
+      annotations: input.annotations ?? [],
       catalogVersion: input.catalogVersion ?? CATALOG_VERSION,
       version: 1,
       createdAt: Date.now(),

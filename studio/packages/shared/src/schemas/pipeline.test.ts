@@ -475,6 +475,8 @@ const pipelineVersion = {
   edges: [],
   containers: [],
   variables: [],
+  description: '',
+  annotations: [],
   catalogVersion: CATALOG_VERSION,
   createdAt: 1700000000000,
   // #3 G6b — git provenance is `null` on a DB-authored version. The backward-
