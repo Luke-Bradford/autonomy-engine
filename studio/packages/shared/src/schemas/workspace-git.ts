@@ -317,8 +317,10 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
  * The first five are BRANCH-side (a committed file), and for those the `message`
  * is a fixed, categorical string keyed by `code` — deliberately NOT the raw
  * JSON/Zod error text, which could echo arbitrary committed file content into an
- * API response. The sixth is composed per instance; see its entry for why that
- * does not cross the same rule.
+ * API response. (A global parameter's `duplicate_resource_id` takes a second
+ * fixed string, since its file holds no resourceId.) The sixth and seventh are
+ * composed per instance; see their entries for why that does not cross the same
+ * rule.
  * - `unparseable`: not valid JSON / failed envelope upgrade+validation.
  * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
  * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.

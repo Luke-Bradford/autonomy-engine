@@ -362,7 +362,9 @@ function importDatasetEnvelope(
  *
  * A name this owner already holds, in any case, is refused by name rather than
  * left to the unique index's generic conflict: an import never overwrites a live
- * global's value (a pull from git is the path that updates one).
+ * global's value (a pull from git is the path that updates one). The check and
+ * the insert run in one synchronous turn (better-sqlite3 does not yield), so
+ * no other write lands between them; the NOCASE unique index stays the backstop.
  */
 function importGlobalParamEnvelope(
   db: Db,

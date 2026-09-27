@@ -8,6 +8,7 @@ import {
   connectionContentForm,
   datasetContentForm,
   globalParamContentForm,
+  globalParamNameDefect,
   globalParamResourceId,
   interpolationMode,
   pipelineVersionContentForm,
@@ -1211,8 +1212,7 @@ export function applyWorkspace(
      * #844 GL6 — the global-parameter phase (spec GL-D6), before pipelines (see
      * `APPLY_RANK`).
      *
-     * Matched by case-folded name against the REAL rows rather than the
-     * serialized snapshot, which omits a row whose name breaks today's rule. A
+     * Matched by case-folded name against the stored rows. A
      * write goes through the same boundary schemas as `POST`/`PATCH
      * /api/global-params`, so a hand-edited file meets the rules a request
      * would; a refusal is attributed to the file and refuses the whole atomic
@@ -1227,8 +1227,14 @@ export function applyWorkspace(
      * is immutable, and the value and description are what a pull writes.
      */
     const applyGlobalParams = (): void => {
+      // A stored row whose name breaks today's rule (a pre-GL3 `__proto__`) is
+      // left out, as the serialized snapshot the PREVIEW reads leaves it out, so
+      // the two agree that no such global exists. A branch file of that name is
+      // then a create, which the name rule refuses.
       const existingByRid = new Map(
-        listOwnerGlobalParams(db, ownerId).map((g) => [globalParamResourceId(g.name), g]),
+        listOwnerGlobalParams(db, ownerId)
+          .filter((g) => globalParamNameDefect(g.name) === null)
+          .map((g) => [globalParamResourceId(g.name), g]),
       );
       for (const inc of incoming.globalParams) {
         const data = inc.data;

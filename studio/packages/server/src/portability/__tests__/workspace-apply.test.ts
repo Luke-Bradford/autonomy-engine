@@ -2482,6 +2482,22 @@ describe('applyWorkspace — global parameters (#844 GL6)', () => {
     expect(snapshot(src).globalParams.map((g) => g.data.name)).toEqual(['ok']);
   });
 
+  // The preview reads a snapshot that leaves such a row out, so the apply must
+  // too, or the two disagree: the preview says `create`, the apply updates.
+  it('treats a stored rule-breaking name as absent, as the preview does', () => {
+    const dst = freshDb().db;
+    global(dst, '__proto__', 'string', 'stored');
+    const branch = snapshot(freshDb().db);
+    branch.globalParams.push({
+      path: 'global-params/proto.json',
+      resourceId: '__proto__',
+      data: { name: '__proto__', type: 'string', value: 'branch', description: '' },
+    });
+
+    expect(() => applyWorkspace(dst, 'local', branch, 'head1', 'main')).toThrow(/reserved/);
+    expect(globalsOf(dst).map((g) => g.value)).toEqual(['stored']);
+  });
+
   it('round-trips into a DIFFERENT workspace', () => {
     const src = freshDb().db;
     global(src, 'apiUrl', 'string', 'https://prod');

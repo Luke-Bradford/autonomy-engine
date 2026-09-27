@@ -187,7 +187,8 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
     <section className="connection-form" aria-labelledby="import-heading">
       <h3 id="import-heading">Import</h3>
       <p className="page-hint">
-        Bring in a pipeline, connection, trigger or dataset from an export file. Secrets are never
+        Bring in a pipeline, connection, trigger, dataset or global parameter from an export file.
+        Secrets are never
         exported, and neither is a pipeline&rsquo;s or trigger&rsquo;s binding to anything else, so
         an imported resource usually needs something rebound — whatever that is will be listed here.
       </p>
