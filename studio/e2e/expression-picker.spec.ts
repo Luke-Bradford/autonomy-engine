@@ -180,6 +180,56 @@ test.describe('U8a — expression insert flyout', () => {
     await expectQuiet(page, problems);
   });
 
+  test('a workspace GLOBAL is offered, and the read reaches the stored version (#844 GL4)', async ({
+    page,
+  }) => {
+    // The global is created through the API: the Manage page is GL2's. What
+    // this proves is that the canvas hands the SAME globals to the catalog and
+    // to the validator that probes each offer — the flyout lists it under its
+    // own heading — and that the server gate accepts `${global.<name>}` on save.
+    // The suite shares one SQLite file, so the name is unique to this test and
+    // cleared on both sides of it.
+    const name = 'e2e_844_gl4_env';
+    const clear = async () => {
+      const res = await page.request.get('/api/global-params?limit=100');
+      expect(res.ok()).toBe(true);
+      const { items } = (await res.json()) as { items: { id: string; name: string }[] };
+      for (const g of items.filter((i) => i.name.toLowerCase() === name)) {
+        expect((await page.request.delete(`/api/global-params/${g.id}`)).ok()).toBe(true);
+      }
+    };
+    await clear();
+    const created = await page.request.post('/api/global-params', {
+      data: { name, type: 'string', value: 'prod' },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'gl4 read a global', {
+      nodes: [
+        { id: 'call', type: 'http_request', position: { x: 0, y: 0 }, config: { method: 'GET' } },
+      ],
+    });
+
+    await nodeById(page, 'call').click();
+    await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
+    await expect(panel(page).getByText('Global parameters')).toBeVisible();
+    await panel(page)
+      .getByRole('button', { name: new RegExp(`^${name}`) })
+      .click();
+    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+      `\${global.${name}}`,
+    );
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id, 'call')).toMatchObject({ url: `\${global.${name}}` });
+
+    await expectQuiet(page, problems);
+    await clear();
+  });
+
   test('a type-checked field offers only what it would accept', async ({ page }) => {
     // A `filter`'s `items` must resolve to an ARRAY and is whole-value, so the
     // picker is in REPLACE mode there. Offering a string reference would destroy

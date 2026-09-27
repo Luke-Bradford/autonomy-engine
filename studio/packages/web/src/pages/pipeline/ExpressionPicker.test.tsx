@@ -6,6 +6,7 @@ import {
   type Edge,
   type Node,
   type Param,
+  type GlobalRead,
   type VariableDef,
 } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
@@ -31,9 +32,10 @@ function mount(
   params: Param[],
   selected: string,
   variables: VariableDef[] = [],
+  globals: GlobalRead[] = [],
 ) {
   const store = createCanvasStore();
-  store.setState({ nodes, edges, params, variables });
+  store.setState({ nodes, edges, params, variables, globals });
 
   function Harness() {
     const node = useStore(store, (s) => s.nodes.find((n) => n.id === selected));
@@ -201,6 +203,18 @@ describe('ExpressionPicker in NodePanel', () => {
     expect(screen.getByText('Pipeline variables')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^attempts/ }));
     expect(ui.field('url').value).toContain('${vars.attempts}');
+  });
+
+  // #844 GL4 — a workspace global is offered under its own heading, and the
+  // pick writes `${global.<name>}`. It survives the picker's validate probe
+  // only because the catalog and the canvas validator are handed ONE map.
+  it('offers a workspace global and writes ${global.<name>}', () => {
+    const globals: GlobalRead[] = [{ name: 'env', type: 'string' }];
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call', [], globals);
+    ui.open('url');
+    expect(screen.getByText('Global parameters')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^env/ }));
+    expect(ui.field('url').value).toContain('${global.env}');
   });
 
   it('closes on Escape without touching the field', () => {

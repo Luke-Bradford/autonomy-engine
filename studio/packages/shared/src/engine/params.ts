@@ -1755,14 +1755,15 @@ export type RefSuggestion = {
   /** The exact text to write into a config field, braces (and any wrapper) included. */
   insert: string;
   /** WHAT this references — a semantic kind, not a display heading. */
-  kind: 'item' | 'param' | 'variable' | 'nodeOutput' | 'nodeStatus' | 'run' | 'trigger';
+  kind: 'item' | 'param' | 'variable' | 'global' | 'nodeOutput' | 'nodeStatus' | 'run' | 'trigger';
   /** The producing node or container id. `nodeOutput`/`nodeStatus` only. */
   producerId?: string;
-  /** Output, param or variable name, or run/trigger field. Absent for `${item}`. */
+  /** Output, param, variable or global name, or run/trigger field. Absent for `${item}`. */
   name?: string;
   /**
    * The type as DECLARED where the reference is declared — a param's `type`, an
-   * output's `type`, or the fixed shape of a run/trigger field. For the author's
+   * output's `type`, a global's stored `type` (a `ParamType` minus `secret`), or
+   * the fixed shape of a run/trigger field. For the author's
    * orientation, so it is the type they WROTE.
    *
    * Deliberately NOT `refRootType`'s answer, which is the type the static
@@ -1842,13 +1843,22 @@ export type RefSite =
  *    to sites this function does not describe, so they are never offered;
  *  - a node site that names no field is not offered a filter predicate's
  *    `${item}`: without the field, that binding cannot be told from `items`'.
+ *
+ * `options.globals` is the workspace's globals (#844 GL4), the same map the
+ * caller hands `validatePipelineDoc`. ABSENT means NONE, exactly as at the gate:
+ * a global is offered only when the validator that judges it would know it.
  */
-export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[] {
+export function availableRefs(
+  doc: ValidatedDoc,
+  site: RefSite,
+  options: Pick<ValidateDocOptions, 'globals'> = {},
+): RefSuggestion[] {
   const containers = doc.containers ?? [];
   const outputsById = outputsByIdOf(doc.nodes, containers);
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
   const variables = variableMapOf(doc.variables);
+  const globals = globalScopeOf(options);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -1857,12 +1867,12 @@ export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[]
     if (c === undefined || !CONTAINER_CONFIG_FIELDS[c.kind].includes(site.field)) return [];
     const scope =
       site.field === 'exitWhen'
-        ? exitWhenScope(c, declared, variables, NO_GLOBALS, outputsById, secureOutputIds)
+        ? exitWhenScope(c, declared, variables, globals, outputsById, secureOutputIds)
         : foreachItemsScope(
             c,
             declared,
             variables,
-            NO_GLOBALS,
+            globals,
             outputsById,
             secureOutputIds,
             computeGraph(doc),
@@ -1890,7 +1900,7 @@ export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[]
     {
       declared,
       variables,
-      ...NO_GLOBALS,
+      ...globals,
       outputsById,
       secureOutputIds,
       guaranteed: graph.guaranteed.get(nodeId) ?? new Set<string>(),
@@ -1973,6 +1983,22 @@ function refsInScope(
       kind: 'variable',
       name: v.name,
       declaredType: v.type,
+      availability: 'available',
+    });
+  }
+
+  // #844 GL4 — every global of the workspace, from the SCOPE (the map
+  // `checkRefRoot` reads), in the order the caller gave them. Always
+  // `available`: the run snapshots them before anything dispatches (GL-D3).
+  // An unaddressable name is skipped for the reason a param's is.
+  for (const [name, type] of scope.globals) {
+    if (!isAddressableOutputName(name)) continue;
+    out.push({
+      ref: `global.${name}`,
+      insert: `\${global.${name}}`,
+      kind: 'global',
+      name,
+      declaredType: type,
       availability: 'available',
     });
   }
@@ -2503,7 +2529,7 @@ type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads'>;
 
 /**
  * No globals: a trigger binding and a tool expression, whose closed root sets
- * exclude `global`, and the flyout's scopes until GL4 gives it the workspace's.
+ * exclude `global` (GL-D2).
  */
 const NO_GLOBALS: GlobalScope = { globals: new Map() };
 
