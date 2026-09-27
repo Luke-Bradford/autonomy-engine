@@ -319,8 +319,14 @@ export type NewRunEvent = z.input<typeof NewRunEventSchema>;
  * - `fold`   — derived by folding the event at `seq`.
  * - `resume` — derived by `resume()` over the projection as of `seq`.
  * - `cap`    — the truncation marker (see `RUN_DIAGNOSTIC_CAP`), at `seq: -1`.
+ * - `start`  — (#1367) why a run's start was REFUSED before any event was
+ *   appended: a bad param, a version that no longer resolves. The one phase that
+ *   derives from no log at all, because there is none — with no event to carry
+ *   the reason, this table is the only place the run can say it. Stored at
+ *   `seq: 0`, and the run page shows no seq for it: there is no event there to
+ *   cross-reference. Written by `terminalizeInterrupted`'s empty-log branch.
  */
-export const RUN_DIAGNOSTIC_PHASES = ['fold', 'resume', 'cap'] as const;
+export const RUN_DIAGNOSTIC_PHASES = ['fold', 'resume', 'cap', 'start'] as const;
 export const RunDiagnosticPhaseSchema = z.enum(RUN_DIAGNOSTIC_PHASES);
 export type RunDiagnosticPhase = z.infer<typeof RunDiagnosticPhaseSchema>;
 

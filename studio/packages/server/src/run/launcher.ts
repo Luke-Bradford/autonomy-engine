@@ -257,7 +257,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         await startRun(deps, run, triggerContext);
       } catch (err) {
         deps.log?.error({ err, runId: run.id, triggerId: run.triggerId }, 'run drive failed');
-        terminalizeInterrupted(deps, run.id);
+        terminalizeInterrupted(deps, run.id, undefined, err);
       }
     });
 

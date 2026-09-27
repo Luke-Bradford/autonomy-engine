@@ -7,6 +7,7 @@ import {
   EngineEventSchema,
   FAILURE_CODES,
   MAX_WAIT_SECONDS,
+  ParamResolveError,
   type ArmWakeupInput,
   type CancelSource,
   type Engine,
@@ -1444,6 +1445,25 @@ const isTerminalRow = (status: string): boolean =>
   (TERMINAL_RUN as ReadonlySet<string>).has(status);
 
 /**
+ * #1367 — the sentence a refused start leaves on the run, for the operator.
+ *
+ * Only the refusals whose messages are WRITTEN for an author are quoted: a bad
+ * param (`ParamResolveError`, which never echoes a secret's value) and a version
+ * that is missing or unreadable (`DocUnresolvableError` and its unparseable
+ * subtype). Anything else is a fault inside the server — a DB error, a bug — whose
+ * message can carry SQL or file paths, and `run_diagnostics` is served to the
+ * run's owner. So that case says only that it happened; the detail is already in
+ * the server log the caller wrote. A NEW start-time refusal that authors should
+ * read (a missing global, say) joins this list when it is built.
+ */
+function startRefusalMessage(cause: unknown): string {
+  if (cause instanceof ParamResolveError || cause instanceof DocUnresolvableError) {
+    return `The run did not start: ${cause.message}`;
+  }
+  return 'The run did not start: an unexpected server error stopped it. The server log has the details.';
+}
+
+/**
  * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
  * every EXPECTED activity failure to a terminal event itself, so reaching
  * here is a bug/bad-doc, not a normal failure). Keep the append-log the
@@ -1484,11 +1504,21 @@ const isTerminalRow = (status: string): boolean =>
  * have minted a false fact — the same objection `interruptRun`
  * (`reconcile.ts`) was written to avoid. The default keeps every existing
  * drive-path caller unchanged.
+ *
+ * `cause` is the error that made the caller give up, and it matters ONLY on the
+ * empty-log branch (#1367). A run refused before anything was appended has no
+ * event to carry a reason — no `run.interrupted` is written there, by design —
+ * so without it the run page shows a bare `interrupted` and the reason lives
+ * only in the server log. With a cause, that branch also records ONE `start`
+ * diagnostic saying why (`startRefusalMessage`). A non-empty log needs none:
+ * its appended `run.interrupted` already states the reason in the event feed.
+ * The boot sweep passes no cause, because no error exists there to report.
  */
 export function terminalizeInterrupted(
   deps: TerminalizeDeps,
   runId: string,
   reason = 'drive_failed',
+  cause?: unknown,
 ): void {
   const { db } = deps;
   const patchRow = (): void => {
@@ -1514,6 +1544,9 @@ export function terminalizeInterrupted(
   if (run === null || isTerminalRow(run.status)) return;
   if (events.length === 0) {
     patchRow();
+    if (cause !== undefined) {
+      recordRunDiagnostics(db, runId, 0, 'start', [startRefusalMessage(cause)], deps.log);
+    }
     return;
   }
   // The LOG already records a terminal fact: the run really did finish, and the

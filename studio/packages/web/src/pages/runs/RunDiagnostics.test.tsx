@@ -152,6 +152,26 @@ describe('RunDiagnostics', () => {
     expect(screen.getAllByText(/derived when the run was resumed/i)).toHaveLength(1);
   });
 
+  /* #1367 — a refused start has NO event, so its row must not offer a seq as a
+     cross-reference into an Events table that is empty. */
+  it('shows a refused start as its own row with no seq to cross-reference', async () => {
+    const START: RunDiagnostic = {
+      ...DIAGNOSTIC,
+      id: 'rdg_start',
+      seq: 0,
+      phase: 'start',
+      message: "The run did not start: override for undeclared param 'nope'",
+    };
+    stubDiagnostics([START]);
+    render(<RunDiagnostics runId="run_1" settled />);
+
+    const cell = await screen.findByText(START.message, { exact: false });
+    const row = cell.closest('tr')!;
+    expect(row.querySelector('td')!.textContent).toBe('—');
+    expect(row.textContent).toMatch(/refused before it started/i);
+    expect(screen.queryByText(/derived when the run was resumed/i)).toBeNull();
+  });
+
   it('says an unfinished run’s list is a snapshot, and drops the caveat once it settles', async () => {
     stubDiagnostics([DIAGNOSTIC]);
     const { rerender } = render(<RunDiagnostics runId="run_1" settled={false} />);
