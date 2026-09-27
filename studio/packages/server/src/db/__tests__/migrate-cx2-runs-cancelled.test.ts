@@ -81,7 +81,9 @@ describe('0039 migration: runs.status accepts cancelled on an upgrading DB', () 
 
     const { applied } = runMigrations(sqlite);
 
-    expect(applied).toEqual(['0039_cx2_runs_cancelled_status.sql']);
+    // Asserted as `toContain`, not the whole pending set, which every later
+    // migration grows (0040 is the first to).
+    expect(applied).toContain('0039_cx2_runs_cancelled_status.sql');
     expect(allRows(sqlite)).toEqual(before);
   });
 

@@ -14,6 +14,7 @@ import {
   type PipelineVersion,
   type PipelineVersionExport,
   type TriggerExportData,
+  omitEmptyVariables,
 } from '@autonomy-studio/shared';
 import {
   getConnection,
@@ -162,12 +163,15 @@ function toPipelineVersionExport(
   version: PipelineVersion,
   strippedIds: Set<string>,
 ): PipelineVersionExport {
-  return {
+  const exported: PipelineVersionExport = {
     ...version,
     nodes: version.nodes.map((node) =>
       stripNodeDatasetIds(stripNodeConnectionId(node, strippedIds)),
     ),
   };
+  // #844 V1 — the same file shape as a workspace-git file (`serializePipeline`).
+  omitEmptyVariables(exported);
+  return exported;
 }
 
 /**

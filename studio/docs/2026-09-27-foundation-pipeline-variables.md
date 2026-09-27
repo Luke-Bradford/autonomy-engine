@@ -341,7 +341,7 @@ node changes meaning. `CATALOG_VERSION` is bumped in the slice that first accept
 
 | # | Ticket | Ships with |
 |---|--------|------------|
-| **V1** | Declare: `VariableTypeSchema` + `VariableDefSchema` + `PipelineVersion.variables` + migration + the `scrubVersion` empty-delete + content-form byte-identity and round-trip tests + `validateDoc` name/type/strict-default rules. Inert. | — |
+| **V1** | Declare: `VariableTypeSchema` + `VariableDefSchema` + `PipelineVersion.variables` + migration + the `scrubVersion` empty-delete + content-form byte-identity and round-trip tests + `validateDoc` name/type/strict-default rules + **the web carry**: `canvasStore` holds `variables` as working state and `toVersionBody`, version restore and copy-pipeline send it. Every one of those builds the write body field by field, so without the carry a canvas Save of a version that declares variables (through the API or a git import) would silently default them to `[]`. Inert. | — |
 | **V2** | Read: the `vars` root in `refRoot`, `SubstitutionContext.variables`, `RunState.variables` seeded from defaults, `checkRefRoot`/`inferExprType`, `refsInScope` `kind:'variable'`, and the test pinning the trigger-binding and tool exclusions. Until V5, reads see defaults only. | — |
 | **V3** | UI: the Variables tab, built by generalising the params row editor (V-D9). The first user-visible slice. | — |
 | **V4** | Pure, unwired, unit-tested: the V-D6 guard as a function over a doc (including `settledRaw` exposed from `computeGraph`, reader collection from the `validateRefs` scan, scope lifting, the back-edge rule and exclusivity), plus `copiedVariableWritesOf` (V-D7). No doc can contain a `set`/`append` node yet, so nothing is reachable from a save or a run. | — |

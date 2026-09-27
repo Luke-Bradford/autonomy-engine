@@ -24,6 +24,7 @@ import {
   type DatasetKind,
   type SecretStatus,
   type Container,
+  type VariableDef,
   type Edge,
   type ExternalAgentOutcome,
   type ExternalWaitStatus,
@@ -232,6 +233,10 @@ export const pipelineVersions = sqliteTable(
     // makes TypeScript refuse a raw insert that omits the key. (The column's
     // SQL DEFAULT exists only to backfill pre-0006 rows — see the migration.)
     containers: text('containers', { mode: 'json' }).notNull().$type<Container[]>(),
+    // #844 V1 — declared pipeline variables, added by 0040 with the #473 pairing
+    // `containers` has above: NOT NULL with no drizzle-level default, so a raw
+    // insert that omits the key does not compile.
+    variables: text('variables', { mode: 'json' }).notNull().$type<VariableDef[]>(),
     catalogVersion: integer('catalog_version').notNull(),
     createdAt: integer('created_at').notNull(),
     // #3 G6b — git provenance: WHERE this immutable version was imported from

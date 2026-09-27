@@ -242,7 +242,7 @@ function slug(v: unknown): string {
 
 // --- runtime type enforcement (the signatures, made real) -------------------
 
-function typeName(v: unknown): string {
+export function typeName(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
   // `NaN`/`Infinity` ARE `typeof 'number'`, but the `number` sig rejects them

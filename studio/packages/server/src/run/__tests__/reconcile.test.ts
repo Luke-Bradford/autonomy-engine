@@ -1072,6 +1072,7 @@ describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boo
         nodes: [node('a'), node('b')],
         edges: [edge('a', 'b'), edge('b', 'a')],
         containers: [],
+        variables: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })
@@ -1418,6 +1419,7 @@ describe('makeDocResolver — the production resolver classifies a gone version 
         nodes: 'not-an-array' as unknown as Node[],
         edges: [],
         containers: [],
+        variables: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })
@@ -1513,6 +1515,7 @@ describe('reconcileOnBoot — #515 a present-but-unparseable version terminalize
         nodes: 'not-an-array' as unknown as Node[],
         edges: [],
         containers: [],
+        variables: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1,
       })

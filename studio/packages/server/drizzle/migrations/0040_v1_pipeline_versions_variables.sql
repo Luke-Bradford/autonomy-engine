@@ -1,0 +1,21 @@
+-- #844 V1: `pipeline_versions.variables` — declared pipeline variables (spec
+-- `studio/docs/2026-09-27-foundation-pipeline-variables.md` V-D2).
+--
+-- Each version doc field is its own column here, and a field the table lacks is
+-- silently dropped on insert (#473, which lost every authored container). So the
+-- new doc field arrives with its column in the same change, and the parity test
+-- (`db/__tests__/schema-table-parity.test.ts`) is what fails if one ever does not.
+--
+-- ALTER ... ADD COLUMN is native in SQLite (no table recreate), so 0002's
+-- `pipeline_versions_no_update` / `_no_delete` triggers are undisturbed, and
+-- because they are `BEFORE UPDATE ON` rather than column-scoped they cover the
+-- new column automatically (pinned by `migrate-variables-column.test.ts`).
+--
+-- NOT NULL DEFAULT '[]'. SQLite requires a non-null default to add a NOT NULL
+-- column to a table with rows, and '[]' is the TRUE value for every existing
+-- row: variables did not exist when they were written, so none declared any.
+-- Unlike 0006's backfill, nothing was lost here. The DEFAULT serves only that
+-- backfill; the drizzle column has no default, so the repo layer's insert must
+-- name the key (see `containers` in 0006 for the same pairing).
+
+ALTER TABLE pipeline_versions ADD COLUMN variables TEXT NOT NULL DEFAULT '[]';

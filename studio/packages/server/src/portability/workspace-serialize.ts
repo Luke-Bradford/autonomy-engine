@@ -22,6 +22,7 @@ import {
   type PipelineVersionExport,
   type ResourceKind,
   type Trigger,
+  omitEmptyVariables,
 } from '@autonomy-studio/shared';
 import {
   getLatestPipelineVersion,
@@ -664,6 +665,10 @@ function serializePipeline(
     ...latest,
     nodes: latest.nodes.map((node) => remapNode(node, maps)),
   };
+  // #844 V1 (spec V-D2) — a version with no variables is written WITHOUT the
+  // key, so every file committed before V1 keeps its exact bytes (and its
+  // `sourceBlobSha`), and the first Commit after V1 rewrites nothing.
+  omitEmptyVariables(versionExport);
   return ExportEnvelopeSchema.parse({
     schemaVersion: SCHEMA_VERSION,
     catalogVersion: CATALOG_VERSION,

@@ -15,6 +15,7 @@ import {
   type NodePolicy,
   type Output,
   type Param,
+  type VariableDef,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
@@ -757,6 +758,7 @@ interface CanvasDocSnapshot {
   containers: Container[];
   params: Param[];
   outputs: Output[];
+  variables: VariableDef[];
   dirty: boolean;
   /** The id of the version this doc was last reconciled against, or `null`. */
   loadedId: string | null;
@@ -769,6 +771,7 @@ function snapshotOf(s: CanvasState): CanvasDocSnapshot {
     containers: s.containers,
     params: s.params,
     outputs: s.outputs,
+    variables: s.variables,
     dirty: s.dirty,
     loadedId: s.loaded?.id ?? null,
   };
@@ -840,6 +843,7 @@ function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasSta
     containers: snap.containers,
     params: snap.params,
     outputs: snap.outputs,
+    variables: snap.variables,
     dirty: snap.dirty || snap.loadedId !== (s.loaded?.id ?? null),
     // Pruned member-wise: undoing an add removes one node of a marquee'd set and
     // leaves the others genuinely selected, so dropping the whole set would be a
@@ -941,6 +945,13 @@ export interface CanvasState {
   params: Param[];
   /** The pipeline's declared output contract — WORKING state as of U16. */
   outputs: Output[];
+  /**
+   * #844 V1 — the pipeline's declared variables, WORKING state from the start
+   * even though nothing edits them until V3. `toVersionBody` builds the save body
+   * from this store alone, so a version that declared variables (through the API
+   * or a git import) would otherwise lose them on the next canvas Save.
+   */
+  variables: VariableDef[];
   /**
    * U21 — what is selected, as a SET. Empty is "nothing selected".
    *
@@ -1450,6 +1461,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       containers: [],
       params: [],
       outputs: [],
+      variables: [],
       selected: [],
       dirty: false,
       addCount: 0,
@@ -1550,6 +1562,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // it could choke on.
           params: v ? v.params.map((p) => structuredClone(p)) : [],
           outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
+          // #844 V1 — deep for the reason `params` is: an `array` default nests.
+          variables: v ? v.variables.map((d) => structuredClone(d)) : [],
           selected: [],
           dirty: false,
           addCount: 0,

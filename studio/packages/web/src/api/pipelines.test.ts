@@ -38,6 +38,7 @@ const version = {
   nodes: [],
   edges: [],
   containers: [],
+  variables: [],
   catalogVersion: 1,
   createdAt: 1,
   // #3 G6b — git provenance, `null` on a non-git version; the client parses
@@ -291,6 +292,23 @@ describe('pipelines API', () => {
       // catalogVersion rather than being silently re-stamped with today's.
       expect(copied.catalogVersion).toBe(version.catalogVersion);
       expect(copied).toMatchObject({ params: [], outputs: [], nodes: [], edges: [] });
+    });
+
+    // #844 V1 — the copy is hand-listed, so a field it forgets is silently
+    // defaulted away by the write schema: variables must ride along.
+    it('carries the source’s declared variables onto the copy', async () => {
+      const variables = [{ name: 'count', type: 'number', default: 0 }];
+      const withVars = { ...version, variables };
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: { ...pipeline, id: 'pl_2' } },
+        { status: 200, body: [withVars] },
+        { status: 201, body: { ...withVars, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+      ]);
+
+      await duplicatePipeline(pipeline, 'Copy');
+
+      const copied = JSON.parse(initOf(fetchMock, 2).body as string) as Record<string, unknown>;
+      expect(copied.variables).toEqual(variables);
     });
 
     it('carries the source’s concurrency cap onto the copy', async () => {

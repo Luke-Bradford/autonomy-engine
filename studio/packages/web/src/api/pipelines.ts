@@ -381,6 +381,9 @@ export async function duplicatePipeline(source: Pipeline, name: string): Promise
         nodes: latest.nodes,
         edges: latest.edges,
         containers: latest.containers,
+        // #844 V1 — hand-listed like every field here, so a forgotten one is
+        // silently defaulted away by the write schema.
+        variables: latest.variables,
         catalogVersion: latest.catalogVersion,
         // #904 — the CAS basis. The copy was created moments ago by the line
         // above and has no versions, so `null` ("I expect none yet") is the
