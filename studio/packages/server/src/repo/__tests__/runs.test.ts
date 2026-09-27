@@ -24,6 +24,7 @@ import {
   getRun,
   LIVE_RUN_STATUSES,
   listParsedRuns,
+  listRunAnnotations,
   listRuns,
   listRunSummariesPage,
   nextQueuedRunForTrigger,
@@ -1233,6 +1234,104 @@ describe('listRunSummaries — U26 filter axes', () => {
         startedAfter: 1_000,
       }).map((s) => s.id),
     ).toEqual([wanted.id]);
+  });
+});
+
+/**
+ * U26 — the ANNOTATION axis. It reads the annotations of the version a run is
+ * BOUND to (F8a puts them on the immutable version doc for exactly this), so a
+ * run keeps the tags it ran under after its pipeline is re-tagged.
+ */
+describe('listRunSummaries — U26 annotation axis', () => {
+  function setup() {
+    const { db } = freshDb();
+    const reports = createPipeline(db, { ownerId: 'local', name: 'Reports' });
+    const versionOf = (annotations: string[]) =>
+      createPipelineVersion(db, {
+        pipelineId: reports.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        annotations,
+        catalogVersion: CATALOG_VERSION,
+      });
+    return { db, versionOf };
+  }
+
+  it('matches the annotations of the version the run BOUND, not a later one', () => {
+    const { db, versionOf } = setup();
+    const tagged = versionOf(['finance', 'nightly']);
+    const retagged = versionOf(['nightly']);
+    const underTag = createRun(db, buildRunInput(tagged.id));
+    createRun(db, buildRunInput(retagged.id));
+
+    expect(summariesOf(db, { annotation: 'finance' }).map((s) => s.id)).toEqual([underTag.id]);
+    expect(summariesOf(db, { annotation: 'nightly' })).toHaveLength(2);
+  });
+
+  it('is an EXACT match: case, a prefix and an unknown value all match nothing', () => {
+    const { db, versionOf } = setup();
+    createRun(db, buildRunInput(versionOf(['Finance EU & UK+']).id));
+
+    expect(summariesOf(db, { annotation: 'Finance EU & UK+' })).toHaveLength(1);
+    expect(summariesOf(db, { annotation: 'finance EU & UK+' })).toEqual([]);
+    expect(summariesOf(db, { annotation: 'Finance' })).toEqual([]);
+    expect(summariesOf(db, { annotation: 'nowhere' })).toEqual([]);
+  });
+
+  it('ANDs with the other axes and never widens past the owner scope', () => {
+    const { db, versionOf } = setup();
+    const v = versionOf(['finance']);
+    const plain = versionOf([]);
+    const wanted = createRun(db, buildRunInput(v.id));
+    // One near-miss per axis: each satisfies every condition but one.
+    const untagged = createRun(db, buildRunInput(plain.id));
+    const otherOwner = createRun(db, buildRunInput(v.id, { ownerId: 'someone_else' }));
+    const wrongStatus = createRun(db, buildRunInput(v.id));
+    for (const id of [wanted.id, untagged.id, otherOwner.id]) {
+      db.update(runs).set({ status: 'failure' }).where(eq(runs.id, id)).run();
+    }
+    db.update(runs).set({ status: 'success' }).where(eq(runs.id, wrongStatus.id)).run();
+
+    expect(
+      summariesOf(db, { ownerId: 'local', annotation: 'finance', status: 'failure' }).map(
+        (s) => s.id,
+      ),
+    ).toEqual([wanted.id]);
+  });
+});
+
+describe('listRunAnnotations — U26 annotation options', () => {
+  it('lists each annotation of a version the caller has a run of, once, sorted', () => {
+    const { db } = freshDb();
+    const reports = createPipeline(db, { ownerId: 'local', name: 'Reports' });
+    const versionOf = (annotations: string[]) =>
+      createPipelineVersion(db, {
+        pipelineId: reports.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        annotations,
+        catalogVersion: CATALOG_VERSION,
+      });
+    const a = versionOf(['nightly', 'Finance']);
+    const b = versionOf(['finance', 'nightly']);
+    // Never run: a draft's tags cannot match a run, so they are not an option.
+    versionOf(['draft-only']);
+    // Another owner's run of a version: its tags are not the caller's options.
+    const foreign = versionOf(['theirs']);
+    createRun(db, buildRunInput(a.id));
+    createRun(db, buildRunInput(a.id));
+    createRun(db, buildRunInput(b.id));
+    createRun(db, buildRunInput(foreign.id, { ownerId: 'someone_else' }));
+
+    // `Finance` and `finance` are distinct: the filter is an exact match, so
+    // folding them here would offer an option that matches only one of them.
+    expect(listRunAnnotations(db, 'local')).toEqual(['finance', 'Finance', 'nightly']);
+    expect(listRunAnnotations(db, 'someone_else')).toEqual(['theirs']);
+    expect(listRunAnnotations(db, 'nobody')).toEqual([]);
   });
 });
 
