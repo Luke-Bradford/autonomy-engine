@@ -457,12 +457,6 @@ describe('importEnvelope: pipeline', () => {
     expect(listPipelineVersions(db, pipeline.id)).toHaveLength(2);
   });
 
-  // #473 — the SECOND, independent loss point. Even with the `containers`
-  // column fixed, `importPipelineEnvelope` rebuilt its `NewPipelineVersion`
-  // field-by-field and simply never copied `containers`, so an imported
-  // pipeline came back flat. `containers` is optional in `NewPipelineVersion`
-  // (`z.input`, because of the write-side `.default([])`), so the omission
-  // type-checked cleanly — nothing but this test can see it.
   // #844 V1 — variables survive export → import (the re-read, not the response),
   // and a re-export carries the same declaration. A variable-less export has no
   // key at all (spec V-D2).
@@ -510,6 +504,12 @@ describe('importEnvelope: pipeline', () => {
     expect(Object.keys(envelope.data.versions[0]!)).not.toContain('variables');
   });
 
+  // #473 — the SECOND, independent loss point. Even with the `containers`
+  // column fixed, `importPipelineEnvelope` rebuilt its `NewPipelineVersion`
+  // field-by-field and simply never copied `containers`, so an imported
+  // pipeline came back flat. `containers` is optional in `NewPipelineVersion`
+  // (`z.input`, because of the write-side `.default([])`), so the omission
+  // type-checked cleanly — nothing but this test can see it.
   it('round-trip: containers survive export → import (#473)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Containered' });
