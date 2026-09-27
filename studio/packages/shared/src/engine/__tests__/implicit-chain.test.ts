@@ -70,7 +70,7 @@ describe('implicitRouting (#788)', () => {
   it('describes the partition when containers are present — the chain is not the walk', () => {
     const d = doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: ['b'] }]);
     // Reachability, not a hypothetical: the write gate accepts this doc as-is.
-    expect(validateDoc({ ...d, params: [] })).toEqual([]);
+    expect(validateDoc({ ...d, params: [], variables: [] })).toEqual([]);
     expect(implicitRouting(d)).toEqual({
       kind: 'partitioned',
       partition: {

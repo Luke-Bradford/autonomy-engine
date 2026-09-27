@@ -32,8 +32,8 @@ function doc(
   edges: Edge[] = [],
   params: Param[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 const param = (name: string, type: Param['type']): Param => ({ name, type, required: true });
 

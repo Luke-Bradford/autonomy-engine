@@ -329,6 +329,7 @@ describe('an empty-bodied LOOP must not spin the reducer forever', () => {
   it('validateDoc reports the no-progress loop, and NOTHING else was ever wrong with it', () => {
     const errors = validateDoc({
       params: [{ name: 'go', type: 'string', required: false, default: 'no' }],
+      variables: [],
       ...EMPTY_LOOP,
     } as never);
     expect(errors).toEqual([expect.stringContaining('makes no progress')]);
@@ -427,6 +428,7 @@ describe('#492 — a child shared by two containers must resolve to ONE owner, a
   it('validateDoc still reports the shared child as a disjointness error', () => {
     const errors = validateDoc({
       params: [],
+      variables: [],
       nodes: [{ id: 'n1', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
       edges: [],
       containers: [

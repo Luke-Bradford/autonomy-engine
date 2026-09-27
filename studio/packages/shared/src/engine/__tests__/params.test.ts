@@ -57,8 +57,8 @@ function doc(
   edges: Edge[],
   params: Param[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 
 // ===========================================================================
@@ -2228,6 +2228,7 @@ describe('jsonReplaySafetyErrors / assertJsonReplaySafe — non-finite guard (#5
 describe('validateDoc — param default replay-safety (#547 / F1)', () => {
   const doc = (defaultValue: unknown) => ({
     params: [{ name: 'x', type: 'json' as const, required: false, default: defaultValue }],
+    variables: [],
     nodes: [],
     edges: [],
     containers: [],
@@ -2246,6 +2247,7 @@ describe('validateDoc — param default replay-safety (#547 / F1)', () => {
     expect(
       validateDoc({
         params: [{ name: 'x', type: 'json' as const, required: false }],
+        variables: [],
         nodes: [],
         edges: [],
         containers: [],

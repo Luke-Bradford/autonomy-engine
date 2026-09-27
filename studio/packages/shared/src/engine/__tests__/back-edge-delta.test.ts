@@ -37,13 +37,13 @@ function doc(
   nodes: Node[],
   edges: Edge[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params: [], nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params: [], nodes, edges, containers, variables: [] };
 }
 
 /** The back-edge refusals the save gate would report for `from → to`. */
 function gateBackErrors(
-  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>,
   from: string,
   to: string,
 ): string[] {
@@ -61,7 +61,7 @@ function gateBackErrors(
  * has no back-edge complaint about the doc that would result.
  */
 function agrees(
-  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>,
   from: string,
   to: string,
 ): void {

@@ -43,8 +43,8 @@ function doc(
   edges: Edge[] = [],
   containers: Container[] = [],
   params: Param[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 
 // ===========================================================================
@@ -1623,6 +1623,7 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
   function kindLegalityErrors(kind: ContainerKind, field: ContainerConfigField): string[] {
     const errors = validateDoc({
       params: [],
+      variables: [],
       nodes: [node('a')],
       edges: [],
       containers: [{ id: 'c1', kind, children: ['a'], [field]: SAMPLE[field] } as Container],
@@ -1677,6 +1678,7 @@ describe('#796 item 2 — a detached call (wait: false) returns nothing', () => 
     });
   const docOf = (nodes: Node[], edges: Edge[] = []) => ({
     params: [],
+    variables: [],
     nodes,
     edges,
     containers: [],

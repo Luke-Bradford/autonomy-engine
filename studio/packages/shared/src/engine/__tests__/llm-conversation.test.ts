@@ -25,8 +25,8 @@ function doc(
   edges: Edge[] = [],
   params: Param[] = [],
   containers: Container[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
-  return { params, nodes, edges, containers };
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'> {
+  return { params, nodes, edges, containers, variables: [] };
 }
 
 /** An upstream llm node whose (post-lowering) contract declares the transcript. */
