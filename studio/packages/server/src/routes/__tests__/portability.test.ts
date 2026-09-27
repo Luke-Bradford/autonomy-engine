@@ -67,6 +67,9 @@ describe('portability routes (export + import)', () => {
         // #844 V1 — an EMPTY `variables` is omitted from an export, so every
         // pre-V1 file keeps its bytes (spec V-D2).
         variables: _vars,
+        // #1 F8a — the same for an empty description and empty annotations.
+        description: _desc,
+        annotations: _ann,
         /* eslint-enable @typescript-eslint/no-unused-vars */
         ...versionWithoutProvenance
       } = version;
