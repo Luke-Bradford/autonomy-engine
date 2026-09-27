@@ -101,6 +101,7 @@ describe('substitute — ${tool.*} is unbound outside a tool expression', () => 
         run: {},
         trigger: {},
         variables: {},
+        globals: {},
       }),
     ).toThrow(/'tool' is only bound inside an llm_call tool expression/);
   });

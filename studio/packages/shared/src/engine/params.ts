@@ -235,6 +235,9 @@ type RefRoot =
   // output it needs no availability check: a variable is seeded from its
   // declared default before anything dispatches, so it always has a value.
   | { kind: 'vars'; name: string; arity: 2 }
+  // #844 GL3 — `${global.<name>}`: a workspace global parameter. The run reads
+  // the value its `run.started` event logged (spec GL-D3), never the live table.
+  | { kind: 'global'; name: string; arity: 2 }
   | { kind: 'nodeOutput'; id: string; name: string; arity: 4 }
   | { kind: 'nodeStatus'; id: string; arity: 3 }
   | { kind: 'run'; field: string; arity: 2 }
@@ -250,6 +253,8 @@ function refRoot(fields: string[]): RefRoot | null {
   if (ns === 'item') return { kind: 'item', arity: 1 };
   if (ns === 'params' && fields.length >= 2) return { kind: 'params', name: a as string, arity: 2 };
   if (ns === 'vars' && fields.length >= 2) return { kind: 'vars', name: a as string, arity: 2 };
+  if (ns === 'global' && fields.length >= 2)
+    return { kind: 'global', name: a as string, arity: 2 };
   if (ns === 'nodes' && fields.length >= 4 && b === 'output') {
     return { kind: 'nodeOutput', id: a as string, name: c as string, arity: 4 };
   }
@@ -395,6 +400,15 @@ function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: E
         throw new SubstituteError(`unknown variable reference \${vars.${root.name}}`);
       }
       return ctx.variables[root.name];
+    }
+    // #844 GL3 — a plain `SubstituteError` too: the run holds a snapshot of
+    // exactly the globals its version reads, so an unknown one is an authoring
+    // error, never a value `default()` may paper over.
+    case 'global': {
+      if (!Object.prototype.hasOwnProperty.call(ctx.globals, root.name)) {
+        throw new SubstituteError(`unknown global parameter reference \${global.${root.name}}`);
+      }
+      return ctx.globals[root.name];
     }
     case 'nodeOutput': {
       const outs = ctx.nodeOutputs[root.id];
@@ -902,7 +916,15 @@ export function evalToolExpression(expression: string, args: Record<string, unkn
     throw new SubstituteError('tool expression has an unterminated ${...} reference');
   }
   const env: Env = {
-    ctx: { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {}, variables: {} },
+    ctx: {
+      params: {},
+      nodeOutputs: {},
+      nodeStatuses: {},
+      run: {},
+      trigger: {},
+      variables: {},
+      globals: {},
+    },
     toolArgs: args,
     budget: { spent: 0 },
   };
@@ -1424,6 +1446,7 @@ export function resolveTriggerBindings(
     run: {},
     trigger: triggerRoot(tc),
     variables: {},
+    globals: {},
   };
   const resolved = substitute(triggerParams, ctx) as Record<string, unknown>;
   // #547 — boundary 3 (fire-time backstop). A binding whose whole-value result
@@ -1446,11 +1469,16 @@ export function resolveTriggerBindings(
  * unterminated `${` is an error; and node-output refs are validated by
  * AVAILABILITY / DOMINANCE over the doc's edge graph (see `computeGraph`).
  */
-export function validateRefs(doc: ValidatedDoc, reads?: VariableReads): string[] {
+export function validateRefs(
+  doc: ValidatedDoc,
+  reads?: VariableReads,
+  globalsIn: Pick<ValidateDocOptions, 'globals' | 'globalReads'> = {},
+): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
   const variables = variableMapOf(doc.variables);
+  const g = globalScopeOf(globalsIn);
 
   const graph = computeGraph(doc);
 
@@ -1482,6 +1510,7 @@ export function validateRefs(doc: ValidatedDoc, reads?: VariableReads): string[]
     const scope: ScanScope = {
       declared,
       variables,
+      ...g,
       guaranteed,
       settled,
       reachable,
@@ -1829,11 +1858,12 @@ export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[]
     if (c === undefined || !CONTAINER_CONFIG_FIELDS[c.kind].includes(site.field)) return [];
     const scope =
       site.field === 'exitWhen'
-        ? exitWhenScope(c, declared, variables, outputsById, secureOutputIds)
+        ? exitWhenScope(c, declared, variables, NO_GLOBALS, outputsById, secureOutputIds)
         : foreachItemsScope(
             c,
             declared,
             variables,
+            NO_GLOBALS,
             outputsById,
             secureOutputIds,
             computeGraph(doc),
@@ -1861,6 +1891,7 @@ export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[]
     {
       declared,
       variables,
+      ...NO_GLOBALS,
       outputsById,
       secureOutputIds,
       guaranteed: graph.guaranteed.get(nodeId) ?? new Set<string>(),
@@ -2363,11 +2394,34 @@ export function variableDefaultDefects(v: VariableDef): string[] {
 export const GLOBAL_PARAM_MAX_BYTES = 64 * 1024;
 
 /**
+ * #844 GL3 — the upper bound on a run's global snapshot, in UTF-8 bytes of its
+ * serialized JSON (spec GL-D3). Checked at run start, not at save: values can
+ * grow after a version is saved.
+ */
+export const GLOBAL_SNAPSHOT_MAX_BYTES = 256 * 1024;
+
+/** #844 GL3 — why a run's global snapshot is too large to log, or `null`. */
+export function globalSnapshotDefect(snapshot: Record<string, unknown>): string | null {
+  const bytes = utf8ByteLength(JSON.stringify(snapshot));
+  if (bytes <= GLOBAL_SNAPSHOT_MAX_BYTES) return null;
+  return (
+    `the global parameters this version reads are ${bytes} bytes of JSON; ` +
+    `the limit is ${GLOBAL_SNAPSHOT_MAX_BYTES}`
+  );
+}
+
+/**
  * #844 GL1 — why `name` cannot be a global's name, or `null`. The V1 rule as a
  * HARD rule: a global exists only to be read as `${global.<name>}`, and no
  * stored global predates the rule.
  */
 export function globalParamNameDefect(name: string): string | null {
+  // #844 GL3 — `__proto__` is reserved: zod's `z.record` DROPS that key, so a
+  // run's logged snapshot (`run.started.globals`) would lose it when the log is
+  // read back, and a replay would fail a read the live run resolved.
+  if (name === '__proto__') {
+    return `global '${name}' is a reserved name`;
+  }
   if (isAddressableOutputName(name)) return null;
   return (
     `global '${name}' cannot be referenced as \${global.<name>} ` +
@@ -2430,6 +2484,32 @@ export interface ValidateDocOptions {
    * for nodes. See {@link variableReadsOf}.
    */
   variableReads?: VariableReads;
+  /**
+   * #844 GL3 — the workspace's global parameters, name → type, for
+   * `${global.<name>}` (spec GL-D2). ABSENT means NONE, so every global read
+   * is refused: the canvas and the server write gate pass the owner's globals,
+   * and a caller that passes nothing cannot wave a read through.
+   */
+  globals?: ReadonlyMap<string, GlobalParamType>;
+  /**
+   * #844 GL3 — collect every global name the doc reads, node and container
+   * fields alike, for the version's `global_reads` column. Complete only when
+   * the validators report nothing, as {@link variableReadsOf} explains.
+   */
+  globalReads?: Set<string>;
+}
+
+/** #844 GL3 — the globals a scan may read, and where it collects the reads. */
+type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads'>;
+
+/** No globals: the flyout's scopes until GL4 gives it the workspace's. */
+const NO_GLOBALS: GlobalScope = { globals: new Map() };
+
+function globalScopeOf(options: Pick<ValidateDocOptions, 'globals' | 'globalReads'>): GlobalScope {
+  return {
+    globals: options.globals ?? new Map(),
+    ...(options.globalReads !== undefined ? { globalReads: options.globalReads } : {}),
+  };
 }
 
 /**
@@ -2474,7 +2554,7 @@ export function variableReadsOf(
   const reads: VariableReads = new Map();
   const validatorErrors = [
     ...validateDoc(doc, { ...options, variableReads: reads }),
-    ...validateRefs(doc, reads),
+    ...validateRefs(doc, reads, options),
   ];
   return { reads, validatorErrors };
 }
@@ -2542,6 +2622,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const variables = variableMapOf(doc.variables);
+  const g = globalScopeOf(options);
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
@@ -2938,6 +3019,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
           c,
           declared,
           variables,
+          g,
           outputsById,
           secureOutputIds,
           itemsGraph(),
@@ -2981,6 +3063,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         c,
         declared,
         variables,
+        g,
         outputsById,
         secureOutputIds,
         errors,
@@ -3720,6 +3803,7 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
     const scope: ScanScope = {
       declared: new Map(),
       variables: new Map(),
+      globals: new Map(),
       guaranteed: new Set(),
       settled: new Set(),
       reachable: new Set(),
@@ -3742,12 +3826,14 @@ function exitWhenScope(
   c: Container,
   declared: Map<string, Param>,
   variables: ReadonlyMap<string, VariableDef>,
+  g: GlobalScope,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
 ): ScanScope {
   return {
     declared,
     variables,
+    ...g,
     secureOutputIds,
     // E6 needs the child producers' declared output types to type the exitWhen
     // expression — without them `${nodes.check.output.done}` is `any` and the
@@ -3781,6 +3867,7 @@ function validateExitWhen(
   c: Container,
   declared: Map<string, Param>,
   variables: ReadonlyMap<string, VariableDef>,
+  g: GlobalScope,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   errors: string[],
@@ -3789,7 +3876,7 @@ function validateExitWhen(
   if (c.exitWhen === undefined) return;
   const where = `container.${c.id}.exitWhen`;
   const scope = {
-    ...exitWhenScope(c, declared, variables, outputsById, secureOutputIds),
+    ...exitWhenScope(c, declared, variables, g, outputsById, secureOutputIds),
     ...readsFor(reads, c.id),
   };
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
@@ -3863,6 +3950,7 @@ function validateForeachItems(
   c: Container,
   declared: Map<string, Param>,
   variables: ReadonlyMap<string, VariableDef>,
+  g: GlobalScope,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   graph: Graph,
@@ -3872,7 +3960,7 @@ function validateForeachItems(
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
   const scope = {
-    ...foreachItemsScope(c, declared, variables, outputsById, secureOutputIds, graph),
+    ...foreachItemsScope(c, declared, variables, g, outputsById, secureOutputIds, graph),
     ...readsFor(reads, c.id),
   };
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
@@ -3913,6 +4001,7 @@ function foreachItemsScope(
   c: Container,
   declared: Map<string, Param>,
   variables: ReadonlyMap<string, VariableDef>,
+  g: GlobalScope,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   graph: Graph,
@@ -3920,6 +4009,7 @@ function foreachItemsScope(
   return {
     declared,
     variables,
+    ...g,
     outputsById,
     secureOutputIds,
     guaranteed: graph.guaranteed.get(c.id) ?? new Set<string>(),
@@ -4299,6 +4389,14 @@ interface ScanScope {
    * Optional because only the variable guard's reader collection asks for it.
    */
   variableReads?: Set<string>;
+  /**
+   * #844 GL3 — the workspace's global parameters, name → type, for
+   * `${global.<name>}`. REQUIRED for the reason `variables` is: an omitted map
+   * reads as "none" and refuses every global in that scope.
+   */
+  globals: ReadonlyMap<string, GlobalParamType>;
+  /** #844 GL3 — a side output: every declared global this scope's scan reads. */
+  globalReads?: Set<string>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -4506,6 +4604,7 @@ export function validateTriggerBindings(
   const scope: ScanScope = {
     declared: new Map(),
     variables: new Map(),
+    globals: new Map(),
     guaranteed: new Set(),
     settled: new Set(),
     reachable: new Set(),
@@ -4717,6 +4816,11 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
     // Undeclared is reported by `checkRefRoot`; `any` keeps it to one error.
     case 'vars':
       return scope.variables.get(root.name)?.type ?? 'any';
+    // #844 GL3 — typed at save time by the global's type (immutable, GL-D1).
+    case 'global': {
+      const type = scope.globals.get(root.name);
+      return type === undefined ? 'any' : sigOfDeclared(type);
+    }
     case 'nodeOutput': {
       const contract = scope.outputsById?.get(root.id);
       // No contract (`absent`), a corrupt one (`invalid` — reported once by
@@ -4993,6 +5097,20 @@ function checkRefRoot(
     if (!scope.variables.has(root.name)) {
       errors.push(`${where}: \${vars.${root.name}} is not a declared variable`);
     }
+    return;
+  }
+  // #844 GL3 — a global of this workspace, matched by its exact name. No
+  // availability rule (the run's snapshot is taken before anything dispatches)
+  // and no secret rule (a global is cleartext by design, GL-D5). Only a KNOWN
+  // name is collected, so the version never records a read it cannot type.
+  if (root.kind === 'global') {
+    if (!scope.globals.has(root.name)) {
+      errors.push(
+        `${where}: \${global.${root.name}} is not a global parameter of this workspace`,
+      );
+      return;
+    }
+    scope.globalReads?.add(root.name);
     return;
   }
   if (root.kind === 'nodeOutput') {

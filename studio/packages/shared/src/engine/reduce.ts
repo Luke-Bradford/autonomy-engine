@@ -1311,6 +1311,7 @@ export function createEngine(doc: EngineDoc): Engine {
       },
       trigger,
       variables: state.variables,
+      globals: state.globals,
     };
   }
 
@@ -3369,6 +3370,9 @@ export function createEngine(doc: EngineDoc): Engine {
       // #844 V2 — seeded afresh from the defaults (V-D3). Nothing can write a
       // variable before the run starts, so there is nothing to carry.
       variables: seedVariables(),
+      // #844 GL3 — the logged snapshot, verbatim (a shallow copy, like `params`).
+      // A spread defines own data properties, so no name reaches the prototype.
+      globals: { ...(event.globals ?? {}) },
     };
     // RS1 — rerun-from-failed DEFERS dispatch: a `run.started{rerunOf}` seeds the
     // node/container map but must NOT settle, because the immediately-following
@@ -4950,6 +4954,7 @@ export function createEngine(doc: EngineDoc): Engine {
       triggerContext: null,
       cancelRequested: null,
       variables: seedVariables(),
+      globals: {},
     };
   }
 

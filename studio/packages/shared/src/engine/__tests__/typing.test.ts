@@ -408,6 +408,7 @@ describe('the catalog’s declared `ret` is honest (E6 reads it)', () => {
       run: {},
       trigger: {},
       variables: {},
+      globals: {},
     });
     expect(
       matchesSig(value, spec.ret),
@@ -438,6 +439,7 @@ describe('`number` is FINITE at every boundary (E6’s `ret: number` premise)', 
     run: {},
     trigger: {},
     variables: {},
+    globals: {},
   });
 
   it('float() refuses an overflowing literal instead of returning Infinity', () => {

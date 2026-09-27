@@ -70,6 +70,9 @@ export type {
  *                `${vars.<name>}`: `RunState.variables`, seeded from the bound
  *                version's declared defaults. Folded state, so a read is
  *                replay-stable without being recorded.
+ * - `globals`   — the workspace global parameters the run read (#844 GL3),
+ *                backing `${global.<name>}`: `RunState.globals`, the snapshot
+ *                logged on `run.started`, so a read is replay-stable.
  */
 export interface SubstitutionContext {
   params: Record<string, unknown>;
@@ -78,6 +81,7 @@ export interface SubstitutionContext {
   run: Record<string, unknown>;
   trigger: Record<string, unknown>;
   variables: Record<string, unknown>;
+  globals: Record<string, unknown>;
 }
 
 /**
@@ -507,6 +511,13 @@ export const RunStateSchema = z.object({
    * which is the whole difference from `outputs` (spec V-D3).
    */
   variables: z.record(z.string(), z.unknown()),
+  /**
+   * #844 GL3 — the workspace global parameters this run read, `name → value`,
+   * backing `${global.<name>}`. Folded from `run.started.globals` (`{}` when
+   * absent, so an old log folds identically) and never changed during the run:
+   * replay and boot reconcile read the log, never the live table (GL-D3).
+   */
+  globals: z.record(z.string(), z.unknown()),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 
@@ -1072,6 +1083,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     startedAt: z.string().optional(),
     /** Already-resolved run params (post `resolveRunParams`, secrets stripped). */
     params: z.record(z.string(), z.unknown()),
+    /**
+     * #844 GL3 — the snapshot of the workspace global parameters this run reads:
+     * the live values of exactly the reads its version recorded
+     * (`pipeline_versions.global_reads`), taken at start before any other
+     * append (spec GL-D3). A rerun-from-failed copies its source run's snapshot
+     * verbatim. OPTIONAL: absent on a log that predates GL3 and on a run whose
+     * version reads no global, and both fold to `{}`.
+     */
+    globals: z.record(z.string(), z.unknown()).optional(),
     /**
      * RS1 — rerun-from-failed lineage: the source run `R1` this run resumes.
      * Its PRESENCE also DEFERS the start-time dispatch (`onRunStarted` returns
