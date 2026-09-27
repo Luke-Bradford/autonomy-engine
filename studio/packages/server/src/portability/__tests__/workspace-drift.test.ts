@@ -156,6 +156,7 @@ function ws(overrides: Partial<ParsedWorkspace> = {}): ParsedWorkspace {
     connections: [],
     datasets: [],
     triggers: [],
+    globalParams: [],
     diagnostics: [],
     ...overrides,
   };

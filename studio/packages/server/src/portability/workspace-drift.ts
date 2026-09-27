@@ -1,6 +1,7 @@
 import {
   connectionContentForm,
   datasetContentForm,
+  globalParamContentForm,
   pipelineContentForm,
   RESOURCE_KINDS,
   triggerContentForm,
@@ -10,6 +11,7 @@ import {
 import type {
   ParsedConnection,
   ParsedDataset,
+  ParsedGlobalParam,
   ParsedPipeline,
   ParsedTrigger,
   ParsedWorkspace,
@@ -151,6 +153,19 @@ function datasetItem(d: ParsedDataset): DriftItem {
   };
 }
 
+/** #844 GL6 — a DB global the branch lacks projects as `added`, since the DB
+ * holds it and the committed snapshot does not. That is the spec's "reported as
+ * drift" for a global the apply will not delete (GL-D6): the next Commit writes
+ * it back. */
+function globalParamItem(g: ParsedGlobalParam): DriftItem {
+  return {
+    path: g.path,
+    resourceId: g.resourceId,
+    name: g.data.name,
+    contentForm: globalParamContentForm(g.data),
+  };
+}
+
 function triggerItem(t: ParsedTrigger): DriftItem {
   return {
     path: t.path,
@@ -187,6 +202,7 @@ const DRIFT_PROJECTIONS: Record<ResourceKind, (workspace: ParsedWorkspace) => Dr
   connection: (workspace) => workspace.connections.map(connectionItem),
   trigger: (workspace) => workspace.triggers.map(triggerItem),
   dataset: (workspace) => workspace.datasets.map(datasetItem),
+  'global-param': (workspace) => workspace.globalParams.map(globalParamItem),
 };
 
 export function computeDrift(

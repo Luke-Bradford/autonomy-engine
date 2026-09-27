@@ -1,8 +1,14 @@
 import {
+  GlobalParamCreateBodySchema,
+  GlobalParamExportDataSchema,
+  GlobalParamPatchBodySchema,
+  GlobalParamValueSchema,
   NewTriggerSchema,
   RESOURCE_KINDS,
   connectionContentForm,
   datasetContentForm,
+  globalParamContentForm,
+  globalParamResourceId,
   interpolationMode,
   pipelineVersionContentForm,
   triggerContentForm,
@@ -20,6 +26,7 @@ import {
   type WorkspaceGitApplyResult,
   type WorkspaceGitArchivedResult,
   type WorkspaceGitDeferredResource,
+  type WorkspaceParseDiagnostic,
   formatZodIssues,
 } from '@autonomy-studio/shared';
 import { ZodError } from 'zod';
@@ -55,8 +62,14 @@ import {
   listPipelineVersions,
   listVersionResourceIds,
 } from '../repo/pipeline-versions.js';
+import {
+  createGlobalParam,
+  listOwnerGlobalParams,
+  updateGlobalParam,
+} from '../repo/global-params.js';
 import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
+import { globalParamConflict } from './global-param-conflict.js';
 import { enabledForReadiness, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
 import {
@@ -842,12 +855,18 @@ function assertTriggerWindowBindingsConsistent(data: TriggerExportData, label: s
  * A dataset names the connection it lives in, so it needs `connById` populated;
  * a copy node will name the dataset (M3), so datasets must exist before the
  * pipeline phase remaps node refs.
+ *
+ * #844 GL6 inserted `global-param` before pipelines the same way (spec GL-D6):
+ * minting a pulled pipeline version runs the save gate, which types each
+ * `${global.x}` against the owner's STORED globals, so a pulled global must be
+ * written before the version that reads it.
  */
 export const APPLY_RANK: Record<ResourceKind, number> = {
   connection: 0,
   dataset: 1,
-  pipeline: 2,
-  trigger: 3,
+  'global-param': 2,
+  pipeline: 3,
+  trigger: 4,
 };
 
 /** The apply phases in `APPLY_RANK` order — every `ResourceKind`, exactly once. */
@@ -947,6 +966,8 @@ export function applyWorkspace(
     }
 
     const applied: WorkspaceGitAppliedResource[] = [];
+    // #844 GL6 — branch globals the global phase skipped (a type conflict).
+    const globalParamConflicts: WorkspaceParseDiagnostic[] = [];
 
     // --- Connections (leaf: they reference nothing) ---
     // `connById` (resourceId → DB id) resolves node connection refs on the way
@@ -1181,6 +1202,78 @@ export function applyWorkspace(
           resourceId: existing.resourceId,
           action,
           versionMinted: false, // datasets have no versions
+          versionContentUnverified: false, // ...so no version content to judge
+        });
+      }
+    };
+
+    /**
+     * #844 GL6 — the global-parameter phase (spec GL-D6), before pipelines (see
+     * `APPLY_RANK`).
+     *
+     * Matched by case-folded name against the REAL rows rather than the
+     * serialized snapshot, which omits a row whose name breaks today's rule. A
+     * write goes through the same boundary schemas as `POST`/`PATCH
+     * /api/global-params`, so a hand-edited file meets the rules a request
+     * would; a refusal is attributed to the file and refuses the whole atomic
+     * apply. Two cases are NOT written:
+     *  - a branch global whose type differs from the stored one: skipped and
+     *    reported (`globalParamConflict`, the preview's rule too);
+     *  - a stored global the branch lacks: this loop visits only the branch's
+     *    files, so it is never deleted. The DB is the runtime source of truth,
+     *    and deleting live configuration would fail the next run of every
+     *    version that reads it.
+     * A matched name that differs only in case keeps the stored spelling: a name
+     * is immutable, and the value and description are what a pull writes.
+     */
+    const applyGlobalParams = (): void => {
+      const existingByRid = new Map(
+        listOwnerGlobalParams(db, ownerId).map((g) => [globalParamResourceId(g.name), g]),
+      );
+      for (const inc of incoming.globalParams) {
+        const data = inc.data;
+        const label = `global parameter ${inc.path}`;
+        const existing = existingByRid.get(inc.resourceId);
+        if (existing === undefined) {
+          attributedTo(label, () =>
+            createGlobalParam(db, { ...GlobalParamCreateBodySchema.parse(data), ownerId }),
+          );
+          applied.push({
+            path: inc.path,
+            kind: 'global-param',
+            resourceId: inc.resourceId,
+            action: 'created',
+            versionMinted: false, // globals have no versions
+            versionContentUnverified: false, // ...so no version content to judge
+          });
+          continue;
+        }
+
+        const conflict = globalParamConflict(inc.path, data, existing);
+        if (conflict !== null) {
+          globalParamConflicts.push(conflict);
+          continue;
+        }
+
+        const dbForm = globalParamContentForm(GlobalParamExportDataSchema.parse(existing));
+        let action: WorkspaceGitAppliedAction = 'unchanged';
+        if (globalParamContentForm(data) !== dbForm) {
+          attributedTo(label, () => {
+            const patch = GlobalParamPatchBodySchema.parse({
+              value: data.value,
+              description: data.description,
+            });
+            GlobalParamValueSchema.parse({ type: existing.type, value: data.value });
+            updateGlobalParam(db, existing.id, patch);
+          });
+          action = 'updated';
+        }
+        applied.push({
+          path: inc.path,
+          kind: 'global-param',
+          resourceId: inc.resourceId,
+          action,
+          versionMinted: false, // globals have no versions
           versionContentUnverified: false, // ...so no version content to judge
         });
       }
@@ -1481,6 +1574,7 @@ export function applyWorkspace(
     const appliers: Record<ResourceKind, () => void> = {
       connection: applyConnections,
       dataset: applyDatasets,
+      'global-param': applyGlobalParams,
       pipeline: applyPipelines,
       trigger: applyTriggers,
     };
@@ -1527,14 +1621,18 @@ export function applyWorkspace(
     // resources this import could not compare (and therefore did not consider
     // for archive). Disclosed rather than dropped, on the same principle the
     // branch-side diagnostics follow — the difference is only that these do not
-    // refuse.
+    // refuse. #844 GL6 — the branch globals skipped for a type conflict join
+    // them, for the same reason: reported, not refusing.
     return {
       head,
       refused: false,
       applied,
       deferred,
       archived,
-      diagnostics: serialized.unserializable.map(unserializableDiagnostic),
+      diagnostics: [
+        ...serialized.unserializable.map(unserializableDiagnostic),
+        ...globalParamConflicts,
+      ],
     };
   });
 }

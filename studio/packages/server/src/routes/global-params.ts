@@ -3,6 +3,7 @@ import {
   GlobalParamCreateBodySchema,
   GlobalParamPatchBodySchema,
   GlobalParamValueSchema,
+  canonicalStringify,
   type GlobalParam,
 } from '@autonomy-studio/shared';
 import {
@@ -14,6 +15,7 @@ import {
 } from '../repo/index.js';
 import { globalParamUsage } from '../repo/global-param-usage.js';
 import { NotFoundError } from '../errors.js';
+import { exportGlobalParam } from '../portability/export.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 
 /**
@@ -82,6 +84,16 @@ export const globalParamsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{ Params: { id: string } }>('/api/global-params/:id/usage', async (request) => {
     const existing = requireOwnedGlobalParam(request);
     return globalParamUsage(db, existing.ownerId, existing.name);
+  });
+
+  /**
+   * #844 GL6 — the global's export file (spec GL-D6), canonical JSON as every
+   * other export route. Owner-checked by `exportGlobalParam`: another owner's id
+   * is a 404, the same answer as an unknown one.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/global-params/:id/export', async (request, reply) => {
+    const envelope = exportGlobalParam(db, request.params.id, request.principal.ownerId);
+    return reply.type('application/json').send(canonicalStringify(envelope));
   });
 
   /**

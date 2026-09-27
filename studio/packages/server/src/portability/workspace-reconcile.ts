@@ -1,6 +1,7 @@
 import {
   connectionContentForm,
   datasetContentForm,
+  globalParamContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
   RESOURCE_KINDS,
@@ -9,8 +10,10 @@ import {
   type WorkspaceGitArchiveProposal,
   type WorkspaceGitDisposition,
   type WorkspaceGitPreviewResource,
+  type WorkspaceParseDiagnostic,
 } from '@autonomy-studio/shared';
 import type { OwnedVersionForm } from './workspace-serialize.js';
+import { globalParamConflict } from './global-param-conflict.js';
 import { normalizedTriggerContentForm } from './trigger-content.js';
 import {
   latestVersion,
@@ -99,6 +102,12 @@ import {
 export interface WorkspaceReconcilePlan {
   resources: WorkspaceGitPreviewResource[];
   archive: WorkspaceGitArchiveProposal[];
+  /** #844 GL6 — branch globals the apply will NOT write because their type
+   * differs from this workspace's (`global_param_conflict`). They are left out of
+   * `resources`, as the apply leaves them out of `applied`. Deliberately NOT
+   * `incoming.diagnostics`: they do not refuse the import and must not suppress
+   * the archive proposals below. */
+  diagnostics: WorkspaceParseDiagnostic[];
 }
 
 /** The DB-side facts needed to diff one incoming resource: its display name and
@@ -261,6 +270,17 @@ export function classifyWorkspace(
     datasetName,
     (d) => datasetContentForm(d.data),
   );
+  // #844 GL6 — the display name passed for a matched global is the DB's
+  // spelling: the apply keeps it (a name is immutable, and matches
+  // case-insensitively), so a case-only difference is not previewed as a rename.
+  const dbGlobalParams = dbMap(
+    db.globalParams,
+    (g) => g.resourceId,
+    (g) => g.data.name,
+    (g) => globalParamContentForm(g.data),
+  );
+  const dbGlobalParamData = new Map(db.globalParams.map((g) => [g.resourceId, g.data]));
+  const diagnostics: WorkspaceParseDiagnostic[] = [];
   const dbTriggers = dbMap(
     db.triggers,
     (t) => t.resourceId,
@@ -377,6 +397,26 @@ export function classifyWorkspace(
           dbDatasets,
         ),
       ),
+    'global-param': () =>
+      incoming.globalParams.flatMap((g) => {
+        const existing = dbGlobalParamData.get(g.resourceId);
+        const conflict =
+          existing === undefined ? null : globalParamConflict(g.path, g.data, existing);
+        if (conflict !== null) {
+          diagnostics.push(conflict);
+          return [];
+        }
+        return [
+          classifyResource(
+            'global-param',
+            g.path,
+            g.resourceId,
+            existing?.name ?? g.data.name,
+            globalParamContentForm(g.data),
+            dbGlobalParams,
+          ),
+        ];
+      }),
     trigger: () =>
       incoming.triggers.map((t) =>
         classifyResource(
@@ -425,5 +465,5 @@ export function classifyWorkspace(
             name: pipelineName(p),
           }));
 
-  return { resources, archive };
+  return { resources, archive, diagnostics };
 }

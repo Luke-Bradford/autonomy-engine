@@ -1,9 +1,11 @@
 import {
+  globalParamResourceId,
   kindForDir,
   parseAndUpgradeEnvelope,
   type ConnectionExportData,
   type DatasetExportData,
   type ExportEnvelope,
+  type GlobalParamExportData,
   type PipelineExportData,
   type PipelineVersionExport,
   type ResourceKind,
@@ -95,6 +97,15 @@ export interface ParsedDataset {
   data: DatasetExportData;
 }
 
+/** #844 GL6 — a parsed global-parameter file. `resourceId` is DERIVED from
+ * `data.name` (`globalParamResourceId`), never read from the file, so it is
+ * never null. */
+export interface ParsedGlobalParam {
+  path: string;
+  resourceId: string;
+  data: GlobalParamExportData;
+}
+
 export interface ParsedTrigger {
   path: string;
   resourceId: string | null;
@@ -106,6 +117,7 @@ export interface ParsedWorkspace {
   connections: ParsedConnection[];
   datasets: ParsedDataset[];
   triggers: ParsedTrigger[];
+  globalParams: ParsedGlobalParam[];
   diagnostics: WorkspaceParseDiagnostic[];
 }
 
@@ -124,13 +136,24 @@ const DIAGNOSTIC_MESSAGE: Record<WorkspaceParseDiagnostic['code'], string> = {
   // half alone cannot say WHICH node to fix. Editing this string changes nothing
   // the operator sees.
   unserializable_ref: 'this workspace cannot express the resource in portable form',
+  // UNREACHABLE here for the same reason: the reconcile and the apply compose
+  // this one, naming the global and both types.
+  global_param_conflict: 'a global parameter on the branch has a different type here',
 };
+
+/** #844 GL6 — a global file carries no `resourceId`, so the generic
+ * "resourceId is claimed by more than one file" would describe something that
+ * is not in the file. Two global files collide when their names differ only in
+ * case (a global's identity, GL-D1). */
+const DUPLICATE_GLOBAL_MESSAGE =
+  'two files name the same global parameter (their names differ only in case)';
 
 function diagnostic(
   path: string,
   code: WorkspaceParseDiagnostic['code'],
+  message: string = DIAGNOSTIC_MESSAGE[code],
 ): WorkspaceParseDiagnostic {
-  return { path, code, message: DIAGNOSTIC_MESSAGE[code] };
+  return { path, code, message };
 }
 
 /**
@@ -201,17 +224,24 @@ export function withoutResources(
     connections: keep('connection', workspace.connections),
     datasets: keep('dataset', workspace.datasets),
     triggers: keep('trigger', workspace.triggers),
+    globalParams: keep('global-param', workspace.globalParams),
     diagnostics: workspace.diagnostics,
   };
 }
 
 /** The stable identity of a resource envelope: for a pipeline it is the
- * pipeline ROW's resourceId (NOT a version's); for every other kind it is the
- * resource's own resourceId. */
+ * pipeline ROW's resourceId (NOT a version's); for a global parameter it is its
+ * case-folded name (#844 GL6 — the file holds no id); for every other kind it
+ * is the resource's own resourceId. */
 function envelopeResourceId(envelope: ExportEnvelope): string | null {
-  return envelope.kind === 'pipeline'
-    ? envelope.data.pipeline.resourceId
-    : envelope.data.resourceId;
+  switch (envelope.kind) {
+    case 'pipeline':
+      return envelope.data.pipeline.resourceId;
+    case 'global-param':
+      return globalParamResourceId(envelope.data.name);
+    default:
+      return envelope.data.resourceId;
+  }
 }
 
 export function parseWorkspaceFiles(
@@ -222,6 +252,7 @@ export function parseWorkspaceFiles(
   const connections: ParsedConnection[] = [];
   const datasets: ParsedDataset[] = [];
   const triggers: ParsedTrigger[] = [];
+  const globalParams: ParsedGlobalParam[] = [];
   // Unreadable files never made it into `files` — surface each as a diagnostic
   // up front so a preview shows the whole picture and an apply fails closed.
   const diagnostics: WorkspaceParseDiagnostic[] = unreadablePaths.map((path) =>
@@ -233,6 +264,7 @@ export function parseWorkspaceFiles(
     connection: new Set(),
     dataset: new Set(),
     trigger: new Set(),
+    'global-param': new Set(),
   };
 
   for (const file of files) {
@@ -266,7 +298,11 @@ export function parseWorkspaceFiles(
     const resourceId = envelopeResourceId(envelope);
     if (resourceId !== null) {
       if (seenResourceId[expectedKind].has(resourceId)) {
-        diagnostics.push(diagnostic(file.path, 'duplicate_resource_id'));
+        diagnostics.push(
+          expectedKind === 'global-param'
+            ? diagnostic(file.path, 'duplicate_resource_id', DUPLICATE_GLOBAL_MESSAGE)
+            : diagnostic(file.path, 'duplicate_resource_id'),
+        );
         continue;
       }
       seenResourceId[expectedKind].add(resourceId);
@@ -292,8 +328,15 @@ export function parseWorkspaceFiles(
       case 'trigger':
         triggers.push({ path: file.path, resourceId, data: envelope.data });
         break;
+      case 'global-param':
+        globalParams.push({
+          path: file.path,
+          resourceId: globalParamResourceId(envelope.data.name),
+          data: envelope.data,
+        });
+        break;
     }
   }
 
-  return { pipelines, connections, datasets, triggers, diagnostics };
+  return { pipelines, connections, datasets, triggers, globalParams, diagnostics };
 }

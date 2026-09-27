@@ -3,18 +3,22 @@ import {
   ConnectionExportDataSchema,
   DatasetExportDataSchema,
   ExportEnvelopeSchema,
+  GlobalParamExportDataSchema,
   PipelineExportDataSchema,
   RESOURCE_KINDS,
   SCHEMA_VERSION,
   TriggerExportDataSchema,
   WebhookPublicConfigSchema,
   canonicalStringify,
+  globalParamNameDefect,
+  globalParamResourceId,
   interpolationMode,
   pipelineVersionContentForm,
   resourceFilePaths,
   type Connection,
   type Dataset,
   type ExportEnvelope,
+  type GlobalParam,
   type Node,
   type NodeExport,
   type Pipeline,
@@ -28,6 +32,7 @@ import {
   getLatestPipelineVersion,
   listConnections,
   listDatasets,
+  listOwnerGlobalParams,
   listPipelineVersions,
   listPipelines,
   listTriggers,
@@ -696,6 +701,22 @@ function serializeConnection(connection: Connection): ExportEnvelope {
 }
 
 /**
+ * #844 GL6 — a global parameter's file (spec GL-D6): `{ name, type, value,
+ * description }`, with no DB id, owner or timestamps. It holds no reference to
+ * remap, so like a connection it cannot be unserializable. Exported so the
+ * single-file export writes the same bytes the git form does.
+ */
+export function serializeGlobalParam(param: GlobalParam): ExportEnvelope {
+  return ExportEnvelopeSchema.parse({
+    schemaVersion: SCHEMA_VERSION,
+    catalogVersion: CATALOG_VERSION,
+    kind: 'global-param',
+    exportedAt: 0,
+    data: GlobalParamExportDataSchema.parse(param),
+  });
+}
+
+/**
  * #3 G5c-2 — EXPORTED (was module-private) so the reconcile APPLY can compute a
  * stored trigger's DB-side content form as `triggerContentForm(serializeTrigger(
  * existing, maps).data)` — the EXACT inverse it is reversing, webhook-secret
@@ -785,6 +806,13 @@ export function serializeWorkspaceTolerant(
   const connections = listConnections(db, ownerId);
   const datasets = listDatasets(db, ownerId);
   const triggers = listTriggers(db, { ownerId });
+  // #844 GL6 — a global whose name breaks today's rule (a `__proto__` stored
+  // before GL3 reserved it) is left out, as `listOwnerGlobalTypes` leaves it out
+  // of the save gate: no version can read it, and a committed file holding it
+  // would be refused by every collaborator's apply, blocking their whole pull.
+  const globalParams = listOwnerGlobalParams(db, ownerId).filter(
+    (g) => globalParamNameDefect(g.name) === null,
+  );
   // Ref map over ALL pipelines (incl. archived) so a live ref to an archived
   // version still resolves (faithful; dangle-on-import is G7's concern).
   const maps = buildOwnerRefMaps(db, allPipelines, connections, datasets);
@@ -897,6 +925,21 @@ export function serializeWorkspaceTolerant(
           datasetPaths.get(dataset.resourceId)!,
           () => serializeDataset(dataset, maps),
         );
+      }
+    },
+    // #844 GL6 — pushed directly, like a connection: a global holds no ref, so
+    // there is nothing for `collect` to catch. Its identity is its case-folded
+    // name, which the parser derives the same way from the file's `name`.
+    'global-param': () => {
+      const globalPaths = resourceFilePaths(
+        'global-param',
+        globalParams.map((g) => ({ resourceId: globalParamResourceId(g.name), name: g.name })),
+      );
+      for (const param of globalParams) {
+        files.push({
+          path: globalPaths.get(globalParamResourceId(param.name))!,
+          contents: canonicalStringify(serializeGlobalParam(param)),
+        });
       }
     },
     trigger: () => {

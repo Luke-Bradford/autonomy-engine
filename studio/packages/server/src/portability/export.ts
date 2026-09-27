@@ -19,12 +19,13 @@ import {
 import {
   getConnection,
   getDataset,
+  getGlobalParam,
   getPipeline,
   getTrigger,
   listPipelineVersions,
 } from '../repo/index.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
-import { serializeDataset } from './workspace-serialize.js';
+import { serializeDataset, serializeGlobalParam } from './workspace-serialize.js';
 import type { Db } from '../repo/types.js';
 
 /** A LITERAL `connectionId` is nulled on export — a concrete connection id from
@@ -293,4 +294,17 @@ export function exportDataset(db: Db, id: string, ownerId: string): ExportEnvelo
     datasetResourceId: new Map(),
   });
   return ExportEnvelopeSchema.parse({ ...envelope, exportedAt: Date.now() });
+}
+
+/**
+ * #844 GL6 — one global parameter's export file (spec GL-D6): the SAME bytes its
+ * git file holds (`serializeGlobalParam`), stamped with `exportedAt`. It carries
+ * no id and no owner, so nothing needs remapping. A pipeline export carries no
+ * globals; importing one that reads a global the target lacks is refused by the
+ * save gate, naming the global.
+ */
+export function exportGlobalParam(db: Db, id: string, ownerId: string): ExportEnvelope {
+  const param = getGlobalParam(db, id);
+  if (!param || param.ownerId !== ownerId) throw new NotFoundError('global parameter', id);
+  return ExportEnvelopeSchema.parse({ ...serializeGlobalParam(param), exportedAt: Date.now() });
 }

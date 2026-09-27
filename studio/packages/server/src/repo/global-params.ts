@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   GlobalParamSchema,
   globalParamNameDefect,
@@ -140,6 +140,21 @@ export function listOwnerGlobalParamsNamed(
     .select()
     .from(globalParams)
     .where(and(eq(globalParams.ownerId, ownerId), inArray(globalParams.name, [...names])))
+    .all()
+    .map(decode);
+}
+
+/**
+ * #844 GL6 — every global one owner holds, unpaged, for the workspace-git
+ * serialize and apply (spec GL-D6). Ordered by name so a caller that iterates
+ * it is deterministic; the file paths do not depend on this order.
+ */
+export function listOwnerGlobalParams(db: Db, ownerId: string): GlobalParam[] {
+  return db
+    .select()
+    .from(globalParams)
+    .where(eq(globalParams.ownerId, ownerId))
+    .orderBy(asc(globalParams.name), asc(globalParams.id))
     .all()
     .map(decode);
 }

@@ -805,6 +805,8 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         diagnostics: [
           ...incoming.diagnostics,
           ...serialized.unserializable.map(unserializableDiagnostic),
+          // #844 GL6 — the branch globals the apply will not write (type conflict).
+          ...plan.diagnostics,
         ],
       });
     });
