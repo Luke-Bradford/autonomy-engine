@@ -627,9 +627,19 @@ export type CaptureTurn = LlmTurn & { toolTurn?: CaptureToolTurn };
  * placeholder, so capturing it would record a completion the model never gave.
  * `completionText` is a REQUIRED key (it may hold `undefined`) so an adapter
  * cannot forget it the way it could an optional one.
+ *
+ * #605 — `reasoningText` is the response's reasoning summary (see
+ * `buildCapture`), REQUIRED on `validated` for the same reason. It is optional
+ * on `terminal`, where only a response that arrived and still failed (a 2xx
+ * with no completion, when thinking spent the whole token budget) has one.
  */
 export type StructuredCallOutcome =
-  | { type: 'terminal'; event: Extract<ActivityEvent, { type: 'failed' }>; latencyMs: number }
+  | {
+      type: 'terminal';
+      event: Extract<ActivityEvent, { type: 'failed' }>;
+      latencyMs: number;
+      reasoningText?: string;
+    }
   | {
       type: 'validated';
       usage: LlmUsage;
@@ -637,6 +647,7 @@ export type StructuredCallOutcome =
       echo: string;
       latencyMs: number;
       completionText: string | undefined;
+      reasoningText: string | undefined;
     };
 
 /**
@@ -651,6 +662,7 @@ export interface LlmCaptureContext {
   model: string;
   system?: string;
   captureMode?: LlmCaptureMode;
+  captureReasoning?: boolean;
 }
 
 /**
@@ -757,6 +769,7 @@ export async function* runStructuredWithRepair(
         latencyMs: outcome.latencyMs,
         turns,
         completionText,
+        reasoningText: outcome.reasoningText,
       }),
     });
     if (outcome.type === 'terminal') {
@@ -1024,18 +1037,22 @@ export type ToolRoundOutcome<C> =
       type: 'terminal';
       event: Extract<ActivityEvent, { type: 'failed' }>;
       latencyMs: number;
+      /** #605 — as on `StructuredCallOutcome`'s terminal arm. */
+      reasoningText?: string;
     }
   | {
       type: 'text';
       usage: LlmUsage;
       latencyMs: number;
       completionText: string;
+      reasoningText: string | undefined;
       succeeded: Extract<ActivityEvent, { type: 'succeeded' }>;
     }
   | {
       type: 'toolUse';
       usage: LlmUsage;
       latencyMs: number;
+      reasoningText: string | undefined;
       calls: ToolCallRequest[];
       buildNext: (results: ToolCallResult[]) => C;
     };
@@ -1108,6 +1125,7 @@ export async function* runTextWithTools<C>(
         latencyMs: outcome.latencyMs,
         turns: sent,
         completionText,
+        reasoningText: outcome.reasoningText,
       }),
     });
     if (outcome.type === 'terminal') {
@@ -1533,6 +1551,15 @@ export function meterUsage(
  * and `completion` is omitted when `completionText` is undefined (a failure before
  * a readable completion) — an absent completion is ABSENT, never `hash('')`, which
  * would manufacture a benign fact.
+ *
+ * #605 — `reasoning` is recorded only on a `captureReasoning` node in `full`
+ * mode (the save rule couples the two; both are checked here so a node that
+ * slipped past it records nothing rather than a bare hash), and only when
+ * `reasoningText` is non-empty: Anthropic returns `''` when it did not SHOW its
+ * thinking, which is not the same as not thinking. Its text gets a slot of its
+ * OWN — the per-field cap, outside the event budget the other fields share — so
+ * a long prompt cannot starve a trace the author asked for, and the trace cannot
+ * push out the prompt. The event's bound is therefore the budget plus one field.
  */
 export function buildCapture(args: {
   provider: LlmConnectionKind;
@@ -1542,8 +1569,11 @@ export function buildCapture(args: {
   system?: string;
   completionText?: string;
   captureMode?: LlmCaptureMode;
+  captureReasoning?: boolean;
+  reasoningText?: string;
 }): LlmCapture {
   const { provider, model, latencyMs, turns, system, completionText, captureMode } = args;
+  const { captureReasoning, reasoningText } = args;
   // The budget is spent in PRIORITY order — completion, system, then the turns
   // NEWEST-first (see `allocateCaptureText`) — so each field reads its slot back
   // by position in that order.
@@ -1575,6 +1605,18 @@ export function buildCapture(args: {
   };
   if (system !== undefined) capture.request.system = field(system, systemSlot);
   if (completionText !== undefined) capture.completion = field(completionText, 0);
+  if (
+    captureReasoning === true &&
+    captureMode === 'full' &&
+    reasoningText !== undefined &&
+    reasoningText !== ''
+  ) {
+    capture.reasoning = {
+      chars: reasoningText.length,
+      contentHash: sha256Hex(reasoningText),
+      ...allocateCaptureText([reasoningText])[0],
+    };
+  }
   return capture;
 }
 

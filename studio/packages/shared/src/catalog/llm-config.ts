@@ -612,6 +612,42 @@ export const llmCaptureModeSchema = z.enum(['metadata', 'full']);
 export type LlmCaptureMode = z.infer<typeof llmCaptureModeSchema>;
 
 /**
+ * #605 — the capture COUPLING rule, shared (the `refineOutputModeCoupling`
+ * pattern) by the DISPATCH schema and the save-time SURFACE slice:
+ * `captureReasoning: true` needs `capture: 'full'`. The spec keeps the trace
+ * OFF by default and puts it behind "explicit verbose logging", and `full` is
+ * that switch; a metadata node records lengths and hashes, never text, and a
+ * reasoning trace recorded as a hash alone tells nobody anything.
+ */
+function refineLlmCaptureCoupling(
+  c: { captureReasoning?: unknown; capture?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (c.captureReasoning === true && c.capture !== 'full') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['captureReasoning'],
+      message:
+        "captureReasoning needs capture: 'full' (the reasoning trace is recorded as text, " +
+        'which only the full capture mode stores)',
+    });
+  }
+}
+
+/**
+ * #605 — the `{ capture, captureReasoning }` SLICE of a node's config the
+ * save-time validator reads (`params.ts::validateLlmCallCapture`), mirroring
+ * `llmConversationSurfaceSchema`. NON-STRICT; `capture` is read loosely because
+ * the coupling rule only asks "is it 'full'".
+ */
+export const llmCaptureSurfaceSchema = z
+  .object({
+    capture: z.unknown().optional(),
+    captureReasoning: z.boolean().optional(),
+  })
+  .superRefine(refineLlmCaptureCoupling);
+
+/**
  * The canonical `llm_call` config.
  *
  * NON-STRICT BY DESIGN (#2 L1, planning-gate HIGH constraint): the value parsed
@@ -730,6 +766,20 @@ export const llmCallConfigSchema = z
     // captured once per provider response, repairs included, and a node with
     // tools once per tool-loop round (#605).
     capture: llmCaptureModeSchema.optional(),
+    // #605 — record the model's REASONING summary on each `activity.captured`
+    // (its `reasoning` field). OFF unless set, and only with `capture: 'full'`
+    // (`refineLlmCaptureCoupling`). A literal boolean, like `emitMessages`.
+    //
+    // Unlike `capture`, this one CHANGES THE REQUEST on Anthropic: current
+    // models return an EMPTY thinking block unless asked for a summary, so the
+    // adapter adds `thinking.display: 'summarized'`. Display is visibility only
+    // (billing and the answer are unchanged). It needs `reasoningEffort`: that
+    // is what puts `thinking` on the wire, so without it nothing is recorded
+    // even on a model that thinks by default.
+    //
+    // Where it is knowingly INERT: OpenAI (Chat Completions returns no reasoning
+    // text) and an `agent_cli`-bound node. Ollama records `message.thinking`.
+    captureReasoning: z.boolean().optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
@@ -739,7 +789,8 @@ export const llmCallConfigSchema = z
   })
   .superRefine(refineOutputModeCoupling)
   .superRefine(refineLlmToolsCoupling)
-  .superRefine(refineLlmConversationCoupling);
+  .superRefine(refineLlmConversationCoupling)
+  .superRefine(refineLlmCaptureCoupling);
 
 export type LlmCallConfig = z.infer<typeof llmCallConfigSchema>;
 
@@ -780,6 +831,9 @@ export interface NormalizedLlmRequest {
   // Named `captureMode`, not `capture`, because the adapters already use
   // `capture` for the built `LlmCapture` object. `undefined` = metadata.
   captureMode?: LlmCaptureMode;
+  // #605 — the node's `captureReasoning` opt-in: the Anthropic adapter asks for
+  // a thinking SUMMARY, and `buildCapture` records it. `undefined` = off.
+  captureReasoning?: boolean;
 }
 
 /**
@@ -845,5 +899,6 @@ export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
     // the ternary never yields `structured`-without-schema.
     structuredOutput: cfg.outputMode === 'structured' ? cfg.outputSchema : undefined,
     captureMode: cfg.capture,
+    captureReasoning: cfg.captureReasoning,
   };
 }

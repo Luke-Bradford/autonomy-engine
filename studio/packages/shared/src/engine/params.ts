@@ -41,6 +41,7 @@ import {
 } from '../catalog/types.js';
 import {
   findLlmMessagesRowIndex,
+  llmCaptureSurfaceSchema,
   llmConversationSurfaceSchema,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
@@ -2781,6 +2782,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       validateLlmCallOutput(node, errors);
       validateLlmCallTools(node, errors); // #2 L10a — the tools config surface
       validateLlmCallConversation(node, errors); // #2 L12 — the conversation surface
+      validateLlmCallCapture(node, errors); // #605 — the capture surface
     }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
@@ -3566,12 +3568,26 @@ function validateExecutePipelineConfig(node: Node, errors: string[]): void {
  * no back-compat risk to existing text nodes.
  */
 function validateLlmCallOutput(node: Node, errors: string[]): void {
-  const parsed = llmStructuredOutputSurfaceSchema.safeParse(node.config);
+  // Every issue path starts at the `outputSchema`/`outputMode` field (the two
+  // keys this slice picks), so the dotted path already names the surface — no
+  // hardcoded prefix needed.
+  pushSurfaceIssues(node, llmStructuredOutputSurfaceSchema.safeParse(node.config), errors);
+}
+
+/**
+ * The `llm_call` config SURFACE slices (output, tools, conversation, capture) report
+ * each parse issue the same way: node-scoped, prefixed by the dotted path, which
+ * already names the field because every slice picks its keys at the top level.
+ */
+function pushSurfaceIssues(
+  node: Node,
+  parsed:
+    | { success: true }
+    | { success: false; error: { issues: readonly { path: PropertyKey[]; message: string }[] } },
+  errors: string[],
+): void {
   if (parsed.success) return;
   for (const issue of parsed.error.issues) {
-    // Every issue path starts at the `outputSchema`/`outputMode` field (the two
-    // keys this slice picks), so the dotted path already names the surface — no
-    // hardcoded prefix needed.
     const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
     errors.push(`node.${node.id}: ${path}${issue.message}`);
   }
@@ -3586,12 +3602,17 @@ function validateLlmCallOutput(node: Node, errors: string[]): void {
  * `scanLlmToolRefs`'s half (validateRefs); this is the config SHAPE half.
  */
 function validateLlmCallTools(node: Node, errors: string[]): void {
-  const parsed = llmToolsSurfaceSchema.safeParse(node.config);
-  if (parsed.success) return;
-  for (const issue of parsed.error.issues) {
-    const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
-    errors.push(`node.${node.id}: ${path}${issue.message}`);
-  }
+  pushSurfaceIssues(node, llmToolsSurfaceSchema.safeParse(node.config), errors);
+}
+
+/**
+ * #605 — the capture-surface counterpart of `validateLlmCallTools`: parse the
+ * `{ capture, captureReasoning }` slice through `llmCaptureSurfaceSchema`, so a
+ * node asking for a reasoning trace without `capture: 'full'` is refused at save
+ * by the same rule dispatch applies.
+ */
+function validateLlmCallCapture(node: Node, errors: string[]): void {
+  pushSurfaceIssues(node, llmCaptureSurfaceSchema.safeParse(node.config), errors);
 }
 
 /**
@@ -3627,13 +3648,7 @@ function validateLlmCallTools(node: Node, errors: string[]): void {
  *      success — the same guaranteed-failure class).
  */
 function validateLlmCallConversation(node: Node, errors: string[]): void {
-  const parsed = llmConversationSurfaceSchema.safeParse(node.config);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) {
-      const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
-      errors.push(`node.${node.id}: ${path}${issue.message}`);
-    }
-  }
+  pushSurfaceIssues(node, llmConversationSurfaceSchema.safeParse(node.config), errors);
   const history = node.config['history'];
   if (history !== undefined && typeof history !== 'string') {
     errors.push(

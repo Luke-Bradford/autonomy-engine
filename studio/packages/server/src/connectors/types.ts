@@ -186,6 +186,8 @@ export interface LlmCapture {
     })[];
   };
   completion?: CapturedContent;
+  /** #605 — the reasoning summary; see `activity.captured`'s `reasoning`. */
+  reasoning?: CapturedContent;
 }
 
 /**

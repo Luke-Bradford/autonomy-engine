@@ -24,7 +24,8 @@
  *    `activity.toolCalled` (either flag) — they are UNSALTED sha256, so a short
  *    secret (a one-time code, a yes/no answer) is recoverable by guessing.
  *    Lengths and counts stay: they are the cost/latency facts those events exist
- *    for.
+ *    for. A `capture: 'full'` node's captured TEXTS go the same way: system,
+ *    turns, completion and (#605) the reasoning summary.
  *
  * THE CONTRACT CHECK SURVIVES. A declared `number` output replaced by a string
  * marker would fail the reducer's type check on every run, so redaction decides
@@ -148,6 +149,7 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
           messages: event.request.messages.map(redactCaptured),
         },
         ...(event.completion !== undefined ? { completion: redactCaptured(event.completion) } : {}),
+        ...(event.reasoning !== undefined ? { reasoning: redactCaptured(event.reasoning) } : {}),
       };
     case 'node.dispatched':
       // #890 — EITHER flag, as for `activity.captured`: a node's outputs, errors

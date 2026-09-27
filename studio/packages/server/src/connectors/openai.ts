@@ -319,6 +319,9 @@ export const openaiAdapter: ConnectorAdapter = {
             echo: structuredEcho(content),
             latencyMs: res.latencyMs,
             completionText: typeof content === 'string' ? content : undefined,
+            // #605 — Chat Completions returns no reasoning text (only a token
+            // count), so `captureReasoning` is inert on this adapter.
+            reasoningText: undefined,
           };
         },
       );
@@ -409,6 +412,7 @@ export const openaiAdapter: ConnectorAdapter = {
             const rawMessage = first!.message;
             return {
               type: 'toolUse',
+              reasoningText: undefined, // #605 — none on Chat Completions
               usage,
               latencyMs: res.latencyMs,
               calls,
@@ -454,6 +458,7 @@ export const openaiAdapter: ConnectorAdapter = {
             usage,
             latencyMs: res.latencyMs,
             completionText: text,
+            reasoningText: undefined, // #605 — none on Chat Completions
             succeeded: {
               type: 'succeeded',
               outputs: { text, stopReason: coerceStopReason(first?.finish_reason) },

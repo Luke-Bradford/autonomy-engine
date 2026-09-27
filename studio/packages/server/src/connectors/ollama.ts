@@ -39,6 +39,18 @@ import type { LlmTurn, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
 
+/**
+ * #605 — the response's reasoning text: `message.thinking`, which Ollama returns
+ * beside `content` when the request set `think` (a node's `reasoningEffort`).
+ * `undefined` when absent or empty, so a capture never records `hash('')`.
+ */
+function thinkingOf(json: unknown): string | undefined {
+  const message = (json as { message?: unknown }).message;
+  if (typeof message !== 'object' || message === null) return undefined;
+  const thinking = (message as { thinking?: unknown }).thinking;
+  return typeof thinking === 'string' && thinking !== '' ? thinking : undefined;
+}
+
 export const ollamaAdapter: ConnectorAdapter = {
   kind: 'ollama',
   configSchema: llmConnectionConfigSchema,
@@ -95,6 +107,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       reasoningEffort,
       structuredOutput,
       captureMode,
+      captureReasoning,
     } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/api/chat`;
@@ -173,7 +186,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       yield* runStructuredWithRepair(
         'ollama',
         turns,
-        { model, system: systemContent, captureMode },
+        { model, system: systemContent, captureMode, captureReasoning },
         async (msgTurns) => {
           const res = await postJsonAndParse(
             ctx,
@@ -193,6 +206,7 @@ export const ollamaAdapter: ConnectorAdapter = {
             echo: structuredEcho(content),
             latencyMs: res.latencyMs,
             completionText: typeof content === 'string' ? content : undefined,
+            reasoningText: thinkingOf(res.json),
           };
         },
       );
@@ -227,7 +241,7 @@ export const ollamaAdapter: ConnectorAdapter = {
         tools,
         wireMessages(turns),
         turns,
-        { model, system, captureMode },
+        { model, system, captureMode, captureReasoning },
         authorChoice,
         async (conv): Promise<ToolRoundOutcome<readonly unknown[]>> => {
           const res = await postJsonAndParse(
@@ -262,6 +276,7 @@ export const ollamaAdapter: ConnectorAdapter = {
               type: 'toolUse',
               usage,
               latencyMs: res.latencyMs,
+              reasoningText: thinkingOf(res.json),
               calls,
               buildNext: (results) => [
                 ...conv,
@@ -283,6 +298,7 @@ export const ollamaAdapter: ConnectorAdapter = {
               type: 'terminal',
               event: { ...noCompletionFailure('ollama', 'malformed_block'), spendFact: usage },
               latencyMs: res.latencyMs,
+              reasoningText: thinkingOf(res.json),
             };
           }
           return {
@@ -290,6 +306,7 @@ export const ollamaAdapter: ConnectorAdapter = {
             usage,
             latencyMs: res.latencyMs,
             completionText: text,
+            reasoningText: thinkingOf(res.json),
             succeeded: {
               type: 'succeeded',
               outputs: {
@@ -330,6 +347,8 @@ export const ollamaAdapter: ConnectorAdapter = {
         system,
         completionText,
         captureMode,
+        captureReasoning,
+        reasoningText: result.ok ? thinkingOf(result.json) : undefined,
       }),
     });
     if (!result.ok) {
