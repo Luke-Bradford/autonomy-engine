@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { DatasetSchema } from '../schemas/dataset.js';
-import { NodeSchema, PipelineSchema, PipelineVersionSchema } from '../schemas/pipeline.js';
+import {  NodeSchema,  PipelineSchema,  PipelineVersionSchema,  VariableDefSchema,} from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { RESOURCE_KINDS } from './paths.js';
@@ -120,6 +120,12 @@ export const PipelineVersionExportSchema = PipelineVersionSchema.omit({
 }).extend({
   nodes: z.array(NodeExportSchema),
   resourceId: exportResourceId,
+  // #844 V1 (spec V-D2) — OPTIONAL in the export, with no default: an empty list
+  // is omitted from the file (`omitEmptyVariables`) so every pre-V1 file keeps
+  // its bytes, and a version exported that way must parse back WITHOUT the key
+  // being re-manufactured. Absent means "no variables", and the write schema
+  // (`NewPipelineVersionSchema`) turns it back into `[]` on import.
+  variables: z.array(VariableDefSchema).optional(),
 });
 export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
 

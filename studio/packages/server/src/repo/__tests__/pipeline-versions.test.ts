@@ -172,6 +172,38 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     ).not.toThrow();
   });
 
+  it('REFUSES a variable default that disagrees with its type (#844 V1) — no coercion', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    let caught: InvalidPipelineDocError | undefined;
+    try {
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        // Unlike the param above, '5' is NOT a number here: a variable's default
+        // is checked strictly (spec V-D1).
+        variables: [{ name: 'n', type: 'number', default: '5' }],
+      });
+    } catch (err) {
+      caught = err as InvalidPipelineDocError;
+    }
+    expect(caught).toBeInstanceOf(InvalidPipelineDocError);
+    expect(caught?.issues).toEqual(["variable 'n' default must be a number, got string"]);
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+  });
+
+  it('PERSISTS declared variables — the RE-READ carries them (#844 V1, the #473 shape)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const variables = [
+      { name: 'count', type: 'number' as const, default: 0, description: 'rounds so far' },
+      { name: 'seen', type: 'array' as const, default: [] },
+    ];
+    const created = createPipelineVersion(db, { ...buildVersionInput(pipeline.id), variables });
+    // The create response is built from the in-memory input, so it cannot witness
+    // a dropped column; only a re-read can.
+    expect(getPipelineVersion(db, created.id)?.variables).toEqual(variables);
+  });
+
   it('carries EVERY issue on the error, not just the first', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -627,6 +659,8 @@ describe('pipeline-versions repo', () => {
       containers: [
         { id: 'c1', kind: 'loop', children: ['node_2'], maxRounds: 3, exitWhen: CHILD_EXIT_WHEN },
       ],
+      // #844 V1 — non-empty for the same reason: a dropped column reads back `[]`.
+      variables: [{ name: 'tally', type: 'number', default: 3, description: 'kept' }],
       // Deliberately NOT CATALOG_VERSION — a dropped `catalogVersion` defaults to
       // the current one, so an equal read-back would prove nothing. The write
       // gate does not constrain this value (no catalog refs in `validatePipelineDoc`).
@@ -810,6 +844,7 @@ describe('pipeline-versions repo', () => {
       // write-side `.default([])`) but NOT NULL on the table, so a raw insert
       // must name it — the repo path gets it from Zod's default instead.
       containers: input.containers ?? [],
+      variables: input.variables ?? [],
       catalogVersion: input.catalogVersion ?? CATALOG_VERSION,
       version: 1,
       createdAt: Date.now(),

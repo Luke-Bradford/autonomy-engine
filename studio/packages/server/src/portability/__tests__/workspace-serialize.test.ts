@@ -427,6 +427,31 @@ describe('serializeWorkspace', () => {
     expect(JSON.stringify(env)).not.toContain('sec_abc');
   });
 
+  // #844 V1 (spec V-D2) — every committed pipeline file predates `variables`,
+  // and `sourceBlobSha` hashes those exact bytes. A variable-less version must
+  // serialize WITHOUT the key, or the first Commit after V1 rewrites every file.
+  it('#844 V1 — a version with NO variables serializes with no `variables` key', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Plain' });
+    createPipelineVersion(db, baseVersion(pipeline.id));
+
+    const [file] = serializeWorkspace(db, 'local');
+    expect(file!.contents).not.toContain('variables');
+    expect(Object.keys(JSON.parse(file!.contents).data.versions[0])).not.toContain('variables');
+  });
+
+  it('#844 V1 — declared variables serialize, and parse back to the same declaration', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Stateful' });
+    const variables = [{ name: 'count', type: 'number' as const, default: 0 }];
+    createPipelineVersion(db, { ...baseVersion(pipeline.id), variables });
+
+    const files = serializeWorkspace(db, 'local');
+    expect(envelopeAt(files, 'pipelines/stateful.json').data.versions[0].variables).toEqual(
+      variables,
+    );
+  });
+
   it('normalizes exportedAt to 0 so identical content re-serializes to identical bytes', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'Stable' });

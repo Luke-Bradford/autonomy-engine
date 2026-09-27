@@ -463,6 +463,53 @@ describe('importEnvelope: pipeline', () => {
   // pipeline came back flat. `containers` is optional in `NewPipelineVersion`
   // (`z.input`, because of the write-side `.default([])`), so the omission
   // type-checked cleanly — nothing but this test can see it.
+  // #844 V1 — variables survive export → import (the re-read, not the response),
+  // and a re-export carries the same declaration. A variable-less export has no
+  // key at all (spec V-D2).
+  it('round-trip: variables survive export → import → export (#844 V1)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Stateful' });
+    const variables = [
+      { name: 'count', type: 'number' as const, default: 0 },
+      { name: 'seen', type: 'array' as const, default: ['a'], description: 'visited' },
+    ];
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      variables,
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const imported = getPipelineVersion(db, result.versions[0]!.id);
+    expect(imported?.variables).toEqual(variables);
+
+    const again = exportPipeline(db, result.pipeline.id, 'owner-b');
+    if (again.kind !== 'pipeline' || envelope.kind !== 'pipeline') throw new Error('unreachable');
+    expect(again.data.versions[0]!.variables).toEqual(envelope.data.versions[0]!.variables);
+  });
+
+  it('a pipeline with no variables exports with no `variables` key (#844 V1)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Plain' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    expect(Object.keys(envelope.data.versions[0]!)).not.toContain('variables');
+  });
+
   it('round-trip: containers survive export → import (#473)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Containered' });
@@ -653,6 +700,8 @@ describe('importEnvelope: pipeline', () => {
           exitWhen: '${nodes.n2.output.done}',
         },
       ],
+      // #844 V1 — non-empty for the same reason: a dropped column reads back `[]`.
+      variables: [{ name: 'tally', type: 'number', default: 3, description: 'kept' }],
       // NOT CATALOG_VERSION — import is an "upgrade path can still set an older
       // value" (see `NewPipelineVersionSchema`), so a preserved older value is
       // the meaningful assertion; a re-stamped one would silently equal the default.

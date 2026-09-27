@@ -162,10 +162,9 @@ function scrubVersion(version: { nodes: unknown[] }): void {
  * the portable export for the same shape). A non-empty list is left untouched,
  * because then it is content.
  */
-export function omitEmptyVariables(version: { variables?: unknown }): void {
-  if (Array.isArray(version.variables) && version.variables.length === 0) {
-    delete version.variables;
-  }
+export function omitEmptyVariables(version: object): void {
+  const doc = version as { variables?: unknown };
+  if (Array.isArray(doc.variables) && doc.variables.length === 0) delete doc.variables;
 }
 
 export function pipelineVersionContentForm(
