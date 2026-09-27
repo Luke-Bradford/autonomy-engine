@@ -365,6 +365,9 @@ test.describe('#794 a revealed container lands below the routing advisory', () =
       nodes: [
         { id: 'only', position: { x: 0, y: 0 } },
         { id: 'after', type: 'file_write', position: { x: 420, y: 0 } },
+        // Two activities outside the loop: the advisory needs something to
+        // chain once the loop's only child is gone.
+        { id: 'more', type: 'file_write', position: { x: 420, y: 200 } },
       ],
       containers: [
         {
