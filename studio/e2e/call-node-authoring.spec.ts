@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas, seedVersion } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * #425 — authoring a `call_pipeline` node on the canvas.
@@ -24,17 +25,13 @@ import { openSeededCanvas, seedVersion } from './support/seedDoc';
  *    the reload rendering it back into the same picker.
  */
 
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
-
 /**
  * One argument row's input. By ROLE, not `getByLabel`: since #1012 each row has
  * an "Insert reference into parameter <name>" toggle, and a label lookup
  * matches that aria-label too.
  */
 function arg(page: Page, name: string) {
-  return panel(page).getByRole('textbox', { name: new RegExp(`^${name}`) });
+  return properties(page).getByRole('textbox', { name: new RegExp(`^${name}`) });
 }
 
 async function validationIssues(page: Page): Promise<string[]> {
@@ -71,18 +68,20 @@ test.describe('#425 — call-node authoring', () => {
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
 
     // The child's params are UNKNOWN until a version is chosen — they are a
     // property of the target, not of the node — and the panel says so rather
     // than offering an empty form or a raw JSON box.
     await expect(arg(page, 'query')).toHaveCount(0);
     await expect(
-      panel(page).getByText('Choose a version to see the parameters it declares.'),
+      properties(page).getByText('Choose a version to see the parameters it declares.'),
     ).toBeVisible();
 
-    await panel(page).getByRole('combobox', { name: 'Pipeline' }).selectOption({ label: CHILD });
-    await panel(page).getByRole('combobox', { name: 'Version' }).selectOption({ label: 'v1' });
+    await properties(page)
+      .getByRole('combobox', { name: 'Pipeline' })
+      .selectOption({ label: CHILD });
+    await properties(page).getByRole('combobox', { name: 'Version' }).selectOption({ label: 'v1' });
 
     // Now they are on screen, straight from the version the picker resolved.
     await expect(arg(page, 'query')).toBeVisible();
@@ -91,12 +90,16 @@ test.describe('#425 — call-node authoring', () => {
     // #796 item 2 — a new call WAITS, because that is what the engine does with
     // an absent `wait`; the box used to read unchecked while the node waited.
     // Unticking it is the one choice that gets written.
-    const wait = panel(page).getByLabel('Wait for the child run');
+    const wait = properties(page).getByLabel('Wait for the child run');
     await expect(wait).toBeChecked();
-    await expect(panel(page).getByText('succeeds as soon as the child run starts')).toHaveCount(0);
+    await expect(
+      properties(page).getByText('succeeds as soon as the child run starts'),
+    ).toHaveCount(0);
     await wait.uncheck();
-    await expect(panel(page).getByText('succeeds as soon as the child run starts')).toBeVisible();
-    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    await expect(
+      properties(page).getByText('succeeds as soon as the child run starts'),
+    ).toBeVisible();
+    await properties(page).getByRole('button', { name: 'Apply call' }).click();
 
     expect(await validationIssues(page), 'the authored call left the doc invalid').toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -110,11 +113,11 @@ test.describe('#425 — call-node authoring', () => {
 
     // Resolved back to the pipeline AND the version, from the stored id alone —
     // the picker is showing what the doc says, not a remembered selection.
-    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toHaveValue(/.+/);
-    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
+    await expect(properties(page).getByRole('combobox', { name: 'Pipeline' })).toHaveValue(/.+/);
+    await expect(properties(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
     await expect(arg(page, 'query')).toHaveValue('ships');
     await expect(arg(page, 'limit')).toHaveValue('25');
-    await expect(panel(page).getByLabel('Wait for the child run')).not.toBeChecked();
+    await expect(properties(page).getByLabel('Wait for the child run')).not.toBeChecked();
 
     // The contract that would otherwise be destroyed silently: a call node's
     // outputs come from the CHILD projection, so `config.outputs` must be ABSENT
@@ -144,7 +147,7 @@ test.describe('#425 — call-node authoring', () => {
 
     await addActivity(page, 'Execute Pipeline');
     await canvasNodes(page).first().click();
-    await panel(page).getByRole('radio', { name: 'Expression' }).check();
+    await properties(page).getByRole('radio', { name: 'Expression' }).check();
 
     /* The honesty the panel owes the operator, asserted in all three of its
        claims because the failure this guards is the hint drifting out of step
@@ -159,17 +162,17 @@ test.describe('#425 — call-node authoring', () => {
            `MAX_CALL_DEPTH`), and reaching that bound is a refusal, not a cap —
            stated as "only at run time" because the nested runs up to the bound
            DO execute, side effects included, before the next one is refused. */
-    await expect(panel(page).getByText(/references are checked when you save/)).toBeVisible();
-    await expect(panel(page).getByText(/only see literal targets/)).toBeVisible();
-    await expect(panel(page).getByText(/nested runs\s+deep/)).toBeVisible();
-    await expect(panel(page).getByText(/the next call is refused/)).toBeVisible();
-    await expect(panel(page).getByText(/not checked when you save/)).toHaveCount(0);
+    await expect(properties(page).getByText(/references are checked when you save/)).toBeVisible();
+    await expect(properties(page).getByText(/only see literal targets/)).toBeVisible();
+    await expect(properties(page).getByText(/nested runs\s+deep/)).toBeVisible();
+    await expect(properties(page).getByText(/the next call is refused/)).toBeVisible();
+    await expect(properties(page).getByText(/not checked when you save/)).toHaveCount(0);
 
-    await panel(page).getByLabel('Version id or expression').fill('${params.target}');
+    await properties(page).getByLabel('Version id or expression').fill('${params.target}');
     // The target is not a listable version, so its declared params are unknown —
     // the arguments are entered directly rather than guessed at.
-    await panel(page).getByLabel('Parameters (JSON object)').fill('{"query":"ships"}');
-    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    await properties(page).getByLabel('Parameters (JSON object)').fill('{"query":"ships"}');
+    await properties(page).getByRole('button', { name: 'Apply call' }).click();
 
     expect(await validationIssues(page)).toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -180,10 +183,10 @@ test.describe('#425 — call-node authoring', () => {
     // chosen" and then lost on the next Apply.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(parentId)}`);
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByLabel('Version id or expression')).toHaveValue(
+    await expect(properties(page).getByLabel('Version id or expression')).toHaveValue(
       '${params.target}',
     );
-    await expect(panel(page).getByLabel('Parameters (JSON object)')).toHaveValue(
+    await expect(properties(page).getByLabel('Parameters (JSON object)')).toHaveValue(
       '{\n  "query": "ships"\n}',
     );
 
@@ -229,9 +232,9 @@ test.describe('#425 — call-node authoring', () => {
 
     // The routing fix: the call editor, resolved from the stored id — not the
     // generic config box, which is what this node used to get.
-    await expect(panel(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
-    await expect(panel(page).getByRole('button', { name: 'Apply config' })).toHaveCount(0);
-    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(
+    await expect(properties(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
+    await expect(properties(page).getByRole('button', { name: 'Apply config' })).toHaveCount(0);
+    await expect(properties(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(
       'e2e 953 child',
     );
     await expect(arg(page, 'query')).toHaveValue('seeded');
@@ -241,7 +244,7 @@ test.describe('#425 — call-node authoring', () => {
     // was keyed on the same type check, so this arm is the one that proves both
     // halves moved together.
     await arg(page, 'query').fill('edited');
-    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    await properties(page).getByRole('button', { name: 'Apply call' }).click();
     expect(await validationIssues(page)).toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -292,23 +295,23 @@ test.describe('#425 — call-node authoring', () => {
     await canvasNodes(page).first().click();
     await expect(arg(page, 'query')).toHaveValue('about ');
 
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: 'Insert reference into parameter query' })
       .click();
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: /^topic/ })
       .click();
     await expect(arg(page, 'query')).toHaveValue('about ${params.topic}');
 
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: 'Insert reference into parameter limit' })
       .click();
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: /^topic/ })
       .click();
     await expect(arg(page, 'limit')).toHaveValue('${params.topic}');
 
-    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    await properties(page).getByRole('button', { name: 'Apply call' }).click();
     expect(await validationIssues(page)).toEqual([]);
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');

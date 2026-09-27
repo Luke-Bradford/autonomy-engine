@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { triggerForm } from './support/panels';
 
 /**
  * #854 — the trigger modes that were selectable but not configurable.
@@ -19,10 +20,6 @@ import { fluentRootReady } from './support/theme';
  * before this the stale `event`/`window` came back with every save and the
  * trigger was stuck in a mode the UI could not leave.
  */
-
-function triggerForm(page: Page) {
-  return page.getByRole('form', { name: 'Trigger form' });
-}
 
 async function openTriggers(page: Page): Promise<string[]> {
   const problems = collectPageProblems(page);

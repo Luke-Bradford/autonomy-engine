@@ -9,6 +9,7 @@ import {
   viewportSettled,
 } from './support/canvasGraph';
 import { nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U21 slice 3 — copy/paste on the authoring canvas, and the ref remapping that
@@ -80,7 +81,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await page.getByTestId('rf__node-c').click();
     await page.keyboard.up('Meta');
 
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await expect(panel.getByRole('heading', { name: '2 selected' })).toBeVisible();
 
     await page.keyboard.press('Meta+c');
@@ -319,7 +320,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
     await expect(page.getByText('Copied 1 activity.')).toBeVisible();
 
     await openInApp(page, targetId, ['z', 'a']);
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await panel.getByRole('button', { name: 'Paste' }).click();
     await expect(
       page.getByText(
@@ -342,7 +343,7 @@ test.describe('copy/paste on the canvas (U21)', () => {
 
     // The nothing-selected panel is where Paste lives, and where an operator
     // discovers the gesture exists at all.
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await panel.getByRole('button', { name: 'Paste' }).click();
     await expect(page.getByText('Nothing has been copied yet.')).toBeVisible();
     await expect(canvasNodes(page)).toHaveCount(1);

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U8a — the expression-insert flyout.
@@ -18,10 +19,6 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  * Save, not as a message about the picker. Saving successfully is therefore the
  * assertion: it can only pass if the picker replaced rather than spliced.
  */
-
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 /** One node's stored config, read back from the LATEST persisted version. */
 async function persistedConfig(
@@ -69,7 +66,7 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
-    const url = panel(page).getByRole('textbox', { name: 'url' });
+    const url = properties(page).getByRole('textbox', { name: 'url' });
     const text = '${concat(nodes.fetch.output.body, "x")}';
     await url.fill(text);
     const [from, to] = [text.indexOf('nodes'), text.indexOf(',')];
@@ -82,13 +79,13 @@ test.describe('U8a — expression insert flyout', () => {
     for (let i = text.length; i > to; i -= 1) await url.press('ArrowLeft');
     for (let i = to; i > from; i -= 1) await url.press('Shift+ArrowLeft');
 
-    const wrap = panel(page).getByRole('button', {
+    const wrap = properties(page).getByRole('button', {
       name: 'Wrap an expression in url in a function',
     });
     await wrap.click();
     // Offered by what the save gate accepts: a two-argument function is not.
-    await expect(panel(page).getByRole('button', { name: /^substring\(/ })).toHaveCount(0);
-    await panel(page)
+    await expect(properties(page).getByRole('button', { name: /^substring\(/ })).toHaveCount(0);
+    await properties(page)
       .getByRole('button', { name: /^toUpper\(/ })
       .click();
     await expect(url).toHaveValue('${concat(toUpper(nodes.fetch.output.body), "x")}');
@@ -96,12 +93,12 @@ test.describe('U8a — expression insert flyout', () => {
     // No selection now: the caret sits after `toUpper(...)`, so the next wrap
     // takes the WHOLE expression it is in.
     await wrap.click();
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: /^toLower\(/ })
       .click();
     await expect(url).toHaveValue('${toLower(concat(toUpper(nodes.fetch.output.body), "x"))}');
 
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
     expect(await persistedConfig(page, id, 'call')).toMatchObject({
@@ -122,7 +119,7 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
-    await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
+    await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
 
     // The discovery this ticket exists for: the producer is named by the text
     // its BOX carries, and its declared output name is spelled out — neither of
@@ -130,15 +127,17 @@ test.describe('U8a — expression insert flyout', () => {
     // TWO `http_request` nodes, and #878's ordinal is what says which box the
     // reference points at; it used to be the raw doc id in brackets, a string
     // shown nowhere on the canvas.
-    const option = panel(page).getByRole('button', { name: /HTTP Request 1 → body/ });
-    await expect(panel(page).getByRole('button', { name: /HTTP Request 2 → / })).toHaveCount(0);
+    const option = properties(page).getByRole('button', { name: /HTTP Request 1 → body/ });
+    await expect(properties(page).getByRole('button', { name: /HTTP Request 2 → / })).toHaveCount(
+      0,
+    );
     await expect(option).toBeVisible();
     await option.click();
 
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
       '${nodes.fetch.output.body}',
     );
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -165,13 +164,15 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
-    await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
-    await expect(panel(page).getByText('Pipeline variables')).toBeVisible();
-    await panel(page)
+    await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
+    await expect(properties(page).getByText('Pipeline variables')).toBeVisible();
+    await properties(page)
       .getByRole('button', { name: /^baseUrl/ })
       .click();
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue('${vars.baseUrl}');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+      '${vars.baseUrl}',
+    );
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -212,15 +213,15 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
-    await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
-    await expect(panel(page).getByText('Global parameters')).toBeVisible();
-    await panel(page)
+    await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
+    await expect(properties(page).getByText('Global parameters')).toBeVisible();
+    await properties(page)
       .getByRole('button', { name: new RegExp(`^${name}`) })
       .click();
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
       `\${global.${name}}`,
     );
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -262,13 +263,15 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'pick').click();
-    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
+    await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
 
-    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeVisible();
-    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → label/ })).toHaveCount(
-      0,
-    );
-    await expect(panel(page).getByRole('button', { name: /^runId/ })).toHaveCount(0);
+    await expect(
+      properties(page).getByRole('button', { name: /HTTP Request 1 → rows/ }),
+    ).toBeVisible();
+    await expect(
+      properties(page).getByRole('button', { name: /HTTP Request 1 → label/ }),
+    ).toHaveCount(0);
+    await expect(properties(page).getByRole('button', { name: /^runId/ })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -304,15 +307,17 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'pick').click();
-    const item = panel(page).getByRole('button', { name: /^item — / });
+    const item = properties(page).getByRole('button', { name: /^item — / });
 
-    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
-    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeVisible();
+    await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
+    await expect(
+      properties(page).getByRole('button', { name: /HTTP Request 1 → rows/ }),
+    ).toBeVisible();
     await expect(item).toHaveCount(0);
 
-    await panel(page).getByRole('button', { name: 'Insert reference into predicate' }).click();
+    await properties(page).getByRole('button', { name: 'Insert reference into predicate' }).click();
     await item.click();
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await expect(page.locator('.badge-list')).toHaveCount(0);
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -341,15 +346,15 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'gate').click();
-    await panel(page).getByRole('button', { name: 'Insert reference into condition' }).click();
+    await properties(page).getByRole('button', { name: 'Insert reference into condition' }).click();
 
     // Said BEFORE the author commits: this field takes one expression, so the
     // choice is destructive.
-    await expect(panel(page).getByText(/REPLACES its current value/)).toBeVisible();
-    await panel(page)
+    await expect(properties(page).getByText(/REPLACES its current value/)).toBeVisible();
+    await properties(page)
       .getByRole('button', { name: /HTTP Request 1 → body/ })
       .click();
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     // The whole point. A spliced value (`${default(…)}${nodes.…}`) is not a
     // whole-value expression, `validatePipelineDoc` refuses it, and Save is

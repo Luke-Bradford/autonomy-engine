@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { deselect } from './support/canvasGraph';
 import { nodeById, openSeededCanvas, rectOf } from './support/seedDoc';
@@ -9,6 +9,7 @@ import {
   setTheme,
   surfaceBehind,
 } from './support/theme';
+import { properties } from './support/panels';
 
 /**
  * #852 / #844 — U7's BOTTOM property dock. The properties used to be a third,
@@ -23,10 +24,6 @@ import {
  *   node, so the choice is lifted above it);
  * - the tab strip is legible in dark mode (Fluent tokens resolve on the dock).
  */
-
-function properties(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 const seed = {
   nodes: [

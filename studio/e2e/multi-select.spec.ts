@@ -11,6 +11,7 @@ import {
   fitAndSettle,
   marqueeAllNodes,
 } from './support/canvasGraph';
+import { properties } from './support/panels';
 
 /**
  * U21 slice 2 — several things selected at once.
@@ -79,7 +80,7 @@ test.describe('multi-select (U21)', () => {
 
     // The panel agrees — the half a class-only assertion would miss, and the
     // proof the gesture reached the STORE rather than only React Flow's view.
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await expect(panel.getByRole('heading', { name: '2 selected' })).toBeVisible();
     await expect(panel.getByText('2 activities')).toBeVisible();
 
@@ -242,8 +243,6 @@ test.describe('modifier-click multi-select (#947)', () => {
     }
   }
 
-  const panelOf = (page: Page) => page.getByRole('complementary', { name: 'Properties' });
-
   test('⌘-click ADDS a node to the selection instead of replacing it', async ({ page }) => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e modifier add');
@@ -256,8 +255,8 @@ test.describe('modifier-click multi-select (#947)', () => {
 
     // The panel agrees, which is what makes this a claim about the STORE and
     // not merely about React Flow's own view array.
-    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
-    await expect(panelOf(page).getByText('2 activities')).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+    await expect(properties(page).getByText('2 activities')).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -279,8 +278,8 @@ test.describe('modifier-click multi-select (#947)', () => {
 
     await expect(selectedNodes(page)).toHaveCount(1);
     await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
-    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
-    await expect(panelOf(page).getByText('1 activity, 1 connection')).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+    await expect(properties(page).getByText('1 activity, 1 connection')).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -345,7 +344,7 @@ test.describe('modifier-click multi-select (#947)', () => {
     await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
     // The panel agrees, which makes this a claim about the STORE and not just
     // about React Flow's view array.
-    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+    await expect(properties(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
 
     // The discriminator: same point, same selection, no modifier.
     await page.mouse.click(empty!.x, empty!.y);

@@ -4,6 +4,7 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { resolvedPaletteColor } from './support/theme';
 import { CONNECTION_RADIUS } from '../packages/web/src/pages/pipeline/ports';
+import { properties } from './support/panels';
 
 /**
  * U19 — outcome-by-source-handle, in a real browser.
@@ -364,9 +365,7 @@ test.describe('U19 outcome ports', () => {
        carries the field's name in its accessible name, so `getByLabel('cases')`
        matches the textarea AND the button (`node-config-form.spec.ts` records
        the same constraint). */
-    const cases = page
-      .getByRole('complementary', { name: 'Properties' })
-      .getByRole('textbox', { name: /^cases/ });
+    const cases = properties(page).getByRole('textbox', { name: /^cases/ });
     await cases.fill('red');
     // The form is APPLY-gated — typing alone edits nothing, which is what keeps
     // a half-typed identifier out of the doc.

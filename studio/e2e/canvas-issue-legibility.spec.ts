@@ -3,6 +3,7 @@ import { addActivity, canvasNodes } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
 import { resolvedPaletteColor, setTheme } from './support/theme';
+import { properties } from './support/panels';
 
 /**
  * #884 — the validation badge list names what it is asking the operator to fix.
@@ -23,10 +24,6 @@ import { resolvedPaletteColor, setTheme } from './support/theme';
  * in a browser, not in review — which is why this spec builds its doc by clicking
  * the toolbox rather than by seeding one.
  */
-
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 /** The validation badge's messages, or `[]` when there is no badge. */
 async function validationIssues(page: Page): Promise<string[]> {
@@ -111,8 +108,8 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     // `readableIssue`'s original quoted-token pass could not see at all, so this
     // message reached the badge list as a raw uuid until #884.
     await canvasNodes(page).nth(1).click();
-    await panel(page).getByRole('textbox', { name: 'url' }).fill('${nodes.ghost.output.body}');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('textbox', { name: 'url' }).fill('${nodes.ghost.output.body}');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     const issues = await validationIssues(page);
     expect(issues.length, 'the bad reference is refused').toBeGreaterThan(0);
@@ -171,8 +168,10 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     // of nothing, so the reference is refused.
     const second = await mintedId(page, 1);
     await canvasNodes(page).nth(0).click();
-    await panel(page).getByRole('textbox', { name: 'url' }).fill(`\${nodes.${second}.output.body}`);
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page)
+      .getByRole('textbox', { name: 'url' })
+      .fill(`\${nodes.${second}.output.body}`);
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     const all = (await validationIssues(page)).join('\n');
     expect(all).toContain("node 'HTTP Request 1' config.url:");
@@ -216,8 +215,10 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
 
       const [first, second] = [canvasNodes(page).nth(0), canvasNodes(page).nth(1)];
       await second.click();
-      await panel(page).getByRole('textbox', { name: 'url' }).fill('${nodes.ghost.output.body}');
-      await panel(page).getByRole('button', { name: 'Apply config' }).click();
+      await properties(page)
+        .getByRole('textbox', { name: 'url' })
+        .fill('${nodes.ghost.output.body}');
+      await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
       const issues = await validationIssues(page);
       const own = issues.filter((m) => m.startsWith("node 'HTTP Request 2' "));
@@ -239,11 +240,11 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       expect(painted).toBe(await resolvedPaletteColor(page, '--error'));
 
       // The panel of the node it is about lists the same text as the full list.
-      await expect(panel(page).locator('.subject-issues li')).toHaveText(own);
+      await expect(properties(page).locator('.subject-issues li')).toHaveText(own);
 
       // …and the neighbour's panel does not.
       await first.click();
-      await expect(panel(page).locator('.subject-issues')).toHaveCount(0);
+      await expect(properties(page).locator('.subject-issues')).toHaveCount(0);
       // Deselected, the refused box's own outline is the error colour.
       const outline = await second
         .locator('.flow-node')
@@ -252,10 +253,10 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
 
       // Fixing the config clears the badge — it tracks the doc, not a snapshot.
       await second.click();
-      await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test');
-      await panel(page).getByRole('button', { name: 'Apply config' }).click();
+      await properties(page).getByRole('textbox', { name: 'url' }).fill('https://example.test');
+      await properties(page).getByRole('button', { name: 'Apply config' }).click();
       await expect(second.locator('.flow-issue-badge')).toHaveCount(0);
-      await expect(panel(page).locator('.subject-issues')).toHaveCount(0);
+      await expect(properties(page).locator('.subject-issues')).toHaveCount(0);
 
       await expectQuiet(page, problems);
     });

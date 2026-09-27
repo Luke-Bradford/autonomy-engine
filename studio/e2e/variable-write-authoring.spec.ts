@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { deselect } from './support/canvasGraph';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * #844 V6 — authoring a Set variable / Append variable node (spec V-D9).
@@ -13,10 +14,6 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
  * path: the chooser lists what the Variables tab declares, filtered per writer,
  * and a choice reaches the server through Apply and Save.
  */
-
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 /** The seeded doc every test starts from: one of each writer, both valid. */
 const SEED = {
@@ -43,7 +40,7 @@ const SEED = {
 
 /** The chooser's options as `[value, text]`, placeholder included. */
 async function chooserOptions(page: Page): Promise<string[][]> {
-  return panel(page)
+  return properties(page)
     .getByLabel('Declared variable', { exact: true })
     .locator('option')
     .evaluateAll((opts) => opts.map((o) => [(o as HTMLOptionElement).value, o.textContent ?? '']));
@@ -57,7 +54,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
     const id = await openSeededCanvas(page, 'v6 set chooser', SEED);
 
     await nodeById(page, 's').click();
-    const variable = panel(page).getByRole('textbox', { name: 'variable', exact: true });
+    const variable = properties(page).getByRole('textbox', { name: 'variable', exact: true });
     await expect(variable).toHaveValue('count');
     // Every declared variable, typed, in declaration order.
     expect(await chooserOptions(page)).toEqual([
@@ -66,19 +63,21 @@ test.describe('#844 V6 — set/append variable config form', () => {
       ['rows', 'rows (array)'],
       ['label', 'label (string)'],
     ]);
-    await expect(panel(page).getByLabel('Declared variable', { exact: true })).toHaveValue('count');
+    await expect(properties(page).getByLabel('Declared variable', { exact: true })).toHaveValue(
+      'count',
+    );
     // The name is a literal: no `${}` flyout on it. The value keeps its own.
     await expect(
-      panel(page).getByRole('button', { name: 'Insert reference into variable' }),
+      properties(page).getByRole('button', { name: 'Insert reference into variable' }),
     ).toHaveCount(0);
     await expect(
-      panel(page).getByRole('button', { name: 'Insert reference into value' }),
+      properties(page).getByRole('button', { name: 'Insert reference into value' }),
     ).toBeVisible();
 
-    await panel(page).getByLabel('Declared variable', { exact: true }).selectOption('label');
+    await properties(page).getByLabel('Declared variable', { exact: true }).selectOption('label');
     await expect(variable).toHaveValue('label');
-    await panel(page).getByRole('textbox', { name: 'value', exact: true }).fill('hello');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('textbox', { name: 'value', exact: true }).fill('hello');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -109,7 +108,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
       ['', '— choose —'],
       ['rows', 'rows (array)'],
     ]);
-    await expect(panel(page).locator('.config-field-choices-empty')).toHaveCount(0);
+    await expect(properties(page).locator('.config-field-choices-empty')).toHaveCount(0);
 
     // Retype the only array variable. The node now names a variable it may
     // not append to: the chooser has nothing to offer and says WHY, and the
@@ -119,11 +118,11 @@ test.describe('#844 V6 — set/append variable config form', () => {
     await page.getByRole('tab', { name: 'Variables' }).click();
     await page.getByLabel('variable 2 type').selectOption('string');
     await nodeById(page, 'a').click();
-    await expect(panel(page).getByLabel('Declared variable', { exact: true })).toHaveCount(0);
-    await expect(panel(page).locator('.config-field-choices-empty')).toHaveText(
+    await expect(properties(page).getByLabel('Declared variable', { exact: true })).toHaveCount(0);
+    await expect(properties(page).locator('.config-field-choices-empty')).toHaveText(
       /^None of this pipeline’s variables is an array/,
     );
-    await expect(panel(page)).toContainText('append_variable needs an array variable');
+    await expect(properties(page)).toContainText('append_variable needs an array variable');
 
     await expectQuiet(page, problems);
   });

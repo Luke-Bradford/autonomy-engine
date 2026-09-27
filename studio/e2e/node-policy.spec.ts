@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * #1312 — a node's run policy (retry, retry interval, secure flags) is editable
@@ -9,16 +10,11 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
 
 /** #852 — run policy is the property dock's General tab (ADF's). */
 async function openGeneralTab(page: Page): Promise<void> {
-  await page
-    .getByRole('complementary', { name: 'Properties' })
-    .getByRole('tab', { name: 'General' })
-    .click();
+  await properties(page).getByRole('tab', { name: 'General' }).click();
 }
 
 function policySection(page: Page) {
-  return page
-    .getByRole('complementary', { name: 'Properties' })
-    .getByRole('group', { name: 'Run policy' });
+  return properties(page).getByRole('group', { name: 'Run policy' });
 }
 
 /** The stored policy of node `a`, read back from the LATEST version. */

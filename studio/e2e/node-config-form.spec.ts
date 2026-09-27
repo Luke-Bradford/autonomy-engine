@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes } from './support/canvasGraph';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
+import { properties } from './support/panels';
 
 /**
  * U7 — authoring an activity's settings through NAMED controls.
@@ -31,10 +32,6 @@ import { seedConnection } from './support/seedResources';
  * trap — the label reading the field's VALUE — is closed at source by #1227 and
  * pinned by the exact-label test below.)
  */
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
-
 /** The stored config of the seeded node, read back from the LATEST version. */
 async function persistedConfig(page: Page, pipelineId: string): Promise<Record<string, unknown>> {
   const res = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`);
@@ -61,15 +58,17 @@ test.describe('U7 — per-activity node config form', () => {
     // The hole this ticket closes: the settings are NAMED on screen. `url` and
     // `method` are not strings this spec invented — they are the keys of
     // `http_request`'s own `configSchema`, so a control per key is the assertion.
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toBeVisible();
-    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'url' })).toBeVisible();
+    await expect(
+      properties(page).getByRole('textbox', { name: 'method (optional)' }),
+    ).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
-    await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
+    await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
-    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/hook');
-    await panel(page).getByRole('textbox', { name: 'method (optional)' }).fill('POST');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/hook');
+    await properties(page).getByRole('textbox', { name: 'method (optional)' }).fill('POST');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -80,10 +79,10 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
 
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
       'https://example.test/hook',
     );
-    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue(
       'POST',
     );
     expect(await persistedConfig(page, id)).toMatchObject({
@@ -106,7 +105,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
 
-    const url = panel(page).getByLabel('url', { exact: true });
+    const url = properties(page).getByLabel('url', { exact: true });
     await expect(url).toHaveValue('');
     await url.fill('https://example.test/label');
     await expect(url).toHaveValue('https://example.test/label', { timeout: 3_000 });
@@ -132,7 +131,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
 
-    const facts = await panel(page).evaluate((root) => {
+    const facts = await properties(page).evaluate((root) => {
       const byLabel = (name: string) =>
         Array.from(
           root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
@@ -161,8 +160,10 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     // The input still round-trips through a save.
-    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/one-line');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page)
+      .getByRole('textbox', { name: 'url' })
+      .fill('https://example.test/one-line');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
     expect(await persistedConfig(page, id)).toMatchObject({
@@ -203,8 +204,8 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://after');
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://after');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -238,14 +239,14 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://typed-in-a-field');
-    await panel(page).getByRole('button', { name: 'Edit as JSON' }).click();
+    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://typed-in-a-field');
+    await properties(page).getByRole('button', { name: 'Edit as JSON' }).click();
 
-    const json = panel(page).getByLabel('Config (JSON)');
+    const json = properties(page).getByLabel('Config (JSON)');
     await expect(json).toHaveValue(/https:\/\/typed-in-a-field/);
     // The toggle names the mode it goes TO, and it is reachable in the new mode.
-    await expect(panel(page).getByRole('button', { name: 'Edit as fields' })).toBeVisible();
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await expect(properties(page).getByRole('button', { name: 'Edit as fields' })).toBeVisible();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -277,14 +278,16 @@ test.describe('U7 — per-activity node config form', () => {
 
     await canvasNodes(page).first().click();
 
-    await expect(panel(page).getByLabel('Config (JSON)')).toBeVisible();
+    await expect(properties(page).getByLabel('Config (JSON)')).toBeVisible();
     // EXACT: the fallback textarea is wrapped by its own <label>, whose text
     // content includes the JSON being edited — which here literally contains the
     // word "url". A substring match would resolve to the escape hatch itself and
     // pass for the wrong reason.
-    await expect(panel(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(0);
+    await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(
+      0,
+    );
     await expect(
-      panel(page).getByText(/Saved settings this form cannot show \(url\)/),
+      properties(page).getByText(/Saved settings this form cannot show \(url\)/),
     ).toBeVisible();
 
     await expectQuiet(page, problems);
@@ -306,7 +309,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    const p = panel(page);
+    const p = properties(page);
     // No JSON blob for either record: a row group per field.
     await expect(p.getByRole('group', { name: 'headers (optional)', exact: true })).toBeVisible();
     await expect(
@@ -381,7 +384,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    const p = panel(page);
+    const p = properties(page);
     await expect(p.getByRole('group', { name: 'messages (optional)', exact: true })).toBeVisible();
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
       'user',
@@ -456,7 +459,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await nodeById(page, 'a').click();
-    const p = panel(page);
+    const p = properties(page);
     const history = p.getByRole('textbox', { name: 'history (optional)', exact: true });
     await expect(history).toHaveValue('');
     // The prompt, a template, IS offered the producer's string `text`...
@@ -511,7 +514,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    const p = panel(page);
+    const p = properties(page);
     await expect(
       p.getByRole('button', { name: 'move messages row 1 up', exact: true }),
     ).toBeDisabled();
@@ -568,7 +571,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    const p = panel(page);
+    const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
       p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
     await expect(

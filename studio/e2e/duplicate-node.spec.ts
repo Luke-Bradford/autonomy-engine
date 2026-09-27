@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { canvasNodes, edgeGroup, viewportSettled } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U21 — duplicating a node on the authoring canvas.
@@ -39,7 +40,7 @@ test.describe('duplicate a node (U21)', () => {
     });
 
     await page.getByTestId('rf__node-b').click();
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await expect(panel.getByRole('textbox', { name: 'url' })).toHaveValue(
       'https://example.test/${nodes.a.output.body}',
     );

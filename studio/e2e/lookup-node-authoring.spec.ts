@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * #996 M12 slice 2 (#1221) — authoring a `lookup` node on the canvas.
@@ -24,10 +25,6 @@ import { openSeededCanvas } from './support/seedDoc';
  *    version with NO sink key, rather than a present-`undefined` that a unit
  *    test's `toEqual` cannot see.
  */
-
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 async function seedConnection(page: Page, name: string, path: string): Promise<string> {
   const res = await page.request.post('/api/connections', {
@@ -81,23 +78,23 @@ test.describe('#1221 — lookup-node authoring', () => {
     // name by SUBSTRING, so a loose 'Connection' would also match
     // 'Source connection' and this assertion could not fail.
     await expect(
-      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+      properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
     ).toBeVisible();
     for (const absent of ['Source connection', 'Sink connection', 'Sink dataset']) {
-      await expect(panel(page).getByRole('combobox', { name: absent })).toHaveCount(0);
+      await expect(properties(page).getByRole('combobox', { name: absent })).toHaveCount(0);
     }
-    await expect(panel(page).getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
+    await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toBeVisible();
 
     // A lookup node has no settings of its own — everything that shapes the read
     // belongs to the dataset — so the form derives to nothing rather than
     // degrading to a raw JSON textarea.
-    await expect(panel(page)).toContainText('This activity has no settings.');
+    await expect(properties(page)).toContainText('This activity has no settings.');
 
     // Before a connection is picked, both stores' datasets are on offer. Asserted
     // by IDENTITY rather than by a total count: the e2e workspace is shared
     // across specs, so the unnarrowed list also carries whatever they seeded and
     // a fixed number would be a flake waiting on test-ordering.
-    const sourceDataset = panel(page).getByRole('combobox', { name: 'Source dataset' });
+    const sourceDataset = properties(page).getByRole('combobox', { name: 'Source dataset' });
     await expect(sourceDataset.locator(`option[value="${setB}"]`)).toHaveCount(1);
     await expect(sourceDataset.locator(`option[value="${setA}"]`)).toHaveCount(1);
 
@@ -107,7 +104,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     // axis silently degraded to kind-only and offered datasets on stores this
     // node is not bound to, which dispatch then refuses with
     // `DATASET_CONNECTION_MISMATCH`.
-    await panel(page)
+    await properties(page)
       .getByRole('combobox', { name: 'Connection', exact: true })
       .selectOption(connA);
     // Store B's dataset is GONE, store A's remains — and now the total IS
@@ -121,7 +118,7 @@ test.describe('#1221 — lookup-node authoring', () => {
 
     // No half-bound advisory: a source-only binding is COMPLETE for this
     // activity, so nothing is pending and the panel must not claim otherwise.
-    await expect(panel(page).getByRole('status')).toHaveCount(0);
+    await expect(properties(page).getByRole('status')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -132,9 +129,11 @@ test.describe('#1221 — lookup-node authoring', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
     await expect(
-      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+      properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
     ).toHaveValue(connA);
-    await expect(panel(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(setA);
+    await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
+      setA,
+    );
 
     // Read from the PERSISTED version: a picker showing the right value proves
     // the store round-tripped it, not that the server stored it.

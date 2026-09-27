@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import {
   WIDE_CANVAS,
@@ -11,6 +11,7 @@ import {
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { properties, triggerForm } from './support/panels';
 
 /**
  * #1386 — one operator path, end to end, through the UI.
@@ -34,10 +35,6 @@ const CONNECTION = 'Golden path echo';
 const PIPELINE = 'Golden path';
 const TRIGGER = 'Golden path trigger';
 const TASK = 'say golden path';
-
-function properties(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 test('#1386 — create a connection, author and bind, trigger it, and read the run log', async ({
   page,
@@ -84,16 +81,19 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await panel.getByRole('button', { name: 'Apply config', exact: true }).click();
 
   await page.getByRole('button', { name: 'Save version', exact: true }).click();
-  await expect(page.locator('.notice')).toHaveText('Saved v1.');
+  // Filtered, not bare: the canvas can hold a second `.notice` (its clipboard
+  // and tidy messages), and a bare locator would then match both.
+  await expect(page.locator('.notice', { hasText: 'Saved v1.' })).toBeVisible();
 
   // 4. Manage → Triggers → New trigger, bound to the version just saved.
   await page.goto('/#/manage/triggers');
+  await fluentRootReady(page);
   await expect(page.getByRole('heading', { name: 'Triggers' })).toBeVisible();
   await page.getByRole('button', { name: /New trigger/i }).click();
-  const triggerForm = page.getByRole('form', { name: 'Trigger form' });
-  await triggerForm.getByLabel('Name').fill(TRIGGER);
-  await triggerForm.getByLabel('Pipeline version').selectOption({ label: `${PIPELINE} v1` });
-  await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
+  const form = triggerForm(page);
+  await form.getByLabel('Name').fill(TRIGGER);
+  await form.getByLabel('Pipeline version').selectOption({ label: `${PIPELINE} v1` });
+  await form.getByRole('button', { name: /Create trigger/i }).click();
 
   // 5. Fire now → Watch live.
   await page.getByRole('button', { name: `Fire now: ${TRIGGER}`, exact: true }).click();
@@ -134,8 +134,9 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   // alarm (`timer.due`), not `node.succeeded`, so this is its completion fact.
   expect(types.indexOf('timer.due')).toBeGreaterThan(types.indexOf('node.succeeded'));
 
-  // 6. The run log, as the operator reads it: one row per durable event, in
-  // seq order, naming each event's type.
+  // 6. The run log, as the operator reads it. The REST read above is the oracle;
+  // the page must mirror it exactly: one row per durable event, in seq order,
+  // naming each event's type.
   const feed = page.locator('table.event-feed tbody tr');
   await expect(feed).toHaveCount(events.length);
   await expect(feed.locator('td:nth-child(3)')).toHaveText(types);

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { triggerForm } from './support/panels';
 
 /**
  * #439 U14b — authoring a schedule as a structured RECURRENCE.
@@ -18,10 +19,6 @@ import { fluentRootReady } from './support/theme';
  * That trigger is SEEDED THROUGH THE API below, not through the new form, so
  * the spec exercises a pre-existing row rather than only the path it just built.
  */
-
-function triggerForm(page: Page) {
-  return page.getByRole('form', { name: 'Trigger form' });
-}
 
 /** Open the Manage → Triggers hub with the console under watch. */
 async function openTriggers(page: Page): Promise<string[]> {

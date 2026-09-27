@@ -8,6 +8,7 @@ import {
   tabToFocus,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { properties } from './support/panels';
 
 /**
  * #737 — the canvas is operable from the KEYBOARD, not just the mouse.
@@ -85,7 +86,7 @@ test.describe('#737 keyboard selection', () => {
       .click();
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await expect(panel.getByText(/^Select a node or an edge to edit it/)).toBeVisible();
 
     await tabToFocus(page, 'react-flow__node');
@@ -124,7 +125,7 @@ test.describe('#737 keyboard selection', () => {
       .click();
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await tabToFocus(page, 'react-flow__node');
     await page.keyboard.press('Enter');
     await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
