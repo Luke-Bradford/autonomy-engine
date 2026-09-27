@@ -8,7 +8,13 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
-import type { OutputType, ParamType, VariableDef, VariableType } from '../schemas/pipeline.js';
+import type {
+  GlobalParamType,
+  OutputType,
+  ParamType,
+  VariableDef,
+  VariableType,
+} from '../schemas/pipeline.js';
 import { callDetaches, isAddressableOutputName } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
@@ -59,6 +65,7 @@ import {
   sigOfDeclared,
   toStr,
   typeName,
+  utf8ByteLength,
 } from './functions.js';
 
 // ---------------------------------------------------------------------------
@@ -2345,6 +2352,56 @@ export function variableDefaultDefects(v: VariableDef): string[] {
   return v.type === 'array'
     ? jsonReplaySafetyErrors(`variable '${v.name}' default`, v.default)
     : [];
+}
+
+/**
+ * #844 GL1 — the upper bound on one global's value, in UTF-8 bytes of its
+ * serialized JSON (global-params spec GL-D1). A judgement, not a measurement
+ * (the spec's open question 4): every value a run reads is copied into its log
+ * (GL-D3), so an unbounded one would be an unbounded log entry.
+ */
+export const GLOBAL_PARAM_MAX_BYTES = 64 * 1024;
+
+/**
+ * #844 GL1 — why `name` cannot be a global's name, or `null`. The V1 rule as a
+ * HARD rule: a global exists only to be read as `${global.<name>}`, and no
+ * stored global predates the rule.
+ */
+export function globalParamNameDefect(name: string): string | null {
+  if (isAddressableOutputName(name)) return null;
+  return (
+    `global '${name}' cannot be referenced as \${global.<name>} ` +
+    '(a name is a letter or underscore, then letters, digits or underscores)'
+  );
+}
+
+/**
+ * #844 GL1 — why `value` cannot be stored under `type`; empty when it can. The
+ * `variableDefaultDefects` rule (strict `matchesSig`, no coercion: `"5"` is not
+ * a `number`), plus the replay-safety walk for `json` — `matchesSig` has no
+ * `json` case, and a nested non-finite (`1e400` parses to `Infinity`) would be
+ * logged and then replay as `null`. The walk runs BEFORE the byte bound because
+ * it bounds nesting depth and `JSON.stringify` does not. No message echoes the
+ * value.
+ */
+export function globalParamValueDefects(type: GlobalParamType, value: unknown): string[] {
+  // `json`'s sig is `any`, which `undefined` matches — but `undefined` is no
+  // JSON value (`JSON.stringify` returns `undefined`, not text). Refused here so
+  // a caller other than the Zod body (GL6's apply) cannot store it.
+  if (value === undefined) return ['value is required'];
+  if (!matchesSig(value, sigOfDeclared(type))) {
+    // `json` never reaches here: its sig is `any`, which every value matches.
+    return [`value must be a ${type}, got ${typeName(value)}`];
+  }
+  if (type === 'json') {
+    const unsafe = jsonReplaySafetyErrors('value', value);
+    if (unsafe.length > 0) return unsafe;
+  }
+  const bytes = utf8ByteLength(JSON.stringify(value) ?? '');
+  if (bytes > GLOBAL_PARAM_MAX_BYTES) {
+    return [`value is ${bytes} bytes of JSON; the limit is ${GLOBAL_PARAM_MAX_BYTES}`];
+  }
+  return [];
 }
 
 /**

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { ConnectionKindSchema } from '@autonomy-studio/shared';
+import { ConnectionKindSchema, GlobalParamTypeSchema } from '@autonomy-studio/shared';
 import {
   connections,
+  globalParams,
   pipelineVersions,
   pipelines,
   runEvents,
@@ -607,5 +608,70 @@ describe('#5 S1 scheduled_wakeups constraints (raw db access)', () => {
         .values({ ...row, kind: 'a_kind_invented_in_2027' })
         .run(),
     ).not.toThrow();
+  });
+});
+
+/**
+ * #844 GL1 — `global_params` (migration 0041). The store's two load-bearing
+ * properties hold in SQL, not only in the repo: an owner is never NULL (SQLite
+ * treats NULLs as distinct, so a nullable owner would let the unique index admit
+ * duplicate names — the hole `secrets` has), and a name is unique per owner
+ * case-insensitively.
+ */
+describe('global_params constraints (#844 GL1)', () => {
+  const row = {
+    id: 'gp_a',
+    ownerId: 'local',
+    name: 'apiUrl',
+    type: 'string' as const,
+    value: '"x"',
+    description: '',
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  it('NOT NULL rejects a null owner_id', () => {
+    const { db } = freshDb();
+    expect(() =>
+      db
+        .insert(globalParams)
+        .values({ ...row, ownerId: null as never })
+        .run(),
+    ).toThrow(/NOT NULL constraint failed/);
+  });
+
+  it('UNIQUE (owner_id, name COLLATE NOCASE) rejects a case-variant for the same owner only', () => {
+    const { db } = freshDb();
+    db.insert(globalParams).values(row).run();
+    expect(() =>
+      db
+        .insert(globalParams)
+        .values({ ...row, id: 'gp_b', name: 'APIURL' })
+        .run(),
+    ).toThrow(/UNIQUE constraint failed/);
+    expect(() =>
+      db
+        .insert(globalParams)
+        .values({ ...row, id: 'gp_c', ownerId: 'other', name: 'APIURL' })
+        .run(),
+    ).not.toThrow();
+  });
+
+  it('CHECK accepts EVERY GlobalParamTypeSchema type and rejects `secret`', () => {
+    const { db } = freshDb();
+    for (const type of GlobalParamTypeSchema.options) {
+      expect(() =>
+        db
+          .insert(globalParams)
+          .values({ ...row, id: `gp_${type}`, name: `n_${type}`, type })
+          .run(),
+      ).not.toThrow();
+    }
+    expect(() =>
+      db
+        .insert(globalParams)
+        .values({ ...row, id: 'gp_s', name: 's', type: 'secret' as never })
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
   });
 });

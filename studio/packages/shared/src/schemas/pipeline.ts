@@ -14,6 +14,20 @@ import { CATALOG_VERSION } from './version.js';
 export const ParamTypeSchema = z.enum(['string', 'number', 'boolean', 'json', 'secret']);
 export type ParamType = z.infer<typeof ParamTypeSchema>;
 
+/**
+ * #844 GL1 — a workspace global parameter's type: the param types minus
+ * `secret`. Derived, not restated, so a new param type is a global type too
+ * unless excluded here. There are no "secure globals" (global-params spec
+ * GL-D5): a credential is a named secret, addressed as `{ "$secret": "<name>" }`.
+ * Homed beside `ParamTypeSchema` rather than in `global-param.ts` so the
+ * engine can type a global (GL3) without importing a module that imports it.
+ * The same derivation as `OutputTypeSchema` below, kept separate on purpose: an
+ * output type added later (a produced value) is not thereby a type an operator
+ * can store as a global.
+ */
+export const GlobalParamTypeSchema = ParamTypeSchema.exclude(['secret']);
+export type GlobalParamType = z.infer<typeof GlobalParamTypeSchema>;
+
 export const ParamSchema = z.object({
   name: z.string().min(1),
   type: ParamTypeSchema,

@@ -13,6 +13,7 @@ import {
   DatasetKindSchema,
   ExternalAgentOutcomeSchema,
   ExternalWaitStatusSchema,
+  GlobalParamTypeSchema,
   RunStatusSchema,
   SecretStatusSchema,
   TriggerModeSchema,
@@ -461,6 +462,33 @@ export const secrets = sqliteTable(
   (table) => [
     uniqueIndex('secrets_ref_idx').on(table.ref),
     uniqueIndex('secrets_owner_name_idx').on(table.ownerId, sql`${table.name} COLLATE NOCASE`),
+  ],
+);
+
+/**
+ * #844 GL1 — a workspace's global parameters (migration 0041, which carries the
+ * reasoning). `ownerId` is NOT NULL, unlike `secrets`, so the NOCASE unique
+ * index below cannot be defeated by a NULL owner. `value` is JSON TEXT the repo
+ * serializes itself — deliberately NOT `{ mode: 'json' }`, which would write a
+ * JSON `null` value as SQL NULL into a NOT NULL column.
+ */
+export const globalParams = sqliteTable(
+  'global_params',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    name: text('name').notNull(),
+    type: text('type', { enum: asEnumTuple(GlobalParamTypeSchema.options) }).notNull(),
+    value: text('value').notNull(),
+    description: text('description').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('global_params_owner_name_idx').on(
+      table.ownerId,
+      sql`${table.name} COLLATE NOCASE`,
+    ),
   ],
 );
 

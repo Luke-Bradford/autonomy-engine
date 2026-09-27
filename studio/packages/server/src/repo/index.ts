@@ -3,6 +3,7 @@ export * from './types.js';
 export * from './pagination.js';
 export * from './connections.js';
 export * from './datasets.js';
+export * from './global-params.js';
 export * from './pipelines.js';
 export * from './pipeline-versions.js';
 export * from './triggers.js';
