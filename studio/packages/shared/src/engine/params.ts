@@ -2157,7 +2157,7 @@ export function validatePipelineDoc(doc: ValidatedDoc, options: ValidateDocOptio
  * #1359, with V3's editor.
  */
 export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> & {
-  variables?: readonly VariableDef[];
+  variables: readonly VariableDef[];
 };
 
 /**
