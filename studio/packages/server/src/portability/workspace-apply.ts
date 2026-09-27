@@ -86,6 +86,7 @@ import {
   serializeWorkspaceTolerant,
   type OwnerRefMaps,
 } from './workspace-serialize.js';
+import { mapLiteralRef } from './ref-remap.js';
 
 /**
  * #3 G5c-1 — the transactional reconcile APPLY write-path: the WRITE inverse of
@@ -282,23 +283,22 @@ function remapNodeToDb(
   /** One ref: `null` → unbound, `${}` → verbatim, literal → mapped or refused.
    * The map is an ARGUMENT rather than a closed-over `connById` (M3, #1117):
    * datasets resolve through their own map on the identical three-way rule, and
-   * a second near-identical closure is how the two rules drift apart. */
+   * a second near-identical closure is how the two rules drift apart. #1106 — the
+   * dynamic/literal half of the rule is `mapLiteralRef`, shared with the commit
+   * and compare directions; only the `null` arm (the DB shape) is local. */
   const toDbRef = (
     ref: string | null,
     byResourceId: Map<string, string>,
     what: string,
-  ): string | undefined => {
-    if (ref === null) return undefined;
-    if (interpolationMode(ref).mode !== 'literal') return ref; // dynamic — preserve verbatim
-    const resolved = byResourceId.get(ref);
-    if (resolved === undefined) {
-      throw new WorkspaceApplyError(
-        'conflict',
-        `node "${node.id}" references ${what} "${ref}", which is not on the branch or in the workspace`,
-      );
-    }
-    return resolved;
-  };
+  ): string | undefined =>
+    ref === null
+      ? undefined
+      : mapLiteralRef(ref, byResourceId, () => {
+          throw new WorkspaceApplyError(
+            'conflict',
+            `node "${node.id}" references ${what} "${ref}", which is not on the branch or in the workspace`,
+          );
+        });
 
   let dbNode: Node;
   const resolvedSingular = toDbRef(connectionId, connById, 'connection');
@@ -350,21 +350,16 @@ function remapNodeToDb(
   }
 
   if (call) {
+    // Not `toDbRef`: the call ref is non-nullable, and its refusal says "call
+    // references" so the author can tell it from the node's connection ref.
     const ref = call.pipelineVersionId;
-    let resolvedRef: string;
-    if (interpolationMode(ref).mode !== 'literal') {
-      resolvedRef = ref; // dynamic — preserve verbatim
-    } else {
-      const mapped = versionById.get(ref);
-      if (mapped === undefined) {
-        throw new WorkspaceApplyError(
-          'conflict',
-          `node "${node.id}" call references pipeline version "${ref}", which is not on the branch or in the workspace`,
-        );
-      }
-      resolvedRef = mapped;
-    }
-    dbNode = { ...dbNode, call: { ...call, pipelineVersionId: resolvedRef } };
+    const pipelineVersionId = mapLiteralRef(ref, versionById, () => {
+      throw new WorkspaceApplyError(
+        'conflict',
+        `node "${node.id}" call references pipeline version "${ref}", which is not on the branch or in the workspace`,
+      );
+    });
+    dbNode = { ...dbNode, call: { ...call, pipelineVersionId } };
   }
 
   return dbNode;
