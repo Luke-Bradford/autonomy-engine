@@ -547,12 +547,9 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     const pvId = seedVersion(db, [node('a')]);
     const run = seedRun(db, pvId);
 
-    terminalizeInterrupted(
-      deps(db),
-      run.id,
-      undefined,
-      new ParamResolveError("override for undeclared param 'nope'"),
-    );
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new ParamResolveError("override for undeclared param 'nope'"),
+    });
 
     expect(getRun(db, run.id)?.status).toBe('interrupted');
     expect(loadEngineEvents(db, run.id)).toHaveLength(0);
@@ -571,12 +568,9 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     const { db } = freshDb();
     const run = seedRun(db, seedVersion(db, [node('a')]));
 
-    terminalizeInterrupted(
-      deps(db),
-      run.id,
-      undefined,
-      new DocUnresolvableError("pipeline version 'pv-x' not found"),
-    );
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new DocUnresolvableError("pipeline version 'pv-x' not found"),
+    });
 
     expect(listRunDiagnostics(db, run.id).map((d) => d.message)).toEqual([
       "The run did not start: pipeline version 'pv-x' not found",
@@ -590,12 +584,9 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     const { db } = freshDb();
     const run = seedRun(db, seedVersion(db, [node('a')]));
 
-    terminalizeInterrupted(
-      deps(db),
-      run.id,
-      undefined,
-      new Error('SQLITE_IOERR at /private/state/db'),
-    );
+    terminalizeInterrupted(deps(db), run.id, {
+      cause: new Error('SQLITE_IOERR at /private/state/db'),
+    });
 
     const messages = listRunDiagnostics(db, run.id).map((d) => d.message);
     expect(messages).toHaveLength(1);
@@ -609,12 +600,12 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     const started = seedRun(db, pvId);
     const bus = createRunEventBus();
     appendEngineEvent(db, { type: 'run.triggerContext', runId: started.id, triggerId: 't' }, bus);
-    terminalizeInterrupted({ ...deps(db), bus }, started.id, undefined, new Error('mid-pump'));
+    terminalizeInterrupted({ ...deps(db), bus }, started.id, { cause: new Error('mid-pump') });
     expect(listRunDiagnostics(db, started.id)).toEqual([]);
 
     // The boot sweep's caller: no error exists, so there is nothing to explain.
     const swept = seedRun(db, pvId);
-    terminalizeInterrupted(deps(db), swept.id, 'never_started');
+    terminalizeInterrupted(deps(db), swept.id, { reason: 'never_started' });
     expect(getRun(db, swept.id)?.status).toBe('interrupted');
     expect(listRunDiagnostics(db, swept.id)).toEqual([]);
   });

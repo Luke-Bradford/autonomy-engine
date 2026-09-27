@@ -1,3 +1,4 @@
+import { listRunDiagnostics } from '../../repo/run-diagnostics.js';
 import sodium from 'libsodium-wrappers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { EngineEvent, NewPipelineVersion, Node } from '@autonomy-studio/shared';
@@ -581,6 +582,29 @@ describe('#1041 — a kick queued behind the orphan sweep does not resurrect the
     const row = getRun(db, child.id)!;
     expect(row.status).toBe('interrupted');
     expect(row.finishedAt).toBe(1_700_000_000_000);
+    b.unsubscribe();
+  });
+});
+
+describe('#1367 — a child refused at start says why', () => {
+  it('records a `start` diagnostic when a kicked child cannot resolve its params', async () => {
+    const { db } = freshDb();
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: seedVersion(db, [leaf('work')]),
+      triggerId: null,
+      parentRunId: seedRun(db, seedVersion(db, [leaf('a')])).id,
+      params: { nope: 1 },
+    });
+    const b = boundary(db);
+
+    b.childRuns.kick(child);
+    await settle(b.drives);
+
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+    expect(listRunDiagnostics(db, child.id).map((d) => [d.phase, d.message])).toEqual([
+      ['start', "The run did not start: override for undeclared param 'nope'"],
+    ]);
     b.unsubscribe();
   });
 });

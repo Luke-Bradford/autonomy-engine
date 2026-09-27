@@ -1510,15 +1510,16 @@ function startRefusalMessage(cause: unknown): string {
  * event to carry a reason — no `run.interrupted` is written there, by design —
  * so without it the run page shows a bare `interrupted` and the reason lives
  * only in the server log. With a cause, that branch also records ONE `start`
- * diagnostic saying why (`startRefusalMessage`). A non-empty log needs none:
- * its appended `run.interrupted` already states the reason in the event feed.
+ * diagnostic saying why (`startRefusalMessage`). A non-empty log gets none: its
+ * appended `run.interrupted` is the visible terminal fact in the event feed, and
+ * its generic `reason` is unchanged here — the error's own detail on that path
+ * stays in the server log, as it did before #1367.
  * The boot sweep passes no cause, because no error exists there to report.
  */
 export function terminalizeInterrupted(
   deps: TerminalizeDeps,
   runId: string,
-  reason = 'drive_failed',
-  cause?: unknown,
+  { reason = 'drive_failed', cause }: { reason?: string; cause?: unknown } = {},
 ): void {
   const { db } = deps;
   const patchRow = (): void => {
@@ -1671,7 +1672,7 @@ async function driveLocked(deps: DriveDeps, runId: string): Promise<void> {
     // catch as one log line. That asymmetry between two entry points doing the
     // same job is what produced B1; it does not get to survive B1's fix.
     deps.log?.error({ err, runId }, 'retry drive failed');
-    terminalizeInterrupted(deps, runId);
+    terminalizeInterrupted(deps, runId, { cause: err });
   }
 }
 

@@ -350,7 +350,7 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
       .catch((err: unknown) => {
         deps.log?.error?.({ err, runId: run.id }, 'call_pipeline child drive failed');
         try {
-          terminalizeInterrupted(deps, run.id, undefined, err);
+          terminalizeInterrupted(deps, run.id, { cause: err });
         } catch (cleanupErr) {
           deps.log?.error?.({ err: cleanupErr, runId: run.id }, 'child interrupt-cleanup failed');
         }

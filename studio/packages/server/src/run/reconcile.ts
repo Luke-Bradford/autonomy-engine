@@ -848,7 +848,7 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
     // default — no drive existed to fail. Written only when the log is non-empty
     // (a `run.triggerContext`-only strand); an empty log takes that function's
     // row-patch branch, which appends nothing at all.
-    terminalizeInterrupted(deps, run.id, 'never_started');
+    terminalizeInterrupted(deps, run.id, { reason: 'never_started' });
     recordSweep(deps, report, run.id);
     return;
   }
@@ -928,7 +928,7 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   // row-patch branch — and that branch appends no event, so there is nowhere for
   // a reason to be recorded. Spelled out because "it passes a reason" otherwise
   // reads as "a reason is written here".
-  terminalizeInterrupted(deps, run.id, 'never_started');
+  terminalizeInterrupted(deps, run.id, { reason: 'never_started' });
   recordSweep(deps, report, run.id);
 }
 
