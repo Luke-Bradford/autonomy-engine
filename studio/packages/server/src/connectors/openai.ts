@@ -292,29 +292,36 @@ export const openaiAdapter: ConnectorAdapter = {
     // terminalizing `permanent`. The no-completion case is covered here without a
     // separate #461 branch.
     if (structuredOutput !== undefined) {
-      yield* runStructuredWithRepair('openai_api', turns, async (msgTurns) => {
-        const res = await postJsonAndParse(
-          ctx,
-          'openai_api',
-          model,
-          url,
-          headers,
-          buildBody(wireMessages(msgTurns)),
-          timeoutMs,
-        );
-        if (!res.ok) return { type: 'terminal', event: res.event };
-        const choices = (res.json as { choices?: unknown }).choices;
-        const content =
-          Array.isArray(choices) && choices.length > 0
-            ? (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content
-            : undefined;
-        return {
-          type: 'validated',
-          usage: usageOf(res.json),
-          result: parseAndValidateStructured(structuredOutput, content),
-          echo: structuredEcho(content),
-        };
-      });
+      yield* runStructuredWithRepair(
+        'openai_api',
+        turns,
+        { model, system: systemContent, captureMode },
+        async (msgTurns) => {
+          const res = await postJsonAndParse(
+            ctx,
+            'openai_api',
+            model,
+            url,
+            headers,
+            buildBody(wireMessages(msgTurns)),
+            timeoutMs,
+          );
+          if (!res.ok) return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
+          const choices = (res.json as { choices?: unknown }).choices;
+          const content =
+            Array.isArray(choices) && choices.length > 0
+              ? (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content
+              : undefined;
+          return {
+            type: 'validated',
+            usage: usageOf(res.json),
+            result: parseAndValidateStructured(structuredOutput, content),
+            echo: structuredEcho(content),
+            latencyMs: res.latencyMs,
+            completionText: typeof content === 'string' ? content : undefined,
+          };
+        },
+      );
       return;
     }
 

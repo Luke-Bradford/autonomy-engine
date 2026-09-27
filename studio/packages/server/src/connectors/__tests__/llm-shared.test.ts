@@ -438,49 +438,133 @@ describe('buildRepairTurns', () => {
 // control flow (meter-every-call, repair-then-terminalize, no-repair-on-terminal)
 // is tested independent of any provider wire shape.
 describe('runStructuredWithRepair', () => {
+  // #605 — the capture context the loop builds each response's `captured` fact from.
+  const CAP = { model: 'm', system: 'be terse', captureMode: 'full' as const };
   const okOutcome = (): StructuredCallOutcome => ({
     type: 'validated',
     usage: USAGE,
     result: { ok: true, value: { category: 'bug' } },
     echo: '{"category":"bug"}',
+    latencyMs: 7,
+    completionText: '{"category":"bug"}',
   });
   const invalidOutcome = (reason: string): StructuredCallOutcome => ({
     type: 'validated',
     usage: USAGE,
     result: { ok: false, reason },
     echo: 'bad',
+    latencyMs: 5,
+    completionText: 'bad',
   });
+  const capturesOf = (events: ActivityEvent[]): LlmCapture[] =>
+    events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
 
   it('meters once and succeeds when the first response validates', async () => {
     let calls = 0;
     const events = await drain(
-      runStructuredWithRepair('openai_api', [{ role: 'user', content: 'q' }], async () => {
+      runStructuredWithRepair('openai_api', [{ role: 'user', content: 'q' }], CAP, async () => {
         calls += 1;
         return okOutcome();
       }),
     );
     expect(calls).toBe(1);
-    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
   });
 
   it('repairs once then succeeds — TWO metered facts, both billed', async () => {
     const turnsSeen: LlmTurn[][] = [];
     const events = await drain(
-      runStructuredWithRepair('openai_api', [{ role: 'user', content: 'q' }], async (turns) => {
-        turnsSeen.push(turns);
-        return turnsSeen.length === 1 ? invalidOutcome('category: enum') : okOutcome();
-      }),
+      runStructuredWithRepair(
+        'openai_api',
+        [{ role: 'user', content: 'q' }],
+        CAP,
+        async (turns) => {
+          turnsSeen.push(turns);
+          return turnsSeen.length === 1 ? invalidOutcome('category: enum') : okOutcome();
+        },
+      ),
     );
-    expect(events.map((e) => e.type)).toEqual(['metered', 'metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'metered',
+      'captured',
+      'succeeded',
+    ]);
     // the SECOND call carries the repair critique appended to the first turns.
     expect(turnsSeen[1]!.length).toBeGreaterThan(turnsSeen[0]!.length);
     expect(turnsSeen[1]!.some((t) => t.content.includes('enum'))).toBe(true);
   });
 
+  // #605 — one capture PER provider response, each recording the turns that
+  // call actually SENT: the repair capture holds the echo + critique, never a
+  // copy of the first request.
+  it('captures each response with the turns that call sent and its own completion', async () => {
+    const turnsSeen: LlmTurn[][] = [];
+    const events = await drain(
+      runStructuredWithRepair(
+        'openai_api',
+        [{ role: 'user', content: 'q' }],
+        CAP,
+        async (turns) => {
+          turnsSeen.push(turns);
+          return turnsSeen.length === 1 ? invalidOutcome('category: enum') : okOutcome();
+        },
+      ),
+    );
+    const [first, second] = capturesOf(events);
+    expect(first).toMatchObject({
+      provider: 'openai_api',
+      model: 'm',
+      latencyMs: 5,
+      request: {
+        messageCount: 1,
+        system: { text: 'be terse' },
+        messages: [{ role: 'user', text: 'q' }],
+      },
+      completion: { text: 'bad' },
+    });
+    expect(second!.request.messageCount).toBe(turnsSeen[1]!.length);
+    expect(second!.request.messages.map((m) => m.text)).toEqual(
+      turnsSeen[1]!.map((t) => t.content),
+    );
+    expect(second!.request.messages.at(-1)!.text).toContain('enum');
+    expect(second).toMatchObject({ latencyMs: 7, completion: { text: '{"category":"bug"}' } });
+  });
+
+  it('records NO completion when the response carried none — absent, never hash("")', async () => {
+    const events = await drain(
+      runStructuredWithRepair('ollama', [{ role: 'user', content: 'q' }], CAP, async () => ({
+        ...okOutcome(),
+        completionText: undefined,
+      })),
+    );
+    const [cap] = capturesOf(events);
+    expect(cap).toBeDefined();
+    expect(cap).not.toHaveProperty('completion');
+  });
+
+  it('stores hashes but no text unless the node asked for full capture', async () => {
+    const events = await drain(
+      runStructuredWithRepair(
+        'ollama',
+        [{ role: 'user', content: 'q' }],
+        { model: 'm' },
+        async () => okOutcome(),
+      ),
+    );
+    const [cap] = capturesOf(events);
+    expect(cap!.completion).toEqual({
+      chars: '{"category":"bug"}'.length,
+      contentHash: sha256Hex('{"category":"bug"}'),
+    });
+    expect(cap!.request.messages[0]).not.toHaveProperty('text');
+  });
+
   it('terminalizes permanent after repairs are exhausted (still meters both calls)', async () => {
     let calls = 0;
     const events = await drain(
-      runStructuredWithRepair('ollama', [{ role: 'user', content: 'q' }], async () => {
+      runStructuredWithRepair('ollama', [{ role: 'user', content: 'q' }], CAP, async () => {
         calls += 1;
         return invalidOutcome('missing field');
       }),
@@ -491,21 +575,32 @@ describe('runStructuredWithRepair', () => {
     expect(failed).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect((failed as { error: string }).error).toContain('missing field');
     expect(events.filter((e) => e.type === 'metered')).toHaveLength(DEFAULT_STRUCTURED_REPAIRS + 1);
+    expect(capturesOf(events)).toHaveLength(DEFAULT_STRUCTURED_REPAIRS + 1);
+    expect(events.at(-1)!.type).toBe('failed');
   });
 
-  it('yields a terminal transport failure verbatim WITHOUT metering or repair', async () => {
+  it('yields a terminal transport failure WITHOUT metering or repair, after a request-only capture', async () => {
     let calls = 0;
     const events = await drain(
-      runStructuredWithRepair('anthropic_api', [{ role: 'user', content: 'q' }], async () => {
+      runStructuredWithRepair('anthropic_api', [{ role: 'user', content: 'q' }], CAP, async () => {
         calls += 1;
         return {
           type: 'terminal',
           event: { type: 'failed', kind: 'transient', error: 'llm request timed out' },
+          latencyMs: 3,
         };
       }),
     );
     expect(calls).toBe(1); // no repair on a transport/HTTP failure
-    expect(events).toEqual([{ type: 'failed', kind: 'transient', error: 'llm request timed out' }]);
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    expect(events[1]).toEqual({
+      type: 'failed',
+      kind: 'transient',
+      error: 'llm request timed out',
+    });
+    const [cap] = capturesOf(events);
+    expect(cap).toMatchObject({ latencyMs: 3, request: { messages: [{ text: 'q' }] } });
+    expect(cap).not.toHaveProperty('completion');
   });
 });
 
