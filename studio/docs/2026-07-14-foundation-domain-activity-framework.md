@@ -100,7 +100,8 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 
 > **Superseded 2026-09-27 by [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md)** (GL-series), which
 > keeps the explicit read-only namespace below and settles run determinism (GL-D3). It does NOT
-> build secure globals (GL-D5): a credential is a named secret.
+> build secure globals (GL-D5): a credential is a named secret. **So the "secure globals route to
+> the secret store" sentence below is REVERSED**, not merely superseded: a global is cleartext.
 
 Workspace-scoped store `{ name, type, value }`; **`${global.x}` is its own explicit,
 read-only namespace.** It is **NOT** an implicit fallback for same-named `${params}`

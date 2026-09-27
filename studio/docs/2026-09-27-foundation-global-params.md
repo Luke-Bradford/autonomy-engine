@@ -69,8 +69,8 @@ New table `global_params`:
   already-saved version means. A rename or retype is delete + create, and GL-D3's start check catches
   the break.
 - **REST**, owner-scoped with `requireOwned`: `GET /api/global-params`, `POST`, `PATCH /:id`
-  (`value` and `description` only; `name`/`type` refused with 400), `DELETE /:id`, and
-  `GET /api/global-params/:id/usage` (GL-D4). No bulk route.
+  (`value` and `description` only; `name`/`type` refused with 400), `DELETE /:id`. No bulk route.
+  `GET /api/global-params/:id/usage` (GL-D4) answers from `global_reads`, so it ships with GL3.
 
 ### GL-D2 — Reads: the `${global.<name>}` root
 
@@ -79,9 +79,11 @@ New table `global_params`:
   `default()` cannot rescue a typo (V2's rule).
 - **Typing.** `refRootType` returns `sigOfDeclared(type)`. The scalar-root rule is V2's: a `json`
   global may be field-stepped and indexed, a scalar may not take a tail.
-- **Where it is allowed:** everywhere `validateRefs` already scans `${params}`, i.e. node config fields,
-  container `items`/`exitWhen`, and the reference fields `connectionId`, `connectionIds`,
-  `datasetIds` and `call.pipelineVersionId`. The reference fields are allowed on purpose: selecting a
+- **Where it is allowed:** everywhere `${params}` is scanned today. `validateRefs` covers node config
+  fields and the reference fields `connectionId`, `connectionIds`, `datasetIds` and
+  `call.pipelineVersionId`. `validateDoc` covers container `items`/`exitWhen` through
+  `validateForeachItems`/`validateExitWhen`, which build their own scopes (`foreachItemsScope`,
+  `exitWhenScope`), so those builders take `globals` too. The reference fields are allowed on purpose: selecting a
   connection per environment is the main thing ADF globals are used for. Such a value is a raw DB id
   and travels raw through git and export (GL-D6), exactly like a `${params}` default holding an id.
 - **Not** in trigger bindings or tool-argument expressions. Both stay on their closed `allowedRoots`
@@ -106,17 +108,20 @@ values it read.
   column (every row written before GL3) means "reads none". Those rows cannot reference a global,
   because the root did not exist.
 - **The run snapshots them.** `run.started.globals?: Record<name, JsonValue>` holds the live values of
-  exactly the recorded reads, taken in `startRun` after `foldPendingCancel` and before the
-  `run.triggerContext` append. An unrelated global never lands in a run's log.
+  exactly the recorded reads, taken in `startRun` beside `resolveRunParams`, i.e. before
+  `foldPendingCancel` (which can itself append) and before any other append. An unrelated global never lands in a run's log.
 - **The start check reads the column and never runs the validator.** Every recorded read must exist
   and its live type must equal the recorded type. That catches a global deleted, and one deleted and
   recreated under the same name with a new type. Re-validating the doc at start would refuse
   versions saved before a newer, unrelated rule existed. The snapshot's total size is capped at
   `GLOBAL_SNAPSHOT_MAX_BYTES` = 256 KiB, checked here, because values can grow after the save.
 - A failed check throws before any append, the same seam as a bad trigger-authored param. **What the
-  operator sees:** a manual run is pre-checked by the route and refused with a 400 naming the global,
-  as a bad binding already is. A scheduled, webhook or `call_pipeline` start ends as an `interrupted`
-  row with the reason only in the server log (a child's refusal fails the parent's call node). That
+  operator sees:** a start that throws there ends as an `interrupted` row with the reason only in the
+  server log, because `driveRun` runs `startRun` unawaited (a child's refusal fails the parent's call
+  node). So GL3 adds one thing the params path lacks: the trigger run-now route (`routes/triggers.ts`,
+  the only manual start) runs the same check function BEFORE `fire()` creates the row, and refuses with a 400 naming the global, as a bad trigger
+  binding already is. The start check still runs, since a global can be deleted between the two.
+  Scheduled, webhook and child starts keep the `interrupted` outcome. That
   gap is not new, since a bad trigger param already ends the same way, but deleting a global makes it
   routine. Open question 3.
 - `RunState.globals` is folded from `run.started.globals` (default `{}`) and never changes during the
