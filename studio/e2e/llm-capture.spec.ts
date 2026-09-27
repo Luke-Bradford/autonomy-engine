@@ -29,6 +29,10 @@ const STRUCT_VALID = '{"category":"bug"}';
    sent, then answers. Chosen from the REQUEST, as above. */
 const TOOL_PROMPT = 'What is 19 plus 23? Use the adder.';
 const TOOL_ANSWER = 'It is 42.';
+/* #605 — the stub's reasoning, sent as Ollama's `message.thinking` whenever the
+   request set `think` (a node's `reasoningEffort`), as a thinking model does. */
+const THINKING = 'The numbers moved little; lead with revenue.';
+const TRACE = { capture: 'full', captureReasoning: true, reasoningEffort: 'high' };
 const ADDER = {
   name: 'adder',
   description: 'Adds two numbers.',
@@ -51,6 +55,7 @@ test.beforeAll(async () => {
       const sent = JSON.parse(body) as {
         format?: unknown;
         tools?: unknown;
+        think?: unknown;
         messages: { role: string }[];
       };
       const turns = sent.messages.filter((m) => m.role !== 'system').length;
@@ -71,6 +76,7 @@ test.beforeAll(async () => {
           message: {
             role: 'assistant',
             content,
+            ...(sent.think !== undefined ? { thinking: THINKING } : {}),
             ...(askForTool
               ? { tool_calls: [{ function: { name: 'adder', arguments: { a: 19, b: 23 } } }] }
               : {}),
@@ -154,20 +160,58 @@ test('#605 — a full-capture LLM node shows the prompt it sent and the answer i
 
 test('#605 — a SECURE full-capture node stores and shows only the marker', async ({ page }) => {
   const problems = collectPageProblems(page);
-  const runId = await runCaptured(page, '#605 secure capture', {
-    secureInput: true,
-    secureOutput: true,
-  });
+  const runId = await runCaptured(
+    page,
+    '#605 secure capture',
+    { secureInput: true, secureOutput: true },
+    // The reasoning trace too: the model's text about a secret input is secret.
+    { prompt: PROMPT, system: SYSTEM, ...TRACE },
+  );
 
   const eventsRes = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`);
   const raw = await eventsRes.text();
-  for (const secret of [PROMPT, SYSTEM, ANSWER]) expect(raw).not.toContain(secret);
+  for (const secret of [PROMPT, SYSTEM, ANSWER, THINKING]) expect(raw).not.toContain(secret);
+  /* Non-vacuous: the trace WAS captured and withheld, not simply never asked for. */
+  const events = JSON.parse(raw) as { type: string; payload: Record<string, unknown> }[];
+  expect(events.find((e) => e.type === 'activity.captured')?.payload).toMatchObject({
+    reasoning: { text: '[redacted: secure]' }, // SECURE_REDACTED
+  });
 
   const panel = await openDrillIn(page, runId);
   const section = panel.getByRole('region', { name: 'Prompt & completion' });
   await expect(section.getByText(/Secure input or Secure output set/)).toBeVisible();
   await expect(section.getByText(PROMPT)).toHaveCount(0);
   await expect(section.getByText(ANSWER)).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
+
+test('#605 — a node that opted into its reasoning trace shows the model’s summary', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const runId = await runCaptured(page, '#605 reasoning trace', undefined, {
+    prompt: PROMPT,
+    system: SYSTEM,
+    ...TRACE,
+  });
+
+  /* The PREMISE, on the durable log: the trace is stored beside, not inside,
+     the completion. */
+  const eventsRes = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`);
+  const events = (await eventsRes.json()) as { type: string; payload: Record<string, unknown> }[];
+  expect(events.find((e) => e.type === 'activity.captured')?.payload).toMatchObject({
+    reasoning: { text: THINKING },
+    completion: { text: ANSWER },
+  });
+
+  const panel = await openDrillIn(page, runId);
+  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  await expect(
+    section.getByRole('heading', { name: "Reasoning (the model's summary)" }),
+  ).toBeVisible();
+  await expect(section.getByText(THINKING, { exact: true })).toBeVisible();
+  await expect(section.getByText(ANSWER, { exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

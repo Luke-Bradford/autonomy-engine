@@ -858,3 +858,32 @@ describe('normalizeLlmRequest — L12 history threading', () => {
     ).toThrow();
   });
 });
+
+// #605 — the reasoning trace: `captureReasoning` needs `capture: 'full'`, the
+// same rule the save-time surface applies.
+describe('llmCallConfigSchema — captureReasoning (#605)', () => {
+  it("refuses it without capture: 'full', on the captureReasoning path", () => {
+    const r = llmCallConfigSchema.safeParse({ prompt: 'p', captureReasoning: true });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0]?.path).toEqual(['captureReasoning']);
+  });
+
+  it("accepts it with capture: 'full' and threads it into the request", () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      captureReasoning: true,
+      capture: 'full',
+    });
+    expect(r.success).toBe(true);
+    expect(normalizeLlmRequest(r.data!).captureReasoning).toBe(true);
+  });
+
+  it('refuses a non-boolean (a `${}` string cannot opt in)', () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      capture: 'full',
+      captureReasoning: '${params.x}',
+    });
+    expect(r.success).toBe(false);
+  });
+});

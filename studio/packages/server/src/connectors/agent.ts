@@ -1012,7 +1012,8 @@ async function* runAgentTask(
  * - `capture: 'full'` (#605) is inert here too: this adapter emits no
  *   `captured` event at all (its subprocess telemetry is `agentTelemetry`), so
  *   an `llm_call` bound to an `agent_cli` connection stores no prompt/completion
- *   text whatever the node says.
+ *   text whatever the node says — and, for the same reason, no `captureReasoning`
+ *   trace.
  * - The folded prompt is the FINAL argv element (never shell-interpolated). If a
  *   prompt can begin with `-`/`--`, add a `--` end-of-options terminator to the
  *   connection's `args` where the target CLI supports it, so the prompt is never

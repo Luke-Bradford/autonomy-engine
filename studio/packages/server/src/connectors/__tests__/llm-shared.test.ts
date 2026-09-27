@@ -348,6 +348,79 @@ describe('buildCapture', () => {
       expect(stored).toBe(LLM_CAPTURE_BUDGET_CHARS);
     });
   });
+
+  // #605 — the reasoning summary, behind `captureReasoning` + `full`.
+  describe('reasoning', () => {
+    const base = { provider: 'anthropic_api' as const, model: 'm', latencyMs: 1, turns };
+
+    it('records the summary with its text on a captureReasoning full node', () => {
+      const cap = buildCapture({
+        ...base,
+        completionText: 'c',
+        captureMode: 'full',
+        captureReasoning: true,
+        reasoningText: 'I weighed it',
+      });
+      expect(cap.reasoning).toStrictEqual({
+        chars: 12,
+        contentHash: sha256Hex('I weighed it'),
+        text: 'I weighed it',
+      });
+    });
+
+    it('records nothing unless BOTH captureReasoning and full are set', () => {
+      for (const [captureMode, captureReasoning] of [
+        ['full', undefined],
+        ['full', false],
+        ['metadata', true],
+        [undefined, true],
+      ] as const) {
+        const cap = buildCapture({
+          ...base,
+          captureMode,
+          captureReasoning,
+          reasoningText: 'I weighed it',
+        });
+        expect('reasoning' in cap).toBe(false);
+      }
+    });
+
+    it("keeps an empty summary ABSENT (an omitted display is '', not no thinking)", () => {
+      const cap = buildCapture({
+        ...base,
+        captureMode: 'full',
+        captureReasoning: true,
+        reasoningText: '',
+      });
+      expect('reasoning' in cap).toBe(false);
+    });
+
+    it('has its own slot: a full budget neither starves it nor is displaced by it', () => {
+      const f = LLM_CAPTURE_FIELD_MAX_CHARS;
+      const n = Math.ceil(LLM_CAPTURE_BUDGET_CHARS / f) + 1;
+      const many: LlmTurn[] = Array.from({ length: n }, () => ({
+        role: 'user' as const,
+        content: 'u'.repeat(f),
+      }));
+      const long = 'r'.repeat(f + 5);
+      const args = {
+        ...base,
+        turns: many,
+        completionText: 'c'.repeat(f),
+        captureMode: 'full' as const,
+      };
+      const without = buildCapture(args);
+      const withIt = buildCapture({ ...args, captureReasoning: true, reasoningText: long });
+      expect(withIt.reasoning).toStrictEqual({
+        chars: long.length,
+        contentHash: sha256Hex(long),
+        text: long.slice(0, f),
+        truncated: true,
+      });
+      expect(withIt.request).toStrictEqual(without.request);
+      expect(withIt.completion).toStrictEqual(without.completion);
+    });
+  });
 });
 
 describe('sha256Hex', () => {
@@ -442,6 +515,7 @@ describe('runStructuredWithRepair', () => {
   const CAP = { model: 'm', system: 'be terse', captureMode: 'full' as const };
   const okOutcome = (): StructuredCallOutcome => ({
     type: 'validated',
+    reasoningText: undefined,
     usage: USAGE,
     result: { ok: true, value: { category: 'bug' } },
     echo: '{"category":"bug"}',
@@ -450,6 +524,7 @@ describe('runStructuredWithRepair', () => {
   });
   const invalidOutcome = (reason: string): StructuredCallOutcome => ({
     type: 'validated',
+    reasoningText: undefined,
     usage: USAGE,
     result: { ok: false, reason },
     echo: 'bad',
@@ -919,6 +994,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
       runTextWithTools('anthropic_api', [ADDER], ['conv0'], TURNS, TOOL_CAP, 'auto', () =>
         Promise.resolve({
           type: 'text',
+          reasoningText: undefined,
           usage: USAGE,
           latencyMs: 5,
           completionText: 'done',
@@ -944,6 +1020,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
           if (seen.length === 1) {
             return Promise.resolve({
               type: 'toolUse' as const,
+              reasoningText: undefined,
               usage: USAGE,
               latencyMs: 5,
               calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
@@ -952,6 +1029,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
           }
           return Promise.resolve({
             type: 'text' as const,
+            reasoningText: undefined,
             usage: USAGE,
             latencyMs: 5,
             completionText: 'done',
@@ -984,6 +1062,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
         calls += 1;
         return Promise.resolve({
           type: 'toolUse' as const,
+          reasoningText: undefined,
           usage: USAGE,
           latencyMs: 5,
           calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
@@ -1027,6 +1106,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
         if (conv === 'c') {
           return Promise.resolve({
             type: 'toolUse' as const,
+            reasoningText: undefined,
             usage: USAGE,
             latencyMs: 5,
             calls: [{ id: 't1', name: 'nope', args: {} }],
@@ -1038,6 +1118,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
         }
         return Promise.resolve({
           type: 'text' as const,
+          reasoningText: undefined,
           usage: USAGE,
           latencyMs: 5,
           completionText: 'done',
@@ -1065,6 +1146,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
       if (calls <= toolUses) {
         return Promise.resolve({
           type: 'toolUse' as const,
+          reasoningText: undefined,
           usage: USAGE,
           latencyMs: 5,
           calls: [{ id: `t${calls}`, name: 'adder', args: { a: calls, b: 1 } }],
@@ -1073,6 +1155,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
       }
       return Promise.resolve({
         type: 'text' as const,
+        reasoningText: undefined,
         usage: USAGE,
         latencyMs: 5,
         completionText: 'done',
@@ -1133,6 +1216,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           conv === 'conv0'
             ? Promise.resolve({
                 type: 'toolUse' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 5,
                 calls: [
@@ -1143,6 +1227,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
               })
             : Promise.resolve({
                 type: 'text' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 5,
                 completionText: 'done',
@@ -1195,6 +1280,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           controller.abort();
           return Promise.resolve({
             type: 'toolUse' as const,
+            reasoningText: undefined,
             usage: USAGE,
             latencyMs: 5,
             calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
@@ -1234,6 +1320,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           if (calls === 2) controller.abort();
           return Promise.resolve({
             type: 'toolUse' as const,
+            reasoningText: undefined,
             usage: USAGE,
             latencyMs: 5,
             calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
@@ -1262,6 +1349,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         if (n === 1) {
           return Promise.resolve({
             type: 'toolUse' as const,
+            reasoningText: undefined,
             usage: USAGE,
             latencyMs: 7,
             calls: [
@@ -1273,6 +1361,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         }
         return Promise.resolve({
           type: 'text' as const,
+          reasoningText: undefined,
           usage: USAGE,
           latencyMs: 9,
           completionText: 'it is 3',
@@ -1350,6 +1439,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           return n === 1
             ? Promise.resolve({
                 type: 'toolUse' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 1,
                 calls: [{ id: 't1', name: null, args: '{not json' }],
@@ -1357,6 +1447,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
               })
             : Promise.resolve({
                 type: 'text' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 1,
                 completionText: 'done',
@@ -1377,6 +1468,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           return n === 1
             ? Promise.resolve({
                 type: 'toolUse' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 1,
                 calls: [
@@ -1387,6 +1479,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
               })
             : Promise.resolve({
                 type: 'text' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 1,
                 completionText: 'done',
@@ -1407,6 +1500,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           return n === 1
             ? Promise.resolve({
                 type: 'toolUse' as const,
+                reasoningText: undefined,
                 usage: USAGE,
                 latencyMs: 1,
                 calls: [{ id: null, name: 'adder', args: { a: 1, b: 2 } }],
@@ -1446,6 +1540,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
             controller.abort();
             return Promise.resolve({
               type: 'toolUse' as const,
+              reasoningText: undefined,
               usage: USAGE,
               latencyMs: 1,
               calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],

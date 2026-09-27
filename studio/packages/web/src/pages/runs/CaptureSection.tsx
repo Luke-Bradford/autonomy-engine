@@ -16,6 +16,8 @@ import type { CapturedText, NodeCapture } from './runSummary';
  *  - a SECURE node's texts arrive as the marker, and say why here rather than
  *    through `SecureMarkerHint`, whose copy names Secure OUTPUT alone — a
  *    capture is withheld under either flag;
+ *  - #605's reasoning is the SUMMARY a provider returns, never the raw chain
+ *    of thought, and is labelled that way;
  *  - an ABSENT completion (the exchange failed, asked for a tool, or returned
  *    no structured result) and an
  *    EMPTY one (the model returned nothing) are different facts.
@@ -49,7 +51,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
   const showAttempt = captures.some((x) => x.attempt !== captures[0]?.attempt);
   const headingId = useId();
   const withheld = shown.some((c) =>
-    [c.system, c.completion, ...c.messages].some((f) => f?.text === SECURE_REDACTED),
+    [c.system, c.completion, c.reasoning, ...c.messages].some((f) => f?.text === SECURE_REDACTED),
   );
   return (
     <section className="contract-section" aria-labelledby={headingId}>
@@ -60,8 +62,8 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
       {withheld && (
         <p className="page-hint">
           <code>{SECURE_REDACTED}</code> marks text withheld from the run log: this node&rsquo;s run
-          policy has Secure input or Secure output set, so its prompt and completion were redacted
-          before they were recorded.
+          policy has Secure input or Secure output set, so its captured text was redacted before it
+          was recorded.
         </p>
       )}
       {shown.map((c, i) => {
@@ -82,6 +84,9 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
             {c.messages.map((m, j) => (
               <CapturedBlock key={j} label={turnLabel(m)} field={m} />
             ))}
+            {c.reasoning !== undefined && (
+              <CapturedBlock label="Reasoning (the model's summary)" field={c.reasoning} />
+            )}
             {c.completion !== undefined ? (
               <CapturedBlock label="Completion" field={c.completion} />
             ) : (

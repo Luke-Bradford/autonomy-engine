@@ -123,6 +123,28 @@ const DEFAULT_MODEL = 'claude-opus-5';
 // parses at dispatch. Imported, never re-declared.
 
 /**
+ * #605 — the response's reasoning SUMMARY: the `thinking` text of each
+ * `type:'thinking'` block, joined by a blank line, or `undefined` when there is
+ * none. Current models return an EMPTY `thinking` unless the request asked for
+ * `display: 'summarized'` (see `buildBody`), so an empty block adds nothing. A
+ * `redacted_thinking` block carries no readable text and is skipped.
+ */
+function extractThinking(json: unknown): string | undefined {
+  const content = (json as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const texts = content.flatMap((b) =>
+    typeof b === 'object' &&
+    b !== null &&
+    (b as { type?: unknown }).type === 'thinking' &&
+    typeof (b as { thinking?: unknown }).thinking === 'string' &&
+    (b as { thinking: string }).thinking !== ''
+      ? [(b as { thinking: string }).thinking]
+      : [],
+  );
+  return texts.length > 0 ? texts.join('\n\n') : undefined;
+}
+
+/**
  * Concatenate the `text`-type content blocks of a Messages API response, or
  * `null` when the response carries NO text completion (#461): a non-array
  * `content` (absent/malformed), an empty array, or an array with zero
@@ -274,8 +296,15 @@ export const anthropicAdapter: ConnectorAdapter = {
     // narrows the `string | null` return to `string` for `meterUsage` (which
     // needs a resolved model) without changing behaviour.
     const model = resolveModel(input.data, config.data, DEFAULT_MODEL) ?? DEFAULT_MODEL;
-    const { system, messages, sampling, reasoningEffort, structuredOutput, captureMode } =
-      normalizeLlmRequest(input.data);
+    const {
+      system,
+      messages,
+      sampling,
+      reasoningEffort,
+      structuredOutput,
+      captureMode,
+      captureReasoning,
+    } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/v1/messages`;
     const headers = {
@@ -373,8 +402,17 @@ export const anthropicAdapter: ConnectorAdapter = {
       // `claude-haiku-4-5`) would 400 on both keys. The dispatch preflight
       // refuses that combination before this builder is ever reached, so this
       // emit is unconditional on the author's opt-in alone.
+      //
+      // #605 — a `captureReasoning` node also asks for the thinking SUMMARY:
+      // current models default `display` to `'omitted'`, which returns thinking
+      // blocks with EMPTY text. Display changes only what the response shows —
+      // the thinking and its billing are the same either way — and it is sent
+      // only on that opt-in, so every other request is unchanged.
       if (reasoningEffort !== undefined) {
-        body.thinking = { type: 'adaptive' };
+        body.thinking =
+          captureReasoning === true
+            ? { type: 'adaptive', display: 'summarized' }
+            : { type: 'adaptive' };
         body.output_config = { effort: reasoningEffort };
       }
       return body;
@@ -446,7 +484,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield* runStructuredWithRepair(
         'anthropic_api',
         messages,
-        { model, system, captureMode },
+        { model, system, captureMode, captureReasoning },
         async (turns) => {
           const res = await postJsonAndParse(
             ctx,
@@ -510,6 +548,7 @@ export const anthropicAdapter: ConnectorAdapter = {
               echo: structuredEcho(undefined),
               latencyMs: res.latencyMs,
               completionText: 'text' in answered ? answered.text : undefined,
+              reasoningText: extractThinking(res.json),
             };
           }
           const validated = validateStructuredOutput(structuredOutput, tool.input);
@@ -525,6 +564,7 @@ export const anthropicAdapter: ConnectorAdapter = {
             // completion (and its hash) is studio's re-serialization of it, not
             // the provider's raw bytes.
             completionText: tool.input === undefined ? undefined : JSON.stringify(tool.input),
+            reasoningText: extractThinking(res.json),
           };
         },
       );
@@ -570,7 +610,7 @@ export const anthropicAdapter: ConnectorAdapter = {
         tools,
         messages,
         messages,
-        { model, system, captureMode },
+        { model, system, captureMode, captureReasoning },
         authorChoice,
         async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
           const res = await postJsonAndParse(
@@ -611,6 +651,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                   spendFact: usage,
                 },
                 latencyMs: res.latencyMs,
+                reasoningText: extractThinking(res.json),
               };
             }
             const responseContent = (res.json as { content: unknown[] }).content;
@@ -618,6 +659,7 @@ export const anthropicAdapter: ConnectorAdapter = {
               type: 'toolUse',
               usage,
               latencyMs: res.latencyMs,
+              reasoningText: extractThinking(res.json),
               calls,
               buildNext: (results) => [
                 ...conv,
@@ -644,6 +686,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                 spendFact: usage,
               },
               latencyMs: res.latencyMs,
+              reasoningText: extractThinking(res.json),
             };
           }
           return {
@@ -651,6 +694,7 @@ export const anthropicAdapter: ConnectorAdapter = {
             usage,
             latencyMs: res.latencyMs,
             completionText: extracted.text,
+            reasoningText: extractThinking(res.json),
             succeeded: {
               type: 'succeeded',
               outputs: {
@@ -694,6 +738,11 @@ export const anthropicAdapter: ConnectorAdapter = {
         system,
         completionText,
         captureMode,
+        captureReasoning,
+        // #605 — a response that arrived and still failed (thinking spent the
+        // whole `max_tokens` budget, so no text came back) keeps its reasoning:
+        // that is the failure the trace explains best.
+        reasoningText: result.ok ? extractThinking(result.json) : undefined,
       }),
     });
     if (!result.ok) {

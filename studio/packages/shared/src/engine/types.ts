@@ -1592,7 +1592,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * content the author marked secret, and on exactly those nodes it is already
      * scrubbed.
      *
-     * Still deferred to #605: the verbose reasoning trace.
+     * #605 — `reasoning`, the model's reasoning SUMMARY, on a node that opted
+     * in with `captureReasoning` (which needs `capture: 'full'`).
      */
     type: z.literal('activity.captured'),
     runId: z.string(),
@@ -1631,6 +1632,17 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * `#473`/fail-open lesson).
      */
     completion: CapturedContentSchema.optional(),
+    /**
+     * #605 — the model's reasoning summary for THIS response: Anthropic's
+     * summarized thinking blocks, or Ollama's `message.thinking`. Present only
+     * on a `captureReasoning` node whose response carried non-empty reasoning
+     * text; ABSENT otherwise, never a hash of `''` (an omitted Anthropic summary
+     * is an empty string, and that means "not shown", not "did not think").
+     * Budgeted in its OWN per-field slot, outside the prompt/completion budget,
+     * so opting in never displaces what the capture already kept. An older build
+     * drops the key (this object is not strict), so it still parses the log.
+     */
+    reasoning: CapturedContentSchema.optional(),
   }),
   z.object({
     /**

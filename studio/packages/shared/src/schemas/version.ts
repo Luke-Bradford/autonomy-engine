@@ -465,6 +465,13 @@
 // of text. That is the SAFE polarity — the older build stores LESS than the
 // author asked for, never more — and it is not bump 21's "parseable, not
 // runnable as authored": nothing the run computes depends on it.
+// NO BUMP for #605's reasoning trace either. `llm_call` gained an optional
+// boolean `captureReasoning`; like `capture`, a pre-#605 build parses and strips
+// it, and records no reasoning — LESS than asked, the safe polarity. Unlike
+// `capture` it is not purely observational: on Anthropic it adds
+// `thinking.display: 'summarized'` to the request. That changes what the
+// response SHOWS, not what the model does or bills or what the node outputs, so
+// the older build's run still computes the same outputs.
 // BUMP 32→33 for #844 V5: two new control TYPES, `set_variable` and
 // `append_variable` (the A11 rule — an older build lacks the types, so it must
 // refuse a doc holding them rather than route them as unknown), together with

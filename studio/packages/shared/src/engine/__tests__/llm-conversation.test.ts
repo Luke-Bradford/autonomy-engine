@@ -188,3 +188,23 @@ describe('validateDoc/validateRefs — L12 review-hardening rules', () => {
     expect(validateDoc(doc([call])).join(' ')).toMatch(/no effect on a call node/);
   });
 });
+
+// ===========================================================================
+// #605 — the capture surface: a reasoning trace needs `capture: 'full'`
+// ===========================================================================
+
+describe('validateDoc — captureReasoning coupling (#605)', () => {
+  it("refuses captureReasoning without capture: 'full'", () => {
+    for (const capture of [undefined, 'metadata']) {
+      const d = doc([llm('a', { prompt: 'p', captureReasoning: true, capture })]);
+      expect(validateDoc(d).join(' ')).toMatch(/captureReasoning needs capture: 'full'/);
+    }
+  });
+
+  it("accepts it with capture: 'full', and a false flag without", () => {
+    expect(
+      validateDoc(doc([llm('a', { prompt: 'p', captureReasoning: true, capture: 'full' })])),
+    ).toEqual([]);
+    expect(validateDoc(doc([llm('a', { prompt: 'p', captureReasoning: false })]))).toEqual([]);
+  });
+});
