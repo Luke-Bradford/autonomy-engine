@@ -1029,4 +1029,53 @@ describe('openaiAdapter — full capture (#605 L9b)', () => {
     expect(capture.request.messages[0]).toMatchObject({ text: 'hi' });
     expect(capture.completion).toMatchObject({ text: 'the answer' });
   });
+
+  // #605 — the structured path captures too, once per provider response.
+  const capturesOf = (events: ActivityEvent[]) =>
+    events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
+
+  it('stores the prompt, the system text it SENT and the structured result', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'bug' })));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, system: 'be terse', capture: 'full' } }),
+        'sk',
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
+    const sent = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const [capture] = capturesOf(events);
+    // The structured system text is the author's PLUS the schema directive —
+    // the capture records what went over the wire, not only what was authored.
+    expect(capture!.request.system!.text).toBe(sent.messages[0]!.content);
+    expect(capture!.request.system!.text).toContain('be terse');
+    expect(capture).toMatchObject({
+      provider: 'openai_api',
+      request: { messages: [{ role: 'user', text: 'classify this ticket' }] },
+      completion: { text: '{"category":"bug"}' },
+    });
+  });
+
+  it('captures the repair call with the turns it sent', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'question' })))
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'feature' })));
+    const events = await drain(
+      openaiAdapter.runActivity(ctx({ input: { ...STRUCTURED_INPUT, capture: 'full' } }), 'sk'),
+    );
+    const [first, second] = capturesOf(events);
+    expect(first!.completion).toMatchObject({ text: '{"category":"question"}' });
+    const sent = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const sentTurns = sent.messages.filter((m) => m.role !== 'system');
+    expect(second!.request.messages.map((m) => m.text)).toEqual(sentTurns.map((m) => m.content));
+    expect(second!.request.messages.at(-1)!.text).toContain('enum');
+    expect(second!.completion).toMatchObject({ text: '{"category":"feature"}' });
+  });
 });

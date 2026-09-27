@@ -1481,7 +1481,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.thinking).toBeUndefined();
     expect(body.output_config).toBeUndefined();
-    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
   });
 
   it('fires on the STRUCTURED path too, not just text', async () => {
@@ -1576,5 +1576,63 @@ describe('anthropicAdapter — full capture (#605 L9b)', () => {
     const { capture } = captured(events);
     expect(capture.request.messages[0]).toMatchObject({ text: 'hello there' });
     expect(capture.completion).toMatchObject({ text: 'Hi there!' });
+  });
+
+  // #605 — the structured path captures too, once per provider response.
+  const capturesOf = (events: ActivityEvent[]) =>
+    events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
+
+  it('stores the prompt and the structured result on the structured path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, toolResponse({ category: 'bug' })),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, system: 'be terse', capture: 'full' } }),
+        'sk',
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
+    const [capture] = capturesOf(events);
+    expect(capture).toMatchObject({
+      provider: 'anthropic_api',
+      request: {
+        system: { text: 'be terse' },
+        messages: [{ role: 'user', text: 'classify this ticket' }],
+      },
+      completion: { text: '{"category":"bug"}' },
+    });
+  });
+
+  it('captures a repair with the critique it sent, and a TEXT answer as the completion', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        fakeResponse(200, { content: [{ type: 'text', text: 'it is a bug' }], usage: {} }),
+      )
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'bug' })));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { ...STRUCTURED_INPUT, capture: 'full' } }), 'sk'),
+    );
+    const [first, second] = capturesOf(events);
+    expect(first!.completion).toMatchObject({ text: 'it is a bug' });
+    expect(second!.request.messages[0]).toMatchObject({ text: 'classify this ticket' });
+    expect(second!.request.messages.at(-1)).toMatchObject({ role: 'user' });
+    expect(second!.request.messages.at(-1)!.text).toContain('structured output schema');
+    expect(second!.completion).toMatchObject({ text: '{"category":"bug"}' });
+  });
+
+  it('stores only hashes for a structured node by default', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, toolResponse({ category: 'bug' })),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    const [capture] = capturesOf(events);
+    expect(capture!.completion).toEqual({
+      chars: '{"category":"bug"}'.length,
+      contentHash: expect.any(String),
+    });
+    expect('text' in capture!.request.messages[0]!).toBe(false);
   });
 });
