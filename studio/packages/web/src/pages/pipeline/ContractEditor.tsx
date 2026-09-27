@@ -22,6 +22,7 @@ import {
   paramDefaultNote,
   paramNameNote,
   withRequired,
+  withoutDefault,
   withVariableType,
 } from './paramRules';
 
@@ -264,16 +265,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
       return;
     }
     field.setError(null);
-    if (parsed.has) update({ ...param, default: parsed.value });
-    else clearDefault();
-  }
-
-  function clearDefault() {
-    // NO default is the absence of the key, not `default: undefined` —
-    // `resolveRunParams` reads it with `hasOwnProperty`.
-    const { default: cleared, ...rest } = param;
-    void cleared; // discard: lint has no ignoreRestSiblings here
-    update(rest);
+    update(parsed.has ? { ...param, default: parsed.value } : withoutDefault(param));
   }
 
   // #844 4c — a blank field says "no default", so `''` needs its own control.
@@ -349,7 +341,7 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
             aria-label={`param ${index + 1} empty-string default`}
             checked={isEmptyString}
             onChange={(e) =>
-              e.target.checked ? update({ ...param, default: '' }) : clearDefault()
+              update(e.target.checked ? { ...param, default: '' } : withoutDefault(param))
             }
           />
           Empty string

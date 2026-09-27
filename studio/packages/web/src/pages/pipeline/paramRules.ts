@@ -391,8 +391,16 @@ export function paramDefaultNote(p: Param): string | null {
  * doc that arrives holding one.
  */
 export function withRequired(p: Param, required: boolean): Param {
-  if (!required) return { ...p, required: false };
+  return required ? { ...withoutDefault(p), required: true } : { ...p, required: false };
+}
+
+/**
+ * The param with NO default: the key ABSENT, not `default: undefined` —
+ * `resolveRunParams` reads it with `hasOwnProperty`, so a present-but-undefined
+ * key would mean "the default is undefined".
+ */
+export function withoutDefault(p: Param): Param {
   const { default: dropped, ...rest } = p;
   void dropped; // discard: lint has no ignoreRestSiblings here
-  return { ...rest, required: true };
+  return rest;
 }
