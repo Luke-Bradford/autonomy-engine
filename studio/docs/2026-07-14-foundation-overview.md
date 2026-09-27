@@ -35,6 +35,7 @@ L3  P7 packaging (Docker / OSS self-host)
 | `2026-07-14-adf-grade-ui-design.md` | L2 | U0–U15 (+R1/R2) |
 | `2026-08-14-foundation-data-movement.md` | L1 | M1–M12 |
 | `2026-09-26-foundation-run-cancellation.md` | L1 | CX1–CX5 |
+| `2026-09-27-foundation-pipeline-variables.md` | L1 | V1–V7 (supersedes #1 F5a–F6) |
 | `2026-07-12-target-architecture.md` | ref | — |
 
 **#9 data movement (M-series) postdates this index and its build order.** It was added 2026-08-14 by

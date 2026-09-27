@@ -28,7 +28,8 @@ container states. Dispatch then proceeds from the ready set beyond the frontier 
 same walk as a normal run.
 
 **RS1 shape reconciled against the SHIPPED engine (built-block below):**
-- The proposed `copiedNodeStates` + `copiedVariables` fields are DROPPED — the engine has **no
+- *(2026-09-27: the `copiedVariables` half of this bullet is reversed when V5 of [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md) lands. It
+  adds `copiedVariableWrites`, see V-D7.)* The proposed `copiedNodeStates` + `copiedVariables` fields are DROPPED — the engine has **no
   `run.variables` concept**; the only run-level writable channel is per-node `outputs`, so
   `copiedOutputs` (`nodeId → {name → value}`) alone carries the copied prefix, and `frontier` +
   `copiedOutputs` fully determine the copied node states.
