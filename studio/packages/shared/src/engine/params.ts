@@ -2340,10 +2340,7 @@ export function variableNameDefect(v: VariableDef): string | null {
  */
 export function variableDefaultDefects(v: VariableDef): string[] {
   if (!matchesSig(v.default, v.type)) {
-    const article = v.type === 'array' ? 'an' : 'a';
-    return [
-      `variable '${v.name}' default must be ${article} ${v.type}, got ${typeName(v.default)}`,
-    ];
+    return [`variable '${v.name}' default must be ${articled(v.type)}, got ${typeName(v.default)}`];
   }
   return v.type === 'array'
     ? jsonReplaySafetyErrors(`variable '${v.name}' default`, v.default)
