@@ -92,9 +92,9 @@ describe('${vars.<name>} at save time', () => {
   // `ValidatedDoc.variables` is optional until V3 (#1359). Absent must mean
   // "none declared", which REFUSES a read, never "anything goes".
   it('refuses a variable read when the doc declares none', () => {
-    expect(validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: undefined }))).toEqual(
-      [expect.stringMatching(/is not a declared variable/)],
-    );
+    expect(
+      validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: undefined })),
+    ).toEqual([expect.stringMatching(/is not a declared variable/)]);
   });
 
   it('types a read by its declared type', () => {

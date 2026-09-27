@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type Edge, type NewPipelineVersion, type Node } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  type Edge,
+  type NewPipelineVersion,
+  type Node,
+} from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';

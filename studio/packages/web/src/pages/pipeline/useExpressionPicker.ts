@@ -176,5 +176,5 @@ export function useExpressionPicker(
           .map((name) => ({ name, signature: fnSignature(name) }));
       },
     };
-  }, [nodes, edges, containers, params, subjectId, field, nodeNames]);
+  }, [nodes, edges, containers, params, variables, subjectId, field, nodeNames]);
 }

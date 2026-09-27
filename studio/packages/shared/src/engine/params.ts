@@ -3438,7 +3438,7 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
     }
     const scope: ScanScope = {
       declared: new Map(),
-    variables: new Map(),
+      variables: new Map(),
       guaranteed: new Set(),
       settled: new Set(),
       reachable: new Set(),

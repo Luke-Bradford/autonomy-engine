@@ -894,7 +894,13 @@ describe('canvasStore — container membership on delete (#746)', () => {
     s.getState().loadVersion(enclosed());
     s.getState().deleteNode('n_b');
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? [], st.variables);
+    const issues = validateCanvas(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.loaded?.params ?? [],
+      st.variables,
+    );
     expect(issues).toEqual([]);
     expect(canSave({ saving: false, ready: true, issues })).toBe(true);
   });
@@ -1464,7 +1470,13 @@ describe('canvasStore — container membership (U6d)', () => {
       s.getState().setNodeContainer('n_b', 'loop_1');
       s.getState().setNodeContainer('n_a', null);
       const st = s.getState();
-      const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? [], st.variables);
+      const issues = validateCanvas(
+        st.nodes,
+        st.edges,
+        st.containers,
+        st.loaded?.params ?? [],
+        st.variables,
+      );
       expect(st.containers[0]!.children).toEqual(['n_b']);
       expect(issues.some((i) => i.includes('crosses a container boundary'))).toBe(true);
       expect(canSave({ saving: false, ready: true, issues })).toBe(false);
@@ -2003,22 +2015,40 @@ describe('canvasStore — back-edges (U6e)', () => {
       }),
     );
     const before = s.getState();
-    expect(validateCanvas(before.nodes, before.edges, before.containers, before.params, before.variables)).toEqual(
-      [],
-    );
+    expect(
+      validateCanvas(
+        before.nodes,
+        before.edges,
+        before.containers,
+        before.params,
+        before.variables,
+      ),
+    ).toEqual([]);
 
     s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
     const after = s.getState();
     // The edge IS authored — the offer is not refused for this...
     expect(after.edges.some((e) => e.back === true)).toBe(true);
     // ...and the canvas badge is what says the doc no longer validates.
-    const issues = validateCanvas(after.nodes, after.edges, after.containers, after.params, after.variables);
+    const issues = validateCanvas(
+      after.nodes,
+      after.edges,
+      after.containers,
+      after.params,
+      after.variables,
+    );
     expect(issues.join('\n')).toContain('is not settled here');
     // Reversible by the same control, which is why it warns instead of refusing.
     s.getState().deleteEdge(after.edges.find((e) => e.back === true)!.id);
     const repaired = s.getState();
     expect(
-      validateCanvas(repaired.nodes, repaired.edges, repaired.containers, repaired.params, repaired.variables),
+      validateCanvas(
+        repaired.nodes,
+        repaired.edges,
+        repaired.containers,
+        repaired.params,
+        repaired.variables,
+      ),
     ).toEqual([]);
   });
 
@@ -2820,7 +2850,9 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       const copy = st.nodes.at(-1)!;
       expect(promptOf(copy)).toBe('expand ${nodes.n_b.output.text}');
       expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_b', to: copy.id }));
-      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual(
+        [],
+      );
     });
 
     it('a cut pair keeps the edge BETWEEN them and gets back the edge INTO them', () => {
@@ -2838,7 +2870,9 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_a', to: copyB.id }));
       expect(st.edges).toContainEqual(expect.objectContaining({ from: copyB.id, to: copyC.id }));
       expect(st.edges).toHaveLength(2);
-      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual(
+        [],
+      );
     });
 
     it('a node cut out of a container is pasted back INTO it', () => {

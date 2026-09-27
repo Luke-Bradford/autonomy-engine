@@ -2292,7 +2292,11 @@ function ContainerSection({
     // when U23's config panel became its second call site. This wrapper is only
     // the "and then apply it" half, which the two callers below share.
     if (
-      !confirmContainerEdit({ nodes, edges, containers, params, variables }, nextContainers, recovery)
+      !confirmContainerEdit(
+        { nodes, edges, containers, params, variables },
+        nextContainers,
+        recovery,
+      )
     ) {
       return false;
     }

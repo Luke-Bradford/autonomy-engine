@@ -417,7 +417,13 @@ describe('ExpressionPicker — wrap in a function', () => {
     const url = READS.config['url'] as string;
     const span = wrapTarget(url, url.length, url.length)!;
     const issues = (value: string) =>
-      validateCanvas([FETCH, { ...READS, config: { ...READS.config, url: value } }], CHAIN, [], [], []);
+      validateCanvas(
+        [FETCH, { ...READS, config: { ...READS.config, url: value } }],
+        CHAIN,
+        [],
+        [],
+        [],
+      );
     const baseline = issues(url);
     for (const name of offered) {
       const after = issues(applyWrap(url, span, name).value);
