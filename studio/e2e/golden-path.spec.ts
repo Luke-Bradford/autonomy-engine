@@ -113,11 +113,24 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
     .toBe('success');
   const eventsRes = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`);
   expect(eventsRes.status()).toBe(200);
-  const events = (await eventsRes.json()) as { seq: number; type: string }[];
+  const events = (await eventsRes.json()) as {
+    seq: number;
+    type: string;
+    payload: Record<string, unknown>;
+  }[];
   const types = events.map((e) => e.type);
-  expect(types[0]).toBe('run.started');
-  expect(types.at(-1)).toBe('run.finished');
-  expect(types.filter((t) => t === 'node.succeeded')).toHaveLength(2);
+  // A trigger-launched run records WHICH trigger before it starts.
+  expect(types.slice(0, 2)).toEqual(['run.triggerContext', 'run.started']);
+  expect(events.at(-1)?.payload).toMatchObject({ type: 'run.finished', outcome: 'success' });
+  /* The agent ran THROUGH the step-1 connection: `/bin/echo` hands back the task
+     as its output, so this value exists only if the node was dispatched with
+     that connection's command. */
+  expect(events.filter((e) => e.type === 'node.succeeded').map((e) => e.payload)).toEqual([
+    expect.objectContaining({ outputs: expect.objectContaining({ output: TASK }) }),
+  ]);
+  // The Wait ran after it, on the success edge. A wait settles through its
+  // alarm (`timer.due`), not `node.succeeded`, so this is its completion fact.
+  expect(types.indexOf('timer.due')).toBeGreaterThan(types.indexOf('node.succeeded'));
 
   // 6. The run log, as the operator reads it: one row per durable event, in
   // seq order, naming each event's type.
