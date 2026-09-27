@@ -277,7 +277,8 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > re-checked after each billed toolUse exchange BEFORE tool execution (abort
 > outranks budget exhaustion) → `cancelled` terminal, no post-abort
 > execution/telemetry (in-flight aborts stay `llmPost`'s). Continuation choice
-> still downgrades to `auto`; capture stays first-exchange-only.
+> still downgrades to `auto`; capture was first-exchange-only here, every round
+> since L9b slice 3 (#605).
 > CATALOG_VERSION 15→16.
 
 | L10c | MCP servers + tool security policy — **DEFERRED to the event-modeled side-effecting sub-spec** (operator, 2026-07-23, #653: option B). A NO-OP in v1: local pure tools (L10a/L10b) are the ENTIRE v1 tool surface; MCP/external tools are never admitted under any v1 policy shape — purity stays machine-verified BY CONSTRUCTION, never operator-asserted inside the opaque loop. Re-open only on explicit operator instruction. | 3 |

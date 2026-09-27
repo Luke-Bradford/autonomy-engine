@@ -647,7 +647,7 @@ export type StructuredCallOutcome =
  * capture records the echo + critique, and a tool round's records the calls and
  * results before it.
  */
-export interface StructuredCaptureContext {
+export interface LlmCaptureContext {
   model: string;
   system?: string;
   captureMode?: LlmCaptureMode;
@@ -743,7 +743,7 @@ export function buildRepairTurns(turns: LlmTurn[], reason: string, echo: string)
 export async function* runStructuredWithRepair(
   provider: LlmConnectionKind,
   initialTurns: LlmTurn[],
-  capture: StructuredCaptureContext,
+  capture: LlmCaptureContext,
   doCall: (turns: LlmTurn[]) => Promise<StructuredCallOutcome>,
 ): AsyncIterable<ActivityEvent> {
   let turns = initialTurns;
@@ -1078,7 +1078,7 @@ export async function* runTextWithTools<C>(
   tools: readonly LlmToolDef[],
   initial: C,
   initialTurns: readonly LlmTurn[],
-  capture: StructuredCaptureContext,
+  capture: LlmCaptureContext,
   initialChoice: LlmToolChoice,
   doCall: (conv: C, choice: LlmToolChoice) => Promise<ToolRoundOutcome<C>>,
   maxRounds: number = 1,
