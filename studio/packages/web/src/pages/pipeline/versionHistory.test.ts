@@ -316,7 +316,7 @@ describe('describePublishRefusal', () => {
 });
 
 describe('restoreBodyFrom', () => {
-  it('carries the six doc arrays of the version it is given', () => {
+  it('carries every doc field of the version it is given', () => {
     const v = version({
       version: 3,
       nodes: [{ id: 'n_z', type: 'http_request', config: {}, position: { x: 1, y: 2 } }],
@@ -324,6 +324,8 @@ describe('restoreBodyFrom', () => {
       params: [{ name: 'p', type: 'string', required: false }],
       outputs: [{ name: 'o', type: 'string' }],
       variables: [{ name: 'count', type: 'number', default: 0 }],
+      description: 'Nightly load',
+      annotations: ['prod'],
     });
 
     expect(restoreBodyFrom(v, 'pv_head')).toEqual({
@@ -333,6 +335,8 @@ describe('restoreBodyFrom', () => {
       params: v.params,
       outputs: v.outputs,
       variables: v.variables,
+      description: 'Nightly load',
+      annotations: ['prod'],
       // #904 — a restore declares its CAS basis like any other save.
       basedOnVersionId: 'pv_head',
     });
@@ -419,11 +423,21 @@ describe('restoreConfirmMessage', () => {
 });
 
 describe('docUnchanged', () => {
-  /* The five arrays are compared by REFERENCE, never by value: every store
-     action mints a fresh array, so identity is what distinguishes "the operator
-     edited during the POST" from "nothing happened". */
+  /* The arrays are compared by REFERENCE, never by value: every store action
+     mints a fresh array, so identity is what distinguishes "the operator edited
+     during the POST" from "nothing happened". `description` is a string, so by
+     value. */
   function doc() {
-    return { nodes: [], edges: [], containers: [], params: [], outputs: [], variables: [] };
+    return {
+      nodes: [],
+      edges: [],
+      containers: [],
+      params: [],
+      outputs: [],
+      variables: [],
+      description: '',
+      annotations: [],
+    };
   }
 
   it('holds when the write sees back the arrays it snapshotted', () => {
@@ -436,12 +450,25 @@ describe('docUnchanged', () => {
      actions only `params`/`outputs`. A check that skipped any one of them would
      let that action's edits be silently overwritten by the rebase, which is the
      exact data loss this guard exists to stop. */
-  for (const field of ['nodes', 'edges', 'containers', 'params', 'outputs', 'variables'] as const) {
+  for (const field of [
+    'nodes',
+    'edges',
+    'containers',
+    'params',
+    'outputs',
+    'variables',
+    'annotations',
+  ] as const) {
     it(`fails when only \`${field}\` was replaced`, () => {
       const before = doc();
       expect(docUnchanged(before, { ...before, [field]: [] })).toBe(false);
     });
   }
+
+  it('fails when only `description` changed (#1 F8a)', () => {
+    const before = doc();
+    expect(docUnchanged(before, { ...before, description: 'typed mid-save' })).toBe(false);
+  });
 
   /* Equal CONTENTS are not the question — a store action that rebuilt an array
      to the same values still means the operator was editing. */

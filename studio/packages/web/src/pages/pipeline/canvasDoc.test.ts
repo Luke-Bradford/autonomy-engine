@@ -40,7 +40,18 @@ describe('toVersionBody', () => {
     const edges = [edge('e', 'a', 'b')];
     const containers = [{ id: 'c1', kind: 'stage' as const, children: [] }];
     const variables = [{ name: 'count', type: 'number' as const, default: 0 }];
-    const body = toVersionBody(nodes, edges, containers, params, outputs, variables, 'pv_basis');
+    const annotations = ['prod'];
+    const body = toVersionBody(
+      nodes,
+      edges,
+      containers,
+      params,
+      outputs,
+      variables,
+      'Nightly load',
+      annotations,
+      'pv_basis',
+    );
 
     // Every value is DISTINCT, so a transposed argument is red rather than
     // masked by two equal empty arrays. Five positional array parameters is
@@ -51,6 +62,8 @@ describe('toVersionBody', () => {
     expect(body.nodes).toEqual(nodes);
     expect(body.edges).toEqual(edges);
     expect(body.variables).toEqual(variables);
+    expect(body.description).toBe('Nightly load');
+    expect(body.annotations).toEqual(annotations);
 
     // CLASS coverage. `catalogVersion` is the ONLY field `toVersionBody` omits
     // on purpose — the server re-stamps the current catalog on save (asserted by
@@ -66,7 +79,7 @@ describe('toVersionBody', () => {
   });
 
   it('omits catalogVersion so the server stamps the current one on save', () => {
-    expect(toVersionBody([], [], [], [], [], [], null)).not.toHaveProperty('catalogVersion');
+    expect(toVersionBody([], [], [], [], [], [], '', [], null)).not.toHaveProperty('catalogVersion');
   });
 
   /**
@@ -81,7 +94,7 @@ describe('toVersionBody', () => {
    * when they are EMPTY, which is the state a carry-forward would have filled.
    */
   it('sends empty params/outputs when the canvas declares none', () => {
-    const body = toVersionBody([node('a')], [], [], [], [], [], null);
+    const body = toVersionBody([node('a')], [], [], [], [], [], '', [], null);
     expect(body.params).toEqual([]);
     expect(body.outputs).toEqual([]);
     expect(body.nodes).toHaveLength(1);
@@ -95,6 +108,8 @@ describe('toVersionBody', () => {
       params,
       outputs,
       [],
+      'Nightly load',
+      ['prod'],
       'pv_basis',
     );
     expect(() => PipelineVersionWriteSchema.parse(body)).not.toThrow();

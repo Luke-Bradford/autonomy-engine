@@ -39,6 +39,8 @@ const version = {
   edges: [],
   containers: [],
   variables: [],
+  description: '',
+  annotations: [],
   catalogVersion: 1,
   createdAt: 1,
   // #3 G6b — git provenance, `null` on a non-git version; the client parses
@@ -296,6 +298,22 @@ describe('pipelines API', () => {
 
     // #844 V1 — the copy is hand-listed, so a field it forgets is silently
     // defaulted away by the write schema: variables must ride along.
+    // #1 F8a — hand-listed the same way, so the same risk.
+    it('carries the source’s description and annotations onto the copy', async () => {
+      const described = { ...version, description: 'Nightly load', annotations: ['prod'] };
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: { ...pipeline, id: 'pl_2' } },
+        { status: 200, body: [described] },
+        { status: 201, body: { ...described, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+      ]);
+
+      await duplicatePipeline(pipeline, 'Copy');
+
+      const copied = JSON.parse(initOf(fetchMock, 2).body as string) as Record<string, unknown>;
+      expect(copied.description).toBe('Nightly load');
+      expect(copied.annotations).toEqual(['prod']);
+    });
+
     it('carries the source’s declared variables onto the copy', async () => {
       const variables = [{ name: 'count', type: 'number', default: 0 }];
       const withVars = { ...version, variables };

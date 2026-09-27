@@ -43,6 +43,10 @@ export function toVersionBody(
   // a version can already declare variables through the API or a git import,
   // and a body without them would have the write schema default them to `[]`.
   variables: VariableDef[],
+  // #1 F8a — the General tab's fields. Positional like the rest: a transposed
+  // string and array do not type-check.
+  description: string,
+  annotations: string[],
   // #904 — the version this write is based on (`canvasStore.loaded`), or `null`
   // for "this pipeline has no versions yet". A REQUIRED parameter, deliberately
   // not an optional one defaulting to `null`: a caller that forgets it must
@@ -56,6 +60,8 @@ export function toVersionBody(
     params,
     outputs,
     variables,
+    description,
+    annotations,
     containers,
     nodes,
     edges,

@@ -250,6 +250,30 @@ export function nameIssues(
   ];
 }
 
+/**
+ * #1 F8a — the SAVE-GATING issues for the General tab's description and
+ * annotations: the write schema's own refusals (`NewPipelineVersionSchema`), so
+ * the canvas says exactly what the server would. Concatenated at the call site
+ * beside `nameIssues`, for the reason given there.
+ *
+ * Unlike `schemaNameIssues`, nothing is skipped: an empty annotation is a
+ * `too_small` issue and has no better wording elsewhere.
+ */
+export function propertyIssues(description: string, annotations: readonly string[]): string[] {
+  const out: string[] = [];
+  const text = NewPipelineVersionSchema.shape.description.safeParse(description);
+  if (!text.success) out.push(...text.error.issues.map((issue) => issue.message));
+  const tags = NewPipelineVersionSchema.shape.annotations.safeParse(annotations);
+  if (!tags.success) {
+    for (const issue of tags.error.issues) {
+      const at = issue.path[0];
+      // A per-annotation refusal names its row; a whole-list one (too many) does not.
+      out.push(typeof at === 'number' ? `annotation ${at + 1}: ${issue.message}` : issue.message);
+    }
+  }
+  return out;
+}
+
 /** What a default field's text means: absent, a typed value, or a parse failure. */
 export type DefaultParse =
   { ok: true; has: false } | { ok: true; has: true; value: unknown } | { ok: false; error: string };
