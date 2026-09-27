@@ -1023,15 +1023,26 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     const events = await drain(
       anthropicAdapter.runActivity(toolCtx({ toolChoice: 'required' }), 'sk'),
     );
-    // metered (call 1) → captured (first exchange) → metered (call 2) → succeeded.
+    // Each billed exchange is metered, then captured (#605).
     expect(events.map((e) => e.type)).toEqual([
       'metered',
       'captured',
       'toolCalled',
       'metered',
+      'captured',
       'succeeded',
     ]);
     expect(succeeded(events).outputs).toEqual({ text: 'Hi there!', stopReason: 'end_turn' });
+    // #605 — the second capture records the round-trip the continuation sent.
+    const secondCapture = events.filter((e) => e.type === 'captured')[1];
+    expect(
+      secondCapture?.type === 'captured' &&
+        secondCapture.capture.request.messages.map((m) => [m.role, m.toolTurn]),
+    ).toEqual([
+      ['user', undefined],
+      ['assistant', 'calls'],
+      ['user', 'result'],
+    ]);
 
     const second = requestBody(fetchSpy, 1);
     // The continuation replays the raw assistant content and answers with a
@@ -1068,8 +1079,10 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
       'captured',
       'toolCalled',
       'metered',
+      'captured',
       'toolCalled',
       'metered',
+      'captured',
       'succeeded',
     ]);
     expect(succeeded(events).outputs.text).toBe('Hi there!');
@@ -1212,12 +1225,12 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     const last = events[events.length - 1]!;
     expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
     if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
-    // Both billed responses metered; one first-exchange capture (L9a).
+    // Both billed responses metered, and each captured (#605).
     expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
-    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(2);
   });
 
-  it('emits the first-exchange capture before a transport terminal (L9a invariant)', async () => {
+  it('emits the capture before a transport terminal (L9a invariant)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(fakeResponse(500, 'overloaded'));
     const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
     expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
@@ -1536,7 +1549,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
 });
 
 // #605 L9b — `capture: 'full'` reaches BOTH capture sites: the plain text path
-// and the tool loop's round-0 capture. Metadata stays the default.
+// and every tool-loop round's capture. Metadata stays the default.
 describe('anthropicAdapter — full capture (#605 L9b)', () => {
   const TOOL = {
     name: 'noop',
@@ -1565,7 +1578,7 @@ describe('anthropicAdapter — full capture (#605 L9b)', () => {
     expect(capture.completion).toMatchObject({ text: 'Hi there!' });
   });
 
-  it("stores the text on the tool loop's round-0 capture too", async () => {
+  it("stores the text on a tool-configured node's capture too", async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(

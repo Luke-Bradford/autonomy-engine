@@ -10,7 +10,7 @@ function exchange(over: Partial<NodeCapture> = {}): NodeCapture {
   return {
     model: 'llama3',
     system: whole('be brief'),
-    messages: [{ role: 'user', ...whole('what is 2+2?') }],
+    messages: [{ role: 'user', toolTurn: undefined, ...whole('what is 2+2?') }],
     completion: whole('4'),
     attempt: 1,
     instanceId: undefined,
@@ -44,12 +44,46 @@ describe('CaptureSection (#605)', () => {
     render(
       <CaptureSection
         captures={[
-          exchange({ messages: [{ role: 'user', text: '', chars: 900, truncated: true }] }),
+          exchange({
+            messages: [
+              { role: 'user', toolTurn: undefined, text: '', chars: 900, truncated: true },
+            ],
+          }),
         ]}
       />,
     );
     expect(screen.getByText(/Not stored: the capture budget was spent/)).toBeTruthy();
     expect(screen.queryByText('Empty.')).toBeNull();
+  });
+
+  it('labels the turns that record an earlier tool round-trip (#605)', () => {
+    render(
+      <CaptureSection
+        captures={[
+          exchange({
+            messages: [
+              { role: 'user', toolTurn: undefined, ...whole('add 1 and 2') },
+              { role: 'assistant', toolTurn: 'calls', ...whole('[{"name":"adder"}]') },
+              { role: 'user', toolTurn: 'result', ...whole('3') },
+              { role: 'user', toolTurn: 'error', ...whole("unknown tool 'x'") },
+            ],
+          }),
+        ]}
+      />,
+    );
+    const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    const headings = within(section)
+      .getAllByRole('heading')
+      .map((h) => h.textContent);
+    expect(headings).toEqual([
+      'Prompt & completion',
+      'System',
+      'User',
+      'Tool calls',
+      'Tool result',
+      'Tool result (error)',
+      'Completion',
+    ]);
   });
 
   it('tells an empty completion apart from a missing one', () => {
@@ -67,7 +101,7 @@ describe('CaptureSection (#605)', () => {
         captures={[
           exchange({
             system: undefined,
-            messages: [{ role: 'user', ...marker }],
+            messages: [{ role: 'user', toolTurn: undefined, ...marker }],
             completion: marker,
           }),
         ]}

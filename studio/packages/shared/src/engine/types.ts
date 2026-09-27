@@ -1033,6 +1033,14 @@ export const CapturedContentSchema = z.object({
 export type CapturedContent = z.infer<typeof CapturedContentSchema>;
 
 /**
+ * #605 — which half of an earlier tool round-trip a captured turn records:
+ * `calls` is the assistant's calls as JSON `[{name, args}]`, `result`/`error`
+ * one executed call's tool_result text (`error` for an error result).
+ */
+export const CaptureToolTurnSchema = z.enum(['calls', 'result', 'error']);
+export type CaptureToolTurn = z.infer<typeof CaptureToolTurnSchema>;
+
+/**
  * #890 — the input a node was dispatched with, as JSON text
  * (`captureDispatchInput`): `chars` is the whole length, `truncated` is present
  * only when the stored `text` was cut. On a secure node `text` is the marker.
@@ -1607,14 +1615,12 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
           role: z.enum(['user', 'assistant']),
           /**
            * #605 — present on a turn that records one half of an earlier tool
-           * round-trip, ABSENT on an author turn: `calls` is the assistant's
-           * calls as JSON `[{name, args}]`, `result`/`error` one executed call's
-           * tool_result text (`error` for an error result). A MARKER, not a new
-           * `role`, so an older build still parses the event: this object is not
-           * strict and drops the key, where a new enum member would fail its
-           * parse of the whole run log.
+           * round-trip (`CaptureToolTurnSchema`), ABSENT on an author turn. A
+           * MARKER, not a new `role`, so an older build still parses the event:
+           * this object is not strict and drops the key, where a new enum member
+           * would fail its parse of the whole run log.
            */
-          toolTurn: z.enum(['calls', 'result', 'error']).optional(),
+          toolTurn: CaptureToolTurnSchema.optional(),
         }),
       ),
     }),

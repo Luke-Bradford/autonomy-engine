@@ -558,6 +558,7 @@ describe('openaiAdapter — local tools (#2 L10a)', () => {
       'captured',
       'toolCalled',
       'metered',
+      'captured',
       'succeeded',
     ]);
     expect(succeeded(events).outputs).toEqual({ text: 'the answer', stopReason: 'stop' });
@@ -988,7 +989,7 @@ describe('openaiAdapter timeout → NO spend fact (#725)', () => {
 });
 
 // #605 L9b — `capture: 'full'` reaches BOTH capture sites: the plain text path
-// and the tool loop's round-0 capture. Metadata stays the default.
+// and every tool-loop round's capture. Metadata stays the default.
 describe('openaiAdapter — full capture (#605 L9b)', () => {
   const TOOL = {
     name: 'noop',
@@ -1017,7 +1018,7 @@ describe('openaiAdapter — full capture (#605 L9b)', () => {
     expect(capture.completion).toMatchObject({ text: 'the answer' });
   });
 
-  it("stores the text on the tool loop's round-0 capture too", async () => {
+  it("stores the text on a tool-configured node's capture too", async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       openaiAdapter.runActivity(

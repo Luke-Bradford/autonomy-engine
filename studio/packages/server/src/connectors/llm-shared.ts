@@ -12,6 +12,7 @@ import {
 } from '@autonomy-studio/shared';
 import type {
   CapturedContent,
+  CaptureToolTurn,
   LlmCallConfig,
   LlmCaptureMode,
   LlmOutputSchema,
@@ -25,7 +26,6 @@ import type {
 import type {
   ActivityContext,
   ActivityEvent,
-  CaptureToolTurn,
   ConnectorErrorKind,
   LlmCapture,
   LlmUsage,

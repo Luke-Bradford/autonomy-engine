@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   CapturedContent,
+  CaptureToolTurn,
   ConnectionKind,
   ConnectionProbeResult,
   DatasetAddress,
@@ -162,13 +163,6 @@ export interface LlmUsage {
   outputTokens?: number;
   meteringStatus: MeteringStatus;
 }
-
-/**
- * #605 — which half of a tool round-trip a CAPTURED turn records. Absent on an
- * author turn. `calls` is the assistant's tool-call turn; `result`/`error` is
- * one executed call's tool_result, `error` when it was an error result.
- */
-export type CaptureToolTurn = 'calls' | 'result' | 'error';
 
 /**
  * A debugging CAPTURE fact for ONE `llm_call` provider response (#2 L9a): the

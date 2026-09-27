@@ -7,6 +7,7 @@ import {
   TERMINAL_NODE,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
+  type CaptureToolTurn,
   type DispatchInput,
   type EngineEvent,
   type FailureKind,
@@ -527,7 +528,11 @@ export interface NodeCapture {
   model: string;
   /** The system instruction, when one was sent AND its text stored. */
   system: CapturedText | undefined;
-  messages: (CapturedText & { role: 'user' | 'assistant' })[];
+  /** `toolTurn` marks a turn recording an earlier tool round-trip (#605). */
+  messages: (CapturedText & {
+    role: 'user' | 'assistant';
+    toolTurn: CaptureToolTurn | undefined;
+  })[];
   /** ABSENT when the exchange produced no readable completion (a failure). */
   completion: CapturedText | undefined;
   /** 1-based, as `NodeToolCall.attempt`: a retry captures again. */
@@ -1339,7 +1344,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const completion = capturedText(e.completion);
         const messages = e.request.messages.flatMap((m) => {
           const t = capturedText(m);
-          return t === undefined ? [] : [{ role: m.role, ...t }];
+          return t === undefined ? [] : [{ role: m.role, toolTurn: m.toolTurn, ...t }];
         });
         if (system === undefined && completion === undefined && messages.length === 0) break;
         const list = capturesByNode.get(target.nodeId) ?? [];
