@@ -86,6 +86,39 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expectQuiet(page, problems);
   });
 
+  test('#844 4c — an empty-string default SURVIVES a save and reload as `""`', async ({ page }) => {
+    // Blank means "no default", so `''` is its own tick box. What the unit suite
+    // cannot see: that the KEY reaches the server, since `default: ''` and no
+    // default at all look identical in the field.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'u16 empty default', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      params: [{ name: 'suffix', type: 'string', required: false }],
+    });
+
+    const box = page.getByLabel('param 1 empty-string default');
+    await expect(box).not.toBeChecked();
+    await box.check();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+    await page.locator('.react-flow__renderer').waitFor();
+    await expect(page.getByLabel('param 1 empty-string default')).toBeChecked();
+    await expect(page.getByLabel('param 1 default')).toHaveValue('');
+
+    const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+    const items = (await versions.json()) as {
+      version: number;
+      params: Record<string, unknown>[];
+    }[];
+    const latest = items.reduce((a, b) => (a.version > b.version ? a : b));
+    expect(Object.prototype.hasOwnProperty.call(latest.params[0], 'default')).toBe(true);
+    expect(latest.params[0]!['default']).toBe('');
+
+    await expectQuiet(page, problems);
+  });
+
   test('an existing contract is NOT dropped by a save that only moves the graph', async ({
     page,
   }) => {

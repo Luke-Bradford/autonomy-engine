@@ -197,6 +197,79 @@ describe('PipelinePanel (U16) — params', () => {
     expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
   });
 
+  describe('#844 4c — the empty-string default', () => {
+    // Blank means "no default", so without this control an optional string
+    // param could not be given `''` — the value that makes `${params.x}`
+    // resolve to nothing rather than be absent from the run's context.
+    const box = () => screen.queryByLabelText('param 1 empty-string default');
+
+    it('ticking it stores `default: ""` — the KEY, not its absence', () => {
+      const store = mount(version({ params: [{ name: 's', type: 'string', required: false }] }));
+      expect(box()).not.toBeChecked();
+      fireEvent.click(box()!);
+
+      const p = store.getState().params[0]!;
+      expect('default' in p).toBe(true);
+      expect(p.default).toBe('');
+      expect(box()).toBeChecked();
+      expect(screen.getByText('The default is the empty string.')).toBeInTheDocument();
+    });
+
+    it('a stored `""` shows ticked, and unticking removes the key', () => {
+      const store = mount(
+        version({ params: [{ name: 's', type: 'string', required: false, default: '' }] }),
+      );
+      expect(box()).toBeChecked();
+      fireEvent.click(box()!);
+
+      expect('default' in store.getState().params[0]!).toBe(false);
+      expect(box()).not.toBeChecked();
+      expect(screen.getByText('Leave blank for no default.')).toBeInTheDocument();
+    });
+
+    it('is offered only while the field is blank, and only for a string', () => {
+      mount(
+        version({
+          params: [
+            { name: 's', type: 'string', required: false, default: 'x' },
+            { name: 'n', type: 'number', required: false },
+          ],
+        }),
+      );
+      expect(box()).toBeNull();
+      expect(screen.queryByLabelText('param 2 empty-string default')).toBeNull();
+
+      fireEvent.change(screen.getByLabelText('param 1 default'), { target: { value: '' } });
+      expect(box()).not.toBeChecked();
+    });
+
+    it('ticking it while the cleared field is uncommitted lands on `""`', () => {
+      // The pointer blurs the field before the click: that blur commits the
+      // blank (removing 'x'), then the tick stores `''`. The final state is the
+      // one the operator asked for, not whichever write happened to win.
+      const store = mount(
+        version({ params: [{ name: 's', type: 'string', required: false, default: 'x' }] }),
+      );
+      const field = screen.getByLabelText('param 1 default');
+      fireEvent.change(field, { target: { value: '' } });
+      fireEvent.blur(field, { target: { value: '' } });
+      fireEvent.click(box()!);
+
+      expect(store.getState().params[0]!.default).toBe('');
+      expect(field).toHaveValue('');
+    });
+
+    it('unticking it on a REQUIRED param makes the param truly required', () => {
+      const store = mount(
+        version({ params: [{ name: 's', type: 'string', required: true, default: '' }] }),
+      );
+      fireEvent.click(box()!);
+
+      expect('default' in store.getState().params[0]!).toBe(false);
+      expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
+    });
+  });
+
   it('commits a default on blur, TYPED — not as the raw text', () => {
     const store = mount(version({ params: [{ name: 'n', type: 'number', required: false }] }));
     const field = screen.getByLabelText('param 1 default');

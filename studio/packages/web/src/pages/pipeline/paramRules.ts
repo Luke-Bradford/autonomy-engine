@@ -263,9 +263,9 @@ export type DefaultParse =
  * referenced even though the run coerces it fine.
  *
  * BLANK means "no default" — not "the empty string". A string param that wants
- * `''` as its default cannot be authored here; that is a known, narrow gap, and
- * the alternative (a separate has-default checkbox on every row) buys one edge
- * case with permanent form clutter.
+ * `''` as its default says so with the row's "Empty string" tick box
+ * (`ParamRow`, #844 4c), which appears only on a blank string field rather than
+ * as a has-default checkbox on every row.
  */
 export function coerceDefaultInput(type: ParamType, raw: string): DefaultParse {
   const text = raw.trim();
