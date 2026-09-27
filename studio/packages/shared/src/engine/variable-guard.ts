@@ -14,12 +14,11 @@ import {
   nodeJoin,
   partitionReadiness,
   settledRawOf,
-  variableReadsOf,
   type ValidatedDoc,
   type VariableReads,
 } from './params.js';
 import type { ReseedFrontier } from './reduce.js';
-import type { Container, Edge, Node } from './types.js';
+import type { Container, Edge } from './types.js';
 
 /**
  * The save-time determinism guard (spec V-D6): a pipeline's final variable
@@ -38,14 +37,16 @@ import type { Container, Edge, Node } from './types.js';
  * CONSERVATIVE ON PURPOSE: a false reject names two nodes to connect; a false
  * accept is a run whose result depends on timing.
  *
- * `reads` defaults to {@link variableReadsOf}, which is complete only for a doc
- * the two validators accept — so the guard's verdict is meaningful only beside
- * theirs, which is how V5 wires it.
+ * `reads` is REQUIRED, and is the full reader list only for a doc the two
+ * validators accept ({@link variableReadsOf}). A default computed here would
+ * hand back `[]` for a refused doc whose scan never reached a read — a fail-open
+ * answer. The guard is meaningful only beside the validators, which is how V5
+ * wires it.
+ *
+ * A `set`/`append` node whose `variable` is not a literal name is refused here
+ * rather than skipped: skipping it would leave a writer the guard never checks.
  */
-export function variableGuardErrors(
-  doc: ValidatedDoc,
-  reads: VariableReads = variableReadsOf(doc),
-): string[] {
+export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): string[] {
   const containers = doc.containers ?? [];
   const containerById = new Map(containers.map((c) => [c.id, c]));
   const owner = containerMembership(containers).owner;
@@ -78,13 +79,21 @@ export function variableGuardErrors(
     }
     return a;
   };
+  const errors: string[] = [];
   for (const n of doc.nodes) {
-    const name = writtenVariable(n);
-    if (name !== undefined) entry(name).writers.add(n.id);
+    if (n.type !== SET_VARIABLE_ACTIVITY_TYPE && n.type !== APPEND_VARIABLE_ACTIVITY_TYPE) continue;
+    const v = n.config['variable'];
+    if (typeof v !== 'string' || v === '' || v.includes('${')) {
+      errors.push(
+        `node '${n.id}' (${n.type}): 'variable' must be a literal variable name, or the ` +
+          `determinism guard cannot tell what it writes`,
+      );
+      continue;
+    }
+    entry(v).writers.add(n.id);
   }
   for (const [id, names] of reads) for (const name of names) entry(name).readers.add(id);
 
-  const errors: string[] = [];
   for (const name of [...accessors.keys()].sort()) {
     const { writers, readers } = accessors.get(name)!;
     if (writers.size === 0) continue;
@@ -175,15 +184,6 @@ export function variableGuardErrors(
     }
   }
   return errors;
-}
-
-/** The variable a `set`/`append` node writes, or `undefined` for any other node. */
-function writtenVariable(n: Node): string | undefined {
-  if (n.type !== SET_VARIABLE_ACTIVITY_TYPE && n.type !== APPEND_VARIABLE_ACTIVITY_TYPE) {
-    return undefined;
-  }
-  const v = n.config['variable'];
-  return typeof v === 'string' ? v : undefined;
 }
 
 /**

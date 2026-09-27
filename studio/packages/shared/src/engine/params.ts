@@ -2265,19 +2265,26 @@ function readsFor(reads: VariableReads | undefined, id: string): { variableReads
  * #844 V4 — the readers of every variable, collected as a SIDE OUTPUT of the
  * two validators' own scans rather than by a second config walker (spec V-D6):
  * a `${}` site a separate collector missed would be a false accept in the
- * determinism guard. Errors are discarded here; V5 threads one map through
- * `validatePipelineDoc`'s own pass instead of calling this.
+ * determinism guard. V5 threads one map through `validatePipelineDoc`'s own
+ * pass instead of calling this.
  *
- * COMPLETE ONLY FOR A DOC BOTH VALIDATORS ACCEPT. A ref inside an unknown
+ * COMPLETE ONLY WHEN `validatorErrors` IS EMPTY. A ref inside an unknown
  * function's args, or under a refused root, is never reached by `checkRefRoot`
- * — but each of those paths also reports an error, so a doc the save gate
- * accepts has had every `vars` ref collected.
+ * — each of those paths reports an error instead, so the reads of a doc the
+ * validators accept are every read, and the reads of a refused doc may not be.
+ * The errors are returned, not dropped, so a caller cannot mistake the second
+ * case for the first.
  */
-export function variableReadsOf(doc: ValidatedDoc): VariableReads {
+export function variableReadsOf(doc: ValidatedDoc): {
+  reads: VariableReads;
+  validatorErrors: string[];
+} {
   const reads: VariableReads = new Map();
-  validateDoc(doc, { variableReads: reads });
-  validateRefs(doc, reads);
-  return reads;
+  const validatorErrors = [
+    ...validateDoc(doc, { variableReads: reads }),
+    ...validateRefs(doc, reads),
+  ];
+  return { reads, validatorErrors };
 }
 
 /** The non-structural fields of a `Container` — everything but `id`/`kind`/`children`. */

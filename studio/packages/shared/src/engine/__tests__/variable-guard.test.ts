@@ -45,8 +45,10 @@ const VARS: VariableDef[] = [
 function doc(nodes: Node[], edges: Edge[] = [], containers: Container[] = []) {
   return { params: [], nodes, edges, containers, variables: VARS };
 }
-const guard = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) =>
-  variableGuardErrors(doc(nodes, edges, containers));
+const guard = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) => {
+  const d = doc(nodes, edges, containers);
+  return variableGuardErrors(d, variableReadsOf(d).reads);
+};
 
 describe('variableReadsOf — readers are a side output of the validators’ own scans', () => {
   it('collects node config, call params and a filter predicate under the node id', () => {
@@ -56,7 +58,7 @@ describe('variableReadsOf — readers are a side output of the validators’ own
       node('flt', { items: '${createArray(1)}', predicate: '${equals(item, vars.v)}' }, 'filter'),
       node('quiet', { prompt: 'no refs' }),
     ]);
-    const reads = variableReadsOf(d);
+    const { reads } = variableReadsOf(d);
     expect([...(reads.get('cfg') ?? [])]).toEqual(['v']);
     expect([...(reads.get('caller') ?? [])]).toEqual(['v']);
     expect([...(reads.get('flt') ?? [])]).toEqual(['v']);
@@ -72,7 +74,7 @@ describe('variableReadsOf — readers are a side output of the validators’ own
         { id: 'lp', kind: 'loop', children: ['body2'], exitWhen: '${equals(vars.v, 3)}' },
       ],
     );
-    const reads = variableReadsOf(d);
+    const { reads } = variableReadsOf(d);
     expect([...(reads.get('fe') ?? [])]).toEqual(['list']);
     expect([...(reads.get('lp') ?? [])]).toEqual(['v']);
   });
@@ -81,7 +83,27 @@ describe('variableReadsOf — readers are a side output of the validators’ own
     const d = doc([
       node('n', { prompt: "${concat(string(vars.v), string(default(vars.list, 'x')))}" }),
     ]);
-    expect([...(variableReadsOf(d).get('n') ?? [])].sort()).toEqual(['list', 'v']);
+    expect([...(variableReadsOf(d).reads.get('n') ?? [])].sort()).toEqual(['list', 'v']);
+  });
+});
+
+describe('variableReadsOf — incompleteness is visible', () => {
+  it('returns the validators’ errors with the reads, never drops them', () => {
+    const d = doc([node('bad', { prompt: '${vars.undeclared}' })]);
+    expect(variableReadsOf(d).validatorErrors.join('\n')).toContain('not a declared variable');
+  });
+});
+
+describe('variableGuardErrors — a writer it cannot read is refused, not skipped', () => {
+  it.each([
+    ['missing', {}],
+    ['non-string', { variable: 3 }],
+    ['empty', { variable: '' }],
+    ['an expression', { variable: '${params.name}' }],
+  ])('refuses a set_variable whose variable is %s', (_label, config) => {
+    const errs = guard([node('w', config, 'set_variable')]);
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toContain("node 'w' (set_variable)");
   });
 });
 
