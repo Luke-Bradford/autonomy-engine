@@ -35,6 +35,7 @@ vi.mock('../../api/version', async () =>
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
   listRuns: vi.fn(),
+  listRunAnnotations: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn(),
   // #1206 — the Watch cases navigate to the run detail route, which loads R1
@@ -171,6 +172,7 @@ function pageOf(items: RunSummary[], nextCursor: string | null = null) {
 
 beforeEach(() => {
   listMock.mockResolvedValue(pageOf([]));
+  vi.mocked(runsApi.listRunAnnotations).mockResolvedValue([]);
   triggersMock.mockResolvedValue([]);
   costMock.mockResolvedValue(rollup());
   vi.mocked(runsApi.getRun).mockResolvedValue({} as never);
@@ -610,6 +612,44 @@ describe('RunsPage — U26 filter pane', () => {
     const select = screen.getByLabelText<HTMLSelectElement>('Pipeline');
     expect(select.value).toBe('pl_gone');
     expect(screen.getByRole('option', { name: /pl_gone/ })).toBeDisabled();
+  });
+
+  /**
+   * U26 — the ANNOTATION axis. Its options come from the server's run
+   * annotations; the chosen one rides the URL as `?annotation=` and reaches the
+   * list request, and an unknown one keeps the sibling orphan guard.
+   */
+  it('offers the run annotations, and a chosen one reaches the URL and the request', async () => {
+    vi.mocked(runsApi.listRunAnnotations).mockResolvedValue(['finance', 'nightly']);
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    await screen.findByText(/No runs yet/i);
+    const select = screen.getByLabelText<HTMLSelectElement>('Annotation');
+    await screen.findByRole('option', { name: 'nightly' });
+    listMock.mockClear();
+
+    await userEvent.selectOptions(select, 'nightly');
+
+    // The filters are read from the URL alone (no state mirror), so the request
+    // carrying it is the URL carrying it.
+    expect(listMock).toHaveBeenCalledWith({ annotation: 'nightly' }, undefined, expect.anything());
+    expect(select.value).toBe('nightly');
+  });
+
+  it('shows a filtered-but-unknown annotation as a disabled option, not as "All annotations"', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?annotation=retired');
+    await screen.findByText(/No runs match these filters/i);
+    expect(listMock).toHaveBeenCalledWith({ annotation: 'retired' }, undefined, expect.anything());
+    const select = screen.getByLabelText<HTMLSelectElement>('Annotation');
+    expect(select.value).toBe('retired');
+    expect(screen.getByRole('option', { name: /retired/ })).toBeDisabled();
+  });
+
+  it('keeps the list when the annotation options cannot load', async () => {
+    vi.mocked(runsApi.listRunAnnotations).mockRejectedValue(new Error('down'));
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    await screen.findByText(/No runs yet/i);
+    expect(screen.getByLabelText<HTMLSelectElement>('Annotation').value).toBe('');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   /**
