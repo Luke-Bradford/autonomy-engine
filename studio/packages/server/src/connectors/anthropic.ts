@@ -524,7 +524,7 @@ export const anthropicAdapter: ConnectorAdapter = {
             // #605 — the forced tool's `input` arrives PARSED, so the captured
             // completion (and its hash) is studio's re-serialization of it, not
             // the provider's raw bytes.
-            completionText: JSON.stringify(tool.input),
+            completionText: tool.input === undefined ? undefined : JSON.stringify(tool.input),
           };
         },
       );

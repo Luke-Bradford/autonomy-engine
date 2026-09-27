@@ -418,9 +418,9 @@ function refineLlmToolsCoupling(
  * `refineOutputModeCoupling` pattern) so the DISPATCH schema and the save-time
  * SURFACE slice enforce ONE rule: `emitMessages: true` is refused with
  * `outputMode:'structured'` in v1 — the transcript's final turn IS the text
- * completion, and a structured node's completion is a provider tool payload
- * (its capture half is likewise deferred with L9b, #605); wiring a structured
- * transcript is that deferral's plumbing, not an oversight. The `history`
+ * completion, and a structured node's completion is a provider tool payload,
+ * not a text turn. A structured transcript is simply not built in v1 — a
+ * deliberate refusal, not an oversight. The `history`
  * INPUT side carries no coupling: prepended turns compose with text,
  * structured, and tools alike.
  */
@@ -434,7 +434,7 @@ function refineLlmConversationCoupling(
       path: ['emitMessages'],
       message:
         "emitMessages is not supported with outputMode:'structured' " +
-        '(the transcript needs the text completion; structured capture is deferred with L9b)',
+        "(the transcript needs a text completion, and a structured node's result is not a text turn)",
     });
   }
 }
