@@ -6,6 +6,7 @@ import {
   type Container,
   type Edge,
   type Node,
+  type GlobalRead,
   type Param,
   type VariableDef,
   type RefSite,
@@ -50,6 +51,8 @@ export function useExpressionPicker(
   containers: Container[],
   params: Param[],
   variables: VariableDef[],
+  /** #844 GL3 — the workspace's globals, which the validator types reads by. */
+  globals: readonly GlobalRead[],
   site: RefSite,
   /** The panel's ONE answer to "what is each activity called" — see `nodeName`. */
   nodeNames: ReadonlyMap<string, string>,
@@ -98,6 +101,7 @@ export function useExpressionPicker(
             containers,
             params,
             variables,
+            globals,
           )
         : validateCanvas(
             nodes,
@@ -105,6 +109,7 @@ export function useExpressionPicker(
             containers.map((c) => (c.id === subjectId ? { ...c, [field]: value } : c)),
             params,
             variables,
+            globals,
           );
 
     // What a candidate is compared against — see `PickerTarget.baseline`. ONE
@@ -112,7 +117,7 @@ export function useExpressionPicker(
     // what the field's position raises whatever it holds.
     const baselineFor = (target: PickerTarget) =>
       target.baseline === 'stored'
-        ? validateCanvas(nodes, edges, containers, params, variables)
+        ? validateCanvas(nodes, edges, containers, params, variables, globals)
         : (() => {
             const literal = issuesWith(target, LITERAL_PROBE);
             return issuesWith(target, '').filter((issue) => literal.includes(issue));
@@ -176,5 +181,5 @@ export function useExpressionPicker(
           .map((name) => ({ name, signature: fnSignature(name) }));
       },
     };
-  }, [nodes, edges, containers, params, variables, subjectId, field, nodeNames]);
+  }, [nodes, edges, containers, params, variables, globals, subjectId, field, nodeNames]);
 }

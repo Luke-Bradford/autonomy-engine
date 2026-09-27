@@ -423,6 +423,7 @@ describe('ExpressionPicker — wrap in a function', () => {
         [],
         [],
         [],
+        [],
       );
     const baseline = issues(url);
     for (const name of offered) {

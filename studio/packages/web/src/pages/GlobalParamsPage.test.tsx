@@ -17,6 +17,7 @@ vi.mock('../api/globalParams', async (importActual) => {
     createGlobalParam: vi.fn(),
     updateGlobalParam: vi.fn(),
     deleteGlobalParam: vi.fn(),
+    getGlobalParamUsage: vi.fn(),
   };
 });
 
@@ -24,6 +25,7 @@ const listMock = vi.mocked(api.listGlobalParams);
 const createMock = vi.mocked(api.createGlobalParam);
 const updateMock = vi.mocked(api.updateGlobalParam);
 const deleteMock = vi.mocked(api.deleteGlobalParam);
+const usageMock = vi.mocked(api.getGlobalParamUsage);
 
 function global(overrides: Partial<GlobalParam> = {}): GlobalParam {
   return {
@@ -46,6 +48,7 @@ function row(name: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   listMock.mockResolvedValue([]);
+  usageMock.mockResolvedValue({ pipelines: [], triggers: [] });
 });
 
 afterEach(() => {
@@ -53,11 +56,12 @@ afterEach(() => {
 });
 
 describe('GlobalParamsPage (#844 GL2)', () => {
-  it('says the store is cleartext, not for credentials, and not read yet', async () => {
+  it('says the store is cleartext, not for credentials, and that runs record what they read', async () => {
     renderWithRouter(<GlobalParamsPage />);
     expect(await screen.findByText('No global parameters yet.')).toBeInTheDocument();
-    // Pinned so GL3, which makes pipelines read globals, has to change it.
-    expect(screen.getByText(/Pipelines cannot read them yet/)).toBeInTheDocument();
+    // #844 GL3 — pipelines read them now, and a run keeps the values it read.
+    expect(screen.queryByText(/cannot read them yet/)).toBeNull();
+    expect(screen.getByText(/A run records the values it read/)).toBeInTheDocument();
     expect(screen.getByText('cleartext')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Secrets' })).toHaveAttribute(
       'href',
@@ -257,6 +261,50 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     await user.click(within(saved).getByRole('button', { name: 'delete global 1' }));
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
     expect(confirm.mock.calls[0]![0]).toContain('"apiUrl"');
+    expect(usageMock).toHaveBeenCalledWith('gp_1');
+  });
+
+  // #844 GL3 (GL-D4) — the confirmation names what reads the global.
+  it('lists what reads the global in the delete confirmation', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([global()]);
+    usageMock.mockResolvedValue({
+      pipelines: [{ pipelineId: 'p1', pipelineName: 'Ingest', versionId: 'pv3', version: 3 }],
+      triggers: [
+        {
+          triggerId: 't1',
+          triggerName: 'Nightly',
+          enabled: false,
+          pipelineName: 'Ingest',
+          versionId: 'pv1',
+          version: 1,
+        },
+      ],
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderWithRouter(<GlobalParamsPage />);
+    const saved = await screen.findByRole('group', { name: 'global apiUrl' });
+    await user.click(within(saved).getByRole('button', { name: 'delete global 1' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    const text = confirm.mock.calls[0]![0]!;
+    expect(text).toContain('Read by the latest version of:\n  • Ingest (v3)');
+    expect(text).toContain('  • Nightly (Ingest v1, disabled)');
+    expect(text).toMatch(/will not start until a global of that name and type exists again/);
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it('says so when what reads it could not be checked, and still lets the delete go ahead', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([global()]);
+    deleteMock.mockResolvedValue(undefined);
+    usageMock.mockRejectedValue(new Error('boom'));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderWithRouter(<GlobalParamsPage />);
+    const saved = await screen.findByRole('group', { name: 'global apiUrl' });
+    await user.click(within(saved).getByRole('button', { name: 'delete global 1' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
+    expect(confirm.mock.calls[0]![0]).toContain('could not be checked');
+    expect(confirm.mock.calls[0]![0]).not.toContain('No pipeline');
   });
 
   it('discards an unsaved new row without a request', async () => {

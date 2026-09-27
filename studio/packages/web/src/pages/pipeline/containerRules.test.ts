@@ -21,7 +21,15 @@ const B: Node = { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y
 const C: Node = { id: 'n_c', type: 'not_in_catalog', config: {}, position: { x: 200, y: 0 } };
 
 function doc(overrides: Partial<ContainerEditDoc> = {}): ContainerEditDoc {
-  return { nodes: [A, B, C], edges: [], containers: [], params: [], variables: [], ...overrides };
+  return {
+    nodes: [A, B, C],
+    edges: [],
+    containers: [],
+    params: [],
+    variables: [],
+    globals: [],
+    ...overrides,
+  };
 }
 
 const D: Node = { id: 'n_d', type: 'http_request', config: {}, position: { x: 300, y: 0 } };
@@ -785,7 +793,7 @@ describe('issuesBySubject (#863)', () => {
   /** The canvas's own pairing: the real validators, each message with its display text. */
   function attributed(d: ContainerEditDoc) {
     const located = [
-      ...validateCanvas(d.nodes, d.edges, d.containers, d.params, d.variables),
+      ...validateCanvas(d.nodes, d.edges, d.containers, d.params, d.variables, []),
       ...policyIssues(d.nodes),
     ].map((raw) => ({ raw, text: readableIssue(raw, d.nodes, d.edges, d.containers) }));
     return { located, map: issuesBySubject(located, d.nodes, d.edges, d.containers) };

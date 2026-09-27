@@ -1,7 +1,10 @@
 import {
   GlobalParamSchema,
+  GlobalParamUsageSchema,
   paginatedResponseSchema,
   type GlobalParam,
+  type GlobalParamUsage,
+  type GlobalRead,
   type GlobalParamCreateBody,
   type GlobalParamPatchBody,
 } from '@autonomy-studio/shared';
@@ -42,4 +45,17 @@ export function updateGlobalParam(id: string, body: GlobalParamPatchBody): Promi
 
 export function deleteGlobalParam(id: string): Promise<void> {
   return apiFetch<void>(`/api/global-params/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** #844 GL3 — what reads a global (GL-D4): advisory, for the delete confirmation. */
+export function getGlobalParamUsage(id: string, signal?: AbortSignal): Promise<GlobalParamUsage> {
+  return apiFetch(`/api/global-params/${encodeURIComponent(id)}/usage`, {
+    schema: GlobalParamUsageSchema,
+    signal,
+  });
+}
+
+/** #844 GL3 — the name and type of each global: all the canvas validator needs. */
+export function toGlobalReads(globals: readonly GlobalParam[]): GlobalRead[] {
+  return globals.map(({ name, type }) => ({ name, type }));
 }
