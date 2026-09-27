@@ -144,6 +144,10 @@ const NODE_OUTPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * some non-identifiers resolve (`${params.my name}` does), and stored versions
  * may hold them — so for params this is the set the picker can offer safely,
  * not the set the save gate accepts.
+ *
+ * A fourth applies it as a HARD rule: pipeline VARIABLE names (#844 V1,
+ * `validateDoc`). A variable exists only to be read as `${vars.<name>}`, and no
+ * stored version predates the rule, so an unaddressable one is refused at save.
  */
 export function isAddressableOutputName(name: string): boolean {
   return NODE_OUTPUT_NAME_RE.test(name);
@@ -940,6 +944,12 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   // (immutable, unrepairable-in-place) can still be opened in the UI to re-author.
   params: z.array(ParamSchema).superRefine(refuseDuplicateNames('param', 'within the pipeline')),
   outputs: z.array(OutputSchema).superRefine(refuseDuplicateNames('output', 'within the pipeline')),
+  // #844 V1 — the same rule for variable names, and for the same reason. The
+  // other variable rules (addressable name, strict default) live in `validateDoc`.
+  variables: z
+    .array(VariableDefSchema)
+    .superRefine(refuseDuplicateNames('variable', 'within the pipeline'))
+    .default([]),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
 

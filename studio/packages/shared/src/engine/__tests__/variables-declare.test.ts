@@ -81,13 +81,25 @@ describe('validateDoc — variable declarations (V-D1)', () => {
     ).toEqual([]);
   });
 
-  it('refuses a duplicate variable name', () => {
-    expect(
-      errorsFor([
+  it('refuses a duplicate variable name on the write schema (the params/outputs rule)', () => {
+    const result = NewPipelineVersionSchema.safeParse({
+      pipelineId: 'pl_1',
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      variables: [
         { name: 'x', type: 'string', default: '' },
         { name: 'x', type: 'number', default: 0 },
-      ]),
-    ).toEqual([`duplicate variable name 'x' (variable names must be unique within the pipeline)`]);
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => [i.path, i.message])).toEqual([
+      [
+        ['variables', 1, 'name'],
+        `duplicate variable name 'x' (variable names must be unique within the pipeline)`,
+      ],
+    ]);
   });
 
   it('refuses a name that cannot be addressed as ${vars.<name>}', () => {

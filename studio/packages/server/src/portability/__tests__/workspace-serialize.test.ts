@@ -828,6 +828,27 @@ describe('ownedVersionForms — compare (#1018)', () => {
   const compareFor = (db: ReturnType<typeof freshDb>['db'], versionRid: string) =>
     ownedVersionForms(db, 'local', new Set([versionRid])).get(versionRid)!.compare;
 
+  // #844 V1 — the stored row always carries `variables` (`[]` for none), while a
+  // pre-V1 branch file has no key. That pair must judge IDENTICAL, or every
+  // re-pull after V1 would mint a duplicate version; and a branch file that
+  // declares variables must NOT, or an authored declaration would be discarded
+  // as `superseded`.
+  it('#844 V1 — an absent `variables` matches a stored `[]`; a declared one differs', () => {
+    const { db } = freshDb();
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, baseVersion(pipe.id));
+    const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+      .versions[0]!;
+    expect(version.variables).toEqual([]);
+    expect(Object.keys(branch)).not.toContain('variables');
+
+    const compare = compareFor(db, version.resourceId);
+    expect(compare(branch).identical).toBe(true);
+    expect(
+      compare({ ...branch, variables: [{ name: 'n', type: 'number', default: 0 }] }).identical,
+    ).toBe(false);
+  });
+
   it('is identical with no undecidable refs while the connection still exists', () => {
     const db = freshDb().db;
     const { version, branch } = heldVersionUsing(db);

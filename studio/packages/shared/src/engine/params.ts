@@ -2122,9 +2122,10 @@ export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 
 };
 
 /**
- * #844 V1 — the save-time rules on a pipeline's declared variables (spec V-D1):
- *  - a name is unique among the variables. Params are a separate root, so
- *    `params.x` and `vars.x` may coexist;
+ * #844 V1 — the save-time rules on a pipeline's declared variables (spec V-D1).
+ * Name UNIQUENESS is not here: it is `refuseDuplicateNames` on the write schema
+ * (`NewPipelineVersionSchema`), the one rule params and outputs already share.
+ * Params are a separate root, so `params.x` and `vars.x` may coexist.
  *  - a name is addressable as `${vars.<name>}`, by the rule node outputs use.
  *    Unlike a param name (#1354 only NOTES that), this is a hard error: a
  *    variable exists only to be read by name, so an unaddressable one is a
@@ -2138,14 +2139,7 @@ export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 
  */
 function variableDeclarationErrors(variables: readonly VariableDef[]): string[] {
   const errors: string[] = [];
-  const seen = new Set<string>();
   for (const v of variables) {
-    if (seen.has(v.name)) {
-      errors.push(
-        `duplicate variable name '${v.name}' (variable names must be unique within the pipeline)`,
-      );
-    }
-    seen.add(v.name);
     if (!isAddressableOutputName(v.name)) {
       errors.push(
         `variable '${v.name}' cannot be referenced as \${vars.<name>} ` +
