@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { triggerForm } from './support/panels';
 
 /**
  * #1090 U14c — authoring a RUN WINDOW through controls instead of raw JSON.
@@ -18,10 +19,6 @@ import { fluentRootReady } from './support/theme';
  * write boundary, persisted, and then silently stopped the trigger ever firing
  * — no error at write time, at fire time, or anywhere on screen.
  */
-
-function triggerForm(page: Page) {
-  return page.getByRole('form', { name: 'Trigger form' });
-}
 
 async function openTriggers(page: Page): Promise<string[]> {
   const problems = collectPageProblems(page);

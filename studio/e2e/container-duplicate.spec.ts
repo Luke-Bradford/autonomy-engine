@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { viewportSettled } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U21 (#935) — duplicating a CONTAINER, body and all.
@@ -71,7 +72,7 @@ test.describe('duplicate a container (U21)', () => {
     // panned into view: it is the panel's subject.
     await expect(page.getByRole('group', { name: /^loop 2 container/ })).toBeInViewport();
     // The copy is the panel's subject now — "another one of these, but different".
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     await expect(panel.getByRole('heading', { name: 'loop 2' })).toBeVisible();
 
     // Beside the original, not over it. Fit first: after the reveal the original

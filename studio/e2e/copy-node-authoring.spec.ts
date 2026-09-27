@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * #996 M5 slice 4c (#1139) — authoring a `copy` node on the canvas.
@@ -23,10 +24,6 @@ import { openSeededCanvas } from './support/seedDoc';
  *    version: `toVersionBody` carrying them, the write gate accepting them, and
  *    the reload resolving all four ids back into the same four pickers.
  */
-
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
 
 /** A `sqlite` store connection, minted through the real route. */
 async function seedConnection(page: Page, name: string, path: string): Promise<string> {
@@ -81,29 +78,33 @@ test.describe('#1139 — copy-node authoring', () => {
     // default, so a loose 'Connection' matches the two paired pickers and this
     // assertion would fail against a correct panel.
     await expect(
-      panel(page).getByRole('combobox', { name: 'Connection', exact: true }),
+      properties(page).getByRole('combobox', { name: 'Connection', exact: true }),
     ).toHaveCount(0);
     for (const label of ['Source connection', 'Sink connection', 'Source dataset']) {
-      await expect(panel(page).getByRole('combobox', { name: label })).toBeVisible();
+      await expect(properties(page).getByRole('combobox', { name: label })).toBeVisible();
     }
 
     // Picking ONE end leaves the doc without the pair, and the panel says so
     // rather than letting the pick look saved.
-    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
-    await expect(panel(page).getByRole('status')).toContainText('not saved');
+    await properties(page)
+      .getByRole('combobox', { name: 'Source connection' })
+      .selectOption(srcConn);
+    await expect(properties(page).getByRole('status')).toContainText('not saved');
 
-    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
+    await properties(page)
+      .getByRole('combobox', { name: 'Sink connection' })
+      .selectOption(sinkConn);
 
     // The dataset lists are narrowed by the connection bound to the SAME end —
     // a disagreeing pair is refused at dispatch, so offering one is offering a
     // binding that cannot run.
     await expect(
-      panel(page).getByRole('combobox', { name: 'Source dataset' }).locator('option'),
+      properties(page).getByRole('combobox', { name: 'Source dataset' }).locator('option'),
     ).toHaveCount(2); // "— none —" plus the one dataset on the source store
 
-    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
-    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
-    await expect(panel(page).getByRole('status')).toHaveCount(0);
+    await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+    await expect(properties(page).getByRole('status')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -114,14 +115,18 @@ test.describe('#1139 — copy-node authoring', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
 
-    await expect(panel(page).getByRole('combobox', { name: 'Source connection' })).toHaveValue(
+    await expect(properties(page).getByRole('combobox', { name: 'Source connection' })).toHaveValue(
       srcConn,
     );
-    await expect(panel(page).getByRole('combobox', { name: 'Sink connection' })).toHaveValue(
+    await expect(properties(page).getByRole('combobox', { name: 'Sink connection' })).toHaveValue(
       sinkConn,
     );
-    await expect(panel(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(srcSet);
-    await expect(panel(page).getByRole('combobox', { name: 'Sink dataset' })).toHaveValue(sinkSet);
+    await expect(properties(page).getByRole('combobox', { name: 'Source dataset' })).toHaveValue(
+      srcSet,
+    );
+    await expect(properties(page).getByRole('combobox', { name: 'Sink dataset' })).toHaveValue(
+      sinkSet,
+    );
 
     // Read from the persisted version, because a picker showing the right value
     // proves the store round-tripped it, not that the SERVER stored it — and
@@ -177,29 +182,33 @@ test.describe('#1139 — copy-node authoring', () => {
     await addActivity(page, 'Copy Data');
     await canvasNodes(page).first().click();
 
-    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
-    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
-    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
-    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+    await properties(page)
+      .getByRole('combobox', { name: 'Source connection' })
+      .selectOption(srcConn);
+    await properties(page)
+      .getByRole('combobox', { name: 'Sink connection' })
+      .selectOption(sinkConn);
+    await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     // The JSON textarea this control replaces — for the field, and for the whole
     // node. Their ABSENCE is the ticket.
-    await expect(panel(page).getByLabel('mapping — JSON')).toHaveCount(0);
-    await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
+    await expect(properties(page).getByLabel('mapping — JSON')).toHaveCount(0);
+    await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     // Two rows, each authored through named controls rather than as JSON.
     for (const [row, source, sink, type] of [
       [1, 'id', 'id', 'integer'],
       [2, 'label', 'full_name', 'string'],
     ] as const) {
-      await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-      await panel(page)
+      await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
+      await properties(page)
         .getByRole('textbox', { name: `mapping row ${row} source (optional)` })
         .fill(source);
-      await panel(page)
+      await properties(page)
         .getByRole('textbox', { name: `mapping row ${row} sink` })
         .fill(sink);
-      await panel(page).getByLabel(`mapping row ${row} type`).selectOption(type);
+      await properties(page).getByLabel(`mapping row ${row} type`).selectOption(type);
     }
 
     // Row 2 takes an explicit `onError`; row 1 is left alone. A defaulted enum
@@ -207,9 +216,9 @@ test.describe('#1139 — copy-node authoring', () => {
     // in — the same rule every optional control in this form follows, and the
     // difference between "the author chose 'fail'" and "the author said
     // nothing", which is a distinction §6.2 can still act on later.
-    await panel(page).getByLabel('mapping row 2 onError (optional)').selectOption('null');
+    await properties(page).getByLabel('mapping row 2 onError (optional)').selectOption('null');
 
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
@@ -229,10 +238,10 @@ test.describe('#1139 — copy-node authoring', () => {
     // And it comes BACK into the same controls, one row per stored mapping.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
-    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
       'full_name',
     );
-    await expect(panel(page).getByLabel('mapping row 2 type')).toHaveValue('string');
+    await expect(properties(page).getByLabel('mapping row 2 type')).toHaveValue('string');
 
     await expectQuiet(page, problems);
   });
@@ -274,45 +283,51 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
 
     // Before either dataset is bound there is nothing to map FROM, and the
     // button says so rather than sitting there live and doing nothing.
-    await expect(panel(page).getByRole('button', { name: 'Auto-map columns' })).toBeDisabled();
+    await expect(properties(page).getByRole('button', { name: 'Auto-map columns' })).toBeDisabled();
 
-    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
-    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
-    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
-    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+    await properties(page)
+      .getByRole('combobox', { name: 'Source connection' })
+      .selectOption(srcConn);
+    await properties(page)
+      .getByRole('combobox', { name: 'Sink connection' })
+      .selectOption(sinkConn);
+    await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
     // §13 — with NO mapping yet, the sink's NOT NULL columns are already named.
     // That is the point of the advisory: the author learns the copy cannot
     // succeed here, rather than at dispatch.
     await expect(
-      panel(page).getByText(/The sink requires a value for id, imported_by/),
+      properties(page).getByText(/The sink requires a value for id, imported_by/),
     ).toBeVisible();
 
-    await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
+    await properties(page).getByRole('button', { name: 'Auto-map columns' }).click();
 
     // Two matched; the third is reported by name, because the author has to
     // resolve it themselves and cannot without knowing which column is stuck.
-    await expect(panel(page).getByText(/Mapped 2 columns\./)).toBeVisible();
+    await expect(properties(page).getByText(/Mapped 2 columns\./)).toBeVisible();
     await expect(
-      panel(page).getByText(/imported_by had no source column of that name/),
+      properties(page).getByText(/imported_by had no source column of that name/),
     ).toBeVisible();
 
     // The rows landed in the real row controls, not in a JSON box.
-    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
       'id',
     );
-    await expect(panel(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'mapping row 2 sink' })).toHaveValue(
       'label',
     );
-    await expect(panel(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
-    await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
+    await expect(properties(page).getByLabel('mapping row 1 type')).toHaveValue('integer');
+    await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     // The advisory NARROWS as the mapping covers the sink — it must stop naming
     // a column that is now mapped, or it teaches the author to ignore it.
-    await expect(panel(page).getByText(/The sink requires a value for imported_by/)).toBeVisible();
-    await expect(panel(page).getByText(/requires a value for id,/)).toHaveCount(0);
+    await expect(
+      properties(page).getByText(/The sink requires a value for imported_by/),
+    ).toBeVisible();
+    await expect(properties(page).getByText(/requires a value for id,/)).toHaveCount(0);
 
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
@@ -332,12 +347,14 @@ test.describe('#1170 — Auto-map and the unmapped advisory', () => {
     // And a second press is ADDITIVE, so it cannot destroy what is already there.
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await canvasNodes(page).first().click();
-    await panel(page).getByRole('button', { name: 'Auto-map columns' }).click();
-    await expect(panel(page).getByText(/No new columns matched\./)).toBeVisible();
-    await expect(panel(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
+    await properties(page).getByRole('button', { name: 'Auto-map columns' }).click();
+    await expect(properties(page).getByText(/No new columns matched\./)).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'mapping row 1 sink' })).toHaveValue(
       'id',
     );
-    await expect(panel(page).getByRole('textbox', { name: 'mapping row 3 sink' })).toHaveCount(0);
+    await expect(properties(page).getByRole('textbox', { name: 'mapping row 3 sink' })).toHaveCount(
+      0,
+    );
 
     await expectQuiet(page, problems);
   });
@@ -367,37 +384,41 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
     await addActivity(page, 'Copy Data');
     await canvasNodes(page).first().click();
 
-    await panel(page).getByRole('combobox', { name: 'Source connection' }).selectOption(srcConn);
-    await panel(page).getByRole('combobox', { name: 'Sink connection' }).selectOption(sinkConn);
-    await panel(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
-    await panel(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
+    await properties(page)
+      .getByRole('combobox', { name: 'Source connection' })
+      .selectOption(srcConn);
+    await properties(page)
+      .getByRole('combobox', { name: 'Sink connection' })
+      .selectOption(sinkConn);
+    await properties(page).getByRole('combobox', { name: 'Source dataset' }).selectOption(srcSet);
+    await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
 
-    await panel(page).getByRole('button', { name: 'Add mapping row' }).click();
-    await panel(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
-    await panel(page).getByLabel('mapping row 1 type').selectOption('string');
+    await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
+    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('label');
+    await properties(page).getByLabel('mapping row 1 type').selectOption('string');
 
     // The column-name cell: held to a literal, so nothing is offered.
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: 'Insert reference into mapping row 1 sink' })
       .click();
     await expect(
-      panel(page).getByText('No reference in this pipeline fits mapping row 1 sink'),
+      properties(page).getByText('No reference in this pipeline fits mapping row 1 sink'),
     ).toBeVisible();
-    await expect(panel(page).getByRole('button', { name: /^batch/ })).toHaveCount(0);
+    await expect(properties(page).getByRole('button', { name: /^batch/ })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
     // The value cell: the param is offered, and lands in THIS row's expression.
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: 'Insert reference into mapping row 1 expression' })
       .click();
-    await panel(page)
+    await properties(page)
       .getByRole('button', { name: /^batch/ })
       .click();
     await expect(
-      panel(page).getByRole('textbox', { name: 'mapping row 1 expression (optional)' }),
+      properties(page).getByRole('textbox', { name: 'mapping row 1 expression (optional)' }),
     ).toHaveValue('${params.batch}');
 
-    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 

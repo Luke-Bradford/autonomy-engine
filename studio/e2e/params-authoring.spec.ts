@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { deselect } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U16 — authoring a pipeline's typed `params`/`outputs` contract on the canvas.
@@ -18,11 +19,6 @@ import { openSeededCanvas } from './support/seedDoc';
  * exactly what a regression to the old carry-forward would silently break.
  */
 
-/** The panel is the nothing-selected slot, so a fresh canvas already shows it. */
-function panel(page: Page) {
-  return page.getByRole('complementary', { name: 'Properties' });
-}
-
 /** The validation badge's messages, or `[]` when there is no badge. */
 async function validationIssues(page: Page): Promise<string[]> {
   const list = page.locator('.badge-list li');
@@ -37,7 +33,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     });
 
     // A brand-new canvas pipeline: no contract at all. This is the hole.
-    await expect(panel(page).getByText('None declared.').first()).toBeVisible();
+    await expect(properties(page).getByText('None declared.').first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Add param' }).click();
     await page.getByLabel('param 1 name').fill('topic');
@@ -191,8 +187,8 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await dflt.fill('run-${run.runId}');
     await dflt.blur();
 
-    await expect(panel(page).getByText("'topic.id' is not a plain identifier")).toBeVisible();
-    await expect(panel(page).getByText('used exactly as written')).toBeVisible();
+    await expect(properties(page).getByText("'topic.id' is not a plain identifier")).toBeVisible();
+    await expect(properties(page).getByText('used exactly as written')).toBeVisible();
     // Notes, not gates: the doc is legal and the server takes it.
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
@@ -234,7 +230,7 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await page.getByLabel('param 1 type').selectOption('number');
 
     // The row names it, and the doc-level badge names it in the SAME words.
-    await expect(panel(page).getByText("param 'n': expected a finite number")).toBeVisible();
+    await expect(properties(page).getByText("param 'n': expected a finite number")).toBeVisible();
     expect(await validationIssues(page)).toContain("param 'n': expected a finite number");
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
@@ -315,7 +311,9 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
       "variable 'my-total' cannot be referenced",
     );
     // The row states the same sentence, where the fix is made.
-    await expect(panel(page).getByRole('alert')).toContainText("'my-total' cannot be referenced");
+    await expect(properties(page).getByRole('alert')).toContainText(
+      "'my-total' cannot be referenced",
+    );
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     await page.getByLabel('variable 1 name').fill('total');

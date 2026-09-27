@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties } from './support/panels';
 
 /**
  * U23 (#839) — editing an EXISTING container's config.
@@ -383,8 +384,6 @@ test.describe('#864 — the expression flyout on container fields', () => {
       ],
     },
   };
-  const panel = (page: Page) => page.getByRole('complementary', { name: 'Properties' });
-
   test("a loop's exitWhen is offered its child's boolean, and the pick is saved", async ({
     page,
   }) => {
@@ -398,12 +397,12 @@ test.describe('#864 — the expression flyout on container fields', () => {
     });
 
     await configure(page, 'loop 1');
-    await panel(page).getByRole('button', { name: 'Insert reference into exitWhen' }).click();
+    await properties(page).getByRole('button', { name: 'Insert reference into exitWhen' }).click();
     // The save gate's boolean check is what filters `note` out, and the scope
     // rule is what keeps the upstream `rows` out — neither restated in the UI.
-    await expect(panel(page).getByRole('button', { name: /→ note/ })).toHaveCount(0);
-    await expect(panel(page).getByRole('button', { name: /→ rows/ })).toHaveCount(0);
-    await panel(page)
+    await expect(properties(page).getByRole('button', { name: /→ note/ })).toHaveCount(0);
+    await expect(properties(page).getByRole('button', { name: /→ rows/ })).toHaveCount(0);
+    await properties(page)
       .getByRole('button', { name: /→ done/ })
       .click();
     await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${nodes.n_body.output.done}');
@@ -435,9 +434,9 @@ test.describe('#864 — the expression flyout on container fields', () => {
     });
 
     await configure(page, 'foreach 1');
-    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
-    await expect(panel(page).getByRole('button', { name: /→ done/ })).toHaveCount(0);
-    await panel(page)
+    await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
+    await expect(properties(page).getByRole('button', { name: /→ done/ })).toHaveCount(0);
+    await properties(page)
       .getByRole('button', { name: /→ rows/ })
       .click();
     await expect(page.getByLabel(/^items/)).toHaveValue('${nodes.n_src.output.rows}');

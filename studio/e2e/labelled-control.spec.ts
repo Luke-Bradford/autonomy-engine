@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { canvasNodes } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
+import { properties, triggerForm } from './support/panels';
 
 /**
  * #1227 — every `<select>`/`<textarea>` is paired with its label by `for`/`id`
@@ -14,10 +15,6 @@ import { openSeededCanvas } from './support/seedDoc';
  * layout tests pin the three shapes the wrapper takes: a stacked form row, the
  * AI page's inline picker, and a config field's own tighter rhythm.
  */
-function triggerForm(page: Page) {
-  return page.getByRole('form', { name: 'Trigger form' });
-}
-
 async function openNewTrigger(page: Page): Promise<string[]> {
   const problems = collectPageProblems(page);
   await page.goto('/#/manage/triggers');
@@ -125,9 +122,7 @@ test.describe('#1227 — a label names its control and nothing else', () => {
       nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
     });
     await canvasNodes(page).first().click();
-    const url = page
-      .getByRole('complementary', { name: 'Properties' })
-      .getByLabel('url', { exact: true });
+    const url = properties(page).getByLabel('url', { exact: true });
     await expect(url).toBeVisible();
     expect(await configFieldStyle(url)).toEqual(CONFIG_FIELD_RHYTHM);
 

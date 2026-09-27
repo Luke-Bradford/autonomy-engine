@@ -1,7 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { mintVersion, seedVersion } from './support/seedDoc';
+import { triggerForm } from './support/panels';
 
 /**
  * #981 — binding a trigger to "the active published version", from the UI.
@@ -23,10 +24,6 @@ import { mintVersion, seedVersion } from './support/seedDoc';
  * of the same shared schema can see — both sides would agree on the object the
  * client built rather than on the JSON the server receives.
  */
-
-function triggerForm(page: Page) {
-  return page.getByRole('form', { name: 'Trigger form' });
-}
 
 const DOC = { nodes: [{ id: 'n1', position: { x: 0, y: 0 } }] };
 

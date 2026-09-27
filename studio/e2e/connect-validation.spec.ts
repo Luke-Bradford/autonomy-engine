@@ -14,6 +14,7 @@ import {
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { computedStyleOf, resolvedPaletteColor, setTheme } from './support/theme';
+import { properties } from './support/panels';
 
 /**
  * The condition → palette-var mapping, as `index.css` declares it and
@@ -232,7 +233,7 @@ test.describe('U6b connect-time validation', () => {
     await page.locator('.react-flow__edge.edge-variant-failure').focus();
     await page.keyboard.press('Enter');
     await expect(firesOn(page)).toBeVisible();
-    const panel = page.getByRole('complementary', { name: 'Properties' });
+    const panel = properties(page);
     const completion = panel.getByRole('radio', {
       name: 'completion — would repeat the success edge',
     });

@@ -8,6 +8,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 import { seedVersion } from './support/seedDoc';
+import { triggerForm } from './support/panels';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -393,24 +394,24 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await page.goto('/#/manage/triggers');
   await fluentRootReady(page);
   await page.getByRole('button', { name: /New trigger/i }).click();
-  const triggerForm = page.getByRole('form', { name: 'Trigger form' });
-  await triggerForm.getByLabel('Name').fill('Bound to active');
-  await triggerForm.getByRole('radio', { name: /active published version/i }).check();
+  const form = triggerForm(page);
+  await form.getByLabel('Name').fill('Bound to active');
+  await form.getByRole('radio', { name: /active published version/i }).check();
 
   // `pipelineName` was committed and re-imported, but never published.
-  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: pipelineName });
-  await expect(triggerForm.getByText(/has no published version/i)).toBeVisible();
-  await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
+  await form.getByLabel(/^Pipeline/).selectOption({ label: pipelineName });
+  await expect(form.getByText(/has no published version/i)).toBeVisible();
+  await form.getByRole('button', { name: /Create trigger/i }).click();
   // Refused HERE — the request that would 400 is never sent, and the message
   // names the act that clears it rather than echoing the server's, which
   // carries an internal id.
-  const refusal = triggerForm.getByRole('alert');
+  const refusal = form.getByRole('alert');
   await expect(refusal).toContainText(/publish/i);
   await expect(refusal).not.toContainText(/pl_|plv_/);
-  await expect(triggerForm).toBeVisible();
+  await expect(form).toBeVisible();
 
   // `publishName` was published as v1 immediately above.
-  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: publishName });
+  await form.getByLabel(/^Pipeline/).selectOption({ label: publishName });
   /*
    * The id is read off the SELECT rather than looked up in `GET /api/pipelines`:
    * that list is keyset-paginated (`{items, nextCursor}`, #534) and the shared DB
@@ -420,11 +421,11 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * as `bindToActive.pipelineId`, so the pointer below is read for the same
    * pipeline the binding resolved against.
    */
-  const publishedPipelineId = await triggerForm.getByLabel(/^Pipeline/).inputValue();
+  const publishedPipelineId = await form.getByLabel(/^Pipeline/).inputValue();
   expect(publishedPipelineId, `no pipeline id selected for ${publishName}`).toBeTruthy();
-  await expect(triggerForm.getByText(/v1/)).toBeVisible();
-  await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
-  await expect(triggerForm).toBeHidden();
+  await expect(form.getByText(/v1/)).toBeVisible();
+  await form.getByRole('button', { name: /Create trigger/i }).click();
+  await expect(form).toBeHidden();
 
   const boundList = await (await page.request.get('/api/triggers')).json();
   const bound = (boundList as Array<{ name: string; pipelineVersionId: string | null }>).find(
