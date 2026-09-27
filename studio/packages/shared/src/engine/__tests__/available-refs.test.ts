@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { availableRefs, type RefSuggestion } from '../params.js';
 import { validatePipelineDoc } from '../validate-pipeline.js';
-import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
+import type { Container, Edge, GlobalParamType, Node, Param, VariableDef } from '../../index.js';
 
 /**
  * U8a — the reference CATALOG behind the expression-insert flyout.
@@ -44,10 +44,22 @@ function doc(over: Partial<Doc> = {}): Doc {
   return { params: [], variables: [], nodes: [], edges: [], containers: [], ...over };
 }
 
+/**
+ * #844 GL4 — the workspace's globals, handed to EVERY property probe below: the
+ * catalog offers them at every site, and the validator is told the same map, so
+ * each fixture's global offers are held to the no-false-offer rule too. A json
+ * global is included because it is the one type a tail may follow.
+ */
+const GLOBALS: ReadonlyMap<string, GlobalParamType> = new Map<string, GlobalParamType>([
+  ['env', 'string'],
+  ['limits', 'json'],
+]);
+const WITH_GLOBALS = { globals: GLOBALS };
+
 /** Every suggestion offered to every node of `d`, as `[nodeId, suggestion]` pairs. */
 function allOffers(d: Doc): [string, RefSuggestion][] {
   return d.nodes.flatMap((n) =>
-    availableRefs(d, { kind: 'node', nodeId: n.id }).map(
+    availableRefs(d, { kind: 'node', nodeId: n.id }, WITH_GLOBALS).map(
       (s) => [n.id, s] as [string, RefSuggestion],
     ),
   );
@@ -124,8 +136,8 @@ describe('availableRefs — no false offer', () => {
       expect(offers.length).toBeGreaterThan(0);
 
       for (const [nodeId, suggestion] of offers) {
-        const before = validatePipelineDoc(d);
-        const after = validatePipelineDoc(withProbe(d, nodeId, suggestion.insert));
+        const before = validatePipelineDoc(d, WITH_GLOBALS);
+        const after = validatePipelineDoc(withProbe(d, nodeId, suggestion.insert), WITH_GLOBALS);
         expect(after, `${nodeId} ← ${suggestion.insert}`).toEqual(before);
       }
     });
@@ -133,6 +145,76 @@ describe('availableRefs — no false offer', () => {
 
   it('the fixtures are themselves clean, so an unchanged issue set means CLEAN', () => {
     for (const [name, d] of FIXTURES) expect(validatePipelineDoc(d), name).toEqual([]);
+  });
+});
+
+// --- #844 GL4: the workspace's globals ---------------------------------------
+
+describe('availableRefs — global parameters (#844 GL4)', () => {
+  it('the property above really probed globals, at every node site', () => {
+    for (const [name, d] of FIXTURES) {
+      for (const n of d.nodes) {
+        const offered = availableRefs(d, { kind: 'node', nodeId: n.id }, WITH_GLOBALS);
+        expect(
+          offered.filter((s) => s.kind === 'global').map((s) => s.ref),
+          `${name}: ${n.id}`,
+        ).toEqual(['global.env', 'global.limits']);
+      }
+    }
+  });
+
+  it('offers each global with its stored type, always available', () => {
+    const offered = availableRefs(CHAIN, { kind: 'node', nodeId: 'a' }, WITH_GLOBALS).filter(
+      (s) => s.kind === 'global',
+    );
+    expect(offered).toEqual([
+      {
+        ref: 'global.env',
+        insert: '${global.env}',
+        kind: 'global',
+        name: 'env',
+        declaredType: 'string',
+        availability: 'available',
+      },
+      {
+        ref: 'global.limits',
+        insert: '${global.limits}',
+        kind: 'global',
+        name: 'limits',
+        declaredType: 'json',
+        availability: 'available',
+      },
+    ]);
+  });
+
+  it('offers none when the caller passes no globals — absent means NONE, as at the gate', () => {
+    expect(
+      availableRefs(CHAIN, { kind: 'node', nodeId: 'c' }).some((s) => s.kind === 'global'),
+    ).toBe(false);
+  });
+
+  it("offers them at a loop's exitWhen and a foreach's items too", () => {
+    const sites: [Doc, string, (typeof FIELDS)[number]][] = [
+      [LOOP, 'lp', 'exitWhen'],
+      [FOREACH, 'loop', 'items'],
+    ];
+    for (const [d, containerId, field] of sites) {
+      const refs = availableRefs(d, { kind: 'container', containerId, field }, WITH_GLOBALS)
+        .filter((s) => s.kind === 'global')
+        .map((s) => s.ref);
+      expect(refs, `${containerId}.${field}`).toEqual(['global.env', 'global.limits']);
+    }
+  });
+
+  it('skips a name the ref grammar would split, as it does a param', () => {
+    const globals = new Map<string, GlobalParamType>([
+      ['a.b', 'string'],
+      ['ok', 'number'],
+    ]);
+    const refs = availableRefs(CHAIN, { kind: 'node', nodeId: 'c' }, { globals })
+      .filter((s) => s.kind === 'global')
+      .map((s) => s.ref);
+    expect(refs).toEqual(['global.ok']);
   });
 });
 
@@ -287,7 +369,7 @@ const FIELDS = ['exitWhen', 'items'] as const;
 function containerOffers(d: Doc): [string, (typeof FIELDS)[number], RefSuggestion][] {
   return d.containers.flatMap((c) =>
     FIELDS.flatMap((field) =>
-      availableRefs(d, { kind: 'container', containerId: c.id, field }).map(
+      availableRefs(d, { kind: 'container', containerId: c.id, field }, WITH_GLOBALS).map(
         (s) => [c.id, field, s] as [string, (typeof FIELDS)[number], RefSuggestion],
       ),
     ),
@@ -315,9 +397,12 @@ describe('availableRefs — no false offer at a container field (#864)', () => {
     it(`${name}: every offer is in scope for the field it is offered to`, () => {
       const offers = containerOffers(d);
       expect(offers.length).toBeGreaterThan(0);
-      const before = validatePipelineDoc(d);
+      const before = validatePipelineDoc(d, WITH_GLOBALS);
       for (const [id, field, suggestion] of offers) {
-        const after = validatePipelineDoc(withField(d, id, field, suggestion.insert)).filter(
+        const after = validatePipelineDoc(
+          withField(d, id, field, suggestion.insert),
+          WITH_GLOBALS,
+        ).filter(
           (issue) => !TYPE_REFUSAL.test(issue),
         );
         expect(after, `${id}.${field} ← ${suggestion.insert}`).toEqual(before);
