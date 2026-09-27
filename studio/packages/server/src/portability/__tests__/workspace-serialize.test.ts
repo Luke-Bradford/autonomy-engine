@@ -1120,4 +1120,73 @@ describe('ownedVersionForms — compare (#1018)', () => {
       });
     });
   });
+
+  // #1106 — the commit direction (`serializeWorkspace`, which writes the branch)
+  // and the compare direction (`compare`, which re-derives the stored row in
+  // resourceId-space) must agree on EVERY ref position at once. The per-position
+  // round-trips above each cover one; this pins all five in one version, plus a
+  // `call` ref and a `${}` dynamic end, which none of them reach. A drift between
+  // the two directions reads as a permanent phantom "changed" on a version nobody
+  // edited.
+  it('#1106 — every ref position round-trips IDENTICAL, `call` and a dynamic end included', () => {
+    const db = freshDb().db;
+    const conn = (name: string) =>
+      createConnection(db, { ownerId: 'local', name, kind: 'http', config: {}, secretRef: null });
+    const single = conn('Single');
+    const src = conn('Src');
+    const store = conn('Store');
+    const ds = (name: string) =>
+      createDataset(db, {
+        ownerId: 'local',
+        name,
+        connectionId: store.id,
+        kind: 'table',
+        config: {},
+        columns: [],
+      });
+    const dsSrc = ds('DsSrc');
+    const dsSnk = ds('DsSnk');
+    const callee = createPipeline(db, { ownerId: 'local', name: 'Callee' });
+    const calleeVersion = createPipelineVersion(db, baseVersion(callee.id));
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const at = { x: 0, y: 0 };
+    const version = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      params: [{ name: 'target', type: 'string', required: true }],
+      nodes: [
+        { id: 'one', type: 'llm_call', config: {}, connectionId: single.id, position: at },
+        {
+          id: 'pair',
+          type: 'llm_call',
+          config: {},
+          connectionIds: { source: src.id, sink: '${params.target}' },
+          datasetIds: { source: dsSrc.id, sink: dsSnk.id },
+          position: at,
+        },
+        {
+          id: 'call',
+          type: 'call_pipeline',
+          config: {},
+          position: at,
+          call: { pipelineVersionId: calleeVersion.id, params: {} },
+        },
+      ],
+    });
+    const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local'))
+      .pipelines.flatMap((p) => p.data.versions)
+      .find((v) => v.resourceId === version.resourceId)!;
+
+    // The branch really is in resourceId-space, and the dynamic end survived
+    // verbatim — otherwise IDENTICAL below could be two identical mistakes.
+    const [one, pair, call] = branch.nodes;
+    expect(one!.connectionId).toBe(single.resourceId);
+    expect(pair!.connectionIds).toEqual({ source: src.resourceId, sink: '${params.target}' });
+    expect(pair!.datasetIds).toEqual({ source: dsSrc.resourceId, sink: dsSnk.resourceId });
+    expect(call!.call!.pipelineVersionId).toBe(calleeVersion.resourceId);
+
+    expect(compareFor(db, version.resourceId)(branch)).toEqual({
+      identical: true,
+      undecidableRefs: 0,
+    });
+  });
 });
