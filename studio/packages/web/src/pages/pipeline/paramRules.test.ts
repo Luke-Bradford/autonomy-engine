@@ -5,6 +5,7 @@ import {
   blankParam,
   blankVariable,
   coerceDefaultInput,
+  coerceGlobalValue,
   coerceVariableDefault,
   formatDefaultInput,
   formatVariableDefault,
@@ -369,5 +370,30 @@ describe('#844 V3 — variable rows', () => {
     const a = withVariableType(variable({ default: 'x' }), 'array');
     const b = withVariableType(variable({ default: 'y' }), 'array');
     expect(a.default).not.toBe(b.default);
+  });
+});
+
+describe('coerceGlobalValue (#844 GL2)', () => {
+  it('keeps a string verbatim, blank included — empty text is a value', () => {
+    expect(coerceGlobalValue('string', '')).toEqual({ ok: true, value: '' });
+    expect(coerceGlobalValue('string', ' a ')).toEqual({ ok: true, value: ' a ' });
+  });
+
+  it('refuses a blank non-string rather than inventing 0, false or null', () => {
+    for (const type of ['number', 'boolean', 'json'] as const) {
+      expect(coerceGlobalValue(type, '  ')).toEqual({
+        ok: false,
+        error: `a ${type} global needs a value`,
+      });
+    }
+  });
+
+  it('reads each type strictly', () => {
+    expect(coerceGlobalValue('number', '42')).toEqual({ ok: true, value: 42 });
+    expect(coerceGlobalValue('number', 'abc')).toEqual({ ok: false, error: 'expected a number' });
+    expect(coerceGlobalValue('boolean', 'false')).toEqual({ ok: true, value: false });
+    expect(coerceGlobalValue('json', '{"a":[1]}')).toEqual({ ok: true, value: { a: [1] } });
+    expect(coerceGlobalValue('json', 'null')).toEqual({ ok: true, value: null });
+    expect(coerceGlobalValue('json', '{')).toEqual({ ok: false, error: 'expected valid JSON' });
   });
 });

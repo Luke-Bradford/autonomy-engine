@@ -134,6 +134,10 @@ vi.mock('./api/secrets', async (importActual) => ({
   ...(await importActual<typeof import('./api/secrets')>()),
   listSecrets: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('./api/globalParams', async (importActual) => ({
+  ...(await importActual<typeof import('./api/globalParams')>()),
+  listGlobalParams: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),
@@ -319,6 +323,7 @@ describe('route tree', () => {
     ['/manage/connections', 'Connections'],
     ['/manage/datasets', 'Datasets'],
     ['/manage/secrets', 'Secrets'],
+    ['/manage/global-params', 'Global parameters'],
     ['/manage/triggers', 'Triggers'],
     ['/manage/git', 'Git'],
   ])('renders %s', async (path, heading) => {
@@ -721,6 +726,7 @@ describe('shell chrome over the real route tree', () => {
     ['/manage/connections', ['Manage', 'Connections']],
     ['/manage/datasets', ['Manage', 'Datasets']],
     ['/manage/secrets', ['Manage', 'Secrets']],
+    ['/manage/global-params', ['Manage', 'Global parameters']],
     ['/manage/triggers', ['Manage', 'Triggers']],
     ['/manage/git', ['Manage', 'Git']],
   ])('breadcrumbs %s as %j', async (path, expected) => {
@@ -752,7 +758,7 @@ describe('shell chrome over the real route tree', () => {
       within(pane)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Connections', 'Datasets', 'Secrets', 'Triggers', 'Git']);
+    ).toEqual(['Connections', 'Datasets', 'Secrets', 'Global parameters', 'Triggers', 'Git']);
     expect(screen.getByRole('separator')).toHaveAttribute('aria-controls', pane.id);
   });
 

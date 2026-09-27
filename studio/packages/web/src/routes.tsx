@@ -7,6 +7,7 @@ import { ConnectionsPage } from './pages/ConnectionsPage';
 import { DatasetsPage } from './pages/DatasetsPage';
 import { DatasetDetailRoute } from './pages/datasets/DatasetDetailRoute';
 import { SecretsPage } from './pages/SecretsPage';
+import { GlobalParamsPage } from './pages/GlobalParamsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 // #698 — loaded on demand (React Flow is reachable only from this route); the
 // `<Suspense>` boundary is in `AppShell`, inside `<main>`.
@@ -208,6 +209,11 @@ export const ROUTES: RouteObject[] = [
             path: 'secrets',
             element: <SecretsPage />,
             handle: { crumb: sectionLabel('/manage/secrets') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'global-params',
+            element: <GlobalParamsPage />,
+            handle: { crumb: sectionLabel('/manage/global-params') } satisfies ShellRouteHandle,
           },
           {
             path: 'triggers',
