@@ -265,7 +265,21 @@ export function getGlobalReads(db: Db, id: string): GlobalRead[] | null {
     .get();
   if (row === undefined) return null;
   if (row.globalReads === null) return [];
-  return GlobalReadsColumnSchema.parse(JSON.parse(row.globalReads));
+  // A plain Error, never the `ZodError` a `.parse` would throw: the error
+  // handler answers a `ZodError` with a 400 that blames the REQUEST, and this is
+  // the server's own data. So a route answers 500 (details in the log only) and
+  // a start is refused as an unexpected fault.
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(row.globalReads);
+  } catch {
+    decoded = undefined;
+  }
+  const parsed = GlobalReadsColumnSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new Error(`pipeline version '${id}' has an unreadable global_reads column`);
+  }
+  return parsed.data;
 }
 
 const GlobalReadsColumnSchema = z.array(GlobalReadSchema);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'drizzle-orm';
 import {
   CATALOG_VERSION,
   GLOBAL_PARAM_MAX_BYTES,
@@ -242,6 +243,20 @@ describe('global params read by pipelines (#844 GL3)', () => {
     const res = await app.inject({ method: 'POST', url: `/api/triggers/${t.id}/fire` });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toMatch(/global parameter "apiUrl" no longer exists/);
+    expect(listRuns(app.db, {})).toHaveLength(0);
+  });
+
+  // The column is the server's own data: garbage in it is a 500 (a fault), never
+  // the 400 a `ZodError` would become, which would blame the request.
+  it('run-now answers a corrupt global_reads column with a 500 and creates no run', async () => {
+    global('apiUrl');
+    const { versionIds } = pipeline('P', ['apiUrl']);
+    const t = trigger('T', versionIds[0]!);
+    app.db.run(sql`drop trigger pipeline_versions_no_update`);
+    app.db.run(sql`update pipeline_versions set global_reads = '[{"name":1}]'`);
+    const res = await app.inject({ method: 'POST', url: `/api/triggers/${t.id}/fire` });
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain('global_reads');
     expect(listRuns(app.db, {})).toHaveLength(0);
   });
 
