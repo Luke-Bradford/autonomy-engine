@@ -266,23 +266,46 @@ describe('revealTransform — the minimum pan that brings a box on screen', () =
    * moves the frame's top edge down to the advisory's bottom: the box lands the
    * margin BELOW it, and a box already tucked under it no longer counts as seen.
    */
+  /** A cover spanning the whole pane width, `bottom` px deep. */
+  const band = (bottom: number) => ({ left: 0, right: W, bottom });
+
   it('#794 — pans DOWN until the top edge clears a top inset by the margin', () => {
-    const next = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, 60);
+    const next = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, band(60));
     expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN + 100, zoom: 1 });
   });
 
   it('#794 — a box on screen but under the inset is not "already visible"', () => {
     expect(revealTransform([rect(100, 10, 220, 120)], IDENTITY, W, H)).toBeNull();
-    const next = revealTransform([rect(100, 10, 220, 120)], IDENTITY, W, H, 60);
+    const next = revealTransform([rect(100, 10, 220, 120)], IDENTITY, W, H, band(60));
     expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN - 10, zoom: 1 });
   });
 
   it('#794 — an inset that leaves no room for a box is ignored, not obeyed', () => {
     const noInset = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H);
-    expect(revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, H)).toEqual(noInset);
+    expect(revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, band(H))).toEqual(noInset);
     expect(
-      revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, H - 2 * REVEAL_MARGIN),
+      revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, band(H - 2 * REVEAL_MARGIN)),
     ).toEqual(noInset);
+  });
+
+  it('#794 — a box BESIDE a centred cover is not panned under it, or away from it', () => {
+    const centred = { left: 300, right: 700, bottom: 60 };
+    // In either top corner, clear of the cover: already visible, no pan.
+    expect(revealTransform([rect(20, 10, 220, 120)], IDENTITY, W, H, centred)).toBeNull();
+    expect(revealTransform([rect(760, 10, 220, 120)], IDENTITY, W, H, centred)).toBeNull();
+    // Under it: panned below it.
+    expect(revealTransform([rect(400, 10, 220, 120)], IDENTITY, W, H, centred)).toEqual({
+      x: 0,
+      y: 60 + REVEAL_MARGIN - 10,
+      zoom: 1,
+    });
+    // Judged where the box LANDS: off the left edge, panned right into the
+    // corner — beside the cover, so it keeps the plain margin.
+    expect(revealTransform([rect(-300, -100, 220, 120)], IDENTITY, W, H, centred)).toEqual({
+      x: REVEAL_MARGIN + 300,
+      y: REVEAL_MARGIN + 100,
+      zoom: 1,
+    });
   });
 
   it('#794 — a box too tall for the room below the inset keeps its TOP clear of it', () => {
@@ -294,7 +317,7 @@ describe('revealTransform — the minimum pan that brings a box on screen', () =
       y: REVEAL_MARGIN - 100,
       zoom: 1,
     });
-    const next = revealTransform([rect(100, 100, 220, 560)], IDENTITY, W, H, 60);
+    const next = revealTransform([rect(100, 100, 220, 560)], IDENTITY, W, H, band(60));
     expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN - 100, zoom: 1 });
   });
 
@@ -542,9 +565,21 @@ describe('the reveal trigger', () => {
     it('#794 — a rect wholly under a top inset is covered, not seen', () => {
       // Top at 100-130 = -30, bottom at 22: inside a 40px advisory band.
       expect(onScreen(r, [0, -130, 1], 800, 600)).toBe(true);
-      expect(onScreen(r, [0, -130, 1], 800, 600, 40)).toBe(false);
+      expect(onScreen(r, [0, -130, 1], 800, 600, { left: 0, right: 800, bottom: 40 })).toBe(false);
       // One pixel below the band is enough, as for any other edge.
-      expect(onScreen(r, [0, -130, 1], 800, 600, 21)).toBe(true);
+      expect(onScreen(r, [0, -130, 1], 800, 600, { left: 0, right: 800, bottom: 21 })).toBe(true);
+    });
+
+    it('#794 — a rect beside the cover, or sticking out of it, is seen', () => {
+      const centred = { left: 300, right: 700, bottom: 40 };
+      // x 100..250, clear of a cover over 300..700.
+      expect(onScreen(r, [0, -130, 1], 800, 600, centred)).toBe(true);
+      // x 600..750: half of it sticks out to the right of the cover.
+      expect(onScreen(r, [500, -130, 1], 800, 600, centred)).toBe(true);
+      // x 250..400: half of it sticks out to the left of the cover.
+      expect(onScreen(r, [150, -130, 1], 800, 600, centred)).toBe(true);
+      // x 400..550: wholly under it.
+      expect(onScreen(r, [300, -130, 1], 800, 600, centred)).toBe(false);
     });
 
     it('applies the zoom to position AND size', () => {

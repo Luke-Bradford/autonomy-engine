@@ -362,6 +362,19 @@ export function revealReady(
 }
 
 /**
+ * #794 — a panel drawn OVER the top of the pane (the implicit-routing
+ * advisory), in pane pixels. The band it covers is `left..right` wide and runs
+ * from the pane's top edge to `bottom`: a rect wholly inside it is covered, not
+ * seen, and a reveal whose box would sit in it lands below it instead. A box
+ * BESIDE it — in a top corner, clear of a centred advisory — is neither.
+ */
+export interface Cover {
+  left: number;
+  right: number;
+  bottom: number;
+}
+
+/**
  * #1336 — is ANY part of `rect` (flow coordinates) inside a `width`×`height`
  * pane under React Flow's `[x, y, zoom]` transform?
  *
@@ -376,18 +389,20 @@ export function onScreen(
   transform: readonly [number, number, number],
   width: number,
   height: number,
-  /** #794 — as `revealTransform`'s: the band drawn over the pane's top. A rect
-   * wholly inside it is covered, not seen. */
-  topInset = 0,
+  cover: Cover | null = null,
 ): boolean {
   const [tx, ty, zoom] = transform;
   const left = rect.x * zoom + tx;
   const top = rect.y * zoom + ty;
-  return (
-    left < width &&
-    left + rect.width * zoom > 0 &&
-    top < height &&
-    top + rect.height * zoom > topInset
+  const right = left + rect.width * zoom;
+  const bottom = top + rect.height * zoom;
+  if (!(left < width && right > 0 && top < height && bottom > 0)) return false;
+  // The part inside the pane, wholly under the cover, is covered — not seen.
+  return !(
+    cover !== null &&
+    Math.max(left, 0) >= cover.left &&
+    Math.min(right, width) <= cover.right &&
+    bottom <= cover.bottom
   );
 }
 
@@ -414,10 +429,10 @@ export function revealTransform(
   transform: readonly [number, number, number],
   width: number,
   height: number,
-  /** #794 — pixels at the top of the pane that something is drawn OVER (the
-   * implicit-routing advisory). The frame's top edge moves down by this much,
-   * so a box lands the margin below it rather than under it. */
-  topInset = 0,
+  /** #794 — a panel drawn over the pane's top. When the box, once panned
+   * across, would sit beneath it, the frame's top edge moves down to its
+   * bottom, so the box lands the margin below it rather than under it. */
+  cover: Cover | null = null,
 ): { x: number; y: number; zoom: number } | null {
   // An unmeasured viewport (React Flow reports 0×0 until it has measured the
   // pane) cannot say what is visible. Refuse rather than pan against a 0×0 box:
@@ -429,10 +444,19 @@ export function revealTransform(
 
   const [tx, ty, zoom] = transform;
   const dx = axisPan(target.x * zoom + tx, target.width * zoom, width);
-  // An inset that leaves no room for a box and its two margins is ignored, not
-  // obeyed: panning into a band that cannot hold anything would push the box off
-  // the bottom, which is worse than landing it under the advisory.
-  const inset = height - topInset > 2 * REVEAL_MARGIN ? topInset : 0;
+  // Judged AFTER the horizontal pan: that is where the box will be. A box beside
+  // the cover owes it nothing. A cover that leaves no room for a box and its two
+  // margins is ignored, not obeyed: panning into a band that cannot hold
+  // anything would push the box off the bottom, which is worse than landing it
+  // under the advisory.
+  const left = target.x * zoom + tx + dx;
+  const inset =
+    cover !== null &&
+    left < cover.right &&
+    left + target.width * zoom > cover.left &&
+    height - cover.bottom > 2 * REVEAL_MARGIN
+      ? cover.bottom
+      : 0;
   const dy = axisPan(target.y * zoom + ty - inset, target.height * zoom, height - inset);
   if (dx === 0 && dy === 0) return null;
   return { x: tx + dx, y: ty + dy, zoom };

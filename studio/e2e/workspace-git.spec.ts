@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { makeBareRepo } from './support/bareRepo';
+import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 import { seedVersion } from './support/seedDoc';
 
 /**
@@ -125,8 +125,11 @@ test.beforeAll(() => {
 test.afterAll(async ({ request }) => {
   // Unconditional: a failure above must not leave the workspace in git mode for
   // whatever spec file runs next.
-  await request.delete('/api/workspace/git').catch(() => undefined);
-  if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  try {
+    await disconnectWorkspaceGit(request);
+  } finally {
+    if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({

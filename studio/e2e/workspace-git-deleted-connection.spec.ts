@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { makeBareRepo } from './support/bareRepo';
+import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { mintVersion, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
@@ -42,8 +42,11 @@ test.beforeAll(() => {
 });
 
 test.afterAll(async ({ request }) => {
-  await request.delete('/api/workspace/git').catch(() => undefined);
-  if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  try {
+    await disconnectWorkspaceGit(request);
+  } finally {
+    if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  }
 });
 
 async function post(page: Page, url: string, data: unknown): Promise<void> {
