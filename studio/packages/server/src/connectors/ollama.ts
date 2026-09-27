@@ -42,13 +42,13 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
 /**
  * #605 — the response's reasoning text: `message.thinking`, which Ollama returns
  * beside `content` when the request set `think` (a node's `reasoningEffort`).
- * `undefined` when absent or empty, so a capture never records `hash('')`.
+ * An empty string passes through: `buildCapture` records no `reasoning` for it.
  */
 function thinkingOf(json: unknown): string | undefined {
   const message = (json as { message?: unknown }).message;
   if (typeof message !== 'object' || message === null) return undefined;
   const thinking = (message as { thinking?: unknown }).thinking;
-  return typeof thinking === 'string' && thinking !== '' ? thinking : undefined;
+  return typeof thinking === 'string' ? thinking : undefined;
 }
 
 export const ollamaAdapter: ConnectorAdapter = {
