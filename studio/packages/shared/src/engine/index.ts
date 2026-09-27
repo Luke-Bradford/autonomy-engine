@@ -53,6 +53,9 @@ export * from './instance-key.js';
 
 // P2b — the pure event-sourced reducer + acyclic DAG walk.
 export * from './reduce.js';
+// #844 V4 — the pipeline-variable determinism guard and the rerun write carry.
+// Pure and not yet called from the save or reseed path: V5 wires both.
+export * from './variable-guard.js';
 // #796 (P3b) — what a `call_pipeline` child hands back on `call.returned`. Pure,
 // and out here rather than inside `reduce.ts` because its caller is the SERVER's
 // spawn seam (the reducer never sees a child's state), while its rule has to

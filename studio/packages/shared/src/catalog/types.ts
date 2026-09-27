@@ -98,6 +98,15 @@ export const IF_BRANCH_TRUE = 'true';
 export const IF_BRANCH_FALSE = 'false';
 
 /**
+ * The `Node.type`s of the two variable-writing control activities (#844, spec
+ * V-D4). Read structurally by the determinism guard (`variable-guard.ts`, V4)
+ * before their catalog entries exist (V5), and by those entries and the
+ * reducer's write path once they do — one string, every site.
+ */
+export const SET_VARIABLE_ACTIVITY_TYPE = 'set_variable';
+export const APPEND_VARIABLE_ACTIVITY_TYPE = 'append_variable';
+
+/**
  * The `Node.type` of the `switch` control activity (#4 A2). Same constant-SSOT
  * rationale as `IF_ACTIVITY_TYPE`: a typed identifier read STRUCTURALLY in the
  * same three sites that must agree — the reducer's control-dispatch discriminant

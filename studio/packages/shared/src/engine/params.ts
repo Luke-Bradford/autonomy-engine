@@ -1273,7 +1273,7 @@ export function resolveTriggerBindings(
  * unterminated `${` is an error; and node-output refs are validated by
  * AVAILABILITY / DOMINANCE over the doc's edge graph (see `computeGraph`).
  */
-export function validateRefs(doc: ValidatedDoc): string[] {
+export function validateRefs(doc: ValidatedDoc, reads?: VariableReads): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
@@ -1315,6 +1315,7 @@ export function validateRefs(doc: ValidatedDoc): string[] {
       soft,
       outputsById,
       secureOutputIds,
+      ...readsFor(reads, node.id),
     };
     if (node.type === FILTER_ACTIVITY_TYPE) {
       // #4 A8 — a `filter`'s two `${}` fields must be scanned as ONE composed
@@ -2234,6 +2235,56 @@ export interface ValidateDocOptions {
   resolvePipeline?: PipelineResolver;
   /** Max call-graph depth (hops from this version). Default 3. */
   maxCallDepth?: number;
+  /**
+   * #844 V4 — collect the `${vars.*}` a container's OWN fields (`items`,
+   * `exitWhen`) read, keyed by container id. `validateRefs` fills the same map
+   * for nodes. See {@link variableReadsOf}.
+   */
+  variableReads?: VariableReads;
+}
+
+/**
+ * #844 V4 — which variables each accessor READS: node id (its config and every
+ * other `${}` field `validateRefs` scans) or container id (its own `items` /
+ * `exitWhen`) → the names it references. Node and container ids are disjoint.
+ */
+export type VariableReads = Map<string, Set<string>>;
+
+/** The collector slot a scope for `id` carries, or nothing when not collecting. */
+function readsFor(reads: VariableReads | undefined, id: string): { variableReads?: Set<string> } {
+  if (reads === undefined) return {};
+  let set = reads.get(id);
+  if (set === undefined) {
+    set = new Set();
+    reads.set(id, set);
+  }
+  return { variableReads: set };
+}
+
+/**
+ * #844 V4 — the readers of every variable, collected as a SIDE OUTPUT of the
+ * two validators' own scans rather than by a second config walker (spec V-D6):
+ * a `${}` site a separate collector missed would be a false accept in the
+ * determinism guard. V5 threads one map through `validatePipelineDoc`'s own
+ * pass instead of calling this.
+ *
+ * COMPLETE ONLY WHEN `validatorErrors` IS EMPTY. A ref inside an unknown
+ * function's args, or under a refused root, is never reached by `checkRefRoot`
+ * — each of those paths reports an error instead, so the reads of a doc the
+ * validators accept are every read, and the reads of a refused doc may not be.
+ * The errors are returned, not dropped, so a caller cannot mistake the second
+ * case for the first.
+ */
+export function variableReadsOf(doc: ValidatedDoc): {
+  reads: VariableReads;
+  validatorErrors: string[];
+} {
+  const reads: VariableReads = new Map();
+  const validatorErrors = [
+    ...validateDoc(doc, { variableReads: reads }),
+    ...validateRefs(doc, reads),
+  ];
+  return { reads, validatorErrors };
 }
 
 /** The non-structural fields of a `Container` — everything but `id`/`kind`/`children`. */
@@ -2686,6 +2737,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
           secureOutputIds,
           itemsGraph(),
           errors,
+          options.variableReads,
         );
       // #4 A4b (#566 slice 2) — PARALLEL mode (`batchCount >= 2`) refusals. Both
       // rules exist because parallel items are namespaced per instance key
@@ -2720,7 +2772,15 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       }
     }
     if (c.exitWhen !== undefined) {
-      validateExitWhen(c, declared, variables, outputsById, secureOutputIds, errors);
+      validateExitWhen(
+        c,
+        declared,
+        variables,
+        outputsById,
+        secureOutputIds,
+        errors,
+        options.variableReads,
+      );
     }
   }
 
@@ -3519,10 +3579,14 @@ function validateExitWhen(
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   errors: string[],
+  reads?: VariableReads,
 ): void {
   if (c.exitWhen === undefined) return;
   const where = `container.${c.id}.exitWhen`;
-  const scope = exitWhenScope(c, declared, variables, outputsById, secureOutputIds);
+  const scope = {
+    ...exitWhenScope(c, declared, variables, outputsById, secureOutputIds),
+    ...readsFor(reads, c.id),
+  };
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
 
@@ -3598,10 +3662,14 @@ function validateForeachItems(
   secureOutputIds: ReadonlySet<string>,
   graph: Graph,
   errors: string[],
+  reads?: VariableReads,
 ): void {
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
-  const scope = foreachItemsScope(c, declared, variables, outputsById, secureOutputIds, graph);
+  const scope = {
+    ...foreachItemsScope(c, declared, variables, outputsById, secureOutputIds, graph),
+    ...readsFor(reads, c.id),
+  };
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
   scan(where, c.items, scope, errors);
 
@@ -4020,6 +4088,12 @@ interface ScanScope {
    * refuse every variable in that scope, so the compiler must see every site.
    */
   variables: ReadonlyMap<string, VariableDef>;
+  /**
+   * #844 V4 — a side output: every `${vars.<name>}` this scope's scan reaches
+   * is added here, by `checkRefRoot`, the one place a `vars` ref is checked.
+   * Optional because only the variable guard's reader collection asks for it.
+   */
+  variableReads?: Set<string>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -4700,6 +4774,7 @@ function checkRefRoot(
   // Its default is checked against its type at save (V1), and no secret can
   // be one (V-D8), so there is no secret rule here either.
   if (root.kind === 'vars') {
+    scope.variableReads?.add(root.name);
     if (!scope.variables.has(root.name)) {
       errors.push(`${where}: \${vars.${root.name}} is not a declared variable`);
     }
@@ -4960,6 +5035,16 @@ interface Graph {
   guaranteed: Map<string, Set<string>>;
   /** nodeId → node ids guaranteed TERMINAL (settled) on every path to it. */
   settled: Map<string, Set<string>>;
+  /**
+   * #844 V4 — `settled` as the topological pass computed it, BEFORE the doc-wide
+   * `canReRunNodes` refusal empties it. That refusal answers a question about a
+   * STATUS ref (a re-run node's status is not stable); the variable determinism
+   * guard (`variable-guard.ts`) asks a different one — "must `a` be terminal
+   * before `b` dispatches, within one round of `b`'s scope" — which a loop or
+   * foreach elsewhere in the doc does not change. Bare back-edge bodies, where
+   * it CAN change, are handled by the guard's own body rule.
+   */
+  settledRaw: Map<string, Set<string>>;
   /** nodeId → node ids forward-reachable (may run before it on some path). */
   reachable: Map<string, Set<string>>;
   /** nodeId → back-edge-visible sibling node ids (default()-only reads). */
@@ -5164,6 +5249,7 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   // a loop's own `exitWhen`: `validateExitWhen` builds its own scope, where every
   // child is terminal by the reducer's own precondition. Zeroed over ALL endpoints
   // so a `${nodes.<container>.status}` ref is refused in a re-run doc too.
+  const settledRaw = new Map(settled);
   if (canReRunNodes) for (const id of endpointIds) settled.set(id, new Set());
 
   // soft[R]: back-edge sources whose outputs R may read ONLY inside default().
@@ -5182,7 +5268,20 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
     }
   }
 
-  return { guaranteed, settled, reachable, soft };
+  return { guaranteed, settled, settledRaw, reachable, soft };
+}
+
+/**
+ * #844 V4 — the must-precede relation over every endpoint (node or container):
+ * `a ∈ settledRawOf(doc).get(b)` iff every path to `b` in `b`'s own scope
+ * guarantees `a` is terminal first. See `Graph.settledRaw` for why this is the
+ * pre-refusal map. `computeGraph` stays private; this is the one view of it the
+ * variable guard needs.
+ */
+export function settledRawOf(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
+): Map<string, Set<string>> {
+  return computeGraph(doc).settledRaw;
 }
 
 /**
