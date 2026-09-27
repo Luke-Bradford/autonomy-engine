@@ -37,6 +37,7 @@ import {
   type RunTab,
 } from './runOrigin';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { FilterPicker } from './FilterPicker';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -220,7 +221,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    * #1083 — the `filterKey` stamping this replaced is gone. It existed because
    * the page owned the rows and had to decide whether an arriving answer still
    * belonged to the filter on screen; `usePagedList` now owns them and keys that
-   * decision on the FETCHER's identity, which changes with exactly these four
+   * decision on the FETCHER's identity, which changes with exactly these
    * axes. One authority instead of a key and a fetcher that could disagree.
    */
 
@@ -434,76 +435,29 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           )}
         </LabelledControl>
 
-        <LabelledControl label="Pipeline">
-          {(id) => (
-            <select
-              id={id}
-              value={pipelineId ?? ''}
-              onChange={(e) => setFilter(RUN_FILTER_PARAMS.pipelineId, e.target.value)}
-            >
-              <option value="">All pipelines</option>
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-              {/* The orphan guard. A `<select>` whose value matches no option
-                renders the FIRST one — so a link to a deleted pipeline (or a
-                render before the list has loaded) would say "All pipelines"
-                while the list stayed filtered: the control lying about what is
-                applied. A disabled option makes the mismatch visible instead. */}
-              {pipelineId !== undefined && !pipelines.some((p) => p.id === pipelineId) && (
-                <option value={pipelineId} disabled>
-                  {pipelineId} (unavailable)
-                </option>
-              )}
-            </select>
-          )}
-        </LabelledControl>
+        <FilterPicker
+          label="Pipeline"
+          allLabel="All pipelines"
+          value={pipelineId}
+          options={pipelines.map((p) => ({ value: p.id, label: p.name }))}
+          onChange={(next) => setFilter(RUN_FILTER_PARAMS.pipelineId, next)}
+        />
 
-        <LabelledControl label="Annotation">
-          {(id) => (
-            <select
-              id={id}
-              value={annotation ?? ''}
-              onChange={(e) => setFilter(RUN_FILTER_PARAMS.annotation, e.target.value)}
-            >
-              <option value="">All annotations</option>
-              {annotations.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-              {annotation !== undefined && !annotations.includes(annotation) && (
-                <option value={annotation} disabled>
-                  {annotation} (unavailable)
-                </option>
-              )}
-            </select>
-          )}
-        </LabelledControl>
+        <FilterPicker
+          label="Annotation"
+          allLabel="All annotations"
+          value={annotation}
+          options={annotations.map((a) => ({ value: a, label: a }))}
+          onChange={(next) => setFilter(RUN_FILTER_PARAMS.annotation, next)}
+        />
 
-        <LabelledControl label="Trigger">
-          {(id) => (
-            <select
-              id={id}
-              value={triggerId ?? ''}
-              onChange={(e) => setFilter(RUN_FILTER_PARAMS.triggerId, e.target.value)}
-            >
-              <option value="">All triggers</option>
-              {triggers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-              {triggerId !== undefined && !triggers.some((t) => t.id === triggerId) && (
-                <option value={triggerId} disabled>
-                  {triggerId} (unavailable)
-                </option>
-              )}
-            </select>
-          )}
-        </LabelledControl>
+        <FilterPicker
+          label="Trigger"
+          allLabel="All triggers"
+          value={triggerId}
+          options={triggers.map((t) => ({ value: t.id, label: t.name }))}
+          onChange={(next) => setFilter(RUN_FILTER_PARAMS.triggerId, next)}
+        />
 
         <LabelledControl label="Started">
           {(id) => (

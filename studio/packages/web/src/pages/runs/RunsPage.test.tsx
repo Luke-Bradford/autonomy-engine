@@ -673,7 +673,7 @@ describe('RunsPage — U26 filter pane', () => {
     });
 
     /* The sentence that stops the figure being read as the total of the rows
-       below it — which it is not, under ANY of the four filters or the tab. */
+       below it — which it is not, under ANY of the filters or the tab. */
     it('says the figure covers every run of the pipeline, not the rows on screen', async () => {
       renderWithRouter(
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,

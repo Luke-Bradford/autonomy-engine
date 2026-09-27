@@ -255,8 +255,9 @@ export function listRunSummariesPage(
     const resume = beforeCursor(runs.startedAt, runs.id, args.cursor);
     if (resume) conditions.push(resume);
   }
-  // U26 — the one axis that cannot live in `listRunsConditions`: it reads a
-  // JOINED column. Expressed over the join this query already makes, exactly as
+  // U26 — the two axes that cannot live in `listRunsConditions`, because they
+  // read JOINED columns: this one and `annotation` below. The pipeline axis is
+  // expressed over the join this query already makes, exactly as
   // `countActiveRunsForPipeline` does, rather than as a subquery.
   if (filter.pipelineId !== undefined) {
     conditions.push(eq(pipelineVersions.pipelineId, filter.pipelineId));
