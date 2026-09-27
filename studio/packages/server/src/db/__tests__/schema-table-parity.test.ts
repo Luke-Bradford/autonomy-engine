@@ -3,6 +3,7 @@ import { getTableColumns } from 'drizzle-orm';
 import {
   ConnectionSchema,
   DatasetSchema,
+  GlobalParamSchema,
   PipelineSchema,
   PipelineVersionSchema,
   RunDiagnosticSchema,
@@ -16,6 +17,7 @@ import type { z } from 'zod';
 import {
   connections,
   datasets,
+  globalParams,
   pipelines,
   pipelineVersions,
   runDiagnostics,
@@ -84,6 +86,7 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     // field with no column is the #473 defect here too. Its public projection
     // crosses the API boundary; the full `SecretSchema` never does (ciphertext).
     { name: 'secrets', table: secrets, schema: SecretSchema },
+    { name: 'global_params', table: globalParams, schema: GlobalParamSchema },
     // #3 G2 — `workspace_git` round-trips through `WorkspaceGitSchema` on
     // every repo read, and its status projection crosses the API boundary.
     // (`WorkspaceGitStatusSchema.state` is DERIVED, never persisted, so the

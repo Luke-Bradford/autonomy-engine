@@ -21,6 +21,7 @@ export * from './external-agent-activity.js';
 export * from './external-wait.js';
 export * from './run-stream.js';
 export * from './secret.js';
+export * from './global-param.js';
 export * from './secret-ref.js';
 export * from './field-presentation.js';
 export * from './webhook-delivery.js';
