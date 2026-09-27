@@ -408,6 +408,10 @@ export function revealTransform(
   transform: readonly [number, number, number],
   width: number,
   height: number,
+  /** #794 — pixels at the top of the pane that something is drawn OVER (the
+   * implicit-routing advisory). The frame's top edge moves down by this much,
+   * so a box lands the margin below it rather than under it. */
+  topInset = 0,
 ): { x: number; y: number; zoom: number } | null {
   // An unmeasured viewport (React Flow reports 0×0 until it has measured the
   // pane) cannot say what is visible. Refuse rather than pan against a 0×0 box:
@@ -419,7 +423,7 @@ export function revealTransform(
 
   const [tx, ty, zoom] = transform;
   const dx = axisPan(target.x * zoom + tx, target.width * zoom, width);
-  const dy = axisPan(target.y * zoom + ty, target.height * zoom, height);
+  const dy = axisPan(target.y * zoom + ty - topInset, target.height * zoom, height - topInset);
   if (dx === 0 && dy === 0) return null;
   return { x: tx + dx, y: ty + dy, zoom };
 }

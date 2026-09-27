@@ -1303,6 +1303,8 @@ export function FlowCanvas({
   const knownContainers = useRef<Set<string> | null>(null);
   const knownNodes = useRef<Set<string> | null>(null);
   const pendingReveal = useRef<Set<string>>(new Set());
+  /** The #788 routing advisory, measured by the reveal below (#794). */
+  const advisoryRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
     const present = new Set(containerBoxes.keys());
@@ -1373,7 +1375,14 @@ export function FlowCanvas({
         .filter((box): box is ContainerBox => box !== undefined),
       ...lostCopies,
     ];
-    const next = revealTransform(boxes, transform, usable.width, usable.height);
+    /* #794 — the routing advisory is drawn over the top of the pane, and shows in
+       exactly the doc shape (edge-less, with containers) that empties a
+       container and triggers this reveal. Measured, not assumed: it wraps to a
+       second line on a narrow pane. `offsetTop + offsetHeight` is its bottom edge
+       in the React Flow wrapper, which is the pane's own frame. */
+    const advisory = advisoryRef.current;
+    const topInset = advisory === null ? 0 : advisory.offsetTop + advisory.offsetHeight;
+    const next = revealTransform(boxes, transform, usable.width, usable.height, topInset);
     if (next !== null) void setViewport(next);
   }, [
     containerBoxes,
@@ -2244,14 +2253,13 @@ export function FlowCanvas({
              ticket's.
 
              Top, so it does not fight the refusal toast at bottom-center when
-             both are up. It can overlap a container the #785 reveal just panned
-             into view (both need an edge-less doc WITH containers) — visual only,
-             `pointer-events: none` keeps it non-blocking. Filed as #794.
+             both are up. The #785 reveal measures it and lands a container
+             BELOW it (#794) — both need an edge-less doc WITH containers.
 
              Both copies end on what SAVING does, because that is the actual cost
              in the ticket: the inferred routing is what gets minted into the next
              immutable version, and a version cannot be edited afterwards. */
-          <Panel position="top-center" className="canvas-advisory">
+          <Panel ref={advisoryRef} position="top-center" className="canvas-advisory">
             {routing.kind === 'chain' ? (
               <>
                 No edges authored — these {routing.order.length} activities run in one sequence, in

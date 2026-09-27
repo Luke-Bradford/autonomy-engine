@@ -260,6 +260,36 @@ describe('revealTransform — the minimum pan that brings a box on screen', () =
     expect(next).toEqual({ x: 0, y: REVEAL_MARGIN + 100, zoom: 1 });
   });
 
+  /**
+   * #794 — the implicit-routing advisory sits at the pane's top-centre, so a box
+   * landed REVEAL_MARGIN from the top can be drawn underneath it. A top inset
+   * moves the frame's top edge down to the advisory's bottom: the box lands the
+   * margin BELOW it, and a box already tucked under it no longer counts as seen.
+   */
+  it('#794 — pans DOWN until the top edge clears a top inset by the margin', () => {
+    const next = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, 60);
+    expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN + 100, zoom: 1 });
+  });
+
+  it('#794 — a box on screen but under the inset is not "already visible"', () => {
+    expect(revealTransform([rect(100, 10, 220, 120)], IDENTITY, W, H)).toBeNull();
+    const next = revealTransform([rect(100, 10, 220, 120)], IDENTITY, W, H, 60);
+    expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN - 10, zoom: 1 });
+  });
+
+  it('#794 — a box too tall for the room below the inset keeps its TOP clear of it', () => {
+    // 560 tall in a 600 pane: without an inset the top lands at the margin (24);
+    // with one it lands the margin below the inset (84) — the near edge wins, as
+    // it does without an inset (`axisPan` resolves it last).
+    expect(revealTransform([rect(100, 100, 220, 560)], IDENTITY, W, H)).toEqual({
+      x: 0,
+      y: REVEAL_MARGIN - 100,
+      zoom: 1,
+    });
+    const next = revealTransform([rect(100, 100, 220, 560)], IDENTITY, W, H, 60);
+    expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN - 100, zoom: 1 });
+  });
+
   it('pans on BOTH axes at once', () => {
     const next = revealTransform([rect(1200, 800, 220, 120)], IDENTITY, W, H);
     expect(next).toEqual({
