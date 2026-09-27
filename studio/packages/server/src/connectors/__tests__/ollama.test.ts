@@ -631,3 +631,90 @@ describe('ollamaAdapter — full capture (#605 L9b)', () => {
     expect(second!.completion).toMatchObject({ text: '{"category":"feature"}' });
   });
 });
+
+// #605 — the reasoning trace: Ollama returns `message.thinking` beside
+// `content` when `think` is set; a `captureReasoning` node records it.
+describe('ollamaAdapter — reasoning trace (#605)', () => {
+  const TRACE = {
+    model: 'llama3',
+    capture: 'full',
+    captureReasoning: true,
+    reasoningEffort: 'high',
+  };
+  const withThinking = (body: { message: object }, thinking: string) => ({
+    ...body,
+    message: { ...body.message, thinking },
+  });
+  const capturesOf = (events: ActivityEvent[]) =>
+    events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
+
+  it('records message.thinking on the text path, and nothing without the opt-in', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, withThinking(OK_BODY, 'mulling')),
+    );
+    const on = await drain(
+      ollamaAdapter.runActivity(ctx({ input: { prompt: 'q', ...TRACE } }), null),
+    );
+    expect(captured(on).capture.reasoning).toMatchObject({ chars: 7, text: 'mulling' });
+    expect(captured(on).capture.completion).toMatchObject({ text: 'local answer' });
+
+    const off = await drain(
+      ollamaAdapter.runActivity(
+        ctx({ input: { prompt: 'q', model: 'llama3', capture: 'full', reasoningEffort: 'high' } }),
+        null,
+      ),
+    );
+    expect('reasoning' in captured(off).capture).toBe(false);
+  });
+
+  it('records nothing for an empty thinking string', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, withThinking(OK_BODY, '')));
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ input: { prompt: 'q', ...TRACE } }), null),
+    );
+    expect('reasoning' in captured(events).capture).toBe(false);
+  });
+
+  it('records it on the structured path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(
+        200,
+        withThinking(jsonResponse({ category: 'bug' }) as { message: object }, 'a bug'),
+      ),
+    );
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ input: { ...STRUCTURED_INPUT, ...TRACE } }), null),
+    );
+    expect(capturesOf(events)[0]?.reasoning).toMatchObject({ text: 'a bug' });
+  });
+
+  it("records each tool round's own", async () => {
+    const ADDER = {
+      name: 'adder',
+      description: 'Adds.',
+      parameters: { type: 'object', properties: { a: { type: 'number' } } },
+      expression: '${tool.args.a}',
+    };
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        fakeResponse(
+          200,
+          withThinking(
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ function: { name: 'adder', arguments: { a: 1 } } }],
+              },
+            },
+            'call it',
+          ),
+        ),
+      )
+      .mockResolvedValueOnce(fakeResponse(200, withThinking(OK_BODY, 'answer now')));
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ input: { prompt: 'q', tools: [ADDER], ...TRACE } }), null),
+    );
+    expect(capturesOf(events).map((c) => c.reasoning?.text)).toEqual(['call it', 'answer now']);
+  });
+});

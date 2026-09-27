@@ -12,6 +12,7 @@ function exchange(over: Partial<NodeCapture> = {}): NodeCapture {
     system: whole('be brief'),
     messages: [{ role: 'user', toolTurn: undefined, ...whole('what is 2+2?') }],
     completion: whole('4'),
+    reasoning: undefined,
     attempt: 1,
     instanceId: undefined,
     ...over,
@@ -84,6 +85,27 @@ describe('CaptureSection (#605)', () => {
       'Tool result (error)',
       'Completion',
     ]);
+  });
+
+  // #605 — the reasoning trace: a labelled block of its own, and withheld on a
+  // secure node like any other captured text.
+  it("shows the model's reasoning summary as its own labelled block", () => {
+    render(<CaptureSection captures={[exchange({ reasoning: whole('add the two') })]} />);
+    const section = screen.getByRole('region', { name: 'Prompt & completion' });
+    const heading = within(section).getByRole('heading', {
+      name: "Reasoning (the model's summary)",
+    });
+    expect(heading.parentElement?.textContent).toContain('add the two');
+  });
+
+  it('shows no reasoning block when none was recorded', () => {
+    render(<CaptureSection captures={[exchange()]} />);
+    expect(screen.queryByRole('heading', { name: /Reasoning/ })).toBeNull();
+  });
+
+  it('explains a withheld reasoning summary', () => {
+    render(<CaptureSection captures={[exchange({ reasoning: whole(SECURE_REDACTED) })]} />);
+    expect(screen.getByText(/captured text was redacted/)).toBeTruthy();
   });
 
   it('tells an empty completion apart from a missing one', () => {

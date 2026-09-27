@@ -3282,6 +3282,20 @@ describe('deriveNodeActivity — captured prompt/completion text (#605)', () => 
     expect(row.captures).toEqual([]);
   });
 
+  // #605 — the reasoning summary folds with the rest, and is enough on its own
+  // to make the exchange worth showing.
+  it('folds a reasoning summary, even when it is the only text stored', () => {
+    const row = rowOf([
+      started,
+      dispatch('n1#0'),
+      {
+        ...captured({ messageCount: 1, messages: [{ role: 'user', chars: 5, contentHash: 'h' }] }),
+        reasoning: { chars: 5, contentHash: 'h', text: 'hmmmm' },
+      } as EngineEvent,
+    ]);
+    expect(row.captures[0]?.reasoning).toEqual({ text: 'hmmmm', chars: 5, truncated: false });
+  });
+
   it('keeps an absent completion absent (the exchange failed)', () => {
     const row = rowOf([
       started,

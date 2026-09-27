@@ -1649,3 +1649,126 @@ describe('anthropicAdapter — full capture (#605 L9b)', () => {
     expect('text' in capture!.request.messages[0]!).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #605 — the reasoning trace: `captureReasoning` asks for the thinking SUMMARY
+// and records it on each capture.
+// ---------------------------------------------------------------------------
+
+describe('anthropicAdapter — reasoning trace (#605)', () => {
+  const TRACE = { capture: 'full', captureReasoning: true, reasoningEffort: 'high' };
+  const thinking = (text: string) => ({ type: 'thinking', thinking: text, signature: 'sig' });
+  const capturesOf = (events: ActivityEvent[]) =>
+    events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
+
+  it("asks for display 'summarized' only on the opt-in, and only with a reasoning effort", async () => {
+    const bodyFor = async (input: Record<string, unknown>) => {
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+      await drain(anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', ...input } }), 'sk'));
+      const body = sentBody(spy);
+      spy.mockRestore();
+      return body;
+    };
+    expect((await bodyFor(TRACE)).thinking).toStrictEqual({
+      type: 'adaptive',
+      display: 'summarized',
+    });
+    // Without the opt-in the request is exactly what it was.
+    expect((await bodyFor({ capture: 'full', reasoningEffort: 'high' })).thinking).toStrictEqual({
+      type: 'adaptive',
+    });
+    // No reasoning effort → no `thinking` on the wire, opt-in or not.
+    expect('thinking' in (await bodyFor({ capture: 'full', captureReasoning: true }))).toBe(false);
+  });
+
+  it('records the summary on the text path, apart from the completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        ...OK_BODY,
+        content: [thinking('first I'), thinking(''), thinking('then I'), ...OK_BODY.content],
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', ...TRACE } }), 'sk'),
+    );
+    const { capture } = captured(events);
+    expect(capture.reasoning).toStrictEqual({
+      chars: 'first I\n\nthen I'.length,
+      contentHash: sha256Hex('first I\n\nthen I'),
+      text: 'first I\n\nthen I',
+    });
+    expect(capture.completion).toMatchObject({ text: 'Hi there!' });
+    expect(succeeded(events).outputs.text).toBe('Hi there!');
+  });
+
+  it('records nothing when every thinking block is empty (display omitted)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { ...OK_BODY, content: [thinking(''), ...OK_BODY.content] }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', ...TRACE } }), 'sk'),
+    );
+    expect('reasoning' in captured(events).capture).toBe(false);
+  });
+
+  it('keeps the summary when thinking spent the whole budget and no text came back', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [thinking('ran long')],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 5, output_tokens: 7 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', ...TRACE } }), 'sk'),
+    );
+    expect(failed(events)).toBeDefined();
+    const { capture } = captured(events);
+    expect(capture.completion).toBeUndefined();
+    expect(capture.reasoning).toMatchObject({ text: 'ran long' });
+  });
+
+  it("records each tool round's own summary", async () => {
+    const TOOL = {
+      name: 'adder',
+      description: 'Adds.',
+      parameters: { type: 'object', properties: { a: { type: 'number' } } },
+      expression: '${tool.args.a}',
+    };
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        fakeResponse(200, {
+          content: [
+            thinking('need a tool'),
+            { type: 'tool_use', id: 'tu_1', name: 'adder', input: { a: 1 } },
+          ],
+          stop_reason: 'tool_use',
+          usage: { input_tokens: 5, output_tokens: 7 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        fakeResponse(200, { ...OK_BODY, content: [thinking('now answer'), ...OK_BODY.content] }),
+      );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', tools: [TOOL], ...TRACE } }), 'sk'),
+    );
+    expect(capturesOf(events).map((c) => c.reasoning?.text)).toEqual(['need a tool', 'now answer']);
+  });
+
+  it('records the summary on the structured path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [
+          thinking('it is a bug'),
+          { type: 'tool_use', name: 'structured_output', input: { category: 'bug' } },
+        ],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 4, output_tokens: 6 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { ...STRUCTURED_INPUT, ...TRACE } }), 'sk'),
+    );
+    expect(capturesOf(events)[0]?.reasoning).toMatchObject({ text: 'it is a bug' });
+  });
+});

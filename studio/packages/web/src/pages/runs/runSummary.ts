@@ -535,6 +535,8 @@ export interface NodeCapture {
   })[];
   /** ABSENT when the exchange produced no readable completion (a failure). */
   completion: CapturedText | undefined;
+  /** #605 — the model's reasoning summary, on a `captureReasoning` node. */
+  reasoning: CapturedText | undefined;
   /** 1-based, as `NodeToolCall.attempt`: a retry captures again. */
   attempt: number;
   instanceId: string | undefined;
@@ -1342,17 +1344,26 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         if (target === undefined) break;
         const system = capturedText(e.request.system);
         const completion = capturedText(e.completion);
+        const reasoning = capturedText(e.reasoning);
         const messages = e.request.messages.flatMap((m) => {
           const t = capturedText(m);
           return t === undefined ? [] : [{ role: m.role, toolTurn: m.toolTurn, ...t }];
         });
-        if (system === undefined && completion === undefined && messages.length === 0) break;
+        if (
+          system === undefined &&
+          completion === undefined &&
+          reasoning === undefined &&
+          messages.length === 0
+        ) {
+          break;
+        }
         const list = capturesByNode.get(target.nodeId) ?? [];
         list.push({
           model: e.model,
           system,
           messages,
           completion,
+          reasoning,
           attempt: dispatchesByRawNode.get(e.nodeId) ?? target.attempts,
           instanceId: instanceOf(e.nodeId),
         });

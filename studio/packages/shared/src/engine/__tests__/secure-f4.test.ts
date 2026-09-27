@@ -196,6 +196,29 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     expect('truncated' in ev.request.messages[0]!).toBe(false);
   });
 
+  // #605 — the reasoning summary is the model's text about the same input, so it
+  // is withheld exactly like the completion.
+  it('withholds the reasoning summary on a secure node, keeping its length', () => {
+    const ev = eng.redact({
+      type: 'activity.captured',
+      runId: RUN,
+      nodeId: 's',
+      attemptId: 's#0',
+      provider: 'anthropic_api',
+      model: 'm',
+      latencyMs: 1,
+      request: { messageCount: 1, messages: [{ role: 'user', chars: 1, contentHash: 'h' }] },
+      reasoning: { chars: 9, contentHash: 'h-why', text: 'thought-x', truncated: true },
+    });
+    expect(JSON.stringify(ev)).not.toMatch(/h-why|thought-x/);
+    if (ev.type !== 'activity.captured') throw new Error('type changed');
+    expect(ev.reasoning).toStrictEqual({
+      chars: 9,
+      contentHash: SECURE_REDACTED,
+      text: SECURE_REDACTED,
+    });
+  });
+
   it('leaves a metadata-mode capture with NO text key on a secure node', () => {
     const ev = eng.redact({
       type: 'activity.captured',
