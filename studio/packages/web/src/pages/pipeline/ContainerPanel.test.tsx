@@ -64,12 +64,15 @@ describe('ContainerPanel — which fields it offers', () => {
     }
     expect(screen.queryByLabelText(/^items/)).toBeNull();
     expect(screen.queryByLabelText(/^batchCount/)).toBeNull();
+    expect(screen.queryByLabelText(/^allowNondeterministicVars/)).toBeNull();
   });
 
   it('offers a foreach its own fields and none of the loop-only ones', () => {
     mount({ id: 'fe_1', kind: 'foreach', children: ['n_a'], items: '${createArray(1)}' });
     expect(screen.getByLabelText(/^items/)).toBeDefined();
     expect(screen.getByLabelText(/^batchCount/)).toBeDefined();
+    // #844 V5 — the variable-guard opt-in is a foreach field.
+    expect(screen.getByLabelText(/^allowNondeterministicVars/)).toBeDefined();
     expect(screen.queryByLabelText(/^exitWhen/)).toBeNull();
     expect(screen.queryByLabelText(/^maxRounds/)).toBeNull();
     expect(screen.queryByLabelText(/^timeout/)).toBeNull();
@@ -78,7 +81,14 @@ describe('ContainerPanel — which fields it offers', () => {
   it('offers a stage only join', () => {
     mount({ id: 'st_1', kind: 'stage', children: ['n_a'] });
     expect(screen.getByLabelText(/^join/)).toBeDefined();
-    for (const name of [/^exitWhen/, /^maxRounds/, /^timeout/, /^items/, /^batchCount/]) {
+    for (const name of [
+      /^exitWhen/,
+      /^maxRounds/,
+      /^timeout/,
+      /^items/,
+      /^batchCount/,
+      /^allowNondeterministicVars/,
+    ]) {
       expect(screen.queryByLabelText(name)).toBeNull();
     }
   });
@@ -114,6 +124,19 @@ describe('ContainerPanel — applying', () => {
    * absent number, or `''` for an absent string — would author settings the
    * operator never chose, which is #473's shape one level down.
    */
+  it('an edit to a foreach does not write the untouched opt-in (#844 V5)', () => {
+    const fe: Container = {
+      id: 'fe_1',
+      kind: 'foreach',
+      children: ['n_a'],
+      items: '${createArray(1)}',
+    };
+    const onApply = mount(fe);
+    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '2' } });
+    apply();
+    expect(applied(onApply)).toEqual({ ...fe, batchCount: 2 });
+  });
+
   it('is a no-op when nothing was typed', () => {
     const onApply = mount(LOOP);
     apply();

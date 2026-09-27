@@ -23,7 +23,13 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { DocUnresolvableError, startRun, type DocResolver, type DriveDeps } from '../driver.js';
+import {
+  buildEngine,
+  DocUnresolvableError,
+  startRun,
+  type DocResolver,
+  type DriveDeps,
+} from '../driver.js';
 import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from '../events.js';
 import { createRunDrives } from '../drives.js';
 import { createRunEventBus, type RunEventBus } from '../event-bus.js';
@@ -129,6 +135,8 @@ describe('RS2 producer — end-to-end rerun-from-failed', () => {
     const reseeded = r2Events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
     expect(reseeded.sourceRunId).toBe(r1);
     expect(reseeded.frontier).toEqual(['a']); // only a succeeded
+    // #844 V5 — a new reseed ALWAYS writes the field, empty when nothing wrote.
+    expect(reseeded.copiedVariableWrites).toEqual([]);
 
     // a was COPIED (never re-dispatched); b + c re-ran.
     const dispatched = r2Events
@@ -526,5 +534,66 @@ describe('RS2 producer — the double-rerun guard (#896)', () => {
     };
     const svc = createReseedService(brokenDeps);
     await expect(svc.rerunFromFailed(r1)).rejects.toBeInstanceOf(RerunNotEligibleError);
+  });
+});
+
+describe('#844 V5 — rerun-from-failed carries the copied nodes’ variable writes (V-D7)', () => {
+  function seedVarVersion(db: Db): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const w = (id: string, type: string, variable: string, value: string): Node => {
+      seq += 1;
+      return { id, type, config: { variable, value }, position: { x: seq, y: 0 } };
+    };
+    const input: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      variables: [
+        { name: 'n', type: 'number', default: 0 },
+        { name: 'list', type: 'array', default: [] },
+      ],
+      // a writes n, b appends to list, c is the step that fails.
+      nodes: [w('a', 'set_variable', 'n', '5'), w('b', 'append_variable', 'list', 'p'), node('c')],
+      edges: [edge('a', 'b'), edge('b', 'c')],
+      catalogVersion: CATALOG_VERSION,
+    };
+    return createPipelineVersion(db, input).id;
+  }
+  const variablesOf = (db: Db, pvId: string, runId: string) =>
+    buildEngine(getPipelineVersion(db, pvId)!).projectRunState(loadEngineEvents(db, runId))
+      .variables;
+  const reseededOf = (events: EngineEvent[]) =>
+    events[1] as Extract<EngineEvent, { type: 'run.reseeded' }>;
+
+  it('R2 starts from R1’s copied writes, and a rerun of the rerun does not apply them twice', async () => {
+    const { db } = freshDb();
+    const pvId = seedVarVersion(db);
+    const failC = { nodes: { c: { outcome: 'failure' as const } } };
+    const r1 = await seedRun(db, pvId, failC);
+    expect(getRun(db, r1)!.status).toBe('failure');
+
+    const second = await createReseedService(deps(db, failC)).rerunFromFailed(r1);
+    await second.drive;
+    const r2Events = loadEngineEvents(db, second.runId);
+    expect(reseededOf(r2Events).frontier).toEqual(['a', 'b']);
+    expect(reseededOf(r2Events).copiedVariableWrites).toEqual([
+      { nodeId: 'a', op: 'set', name: 'n', value: 5 },
+      { nodeId: 'b', op: 'append', name: 'list', value: 'p' },
+    ]);
+    // The writers were COPIED, not re-run — R2 logs no write of its own.
+    expect(r2Events.some((e) => e.type === 'variable.set' || e.type === 'variable.append')).toBe(
+      false,
+    );
+    expect(variablesOf(db, pvId, second.runId)).toEqual({ n: 5, list: ['p'] });
+
+    // R3 copies from R2, whose writes arrived in its OWN reseed: carried once.
+    const third = await createReseedService(deps(db, {})).rerunFromFailed(second.runId);
+    await third.drive;
+    expect(reseededOf(loadEngineEvents(db, third.runId)).copiedVariableWrites).toEqual([
+      { nodeId: 'a', op: 'set', name: 'n', value: 5 },
+      { nodeId: 'b', op: 'append', name: 'list', value: 'p' },
+    ]);
+    expect(variablesOf(db, pvId, third.runId)).toEqual({ n: 5, list: ['p'] });
+    expect(getRun(db, third.runId)!.status).toBe('success');
   });
 });

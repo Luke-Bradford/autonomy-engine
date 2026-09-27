@@ -15,14 +15,23 @@ import type {
   TerminalNodeStatus,
   WaitingReason,
 } from './types.js';
-import { SubstituteError, TERMINAL_CONTAINER, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import {
+  FAILURE_CODES,
+  SubstituteError,
+  TERMINAL_CONTAINER,
+  TERMINAL_NODE,
+  VARIABLE_MAX_BYTES,
+  terminalStatusOf,
+} from './types.js';
+import {
+  APPEND_VARIABLE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
   LLM_CALL_ACTIVITY_TYPE,
+  SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
@@ -33,17 +42,21 @@ import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.
 import { callDetaches, type VariableDef } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
+  coerceVariableValue,
   composeFilterExpr,
   containerJoin,
   containerMembership,
   isParallelForeach,
+  jsonReplaySafetyErrors,
   nodeDescendants,
   nodeJoin,
   partitionReadiness,
   substitute,
   triggerRoot,
+  variableValueMode,
   wholeValueDefect,
 } from './params.js';
+import { utf8ByteLength } from './functions.js';
 import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 
 // ---------------------------------------------------------------------------
@@ -508,6 +521,7 @@ export function createEngine(doc: EngineDoc): Engine {
   const nodeIds = doc.nodes.map((n) => n.id);
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
   const variableDefs = doc.variables ?? [];
+  const variableDefByName = new Map<string, VariableDef>(variableDefs.map((v) => [v.name, v]));
 
   /**
    * #844 V2 (spec V-D3) — a FRESH `name → default` map for a new run's state.
@@ -523,16 +537,122 @@ export function createEngine(doc: EngineDoc): Engine {
         typeof v.default === 'object' && v.default !== null
           ? JSON.parse(JSON.stringify(v.default))
           : v.default;
-      // A DATA property, not `out[name] =`: the name rule admits `__proto__`,
-      // and an assignment would set the prototype instead of a variable.
-      Object.defineProperty(out, v.name, {
-        value,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+      defineVariable(out, v.name, value);
     }
     return out;
+  }
+
+  /**
+   * #844 V5 (spec V-D4) — `variables` with one write applied, as a NEW object:
+   * `set` replaces the value, `append` adds `value` as one element to the
+   * CURRENT array. `null` when the write cannot apply — an undeclared name, or an
+   * append onto a non-array — which the save rules make unreachable for a real
+   * log; the callers report it rather than guess. Shared by the `variable.*` fold
+   * and the rerun reseed, so a carried write lands exactly as it did in the
+   * source run.
+   */
+  function applyVariableWrite(
+    variables: Record<string, unknown>,
+    op: 'set' | 'append',
+    name: string,
+    value: unknown,
+  ): Record<string, unknown> | null {
+    if (!variableDefByName.has(name)) return null;
+    let next: unknown = value;
+    if (op === 'append') {
+      const current = Object.prototype.hasOwnProperty.call(variables, name)
+        ? variables[name]
+        : undefined;
+      if (!Array.isArray(current)) return null;
+      next = [...(current as unknown[]), value];
+    }
+    const out = { ...variables };
+    defineVariable(out, name, next);
+    return out;
+  }
+
+  /**
+   * #844 V5 (spec V-D4) — what a ready `set_variable`/`append_variable` node
+   * does: evaluate `value` over the scoped run state, check it, and return the
+   * command that makes the outcome durable — `writeVariable` for a writable
+   * value, or `failNode` (`permanent`, a `VARIABLE_*` code) for one that is not.
+   * ONE function for dispatch AND crash-resume: the fold trusts the value it is
+   * given, so a resume that re-emitted blindly could durably write a value that
+   * fails the type, size or replay-safety check.
+   *
+   * THROWS (→ `prepFailure` → `finishRun{invalid_event}`) when the value cannot be
+   * EVALUATED — an unresolvable ref, a function error — or the node is not a
+   * well-formed write (no declared variable, non-text value). That is the verdict
+   * every other control node's evaluation reaches; diverging would give one
+   * expression two failure semantics depending on the node it sits in. A value
+   * that evaluates but cannot be WRITTEN fails the node instead, so the graph's
+   * failure edges can handle it.
+   *
+   * The size check reads the variable as it is NOW. Under the determinism guard
+   * no other write to it can land before this one folds, so the check holds at
+   * fold. The one exception is an `allowNondeterministicVars` parallel body,
+   * whose concurrent appends are each checked against the array as it was at
+   * their own dispatch — the bound can be overshot there by up to
+   * `batchCount - 1` elements, the price of the opt-in.
+   */
+  function variableWriteCommand(
+    state: RunState,
+    node: Node,
+    sid: string,
+    attemptId: string,
+  ): EngineCommand {
+    const op = node.type === SET_VARIABLE_ACTIVITY_TYPE ? 'set' : 'append';
+    const name = node.config['variable'];
+    const def = typeof name === 'string' ? variableDefByName.get(name) : undefined;
+    if (typeof name !== 'string' || def === undefined) {
+      throw new SubstituteError(`'${node.type}' node names no declared variable`);
+    }
+    if (op === 'append' && def.type !== 'array') {
+      throw new SubstituteError(`append_variable targets '${name}', which is not an array`);
+    }
+    const raw = node.config['value'];
+    if (typeof raw !== 'string') {
+      throw new SubstituteError(`'${node.type}' node's value must be text`);
+    }
+    const mode = variableValueMode(raw);
+    if (mode === null) {
+      throw new SubstituteError(`unterminated \${...} in the value of '${node.type}'`);
+    }
+    const resolved = substitute(
+      raw,
+      buildCtx(scopedEvalState(state, sid)),
+      0,
+      foreachItemOf(state, sid),
+    );
+
+    const fail = (code: string, error: string): EngineCommand => ({
+      type: 'failNode',
+      nodeId: sid,
+      attemptId,
+      error,
+      code,
+    });
+    let value = resolved;
+    if (op === 'set') {
+      const typed = coerceVariableValue(def, mode, resolved);
+      if (!typed.ok) return fail(FAILURE_CODES.VARIABLE_TYPE_MISMATCH, typed.error);
+      value = typed.value;
+    }
+    const [unsafe] = jsonReplaySafetyErrors(`variable '${name}'`, value);
+    if (unsafe !== undefined) return fail(FAILURE_CODES.VARIABLE_NOT_REPLAY_SAFE, unsafe);
+    const written = applyVariableWrite(state.variables, op, name, value);
+    if (written === null) {
+      throw new SubstituteError(`variable '${name}' cannot take an append here`);
+    }
+    const bytes = utf8ByteLength(JSON.stringify(written[name]) ?? '');
+    if (bytes > VARIABLE_MAX_BYTES) {
+      return fail(
+        FAILURE_CODES.VARIABLE_TOO_LARGE,
+        `variable '${name}' would be ${bytes} bytes, over the ${VARIABLE_MAX_BYTES}-byte ` +
+          'limit — the value was not written',
+      );
+    }
+    return { type: 'writeVariable', nodeId: sid, attemptId, op, name, value };
   }
 
   // Every doc defect the bind detects, reported ONCE per run at `run.started`
@@ -1589,6 +1709,26 @@ export function createEngine(doc: EngineDoc): Engine {
         branch,
         event: controlEvent,
       });
+      return { state: next, changed: true };
+    }
+    if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+      // #844 V5 (spec V-D4) — a `control` variable write is ENGINE-evaluated like
+      // `fail`/`filter` (checked here, before `node.call` and dispatch): evaluate
+      // and check the value PURELY, hold the node `ready` (the driver owes
+      // `variable.set`/`variable.append`, or `node.failed` for an unwritable
+      // value), and emit that command. NEVER handed to the executor.
+      let command: EngineCommand;
+      try {
+        command = variableWriteCommand(state, node, sid, attemptId);
+      } catch (err) {
+        return prepFailure(state, sid, err, diagnostics);
+      }
+      const next = withNode(state, sid, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push(command);
       return { state: next, changed: true };
     }
     if (node.type === FAIL_ACTIVITY_TYPE) {
@@ -3342,8 +3482,25 @@ export function createEngine(doc: EngineDoc): Engine {
       outputs[containerId] = copied.outputs;
     }
 
+    // #844 V5 (spec V-D7) — the copied nodes' variable writes, applied IN ORDER
+    // over the version defaults, through the same function the live fold uses.
+    // Absent on an old log, which predates variables: nothing to apply. A write
+    // that cannot apply is a malformed manifest — reported and skipped, like an
+    // unknown frontier id, never guessed at.
+    let variables = seedVariables();
+    for (const w of event.copiedVariableWrites ?? []) {
+      const next = applyVariableWrite(variables, w.op, w.name, w.value);
+      if (next === null) {
+        diagnostics.push(
+          `impossible run.reseeded: copied ${w.op} of '${w.name}' by '${w.nodeId}' cannot apply`,
+        );
+        continue;
+      }
+      variables = next;
+    }
+
     // Settle ONCE from the copied successes — dispatch proceeds beyond the frontier.
-    return settle({ ...state, nodes, outputs, containers }, diagnostics);
+    return settle({ ...state, nodes, outputs, containers, variables }, diagnostics);
   }
 
   function onDispatched(
@@ -3463,6 +3620,58 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics,
       };
     }
+    if (event.attemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    diagnostics.push(
+      `${event.type} for node '${event.nodeId}' in unexpected status '${ns.status}'`,
+    );
+    return { state, commands: [], diagnostics };
+  }
+
+  /**
+   * #844 V5 (spec V-D4) — a `set_variable`/`append_variable` node's write is
+   * durable: apply it to `state.variables` and mark the node `success`, ONE
+   * decision in one event. Same attempt/status guards as
+   * `onControlBranchEvaluated`, so a stale or duplicate event (a re-append after
+   * a crash) and an event for a node a loop timeout abandoned
+   * (`abandonLiveChildren` leaves it `skipped` with no attempt) are no-ops. The
+   * value is TRUSTED — the reducer checked it at dispatch — but the event must
+   * match its node: a write the doc's node could not have made (a different
+   * type, op or variable) is an impossible log, never applied.
+   */
+  function onVariableWritten(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'variable.set' | 'variable.append' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    const invalid = (why: string): ReduceResult => {
+      diagnostics.push(`impossible ${event.type} for node '${event.nodeId}': ${why}`);
+      return {
+        state,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    };
+    if (ns.status === 'ready') {
+      if (event.attemptId !== ns.currentAttemptId) {
+        return { state, commands: [], diagnostics };
+      }
+      const op = event.type === 'variable.set' ? 'set' : 'append';
+      const node = docNodeFor(event.nodeId);
+      const expected = op === 'set' ? SET_VARIABLE_ACTIVITY_TYPE : APPEND_VARIABLE_ACTIVITY_TYPE;
+      if (node?.type !== expected) return invalid(`it is not a ${expected} node`);
+      if (node.config['variable'] !== event.name) {
+        return invalid(`it writes '${String(node.config['variable'])}', not '${event.name}'`);
+      }
+      const variables = applyVariableWrite(state.variables, op, event.name, event.value);
+      if (variables === null) return invalid(`'${event.name}' cannot take this ${op}`);
+      const next = withNode({ ...state, variables }, event.nodeId, { status: 'success' });
+      return settle(next, diagnostics);
+    }
+    if (ns.status === 'pending') return invalid('it was never evaluated');
     if (event.attemptId !== ns.currentAttemptId) {
       return { state, commands: [], diagnostics };
     }
@@ -4241,6 +4450,24 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
+        if (
+          node.type === SET_VARIABLE_ACTIVITY_TYPE ||
+          node.type === APPEND_VARIABLE_ACTIVITY_TYPE
+        ) {
+          // #844 V5 crash recovery (spec V-D4): the node folded `ready` after
+          // `tryDispatchNode` pushed its command, and a crash lost it. Re-run the
+          // SAME evaluation and checks through `variableWriteCommand` — never a
+          // blind re-emit, because the fold trusts the value it is given — and
+          // re-route to `writeVariable` or `failNode` accordingly. Idempotent: same
+          // `currentAttemptId`, and a duplicate event folds as a stale no-op.
+          try {
+            commands.push(variableWriteCommand(state, node, id, ns.currentAttemptId));
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish], diagnostics };
+          }
+          continue;
+        }
         if (node.type === FAIL_ACTIVITY_TYPE) {
           // #4 A7 crash recovery: a `fail` folds to `ready` after `tryDispatchNode`
           // pushed `failNode`, but `projectRunState` keeps STATE, not COMMANDS — a
@@ -4631,6 +4858,9 @@ export function createEngine(doc: EngineDoc): Engine {
       case 'condition.evaluated':
       case 'switch.evaluated':
         return onControlBranchEvaluated(state, event, diagnostics);
+      case 'variable.set':
+      case 'variable.append':
+        return onVariableWritten(state, event, diagnostics);
       case 'node.failed':
         return onFailed(state, event, diagnostics);
       case 'call.started':
@@ -4832,6 +5062,15 @@ export function createEngine(doc: EngineDoc): Engine {
 // --- shared pure helpers (no closure needed) --------------------------------
 
 /** Immutable single-node patch: returns a new state, never mutates the input. */
+/**
+ * Set a pipeline variable on `out` as a DATA property, not `out[name] =`: the
+ * name rule admits `__proto__`, and an assignment would set the prototype
+ * instead of a variable (#844).
+ */
+function defineVariable(out: Record<string, unknown>, name: string, value: unknown): void {
+  Object.defineProperty(out, name, { value, enumerable: true, writable: true, configurable: true });
+}
+
 function withNode(state: RunState, id: string, patch: Partial<NodeRunState>): RunState {
   const prev = state.nodes[id]!;
   return { ...state, nodes: { ...state.nodes, [id]: { ...prev, ...patch } } };

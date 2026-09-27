@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EdgeOn, Node, PipelineVersion } from '../types.js';
-import { backEdgeDefect, validatePipelineDoc } from '../params.js';
+import { backEdgeDefect } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 
 /**
  * `backEdgeDefect` — the CONNECT-TIME half of the back-edge rules (U6e).

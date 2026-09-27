@@ -1645,12 +1645,11 @@ export function PipelinePanel({
               <ContractSection
                 heading="Variables"
                 hint={
-                  // #844 V3 — true until V5/V6 add the set/append activities;
-                  // V6 must rewrite this sentence when a node can write one.
+                  // #844 V5 — the set/append activities now write a variable.
                   <>
                     Named values a run holds from start to finish, read as{' '}
-                    <code>{'${vars.name}'}</code>. Every run starts each one at its default; no
-                    activity can change a variable yet.
+                    <code>{'${vars.name}'}</code>. Every run starts each one at its default; a Set
+                    variable or Append variable activity changes it.
                   </>
                 }
                 count={variables.length}

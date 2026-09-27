@@ -1326,6 +1326,8 @@ export async function pump(
         // retry-eligible) and `code:'forced_fail'`. Folded by the SAME `onFailed`
         // handler a connector failure reaches, so the graph's `failure` edges (or an
         // unhandled → run-fail) handle it. No executor, like `evaluateControl`.
+        // #844 V5 — a variable write that cannot be made sends its own `code`
+        // (`VARIABLE_*`); absent means the `fail` activity's `forced_fail`.
         source = [
           {
             type: 'node.failed',
@@ -1334,7 +1336,22 @@ export async function pump(
             attemptId: command.attemptId,
             error: command.error,
             kind: 'permanent',
-            code: FAILURE_CODES.FORCED_FAIL,
+            code: command.code ?? FAILURE_CODES.FORCED_FAIL,
+          },
+        ];
+      } else if (command.type === 'writeVariable') {
+        // #844 V5 (spec V-D4) — the driver's OWN `writeVariable` command: append
+        // the write the reducer already evaluated and checked PURELY, as
+        // `variable.set`/`variable.append` (the write and the node's success, one
+        // event). Folded by `onVariableWritten`. No executor, like `failNode`.
+        source = [
+          {
+            type: command.op === 'set' ? 'variable.set' : 'variable.append',
+            runId: state.runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            name: command.name,
+            value: command.value,
           },
         ];
       } else if (command.type === 'succeedControl') {

@@ -41,6 +41,7 @@ import type {
   EngineEvent,
   RunOutcome,
   RunState,
+  VariableWrite,
 } from '../../types.js';
 import type { Engine } from '../../reduce.js';
 
@@ -78,6 +79,7 @@ export interface DriveOptions {
     copiedOutputs: Record<string, Record<string, unknown>>;
     copiedContainers: Record<string, ContainerRunState>;
     childLinks?: { callNodeId: string; sourceChildRunId: string }[];
+    copiedVariableWrites?: VariableWrite[];
   };
 }
 
@@ -159,6 +161,9 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       copiedOutputs: opts.reseed.copiedOutputs,
       copiedContainers: opts.reseed.copiedContainers,
       ...(opts.reseed.childLinks !== undefined ? { childLinks: opts.reseed.childLinks } : {}),
+      ...(opts.reseed.copiedVariableWrites !== undefined
+        ? { copiedVariableWrites: opts.reseed.copiedVariableWrites }
+        : {}),
     });
   } else {
     apply({ type: 'run.started', runId, pipelineVersionId, params });
@@ -203,7 +208,21 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
         attemptId: c.attemptId,
         error: c.error,
         kind: 'permanent',
-        code: 'forced_fail',
+        code: c.code ?? 'forced_fail',
+      });
+      continue;
+    }
+    // #844 V5 — the driver's OWN `writeVariable` command: append the write the
+    // reducer evaluated and checked, as `variable.set`/`variable.append`. Mirrors
+    // the real driver's `pump` (`server/src/run/driver.ts` `writeVariable` branch).
+    if (c.type === 'writeVariable') {
+      apply({
+        type: c.op === 'set' ? 'variable.set' : 'variable.append',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        name: c.name,
+        value: c.value,
       });
       continue;
     }

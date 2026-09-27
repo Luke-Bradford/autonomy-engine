@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { validateDoc, validatePipelineDoc, validateRefs } from '../params.js';
+import { validateDoc, validateRefs } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
 
 /**

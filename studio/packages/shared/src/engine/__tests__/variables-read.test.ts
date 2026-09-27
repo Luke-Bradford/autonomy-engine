@@ -2,13 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { VariableDef } from '../../schemas/pipeline.js';
 import type { Container, Edge, EngineEvent, Node, Param, SubstitutionContext } from '../types.js';
 import { SubstituteError } from '../types.js';
-import {
-  availableRefs,
-  substitute,
-  validatePipelineDoc,
-  validateRefs,
-  validateTriggerBindings,
-} from '../params.js';
+import { availableRefs, substitute, validateRefs, validateTriggerBindings } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import { createEngine } from '../reduce.js';
 
 /**

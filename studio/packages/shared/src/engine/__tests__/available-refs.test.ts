@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { availableRefs, validatePipelineDoc, type RefSuggestion } from '../params.js';
+import { availableRefs, type RefSuggestion } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
 
 /**

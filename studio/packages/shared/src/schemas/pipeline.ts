@@ -770,6 +770,16 @@ export const ContainerSchema = z.object({
    * containing `@` (instance-key collision).
    */
   batchCount: z.number().int().min(1).max(50).optional(),
+  /**
+   * #844 V5 (spec V-D6) — foreach-only OPT-IN to nondeterministic variable
+   * writes. The determinism guard refuses a `set_variable`/`append_variable`
+   * inside a PARALLEL foreach body (`batchCount >= 2`), because its item
+   * instances race with each other; `true` lifts that one rule for this body, so
+   * e.g. appending each item's result to an array is legal and the element ORDER
+   * is whatever order the items finished in. Every other guard rule still applies.
+   * Refused by `validateDoc` on a loop or stage.
+   */
+  allowNondeterministicVars: z.boolean().optional(),
   /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
   join: z.enum(['all', 'any']).optional(),
 });

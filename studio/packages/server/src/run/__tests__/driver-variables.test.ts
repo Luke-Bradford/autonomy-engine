@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
   type Edge,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
 } from '@autonomy-studio/shared';
+import { loadEngineEvents } from '../events.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
@@ -84,5 +86,63 @@ describe('driver — ${vars.<name>} (#844 V2)', () => {
     const { db } = freshDb();
     const engine = buildEngine(getPipelineVersion(db, seedVersion(db, true))!);
     expect(engine.seedState().variables).toEqual({ flag: true });
+  });
+});
+
+describe('driver — set_variable / append_variable (#844 V5)', () => {
+  function seedWriters(db: Db): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const input: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [{ name: 'p', type: 'json', required: false, default: 3 }],
+      outputs: [],
+      variables: [
+        { name: 'n', type: 'number', default: 0 },
+        { name: 'list', type: 'array', default: [] },
+      ],
+      nodes: [
+        node('w', { type: 'set_variable', config: { variable: 'n', value: '${params.p}' } }),
+        node('a', { type: 'append_variable', config: { variable: 'list', value: 'x' } }),
+        node('handler'),
+      ],
+      edges: [
+        { id: 'w->a', from: 'w', to: 'a', on: 'success' },
+        { id: 'w->h', from: 'w', to: 'handler', on: 'failure' },
+      ],
+      catalogVersion: CATALOG_VERSION,
+    };
+    return createPipelineVersion(db, input).id;
+  }
+  const runOf = (db: Db, pvId: string, params: Record<string, unknown>) =>
+    createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params,
+    });
+
+  it('the pump appends the writes, and the run folds them into its variables', async () => {
+    const { db } = freshDb();
+    const run = runOf(db, seedWriters(db), { p: 4 });
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('success');
+    expect(state.variables).toEqual({ n: 4, list: ['x'] });
+    const writes = loadEngineEvents(db, run.id).filter((e) => e.type.startsWith('variable.'));
+    expect(writes.map((e) => e.type)).toEqual(['variable.set', 'variable.append']);
+  });
+
+  it('an unwritable value is a node.failed carrying the variable code, not forced_fail', async () => {
+    const { db } = freshDb();
+    const run = runOf(db, seedWriters(db), { p: 'four' });
+    const state = await startRun(deps(db), run);
+    const failed = loadEngineEvents(db, run.id).find(
+      (e): e is Extract<EngineEvent, { type: 'node.failed' }> =>
+        e.type === 'node.failed' && e.nodeId === 'w',
+    );
+    expect(failed?.code).toBe('variable_type_mismatch');
+    expect(failed?.kind).toBe('permanent');
+    expect(state.nodes['handler']!.status).toBe('success');
+    expect(state.variables).toEqual({ n: 0, list: [] });
   });
 });

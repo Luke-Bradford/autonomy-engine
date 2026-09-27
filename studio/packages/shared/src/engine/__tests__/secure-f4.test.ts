@@ -7,7 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EngineEvent, Node, NodeRunState, RunState } from '../types.js';
 import { createEngine, type Engine } from '../reduce.js';
-import { availableRefs, validatePipelineDoc } from '../params.js';
+import { availableRefs } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import {
   SECURE_ERROR_WITHHELD,
   SECURE_REDACTED,

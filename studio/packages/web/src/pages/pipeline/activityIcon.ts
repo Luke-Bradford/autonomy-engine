@@ -3,6 +3,7 @@ import {
   ArrowRouting20Regular,
   ArrowSplit20Regular,
   Bot20Regular,
+  BracesVariable20Regular,
   BranchFork20Regular,
   Clock20Regular,
   Copy20Regular,
@@ -19,6 +20,7 @@ import {
   Globe20Regular,
   PlugConnected20Regular,
   Sparkle20Regular,
+  TextBulletListAdd20Regular,
 } from '@fluentui/react-icons';
 
 /**
@@ -83,6 +85,11 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
      is worse: it reads as a UI affordance an operator might click, not as a data
      read a pipeline performs. */
   lookup: DatabaseArrowDown20Regular,
+  /* #844 V5 — the variable writers. `set` draws the braces of a `${vars.x}`
+     reference, which is what it feeds; `append` draws a list gaining a row,
+     because it only ever adds one element to an array. */
+  set_variable: BracesVariable20Regular,
+  append_variable: TextBulletListAdd20Regular,
 };
 
 /**

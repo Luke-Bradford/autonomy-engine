@@ -24,7 +24,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, Node, Param, PipelineVersion } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { validateDoc, validateRefs, validatePipelineDoc } from '../params.js';
+import { validateDoc, validateRefs } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import { getActivity } from '../../catalog/registry.js';
 import { CATALOG_VERSION } from '../../schemas/version.js';
 import { driveRun, simpleResolve } from './helpers/run-driver.js';

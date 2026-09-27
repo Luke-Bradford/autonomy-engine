@@ -1,19 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { VariableDef } from '../../schemas/pipeline.js';
-import type { Container, Edge, Node } from '../types.js';
+import type { Container, Edge, EngineEvent, Node, VariableWrite } from '../types.js';
 import { settledRawOf, variableReadsOf } from '../params.js';
-import {
-  copiedIdsOf,
-  copiedVariableWritesOf,
-  variableGuardErrors,
-  type VariableWrite,
-} from '../variable-guard.js';
+import { copiedIdsOf, copiedVariableWritesOf, variableGuardErrors } from '../variable-guard.js';
 
 /**
- * #844 V4 — the V-D6 determinism guard and the V-D7 reseed carry, PURE and
- * UNWIRED (spec `2026-09-27-foundation-pipeline-variables.md`). No catalog entry
- * for `set_variable`/`append_variable` exists until V5, so these docs name the
- * types directly; the guard reads structure, never the catalog.
+ * #844 V4 — the V-D6 determinism guard and the V-D7 reseed carry (spec
+ * `2026-09-27-foundation-pipeline-variables.md`), tested directly. V5 wired
+ * both; `variable-write.test.ts` covers the wiring. Every doc here passes both
+ * validators (`guard` asserts it), because the guard's reader list is complete
+ * only for such a doc.
  */
 
 let seq = 0;
@@ -21,9 +17,11 @@ function node(id: string, config: Record<string, unknown> = {}, type = 'agent_ta
   seq += 1;
   return { id, type, config, position: { x: seq, y: 0 } };
 }
-const set = (id: string, variable = 'v'): Node => node(id, { variable, value: 1 }, 'set_variable');
+// An array variable has no literal form, so its `set` writes a whole-value `${}`.
+const set = (id: string, variable = 'v'): Node =>
+  node(id, { variable, value: variable === 'list' ? '${createArray(1)}' : '1' }, 'set_variable');
 const append = (id: string, variable = 'list'): Node =>
-  node(id, { variable, value: 1 }, 'append_variable');
+  node(id, { variable, value: '1' }, 'append_variable');
 const read = (id: string, variable = 'v'): Node => node(id, { prompt: `\${vars.${variable}}` });
 const iff = (id: string): Node => node(id, { condition: '${true}' }, 'if');
 
@@ -47,7 +45,9 @@ function doc(nodes: Node[], edges: Edge[] = [], containers: Container[] = []) {
 }
 const guard = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) => {
   const d = doc(nodes, edges, containers);
-  return variableGuardErrors(d, variableReadsOf(d).reads);
+  const { reads, validatorErrors } = variableReadsOf(d);
+  expect(validatorErrors, validatorErrors.join(' | ')).toEqual([]);
+  return variableGuardErrors(d, reads);
 };
 
 describe('variableReadsOf — readers are a side output of the validators’ own scans', () => {
@@ -101,7 +101,10 @@ describe('variableGuardErrors — a writer it cannot read is refused, not skippe
     ['empty', { variable: '' }],
     ['an expression', { variable: '${params.name}' }],
   ])('refuses a set_variable whose variable is %s', (_label, config) => {
-    const errs = guard([node('w', config, 'set_variable')]);
+    // `validateDoc` refuses these too (V5), so `validatePipelineDoc` never runs
+    // the guard on them; this pins the guard's own backstop, called directly.
+    const d = doc([node('w', { value: '1', ...config }, 'set_variable')]);
+    const errs = variableGuardErrors(d, variableReadsOf(d).reads);
     expect(errs).toHaveLength(1);
     expect(errs[0]).toContain("node 'w' (set_variable)");
   });
@@ -112,7 +115,14 @@ describe('settledRawOf — must-precede, not zeroed by a looping doc', () => {
     const d = doc(
       [node('a'), node('b'), node('inner')],
       [e('a', 'b')],
-      [{ id: 'lp', kind: 'loop', children: ['inner'], exitWhen: '${true}' }],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['inner'],
+          exitWhen: "${equals(nodes.inner.status, 'success')}",
+        },
+      ],
     );
     expect(settledRawOf(d).get('b')?.has('a')).toBe(true);
   });
@@ -168,7 +178,14 @@ describe('variableGuardErrors — ordered pairs', () => {
     const errs = guard(
       [set('w'), read('r'), node('inner')],
       [e('w', 'r')],
-      [{ id: 'lp', kind: 'loop', children: ['inner'], exitWhen: '${true}' }],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['inner'],
+          exitWhen: "${equals(nodes.inner.status, 'success')}",
+        },
+      ],
     );
     expect(errs).toEqual([]);
   });
@@ -188,7 +205,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('accepts a switch case against its default', () => {
-    const sw = node('sw', { value: 'x', cases: ['a'] }, 'switch');
+    const sw = node('sw', { on: "${'x'}", cases: ['a'] }, 'switch');
     expect(guard([sw, set('a'), set('d')], [br('sw', 'a', 'a'), br('sw', 'd', 'default')])).toEqual(
       [],
     );
@@ -213,7 +230,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('refuses when a root path bypasses the decision', () => {
-    const t = node('t', { variable: 'v', value: 1, join: 'any' }, 'set_variable');
+    const t = node('t', { variable: 'v', value: '1', join: 'any' }, 'set_variable');
     const nodes = [iff('n'), t, set('f'), node('side')];
     const edges = [br('n', 't', 'true'), br('n', 'f', 'false'), e('side', 't')];
     expect(guard(nodes, edges)).toHaveLength(1);
@@ -226,7 +243,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('refuses an any-join writer reachable under both outcomes', () => {
-    const j = node('j', { variable: 'v', value: 1, join: 'any' }, 'set_variable');
+    const j = node('j', { variable: 'v', value: '1', join: 'any' }, 'set_variable');
     const nodes = [iff('n'), node('a'), node('b'), j, set('f')];
     const edges = [
       br('n', 'a', 'true'),
@@ -274,7 +291,12 @@ describe('variableGuardErrors — scopes', () => {
 
   it('compares two children of one body inside that body', () => {
     const lp = (): Container[] => [
-      { id: 'lp', kind: 'loop', children: ['a', 'b'], exitWhen: '${true}' },
+      {
+        id: 'lp',
+        kind: 'loop',
+        children: ['a', 'b'],
+        exitWhen: "${equals(nodes.a.status, 'success')}",
+      },
     ];
     expect(guard([set('a'), set('b'), node('u1'), node('u2')], [e('u1', 'u2')], lp())).toHaveLength(
       1,
@@ -384,7 +406,12 @@ describe('variableGuardErrors — bare back-edge bodies', () => {
 });
 
 describe('copiedVariableWritesOf — V-D7', () => {
-  const w = (nodeId: string, attemptId: string, value: unknown, op: 'set' | 'append' = 'set') => ({
+  const w = (
+    nodeId: string,
+    attemptId: string,
+    value: unknown,
+    op: 'set' | 'append' = 'set',
+  ): EngineEvent => ({
     type: op === 'set' ? 'variable.set' : 'variable.append',
     runId: 'r1',
     nodeId,
@@ -392,14 +419,17 @@ describe('copiedVariableWritesOf — V-D7', () => {
     name: 'v',
     value,
   });
+  // Filler events the carry must skip; only their `type` is read.
+  const other = (type: string, extra: object = {}) =>
+    ({ type, ...extra }) as unknown as EngineEvent;
 
   it('keeps exactly the copied nodes’ writes, in log order', () => {
     const events = [
-      { type: 'run.started' },
+      other('run.started'),
       w('a', 'a1', 1),
       w('b', 'b1', 2),
       w('a', 'a2', 3, 'append'),
-      { type: 'node.succeeded' },
+      other('node.succeeded'),
     ];
     expect(copiedVariableWritesOf(events, new Set(['a']))).toEqual<VariableWrite[]>([
       { nodeId: 'a', op: 'set', name: 'v', value: 1 },
@@ -426,8 +456,8 @@ describe('copiedVariableWritesOf — V-D7', () => {
       { nodeId: 'gone', op: 'set', name: 'v', value: 99 },
     ];
     const events = [
-      { type: 'run.started' },
-      { type: 'run.reseeded', copiedVariableWrites: carried },
+      other('run.started'),
+      other('run.reseeded', { copiedVariableWrites: carried }),
       w('b', 'b1', 20),
       w('c', 'c1', 30),
     ];

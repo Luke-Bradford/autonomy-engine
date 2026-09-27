@@ -18,6 +18,7 @@ describe('activity catalog', () => {
     // catalog TYPE (its config rides `node.call`, not `node.config`).
     expect([...catalog.keys()].sort()).toEqual([
       'agent_task',
+      'append_variable',
       'copy',
       'execute_pipeline',
       'fail',
@@ -33,6 +34,8 @@ describe('activity catalog', () => {
       'llm_call',
       // #1221 M12 slice 2 — `lookup`, the SOURCE-ONLY data-movement activity.
       'lookup',
+      // #844 V5 — the variable-writing control activities.
+      'set_variable',
       'switch',
       'wait',
       'webhook',
