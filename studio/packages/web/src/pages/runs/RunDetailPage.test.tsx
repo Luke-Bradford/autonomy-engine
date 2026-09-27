@@ -2959,6 +2959,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       ...run({ id, status: 'running', triggerId: null, rerunOf: 'run_1' }),
       pipelineName: 'P',
       pipelineVersion: 1,
+      annotations: [],
       triggerName: null,
       cost: computeRunCost([]),
     } as RunSummary;

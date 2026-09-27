@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import type { RunSummary } from '@autonomy-studio/shared';
 import { RunTimeline } from './RunTimeline';
+import type { RunGroupBy } from './runBars';
 
 const noSpend = {
   totalCostEstimate: 0,
@@ -31,18 +33,31 @@ function run(over: Partial<RunSummary> & Pick<RunSummary, 'id'>): RunSummary {
     pipelineId: 'pipe_a',
     pipelineName: 'Alpha',
     pipelineVersion: 1,
+    annotations: [],
     triggerName: null,
     cost: noSpend,
     ...over,
   } as RunSummary;
 }
 
-function renderTimeline(runs: RunSummary[]) {
+function renderTimeline(
+  runs: RunSummary[],
+  groupBy: RunGroupBy = 'pipeline',
+  onGroupByChange: (next: RunGroupBy) => void = () => {},
+) {
   return render(
     <MemoryRouter>
-      <RunTimeline runs={runs} />
+      <RunTimeline runs={runs} groupBy={groupBy} onGroupByChange={onGroupByChange} />
     </MemoryRouter>,
   );
+}
+
+/** Each lane list's accessible name, resolved through its `aria-labelledby`. */
+function laneNames(): string[] {
+  return screen.getAllByRole('list').map((list) => {
+    const ids = (list.getAttribute('aria-labelledby') ?? '').split(' ');
+    return ids.map((id) => document.getElementById(id)?.textContent ?? '<missing>').join(' ');
+  });
 }
 
 /** The bars, in DOM order, as `[left, width]` percentage strings. */
@@ -62,10 +77,7 @@ describe('U29 RunTimeline', () => {
     const lanes = screen.getAllByRole('list');
     // The lane's accessible name comes from its own heading, which is the only
     // way a reader landing on a bar learns which pipeline it belongs to.
-    expect(lanes.map((l) => l.getAttribute('aria-labelledby'))).toEqual([
-      'run-timeline-group-pipe_a',
-      'run-timeline-group-pipe_b',
-    ]);
+    expect(laneNames()).toEqual(['Alpha', 'Beta']);
     expect(within(lanes[0] as HTMLElement).getAllByRole('listitem')).toHaveLength(1);
   });
 
@@ -158,5 +170,59 @@ describe('U29 RunTimeline', () => {
     expect(
       [...container.querySelectorAll('.timeline-span')].map((el) => el.getAttribute('data-tone')),
     ).toEqual(['failure', 'failure', 'success']);
+  });
+});
+
+describe('#1016 RunTimeline grouped by annotation', () => {
+  /**
+   * A tag may contain spaces, and `aria-labelledby` is a space-separated IDREF
+   * list — so a lane id built from the tag would resolve to the wrong elements.
+   * Asserted by RESOLVING the reference, not by reading the attribute.
+   */
+  it('names each annotation lane by its heading, even for a tag with spaces', () => {
+    renderTimeline(
+      [
+        run({ id: 'r1', annotations: ['finance ops', 'nightly'], startedAt: 100 }),
+        run({ id: 'r2', pipelineName: 'Beta', annotations: [], startedAt: 50 }),
+      ],
+      'annotation',
+    );
+    expect(laneNames()).toEqual(['finance ops', 'nightly', 'Runs with no annotation']);
+    const untagged = screen
+      .getByRole('heading', { name: 'Runs with no annotation' })
+      .closest('.run-timeline-group');
+    expect(untagged?.getAttribute('data-lane-kind')).toBe('untagged');
+  });
+
+  /** An annotation lane mixes pipelines, so each row says which pipeline it is. */
+  it('names the pipeline on each row of an annotation lane, and not on a pipeline lane', () => {
+    const rows = [run({ id: 'r1', pipelineName: 'Alpha', annotations: ['ops'] })];
+    const { unmount } = renderTimeline(rows, 'annotation');
+    expect(screen.getByRole('link', { name: /^Alpha v1 · / })).toBeInTheDocument();
+    unmount();
+    renderTimeline(rows, 'pipeline');
+    expect(screen.getByRole('link', { name: /^v1 · / })).toBeInTheDocument();
+  });
+
+  it('says in the axis note that a multi-tag run appears in each lane', () => {
+    renderTimeline([run({ id: 'r1', annotations: ['a'] })], 'annotation');
+    expect(document.querySelector('.timeline-axis-note')?.textContent).toMatch(
+      /a run carrying several appears in each of their lanes/,
+    );
+  });
+
+  it('reports a lane-key choice, and offers it even when nothing is plottable', async () => {
+    const onGroupByChange = vi.fn();
+    renderTimeline(
+      [run({ id: 'q', status: 'queued', finishedAt: null })],
+      'pipeline',
+      onGroupByChange,
+    );
+    expect(screen.getByRole('button', { name: 'By pipeline' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'By annotation' }));
+    expect(onGroupByChange).toHaveBeenCalledWith('annotation');
   });
 });
