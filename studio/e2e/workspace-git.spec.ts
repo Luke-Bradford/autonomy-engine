@@ -6,6 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { makeBareRepo } from './support/bareRepo';
 import { seedVersion } from './support/seedDoc';
 
 /**
@@ -33,15 +34,6 @@ import { seedVersion } from './support/seedDoc';
 test.describe.configure({ mode: 'serial' });
 
 let repoDir: string;
-
-/** The scratch bare repo, outside the harness's own data dir. */
-function makeBareRepo(): string {
-  // NOT under `data/e2e`: `reset-state.mjs` wipes that tree, and putting
-  // spec-authored content inside it invites a future widening of that delete.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-git-e2e-'));
-  execFileSync('git', ['init', '--bare', '--initial-branch=main', dir], { stdio: 'ignore' });
-  return dir;
-}
 
 /**
  * #979 — push a pipeline file the workspace has never seen, so importing it

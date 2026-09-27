@@ -1360,11 +1360,21 @@ export function FlowCanvas({
        screen). Not writing at all is the point: a box the
        operator can already see must not have their viewport moved under them. */
     const usable = usableExtent(paneWidth, paneHeight);
+    /* #794 — the routing advisory is drawn over the top of the pane, and shows in
+       exactly the doc shape (edge-less, with containers) that empties a
+       container and triggers this reveal. Measured, not assumed: it wraps to a
+       second line on a narrow pane. `offsetTop + offsetHeight` is its bottom edge
+       in the React Flow wrapper, which is the pane's own frame. A copy wholly
+       under it is covered, not seen, so the copy check takes it too. */
+    const advisory = advisoryRef.current;
+    const topInset = advisory === null ? 0 : advisory.offsetTop + advisory.offsetHeight;
     const copies = new Set(appearedSelected(knownDocNodes, docNodeIds, selected, 'node'));
     const copyRects = nodes
       .filter((n) => copies.has(n.id))
       .map((n) => ({ ...n.position, ...unmeasuredNodeSize(portsOf(n.id).length) }));
-    const lostCopies = copyRects.some((r) => onScreen(r, transform, usable.width, usable.height))
+    const lostCopies = copyRects.some((r) =>
+      onScreen(r, transform, usable.width, usable.height, topInset),
+    )
       ? []
       : copyRects;
     if (appeared.length === 0 && lostCopies.length === 0) return;
@@ -1375,13 +1385,6 @@ export function FlowCanvas({
         .filter((box): box is ContainerBox => box !== undefined),
       ...lostCopies,
     ];
-    /* #794 — the routing advisory is drawn over the top of the pane, and shows in
-       exactly the doc shape (edge-less, with containers) that empties a
-       container and triggers this reveal. Measured, not assumed: it wraps to a
-       second line on a narrow pane. `offsetTop + offsetHeight` is its bottom edge
-       in the React Flow wrapper, which is the pane's own frame. */
-    const advisory = advisoryRef.current;
-    const topInset = advisory === null ? 0 : advisory.offsetTop + advisory.offsetHeight;
     const next = revealTransform(boxes, transform, usable.width, usable.height, topInset);
     if (next !== null) void setViewport(next);
   }, [

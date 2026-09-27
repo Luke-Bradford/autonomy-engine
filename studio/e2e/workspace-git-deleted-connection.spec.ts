@@ -1,8 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { makeBareRepo } from './support/bareRepo';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { mintVersion, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
@@ -39,9 +38,7 @@ const CAVEAT = 'a ref names a deleted resource, so it was not compared';
 let repoDir: string;
 
 test.beforeAll(() => {
-  // Outside the harness data dir, which `reset-state.mjs` wipes.
-  repoDir = mkdtempSync(join(tmpdir(), 'studio-git-e2e-delconn-'));
-  execFileSync('git', ['init', '--bare', '--initial-branch=main', repoDir], { stdio: 'ignore' });
+  repoDir = makeBareRepo('studio-git-e2e-delconn-');
 });
 
 test.afterAll(async ({ request }) => {

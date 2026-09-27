@@ -277,6 +277,14 @@ describe('revealTransform — the minimum pan that brings a box on screen', () =
     expect(next).toEqual({ x: 0, y: 60 + REVEAL_MARGIN - 10, zoom: 1 });
   });
 
+  it('#794 — an inset that leaves no room for a box is ignored, not obeyed', () => {
+    const noInset = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H);
+    expect(revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, H)).toEqual(noInset);
+    expect(
+      revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H, H - 2 * REVEAL_MARGIN),
+    ).toEqual(noInset);
+  });
+
   it('#794 — a box too tall for the room below the inset keeps its TOP clear of it', () => {
     // 560 tall in a 600 pane: without an inset the top lands at the margin (24);
     // with one it lands the margin below the inset (84) — the near edge wins, as
@@ -529,6 +537,14 @@ describe('the reveal trigger', () => {
       expect(onScreen(r, [699, 0, 1], 800, 600)).toBe(true);
       expect(onScreen(r, [0, -152, 1], 800, 600)).toBe(false);
       expect(onScreen(r, [-250, 0, 1], 800, 600)).toBe(false);
+    });
+
+    it('#794 — a rect wholly under a top inset is covered, not seen', () => {
+      // Top at 100-130 = -30, bottom at 22: inside a 40px advisory band.
+      expect(onScreen(r, [0, -130, 1], 800, 600)).toBe(true);
+      expect(onScreen(r, [0, -130, 1], 800, 600, 40)).toBe(false);
+      // One pixel below the band is enough, as for any other edge.
+      expect(onScreen(r, [0, -130, 1], 800, 600, 21)).toBe(true);
     });
 
     it('applies the zoom to position AND size', () => {

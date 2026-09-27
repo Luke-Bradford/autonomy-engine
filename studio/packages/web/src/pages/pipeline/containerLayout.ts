@@ -376,12 +376,18 @@ export function onScreen(
   transform: readonly [number, number, number],
   width: number,
   height: number,
+  /** #794 — as `revealTransform`'s: the band drawn over the pane's top. A rect
+   * wholly inside it is covered, not seen. */
+  topInset = 0,
 ): boolean {
   const [tx, ty, zoom] = transform;
   const left = rect.x * zoom + tx;
   const top = rect.y * zoom + ty;
   return (
-    left < width && left + rect.width * zoom > 0 && top < height && top + rect.height * zoom > 0
+    left < width &&
+    left + rect.width * zoom > 0 &&
+    top < height &&
+    top + rect.height * zoom > topInset
   );
 }
 
@@ -423,7 +429,11 @@ export function revealTransform(
 
   const [tx, ty, zoom] = transform;
   const dx = axisPan(target.x * zoom + tx, target.width * zoom, width);
-  const dy = axisPan(target.y * zoom + ty - topInset, target.height * zoom, height - topInset);
+  // An inset that leaves no room for a box and its two margins is ignored, not
+  // obeyed: panning into a band that cannot hold anything would push the box off
+  // the bottom, which is worse than landing it under the advisory.
+  const inset = height - topInset > 2 * REVEAL_MARGIN ? topInset : 0;
+  const dy = axisPan(target.y * zoom + ty - inset, target.height * zoom, height - inset);
   if (dx === 0 && dy === 0) return null;
   return { x: tx + dx, y: ty + dy, zoom };
 }
