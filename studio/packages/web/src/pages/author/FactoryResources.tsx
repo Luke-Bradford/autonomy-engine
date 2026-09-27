@@ -441,82 +441,79 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   /** One pipeline's row — or the draft standing in for it (rename, move). */
   const renderRow = (p: Pipeline) =>
-          activeDraft && replacesRow(activeDraft) && activeDraft.pipelineId === p.id ? (
-            <li key={p.id}>
-              <NameRow
-                draft={activeDraft}
-                busy={busy}
-                folderNames={folderNames}
-                onChange={(name) => setDraft({ ...activeDraft, name })}
-                onSubmit={() => void submitDraft()}
-                onCancel={closeDraft}
-              />
-            </li>
-          ) : (
-            <li key={p.id} className="factory-resources__row">
-              <NavLink
-                to={pipelinePath(p.id)}
-                className={({ isActive }) =>
-                  `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
-                }
-              >
-                {p.name}
-              </NavLink>
-              <Menu>
-                <MenuTrigger disableButtonEnhancement>
-                  <button
-                    id={rowMenuId(p.id)}
-                    type="button"
-                    className="icon-button factory-resources__icon-button"
-                    aria-label={`More actions for ${p.name}`}
-                  >
-                    <MoreHorizontalRegular aria-hidden="true" />
-                  </button>
-                </MenuTrigger>
-                {/* Fluent's DEFAULT body portal — the U0 spike forbids
+    activeDraft && replacesRow(activeDraft) && activeDraft.pipelineId === p.id ? (
+      <li key={p.id}>
+        <NameRow
+          draft={activeDraft}
+          busy={busy}
+          folderNames={folderNames}
+          onChange={(name) => setDraft({ ...activeDraft, name })}
+          onSubmit={() => void submitDraft()}
+          onCancel={closeDraft}
+        />
+      </li>
+    ) : (
+      <li key={p.id} className="factory-resources__row">
+        <NavLink
+          to={pipelinePath(p.id)}
+          className={({ isActive }) =>
+            `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
+          }
+        >
+          {p.name}
+        </NavLink>
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <button
+              id={rowMenuId(p.id)}
+              type="button"
+              className="icon-button factory-resources__icon-button"
+              aria-label={`More actions for ${p.name}`}
+            >
+              <MoreHorizontalRegular aria-hidden="true" />
+            </button>
+          </MenuTrigger>
+          {/* Fluent's DEFAULT body portal — the U0 spike forbids
                     reparenting a surface into the React Flow viewport, and the
                     pane clips its own overflow, so an in-flow popover would be
                     sliced off at the pane's edge. */}
-                <MenuPopover>
-                  <MenuList>
-                    <MenuItem
-                      onClick={() =>
-                        openDraft(
-                          { kind: 'rename', pipelineId: p.id, name: p.name },
-                          rowMenuId(p.id),
-                        )
-                      }
-                    >
-                      Rename
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() =>
-                        openDraft(
-                          { kind: 'move', pipelineId: p.id, name: p.folder ?? '' },
-                          rowMenuId(p.id),
-                        )
-                      }
-                    >
-                      Move to folder…
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        setExpanded(true);
-                        openDraft(
-                          { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
-                          rowMenuId(p.id),
-                        );
-                      }}
-                    >
-                      Duplicate
-                    </MenuItem>
-                    <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
-                    <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
-                  </MenuList>
-                </MenuPopover>
-              </Menu>
-            </li>
-          );
+          <MenuPopover>
+            <MenuList>
+              <MenuItem
+                onClick={() =>
+                  openDraft({ kind: 'rename', pipelineId: p.id, name: p.name }, rowMenuId(p.id))
+                }
+              >
+                Rename
+              </MenuItem>
+              <MenuItem
+                onClick={() =>
+                  openDraft(
+                    { kind: 'move', pipelineId: p.id, name: p.folder ?? '' },
+                    rowMenuId(p.id),
+                  )
+                }
+              >
+                Move to folder…
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setExpanded(true);
+                  openDraft(
+                    { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
+                    rowMenuId(p.id),
+                  );
+                }}
+              >
+                Duplicate
+              </MenuItem>
+              <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
+              <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+      </li>
+    );
 
   const listLabel = section?.label ?? hub.label;
 

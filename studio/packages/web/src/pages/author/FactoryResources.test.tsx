@@ -274,12 +274,11 @@ describe('FactoryResources — folders', () => {
     expect(within(ops).getByRole('link', { name: 'Delta' })).toBeInTheDocument();
 
     // Document order: Nightly, Ops, then the loose rows in the list's order.
-    expect(tree().getAllByRole('link').map((a) => a.textContent)).toEqual([
-      'Gamma',
-      'Delta',
-      'Alpha',
-      'Beta',
-    ]);
+    expect(
+      tree()
+        .getAllByRole('link')
+        .map((a) => a.textContent),
+    ).toEqual(['Gamma', 'Delta', 'Alpha', 'Beta']);
   });
 
   it('collapses one folder without touching the others', async () => {

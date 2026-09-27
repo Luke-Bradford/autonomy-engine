@@ -575,7 +575,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     createPipelineVersion(db, baseVersion(filed.id));
     const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
 
-    const moved = result.applied.find((a) => a.kind === 'pipeline' && a.resourceId === pipe.resourceId);
+    const moved = result.applied.find(
+      (a) => a.kind === 'pipeline' && a.resourceId === pipe.resourceId,
+    );
     expect(moved?.action).toBe('updated');
     expect(getPipeline(tgt, tgtPipe.id)!.folder).toBe('Nightly');
     expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);

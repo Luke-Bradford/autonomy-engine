@@ -175,7 +175,11 @@ describe('pipelines routes', () => {
     expect(await reread()).toBeNull();
 
     // A default create is top level.
-    const plain = await app.inject({ method: 'POST', url: '/api/pipelines', payload: { name: 'Loose' } });
+    const plain = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      payload: { name: 'Loose' },
+    });
     expect(plain.json().folder).toBeNull();
   });
 
