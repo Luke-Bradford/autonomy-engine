@@ -1,11 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import {
-  fireAndSettle,
-  seedManualTrigger,
-  seedVersion,
-  type SeedDoc,
-} from './support/seedDoc';
+import { fireAndSettle, seedManualTrigger, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
