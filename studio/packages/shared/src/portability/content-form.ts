@@ -142,7 +142,30 @@ const VERSION_VOLATILE = [
  * drift on what a version's content is. */
 function scrubVersion(version: { nodes: unknown[] }): void {
   omitKeys(version, VERSION_VOLATILE);
+  omitEmptyVariables(version);
   for (const node of version.nodes) omitKeys(node, ['position']);
+}
+
+/**
+ * #844 V1 (spec V-D2) — delete a version's `variables` key IN PLACE when it is
+ * an empty list, so "absent" and "empty" are the same content.
+ *
+ * `variables` joined the version doc after git serialization existed. Every
+ * committed pipeline file lacks the key, every `sourceBlobSha` hashes a file
+ * without it, and every drift/`superseded` decision compares content forms built
+ * from such files. Written as `variables: []`, every existing pipeline would read
+ * as changed, and the next Commit would rewrite every file with no real change.
+ * (`containers` never needed this: it predates git serialization.)
+ *
+ * The ONE definition, applied at both places that matter: the content form
+ * (`scrubVersion`) and the bytes of a serialized file (`serializePipeline`, and
+ * the portable export for the same shape). A non-empty list is left untouched,
+ * because then it is content.
+ */
+export function omitEmptyVariables(version: { variables?: unknown }): void {
+  if (Array.isArray(version.variables) && version.variables.length === 0) {
+    delete version.variables;
+  }
 }
 
 export function pipelineVersionContentForm(

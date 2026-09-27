@@ -8,7 +8,7 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
-import type { OutputType, ParamType } from '../schemas/pipeline.js';
+import type { OutputType, ParamType, VariableDef } from '../schemas/pipeline.js';
 import { callDetaches, isAddressableOutputName } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
@@ -53,8 +53,10 @@ import {
   assignableTo,
   checkArgTypes,
   listFunctions,
+  matchesSig,
   sigOfDeclared,
   toStr,
+  typeName,
 } from './functions.js';
 
 // ---------------------------------------------------------------------------
@@ -2103,13 +2105,67 @@ function validateSecretMarker(where: string, value: unknown, errors: string[]): 
  * Returns error strings; `[]` means valid.
  */
 export function validatePipelineDoc(
-  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  doc: ValidatedDoc,
   options: ValidateDocOptions = {},
 ): string[] {
   return [...validateDoc(doc, options), ...validateRefs(doc)];
 }
 
 // --- validateDoc (structural static validation, run at pipeline-SAVE time) --
+
+/**
+ * The doc shape the save-time validators read. `variables` (#844 V1) is
+ * OPTIONAL here, and only here: the server gate hands over the parsed write doc,
+ * which always carries it (the schema defaults it to `[]`), so absence can only
+ * come from a caller that has no variables to check. The canvas badge is that
+ * caller until V3 gives it a Variables editor (see `validateCanvas`).
+ */
+export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> & {
+  variables?: readonly VariableDef[];
+};
+
+/**
+ * #844 V1 — the save-time rules on a pipeline's declared variables (spec V-D1):
+ *  - a name is unique among the variables. Params are a separate root, so
+ *    `params.x` and `vars.x` may coexist;
+ *  - a name is addressable as `${vars.<name>}`, by the rule node outputs use.
+ *    Unlike a param name (#1354 only NOTES that), this is a hard error: a
+ *    variable exists only to be read by name, so an unaddressable one is a
+ *    defect, and no stored version predates the rule;
+ *  - a `default` is present and matches `type` STRICTLY via `matchesSig`, with
+ *    no coercion. `"5"` for a `number` is refused, not read as `5`, because the
+ *    doc must state the starting value, and an unset variable has no honest one.
+ *    `matchesSig`'s `number` is finite-only, and an `array` default is also
+ *    walked for a nested non-finite, which would `JSON.stringify` to `null` in
+ *    the run log and replay as a different value (#547).
+ */
+function variableDeclarationErrors(variables: readonly VariableDef[]): string[] {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const v of variables) {
+    if (seen.has(v.name)) {
+      errors.push(
+        `duplicate variable name '${v.name}' (variable names must be unique within the pipeline)`,
+      );
+    }
+    seen.add(v.name);
+    if (!isAddressableOutputName(v.name)) {
+      errors.push(
+        `variable '${v.name}' cannot be referenced as \${vars.<name>} ` +
+          '(a name is a letter or underscore, then letters, digits or underscores)',
+      );
+    }
+    if (!matchesSig(v.default, v.type)) {
+      const article = v.type === 'array' ? 'an' : 'a';
+      errors.push(
+        `variable '${v.name}' default must be ${article} ${v.type}, got ${typeName(v.default)}`,
+      );
+    } else if (v.type === 'array') {
+      errors.push(...jsonReplaySafetyErrors(`variable '${v.name}' default`, v.default));
+    }
+  }
+  return errors;
+}
 
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
 export type PipelineResolver = (
@@ -2182,7 +2238,7 @@ export const CONTAINER_CONFIG_FIELDS: Record<ContainerKind, readonly ContainerCo
  *    `maxCallDepth` over the (statically-resolvable) call graph.
  */
 export function validateDoc(
-  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  doc: ValidatedDoc,
   options: ValidateDocOptions = {},
 ): string[] {
   const errors: string[] = [];
@@ -2219,6 +2275,7 @@ export function validateDoc(
       else errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
     }
   }
+  errors.push(...variableDeclarationErrors(doc.variables ?? []));
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
   const secureOutputIds = secureOutputIdsOf(doc.nodes, doc.containers ?? []);
   // #567 — a `foreach`'s `items` is validated against the container ENDPOINT's real

@@ -3,6 +3,7 @@ import {
   connectionContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
+  pipelineVersionContentForm,
   triggerContentForm,
 } from '../content-form.js';
 import type {
@@ -277,5 +278,35 @@ describe('triggerContentForm', () => {
     expect(
       triggerContentForm(triggerData({ webhook: { replayWindow: 5 }, mode: 'webhook' })),
     ).not.toBe(triggerContentForm(triggerData({ webhook: null, mode: 'webhook' })));
+  });
+});
+
+// #844 V1 (spec V-D2) — `variables` joined the version doc after git
+// serialization existed, so every committed file and every stored content form
+// has no key. An EMPTY list must therefore be the same content as an ABSENT one,
+// or the first Commit after V1 rewrites every pipeline file for no change.
+describe('variables in the version content form (#844 V1)', () => {
+  const version = pipelineData().versions[0]!;
+  const withVars = (variables: unknown) =>
+    ({ ...version, variables }) as unknown as PipelineExportData['versions'][number];
+
+  it('an empty list is byte-identical to an absent key', () => {
+    const { variables: _absent, ...noKey } = withVars([]);
+    expect(pipelineVersionContentForm(withVars([]))).toBe(
+      pipelineVersionContentForm(noKey as PipelineExportData['versions'][number]),
+    );
+    expect(pipelineVersionContentForm(withVars([]))).not.toContain('variables');
+    expect(pipelineContentForm({ ...pipelineData(), versions: [withVars([])] })).toBe(
+      pipelineContentForm({
+        ...pipelineData(),
+        versions: [noKey as PipelineExportData['versions'][number]],
+      }),
+    );
+  });
+
+  it('a declared variable IS content', () => {
+    const declared = withVars([{ name: 'count', type: 'number', default: 0 }]);
+    expect(pipelineVersionContentForm(declared)).not.toBe(pipelineVersionContentForm(withVars([])));
+    expect(pipelineVersionContentForm(declared)).toContain('"count"');
   });
 });

@@ -77,6 +77,34 @@ export const OutputSchema = z.object({
 export type Output = z.infer<typeof OutputSchema>;
 
 /**
+ * #844 V1 — a pipeline VARIABLE's type (spec
+ * `2026-09-27-foundation-pipeline-variables.md` V-D1). Its OWN vocabulary, not
+ * `ParamTypeSchema`: no `json` (an `array` is the one structured type a variable
+ * needs, and its elements are untyped JSON values), and no `secret`, because a
+ * variable's value is written to the run log in clear and a secret would have
+ * nowhere safe to live. The names deliberately coincide with the `SigType`s
+ * `matchesSig` checks, so the strict default rule reads the type directly.
+ */
+export const VariableTypeSchema = z.enum(['string', 'number', 'boolean', 'array']);
+export type VariableType = z.infer<typeof VariableTypeSchema>;
+
+/**
+ * A declared pipeline variable. `default` is REQUIRED by the save gate
+ * (`validateDoc`), checked strictly against `type` with no coercion, and is a
+ * literal that is never substituted (as param defaults are, #844 item 3). It is
+ * `z.unknown()` here, so a missing one reaches the gate as `undefined` and is
+ * reported there, in the same list as every other doc defect, rather than as a
+ * bare schema error.
+ */
+export const VariableDefSchema = z.object({
+  name: z.string().min(1),
+  type: VariableTypeSchema,
+  default: z.unknown(),
+  description: z.string().optional(),
+});
+export type VariableDef = z.infer<typeof VariableDefSchema>;
+
+/**
  * What a NODE-level output name may be (`Node.config.outputs`, #1 F13a).
  *
  * `refRoot` (`engine/params.ts`) addresses `${nodes.<id>.output.<name>}` by
@@ -842,6 +870,16 @@ export const PipelineVersionSchema = z.object({
   /** Control-flow containers (loop/stage). Default `[]` — backward-tolerant so
    * a pre-P2c doc with no `containers` key still parses. */
   containers: z.array(ContainerSchema).default([]),
+  /**
+   * #844 V1 — declared pipeline variables. `.default([])` for the reason
+   * `containers` has one: this schema also parses old exports and old git blobs,
+   * which carry no key. It is NOT the #473 hazard. The DB column is `NOT NULL`,
+   * so a stored row never reaches this default, and on the import path an absent
+   * key can only mean "no variables". An EMPTY list is omitted from the
+   * serialized file and the content form (`omitEmptyVariables`), so absent and
+   * empty are the same content.
+   */
+  variables: z.array(VariableDefSchema).default([]),
   catalogVersion: z.number().int(),
   createdAt: z.number().int(),
   /**
