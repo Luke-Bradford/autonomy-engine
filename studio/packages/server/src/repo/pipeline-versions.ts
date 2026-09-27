@@ -1,6 +1,7 @@
 import { asc, desc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  GlobalReadSchema,
   lowerPipelineNodes,
   NewPipelineVersionSchema,
   PipelineVersionSchema,
@@ -8,10 +9,12 @@ import {
   validatePipelineDoc,
   type NewPipelineVersion,
   type PipelineResolver,
+  type GlobalRead,
   type PipelineVersion,
   summarizeIssueList,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
+import { listOwnerGlobalTypes } from './global-params.js';
 import { newId } from './ids.js';
 import { getPipeline, listPipelines, type CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
@@ -188,8 +191,26 @@ export function createPipelineVersion(
   // answer for those rows: they no longer wedge a run forever, they terminalize
   // as `failure{reason:'stalled'}`. That is containment, NOT a substitute for
   // this gate — a stalled run is still a run the author never wanted.
-  const issues = validatePipelineDoc(lowered, { selfId: id, resolvePipeline });
+  //
+  // #844 GL3 — the gate is also handed the OWNER's globals (GL-D2), the way it
+  // is handed an owner-scoped resolver, and it collects what the doc reads. That
+  // list is complete because only a doc with no issues gets past here, and it is
+  // stored as the version's `global_reads`, which a run's start check reads.
+  const globals = listOwnerGlobalTypes(db, callerOwnerId);
+  const globalReadNames = new Set<string>();
+  const issues = validatePipelineDoc(lowered, {
+    selfId: id,
+    resolvePipeline,
+    globals,
+    globalReads: globalReadNames,
+  });
   if (issues.length > 0) throw new InvalidPipelineDocError(issues);
+  const globalReads: GlobalRead[] = [...globalReadNames].sort().map((name) => {
+    const type = globals.get(name);
+    // The validator adds a name only after finding it in `globals`.
+    if (type === undefined) throw new Error(`global read '${name}' has no type`);
+    return { name, type };
+  });
 
   return db.transaction((tx) => {
     const maxRow = tx
@@ -223,10 +244,31 @@ export function createPipelineVersion(
       sourceFilePath: opts?.sourceFilePath ?? null,
       sourceBlobSha: opts?.sourceBlobSha ?? null,
     };
-    tx.insert(pipelineVersions).values(row).run();
+    tx.insert(pipelineVersions)
+      .values({ ...row, globalReads: JSON.stringify(globalReads) })
+      .run();
     return PipelineVersionSchema.parse(row);
   });
 }
+
+/**
+ * #844 GL3 — the globals version `id` reads (its `global_reads` column), or
+ * `null` for a version that does not exist. A pre-GL3 row (SQL NULL) reads none.
+ * A column that does not decode THROWS: "reads none" is the fail-open reading
+ * of garbage, because a run would then start without the values it reads.
+ */
+export function getGlobalReads(db: Db, id: string): GlobalRead[] | null {
+  const row = db
+    .select({ globalReads: pipelineVersions.globalReads })
+    .from(pipelineVersions)
+    .where(eq(pipelineVersions.id, id))
+    .get();
+  if (row === undefined) return null;
+  if (row.globalReads === null) return [];
+  return GlobalReadsColumnSchema.parse(JSON.parse(row.globalReads));
+}
+
+const GlobalReadsColumnSchema = z.array(GlobalReadSchema);
 
 export function getPipelineVersion(db: Db, id: string): PipelineVersion | null {
   const row = db.select().from(pipelineVersions).where(eq(pipelineVersions.id, id)).get();

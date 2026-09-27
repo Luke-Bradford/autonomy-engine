@@ -1,7 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { GLOBAL_PARAM_MAX_BYTES } from '@autonomy-studio/shared';
-import { createGlobalParam, getGlobalParam } from '../../repo/index.js';
+import {
+  CATALOG_VERSION,
+  GLOBAL_PARAM_MAX_BYTES,
+  type NewPipelineVersion,
+} from '@autonomy-studio/shared';
+import {
+  createGlobalParam,
+  createPipeline,
+  createPipelineVersion,
+  createTrigger,
+  deleteGlobalParam,
+  getGlobalParam,
+  listRuns,
+} from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 /**
@@ -159,5 +171,124 @@ describe('global params routes (#844 GL1)', () => {
     const del = await app.inject({ method: 'DELETE', url: `/api/global-params/${theirs.id}` });
     expect(del.statusCode).toBe(404);
     expect(getGlobalParam(app.db, theirs.id)).toMatchObject({ value: 'prod' });
+  });
+});
+
+/**
+ * #844 GL3 — the two routes that read what versions RECORD: the run-now
+ * pre-check (spec GL-D3) and the usage list the delete confirmation shows
+ * (GL-D4).
+ */
+describe('global params read by pipelines (#844 GL3)', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    app = await buildTestApp();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  function global(name: string, ownerId = 'local') {
+    return createGlobalParam(app.db, {
+      ownerId,
+      name,
+      type: 'string',
+      value: 'v',
+      description: '',
+    });
+  }
+
+  /** A pipeline whose versions are `docs` in order, each a node reading `reads`. */
+  function pipeline(name: string, ...docs: string[][]) {
+    const p = createPipeline(app.db, { ownerId: 'local', name });
+    const ids = docs.map((reads) => {
+      const u = reads.map((r) => `\${global.${r}}`).join(' ');
+      const input: NewPipelineVersion = {
+        pipelineId: p.id,
+        params: [],
+        outputs: [],
+        nodes: [{ id: 'a', type: 'test_activity', config: { u }, position: { x: 0, y: 0 } }],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      };
+      return createPipelineVersion(app.db, input).id;
+    });
+    return { pipelineId: p.id, versionIds: ids };
+  }
+
+  function trigger(name: string, pipelineVersionId: string, enabled = true) {
+    return createTrigger(app.db, {
+      ownerId: 'local',
+      name,
+      pipelineVersionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled,
+    });
+  }
+
+  it('run-now is a 400 naming a deleted global, and creates no run', async () => {
+    const g = global('apiUrl');
+    const { versionIds } = pipeline('P', ['apiUrl']);
+    const t = trigger('T', versionIds[0]!);
+    deleteGlobalParam(app.db, g.id);
+
+    const res = await app.inject({ method: 'POST', url: `/api/triggers/${t.id}/fire` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/global parameter "apiUrl" no longer exists/);
+    expect(listRuns(app.db, {})).toHaveLength(0);
+  });
+
+  it('run-now starts a run whose globals are all there', async () => {
+    global('apiUrl');
+    const { versionIds } = pipeline('P', ['apiUrl']);
+    const t = trigger('T', versionIds[0]!);
+    const res = await app.inject({ method: 'POST', url: `/api/triggers/${t.id}/fire` });
+    expect(res.statusCode).toBe(202);
+  });
+
+  it('usage lists the pipelines whose LATEST version reads it, and every trigger pinning a reader', async () => {
+    const g = global('apiUrl');
+    global('other');
+    const reads = pipeline('Reads now', ['other'], ['apiUrl']);
+    const stopped = pipeline('Stopped reading', ['apiUrl'], ['other']);
+    pipeline('Never', ['other']);
+    const pinned = trigger('Pinned old', stopped.versionIds[0]!, false);
+    trigger('Pinned new', stopped.versionIds[1]!);
+
+    const res = await app.inject({ method: 'GET', url: `/api/global-params/${g.id}/usage` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      pipelines: [
+        {
+          pipelineId: reads.pipelineId,
+          pipelineName: 'Reads now',
+          versionId: reads.versionIds[1],
+          version: 2,
+        },
+      ],
+      triggers: [
+        {
+          triggerId: pinned.id,
+          triggerName: 'Pinned old',
+          enabled: false,
+          pipelineName: 'Stopped reading',
+          versionId: stopped.versionIds[0],
+          version: 1,
+        },
+      ],
+    });
+  });
+
+  it("usage of another owner's global is a 404", async () => {
+    const theirs = global('apiUrl', 'someone-else');
+    const res = await app.inject({ method: 'GET', url: `/api/global-params/${theirs.id}/usage` });
+    expect(res.statusCode).toBe(404);
   });
 });

@@ -8,6 +8,8 @@ import {
 import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
 import { loadEngineEvents, terminalFactFromLog } from './events.js';
 import { buildEngine, type DriveDeps } from './driver.js';
+import { GlobalStartError, resolveRunGlobals } from './globals.js';
+import type { Db } from '../repo/types.js';
 import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
 
 /**
@@ -172,6 +174,7 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // raw params) for the `run.started` payload — computed BEFORE the tx (pure).
       const resolvedParams = resolveRunParams(doc, source.params);
       const sourceTctx = sourceEvents.find((e) => e.type === 'run.triggerContext');
+      const globals = rerunGlobals(db, source, sourceEvents);
 
       // 5+6. Create R2 and append the whole reseed pair in ONE transaction, so a
       // crash can never leave a `pending` R2 row with no log (or a lone
@@ -204,6 +207,7 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           pipelineVersionId: source.pipelineVersionId,
           startedAt: new Date(r2.startedAt).toISOString(),
           params: resolvedParams,
+          ...(globals !== undefined ? { globals } : {}),
           rerunOf: sourceRunId,
         };
         // The schema keeps `copiedVariableWrites` optional for OLD logs only; a new
@@ -243,4 +247,31 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       return { runId, drive };
     },
   };
+}
+
+/**
+ * #844 GL3 (spec GL-D3) — the globals a rerun-from-failed logs: the SOURCE run's
+ * logged snapshot, VERBATIM, never the live values. The RS param rule, for the
+ * same reason: the copied frontier's outputs were computed under the old
+ * values, and mixing in new ones would be a silent inconsistency. So the rerun
+ * still works after a global it read was edited or deleted. (A `call_pipeline`
+ * child the rerun dispatches afresh takes its own live snapshot at its start.)
+ *
+ * A source cancelled before it started logged no `run.started`, so it copied
+ * nothing and has nothing to copy: that rerun is a fresh start, and takes a
+ * live snapshot under the start check.
+ */
+function rerunGlobals(
+  db: Db,
+  source: { id: string; ownerId: string | null; pipelineVersionId: string },
+  sourceEvents: readonly EngineEvent[],
+): Record<string, unknown> | undefined {
+  const started = sourceEvents.find((e) => e.type === 'run.started');
+  if (started !== undefined && started.type === 'run.started') return started.globals;
+  try {
+    return resolveRunGlobals(db, source);
+  } catch (err) {
+    if (err instanceof GlobalStartError) throw new RerunNotEligibleError(source.id, err.message);
+    throw err;
+  }
 }

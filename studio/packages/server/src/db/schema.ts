@@ -238,6 +238,11 @@ export const pipelineVersions = sqliteTable(
     // `containers` has above: NOT NULL with no drizzle-level default, so a raw
     // insert that omits the key does not compile.
     variables: text('variables', { mode: 'json' }).notNull().$type<VariableDef[]>(),
+    // #844 GL3 — the globals this version reads, as JSON `GlobalRead[]` text
+    // serialized by the repo (0042). Server-only and DERIVED: deliberately not a
+    // `PipelineVersionSchema` field, so it never reaches the content form, git or
+    // an export. NULL = a pre-GL3 row, which reads none.
+    globalReads: text('global_reads'),
     catalogVersion: integer('catalog_version').notNull(),
     createdAt: integer('created_at').notNull(),
     // #3 G6b — git provenance: WHERE this immutable version was imported from

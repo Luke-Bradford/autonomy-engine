@@ -42,6 +42,7 @@ import {
 } from './events.js';
 import { maxRunEventSeq } from '../repo/run-events.js';
 import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
+import { GlobalStartError, resolveRunGlobals } from './globals.js';
 
 /**
  * P2d — the run DRIVER: the one impure boundary that turns the pure reducer's
@@ -1454,10 +1455,15 @@ const isTerminalRow = (status: string): boolean =>
  * message can carry SQL or file paths, and `run_diagnostics` is served to the
  * run's owner. So that case says only that it happened; the detail is already in
  * the server log the caller wrote. A NEW start-time refusal that authors should
- * read (a missing global, say) joins this list when it is built.
+ * read joins this list when it is built, as a missing or retyped global
+ * (`GlobalStartError`, #844 GL3) has.
  */
 function startRefusalMessage(cause: unknown): string {
-  if (cause instanceof ParamResolveError || cause instanceof DocUnresolvableError) {
+  if (
+    cause instanceof ParamResolveError ||
+    cause instanceof DocUnresolvableError ||
+    cause instanceof GlobalStartError
+  ) {
     return `The run did not start: ${cause.message}`;
   }
   return 'The run did not start: an unexpected server error stopped it. The server log has the details.';
@@ -1760,6 +1766,11 @@ export async function startRun(
   }
   const pv = deps.resolveDoc(run.pipelineVersionId);
   const resolvedParams = resolveRunParams(pv, run.params);
+  // #844 GL3 — the globals snapshot, beside the params and for the same reason:
+  // it throws while the log is still EMPTY, before `foldPendingCancel` or any
+  // other append (spec GL-D3). A child and an admitted queued run come through
+  // here too, so each takes its own live snapshot at its own start.
+  const globals = resolveRunGlobals(deps.db, run);
   const engine = buildEngine(pv);
 
   // #5 S12 — seed the durable trigger context BEFORE `run.started`, so a root
@@ -1805,6 +1816,7 @@ export async function startRun(
     // identical on every replay.
     startedAt: new Date(run.startedAt).toISOString(),
     params: resolvedParams,
+    ...(globals !== undefined ? { globals } : {}),
   };
   // #497: this fold is where `docDefects` drain — `onRunStarted` reports every
   // defect the bind neutralized (#480/#487/#488), once per run. Before the sink

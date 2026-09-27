@@ -253,8 +253,7 @@ function refRoot(fields: string[]): RefRoot | null {
   if (ns === 'item') return { kind: 'item', arity: 1 };
   if (ns === 'params' && fields.length >= 2) return { kind: 'params', name: a as string, arity: 2 };
   if (ns === 'vars' && fields.length >= 2) return { kind: 'vars', name: a as string, arity: 2 };
-  if (ns === 'global' && fields.length >= 2)
-    return { kind: 'global', name: a as string, arity: 2 };
+  if (ns === 'global' && fields.length >= 2) return { kind: 'global', name: a as string, arity: 2 };
   if (ns === 'nodes' && fields.length >= 4 && b === 'output') {
     return { kind: 'nodeOutput', id: a as string, name: c as string, arity: 4 };
   }
@@ -5105,9 +5104,7 @@ function checkRefRoot(
   // name is collected, so the version never records a read it cannot type.
   if (root.kind === 'global') {
     if (!scope.globals.has(root.name)) {
-      errors.push(
-        `${where}: \${global.${root.name}} is not a global parameter of this workspace`,
-      );
+      errors.push(`${where}: \${global.${root.name}} is not a global parameter of this workspace`);
       return;
     }
     scope.globalReads?.add(root.name);
