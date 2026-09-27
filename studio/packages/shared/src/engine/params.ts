@@ -2385,6 +2385,10 @@ export function globalParamNameDefect(name: string): string | null {
  * value.
  */
 export function globalParamValueDefects(type: GlobalParamType, value: unknown): string[] {
+  // `json`'s sig is `any`, which `undefined` matches — but `undefined` is no
+  // JSON value (`JSON.stringify` returns `undefined`, not text). Refused here so
+  // a caller other than the Zod body (GL6's apply) cannot store it.
+  if (value === undefined) return ['value is required'];
   if (!matchesSig(value, sigOfDeclared(type))) {
     // `json` never reaches here: its sig is `any`, which every value matches.
     return [`value must be a ${type}, got ${typeName(value)}`];

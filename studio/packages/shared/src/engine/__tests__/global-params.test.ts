@@ -31,6 +31,12 @@ describe('global params — the write rules (GL-D1)', () => {
     expect(globalParamValueDefects('string', null)).toHaveLength(1);
   });
 
+  it('an undefined value is refused for EVERY type, `json` included (its sig is `any`)', () => {
+    for (const type of GlobalParamTypeSchema.options) {
+      expect(globalParamValueDefects(type, undefined)).toEqual(['value is required']);
+    }
+  });
+
   it('a non-finite number is refused, top-level and nested in json (it would replay as null)', () => {
     expect(globalParamValueDefects('number', Infinity)).toHaveLength(1);
     expect(globalParamValueDefects('number', NaN)).toHaveLength(1);

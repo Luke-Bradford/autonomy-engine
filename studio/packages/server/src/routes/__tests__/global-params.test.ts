@@ -70,6 +70,7 @@ describe('global params routes (#844 GL1)', () => {
     ['an unaddressable name', { name: 'api url', type: 'string', value: 'x' }, 'name'],
     ['a value of the wrong type', { name: 'k', type: 'number', value: '3' }, 'value'],
     ['a missing value', { name: 'k', type: 'string' }, 'value'],
+    ['a missing json value', { name: 'k', type: 'json' }, 'value'],
     [
       'an over-bound value',
       { name: 'k', type: 'string', value: 'a'.repeat(GLOBAL_PARAM_MAX_BYTES) },
