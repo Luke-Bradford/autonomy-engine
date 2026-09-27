@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   CapturedContent,
+  CaptureToolTurn,
   ConnectionKind,
   ConnectionProbeResult,
   DatasetAddress,
@@ -179,7 +180,10 @@ export interface LlmCapture {
   request: {
     messageCount: number;
     system?: CapturedContent;
-    messages: (CapturedContent & { role: 'user' | 'assistant' })[];
+    messages: (CapturedContent & {
+      role: 'user' | 'assistant';
+      toolTurn?: CaptureToolTurn;
+    })[];
   };
   completion?: CapturedContent;
 }

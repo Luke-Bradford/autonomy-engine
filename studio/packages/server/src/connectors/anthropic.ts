@@ -569,6 +569,8 @@ export const anthropicAdapter: ConnectorAdapter = {
         'anthropic_api',
         tools,
         messages,
+        messages,
+        { model, system, captureMode },
         authorChoice,
         async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
           const res = await postJsonAndParse(
@@ -585,23 +587,8 @@ export const anthropicAdapter: ConnectorAdapter = {
             }),
             timeoutMs,
           );
-          // First-exchange capture semantics (#2 L9a): request = the author's
-          // turns. The generator emits only the round-0 capture; continuation
-          // exchanges carry tool turns `LlmCapture` cannot represent (#605).
-          // Emitted for EVERY post-request outcome — a terminal carries the
-          // capture alongside its event.
-          const captureOf = (completionText?: string) =>
-            buildCapture({
-              provider: 'anthropic_api',
-              model,
-              latencyMs: res.latencyMs,
-              turns: messages,
-              system,
-              completionText,
-              captureMode,
-            });
           if (!res.ok) {
-            return { type: 'terminal', event: res.event, capture: captureOf() };
+            return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
           }
           const usage = usageOf(res.json);
           const calls = extractToolUses(res.json);
@@ -623,14 +610,14 @@ export const anthropicAdapter: ConnectorAdapter = {
                     'malformed tool-call response',
                   spendFact: usage,
                 },
-                capture: captureOf(),
+                latencyMs: res.latencyMs,
               };
             }
             const responseContent = (res.json as { content: unknown[] }).content;
             return {
               type: 'toolUse',
               usage,
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
               calls,
               buildNext: (results) => [
                 ...conv,
@@ -656,13 +643,14 @@ export const anthropicAdapter: ConnectorAdapter = {
                 ...noCompletionFailure('anthropic_api', extracted.reason),
                 spendFact: usage,
               },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           return {
             type: 'text',
             usage,
-            capture: captureOf(extracted.text),
+            latencyMs: res.latencyMs,
+            completionText: extracted.text,
             succeeded: {
               type: 'succeeded',
               outputs: {

@@ -361,6 +361,8 @@ export const openaiAdapter: ConnectorAdapter = {
         'openai_api',
         tools,
         wireMessages(turns),
+        turns,
+        { model, system, captureMode },
         authorChoice,
         async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
           const res = await postJsonAndParse(
@@ -372,22 +374,8 @@ export const openaiAdapter: ConnectorAdapter = {
             buildBody(conv, { tools: wireTools, choice }),
             timeoutMs,
           );
-          // First-exchange capture semantics (#2 L9a): request = the author's
-          // turns; the generator emits only the round-0 capture (#605 owns
-          // continuation-turn representation). Emitted for EVERY post-request
-          // outcome — a terminal carries the capture alongside its event.
-          const captureOf = (completionText?: string) =>
-            buildCapture({
-              provider: 'openai_api',
-              model,
-              latencyMs: res.latencyMs,
-              turns,
-              system,
-              completionText,
-              captureMode,
-            });
           if (!res.ok) {
-            return { type: 'terminal', event: res.event, capture: captureOf() };
+            return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
           }
           const usage = usageOf(res.json);
           const choices = (res.json as { choices?: unknown }).choices;
@@ -415,14 +403,14 @@ export const openaiAdapter: ConnectorAdapter = {
                     'malformed tool-call response',
                   spendFact: usage,
                 },
-                capture: captureOf(),
+                latencyMs: res.latencyMs,
               };
             }
             const rawMessage = first!.message;
             return {
               type: 'toolUse',
               usage,
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
               calls,
               buildNext: (results) => [
                 ...conv,
@@ -440,7 +428,7 @@ export const openaiAdapter: ConnectorAdapter = {
             return {
               type: 'terminal',
               event: { ...noCompletionFailure('openai_api', 'absent_content'), spendFact: usage },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           if (choices.length === 0) {
@@ -450,7 +438,7 @@ export const openaiAdapter: ConnectorAdapter = {
                 ...noCompletionFailure('openai_api', 'empty_completion_set'),
                 spendFact: usage,
               },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
@@ -458,13 +446,14 @@ export const openaiAdapter: ConnectorAdapter = {
             return {
               type: 'terminal',
               event: { ...noCompletionFailure('openai_api', 'malformed_block'), spendFact: usage },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           return {
             type: 'text',
             usage,
-            capture: captureOf(text),
+            latencyMs: res.latencyMs,
+            completionText: text,
             succeeded: {
               type: 'succeeded',
               outputs: { text, stopReason: coerceStopReason(first?.finish_reason) },

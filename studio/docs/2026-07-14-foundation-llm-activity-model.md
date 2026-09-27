@@ -215,11 +215,25 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > emit-time seam redacts every message, so a repair's echoed answer is withheld
 > under `secureOutput` alone. No `CATALOG_VERSION` bump (no config shape change;
 > an older build captures nothing for these nodes, the safe polarity).
+> **L9b slice 3 — every tool-loop round, AS BUILT (#605):** a text `llm_call`
+> with tools now emits `activity.captured` for EVERY provider response, not only
+> round 0. `runTextWithTools` builds each one, as the repair loop does, from the
+> turns that call sent: the author's, then each earlier round rendered
+> provider-agnostically by `toolRoundTurns` — one assistant turn holding the
+> round's calls as JSON `[{name, args}]`, then one user turn per result holding
+> exactly its tool_result text, so its hash IS that call's `toolCalled`
+> `resultHash`. Those turns carry a `toolTurn: 'calls'|'result'|'error'`
+> MARKER, not a new `role`: the event schema is non-strict, so an older build
+> drops the key and still parses the run log, where a new enum member would
+> fail it. Not the wire bytes, and said so: prose a provider returns beside its
+> calls is not recorded, and unparseable OpenAI arguments stay the raw string.
+> Round N re-records rounds 0..N-1, so a long loop's later captures spend the
+> text budget newest-first and may cut the prompt — round 0 still holds it. A
+> `toolUse` response has no completion; its calls open the next capture.
 > **Still on #605:** the keyed-HMAC hash (deferred: the unsalted hash is an
 > oracle only for secret-marked content, and on exactly those nodes F4 already
-> scrubs it), the verbose reasoning trace, and tool-loop rounds after the first.
-> `capture: 'full'` is knowingly inert on the last two and on an
-> `agent_cli`-bound node.
+> scrubs it) and the verbose reasoning trace. `capture: 'full'` is knowingly
+> inert on the trace and on an `agent_cli`-bound node.
 
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
 
@@ -263,7 +277,8 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > re-checked after each billed toolUse exchange BEFORE tool execution (abort
 > outranks budget exhaustion) → `cancelled` terminal, no post-abort
 > execution/telemetry (in-flight aborts stay `llmPost`'s). Continuation choice
-> still downgrades to `auto`; capture stays first-exchange-only.
+> still downgrades to `auto`; capture was first-exchange-only here, every round
+> since L9b slice 3 (#605).
 > CATALOG_VERSION 15→16.
 
 | L10c | MCP servers + tool security policy — **DEFERRED to the event-modeled side-effecting sub-spec** (operator, 2026-07-23, #653: option B). A NO-OP in v1: local pure tools (L10a/L10b) are the ENTIRE v1 tool surface; MCP/external tools are never admitted under any v1 policy shape — purity stays machine-verified BY CONSTRUCTION, never operator-asserted inside the opaque loop. Re-open only on explicit operator instruction. | 3 |

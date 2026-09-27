@@ -726,9 +726,9 @@ export const llmCallConfigSchema = z
     //
     // Where it is knowingly INERT (a capture it cannot reach, not a refusal):
     // an `llm_call` bound to an `agent_cli` connection (that adapter emits no
-    // `captured` event — `agent.ts` SHAPE LIMITS) and every tool-loop round
-    // after the first (only round 0 is captured, #605). A `structured` node is
-    // captured once per provider response, repairs included.
+    // `captured` event — `agent.ts` SHAPE LIMITS). A `structured` node is
+    // captured once per provider response, repairs included, and a node with
+    // tools once per tool-loop round (#605).
     capture: llmCaptureModeSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {

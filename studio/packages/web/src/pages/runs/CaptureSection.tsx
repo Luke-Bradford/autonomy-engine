@@ -28,6 +28,20 @@ import type { CapturedText, NodeCapture } from './runSummary';
  */
 export const MAX_CAPTURE_EXCHANGES = 3;
 
+/** #605 — a turn's heading; a tool round-trip's turns say which half they are. */
+function turnLabel(m: NodeCapture['messages'][number]): string {
+  switch (m.toolTurn) {
+    case 'calls':
+      return 'Tool calls';
+    case 'result':
+      return 'Tool result';
+    case 'error':
+      return 'Tool result (error)';
+    case undefined:
+      return m.role === 'user' ? 'User' : 'Assistant';
+  }
+}
+
 export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
   const shown =
     captures.length > MAX_CAPTURE_EXCHANGES ? captures.slice(-MAX_CAPTURE_EXCHANGES) : captures;
@@ -66,7 +80,7 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
             </summary>
             {c.system !== undefined && <CapturedBlock label="System" field={c.system} />}
             {c.messages.map((m, j) => (
-              <CapturedBlock key={j} label={m.role === 'user' ? 'User' : 'Assistant'} field={m} />
+              <CapturedBlock key={j} label={turnLabel(m)} field={m} />
             ))}
             {c.completion !== undefined ? (
               <CapturedBlock label="Completion" field={c.completion} />

@@ -25,6 +25,16 @@ const ANSWER = 'Revenue up 4%, costs flat.';
 const STRUCT_PROMPT = 'Classify this ticket: the export button crashes.';
 const STRUCT_INVALID = '{"category":"question"}';
 const STRUCT_VALID = '{"category":"bug"}';
+/* #605 — a tool node's stub asks for `adder` until a tool result has been
+   sent, then answers. Chosen from the REQUEST, as above. */
+const TOOL_PROMPT = 'What is 19 plus 23? Use the adder.';
+const TOOL_ANSWER = 'It is 42.';
+const ADDER = {
+  name: 'adder',
+  description: 'Adds two numbers.',
+  parameters: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } },
+  expression: '${add(tool.args.a, tool.args.b)}',
+};
 
 let stub: Server;
 let stubUrl: string;
@@ -38,14 +48,33 @@ test.beforeAll(async () => {
         res.writeHead(404).end();
         return;
       }
-      const sent = JSON.parse(body) as { format?: unknown; messages: { role: string }[] };
+      const sent = JSON.parse(body) as {
+        format?: unknown;
+        tools?: unknown;
+        messages: { role: string }[];
+      };
       const turns = sent.messages.filter((m) => m.role !== 'system').length;
+      const askForTool = sent.tools !== undefined && !sent.messages.some((m) => m.role === 'tool');
       const content =
-        sent.format === undefined ? ANSWER : turns === 1 ? STRUCT_INVALID : STRUCT_VALID;
+        sent.tools !== undefined
+          ? askForTool
+            ? ''
+            : TOOL_ANSWER
+          : sent.format === undefined
+            ? ANSWER
+            : turns === 1
+              ? STRUCT_INVALID
+              : STRUCT_VALID;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
-          message: { role: 'assistant', content },
+          message: {
+            role: 'assistant',
+            content,
+            ...(askForTool
+              ? { tool_calls: [{ function: { name: 'adder', arguments: { a: 19, b: 23 } } }] }
+              : {}),
+          },
           done: true,
           done_reason: 'stop',
           prompt_eval_count: 12,
@@ -182,6 +211,58 @@ test('#605 — a structured node that needed a repair shows BOTH exchanges', asy
   await exchange(1).locator('summary').click();
   await expect(exchange(1).getByText(STRUCT_PROMPT, { exact: true })).toBeVisible();
   await expect(exchange(1).getByText(STRUCT_INVALID, { exact: true })).toBeVisible();
+
+  await expectQuiet(page, problems);
+});
+
+test('#605 — a tool-using node shows every round, with the calls and results it sent', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const runId = await runCaptured(page, '#605 tool capture', undefined, {
+    prompt: TOOL_PROMPT,
+    tools: [ADDER],
+    capture: 'full',
+  });
+
+  /* The PREMISE, on the durable log: one capture per round, the second
+     recording the call and its result as marked turns. */
+  const eventsRes = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`);
+  const events = (await eventsRes.json()) as { type: string; payload: Record<string, unknown> }[];
+  expect(events.find((e) => e.type === 'run.finished')?.payload).toMatchObject({
+    outcome: 'success',
+  });
+  const caps = events
+    .filter((e) => e.type === 'activity.captured')
+    .map(
+      (e) =>
+        e.payload as {
+          request: { messages: { role: string; toolTurn?: string; text: string }[] };
+          completion?: { text: string };
+        },
+    );
+  expect(caps).toHaveLength(2);
+  expect(caps[0]!.completion).toBeUndefined();
+  expect(caps[1]!.request.messages).toMatchObject([
+    { role: 'user', text: TOOL_PROMPT },
+    {
+      role: 'assistant',
+      toolTurn: 'calls',
+      text: JSON.stringify([{ name: 'adder', args: { a: 19, b: 23 } }]),
+    },
+    { role: 'user', toolTurn: 'result', text: '42' },
+  ]);
+  expect(caps[1]!.completion).toMatchObject({ text: TOOL_ANSWER });
+
+  const panel = await openDrillIn(page, runId);
+  const section = panel.getByRole('region', { name: 'Prompt & completion' });
+  const second = section.locator('details', {
+    has: page.locator('summary', { hasText: /^Exchange 2\b/ }),
+  });
+  await expect(second.getByRole('heading', { name: 'Tool calls' })).toBeVisible();
+  await expect(second.getByRole('heading', { name: 'Tool result', exact: true })).toBeVisible();
+  await expect(second.getByText('42', { exact: true })).toBeVisible();
+  await expect(second.getByText(TOOL_ANSWER, { exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

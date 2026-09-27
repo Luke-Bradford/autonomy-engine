@@ -12,6 +12,7 @@ import {
 } from '@autonomy-studio/shared';
 import type {
   CapturedContent,
+  CaptureToolTurn,
   LlmCallConfig,
   LlmCaptureMode,
   LlmOutputSchema,
@@ -601,6 +602,12 @@ export const DEFAULT_STRUCTURED_REPAIRS = 1;
 export type LlmTurn = { role: 'user' | 'assistant'; content: string };
 
 /**
+ * #605 — a turn as `buildCapture` records it: an `LlmTurn`, or one half of a
+ * tool round-trip rendered provider-agnostically (see `toolRoundTurns`).
+ */
+export type CaptureTurn = LlmTurn & { toolTurn?: CaptureToolTurn };
+
+/**
  * #2 L4c — the provider-agnostic outcome of ONE structured provider call, mapped
  * by each adapter's `doCall` closure for `runStructuredWithRepair` to drive:
  *
@@ -633,12 +640,14 @@ export type StructuredCallOutcome =
     };
 
 /**
- * #605 — the per-node half of a structured exchange's capture: everything
- * `buildCapture` needs that does not change between the first call and a repair.
- * The TURNS are deliberately not here — the loop supplies the turns each call
- * actually sent, so a repair's capture records the echo + critique.
+ * #605 — the per-node half of an exchange's capture: everything `buildCapture`
+ * needs that does not change between one provider call and the next. Shared by
+ * the structured repair loop and the text tool loop. The TURNS are deliberately
+ * not here — each loop supplies the turns that call actually sent, so a repair's
+ * capture records the echo + critique, and a tool round's records the calls and
+ * results before it.
  */
-export interface StructuredCaptureContext {
+export interface LlmCaptureContext {
   model: string;
   system?: string;
   captureMode?: LlmCaptureMode;
@@ -734,7 +743,7 @@ export function buildRepairTurns(turns: LlmTurn[], reason: string, echo: string)
 export async function* runStructuredWithRepair(
   provider: LlmConnectionKind,
   initialTurns: LlmTurn[],
-  capture: StructuredCaptureContext,
+  capture: LlmCaptureContext,
   doCall: (turns: LlmTurn[]) => Promise<StructuredCallOutcome>,
 ): AsyncIterable<ActivityEvent> {
   let turns = initialTurns;
@@ -924,15 +933,7 @@ export function toolCallTelemetry(
   call: ToolCallRequest,
   result: ToolCallResult,
 ): ToolCallTelemetry {
-  let argsJson: string;
-  try {
-    // `JSON.stringify(undefined)` IS `undefined` (not a throw) — both the
-    // throw (BigInt/circular) and the undefined case fold to "measures 0",
-    // matching `executeLocalTool`'s serialization guard.
-    argsJson = JSON.stringify(call.args) ?? '';
-  } catch {
-    argsJson = '';
-  }
+  const argsJson = jsonOrEmpty(call.args);
   return {
     round,
     toolName: result.name,
@@ -946,16 +947,71 @@ export function toolCallTelemetry(
 }
 
 /**
+ * JSON text of `value`, or `''` when it has none: `JSON.stringify(undefined)` IS
+ * `undefined` (not a throw), and both that and a throw (BigInt/circular) fold to
+ * "measures 0", matching `executeLocalTool`'s serialization guard.
+ */
+function jsonOrEmpty(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * #605 — one executed tool round-trip as CAPTURED turns, the provider-agnostic
+ * stand-in for the wire turns the adapter's `buildNext` appended: an assistant
+ * `calls` turn holding the JSON of `[{name, args}]`, then one user turn per
+ * result holding exactly its `resultText` (`error` for an error result).
+ *
+ * A non-empty result turn's `contentHash` IS that call's `activity.toolCalled`
+ * `resultHash` (absent for an empty result). The calls turn serializes the
+ * whole round, so its hash matches no single `argsHash`. Each call is
+ * serialized on its own: one whose `args` cannot be (BigInt/circular — not
+ * reachable from a parsed provider response, but guarded) records `args: null`
+ * rather than blanking the round's other calls.
+ *
+ * Two things are not the wire bytes: prose a provider returned BESIDE its tool
+ * calls is not recorded, and OpenAI arguments that were not valid JSON stay the
+ * raw string the model sent, so they serialize as a JSON string. The result
+ * turns take role `user`, as Anthropic sends them (OpenAI and Ollama send role
+ * `tool`); `toolTurn` is what says what they are.
+ */
+export function toolRoundTurns(
+  calls: readonly ToolCallRequest[],
+  results: readonly ToolCallResult[],
+): CaptureTurn[] {
+  return [
+    {
+      role: 'assistant',
+      toolTurn: 'calls',
+      content: `[${calls
+        .map(
+          (c) =>
+            jsonOrEmpty({ name: c.name, args: c.args }) ||
+            JSON.stringify({ name: c.name, args: null }),
+        )
+        .join(',')}]`,
+    },
+    ...results.map((r): CaptureTurn => ({
+      role: 'user',
+      toolTurn: r.isError ? 'error' : 'result',
+      content: r.resultText,
+    })),
+  ];
+}
+
+/**
  * #2 L10a — the provider-agnostic outcome of ONE provider call in a tool flow,
  * mapped by each adapter's `doCall` closure for `runTextWithTools` to drive:
  *
  * - `terminal`  — a transport/HTTP/non-JSON/no-completion failure, yielded
- *   verbatim (the engine retry policy owns transient-ness). `capture` (when the
- *   exchange got far enough to stamp one) preserves the L9a capture-before-
- *   terminal invariant.
+ *   verbatim (the engine retry policy owns transient-ness).
  * - `text`      — a completed exchange with a readable text completion: the
- *   billed `usage`, the optional capture fact, and the ready `succeeded` event
- *   (the adapter maps text/stopReason exactly as its plain text path does).
+ *   billed `usage`, the `completionText` the capture records, and the ready
+ *   `succeeded` event (the adapter maps text/stopReason exactly as its plain
+ *   text path does).
  * - `toolUse`   — the model requested tool call(s): the billed `usage`, the
  *   normalized `calls`, and `buildNext(results)` — the adapter-owned
  *   continuation builder (provider turn shapes are NOT provider-agnostic:
@@ -967,18 +1023,19 @@ export type ToolRoundOutcome<C> =
   | {
       type: 'terminal';
       event: Extract<ActivityEvent, { type: 'failed' }>;
-      capture?: LlmCapture;
+      latencyMs: number;
     }
   | {
       type: 'text';
       usage: LlmUsage;
-      capture?: LlmCapture;
+      latencyMs: number;
+      completionText: string;
       succeeded: Extract<ActivityEvent, { type: 'succeeded' }>;
     }
   | {
       type: 'toolUse';
       usage: LlmUsage;
-      capture?: LlmCapture;
+      latencyMs: number;
       calls: ToolCallRequest[];
       buildNext: (results: ToolCallResult[]) => C;
     };
@@ -1010,12 +1067,14 @@ export type ToolRoundOutcome<C> =
  * continuations could NEVER produce the final text and would fail every
  * `required` node on the budget unconditionally.
  *
- * CAPTURE (#2 L9a): exactly ONE `captured` fact per attempt, for the FIRST
- * exchange (request = the author's turns; completion omitted unless the first
- * response was text) — emitted before any terminal, preserving the
- * capture-precedes-terminal invariant. Continuation exchanges carry provider-
- * specific tool turns `LlmCapture.request` cannot represent; capturing them is
- * still open on #605, and is not silently hashed wrong here.
+ * CAPTURE (#605): ONE `captured` fact PER provider call, built HERE from the
+ * turns that call sent — the author's `initialTurns`, then each earlier round's
+ * calls and results as `toolRoundTurns` renders them — as the structured repair
+ * loop does. After `metered`, before any terminal (capture precedes terminal);
+ * a `toolUse` response has no completion, its calls open the next capture.
+ * Round N re-records rounds 0..N-1, so a long loop's later captures spend the
+ * text budget on the newest turns and may cut the author's prompt to `''` —
+ * round 0's capture still holds it whole.
  *
  * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
  * `toolUse`) is metered HERE. A `terminal` outcome yields no `metered` event from
@@ -1029,6 +1088,8 @@ export async function* runTextWithTools<C>(
   provider: LlmConnectionKind,
   tools: readonly LlmToolDef[],
   initial: C,
+  initialTurns: readonly LlmTurn[],
+  capture: LlmCaptureContext,
   initialChoice: LlmToolChoice,
   doCall: (conv: C, choice: LlmToolChoice) => Promise<ToolRoundOutcome<C>>,
   maxRounds: number = 1,
@@ -1036,20 +1097,26 @@ export async function* runTextWithTools<C>(
 ): AsyncIterable<ActivityEvent> {
   let conv = initial;
   let choice = initialChoice;
+  let sent: CaptureTurn[] = [...initialTurns];
   for (let round = 0; ; round++) {
     const outcome = await doCall(conv, choice);
-    const firstExchange = round === 0;
+    const captured = (completionText: string | undefined): ActivityEvent => ({
+      type: 'captured',
+      capture: buildCapture({
+        provider,
+        ...capture,
+        latencyMs: outcome.latencyMs,
+        turns: sent,
+        completionText,
+      }),
+    });
     if (outcome.type === 'terminal') {
-      if (firstExchange && outcome.capture !== undefined) {
-        yield { type: 'captured', capture: outcome.capture };
-      }
+      yield captured(undefined);
       yield outcome.event;
       return;
     }
     yield { type: 'metered', usage: outcome.usage };
-    if (firstExchange && outcome.capture !== undefined) {
-      yield { type: 'captured', capture: outcome.capture };
-    }
+    yield captured(outcome.type === 'text' ? outcome.completionText : undefined);
     if (outcome.type === 'text') {
       yield outcome.succeeded;
       return;
@@ -1077,6 +1144,7 @@ export async function* runTextWithTools<C>(
       yield { type: 'toolCalled', call: toolCallTelemetry(round, outcome.calls[i]!, result) };
     }
     conv = outcome.buildNext(results);
+    sent = [...sent, ...toolRoundTurns(outcome.calls, results)];
     choice = 'auto';
   }
 }
@@ -1470,7 +1538,7 @@ export function buildCapture(args: {
   provider: LlmConnectionKind;
   model: string;
   latencyMs: number;
-  turns: LlmTurn[];
+  turns: readonly CaptureTurn[];
   system?: string;
   completionText?: string;
   captureMode?: LlmCaptureMode;
@@ -1500,6 +1568,7 @@ export function buildCapture(args: {
       messageCount: turns.length,
       messages: turns.map((t, i) => ({
         role: t.role,
+        ...(t.toolTurn !== undefined ? { toolTurn: t.toolTurn } : {}),
         ...field(t.content, firstTurnSlot + (turns.length - 1 - i)),
       })),
     },

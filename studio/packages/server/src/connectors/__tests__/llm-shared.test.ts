@@ -904,13 +904,11 @@ describe('executeToolCalls (#2 L10a)', () => {
   });
 });
 
+// #605 — the author turns and capture context every tool-loop test threads.
+const TURNS: LlmTurn[] = [{ role: 'user', content: 'add 1 and 2' }];
+const TOOL_CAP = { model: 'm', system: 'be terse', captureMode: 'full' as const };
+
 describe('runTextWithTools (#2 L10a — single round-trip)', () => {
-  const CAPTURE: LlmCapture = {
-    provider: 'anthropic_api',
-    model: 'm',
-    latencyMs: 5,
-    request: { messageCount: 1, messages: [{ role: 'user', chars: 2, contentHash: 'h' }] },
-  };
   const SUCCEEDED: Extract<ActivityEvent, { type: 'succeeded' }> = {
     type: 'succeeded',
     outputs: { text: 'done', stopReason: 'end_turn' },
@@ -918,29 +916,49 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
 
   it('passes an immediate text response through: metered, captured, succeeded', async () => {
     const events = await drain(
-      runTextWithTools('anthropic_api', [ADDER], ['conv0'], 'auto', () =>
-        Promise.resolve({ type: 'text', usage: USAGE, capture: CAPTURE, succeeded: SUCCEEDED }),
+      runTextWithTools('anthropic_api', [ADDER], ['conv0'], TURNS, TOOL_CAP, 'auto', () =>
+        Promise.resolve({
+          type: 'text',
+          usage: USAGE,
+          latencyMs: 5,
+          completionText: 'done',
+          succeeded: SUCCEEDED,
+        }),
       ),
     );
     expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
   });
 
-  it('drives one tool round-trip: 2 metered, 1 captured (first exchange), then success', async () => {
+  it('drives one tool round-trip: metered + captured per exchange, then success', async () => {
     const seen: { conv: unknown; choice: string }[] = [];
     const events = await drain(
-      runTextWithTools('anthropic_api', [ADDER], 'conv0', 'required', (conv, choice) => {
-        seen.push({ conv, choice });
-        if (seen.length === 1) {
+      runTextWithTools(
+        'anthropic_api',
+        [ADDER],
+        'conv0',
+        TURNS,
+        TOOL_CAP,
+        'required',
+        (conv, choice) => {
+          seen.push({ conv, choice });
+          if (seen.length === 1) {
+            return Promise.resolve({
+              type: 'toolUse' as const,
+              usage: USAGE,
+              latencyMs: 5,
+              calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
+              buildNext: (results: ToolCallResult[]) => `conv1:${results[0]!.resultText}`,
+            });
+          }
           return Promise.resolve({
-            type: 'toolUse' as const,
+            type: 'text' as const,
             usage: USAGE,
-            capture: CAPTURE,
-            calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
-            buildNext: (results: ToolCallResult[]) => `conv1:${results[0]!.resultText}`,
+            latencyMs: 5,
+            completionText: 'done',
+            succeeded: SUCCEEDED,
           });
-        }
-        return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
-      }),
+        },
+      ),
     );
     // L10b adds the executed-call telemetry fact between the exchanges.
     expect(events.map((e) => e.type)).toEqual([
@@ -948,6 +966,7 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
       'captured',
       'toolCalled',
       'metered',
+      'captured',
       'succeeded',
     ]);
     // The continuation call sees the tool-result conversation AND the downgraded
@@ -961,12 +980,12 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
   it('fails permanent when the model requests a second tool call', async () => {
     let calls = 0;
     const events = await drain(
-      runTextWithTools('openai_api', [ADDER], 'c', 'auto', () => {
+      runTextWithTools('openai_api', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () => {
         calls += 1;
         return Promise.resolve({
           type: 'toolUse' as const,
           usage: USAGE,
-          capture: calls === 1 ? CAPTURE : undefined,
+          latencyMs: 5,
           calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
           buildNext: () => 'next',
         });
@@ -976,18 +995,25 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
     const last = events[events.length - 1]!;
     expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
     if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
-    // Both billed responses are metered; the single first-exchange capture holds.
-    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
-    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+    // Both billed responses are metered, and each is captured before the
+    // budget terminal (#605).
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'captured',
+      'failed',
+    ]);
   });
 
   it('yields a first-exchange capture before a terminal failure (L9a invariant)', async () => {
     const events = await drain(
-      runTextWithTools('ollama', [ADDER], 'c', 'auto', () =>
+      runTextWithTools('ollama', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () =>
         Promise.resolve({
           type: 'terminal' as const,
           event: { type: 'failed' as const, kind: 'transient' as const, error: 'boom' },
-          capture: CAPTURE,
+          latencyMs: 5,
         }),
       ),
     );
@@ -997,12 +1023,12 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
   it('feeds an error tool_result back rather than failing the node', async () => {
     let sawResults: ToolCallResult[] | null = null;
     const events = await drain(
-      runTextWithTools('anthropic_api', [ADDER], 'c', 'auto', (conv) => {
+      runTextWithTools('anthropic_api', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', (conv) => {
         if (conv === 'c') {
           return Promise.resolve({
             type: 'toolUse' as const,
             usage: USAGE,
-            capture: CAPTURE,
+            latencyMs: 5,
             calls: [{ id: 't1', name: 'nope', args: {} }],
             buildNext: (results: ToolCallResult[]) => {
               sawResults = results;
@@ -1010,7 +1036,13 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
             },
           });
         }
-        return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
+        return Promise.resolve({
+          type: 'text' as const,
+          usage: USAGE,
+          latencyMs: 5,
+          completionText: 'done',
+          succeeded: SUCCEEDED,
+        });
       }),
     );
     expect(sawResults).toEqual([
@@ -1021,12 +1053,6 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
 });
 
 describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)', () => {
-  const CAPTURE: LlmCapture = {
-    provider: 'anthropic_api',
-    model: 'm',
-    latencyMs: 5,
-    request: { messageCount: 1, messages: [{ role: 'user', chars: 2, contentHash: 'h' }] },
-  };
   const SUCCEEDED: Extract<ActivityEvent, { type: 'succeeded' }> = {
     type: 'succeeded',
     outputs: { text: 'done', stopReason: 'end_turn' },
@@ -1040,28 +1066,37 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         return Promise.resolve({
           type: 'toolUse' as const,
           usage: USAGE,
-          capture: calls === 1 ? CAPTURE : undefined,
+          latencyMs: 5,
           calls: [{ id: `t${calls}`, name: 'adder', args: { a: calls, b: 1 } }],
           buildNext: () => `conv${calls}`,
         });
       }
-      return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
+      return Promise.resolve({
+        type: 'text' as const,
+        usage: USAGE,
+        latencyMs: 5,
+        completionText: 'done',
+        succeeded: SUCCEEDED,
+      });
     };
   };
 
   it('drives maxRounds round-trips: per-exchange metering, per-call telemetry, then success', async () => {
     const events = await drain(
-      runTextWithTools('anthropic_api', [ADDER], 'conv0', 'auto', scripted(3), 3),
+      runTextWithTools('anthropic_api', [ADDER], 'conv0', TURNS, TOOL_CAP, 'auto', scripted(3), 3),
     );
     expect(events.map((e) => e.type)).toEqual([
       'metered',
       'captured',
       'toolCalled',
       'metered',
+      'captured',
       'toolCalled',
       'metered',
+      'captured',
       'toolCalled',
       'metered',
+      'captured',
       'succeeded',
     ]);
     // Each telemetry event stamps the 0-based exchange index that REQUESTED it.
@@ -1071,7 +1106,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
 
   it('meters the final billed exchange, then fails permanent on budget exhaustion', async () => {
     const events = await drain(
-      runTextWithTools('openai_api', [ADDER], 'conv0', 'auto', scripted(99), 2),
+      runTextWithTools('openai_api', [ADDER], 'conv0', TURNS, TOOL_CAP, 'auto', scripted(99), 2),
     );
     // Exchanges 0..2 all billed (3 metered); rounds 0 and 1 executed their
     // tools (2 toolCalled); exchange 2's toolUse exhausts the budget.
@@ -1091,20 +1126,28 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         'anthropic_api',
         [ADDER],
         'conv0',
+        TURNS,
+        TOOL_CAP,
         'auto',
         (conv: unknown) =>
           conv === 'conv0'
             ? Promise.resolve({
                 type: 'toolUse' as const,
                 usage: USAGE,
-                capture: CAPTURE,
+                latencyMs: 5,
                 calls: [
                   { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
                   { id: 't2', name: 'nope', args: {} },
                 ],
                 buildNext: () => 'after',
               })
-            : Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED }),
+            : Promise.resolve({
+                type: 'text' as const,
+                usage: USAGE,
+                latencyMs: 5,
+                completionText: 'done',
+                succeeded: SUCCEEDED,
+              }),
         1,
       ),
     );
@@ -1142,6 +1185,8 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         'anthropic_api',
         [ADDER],
         'conv0',
+        TURNS,
+        TOOL_CAP,
         'auto',
         () => {
           // The run is cancelled while the provider call is in flight; the
@@ -1151,7 +1196,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           return Promise.resolve({
             type: 'toolUse' as const,
             usage: USAGE,
-            capture: CAPTURE,
+            latencyMs: 5,
             calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
             buildNext: () => {
               builtNext = true;
@@ -1178,6 +1223,8 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
         'openai_api',
         [ADDER],
         'c',
+        TURNS,
+        TOOL_CAP,
         'auto',
         () => {
           calls += 1;
@@ -1188,7 +1235,7 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
           return Promise.resolve({
             type: 'toolUse' as const,
             usage: USAGE,
-            capture: calls === 1 ? CAPTURE : undefined,
+            latencyMs: 5,
             calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
             buildNext: () => 'next',
           });
@@ -1203,8 +1250,240 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
     expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
   });
 
+  // #605 — every round is captured, each recording the turns that call SENT:
+  // the author's, then each earlier round's calls and results.
+  describe('capture per round (#605)', () => {
+    const capturesOf = (events: ActivityEvent[]): LlmCapture[] =>
+      events.flatMap((e) => (e.type === 'captured' ? [e.capture] : []));
+    const twoRounds = () => {
+      let n = 0;
+      return () => {
+        n += 1;
+        if (n === 1) {
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            latencyMs: 7,
+            calls: [
+              { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
+              { id: 't2', name: 'mystery', args: {} },
+            ],
+            buildNext: () => 'conv1',
+          });
+        }
+        return Promise.resolve({
+          type: 'text' as const,
+          usage: USAGE,
+          latencyMs: 9,
+          completionText: 'it is 3',
+          succeeded: SUCCEEDED,
+        });
+      };
+    };
+
+    it("records the earlier round's calls and results in the next capture's request", async () => {
+      const events = await drain(
+        runTextWithTools(
+          'anthropic_api',
+          [ADDER],
+          'conv0',
+          TURNS,
+          TOOL_CAP,
+          'auto',
+          twoRounds(),
+          2,
+        ),
+      );
+      const [first, second] = capturesOf(events);
+      // Round 0: the author's turn only, and no completion — it asked for tools.
+      expect(first!.latencyMs).toBe(7);
+      expect(first!.request.messages).toEqual([
+        expect.objectContaining({ role: 'user', text: 'add 1 and 2' }),
+      ]);
+      expect(first!.completion).toBeUndefined();
+      expect(first!.request.system).toMatchObject({ text: 'be terse' });
+      // Round 1: the author's turn, the calls, then one turn per result.
+      const callsJson = JSON.stringify([
+        { name: 'adder', args: { a: 1, b: 2 } },
+        { name: 'mystery', args: {} },
+      ]);
+      expect(second!.latencyMs).toBe(9);
+      expect(second!.request.messageCount).toBe(4);
+      expect(
+        second!.request.messages.map(({ role, toolTurn, text }) => ({ role, toolTurn, text })),
+      ).toEqual([
+        { role: 'user', toolTurn: undefined, text: 'add 1 and 2' },
+        { role: 'assistant', toolTurn: 'calls', text: callsJson },
+        { role: 'user', toolTurn: 'result', text: '3' },
+        { role: 'user', toolTurn: 'error', text: "unknown tool 'mystery'" },
+      ]);
+      expect(second!.completion).toMatchObject({ text: 'it is 3' });
+      // An author turn carries no marker at all, not an undefined one.
+      expect('toolTurn' in second!.request.messages[0]!).toBe(false);
+    });
+
+    it("hashes a result turn exactly as that call's toolCalled resultHash", async () => {
+      const events = await drain(
+        runTextWithTools(
+          'anthropic_api',
+          [ADDER],
+          'conv0',
+          TURNS,
+          TOOL_CAP,
+          'auto',
+          twoRounds(),
+          2,
+        ),
+      );
+      const resultHashes = events.flatMap((e) =>
+        e.type === 'toolCalled' ? [e.call.resultHash] : [],
+      );
+      const second = capturesOf(events)[1]!;
+      expect(second.request.messages.slice(2).map((m) => m.contentHash)).toEqual(resultHashes);
+    });
+
+    it('keeps an unparseable OpenAI argument string and a nameless call as sent', async () => {
+      let n = 0;
+      const events = await drain(
+        runTextWithTools('openai_api', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () => {
+          n += 1;
+          return n === 1
+            ? Promise.resolve({
+                type: 'toolUse' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                calls: [{ id: 't1', name: null, args: '{not json' }],
+                buildNext: () => 'next',
+              })
+            : Promise.resolve({
+                type: 'text' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                completionText: 'done',
+                succeeded: SUCCEEDED,
+              });
+        }),
+      );
+      const calls = capturesOf(events)[1]!.request.messages[1]!;
+      expect(calls.text).toBe('[{"name":null,"args":"{not json"}]');
+      expect(capturesOf(events)[1]!.request.messages[2]!.toolTurn).toBe('error');
+    });
+
+    it('records an unserializable call as args: null without blanking the others', async () => {
+      let n = 0;
+      const events = await drain(
+        runTextWithTools('anthropic_api', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () => {
+          n += 1;
+          return n === 1
+            ? Promise.resolve({
+                type: 'toolUse' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                calls: [
+                  { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
+                  { id: 't2', name: 'adder', args: { a: 10n } },
+                ],
+                buildNext: () => 'next',
+              })
+            : Promise.resolve({
+                type: 'text' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                completionText: 'done',
+                succeeded: SUCCEEDED,
+              });
+        }),
+      );
+      expect(capturesOf(events)[1]!.request.messages[1]!.text).toBe(
+        '[{"name":"adder","args":{"a":1,"b":2}},{"name":"adder","args":null}]',
+      );
+    });
+
+    it('captures a later round that ends in a terminal, before the failure', async () => {
+      let n = 0;
+      const events = await drain(
+        runTextWithTools('ollama', [ADDER], 'c', TURNS, TOOL_CAP, 'auto', () => {
+          n += 1;
+          return n === 1
+            ? Promise.resolve({
+                type: 'toolUse' as const,
+                usage: USAGE,
+                latencyMs: 1,
+                calls: [{ id: null, name: 'adder', args: { a: 1, b: 2 } }],
+                buildNext: () => 'next',
+              })
+            : Promise.resolve({
+                type: 'terminal' as const,
+                event: { type: 'failed' as const, kind: 'transient' as const, error: 'boom' },
+                latencyMs: 4,
+              });
+        }),
+      );
+      expect(events.map((e) => e.type)).toEqual([
+        'metered',
+        'captured',
+        'toolCalled',
+        'captured',
+        'failed',
+      ]);
+      const last = capturesOf(events)[1]!;
+      expect(last.latencyMs).toBe(4);
+      expect(last.request.messages).toHaveLength(3);
+      expect(last.completion).toBeUndefined();
+    });
+
+    it('captures the billed round before a cancelled terminal', async () => {
+      const controller = new AbortController();
+      const events = await drain(
+        runTextWithTools(
+          'anthropic_api',
+          [ADDER],
+          'c',
+          TURNS,
+          TOOL_CAP,
+          'auto',
+          () => {
+            controller.abort();
+            return Promise.resolve({
+              type: 'toolUse' as const,
+              usage: USAGE,
+              latencyMs: 1,
+              calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
+              buildNext: () => 'next',
+            });
+          },
+          3,
+          controller.signal,
+        ),
+      );
+      expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'failed']);
+      expect(events[2]).toMatchObject({ kind: 'cancelled' });
+    });
+
+    it('stores hashes but no text for a metadata-mode node', async () => {
+      const events = await drain(
+        runTextWithTools(
+          'anthropic_api',
+          [ADDER],
+          'conv0',
+          TURNS,
+          { model: 'm' },
+          'auto',
+          twoRounds(),
+          2,
+        ),
+      );
+      for (const m of capturesOf(events)[1]!.request.messages) {
+        expect(m.text).toBeUndefined();
+        expect(m.contentHash).toMatch(/^[0-9a-f]{64}$/);
+      }
+    });
+  });
+
   it('defaults to the single L10a round-trip when no budget is passed', async () => {
-    const events = await drain(runTextWithTools('ollama', [ADDER], 'conv0', 'auto', scripted(99)));
+    const events = await drain(
+      runTextWithTools('ollama', [ADDER], 'conv0', TURNS, TOOL_CAP, 'auto', scripted(99)),
+    );
     const last = events[events.length - 1]!;
     expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
     if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);

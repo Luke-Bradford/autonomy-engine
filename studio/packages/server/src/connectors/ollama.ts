@@ -226,6 +226,8 @@ export const ollamaAdapter: ConnectorAdapter = {
         'ollama',
         tools,
         wireMessages(turns),
+        turns,
+        { model, system, captureMode },
         authorChoice,
         async (conv): Promise<ToolRoundOutcome<readonly unknown[]>> => {
           const res = await postJsonAndParse(
@@ -237,22 +239,8 @@ export const ollamaAdapter: ConnectorAdapter = {
             buildBody(conv, wireTools),
             timeoutMs,
           );
-          // First-exchange capture semantics (#2 L9a): request = the author's
-          // turns; the generator emits only the round-0 capture (#605 owns
-          // continuation-turn representation). Emitted for EVERY post-request
-          // outcome — a terminal carries the capture alongside its event.
-          const captureOf = (completionText?: string) =>
-            buildCapture({
-              provider: 'ollama',
-              model,
-              latencyMs: res.latencyMs,
-              turns,
-              system,
-              completionText,
-              captureMode,
-            });
           if (!res.ok) {
-            return { type: 'terminal', event: res.event, capture: captureOf() };
+            return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
           }
           const usage = usageOf(res.json);
           const message = (res.json as { message?: unknown }).message;
@@ -273,7 +261,7 @@ export const ollamaAdapter: ConnectorAdapter = {
             return {
               type: 'toolUse',
               usage,
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
               calls,
               buildNext: (results) => [
                 ...conv,
@@ -286,7 +274,7 @@ export const ollamaAdapter: ConnectorAdapter = {
             return {
               type: 'terminal',
               event: { ...noCompletionFailure('ollama', 'absent_content'), spendFact: usage },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           const text = (message as { content?: unknown }).content;
@@ -294,13 +282,14 @@ export const ollamaAdapter: ConnectorAdapter = {
             return {
               type: 'terminal',
               event: { ...noCompletionFailure('ollama', 'malformed_block'), spendFact: usage },
-              capture: captureOf(),
+              latencyMs: res.latencyMs,
             };
           }
           return {
             type: 'text',
             usage,
-            capture: captureOf(text),
+            latencyMs: res.latencyMs,
+            completionText: text,
             succeeded: {
               type: 'succeeded',
               outputs: {
