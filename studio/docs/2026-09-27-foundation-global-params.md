@@ -64,6 +64,8 @@ New table `global_params`:
 - **`name`** must be an addressable identifier, enforced as a hard rule the way V1 enforces variable
   names, so every global can be referenced. It is unique per owner **case-insensitively**
   (`COLLATE NOCASE`), so `apiUrl` and `apiURL` cannot both exist. A reference matches exactly.
+  *(GL3 amendment: `__proto__` is reserved. zod's `z.record` drops that key when a run's log is read
+  back, so a snapshot holding it would replay without the value the live run read.)*
 - **`name` and `type` are immutable after creation.** A version is immutable and references a
   global by name, typed at save time. Renaming or retyping in place would silently change what an
   already-saved version means. A rename or retype is delete + create, and GL-D3's start check catches
@@ -116,9 +118,10 @@ values it read.
   versions saved before a newer, unrelated rule existed. The snapshot's total size is capped at
   `GLOBAL_SNAPSHOT_MAX_BYTES` = 256 KiB, checked here, because values can grow after the save.
 - A failed check throws before any append, the same seam as a bad trigger-authored param. **What the
-  operator sees:** a start that throws there ends as an `interrupted` row with the reason only in the
-  server log, because `driveRun` runs `startRun` unawaited (a child's refusal fails the parent's call
-  node). So GL3 adds one thing the params path lacks: the trigger run-now route (`routes/triggers.ts`,
+  operator sees:** a start that throws there ends as an `interrupted` row, because `driveRun` runs
+  `startRun` unawaited (a child's refusal fails the parent's call node). Since #1367 the reason is
+  shown on the run page as a `start` diagnostic, and GL3 adds `GlobalStartError` to the refusals it
+  quotes (its message names the global and the types, never a value). So GL3 adds one thing the params path lacks: the trigger run-now route (`routes/triggers.ts`,
   the only manual start) runs the same check function BEFORE `fire()` creates the row, and refuses with a 400 naming the global, as a bad trigger
   binding already is. The start check still runs, since a global can be deleted between the two.
   Scheduled, webhook and child starts keep the `interrupted` outcome. That
@@ -146,9 +149,11 @@ consequence is explicit rather than silent: a new run of a version that reads it
 check, while a rerun-from-failed still works from its copied values.
 
 `GET /api/global-params/:id/usage` answers from the `global_reads` column. It returns the pipelines
-whose **latest** version reads the global, plus every version pinned by an **enabled trigger**, because
+whose **latest** version reads the global, plus every version pinned by a **trigger**, because
 a trigger runs its pinned version, not the latest. The Manage page's delete confirmation shows that
-list. It is advisory, not a gate.
+list. It is advisory, not a gate. *(GL3 amendment: a DISABLED trigger is listed too, flagged
+`enabled: false`, because Run now fires a trigger whatever its `enabled` flag, so its pinned version
+can still start and meet the start check.)*
 
 ### GL-D5 — No "secure globals": a credential is a named secret
 
@@ -229,7 +234,7 @@ bound run changes meaning.
 |---|--------|------------|
 | **GL1** | Store: migration (`global_params`, `owner_id NOT NULL`, the NOCASE unique index), `GlobalParamSchema`/`GlobalParamTypeSchema` + `GLOBAL_PARAM_MAX_BYTES` in shared, the name/type/value rules, owner-scoped REST with `name`/`type` immutability. Inert: nothing reads it. | — |
 | **GL2** | Manage page (GL-D8), with the cleartext notice. The first user-visible slice. | after GL1 |
-| **GL3** | Read, **atomically**: the `global` root (resolver, typing, `checkRefRoot`, the closed-root exclusions pinned by test), `ScanScope.globals` + `globalReads`, the save gate injecting the owner's globals, the `global_reads` column, `run.started.globals` + `RunState.globals` + `buildCtx`, the typed start check + snapshot cap + the manual-run 400, the rerun-from-failed copy, the `usage` route + the delete confirmation's list, and the canvas `validateCanvas` plumbing with its refetch. | after GL1. **Inseparable:** a save gate that accepts `${global.x}` without the snapshot would give runs that replay against live values. A snapshot without the reseed copy would make a rerun silently read new values, the class of #1150. And a server that accepts the root while the canvas does not would block every canvas save that uses it. |
+| **GL3** | **SHIPPED 2026-09-27.** *(Built notes: absent `globals` in `ValidateDocOptions` means NONE, so every caller that passes nothing refuses a read. The save gate reads only names and types, and leaves out a stored row whose name breaks today's rule. `__proto__` is now RESERVED (GL-D1): zod's `z.record` drops that key, so a logged snapshot holding it would lose it on replay from the database. `global_reads` is `[]` on every new row, `NULL` only on a pre-GL3 one, and a column that does not decode refuses the start rather than read as none. A rerun of a source cancelled before it started has no logged snapshot, so it takes a live one under the start check. The canvas loads the globals with the version, fatally, like datasets, and re-reads them on window focus and after a refused save, latest-wins. The usage route lists a disabled trigger too, see GL-D4.)* Read, **atomically**: the `global` root (resolver, typing, `checkRefRoot`, the closed-root exclusions pinned by test), `ScanScope.globals` + `globalReads`, the save gate injecting the owner's globals, the `global_reads` column, `run.started.globals` + `RunState.globals` + `buildCtx`, the typed start check + snapshot cap + the manual-run 400, the rerun-from-failed copy, the `usage` route + the delete confirmation's list, and the canvas `validateCanvas` plumbing with its refetch. | after GL1. **Inseparable:** a save gate that accepts `${global.x}` without the snapshot would give runs that replay against live values. A snapshot without the reseed copy would make a rerun silently read new values, the class of #1150. And a server that accepts the root while the canvas does not would block every canvas save that uses it. |
 | **GL4** | Canvas: the expression picker's "Global parameters" group. | after GL3 |
 | **GL5** | Run page: the "Global parameters" section. | after GL3 |
 | **GL6** | Git + portability: the `global-param` resource kind (`RESOURCE_KINDS`, dirs, `APPLY_RANK`), serialize/parse/apply/drift with the two drift rules, and the export kind. | after GL3 |

@@ -82,8 +82,10 @@ test('#844 GL3 — a run reads a global, logs the value, and keeps it after an e
   expect(run.status).toBe('success');
   const events = (await (
     await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
-  ).json()) as { type: string; globals?: unknown }[];
-  expect(events.find((e) => e.type === 'run.started')?.globals).toEqual({ [ENV]: 'prod' });
+  ).json()) as { type: string; payload: { globals?: unknown } }[];
+  expect(events.find((e) => e.type === 'run.started')?.payload.globals).toEqual({
+    [ENV]: 'prod',
+  });
 
   /* An edit after the start changes later runs, never this one. */
   const patched = await page.request.patch(`/api/global-params/${g.id}`, {
@@ -105,10 +107,11 @@ test('#844 GL3 — the canvas re-reads the globals when the window regains focus
   const g = await createGlobal(page.request, GONE, 'x');
   await openSeededCanvas(page, '#844 GL3 canvas', readerDoc(GONE));
 
-  const save = page.getByRole('button', { name: 'Save', exact: true });
+  const save = page.getByRole('button', { name: 'Save version' });
   const refusal = page.getByText(/is not a global parameter of this workspace/).first();
   /* Known to the canvas: no badge for the read. */
   await expect(refusal).toHaveCount(0);
+  await expect(save).toBeVisible();
 
   /* Deleted in another tab; the canvas learns of it when it regains focus. */
   expect((await page.request.delete(`/api/global-params/${g.id}`)).ok()).toBe(true);
@@ -138,7 +141,9 @@ test('#844 GL3 — deleting a global names the pipeline that reads it', async ({
     .getByRole('group', { name: `global ${USED}` })
     .getByRole('button', { name: /^delete global/ })
     .click();
-  await expect.poll(() => confirmText).toContain(`Read by the latest version of:\n  • ${name} (v1)`);
+  await expect
+    .poll(() => confirmText)
+    .toContain(`Read by the latest version of:\n  • ${name} (v1)`);
   /* Dismissed: the global is still there. */
   await expect(page.getByRole('group', { name: `global ${USED}` })).toBeVisible();
 
