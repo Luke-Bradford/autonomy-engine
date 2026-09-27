@@ -29,6 +29,7 @@ import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { NodeDuration } from './NodeDuration';
 import { RunCostSummary } from './RunCostSummary';
+import { RunGlobals } from './RunGlobals';
 import { RunVariables } from './RunVariables';
 import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
@@ -669,6 +670,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
         overlay={overlay}
         settled={TERMINAL_RUN_ROW_STATUS.has(status)}
       />
+
+      {/* #844 GL5 — the workspace globals the run read, from the same one
+          projection. Renders nothing for a run that read none. */}
+      <RunGlobals overlay={overlay} />
 
       <h3>Graph</h3>
       {doc === null ? (

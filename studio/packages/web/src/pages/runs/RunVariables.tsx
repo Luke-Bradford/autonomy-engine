@@ -1,6 +1,5 @@
 import type { RunState, VariableDef } from '@autonomy-studio/shared';
-import { CappedValue } from './CappedValue';
-import { jsonText, MAX_INLINE_OUTPUT_CHARS } from './format';
+import { InlineJsonValue } from './CappedValue';
 
 /**
  * #844 V7 (spec V-D9) — the run's pipeline variables, as the ENGINE holds them.
@@ -65,7 +64,7 @@ export function RunVariables({
                       {value === undefined ? (
                         <span className="page-hint">no value</span>
                       ) : (
-                        <VariableValue id={`run-variable-value-${i}`} value={value} />
+                        <InlineJsonValue id={`run-variable-value-${i}`} value={value} />
                       )}
                     </td>
                   </tr>
@@ -76,22 +75,5 @@ export function RunVariables({
         </>
       )}
     </section>
-  );
-}
-
-/**
- * One value as JSON, so a string is shown QUOTED: an empty string would
- * otherwise be a blank cell, and a string could pass for the "no value" marker.
- * A short value stays inline; a longer one (an array an `append` has grown,
- * typically) gets the drill-in's bounded block, whose disclosure and copy reach
- * the whole value, because this table is the only place the run's array is
- * shown.
- */
-function VariableValue({ id, value }: { id: string; value: unknown }) {
-  const text = jsonText(value);
-  return text.length <= MAX_INLINE_OUTPUT_CHARS ? (
-    <code>{text}</code>
-  ) : (
-    <CappedValue id={id} text={text} />
   );
 }

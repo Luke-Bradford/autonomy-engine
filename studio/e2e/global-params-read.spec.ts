@@ -66,7 +66,7 @@ async function variableRows(page: Page): Promise<string[][]> {
     );
 }
 
-test('#844 GL3 — a run reads a global, logs the value, and keeps it after an edit', async ({
+test('#844 GL3/GL5 — a run reads a global, logs the value, and shows it after an edit', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
@@ -96,6 +96,20 @@ test('#844 GL3 — a run reads a global, logs the value, and keeps it after an e
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
   expect(await variableRows(page)).toEqual([['label', 'string', '"prod"']]);
+
+  /* #844 GL5 — the run page's Global parameters section shows the SNAPSHOT,
+     not the live store: the global now holds "dev". */
+  const globals = page.getByRole('region', { name: 'Global parameters' });
+  await expect(
+    globals.getByText('A later edit to a global does not change them.', { exact: false }),
+  ).toBeVisible();
+  expect(
+    await globals
+      .locator('tbody tr')
+      .evaluateAll((trs) =>
+        trs.map((tr) => [...tr.querySelectorAll('th, td')].map((c) => c.textContent ?? '')),
+      ),
+  ).toEqual([[ENV, '"prod"']]);
 
   await expectQuiet(page, problems);
 });
