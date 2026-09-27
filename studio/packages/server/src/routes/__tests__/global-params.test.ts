@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import {
   CATALOG_VERSION,
   GLOBAL_PARAM_MAX_BYTES,
+  SCHEMA_VERSION,
   type NewPipelineVersion,
 } from '@autonomy-studio/shared';
 import {
@@ -305,5 +306,120 @@ describe('global params read by pipelines (#844 GL3)', () => {
     const theirs = global('apiUrl', 'someone-else');
     const res = await app.inject({ method: 'GET', url: `/api/global-params/${theirs.id}/usage` });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/**
+ * #844 GL6 — a global's single-file export and import (spec GL-D6): the same
+ * `{ name, type, value, description }` its git file holds, created on import
+ * under the rules `POST` applies, never overwriting a live global.
+ */
+describe('global params export and import (#844 GL6)', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    app = await buildTestApp();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  function global(name: string, ownerId = 'local') {
+    return createGlobalParam(app.db, {
+      ownerId,
+      name,
+      type: 'json',
+      value: { region: 'eu' },
+      description: 'where',
+    });
+  }
+
+  const importFile = (payload: unknown) =>
+    app.inject({ method: 'POST', url: '/api/import', payload: payload as object });
+
+  it('exports name, type, value and description, and imports it back after a delete', async () => {
+    const g = global('cfg');
+    const res = await app.inject({ method: 'GET', url: `/api/global-params/${g.id}/export` });
+    expect(res.statusCode).toBe(200);
+    const envelope = res.json();
+    expect(envelope.kind).toBe('global-param');
+    expect(envelope.data).toEqual({
+      name: 'cfg',
+      type: 'json',
+      value: { region: 'eu' },
+      description: 'where',
+    });
+
+    deleteGlobalParam(app.db, g.id);
+    const imported = await importFile(envelope);
+    expect(imported.statusCode).toBeLessThan(300);
+    expect(imported.json()).toMatchObject({
+      kind: 'global-param',
+      globalParam: { name: 'cfg', type: 'json', value: { region: 'eu' }, ownerId: 'local' },
+    });
+  });
+
+  it("another owner's global does not export (404)", async () => {
+    const theirs = global('cfg', 'someone-else');
+    const res = await app.inject({ method: 'GET', url: `/api/global-params/${theirs.id}/export` });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a name already held in any case, leaving the live value alone', async () => {
+    const g = global('cfg');
+    const envelope = (
+      await app.inject({ method: 'GET', url: `/api/global-params/${g.id}/export` })
+    ).json();
+    const res = await importFile({
+      ...envelope,
+      data: { ...envelope.data, name: 'CFG', value: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('"cfg" already exists');
+    expect(getGlobalParam(app.db, g.id)!.value).toEqual({ region: 'eu' });
+  });
+
+  it('refuses a value that does not match its type, creating nothing', async () => {
+    const res = await importFile({
+      schemaVersion: SCHEMA_VERSION,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'global-param',
+      exportedAt: 1,
+      data: { name: 'limit', type: 'number', value: 'five', description: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    const list = (await app.inject({ method: 'GET', url: '/api/global-params' })).json();
+    expect(list.items).toEqual([]);
+  });
+
+  // A pipeline export carries no globals; the save gate names the missing one.
+  it('refuses a pipeline import that reads a global this workspace lacks, naming it', async () => {
+    const g = global('apiUrl');
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(app.db, {
+      pipelineId: p.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'a',
+          type: 'test_activity',
+          config: { u: '${global.apiUrl}' },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const envelope = (
+      await app.inject({ method: 'GET', url: `/api/pipelines/${p.id}/export` })
+    ).json();
+    expect(JSON.stringify(envelope)).not.toContain('"region"');
+
+    deleteGlobalParam(app.db, g.id);
+    const res = await importFile(envelope);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('apiUrl');
   });
 });

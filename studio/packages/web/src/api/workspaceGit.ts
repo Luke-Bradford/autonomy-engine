@@ -133,8 +133,8 @@ export function readWorkspaceGitDrift(): Promise<WorkspaceGitDrift> {
 /**
  * Commit the workspace working copy to the working branch and push it.
  *
- * This commits the WHOLE workspace — every pipeline, connection, dataset and trigger the
- * serializer produces — which is why it is a workspace-level act on the Manage
+ * This commits the WHOLE workspace — every pipeline, connection, dataset, trigger and global
+ * parameter the serializer produces — which is why it is a workspace-level act on the Manage
  * hub rather than a per-pipeline command-bar button.
  *
  * `committed: false` is a legitimate success meaning "the serialization already

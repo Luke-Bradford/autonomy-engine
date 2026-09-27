@@ -1436,6 +1436,49 @@ describe('WorkspaceGitPage', () => {
     });
 
     /**
+     * #844 GL6 — a branch global retyped against this workspace's is not
+     * written. It does not refuse the import, so the preview must not say it
+     * would; and it means the workspace does NOT match the branch, so the
+     * outcome must not say it does.
+     */
+    it('reports a skipped retyped global without claiming a refusal or a match', async () => {
+      const conflict = {
+        path: 'global-params/limit.json',
+        code: 'global_param_conflict' as const,
+        message: 'global parameter "limit" is a number here but a string on the branch',
+      };
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'current' }));
+      previewMock.mockResolvedValue(
+        preview({ resources: [previewResource()], diagnostics: [conflict] }),
+      );
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'unchanged',
+              versionMinted: false,
+              versionContentUnverified: false,
+            },
+          ],
+          diagnostics: [conflict],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      expect(screen.queryByText(/would be refused/)).toBeNull();
+      expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByText(/is a number here but a string on the branch/)).toBeVisible();
+      expect(screen.queryByText(/already matches main/)).toBeNull();
+    });
+
+    /**
      * The time-of-check/time-of-use gap made visible. No CAS token exists to
      * close it, so the least dishonest thing available is to say when the thing
      * applied was not the thing shown.

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { DatasetSchema } from '../schemas/dataset.js';
+import { GlobalParamSchema } from '../schemas/global-param.js';
 import {
   NodeSchema,
   PipelineSchema,
@@ -219,6 +220,28 @@ export const DatasetExportDataSchema = DatasetSchema.omit({
 export type DatasetExportData = z.infer<typeof DatasetExportDataSchema>;
 
 /**
+ * `data` for a `kind: 'global-param'` envelope (#844 GL6, spec GL-D6): exactly
+ * `{ name, type, value, description }` — no DB id, no owner, no timestamps, and
+ * no `resourceId` either. A global's identity IS its name (case-folded, see
+ * `globalParamResourceId`), so the workspace parser derives it rather than
+ * trusting a second field that could disagree with the name.
+ *
+ * SHAPE only, like the row schema. The write rules (the name rule, value vs
+ * type, the byte bound) are applied where a global is WRITTEN — the git apply
+ * and the single-file import, through the same boundary schemas `POST
+ * /api/global-params` uses. A file with no `value` key is still refused here:
+ * zod 4 treats a `z.unknown()` key as required, so an absent value is never read
+ * as a present `undefined` one.
+ */
+export const GlobalParamExportDataSchema = GlobalParamSchema.pick({
+  name: true,
+  type: true,
+  value: true,
+  description: true,
+});
+export type GlobalParamExportData = z.infer<typeof GlobalParamExportDataSchema>;
+
+/**
  * The ALREADY-public webhook config shape an export's `data.webhook` field
  * carries — i.e. `WebhookPublicConfigSchema`'s output type, but as a plain
  * (non-transforming) schema. This is deliberately NOT `WebhookPublicConfigSchema`
@@ -287,6 +310,11 @@ export const ExportEnvelopeSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ ...EnvelopeBaseShape, kind: z.literal('trigger'), data: TriggerExportDataSchema }),
   z.object({ ...EnvelopeBaseShape, kind: z.literal('dataset'), data: DatasetExportDataSchema }),
+  z.object({
+    ...EnvelopeBaseShape,
+    kind: z.literal('global-param'),
+    data: GlobalParamExportDataSchema,
+  }),
 ]);
 export type ExportEnvelope = z.infer<typeof ExportEnvelopeSchema>;
 
@@ -393,6 +421,9 @@ const V3_TO_V4_BACKFILLS: Record<
   // an "exported before stable identity existed" fact for a kind that never
   // lacked one — the same class of lie as a defaulted `columns`.
   dataset: (data) => data,
+  // #844 GL6 — identity for the same reason: `global-param` postdates v4, and
+  // its file carries no `resourceId` at all (the name is the identity).
+  'global-param': (data) => data,
   trigger: (data) => ({ resourceId: null, ...data }),
 };
 

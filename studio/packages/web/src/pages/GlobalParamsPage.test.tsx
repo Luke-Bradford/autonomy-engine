@@ -5,6 +5,8 @@ import type { GlobalParam } from '@autonomy-studio/shared';
 import { GlobalParamsPage } from './GlobalParamsPage';
 import * as api from '../api/globalParams';
 import { ApiError } from '../api/client';
+import * as download from '../api/download';
+import * as portability from '../api/portability';
 import { renderWithRouter } from '../testing/renderWithRouter';
 
 // Network calls only; the shared schemas stay REAL, so the client-side checks
@@ -315,5 +317,35 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     await user.click(screen.getByRole('button', { name: 'remove global 1' }));
     expect(screen.queryByRole('group', { name: 'new global 1' })).toBeNull();
     expect(deleteMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('GlobalParamsPage export and import (#844 GL6)', () => {
+  it('exports a saved global to a file, and offers no export on an unsaved row', async () => {
+    listMock.mockResolvedValue([global()]);
+    const exportMock = vi
+      .spyOn(portability, 'exportGlobalParam')
+      .mockResolvedValue('{"kind":"global-param"}');
+    const saveMock = vi.spyOn(download, 'downloadTextFile').mockImplementation(() => {});
+    renderWithRouter(<GlobalParamsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Export apiUrl' }));
+
+    await waitFor(() =>
+      expect(saveMock).toHaveBeenCalledWith(
+        'global-param-apiurl-gp_1.json',
+        '{"kind":"global-param"}',
+      ),
+    );
+    expect(exportMock).toHaveBeenCalledWith('gp_1');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add global parameter' }));
+    expect(within(row('new global 2')).queryByRole('button', { name: /^Export/ })).toBeNull();
+  });
+
+  it('offers an import from a file', async () => {
+    renderWithRouter(<GlobalParamsPage />);
+    expect(await screen.findByText(/No global parameters yet/)).toBeVisible();
+    expect(screen.getByLabelText(/import/i)).toBeInTheDocument();
   });
 });

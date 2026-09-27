@@ -2,6 +2,7 @@ import { canonicalStringify } from './canonical.js';
 import type {
   ConnectionExportData,
   DatasetExportData,
+  GlobalParamExportData,
   PipelineExportData,
   TriggerExportData,
 } from './envelope.js';
@@ -225,6 +226,17 @@ export function connectionContentForm(data: ConnectionExportData): string {
  * a real authoring fact: re-pointing a dataset at a different store IS a change.
  */
 export function datasetContentForm(data: DatasetExportData): string {
+  const clone = jsonClone(data);
+  omitKeys(clone, RESOURCE_VOLATILE);
+  return canonicalStringify(clone);
+}
+
+/**
+ * #844 GL6 — a global parameter's content form: its `type`, `value` and
+ * `description`. `name` is left out as for every kind (`RESOURCE_VOLATILE`), so
+ * a difference in the name's spelling is a rename, never a content change.
+ */
+export function globalParamContentForm(data: GlobalParamExportData): string {
   const clone = jsonClone(data);
   omitKeys(clone, RESOURCE_VOLATILE);
   return canonicalStringify(clone);

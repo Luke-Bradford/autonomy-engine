@@ -64,6 +64,11 @@ export function exportDataset(id: string, signal?: AbortSignal): Promise<string>
   return apiFetchText(exportPath('datasets', id), { signal });
 }
 
+/** #844 GL6 — a global's file: `{ name, type, value, description }`, cleartext. */
+export function exportGlobalParam(id: string, signal?: AbortSignal): Promise<string> {
+  return apiFetchText(exportPath('global-params', id), { signal });
+}
+
 /**
  * Read a picked file's text as the value `POST /api/import` expects.
  *
@@ -206,6 +211,12 @@ export function describeImported(result: ImportResult): ImportedResource {
       };
     case 'dataset':
       return { kind: 'dataset', id: result.dataset.id, name: result.dataset.name };
+    case 'global-param':
+      return {
+        kind: 'global-param',
+        id: result.globalParam.id,
+        name: result.globalParam.name,
+      };
   }
 }
 

@@ -1,6 +1,8 @@
 import {
   ConnectionPublicSchema,
+  GlobalParamCreateBodySchema,
   ImportError,
+  globalParamResourceId,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
   windowBindingErrors,
@@ -15,10 +17,12 @@ import {
 import {
   createConnection,
   createDataset,
+  createGlobalParam,
   createPipeline,
   createPipelineVersion,
   createTrigger,
   getConnectionByResourceId,
+  listOwnerGlobalParams,
 } from '../repo/index.js';
 import type { Db } from '../repo/types.js';
 
@@ -351,6 +355,37 @@ function importDatasetEnvelope(
   return { kind: 'dataset', dataset: created, attention: [] };
 }
 
+/**
+ * #844 GL6 — a global parameter from a single file, created under exactly the
+ * rules `POST /api/global-params` applies (a `ZodError` is a 400). A global holds
+ * no reference, so nothing is left to rebind.
+ *
+ * A name this owner already holds, in any case, is refused by name rather than
+ * left to the unique index's generic conflict: an import never overwrites a live
+ * global's value (a pull from git is the path that updates one). The check and
+ * the insert run in one synchronous turn (better-sqlite3 does not yield), so
+ * no other write lands between them; the NOCASE unique index stays the backstop.
+ */
+function importGlobalParamEnvelope(
+  db: Db,
+  ownerId: string,
+  envelope: Extract<ExportEnvelope, { kind: 'global-param' }>,
+): ImportResult {
+  const body = GlobalParamCreateBodySchema.parse(envelope.data);
+  const identity = globalParamResourceId(body.name);
+  const held = listOwnerGlobalParams(db, ownerId).find(
+    (g) => globalParamResourceId(g.name) === identity,
+  );
+  if (held !== undefined) {
+    throw new ImportError(
+      `a global parameter named "${held.name}" already exists — an import does not overwrite ` +
+        'one; edit its value in Manage → Global parameters instead',
+    );
+  }
+  const created = createGlobalParam(db, { ...body, ownerId });
+  return { kind: 'global-param', globalParam: created, attention: [] };
+}
+
 /** #1143 — what the caller of `importEnvelope` may decide for the file. */
 export interface ImportOptions {
   /** The store a DATASET lands in, resolved AND owner-checked by the caller.
@@ -395,5 +430,7 @@ export function importEnvelope(
       return importTriggerEnvelope(db, ownerId, envelope);
     case 'dataset':
       return importDatasetEnvelope(db, ownerId, envelope, opts.resolveStore?.());
+    case 'global-param':
+      return importGlobalParamEnvelope(db, ownerId, envelope);
   }
 }

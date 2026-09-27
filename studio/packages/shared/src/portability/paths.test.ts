@@ -6,14 +6,35 @@ import {
   kindForDir,
   resourceSlug,
   resourceFilePaths,
+  globalParamResourceId,
 } from './paths.js';
+
+describe('globalParamResourceId (#844 GL6)', () => {
+  it('folds ASCII case, so names that differ only in case share one identity', () => {
+    expect(globalParamResourceId('ApiUrl')).toBe('apiurl');
+    expect(globalParamResourceId('apiURL')).toBe(globalParamResourceId('apiurl'));
+    expect(globalParamResourceId('max_rows_2')).toBe('max_rows_2');
+  });
+
+  it('folds ASCII ONLY, as COLLATE NOCASE does: the Kelvin sign is not a k', () => {
+    expect(globalParamResourceId('\u212A')).not.toBe(globalParamResourceId('k'));
+    expect(globalParamResourceId('\u212A')).toBe('\u212A');
+  });
+});
 
 describe('dir↔kind SSOT', () => {
   it('MANAGED_DIRS is exactly the kind dirs in RESOURCE_KINDS order', () => {
     expect(MANAGED_DIRS).toEqual(RESOURCE_KINDS.map((k) => RESOURCE_KIND_DIRS[k]));
     // #1114 — `datasets` is APPENDED, so the three existing dirs keep their
     // positions and the emitted-file order for them is unchanged.
-    expect(MANAGED_DIRS).toEqual(['pipelines', 'connections', 'triggers', 'datasets']);
+    // #844 GL6 — `global-params` appended the same way.
+    expect(MANAGED_DIRS).toEqual([
+      'pipelines',
+      'connections',
+      'triggers',
+      'datasets',
+      'global-params',
+    ]);
   });
 
   it('kindForDir is the exact inverse of RESOURCE_KIND_DIRS', () => {

@@ -93,6 +93,36 @@ describe('ExportEnvelopeSchema', () => {
     ).toThrow();
   });
 
+  // #844 GL6 — the file is exactly { name, type, value, description }.
+  const globalParamEnvelope = {
+    schemaVersion: SCHEMA_VERSION,
+    catalogVersion: CATALOG_VERSION,
+    kind: 'global-param' as const,
+    exportedAt: 1700000000000,
+    data: { name: 'apiUrl', type: 'string' as const, value: 'https://x', description: '' },
+  };
+
+  it('round-trips a global-param envelope as name, type, value and description only', () => {
+    expect(ExportEnvelopeSchema.parse(globalParamEnvelope)).toEqual(globalParamEnvelope);
+    // No DB id, owner or timestamp survives into the file, even if present.
+    const withIds = {
+      ...globalParamEnvelope,
+      data: { ...globalParamEnvelope.data, id: 'gp_1', ownerId: 'o', createdAt: 1 },
+    };
+    expect(ExportEnvelopeSchema.parse(withIds)).toEqual(globalParamEnvelope);
+  });
+
+  it('keeps a JSON null value, and refuses a file with no value at all', () => {
+    const nullValue = {
+      ...globalParamEnvelope,
+      data: { ...globalParamEnvelope.data, type: 'json' as const, value: null },
+    };
+    expect(ExportEnvelopeSchema.parse(nullValue)).toEqual(nullValue);
+    const { value, ...noValue } = globalParamEnvelope.data;
+    void value;
+    expect(() => ExportEnvelopeSchema.parse({ ...globalParamEnvelope, data: noValue })).toThrow();
+  });
+
   // #1114 (M2 slice 2)
   it('round-trips a dataset envelope, keeping the store ref as a resourceId', () => {
     const datasetEnvelope = {
