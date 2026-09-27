@@ -230,10 +230,34 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > Round N re-records rounds 0..N-1, so a long loop's later captures spend the
 > text budget newest-first and may cut the prompt — round 0 still holds it. A
 > `toolUse` response has no completion; its calls open the next capture.
+> **L9b slice 4 — the reasoning trace, AS BUILT (#605):** `llm_call` gained
+> `captureReasoning` (a literal boolean, absent = OFF, the spec default). It
+> needs `capture: 'full'` — one refine, applied at save and at dispatch — because
+> "full trace requires explicit verbose logging" and `full` is that switch; a
+> trace kept as a bare hash tells nobody anything. `activity.captured` gains an
+> optional `reasoning` field (`CapturedContent`), recorded per provider response
+> on all three paths (text, structured, every tool round), and also on a 2xx
+> that returned NO text — thinking that spent the whole `max_tokens` is the
+> failure a trace explains best. It is what the provider RETURNS, which is a
+> SUMMARY, never the raw chain of thought: Anthropic's `thinking` blocks (joined
+> by a blank line), Ollama's `message.thinking`. Anthropic's current models
+> default `thinking.display` to `'omitted'` and return EMPTY thinking text, so
+> the opt-in adds `display: 'summarized'` to the request — the one way this key,
+> unlike `capture`, changes what is sent (visibility only: the thinking and its
+> billing are the same). An empty summary is ABSENT, never `hash('')`. It needs
+> `reasoningEffort`, which is what puts `thinking` on the wire; without it
+> nothing is recorded, even on a model that thinks by default. Knowingly INERT on
+> OpenAI (Chat Completions returns no reasoning text) and on an `agent_cli`-bound
+> node. Budget: the trace has its OWN per-field slot (16k) outside the 64k the
+> other fields share, so a long prompt cannot starve it and it cannot push the
+> prompt out; an exchange's bound is therefore 80k. Secure: the emit-time seam
+> withholds it under either flag, like the completion. No `CATALOG_VERSION`
+> bump; the ledger note in `schemas/version.ts` says why a request change still
+> leaves an older build's outputs identical.
 > **Still on #605:** the keyed-HMAC hash (deferred: the unsalted hash is an
 > oracle only for secret-marked content, and on exactly those nodes F4 already
-> scrubs it) and the verbose reasoning trace. `capture: 'full'` is knowingly
-> inert on the trace and on an `agent_cli`-bound node.
+> scrubs it). `capture: 'full'` is knowingly inert on an `agent_cli`-bound
+> node.
 
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
 
@@ -429,6 +453,9 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 3. Cost price-table source of truth: hard-coded table (needs upkeep) vs per-connection required
    config vs optional (cost shown only when configured)?
 4. Reasoning trace capture: store (debug value) vs drop (size/secure) by default?
+   **ANSWERED (#605 slice 4): drop by default.** A node opts in with
+   `captureReasoning`, which needs `capture: 'full'`; the summary is then stored,
+   bounded and secure-redacted like the rest of the capture.
 5. Conversation state (L12): a run-variable message history vs a dedicated conversation object —
    interaction with #1's parallel-variable hard-reject. **ANSWERED (L12, 2026-07-23): neither, for
    v1 — multi-turn is stateless dataflow (node-output threading via `history`/`emitMessages`; see
