@@ -1861,6 +1861,9 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
       (s) => s.getState().addOutput(),
       (s) => s.getState().updateOutput(0, { name: 'z', type: 'string' }),
       (s) => s.getState().removeOutput(0),
+      (s) => s.getState().addVariable(),
+      (s) => s.getState().updateVariable(0, { name: 'z', type: 'string', default: '' }),
+      (s) => s.getState().removeVariable(0),
     ];
     for (const act of acts) {
       const s = createCanvasStore();
@@ -1868,6 +1871,7 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
         version({
           params: [{ name: 'a', type: 'string', required: false }],
           outputs: [{ name: 'o', type: 'string' }],
+          variables: [{ name: 'v', type: 'number', default: 1 }],
         }),
       );
       expect(s.getState().dirty).toBe(false);
