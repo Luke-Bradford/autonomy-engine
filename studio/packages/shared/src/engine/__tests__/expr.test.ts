@@ -239,6 +239,7 @@ describe('the bare-predicate rule is structural (spec #6 Round-2)', () => {
         nodeStatuses: {},
         run: {},
         trigger: {},
+        variables: {},
       }),
     ).toThrow(SubstituteError);
   });

@@ -8,7 +8,7 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
-import type { OutputType, ParamType, VariableDef } from '../schemas/pipeline.js';
+import type { OutputType, ParamType, VariableDef, VariableType } from '../schemas/pipeline.js';
 import { callDetaches, isAddressableOutputName } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
@@ -222,6 +222,10 @@ function leadingFields(segments: ExprSegment[]): string[] {
 type RefRoot =
   | { kind: 'item'; arity: 1 }
   | { kind: 'params'; name: string; arity: 2 }
+  // #844 V2 — `${vars.<name>}`: a declared pipeline variable. Unlike a node
+  // output it needs no availability check: a variable is seeded from its
+  // declared default before anything dispatches, so it always has a value.
+  | { kind: 'vars'; name: string; arity: 2 }
   | { kind: 'nodeOutput'; id: string; name: string; arity: 4 }
   | { kind: 'nodeStatus'; id: string; arity: 3 }
   | { kind: 'run'; field: string; arity: 2 }
@@ -236,6 +240,7 @@ function refRoot(fields: string[]): RefRoot | null {
   const [ns, a, b, c] = fields;
   if (ns === 'item') return { kind: 'item', arity: 1 };
   if (ns === 'params' && fields.length >= 2) return { kind: 'params', name: a as string, arity: 2 };
+  if (ns === 'vars' && fields.length >= 2) return { kind: 'vars', name: a as string, arity: 2 };
   if (ns === 'nodes' && fields.length >= 4 && b === 'output') {
     return { kind: 'nodeOutput', id: a as string, name: c as string, arity: 4 };
   }
@@ -372,6 +377,15 @@ function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: E
         throw new SubstituteError(`unknown param reference \${params.${root.name}}`);
       }
       return ctx.params[root.name];
+    }
+    // #844 V2 — a plain `SubstituteError`, never `MissingValueError`: every
+    // declared variable is seeded from its default, so an unknown one is an
+    // authoring error, and `default()` must not turn it into a silent fallback.
+    case 'vars': {
+      if (!Object.prototype.hasOwnProperty.call(ctx.variables, root.name)) {
+        throw new SubstituteError(`unknown variable reference \${vars.${root.name}}`);
+      }
+      return ctx.variables[root.name];
     }
     case 'nodeOutput': {
       const outs = ctx.nodeOutputs[root.id];
@@ -879,7 +893,7 @@ export function evalToolExpression(expression: string, args: Record<string, unkn
     throw new SubstituteError('tool expression has an unterminated ${...} reference');
   }
   const env: Env = {
-    ctx: { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {} },
+    ctx: { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {}, variables: {} },
     toolArgs: args,
     budget: { spent: 0 },
   };
@@ -1236,6 +1250,7 @@ export function resolveTriggerBindings(
     nodeStatuses: {},
     run: {},
     trigger: triggerRoot(tc),
+    variables: {},
   };
   const resolved = substitute(triggerParams, ctx) as Record<string, unknown>;
   // #547 — boundary 3 (fire-time backstop). A binding whose whole-value result
@@ -1258,12 +1273,11 @@ export function resolveTriggerBindings(
  * unterminated `${` is an error; and node-output refs are validated by
  * AVAILABILITY / DOMINANCE over the doc's edge graph (see `computeGraph`).
  */
-export function validateRefs(
-  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
-): string[] {
+export function validateRefs(doc: ValidatedDoc): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
+  const variables = variableMapOf(doc.variables);
 
   const graph = computeGraph(doc);
 
@@ -1294,6 +1308,7 @@ export function validateRefs(
     const soft = graph.soft.get(node.id) ?? new Set<string>();
     const scope: ScanScope = {
       declared,
+      variables,
       guaranteed,
       settled,
       reachable,
@@ -1535,10 +1550,10 @@ export type RefSuggestion = {
   /** The exact text to write into a config field, braces (and any wrapper) included. */
   insert: string;
   /** WHAT this references — a semantic kind, not a display heading. */
-  kind: 'item' | 'param' | 'nodeOutput' | 'nodeStatus' | 'run' | 'trigger';
+  kind: 'item' | 'param' | 'variable' | 'nodeOutput' | 'nodeStatus' | 'run' | 'trigger';
   /** The producing node or container id. `nodeOutput`/`nodeStatus` only. */
   producerId?: string;
-  /** Output name, param name, or run/trigger field. Absent for `${item}`. */
+  /** Output, param or variable name, or run/trigger field. Absent for `${item}`. */
   name?: string;
   /**
    * The type as DECLARED where the reference is declared — a param's `type`, an
@@ -1551,7 +1566,7 @@ export type RefSuggestion = {
    * `json`. Naming that divergence rather than quietly picking one — a caller
    * reasoning about assignability must ask `refRootType`, not this.
    */
-  declaredType: ParamType | OutputType | 'any';
+  declaredType: ParamType | OutputType | VariableType | 'any';
   /**
    * `needs-default` — the reference is legal ONLY inside `default()`'s first
    * argument, and `insert` is already wrapped accordingly. The distinction is
@@ -1623,14 +1638,12 @@ export type RefSite =
  *  - a node site that names no field is not offered a filter predicate's
  *    `${item}`: without the field, that binding cannot be told from `items`'.
  */
-export function availableRefs(
-  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
-  site: RefSite,
-): RefSuggestion[] {
+export function availableRefs(doc: ValidatedDoc, site: RefSite): RefSuggestion[] {
   const containers = doc.containers ?? [];
   const outputsById = outputsByIdOf(doc.nodes, containers);
   const secureOutputIds = secureOutputIdsOf(doc.nodes, containers);
   const declared = new Map(doc.params.map((p) => [p.name, p]));
+  const variables = variableMapOf(doc.variables);
 
   if (site.kind === 'container') {
     const c = containers.find((x) => x.id === site.containerId);
@@ -1639,8 +1652,15 @@ export function availableRefs(
     if (c === undefined || !CONTAINER_CONFIG_FIELDS[c.kind].includes(site.field)) return [];
     const scope =
       site.field === 'exitWhen'
-        ? exitWhenScope(c, declared, outputsById, secureOutputIds)
-        : foreachItemsScope(c, declared, outputsById, secureOutputIds, computeGraph(doc));
+        ? exitWhenScope(c, declared, variables, outputsById, secureOutputIds)
+        : foreachItemsScope(
+            c,
+            declared,
+            variables,
+            outputsById,
+            secureOutputIds,
+            computeGraph(doc),
+          );
     return refsInScope(doc, scope, {
       selfId: c.id,
       // Neither field binds `${item}`: `exitWhen` is not a foreach field, and
@@ -1663,6 +1683,7 @@ export function availableRefs(
     doc,
     {
       declared,
+      variables,
       outputsById,
       secureOutputIds,
       guaranteed: graph.guaranteed.get(nodeId) ?? new Set<string>(),
@@ -1729,6 +1750,22 @@ function refsInScope(
       kind: 'param',
       name: p.name,
       declaredType: p.type,
+      availability: 'available',
+    });
+  }
+
+  // #844 V2 — every declared variable, from the SCOPE (the same map
+  // `checkRefRoot` reads). Always `available`: it is seeded before anything
+  // dispatches. An unaddressable name is a save error already (V1), and is
+  // skipped for the reason a param's is.
+  for (const v of scope.variables.values()) {
+    if (!isAddressableOutputName(v.name)) continue;
+    out.push({
+      ref: `vars.${v.name}`,
+      insert: `\${vars.${v.name}}`,
+      kind: 'variable',
+      name: v.name,
+      declaredType: v.type,
       availability: 'available',
     });
   }
@@ -2158,6 +2195,17 @@ function variableDeclarationErrors(variables: readonly VariableDef[]): string[] 
   return errors;
 }
 
+/**
+ * #844 V2 — the declared variables by name, for a `ScanScope`. Absent (a caller
+ * with no variables, see `ValidatedDoc`) is an EMPTY map, so a `${vars.x}` read
+ * is refused as undeclared — never waved through.
+ */
+function variableMapOf(
+  variables: readonly VariableDef[] | undefined,
+): ReadonlyMap<string, VariableDef> {
+  return new Map((variables ?? []).map((v) => [v.name, v]));
+}
+
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
 export type PipelineResolver = (
   pipelineVersionId: string,
@@ -2233,6 +2281,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const nodeIdList = doc.nodes.map((n) => n.id);
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
+  const variables = variableMapOf(doc.variables);
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
@@ -2613,7 +2662,15 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }
       if (c.items !== undefined)
-        validateForeachItems(c, declared, outputsById, secureOutputIds, itemsGraph(), errors);
+        validateForeachItems(
+          c,
+          declared,
+          variables,
+          outputsById,
+          secureOutputIds,
+          itemsGraph(),
+          errors,
+        );
       // #4 A4b (#566 slice 2) — PARALLEL mode (`batchCount >= 2`) refusals. Both
       // rules exist because parallel items are namespaced per instance key
       // (`<nodeId>@<i>`) while two pieces of machinery stay keyed by BARE doc ids:
@@ -2647,7 +2704,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       }
     }
     if (c.exitWhen !== undefined) {
-      validateExitWhen(c, declared, outputsById, secureOutputIds, errors);
+      validateExitWhen(c, declared, variables, outputsById, secureOutputIds, errors);
     }
   }
 
@@ -3381,6 +3438,7 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
     }
     const scope: ScanScope = {
       declared: new Map(),
+    variables: new Map(),
       guaranteed: new Set(),
       settled: new Set(),
       reachable: new Set(),
@@ -3402,11 +3460,13 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
 function exitWhenScope(
   c: Container,
   declared: Map<string, Param>,
+  variables: ReadonlyMap<string, VariableDef>,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
 ): ScanScope {
   return {
     declared,
+    variables,
     secureOutputIds,
     // E6 needs the child producers' declared output types to type the exitWhen
     // expression — without them `${nodes.check.output.done}` is `any` and the
@@ -3439,13 +3499,14 @@ function exitWhenScope(
 function validateExitWhen(
   c: Container,
   declared: Map<string, Param>,
+  variables: ReadonlyMap<string, VariableDef>,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   errors: string[],
 ): void {
   if (c.exitWhen === undefined) return;
   const where = `container.${c.id}.exitWhen`;
-  const scope = exitWhenScope(c, declared, outputsById, secureOutputIds);
+  const scope = exitWhenScope(c, declared, variables, outputsById, secureOutputIds);
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
 
@@ -3516,6 +3577,7 @@ function validateExitWhen(
 function validateForeachItems(
   c: Container,
   declared: Map<string, Param>,
+  variables: ReadonlyMap<string, VariableDef>,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   graph: Graph,
@@ -3523,7 +3585,7 @@ function validateForeachItems(
 ): void {
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
-  const scope = foreachItemsScope(c, declared, outputsById, secureOutputIds, graph);
+  const scope = foreachItemsScope(c, declared, variables, outputsById, secureOutputIds, graph);
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
   scan(where, c.items, scope, errors);
 
@@ -3561,12 +3623,14 @@ function validateForeachItems(
 function foreachItemsScope(
   c: Container,
   declared: Map<string, Param>,
+  variables: ReadonlyMap<string, VariableDef>,
   outputsById: Map<string, OutputContract>,
   secureOutputIds: ReadonlySet<string>,
   graph: Graph,
 ): ScanScope {
   return {
     declared,
+    variables,
     outputsById,
     secureOutputIds,
     guaranteed: graph.guaranteed.get(c.id) ?? new Set<string>(),
@@ -3934,6 +3998,12 @@ function validateCallGraph(
 
 interface ScanScope {
   declared: Map<string, Param>;
+  /**
+   * #844 V2 — the declared pipeline variables, for `${vars.<name>}`. REQUIRED,
+   * like `settled`: an omitted map would read as "none declared" and silently
+   * refuse every variable in that scope, so the compiler must see every site.
+   */
+  variables: ReadonlyMap<string, VariableDef>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
   /**
@@ -4140,6 +4210,7 @@ export function validateTriggerBindings(
   const errors: string[] = [];
   const scope: ScanScope = {
     declared: new Map(),
+    variables: new Map(),
     guaranteed: new Set(),
     settled: new Set(),
     reachable: new Set(),
@@ -4337,6 +4408,10 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
       // fall to `any` rather than manufacturing a second error.
       return decl === undefined ? 'any' : sigOfDeclared(decl.type);
     }
+    // #844 V2 — a `VariableType` IS a `SigType` by name (V1 chose them so).
+    // Undeclared is reported by `checkRefRoot`; `any` keeps it to one error.
+    case 'vars':
+      return scope.variables.get(root.name)?.type ?? 'any';
     case 'nodeOutput': {
       const contract = scope.outputsById?.get(root.id);
       // No contract (`absent`), a corrupt one (`invalid` — reported once by
@@ -4552,12 +4627,14 @@ function checkExprStatic(
   // `run.*`/`.status` are strings by construction. The run-time walk refuses the
   // same shapes (`stepField`/`stepIndex`), so the rule has both halves.
   //
-  // A declared `OutputType` is never `array` (it is `ParamType` minus `secret`),
-  // so for a REF the root type is always one of string|number|boolean|any and the
-  // `array` case cannot arise here.
+  // An `array` root is a `${vars.<name>}` (#844 V2); a declared `OutputType` or
+  // `ParamType` is never one. Its tail is legal only when it OPENS with an index
+  // (`${vars.rows[0].id}`): the run-time walk refuses a field step on an array
+  // (`stepField`), so `${vars.rows.id}` is a true-reject like any scalar root.
   if (tail.length > 0) {
     const rootType = refRootType(root, scope);
-    if (rootType !== 'any') {
+    const indexedArray = rootType === 'array' && tail[0]?.kind === 'index';
+    if (rootType !== 'any' && !indexedArray) {
       errors.push(
         `${where}: \${${expr.source}} — deep addressing needs a json/any value, ` +
           `but this one is a ${rootType}`,
@@ -4599,6 +4676,16 @@ function checkRefRoot(
         `${where}: \${params.${name}} is secret-typed — a secret never enters ` +
           'the ${} language (its only sink is the executor env channel)',
       );
+    }
+    return;
+  }
+  // #844 V2 — declared, and that is all: a variable is seeded from its default
+  // before anything dispatches, so it has no availability or dominance rule.
+  // Its default is checked against its type at save (V1), and no secret can
+  // be one (V-D8), so there is no secret rule here either.
+  if (root.kind === 'vars') {
+    if (!scope.variables.has(root.name)) {
+      errors.push(`${where}: \${vars.${root.name}} is not a declared variable`);
     }
     return;
   }

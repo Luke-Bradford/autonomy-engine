@@ -66,6 +66,10 @@ export type {
  *                and save-time context-scoping keeps them out of node configs —
  *                they are read only by a tumbling trigger's param bindings,
  *                resolved in the launcher at fire time.
+ * - `variables` — the run's pipeline variables (#844 V2), backing
+ *                `${vars.<name>}`: `RunState.variables`, seeded from the bound
+ *                version's declared defaults. Folded state, so a read is
+ *                replay-stable without being recorded.
  */
 export interface SubstitutionContext {
   params: Record<string, unknown>;
@@ -73,6 +77,7 @@ export interface SubstitutionContext {
   nodeStatuses: Record<string, NodeRunStatus>;
   run: Record<string, unknown>;
   trigger: Record<string, unknown>;
+  variables: Record<string, unknown>;
 }
 
 /**
@@ -494,6 +499,14 @@ export const RunStateSchema = z.object({
    * failure once folded. It only ever goes false → true.
    */
   cancelRequested: z.object({ source: CancelSourceSchema, stoppedWork: z.boolean() }).nullable(),
+  /**
+   * #844 V2 — the run's pipeline variables, `name → value`, backing
+   * `${vars.<name>}`. Seeded from the bound version's declared defaults (never
+   * absent — `{}` for a version that declares none, so an old log folds
+   * identically). Run-scoped: `resetNodes`/`resetContainerRound` never touch it,
+   * which is the whole difference from `outputs` (spec V-D3).
+   */
+  variables: z.record(z.string(), z.unknown()),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 

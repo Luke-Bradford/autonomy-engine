@@ -86,6 +86,7 @@ function state(fields: {
     sessions: {},
     triggerContext: null,
     cancelRequested: null,
+    variables: {},
   };
 }
 
