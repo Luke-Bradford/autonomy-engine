@@ -204,7 +204,7 @@ export function pipelineVersionContentForm(
  * to come back here. Note `name` is already excluded (it is `RESOURCE_VOLATILE`)
  * — the reconcile carries the name difference as its own independent signal.
  *
- * This is WIDER than the apply's `rowPatch` (`name` + `concurrency`) by design,
+ * This is WIDER than the apply's `rowPatch` (`name` + `concurrency` + `folder`) by design,
  * and one field makes that concrete today: `strippedConnectionRefs`, which this
  * app's own commit path always writes as `[]` and the apply never reads. A
  * hand-authored branch file carrying a non-empty one therefore previews as

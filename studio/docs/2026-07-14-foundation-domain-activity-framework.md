@@ -63,6 +63,8 @@ trap for a durable event field). `code:'timeout'` is RESERVED there for F3's pol
 
 Add optional (default-empty) doc fields: `description? · annotations?: string[] ·
 folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchanged.
+*(As built, `concurrency` and `folder` are on the mutable pipeline ROW instead — see the notes
+below.)*
 
 > **`concurrency` SHIPPED 2026-07-22 (#5 S6b) — and it lives on the MUTABLE `pipelines` ROW, not
 > the immutable version doc.** The cap is a live operational admission gate ("max concurrent runs
@@ -86,9 +88,22 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 > REFUSED, never trimmed, and duplicates are refused case-insensitively (`Prod`/`prod` would
 > split one U29 group in two). Empty values are omitted from the serialized file and the content
 > form (`omitEmptyLateFields`), so every file committed before F8a keeps its bytes. These are
-> NOT carried by the git-publish spec's `workspace.json` (G-model). **`folder` is deferred to
-> #1380**: the pane tree lists pipeline ROWS, and moving a pipeline between folders minting a
-> version looks wrong, so its home is an open question rather than a copy of this one.
+> NOT carried by the git-publish spec's `workspace.json` (G-model).
+>
+> **`folder` SHIPPED 2026-09-27 (#1380) on the MUTABLE `pipelines` ROW, beside `name` — NOT the
+> version doc this D1 line first named.** A folder is organisational, never behavioural, so
+> the version-doc argument above (a run reads what it ran under) does not apply, and the doc
+> home costs three things: moving a pipeline would mint a version that changes nothing a run
+> does, yet a DB-only workspace's triggers bind to the LATEST version; in a git workspace every
+> move would read as a new version to commit; and the Factory Resources pane lists ROWS, so it
+> would need each pipeline's latest version just to group the list. `null` = top level (the
+> truthful backfill for every older pipeline, migration 0044). ONE FLAT label: a folder name
+> follows the annotation character rules (`LABEL_REFUSED_CHARS`, no surrounding space, max
+> `PIPELINE_FOLDER_MAX_CHARS` 100) and may not contain `/`, so a folder PATH can be given
+> meaning later without reinterpreting any stored value. It travels in the pipeline file's
+> `data.pipeline` (not a `workspace.json`), omitted when `null` (`omitEmptyRowFields`) so every
+> file committed before #1380 keeps its bytes; a folder change is row content, so it shows as
+> drift, commits, and applies as `updated` without minting a version.
 
 ### D2 — Parameters vs Variables
 
@@ -427,7 +442,7 @@ rerun (gated).**
 | F7a | global_params table + REST — **superseded by GL1** ([`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md)) |
 | F7b | `${global}` resolver + explicit-namespace validation — **superseded by GL3** |
 | F7c | secure globals → secret store — **superseded by F15; not built** (GL-D5) |
-| F8a | pipeline props schema (desc/annotations/folder/concurrency) — **`description` + `annotations` SHIPPED 2026-09-27** on the version doc (see the D1 note above); `concurrency` shipped with F8b; **`folder` is #1380** (its home is an open question) |
+| F8a | pipeline props schema (desc/annotations/folder/concurrency) — **`description` + `annotations` SHIPPED 2026-09-27** on the version doc (see the D1 note above); `concurrency` shipped with F8b; **`folder` SHIPPED 2026-09-27 (#1380) on the mutable ROW**, not the doc (see the D1 note) |
 | F8b | per-pipeline concurrency enforcement (scheduler/launcher) — **SHIPPED 2026-07-22 with #5 S6b** (see the D1 note above: the cap lives on the mutable `pipelines` row; launcher both-must-pass admission + pipeline-scoped fair drain) |
 | F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) — **MINIMAL SHIPPED 2026-07-15** (build-order item 3: "minimal contract EARLY, migrations later"). The existing `ActivityCatalogEntry` IS the ActivityDefinition; it gained `kind: 'execution'\|'control'` (the dispatch discriminant — now the executor's PRIMARY branch, checked ahead of the retained `connectionKinds.length > 0` proxy, with a distinct `CONTROL_NOT_DISPATCHABLE` code) + `category`/`ACTIVITY_CATEGORIES` (U5's palette groups, values per spec #4's headings — `agent_task` is `ai`, there is no `agent` class) + an `ActivityDefinition` alias. `cancel`/`timeoutScope`/`secure`/`errorMap`/`inputs` are deliberately NOT declared — each is sequencing behind a named owner (F2a/F3/F4/F15/F9b-d), not an open question. **Production delta is ZERO** and the reducer does not read `kind` yet: **whether A1/A2 route control via this `kind` or a structural discriminant (the `call_pipeline` precedent) is an OPEN FORK no spec settles — #4 owns it.** See the F9a spike-hardened block under D6. |
 | F9b | migrate `http_request` onto it |

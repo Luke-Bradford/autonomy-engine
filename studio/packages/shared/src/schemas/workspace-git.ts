@@ -638,7 +638,7 @@ export function precheckDivergence(
  * - `restored`: the `resourceId` matched a soft-archived pipeline whose file
  *   reappeared → the existing row was un-archived (not duplicated; spec note 1).
  *   A restore MAY also advance the version — see the orthogonal `versionMinted`.
- * - `updated`: the version doc and/or a row field (`concurrency`) changed → a new
+ * - `updated`: the version doc and/or a row field (`concurrency`, `folder`) changed → a new
  *   immutable version was minted and/or the row patched.
  * - `renamed`: only the display name changed → the row's `name` was patched, no
  *   version minted.
