@@ -91,10 +91,7 @@ export function validateCanvas(
   // picker (which probes candidates through this) would drop every variable.
   // #844 GL3 — `globals` (the workspace's) is required for the same reason: the
   // server's gate is handed the owner's globals, and any badge blocks Save.
-  return validatePipelineDoc(
-    { params, nodes, edges, containers, variables },
-    globalTypes(globals),
-  );
+  return validatePipelineDoc({ params, nodes, edges, containers, variables }, globalTypes(globals));
 }
 
 /**

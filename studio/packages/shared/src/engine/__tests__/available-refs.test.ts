@@ -402,9 +402,7 @@ describe('availableRefs — no false offer at a container field (#864)', () => {
         const after = validatePipelineDoc(
           withField(d, id, field, suggestion.insert),
           WITH_GLOBALS,
-        ).filter(
-          (issue) => !TYPE_REFUSAL.test(issue),
-        );
+        ).filter((issue) => !TYPE_REFUSAL.test(issue));
         expect(after, `${id}.${field} ← ${suggestion.insert}`).toEqual(before);
       }
     });
