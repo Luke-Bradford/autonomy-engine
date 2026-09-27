@@ -6,6 +6,7 @@ import {
   type Node,
   type Output,
   type GlobalRead,
+  type ValidateDocOptions,
   type Param,
   type VariableDef,
 } from '@autonomy-studio/shared';
@@ -63,6 +64,15 @@ export function toVersionBody(
 }
 
 /**
+ * #844 GL4 — the workspace's globals as the validator's name → type map. ONE
+ * builder, so the save badges and the expression picker's catalog judge a
+ * `${global.x}` against the same map.
+ */
+export function globalTypes(globals: readonly GlobalRead[]): Pick<ValidateDocOptions, 'globals'> {
+  return { globals: new Map(globals.map((g) => [g.name, g.type])) };
+}
+
+/**
  * The save-time validation badges. Delegates to `validatePipelineDoc`, the
  * shared SSOT — which is the SAME function the server's write gate calls
  * (#444), so a badge the canvas shows is exactly what a save would be refused
@@ -83,7 +93,7 @@ export function validateCanvas(
   // server's gate is handed the owner's globals, and any badge blocks Save.
   return validatePipelineDoc(
     { params, nodes, edges, containers, variables },
-    { globals: new Map(globals.map((g) => [g.name, g.type])) },
+    globalTypes(globals),
   );
 }
 

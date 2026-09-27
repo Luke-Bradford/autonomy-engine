@@ -12,7 +12,7 @@ import {
   type RefSite,
   type RefSuggestion,
 } from '@autonomy-studio/shared';
-import { validateCanvas } from './canvasDoc';
+import { globalTypes, validateCanvas } from './canvasDoc';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { containerLabels } from './containerRules';
 import { applyWrap, insertModeFor, LITERAL_PROBE } from './expressionInsert';
@@ -63,6 +63,9 @@ export function useExpressionPicker(
   const field = site.kind === 'container' ? site.field : undefined;
   return useMemo(() => {
     const doc = { params, nodes, edges, containers, variables };
+    // #844 GL4 — the same map the validator below is handed, so a global is
+    // offered only when the probe that judges it knows it too.
+    const known = globalTypes(globals);
     // Asked per TARGET, because a node's scope can differ by field — a
     // `filter`'s predicate binds `${item}`, its items does not (#864). A
     // container site already names its one field.
@@ -72,6 +75,7 @@ export function useExpressionPicker(
         field === undefined
           ? { kind: 'node', nodeId: subjectId, field: target.field }
           : { kind: 'container', containerId: subjectId, field },
+        known,
       );
     const labels = containerLabels(containers);
     // #878 — an activity is offered under the SAME name its box carries, which

@@ -254,13 +254,14 @@ export function ExpressionPicker({
 /**
  * Display headings for the catalog's semantic kinds, in the order an author
  * reaches for them: what this activity is iterating, what the pipeline was
- * given and the state it carries, what ran before it, and the run's own facts
- * last.
+ * given and the state it carries, the workspace's globals, what ran before it,
+ * and the run's own facts last.
  */
 const GROUPS: { kind: RefSuggestion['kind']; heading: string }[] = [
   { kind: 'item', heading: 'Loop item' },
   { kind: 'param', heading: 'Pipeline params' },
   { kind: 'variable', heading: 'Pipeline variables' },
+  { kind: 'global', heading: 'Global parameters' },
   { kind: 'nodeOutput', heading: 'Upstream outputs' },
   { kind: 'nodeStatus', heading: 'Upstream status' },
   { kind: 'run', heading: 'This run' },
