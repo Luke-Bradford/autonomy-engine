@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useBusyAction } from '../../hooks/useBusyAction';
 import { surrogateSafeCut } from '@autonomy-studio/shared';
+import { jsonText, MAX_INLINE_OUTPUT_CHARS } from './format';
 
 /**
  * #869 — the cap on serialized output characters kept in the DOM.
@@ -141,5 +142,22 @@ export function CappedValue({ id, text }: { id: string; text: string }) {
         </>
       )}
     </>
+  );
+}
+
+/**
+ * One value as JSON, so a string is shown QUOTED: an empty string would
+ * otherwise be a blank cell, and a string could pass for a "no value" marker.
+ * A short value stays inline; a longer one (an array an `append` has grown,
+ * typically) gets the bounded block above, whose disclosure and copy reach the
+ * whole value. Shared by the run page's Variables (#844 V7) and Global
+ * parameters (GL5) tables, where the table is the only place the value is shown.
+ */
+export function InlineJsonValue({ id, value }: { id: string; value: unknown }) {
+  const text = jsonText(value);
+  return text.length <= MAX_INLINE_OUTPUT_CHARS ? (
+    <code>{text}</code>
+  ) : (
+    <CappedValue id={id} text={text} />
   );
 }
