@@ -30,7 +30,7 @@ const VARS: VariableDef[] = [
 ];
 const validate = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) =>
   validatePipelineDoc({
-    params: [{ name: 'x', type: 'number', default: 1 }],
+    params: [{ name: 'x', type: 'number', required: false, default: 1 }],
     nodes,
     edges,
     containers,
