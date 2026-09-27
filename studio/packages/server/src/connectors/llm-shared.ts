@@ -1583,11 +1583,12 @@ export function buildCapture(args: {
     ...turns.map((t) => t.content).reverse(),
   ];
   const texts = captureMode === 'full' ? allocateCaptureText(priority) : undefined;
-  const field = (text: string, slot: number): CapturedContent => ({
+  const measured = (text: string, kept: { text: string; truncated?: true } | undefined) => ({
     chars: text.length,
     contentHash: sha256Hex(text),
-    ...(texts !== undefined ? texts[slot] : {}),
+    ...kept,
   });
+  const field = (text: string, slot: number): CapturedContent => measured(text, texts?.[slot]);
   const systemSlot = completionText !== undefined ? 1 : 0;
   const firstTurnSlot = systemSlot + (system !== undefined ? 1 : 0);
   const capture: LlmCapture = {
@@ -1611,11 +1612,7 @@ export function buildCapture(args: {
     reasoningText !== undefined &&
     reasoningText !== ''
   ) {
-    capture.reasoning = {
-      chars: reasoningText.length,
-      contentHash: sha256Hex(reasoningText),
-      ...allocateCaptureText([reasoningText])[0],
-    };
+    capture.reasoning = measured(reasoningText, allocateCaptureText([reasoningText])[0]);
   }
   return capture;
 }

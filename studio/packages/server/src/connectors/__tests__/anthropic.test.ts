@@ -1755,6 +1755,27 @@ describe('anthropicAdapter — reasoning trace (#605)', () => {
     expect(capturesOf(events).map((c) => c.reasoning?.text)).toEqual(['need a tool', 'now answer']);
   });
 
+  it('keeps the summary on a tool_use with no id (a 2xx that still fails)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [thinking('about to call'), { type: 'tool_use', name: 'adder', input: {} }],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 5, output_tokens: 7 },
+      }),
+    );
+    const TOOL = {
+      name: 'adder',
+      description: 'Adds.',
+      parameters: { type: 'object', properties: { a: { type: 'number' } } },
+      expression: '${1}',
+    };
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', tools: [TOOL], ...TRACE } }), 'sk'),
+    );
+    expect(failed(events).error).toMatch(/without a string id/);
+    expect(captured(events).capture.reasoning).toMatchObject({ text: 'about to call' });
+  });
+
   it('records the summary on the structured path', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       fakeResponse(200, {

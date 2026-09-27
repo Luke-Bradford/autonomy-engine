@@ -123,16 +123,6 @@ const DEFAULT_MODEL = 'claude-opus-5';
 // parses at dispatch. Imported, never re-declared.
 
 /**
- * Concatenate the `text`-type content blocks of a Messages API response, or
- * `null` when the response carries NO text completion (#461): a non-array
- * `content` (absent/malformed), an empty array, or an array with zero
- * text-type blocks whose `text` is a string (a tool_use-only response, or a
- * malformed `{type:'text', text: <non-string>}` block — text-mode `llm_call`
- * sends no tools, so this is treated as no-completion and revisited at L4b/L10). A
- * present text block whose text is `''` is a REAL (if empty) completion and
- * returns `''`, NOT `null`.
- */
-/**
  * #605 — the response's reasoning SUMMARY: the `thinking` text of each
  * `type:'thinking'` block, joined by a blank line, or `undefined` when there is
  * none. Current models return an EMPTY `thinking` unless the request asked for
@@ -154,6 +144,16 @@ function extractThinking(json: unknown): string | undefined {
   return texts.length > 0 ? texts.join('\n\n') : undefined;
 }
 
+/**
+ * Concatenate the `text`-type content blocks of a Messages API response, or
+ * `null` when the response carries NO text completion (#461): a non-array
+ * `content` (absent/malformed), an empty array, or an array with zero
+ * text-type blocks whose `text` is a string (a tool_use-only response, or a
+ * malformed `{type:'text', text: <non-string>}` block — text-mode `llm_call`
+ * sends no tools, so this is treated as no-completion and revisited at L4b/L10). A
+ * present text block whose text is `''` is a REAL (if empty) completion and
+ * returns `''`, NOT `null`.
+ */
 function extractText(json: unknown): { text: string } | { reason: NoCompletionReason } {
   const content = (json as { content?: unknown }).content;
   if (!Array.isArray(content)) return { reason: 'absent_content' };
@@ -651,6 +651,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                   spendFact: usage,
                 },
                 latencyMs: res.latencyMs,
+                reasoningText: extractThinking(res.json),
               };
             }
             const responseContent = (res.json as { content: unknown[] }).content;

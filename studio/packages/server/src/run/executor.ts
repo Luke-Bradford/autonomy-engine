@@ -1128,10 +1128,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // config is refused at save, and secret params never substitute into
           // `${}`). The text is built from `ActivityContext.input` — plus, on a
           // structured repair (#605), the model's own answer and studio's fixed
-          // critique — secret-free by construction. (#605's reasoning summary is
-          // the model's own text about that same input, so it inherits this.) A SECURE node's text is
-          // withheld downstream, at the one emit-time seam every append passes
-          // through (`Engine.redact`).
+          // critique — secret-free by construction. #605's reasoning summary is
+          // the model's own text about that same input, so it inherits this. A
+          // SECURE node's text is withheld downstream, at the one emit-time seam
+          // every append passes through (`Engine.redact`).
           const { capture } = ev;
           emit({
             type: 'activity.captured',
