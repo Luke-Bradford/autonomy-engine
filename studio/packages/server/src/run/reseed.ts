@@ -1,4 +1,10 @@
-import { resolveRunParams, type EngineEvent } from '@autonomy-studio/shared';
+import {
+  copiedIdsOf,
+  copiedVariableWritesOf,
+  resolveRunParams,
+  type EngineEvent,
+  type VariableWrite,
+} from '@autonomy-studio/shared';
 import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
 import { loadEngineEvents, terminalFactFromLog } from './events.js';
 import { buildEngine, type DriveDeps } from './driver.js';
@@ -153,8 +159,14 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       const sourceState = engine.projectRunState(sourceEvents);
 
       // 3. The PURE frontier over R1's projection (strict successful prefix).
-      const { frontier, copiedOutputs, copiedContainers, childLinks } =
-        engine.reseedFrontier(sourceState);
+      const reseed = engine.reseedFrontier(sourceState);
+      const { frontier, copiedOutputs, copiedContainers, childLinks } = reseed;
+      // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
+      // log order (R1's own carried writes first, for a rerun of a rerun).
+      const copiedVariableWrites = copiedVariableWritesOf(
+        sourceEvents,
+        copiedIdsOf(reseed, doc.containers ?? []),
+      );
 
       // 4. `resolveRunParams` reproduces R1's resolved params (same version, same
       // raw params) for the `run.started` payload — computed BEFORE the tx (pure).
@@ -194,7 +206,11 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           params: resolvedParams,
           rerunOf: sourceRunId,
         };
-        const reseeded: EngineEvent = {
+        // The schema keeps `copiedVariableWrites` optional for OLD logs only; a new
+        // reseed must always write it, so this writer's type requires it.
+        const reseeded: Extract<EngineEvent, { type: 'run.reseeded' }> & {
+          copiedVariableWrites: VariableWrite[];
+        } = {
           type: 'run.reseeded',
           runId: r2.id,
           sourceRunId,
@@ -204,6 +220,7 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           // RS4 — omitted when no call node was copied, so a reseed with none
           // logs exactly the shape it did before the field existed.
           ...(childLinks.length > 0 ? { childLinks } : {}),
+          copiedVariableWrites,
         };
 
         const { records: recs } = foldOutOfBand(

@@ -123,6 +123,9 @@ describe('#443 — terminalStatusOf', () => {
       // #4 A2 — a `switch`'s branch decision. NON-terminal for the same reason as
       // `condition.evaluated` (its `if` twin) — folds the node to `success`.
       { type: 'switch.evaluated', ...run, nodeId: 'n1', attemptId: 'n1#0', branch: 'gold' },
+      // #844 V5 — a variable write and its node's success, one event. NON-terminal.
+      { type: 'variable.set', ...run, nodeId: 'n1', attemptId: 'n1#0', name: 'v', value: 1 },
+      { type: 'variable.append', ...run, nodeId: 'n1', attemptId: 'n1#0', name: 'l', value: 1 },
       // #4 A5/A6 — the durable-wait timer pair. NON-terminal, same shape as the
       // retry pair: `timer.waitScheduled` parks the node `wait_pending`, `timer.due`
       // folds it to `success` — neither is itself a run-terminating event, and both

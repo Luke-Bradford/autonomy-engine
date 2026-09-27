@@ -17,8 +17,9 @@ function node(id: string, config: Record<string, unknown> = {}, type = 'agent_ta
   seq += 1;
   return { id, type, config, position: { x: seq, y: 0 } };
 }
+// An array variable has no literal form, so its `set` writes a whole-value `${}`.
 const set = (id: string, variable = 'v'): Node =>
-  node(id, { variable, value: '1' }, 'set_variable');
+  node(id, { variable, value: variable === 'list' ? '${createArray(1)}' : '1' }, 'set_variable');
 const append = (id: string, variable = 'list'): Node =>
   node(id, { variable, value: '1' }, 'append_variable');
 const read = (id: string, variable = 'v'): Node => node(id, { prompt: `\${vars.${variable}}` });
@@ -45,7 +46,7 @@ function doc(nodes: Node[], edges: Edge[] = [], containers: Container[] = []) {
 const guard = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) => {
   const d = doc(nodes, edges, containers);
   const { reads, validatorErrors } = variableReadsOf(d);
-  expect(validatorErrors).toEqual([]);
+  expect(validatorErrors, validatorErrors.join(' | ')).toEqual([]);
   return variableGuardErrors(d, reads);
 };
 
@@ -100,7 +101,10 @@ describe('variableGuardErrors — a writer it cannot read is refused, not skippe
     ['empty', { variable: '' }],
     ['an expression', { variable: '${params.name}' }],
   ])('refuses a set_variable whose variable is %s', (_label, config) => {
-    const errs = guard([node('w', config, 'set_variable')]);
+    // `validateDoc` refuses these too (V5), so `validatePipelineDoc` never runs
+    // the guard on them; this pins the guard's own backstop, called directly.
+    const d = doc([node('w', { value: '1', ...config }, 'set_variable')]);
+    const errs = variableGuardErrors(d, variableReadsOf(d).reads);
     expect(errs).toHaveLength(1);
     expect(errs[0]).toContain("node 'w' (set_variable)");
   });
@@ -111,7 +115,14 @@ describe('settledRawOf — must-precede, not zeroed by a looping doc', () => {
     const d = doc(
       [node('a'), node('b'), node('inner')],
       [e('a', 'b')],
-      [{ id: 'lp', kind: 'loop', children: ['inner'], exitWhen: '${true}' }],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['inner'],
+          exitWhen: "${equals(nodes.inner.status, 'success')}",
+        },
+      ],
     );
     expect(settledRawOf(d).get('b')?.has('a')).toBe(true);
   });
@@ -167,7 +178,14 @@ describe('variableGuardErrors — ordered pairs', () => {
     const errs = guard(
       [set('w'), read('r'), node('inner')],
       [e('w', 'r')],
-      [{ id: 'lp', kind: 'loop', children: ['inner'], exitWhen: '${true}' }],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['inner'],
+          exitWhen: "${equals(nodes.inner.status, 'success')}",
+        },
+      ],
     );
     expect(errs).toEqual([]);
   });
@@ -187,7 +205,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('accepts a switch case against its default', () => {
-    const sw = node('sw', { value: 'x', cases: ['a'] }, 'switch');
+    const sw = node('sw', { on: "${'x'}", cases: ['a'] }, 'switch');
     expect(guard([sw, set('a'), set('d')], [br('sw', 'a', 'a'), br('sw', 'd', 'default')])).toEqual(
       [],
     );
@@ -212,7 +230,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('refuses when a root path bypasses the decision', () => {
-    const t = node('t', { variable: 'v', value: 1, join: 'any' }, 'set_variable');
+    const t = node('t', { variable: 'v', value: '1', join: 'any' }, 'set_variable');
     const nodes = [iff('n'), t, set('f'), node('side')];
     const edges = [br('n', 't', 'true'), br('n', 'f', 'false'), e('side', 't')];
     expect(guard(nodes, edges)).toHaveLength(1);
@@ -225,7 +243,7 @@ describe('variableGuardErrors — exclusive pairs', () => {
   });
 
   it('refuses an any-join writer reachable under both outcomes', () => {
-    const j = node('j', { variable: 'v', value: 1, join: 'any' }, 'set_variable');
+    const j = node('j', { variable: 'v', value: '1', join: 'any' }, 'set_variable');
     const nodes = [iff('n'), node('a'), node('b'), j, set('f')];
     const edges = [
       br('n', 'a', 'true'),
@@ -273,7 +291,12 @@ describe('variableGuardErrors — scopes', () => {
 
   it('compares two children of one body inside that body', () => {
     const lp = (): Container[] => [
-      { id: 'lp', kind: 'loop', children: ['a', 'b'], exitWhen: '${true}' },
+      {
+        id: 'lp',
+        kind: 'loop',
+        children: ['a', 'b'],
+        exitWhen: "${equals(nodes.a.status, 'success')}",
+      },
     ];
     expect(guard([set('a'), set('b'), node('u1'), node('u2')], [e('u1', 'u2')], lp())).toHaveLength(
       1,

@@ -1097,6 +1097,21 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.instanceId = instanceOf(e.nodeId);
         break;
       }
+      case 'variable.set':
+      case 'variable.append': {
+        // #844 V5 — a `set_variable`/`append_variable` is engine-evaluated like
+        // an `if`, and THIS is its terminal-success event (reduce.ts
+        // `onVariableWritten`): the write and the success are one event. Its
+        // catalog entry declares `outputs: []`, so `{}` is exact; the value it
+        // wrote is shown by the run page's variables view (V7).
+        const n = ensure(e.nodeId);
+        clearResult(n);
+        n.status = 'success';
+        n.attempts += 1;
+        n.outputValues = {};
+        n.instanceId = instanceOf(e.nodeId);
+        break;
+      }
       case 'call.started': {
         // #796 / #735 — the child is in flight. Before this event a call node's
         // ONLY event was `call.returned`, so `ensure` first created its row at

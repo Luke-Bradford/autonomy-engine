@@ -192,6 +192,13 @@ export function secureEventNodeId(event: EngineEvent): string | undefined {
     case 'activity.agentTelemetry':
     case 'activity.toolCalled':
       return event.nodeId;
+    // #844 V5 (spec V-D8) — listed EXPLICITLY as never secure rather than left to
+    // the default: a `set`/`append` node cannot carry a secure flag
+    // (`validateSecurePolicy`), because the value it writes is readable
+    // everywhere as `${vars.<name>}`, so there is nothing here to withhold.
+    case 'variable.set':
+    case 'variable.append':
+      return undefined;
     default:
       return undefined;
   }
