@@ -8,6 +8,7 @@ import {
   getActivity,
   llmMessageSchema,
   llmOutputSchemaSchema,
+  literalText,
   singleLine,
 } from '@autonomy-studio/shared';
 import {
@@ -1555,5 +1556,29 @@ describe('schemaPrecheckCandidate (#864 item 4)', () => {
     const config = { ...base, history: '${nodes.a.outputs.messages}' };
     expect(schema.safeParse(config).success).toBe(false);
     expect(schema.safeParse(schemaPrecheckCandidate(config, llm)).success).toBe(true);
+  });
+});
+
+describe('literalText presentation hint (#844 V6)', () => {
+  it('marks a variable writer’s `variable` literal, and leaves its `value` open to ${}', () => {
+    for (const type of ['set_variable', 'append_variable']) {
+      expect(field(fieldsOf(type), 'variable').literal).toBe(true);
+      expect(field(fieldsOf(type), 'variable').singleLine).toBe(true);
+      expect(field(fieldsOf(type), 'value').literal).toBeUndefined();
+    }
+    expect(field(fieldsOf('http_request'), 'url').literal).toBeUndefined();
+  });
+
+  it('reads the tag through an optional wrapper and past a refine clone', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        wrapped: literalText(z.string()).optional(),
+        refined: literalText(z.string()).min(1),
+      }),
+    );
+    expect((fields ?? []).map((f) => [f.name, f.literal])).toEqual([
+      ['wrapped', true],
+      ['refined', true],
+    ]);
   });
 });

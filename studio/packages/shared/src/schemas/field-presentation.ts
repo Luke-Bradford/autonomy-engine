@@ -31,6 +31,20 @@ export interface FieldPresentation {
    * in the save gate alone, which the expression flyout already probes.
    */
   readonly authoredAsExpression?: true;
+  /**
+   * #844 V6: the field's text is used VERBATIM and never substituted, so a form
+   * must not offer the `${}` expression flyout on it. `set_variable`'s
+   * `variable` is the case: it names the variable the determinism guard matches
+   * literally, and the save gate refuses a `${` in it.
+   *
+   * Why a tag and not the flyout's usual no-false-offer probe (each candidate
+   * run through the whole-doc validator, dropped if it adds an issue): the
+   * probe only sees a NEW issue. On a freshly dropped writer the field is
+   * blank, which the gate already refuses with the same message it gives a
+   * `${}` — so every reference would count as adding nothing, and all of them
+   * would be offered.
+   */
+  readonly literal?: true;
 }
 
 export const fieldPresentation = z.registry<FieldPresentation>();
@@ -58,6 +72,11 @@ export function authoredAsExpression<T extends z.ZodType>(schema: T): T {
   return tag(schema, { authoredAsExpression: true });
 }
 
+/** Tag a string schema as literal (never substituted), returning the SAME instance. */
+export function literalText<T extends z.ZodType>(schema: T): T {
+  return tag(schema, { literal: true });
+}
+
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */
 function presentationOf(schema: unknown): FieldPresentation | undefined {
   // Structural, not `instanceof`: a schema built by another copy of zod would
@@ -74,4 +93,9 @@ export function isSingleLine(schema: unknown): boolean {
 /** Whether `schema` itself (not a wrapper around it) is authored as expression text. */
 export function isAuthoredAsExpression(schema: unknown): boolean {
   return presentationOf(schema)?.authoredAsExpression === true;
+}
+
+/** Whether `schema` itself (not a wrapper around it) is tagged literal. */
+export function isLiteralText(schema: unknown): boolean {
+  return presentationOf(schema)?.literal === true;
 }

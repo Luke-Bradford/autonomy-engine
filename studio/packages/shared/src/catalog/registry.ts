@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { literalText, singleLine } from '../schemas/field-presentation.js';
 import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
@@ -223,7 +223,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({
-      variable: singleLine(z.string()).min(1),
+      variable: literalText(singleLine(z.string())).min(1),
       value: singleLine(z.string()),
     }),
   },
@@ -240,7 +240,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({
-      variable: singleLine(z.string()).min(1),
+      variable: literalText(singleLine(z.string())).min(1),
       value: singleLine(z.string()),
     }),
   },

@@ -115,6 +115,14 @@ export type FieldChoices = {
   readonly label: string;
   readonly values: readonly string[];
   readonly onChoose: (value: string) => void;
+  /** An option's visible text, when the value alone does not say enough (#844
+   *  V6: a variable's TYPE decides how a literal value is read). The option's
+   *  VALUE is always the literal itself. */
+  readonly describe?: (value: string) => string;
+  /** Shown in place of the chooser when `values` is empty. Without it an empty
+   *  list renders nothing, which cannot tell "nothing to choose" from "no
+   *  chooser here". */
+  readonly emptyHint?: string;
 };
 
 /**
@@ -358,13 +366,19 @@ export function ConfigFieldControl({
                   <option value="">— choose —</option>
                   {choices.values.map((option) => (
                     <option key={option} value={option}>
-                      {option}
+                      {choices.describe?.(option) ?? option}
                     </option>
                   ))}
                 </select>
               )}
             </LabelledControl>
           )}
+          {choices &&
+            field.kind === 'text' &&
+            choices.values.length === 0 &&
+            choices.emptyHint !== undefined && (
+              <p className="page-hint config-field-choices-empty">{choices.emptyHint}</p>
+            )}
           {picker && field.kind === 'text' && !field.literal && (
             <ExpressionPicker
               fieldName={shown}
