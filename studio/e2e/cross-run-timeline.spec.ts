@@ -176,3 +176,81 @@ test('U29 — two pipelines, two lanes, one axis', async ({ page }) => {
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1016 — the same chart with its lanes keyed by ANNOTATION. The e2e database is
+ * shared by every spec, so the tags are stamped unique to this run and the
+ * untagged lane (which holds every other spec's untagged runs too) is searched
+ * for THIS spec's run by its link title, never counted.
+ */
+test('#1016 — lanes by annotation: a multi-tag run in each of its lanes, untagged runs last', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const stamp = Date.now();
+  const nightly = `u29 nightly ops ${stamp}`;
+  const finance = `u29 finance ${stamp}`;
+
+  const tagged = await seedVersion(page, `U29 tagged ${stamp}`, {
+    ...DOC,
+    annotations: [nightly, finance],
+  });
+  const taggedRun = await fireAndSettle(page, tagged.pipelineVersionId, 'U29 tagged');
+  const plain = await seedVersion(page, `U29 untagged ${stamp}`, DOC);
+  const plainRun = await fireAndSettle(page, plain.pipelineVersionId, 'U29 untagged');
+
+  await page.goto('/#/monitor/runs?view=timeline');
+  await fluentRootReady(page);
+  await page.getByRole('button', { name: 'By annotation', exact: true }).click();
+  expect(new URL(page.url()).hash).toContain('group=annotation');
+  await expect(page.getByRole('heading', { name: nightly, exact: true })).toBeVisible();
+
+  /* One read of everything: the lanes in DOM order, each lane's resolved
+     accessible name (through `aria-labelledby`, which a tag with spaces would
+     break if the id were built from it), and which run ids it holds. */
+  const lanes = await page.evaluate(() =>
+    [...document.querySelectorAll('.run-timeline-group')].map((group) => {
+      const list = group.querySelector('ol');
+      const name = (list?.getAttribute('aria-labelledby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent ?? '<missing>')
+        .join(' ');
+      return {
+        kind: group.getAttribute('data-lane-kind'),
+        name,
+        runIds: [...group.querySelectorAll('.timeline-row-label a')].map((a) =>
+          a.getAttribute('title'),
+        ),
+        rowLabels: [...group.querySelectorAll('.timeline-row-label a')].map((a) =>
+          (a.textContent ?? '').trim(),
+        ),
+      };
+    }),
+  );
+
+  const byName = (name: string) => lanes.find((l) => l.name === name);
+  for (const tag of [nightly, finance]) {
+    const lane = byName(tag);
+    expect(lane, `a lane for '${tag}', named by its own heading`).toBeDefined();
+    expect(lane!.kind).toBe('annotation');
+    expect(lane!.runIds, `'${tag}' holds exactly the tagged run`).toEqual([taggedRun]);
+    // A tag lane mixes pipelines, so the row names its pipeline.
+    expect(lane!.rowLabels[0]).toMatch(new RegExp(`^U29 tagged ${stamp} v1 · `));
+  }
+
+  const untagged = lanes.filter((l) => l.kind === 'untagged');
+  expect(untagged, 'exactly one untagged lane').toHaveLength(1);
+  expect(untagged[0]!.name).toBe('Runs with no annotation');
+  expect(untagged[0]!.runIds).toContain(plainRun);
+  expect(untagged[0]!.runIds).not.toContain(taggedRun);
+  expect(lanes.at(-1)?.kind, 'the untagged lane is the last lane').toBe('untagged');
+
+  // Back to pipeline lanes: the default, so the param is cleared.
+  await page.getByRole('button', { name: 'By pipeline', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: `U29 tagged ${stamp}`, exact: true }),
+  ).toBeVisible();
+  expect(new URL(page.url()).hash).not.toContain('group=');
+
+  await expectQuiet(page, problems);
+});

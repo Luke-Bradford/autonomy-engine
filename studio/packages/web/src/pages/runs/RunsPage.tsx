@@ -38,6 +38,7 @@ import {
 } from './runOrigin';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
+import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -45,6 +46,19 @@ import { FilterPicker } from './FilterPicker';
  * it lives beside the tab rather than inside `runFilters.ts`.
  */
 type RunView = 'list' | 'timeline';
+
+/**
+ * #1016 — the timeline's lane key, under the same URL rules as `?view=`: absent
+ * is `pipeline`, anything unrecognised falls back to it. Another view setting,
+ * not a filter, so it is NOT in `RUN_FILTER_PARAMS` and "Clear filters" keeps it;
+ * and it survives a switch to List, so returning to the timeline restores it.
+ */
+const GROUP_PARAM = 'group';
+
+function readGroupBy(params: URLSearchParams): RunGroupBy {
+  const raw = params.get(GROUP_PARAM);
+  return RUN_GROUP_BYS.find((by) => by === raw) ?? 'pipeline';
+}
 
 /**
  * One Cost cell. A component rather than an inline expression so the decision
@@ -192,6 +206,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    * deletes only `RUN_FILTER_PARAMS`, so switching a filter keeps the view.
    */
   const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
+  const groupBy = readGroupBy(searchParams);
 
   function selectView(next: RunView) {
     const params = new URLSearchParams(searchParams);
@@ -556,7 +571,11 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                  id and pipeline name on screen twice, which is the ambiguity
                  `AttemptTimeline` records for its own untimed list, and would
                  make the table's existing row queries match two things. */
-              <RunTimeline runs={visible} />
+              <RunTimeline
+                runs={visible}
+                groupBy={groupBy}
+                onGroupByChange={(next) => setFilter(GROUP_PARAM, next === 'pipeline' ? '' : next)}
+              />
             ) : (
               <table>
                 <thead>

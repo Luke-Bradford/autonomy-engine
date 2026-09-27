@@ -24,10 +24,32 @@ export interface RunBar extends SpanLike {
   run: RunSummary;
 }
 
-/** One lane of the chart: a pipeline, and the runs of it that can be drawn. */
+/**
+ * What the lanes are keyed by (#1016). `pipeline` is the default and the lane a
+ * pipeline's runs have always had; `annotation` keys a lane by a tag of the
+ * version a run BOUND — the same exact, case-sensitive strings U26's
+ * `?annotation=` filter matches, so a lane and a filter agree on what a tag is.
+ */
+export const RUN_GROUP_BYS = ['pipeline', 'annotation'] as const;
+export type RunGroupBy = (typeof RUN_GROUP_BYS)[number];
+
+/**
+ * A lane's identity. A union rather than a prefixed string so that the one lane
+ * that is NOT a tag — the runs whose version carries none — cannot be mistaken
+ * for a tag that happens to be spelled like its label.
+ */
+export type RunLane =
+  | { kind: 'pipeline'; pipelineId: string; pipelineName: string }
+  | { kind: 'annotation'; tag: string }
+  | { kind: 'untagged' };
+
+/** One lane of the chart, and the runs in it that can be drawn. */
 export interface RunGroup {
-  pipelineId: string;
-  pipelineName: string;
+  lane: RunLane;
+  /** Unique across the lanes of one grouping; the React key and the tie-break. */
+  key: string;
+  /** What the lane heading says. */
+  label: string;
   /** Oldest first. Never empty — a lane with nothing to draw is not a lane. */
   bars: RunBar[];
 }
@@ -118,7 +140,7 @@ export interface GroupedRuns {
    * order, so the rows arrive newest-first and the list renders newest-first —
    * but nothing here enforces that, and a caller passing rows in another order,
    * or a change to the server's `ORDER BY`, would quietly falsify it. The
-   * precondition is the caller's; `groupRunsByPipeline`'s docblock repeats it.
+   * precondition is the caller's; `groupRuns`'s docblock repeats it.
    */
   unplottable: UnplottableRun[];
   /**
@@ -131,13 +153,58 @@ export interface GroupedRuns {
 }
 
 /**
+ * The lanes one run belongs to. ONE for `pipeline`. For `annotation`, one per
+ * tag its version carries — a tag list is a set, so picking the "first" tag
+ * would make an order nobody chose decide which lane a run is in — and the
+ * single untagged lane when it carries none, because a run with no tag is still
+ * a run that ran (U29's third property: named, never dropped).
+ */
+function lanesOf(run: RunSummary, by: RunGroupBy): RunLane[] {
+  if (by === 'pipeline') {
+    return [{ kind: 'pipeline', pipelineId: run.pipelineId, pipelineName: run.pipelineName }];
+  }
+  if (run.annotations.length === 0) return [{ kind: 'untagged' }];
+  /* De-duplicated here, not trusted from the row: only the WRITE schema refuses a
+     repeated tag, the read schema is deliberately tolerant, so a stored
+     `['a','a']` must still be ONE bar in lane `a`, not two claiming two runs. */
+  return [...new Set(run.annotations)].map((tag) => ({ kind: 'annotation', tag }));
+}
+
+function laneKey(lane: RunLane): string {
+  switch (lane.kind) {
+    case 'pipeline':
+      return `pipeline:${lane.pipelineId}`;
+    case 'annotation':
+      return `annotation:${lane.tag}`;
+    case 'untagged':
+      return 'untagged';
+  }
+}
+
+function laneLabel(lane: RunLane): string {
+  switch (lane.kind) {
+    case 'pipeline':
+      return lane.pipelineName;
+    case 'annotation':
+      return lane.tag;
+    case 'untagged':
+      return 'Runs with no annotation';
+  }
+}
+
+/**
  * Lanes, refusals and the shared window, from one pass over the rows.
  *
  * The GROUPS are sorted here and their ordering is guaranteed. The `unplottable`
  * list is NOT: it comes back in the order `runs` was given, so the caller owns
  * how it reads. `RunsPage` hands over `visible`, which is newest-first.
+ *
+ * Under `annotation` a run carrying several tags is a bar in EACH of their
+ * lanes, but a refused run is listed ONCE — the refusal is about the row, not
+ * about any lane. The window is unaffected by the repetition: the same bar
+ * yielded twice moves neither edge.
  */
-export function groupRunsByPipeline(runs: readonly RunSummary[]): GroupedRuns {
+export function groupRuns(runs: readonly RunSummary[], by: RunGroupBy): GroupedRuns {
   const unplottable: UnplottableRun[] = [];
   const lanes = new Map<string, RunGroup>();
 
@@ -147,12 +214,15 @@ export function groupRunsByPipeline(runs: readonly RunSummary[]): GroupedRuns {
       unplottable.push({ run, reason });
       continue;
     }
-    let lane = lanes.get(run.pipelineId);
-    if (lane === undefined) {
-      lane = { pipelineId: run.pipelineId, pipelineName: run.pipelineName, bars: [] };
-      lanes.set(run.pipelineId, lane);
+    for (const laneOf of lanesOf(run, by)) {
+      const key = laneKey(laneOf);
+      let lane = lanes.get(key);
+      if (lane === undefined) {
+        lane = { lane: laneOf, key, label: laneLabel(laneOf), bars: [] };
+        lanes.set(key, lane);
+      }
+      lane.bars.push(toRunBar(run));
     }
-    lane.bars.push(toRunBar(run));
   }
 
   const groups = [...lanes.values()];
@@ -160,15 +230,19 @@ export function groupRunsByPipeline(runs: readonly RunSummary[]): GroupedRuns {
     lane.bars.sort((a, b) => a.startedAtMs - b.startedAtMs || a.run.id.localeCompare(b.run.id));
   }
   /* Earliest bar first, so the chart reads top-left to bottom-right. Every tie
-     is broken all the way down — start, then name, then id — because a chart
+     is broken all the way down — start, then label, then key — because a chart
      that reshuffles its lanes between two renders of the same rows is one the
      operator cannot compare against the last one they looked at. `bars[0]` is
      safe: a lane exists only because a bar was pushed into it. */
   groups.sort(
     (a, b) =>
+      /* The untagged lane is the remainder, so it goes LAST whatever its times —
+         a fixed place is what tells it apart from a tag that happens to be
+         spelled like its heading, for a reader who cannot see the styling. */
+      Number(a.lane.kind === 'untagged') - Number(b.lane.kind === 'untagged') ||
       (a.bars[0]?.startedAtMs ?? 0) - (b.bars[0]?.startedAtMs ?? 0) ||
-      a.pipelineName.localeCompare(b.pipelineName) ||
-      a.pipelineId.localeCompare(b.pipelineId),
+      a.label.localeCompare(b.label) ||
+      a.key.localeCompare(b.key),
   );
 
   return {

@@ -154,6 +154,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     // R2 — the joined names the list renders.
     pipelineName: 'Nightly report',
     pipelineVersion: 3,
+    annotations: [],
     triggerName: 'Every morning',
     ...overrides,
   };
@@ -1050,5 +1051,45 @@ describe('U29 runs view toggle', () => {
 
     expect(router.state.location.search).toContain('view=timeline');
     expect(await screen.findByRole('heading', { name: 'Timeline' })).toBeInTheDocument();
+  });
+
+  /**
+   * #1016 — the lane key is a URL param under `?view=`'s rules: absent means
+   * pipeline, the default clears the param, and unrecognised falls back.
+   */
+  it('reads the lane key from ?group=, and writes it back', async () => {
+    listMock.mockResolvedValue(
+      pageOf([run({ id: 'run_t', annotations: ['nightly ops'], startedAt: 1, finishedAt: 2 })]),
+    );
+    const router = createMemoryRouter(ROUTES, {
+      initialEntries: ['/monitor/runs?view=timeline&group=annotation'],
+    });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByRole('heading', { name: 'nightly ops' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'By annotation' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'By pipeline' }));
+    expect(router.state.location.search).toBe('?view=timeline');
+    expect(await screen.findByRole('heading', { name: 'Nightly report' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'By annotation' }));
+    expect(router.state.location.search).toBe('?view=timeline&group=annotation');
+
+    // A view setting, not a filter: switching to List and back keeps it.
+    await userEvent.click(screen.getByRole('button', { name: 'List' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    expect(await screen.findByRole('heading', { name: 'nightly ops' })).toBeInTheDocument();
+  });
+
+  it('falls back to pipeline lanes for an unrecognised ?group=', async () => {
+    renderWithRouter(<RunsPage />, '/monitor/runs?view=timeline&group=colour');
+    expect(await screen.findByRole('heading', { name: 'Alpha' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'By pipeline' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 });

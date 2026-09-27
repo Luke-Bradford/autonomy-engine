@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RunStatusSchema, type RunStatus, type RunSummary } from '@autonomy-studio/shared';
-import { groupRunsByPipeline, toRunBar, unplottableReason } from './runBars';
+import { groupRuns, toRunBar, unplottableReason, type RunGroup } from './runBars';
 
 function run(over: Partial<RunSummary> & Pick<RunSummary, 'id'>): RunSummary {
   return {
@@ -20,6 +20,7 @@ function run(over: Partial<RunSummary> & Pick<RunSummary, 'id'>): RunSummary {
     pipelineId: 'pipe_a',
     pipelineName: 'A',
     pipelineVersion: 1,
+    annotations: [],
     triggerName: null,
     cost: {
       totalCostEstimate: 0,
@@ -93,7 +94,12 @@ describe('U29 toRunBar', () => {
   });
 });
 
-describe('U29 groupRunsByPipeline', () => {
+const groupRunsByPipeline = (runs: RunSummary[]) => groupRuns(runs, 'pipeline');
+const groupRunsByAnnotation = (runs: RunSummary[]) => groupRuns(runs, 'annotation');
+const pipelineIdsOf = (groups: RunGroup[]) =>
+  groups.map((g) => (g.lane.kind === 'pipeline' ? g.lane.pipelineId : `not a pipeline: ${g.key}`));
+
+describe('U29 groupRuns by pipeline', () => {
   /**
    * The reason `pipelineId` was added to `RunSummary` at all. Two pipelines may
    * share a name — `pipelines` is unique on `(owner_id, resource_id)`, not on
@@ -105,7 +111,7 @@ describe('U29 groupRunsByPipeline', () => {
       run({ id: 'r1', pipelineId: 'pipe_a', pipelineName: 'Nightly' }),
       run({ id: 'r2', pipelineId: 'pipe_b', pipelineName: 'Nightly' }),
     ]);
-    expect(groups.map((g) => g.pipelineId)).toEqual(['pipe_a', 'pipe_b']);
+    expect(pipelineIdsOf(groups)).toEqual(['pipe_a', 'pipe_b']);
   });
 
   it('collects a pipeline’s runs into ONE group, oldest bar first', () => {
@@ -134,7 +140,7 @@ describe('U29 groupRunsByPipeline', () => {
       run({ id: 'r3', pipelineId: 'pipe_m', pipelineName: 'Alpha', startedAt: 100 }),
       run({ id: 'r2', pipelineId: 'pipe_a', pipelineName: 'Alpha', startedAt: 100 }),
     ]);
-    expect(groups.map((g) => g.pipelineId)).toEqual(['pipe_a', 'pipe_m', 'pipe_z']);
+    expect(pipelineIdsOf(groups)).toEqual(['pipe_a', 'pipe_m', 'pipe_z']);
   });
 
   /**
@@ -147,7 +153,7 @@ describe('U29 groupRunsByPipeline', () => {
       run({ id: 'r1', pipelineId: 'pipe_a', status: 'queued', finishedAt: null }),
       run({ id: 'r2', pipelineId: 'pipe_b', startedAt: 100, finishedAt: 200 }),
     ]);
-    expect(groups.map((g) => g.pipelineId)).toEqual(['pipe_b']);
+    expect(pipelineIdsOf(groups)).toEqual(['pipe_b']);
     expect(unplottable.map((u) => u.run.id)).toEqual(['r1']);
     expect(unplottable[0]?.reason).toMatch(/enqueued/);
   });
@@ -206,5 +212,98 @@ describe('U29 groupRunsByPipeline', () => {
       run({ id: 'r2', status: 'running', startedAt: 300, finishedAt: null }),
     ]);
     expect(window).toEqual({ from: 100, to: 300 });
+  });
+});
+
+describe('#1016 groupRuns by annotation', () => {
+  /**
+   * A tag list is a set: a run whose version carries two tags is in BOTH lanes.
+   * Picking one would make an order nobody chose decide where the run appears,
+   * and would leave the other lane claiming that tag's workload was lighter.
+   */
+  it('draws a run carrying several tags in EACH of their lanes', () => {
+    const { groups } = groupRunsByAnnotation([
+      run({ id: 'r1', annotations: ['finance', 'nightly'], startedAt: 100, finishedAt: 200 }),
+      run({ id: 'r2', annotations: ['nightly'], startedAt: 300, finishedAt: 400 }),
+    ]);
+    expect(groups.map((g) => [g.label, g.bars.map((b) => b.run.id)])).toEqual([
+      ['finance', ['r1']],
+      ['nightly', ['r1', 'r2']],
+    ]);
+  });
+
+  /** Property 3 — a run with no tag ran, so it is in a lane, not missing. */
+  it('puts every run with no tag in ONE untagged lane', () => {
+    const { groups } = groupRunsByAnnotation([
+      run({ id: 'r1', pipelineId: 'pipe_a', annotations: [] }),
+      run({ id: 'r2', pipelineId: 'pipe_b', annotations: [] }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.lane).toEqual({ kind: 'untagged' });
+    expect(groups[0]?.label).toBe('Runs with no annotation');
+    expect(groups[0]?.bars.map((b) => b.run.id)).toEqual(['r1', 'r2']);
+  });
+
+  /**
+   * The untagged lane is not a tag. A real tag spelled like its label, or like
+   * its key, must still be a lane of its own — merging them would put tagged
+   * runs among the untagged ones.
+   */
+  it('never merges a tag spelled like the untagged lane into it', () => {
+    const { groups } = groupRunsByAnnotation([
+      run({ id: 'none', annotations: [] }),
+      run({ id: 'label', annotations: ['Runs with no annotation'] }),
+      run({ id: 'key', annotations: ['untagged'] }),
+    ]);
+    expect(groups).toHaveLength(3);
+    expect(new Set(groups.map((g) => g.key)).size).toBe(3);
+    const untagged = groups.filter((g) => g.lane.kind === 'untagged');
+    expect(untagged.map((g) => g.bars.map((b) => b.run.id))).toEqual([['none']]);
+  });
+
+  /** Exact and case-sensitive, as U26's filter is — the two must agree on a tag. */
+  it('keeps two tags differing only in case apart', () => {
+    const { groups } = groupRunsByAnnotation([
+      run({ id: 'r1', annotations: ['Prod'] }),
+      run({ id: 'r2', annotations: ['prod'] }),
+    ]);
+    expect(groups.map((g) => g.label).sort()).toEqual(['Prod', 'prod']);
+  });
+
+  /** A refusal is about the ROW, so it is listed once however many tags it has. */
+  it('lists an unplottable multi-tag run ONCE, in no lane', () => {
+    const { groups, unplottable } = groupRunsByAnnotation([
+      run({ id: 'q', status: 'queued', finishedAt: null, annotations: ['a', 'b'] }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unplottable.map((u) => u.run.id)).toEqual(['q']);
+  });
+
+  it('measures ONE window across the lanes, unmoved by a run drawn twice', () => {
+    const { window } = groupRunsByAnnotation([
+      run({ id: 'r1', annotations: ['a', 'b'], startedAt: 100, finishedAt: 200 }),
+      run({ id: 'r2', annotations: [], startedAt: 500, finishedAt: 3_000 }),
+    ]);
+    expect(window).toEqual({ from: 100, to: 3_000 });
+  });
+
+  it('orders lanes by their earliest bar, then by label — and the untagged lane LAST', () => {
+    const { groups } = groupRunsByAnnotation([
+      run({ id: 'r0', annotations: [], startedAt: 50 }),
+      run({ id: 'r1', annotations: ['zulu'], startedAt: 900 }),
+      run({ id: 'r2', annotations: ['beta', 'alpha'], startedAt: 100 }),
+    ]);
+    expect(groups.map((g) => g.label)).toEqual([
+      'alpha',
+      'beta',
+      'zulu',
+      'Runs with no annotation',
+    ]);
+  });
+
+  /** Only the write schema refuses a repeat; a stored one is still one run. */
+  it('draws a run whose stored tags repeat ONCE in that lane', () => {
+    const { groups } = groupRunsByAnnotation([run({ id: 'r1', annotations: ['a', 'a'] })]);
+    expect(groups.map((g) => [g.label, g.bars.length])).toEqual([['a', 1]]);
   });
 });

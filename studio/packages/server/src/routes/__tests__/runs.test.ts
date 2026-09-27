@@ -290,6 +290,44 @@ describe('runs routes (read-only)', () => {
       expect(items.filter((t) => t.startsWith('opt-'))).toEqual(['opt-finance', 'opt-nightly']);
       expect(items).toEqual([...items].sort((a, b) => a.localeCompare(b, 'en')));
     });
+
+    /**
+     * #1016 — a summary carries the annotations of the version the run BOUND, not
+     * whatever the pipeline carries today: two versions of one pipeline with
+     * different tags, one run of each, and each run reports its own version's.
+     */
+    it("carries each run's BOUND version annotations on its summary (#1016)", async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Retagged' });
+      const runOf = (annotations: string[]) => {
+        const version = createPipelineVersion(app.db, {
+          pipelineId: pipeline.id,
+          params: [],
+          outputs: [],
+          nodes: [],
+          edges: [],
+          annotations,
+          catalogVersion: CATALOG_VERSION,
+        });
+        return createRun(app.db, {
+          ownerId: 'local',
+          pipelineVersionId: version.id,
+          triggerId: null,
+          parentRunId: null,
+          params: {},
+        });
+      };
+      const first = runOf(['grp-old', 'grp shared']);
+      const second = runOf([]);
+      const res = await app.inject({ method: 'GET', url: `/api/runs?pipelineId=${pipeline.id}` });
+      expect(res.statusCode).toBe(200);
+      const byId = new Map(
+        paginatedResponseSchema(RunSummarySchema)
+          .parse(res.json())
+          .items.map((r) => [r.id, r.annotations]),
+      );
+      expect(byId.get(first.id)).toEqual(['grp-old', 'grp shared']);
+      expect(byId.get(second.id)).toEqual([]);
+    });
   });
 
   it('GET /api/runs/:id/events returns the append-only event log in order', async () => {

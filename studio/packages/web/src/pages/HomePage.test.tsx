@@ -33,6 +33,7 @@ function runRow(over: Partial<RunSummary> = {}): RunSummary {
     pipelineId: 'pl_1',
     pipelineName: 'Nightly report',
     pipelineVersion: 3,
+    annotations: [],
     triggerName: null,
     cost: { kind: 'none' },
     ...over,

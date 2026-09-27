@@ -202,6 +202,17 @@ export const RunSummarySchema = RunSchema.extend({
   /** `null` for a rerun, or for a run whose trigger has been deleted. */
   triggerName: z.string().nullable(),
   /**
+   * #1016 (U29) — the annotations of the version this run BOUND (F8a), exactly as
+   * stored: the strings U26's `?annotation=` filter matches against, so a lane the
+   * timeline groups by and a filter the list applies agree on what a tag is.
+   *
+   * NO `.default([])`. The column is `NOT NULL`, so a summary without the key is a
+   * broken read, and defaulting it would manufacture "this run carried no tags" —
+   * putting a tagged run in the untagged lane with nothing to show it was wrong
+   * (the #473 shape: an absent fact is never a benign default).
+   */
+  annotations: z.array(z.string()),
+  /**
    * #931 — what this run has been billed, as a bounded per-run SQL aggregate
    * (`repo/run-events.ts::aggregateRunCosts`).
    *
