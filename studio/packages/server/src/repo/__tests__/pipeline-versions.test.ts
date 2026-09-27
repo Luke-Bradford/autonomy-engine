@@ -208,6 +208,9 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     [['prod', 'Prod'], "duplicate annotation 'Prod'"],
     [[' prod'], 'cannot start or end with a space'],
     [['a\nb'], 'line break'],
+    [['a\u2028b'], 'line break'],
+    [['a\u200bb'], 'invisible character'],
+    [['a\u00a0b'], 'other than an ordinary one'],
     [[''], 'cannot be empty'],
   ])('REFUSES annotations %j (#1 F8a) — nothing is written', (annotations, message) => {
     const { db } = freshDb();

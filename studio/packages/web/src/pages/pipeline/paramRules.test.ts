@@ -71,6 +71,11 @@ describe('propertyIssues — the General tab’s save gate (#1 F8a)', () => {
     expect(propertyIssues('', ['prod '])).toEqual([
       'annotation 1: an annotation cannot start or end with a space',
     ]);
+    // An ordinary interior space is fine; a no-break one is not.
+    expect(propertyIssues('', ['data platform'])).toEqual([]);
+    expect(propertyIssues('', ['data\u00a0platform'])).toEqual([
+      'annotation 1: an annotation cannot contain a line break, an invisible character, or a space other than an ordinary one',
+    ]);
   });
 
   it('refuses an over-long description and too many annotations', () => {

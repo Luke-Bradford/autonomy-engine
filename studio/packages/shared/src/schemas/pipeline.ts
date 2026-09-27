@@ -903,9 +903,14 @@ export const AnnotationSchema = z
   .refine((s) => s.trim() === s, {
     message: 'an annotation cannot start or end with a space',
   })
-  // eslint-disable-next-line no-control-regex
-  .refine((s) => !/[\u0000-\u001f\u007f]/.test(s), {
-    message: 'an annotation cannot contain a line break or other control character',
+  // Control characters (a newline among them), Unicode line/paragraph
+  // separators, invisible format characters (zero-width space, joiners, BOM) and
+  // any space other than U+0020 (a no-break space). Each renders as nothing, or
+  // as an ordinary space, so it would make two annotations that LOOK the same and
+  // pass the duplicate check below.
+  .refine((s) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/u.test(s), {
+    message:
+      'an annotation cannot contain a line break, an invisible character, or a space other than an ordinary one',
   });
 
 /**
