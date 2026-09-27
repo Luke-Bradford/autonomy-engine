@@ -28,6 +28,7 @@ import {
   type Trigger,
   omitEmptyLateFields,
 } from '@autonomy-studio/shared';
+import { mapLiteralRef } from './ref-remap.js';
 import {
   getLatestPipelineVersion,
   listConnections,
@@ -250,66 +251,16 @@ function buildOwnerRefMaps(
  * always map; a mismatch just makes the content forms differ, never a false
  * "unchanged"). Reads no DB — pure over the passed maps.
  *
- * That defensiveness is load-bearing rather than belt-and-braces, and it is why
- * this lives here rather than being re-derived from `serializePipeline`: a
- * HISTORIC version can name a connection that has since been hard-deleted, and
- * `remapRef` (the commit-direction path) THROWS on an unmapped literal. Throwing
- * is right when writing a branch — a commit must not emit a dangling ref — and
- * wrong when merely comparing two versions, where the honest answer is "these
- * forms differ".
+ * That defensiveness is load-bearing rather than belt-and-braces, and it is the
+ * ONE way this differs from the commit direction (`remapNode`): a HISTORIC
+ * version can name a connection that has since been hard-deleted, and the commit
+ * THROWS on an unmapped literal. Throwing is right when writing a branch — a
+ * commit must not emit a dangling ref — and wrong when merely comparing two
+ * versions, where the honest answer is "these forms differ". #1106 — both run
+ * through `exportNode`, so that fallback is the only thing that can differ.
  */
 function forwardRemapNode(node: Node, maps: OwnerRefMaps): NodeExport {
-  // M3 (#1117) — the three functions in this reverse-map family take the
-  // `OwnerRefMaps` STRUCT rather than loose positional `Map<string, string>`
-  // arguments. With three same-typed maps a mis-ordered call compiles clean
-  // across four call sites, and the failure is silent in exactly the worst way:
-  // an empty map makes every literal ref read as undecidable, which masks both
-  // sides of the comparison and reports a real hand-edit as `identical`.
-  const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
-  // The three-way (absent / dynamic / literal-mapped) rule, as ONE function
-  // taking its map as an ARGUMENT, so no ref position can drift from another —
-  // divergence here manufactures a false "changed" in the stored-vs-branch
-  // compare, which is worse than a loud failure because it silently mints a
-  // version nobody authored.
-  //
-  // M3 (#1117) made the map a parameter rather than a closed-over variable. With
-  // the singular, two pairs and `call` there are now FIVE ref positions across
-  // THREE maps, and a per-position closure is how they become five subtly
-  // different copies of one rule — the same reasoning `remapNodeToDb`'s
-  // `toDbRef` states in `workspace-apply.ts`.
-  const forwardRef = (id: string, byDbId: Map<string, string>): string =>
-    interpolationMode(id).mode !== 'literal' ? id : (byDbId.get(id) ?? id);
-  const conn = maps.connectionResourceId;
-  const connExport: string | null =
-    connectionId === undefined ? null : forwardRef(connectionId, conn);
-
-  const exported: NodeExport = { ...rest, connectionId: connExport };
-  if (connectionIds !== undefined) {
-    exported.connectionIds = {
-      source: forwardRef(connectionIds.source, conn),
-      sink: forwardRef(connectionIds.sink, conn),
-    };
-  }
-  // M3 (#1117) — the dataset pair, forward-mapped through the DATASET map on the
-  // same rule. Emitted only when the node binds one, so a node with no datasets
-  // produces the byte-identical content form it did before M3.
-  if (datasetIds !== undefined) {
-    const ds = maps.datasetResourceId;
-    // M12 slice 1 (#1220) — an absent sink is OMITTED, not forward-mapped. See
-    // `remapNode` below for why turning absence into `null` here loses data.
-    const sink = datasetIds.sink;
-    exported.datasetIds = {
-      source: forwardRef(datasetIds.source, ds),
-      ...(sink === undefined ? {} : { sink: forwardRef(sink, ds) }),
-    };
-  }
-  if (call) {
-    exported.call = {
-      ...call,
-      pipelineVersionId: forwardRef(call.pipelineVersionId, maps.versionResourceId),
-    };
-  }
-  return exported;
+  return exportNode(node, maps, (dangling) => dangling.danglingId);
 }
 
 /** The content form of a STORED DB version, in resourceId-space — the baseline
@@ -583,36 +534,50 @@ function remapRef(
   describe: () => UnserializableRefDetail,
 ): string | null {
   if (value == null) return null;
-  if (interpolationMode(value).mode !== 'literal') return value; // dynamic — preserve verbatim
-  const resourceId = map.get(value);
-  if (resourceId === undefined) throw new UnserializableRefError(describe());
-  return resourceId;
+  return mapLiteralRef(value, map, () => {
+    throw new UnserializableRefError(describe());
+  });
 }
 
-function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
+/**
+ * #1106 — ONE node's refs, DB ids → `resourceId`s, for BOTH directions that need
+ * it: the commit (`remapNode`, which writes the branch) and the compare
+ * (`forwardRemapNode`, which re-derives a stored row to judge it against the
+ * branch). They differ only in what an unmapped literal becomes, so that is the
+ * one parameter; every ref position is walked here once. Two walkers is how the
+ * directions drift, and a drift is silent in the worst way — the compare reads a
+ * version nobody edited as changed, on every pull, forever.
+ *
+ * `onDangling` receives the ref's detail. Positions are visited in a FIXED order
+ * (singular, connection pair, dataset pair, call) and each detail is built only
+ * when its ref dangles, so the commit's throw names the first dangling ref.
+ */
+function exportNode(
+  node: Node,
+  maps: OwnerRefMaps,
+  onDangling: (dangling: UnserializableRefDetail) => string,
+): NodeExport {
   const { connectionId, connectionIds, datasetIds, call, ...rest } = node;
-  const mappedConnectionId = remapRef(connectionId, maps.connectionResourceId, () => ({
-    ref: 'connection',
-    nodeId: node.id,
-    danglingId: connectionId!,
-  }));
+  const toRid = (
+    ref: string,
+    map: Map<string, string>,
+    kind: UnserializableRefDetail['ref'],
+  ): string =>
+    mapLiteralRef(ref, map, () => onDangling({ ref: kind, nodeId: node.id, danglingId: ref }));
+  const conn = maps.connectionResourceId;
 
-  const exported: NodeExport = { ...rest, connectionId: mappedConnectionId };
+  // `== null`: the DB `connectionId` is `optional()`, and the export shape is `null`.
+  const exported: NodeExport = {
+    ...rest,
+    connectionId: connectionId == null ? null : toRid(connectionId, conn, 'connection'),
+  };
   if (connectionIds !== undefined) {
     // M1 (#1104) — each end remapped independently, and a dangling end names
     // WHICH end it is: "node X references a connection that no longer exists"
     // is not actionable on a node that binds two of them.
     exported.connectionIds = {
-      source: remapRef(connectionIds.source, maps.connectionResourceId, () => ({
-        ref: 'connectionSource',
-        nodeId: node.id,
-        danglingId: connectionIds.source,
-      })),
-      sink: remapRef(connectionIds.sink, maps.connectionResourceId, () => ({
-        ref: 'connectionSink',
-        nodeId: node.id,
-        danglingId: connectionIds.sink,
-      })),
+      source: toRid(connectionIds.source, conn, 'connectionSource'),
+      sink: toRid(connectionIds.sink, conn, 'connectionSink'),
     };
   }
   // M3 (#1117) — the dataset pair, remapped through the DATASET map. Each end
@@ -620,45 +585,33 @@ function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   // INDEPENDENTLY of the connection pair above: the two are orthogonal, so a
   // node may carry either, both or neither.
   if (datasetIds !== undefined) {
-    // M12 slice 1 (#1220) — an ABSENT sink must be OMITTED, and this is the one
-    // site in this file where getting it wrong is silent. `remapRef` maps a
-    // nullish input to `null` (`value == null` catches `undefined` too), so
-    // passing an absent sink straight through would serialize `sink: null` —
-    // which the importer reads as "export stripped a literal" and drops the whole
-    // pair on. A source-only node would lose its dataset binding on a git
-    // round-trip and be reported as an `unresolvedDatasetRef` that never existed.
-    // `envelope.ts` states the null-vs-absent contract this honours.
+    // M12 slice 1 (#1220) — an ABSENT sink must be OMITTED, not exported as
+    // `sink: null`, which the importer reads as "export stripped a literal" and
+    // drops the whole pair on. A source-only node would lose its dataset binding
+    // on a git round-trip and be reported as an `unresolvedDatasetRef` that never
+    // existed. `envelope.ts` states the null-vs-absent contract this honours.
+    const ds = maps.datasetResourceId;
     const sink = datasetIds.sink;
     exported.datasetIds = {
-      source: remapRef(datasetIds.source, maps.datasetResourceId, () => ({
-        ref: 'datasetSource',
-        nodeId: node.id,
-        danglingId: datasetIds.source,
-      })),
-      ...(sink === undefined
-        ? {}
-        : {
-            sink: remapRef(sink, maps.datasetResourceId, () => ({
-              ref: 'datasetSink',
-              nodeId: node.id,
-              danglingId: sink,
-            })),
-          }),
+      source: toRid(datasetIds.source, ds, 'datasetSource'),
+      ...(sink === undefined ? {} : { sink: toRid(sink, ds, 'datasetSink') }),
     };
   }
   if (call) {
-    // call.pipelineVersionId is non-nullable; remapRef never returns null for a
-    // non-null literal input (it either maps it or throws), so the `!` is sound.
     exported.call = {
       ...call,
-      pipelineVersionId: remapRef(call.pipelineVersionId, maps.versionResourceId, () => ({
-        ref: 'call',
-        nodeId: node.id,
-        danglingId: call.pipelineVersionId,
-      }))!,
+      pipelineVersionId: toRid(call.pipelineVersionId, maps.versionResourceId, 'call'),
     };
   }
   return exported;
+}
+
+/** The commit direction: a dangling literal ref THROWS, because a commit must
+ * not emit a ref that resolves to nothing. */
+function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
+  return exportNode(node, maps, (dangling) => {
+    throw new UnserializableRefError(dangling);
+  });
 }
 
 function serializePipeline(
