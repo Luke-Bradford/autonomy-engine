@@ -237,6 +237,17 @@ describe('the fold', () => {
     expect(r.state.variables).toEqual(state.variables);
   });
 
+  it('an append event for a SET node is refused even when the variable could take it', () => {
+    // Only the op check stands between this event and a write: `list` is an
+    // array, so the append itself would apply cleanly.
+    const { e, state } = readyState([set('w', 'list', '${createArray(1)}')]);
+    const r = e.reduce(state, written({ type: 'variable.append' as never, name: 'list' }));
+    expect(r.commands).toEqual([
+      { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+    ]);
+    expect(r.state.variables['list']).toEqual([]);
+  });
+
   it('an event for a node a loop timeout abandoned folds as a no-op', () => {
     const e = eng(
       [set('w', 'n', '5')],
