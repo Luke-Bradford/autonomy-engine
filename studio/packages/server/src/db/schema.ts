@@ -193,6 +193,10 @@ export const pipelines = sqliteTable(
     // pre-S6b rows are genuinely uncapped, so the nullable ADD COLUMN backfill
     // is truthful, not manufactured (#473's lesson does not apply).
     concurrency: integer('concurrency'),
+    // #1380 — the Factory Resources folder. NULL = top level, which every
+    // pre-#1380 pipeline truthfully is. Organisational, never behavioural, so
+    // it is on the mutable row: moving a pipeline must not mint a version.
+    folder: text('folder'),
     // #3 G5a (item ②) — soft-delete/archive flag. NOT NULL DEFAULT false: every
     // pre-G5a row is un-archived (a truthful backfill, not a manufactured
     // absent value). Archiving disables dependent triggers and bars dispatch;

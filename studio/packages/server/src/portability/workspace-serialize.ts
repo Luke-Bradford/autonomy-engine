@@ -27,6 +27,7 @@ import {
   type ResourceKind,
   type Trigger,
   omitEmptyLateFields,
+  omitEmptyRowFields,
 } from '@autonomy-studio/shared';
 import { mapLiteralRef } from './ref-remap.js';
 import {
@@ -627,6 +628,9 @@ function serializePipeline(
   // key, so every file committed before V1 keeps its exact bytes (and its
   // `sourceBlobSha`), and the first Commit after V1 rewrites nothing.
   omitEmptyLateFields(versionExport);
+  // #1380 — likewise a pipeline with no folder: no key, same bytes as before.
+  const row: Partial<Pipeline> = { ...pipeline };
+  omitEmptyRowFields(row);
   return ExportEnvelopeSchema.parse({
     schemaVersion: SCHEMA_VERSION,
     catalogVersion: CATALOG_VERSION,
@@ -635,7 +639,7 @@ function serializePipeline(
     // A workspace-git file preserves refs (nothing is stripped), so nothing
     // needs a connection REBIND on import: strippedConnectionRefs is empty.
     data: PipelineExportDataSchema.parse({
-      pipeline,
+      pipeline: row,
       versions: [versionExport],
       strippedConnectionRefs: [],
     }),

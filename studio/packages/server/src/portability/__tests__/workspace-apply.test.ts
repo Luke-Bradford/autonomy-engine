@@ -561,6 +561,51 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
   });
 
+  it('#1380 — a FOLDER move patches the row as `updated` and mints NO version; a new pipeline arrives filed', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, baseVersion(pipe.id));
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    expect(tgtPipe.folder).toBeNull();
+
+    updatePipeline(db, pipe.id, { folder: 'Nightly' });
+    const filed = createPipeline(db, { ownerId: 'local', name: 'Q', folder: 'Ops' });
+    createPipelineVersion(db, baseVersion(filed.id));
+    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
+
+    const moved = result.applied.find((a) => a.kind === 'pipeline' && a.resourceId === pipe.resourceId);
+    expect(moved?.action).toBe('updated');
+    expect(getPipeline(tgt, tgtPipe.id)!.folder).toBe('Nightly');
+    expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
+    expect(getPipelineByResourceId(tgt, 'local', filed.resourceId)!.folder).toBe('Ops');
+
+    // ...and moving it back OUT is a real change too: the file loses the key.
+    updatePipeline(db, pipe.id, { folder: null });
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha3', 'main');
+    expect(getPipeline(tgt, tgtPipe.id)!.folder).toBeNull();
+  });
+
+  it('#1380 REFUSES a bad folder in a branch file on the UPDATE path, naming the file', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, baseVersion(pipe.id));
+    const incoming = snapshot(db);
+    incoming.pipelines[0]!.data.pipeline.folder = 'a/b';
+
+    let thrown: unknown;
+    try {
+      applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ZodError);
+    const paths = (thrown as ZodError).issues.map((i) => i.path.join('.'));
+    expect(paths).toContain(`pipeline ${incoming.pipelines[0]!.path}.folder`);
+    expect(getPipeline(db, pipe.id)!.folder).toBeNull();
+  });
+
   it('RESTORES an archived pipeline whose file reappears, never a duplicate (spec note 1)', () => {
     const db = freshDb().db;
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });

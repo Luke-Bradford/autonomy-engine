@@ -151,6 +151,12 @@ export const PipelineExportSchema = PipelineSchema.omit({
   archived: true,
 }).extend({
   resourceId: exportResourceId,
+  // #1380 — ABSENT means top level. A pipeline with no folder is written
+  // without the key (`omitEmptyRowFields`), so every file from before #1380
+  // keeps its bytes; `.nullable()` as well so a hand-written `"folder": null`
+  // means the same thing rather than failing the parse. Lenient here, like
+  // `concurrency`: the import's write schema is where a bad folder is refused.
+  folder: z.string().nullable().optional(),
 });
 export type PipelineExport = z.infer<typeof PipelineExportSchema>;
 

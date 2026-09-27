@@ -205,6 +205,21 @@ describe('pipelineRowContentForm', () => {
     );
   });
 
+  it('#1380 — a FOLDER is row content: a move differs, and no folder is byte-identical to an absent key', () => {
+    const base = pipelineRowContentForm(pipelineData());
+    expect(pipelineRowContentForm(pipelineData({ pipeline: { folder: 'ops' } }))).not.toBe(base);
+    // A DB row carries `folder: null`; a git file written before #1380 (or by
+    // it, for a top-level pipeline) carries no key. They must compare EQUAL, or
+    // every existing pipeline would read as drifted and be rewritten.
+    expect(pipelineRowContentForm(pipelineData({ pipeline: { folder: null } }))).toBe(base);
+    expect(pipelineContentForm(pipelineData({ pipeline: { folder: null } }))).toBe(
+      pipelineContentForm(pipelineData()),
+    );
+    expect(pipelineContentForm(pipelineData({ pipeline: { folder: null } }))).not.toContain(
+      'folder',
+    );
+  });
+
   it('is EQUAL when only the display NAME differs — the reconcile carries that signal itself', () => {
     expect(pipelineRowContentForm(pipelineData({ pipeline: { name: 'Renamed' } }))).toBe(
       pipelineRowContentForm(pipelineData()),

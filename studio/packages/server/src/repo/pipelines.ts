@@ -148,7 +148,8 @@ export function listPipelinesPage(
 }
 
 /** Only `name`, `concurrency` (#5 S6b — the live admission cap, deliberately
- * mutable/repairable) and `ownerId` (unused by MVP callers) are mutable here —
+ * mutable/repairable), `folder` (#1380) and `ownerId` (unused by MVP callers)
+ * are mutable here —
  * the graph itself is never edited in place; every graph change is a new
  * `PipelineVersion` row (see `pipeline-versions.ts`). NOTE the parse below is
  * the LENIENT read schema: cap strictness is the HTTP boundary's job
@@ -157,10 +158,15 @@ export function listPipelinesPage(
 export function updatePipeline(
   db: Db,
   id: string,
-  patch: Partial<Pick<NewPipeline, 'name' | 'ownerId' | 'concurrency'>>,
+  patch: Partial<Pick<NewPipeline, 'name' | 'ownerId' | 'concurrency' | 'folder'>>,
 ): Pipeline | null {
   const existing = getPipeline(db, id);
   if (!existing) return null;
+  // #1380 — unlike the cap, a folder IS checked here: the git apply patches it
+  // straight from a branch file, which is outside input, and a bad folder has no
+  // fail-closed use site to fall back on. The path names the field, so the
+  // apply's attribution reads `pipeline <file>.folder`.
+  if (patch.folder !== undefined) NewPipelineSchema.pick({ folder: true }).parse(patch);
   const updated = PipelineSchema.parse({ ...existing, ...patch, updatedAt: Date.now() });
   db.update(pipelines).set(updated).where(eq(pipelines.id, id)).run();
   return updated;

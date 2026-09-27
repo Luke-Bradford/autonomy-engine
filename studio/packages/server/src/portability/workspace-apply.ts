@@ -1322,7 +1322,7 @@ export function applyWorkspace(
           const created = attributedTo(`pipeline ${inc.path}`, () =>
             createPipeline(
               db,
-              { ownerId, name: row.name, concurrency: row.concurrency },
+              { ownerId, name: row.name, concurrency: row.concurrency, folder: row.folder ?? null },
               inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
             ),
           );
@@ -1333,9 +1333,12 @@ export function applyWorkspace(
         } else {
           pipelineId = existing.id;
           resourceId = existing.resourceId;
-          const rowPatch: { name?: string; concurrency?: number | null } = {};
+          const rowPatch: { name?: string; concurrency?: number | null; folder?: string | null } =
+            {};
           if (row.name !== existing.name) rowPatch.name = row.name;
           if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
+          // #1380 — a file with no `folder` key is a top-level pipeline.
+          if ((row.folder ?? null) !== existing.folder) rowPatch.folder = row.folder ?? null;
           if (Object.keys(rowPatch).length > 0) {
             attributedTo(`pipeline ${inc.path}`, () => updatePipeline(db, existing.id, rowPatch));
           }
@@ -1415,7 +1418,7 @@ export function applyWorkspace(
           if (existing.archived) {
             restorePipeline(db, existing.id);
             action = 'restored';
-          } else if (willMint || rowPatch.concurrency !== undefined) {
+          } else if (willMint || rowPatch.concurrency !== undefined || 'folder' in rowPatch) {
             action = 'updated';
           } else if (rowPatch.name !== undefined) {
             action = 'renamed';

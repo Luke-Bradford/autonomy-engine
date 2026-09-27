@@ -452,6 +452,21 @@ describe('serializeWorkspace', () => {
     expect(file!.contents).not.toContain('annotations');
   });
 
+  // #1380 — the same rule on the ROW: a pipeline with no folder must serialize
+  // to the bytes it had before folders existed.
+  it('#1380 — a top-level pipeline serializes with no `folder` key; a filed one carries it', () => {
+    const { db } = freshDb();
+    const loose = createPipeline(db, { ownerId: 'local', name: 'Loose' });
+    createPipelineVersion(db, baseVersion(loose.id));
+    const filed = createPipeline(db, { ownerId: 'local', name: 'Filed', folder: 'Nightly' });
+    createPipelineVersion(db, baseVersion(filed.id));
+
+    const files = serializeWorkspace(db, 'local');
+    const looseFile = files.find((f) => f.path === 'pipelines/loose.json')!;
+    expect(looseFile.contents).not.toContain('folder');
+    expect(envelopeAt(files, 'pipelines/filed.json').data.pipeline.folder).toBe('Nightly');
+  });
+
   it('#1 F8a — a description and annotations serialize', () => {
     const { db } = freshDb();
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });

@@ -11,10 +11,12 @@ import {
   type ExportEnvelope,
   type Node,
   type NodeExport,
+  type Pipeline,
   type PipelineVersion,
   type PipelineVersionExport,
   type TriggerExportData,
   omitEmptyLateFields,
+  omitEmptyRowFields,
 } from '@autonomy-studio/shared';
 import {
   getConnection,
@@ -195,13 +197,18 @@ export function exportPipeline(db: Db, id: string, ownerId: string): ExportEnvel
     toPipelineVersionExport(version, strippedConnectionRefs),
   );
 
+  // #1380 — a top-level pipeline exports with no `folder` key (the same bytes
+  // as before folders existed); `serializePipeline` applies the same rule.
+  const row: Partial<Pipeline> = { ...pipeline };
+  omitEmptyRowFields(row);
+
   return ExportEnvelopeSchema.parse({
     schemaVersion: SCHEMA_VERSION,
     catalogVersion: CATALOG_VERSION,
     kind: 'pipeline',
     exportedAt: Date.now(),
     data: PipelineExportDataSchema.parse({
-      pipeline,
+      pipeline: row,
       versions,
       strippedConnectionRefs: Array.from(strippedConnectionRefs),
     }),

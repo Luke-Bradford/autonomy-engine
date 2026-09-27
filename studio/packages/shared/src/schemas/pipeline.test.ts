@@ -13,6 +13,7 @@ import {
   OutputTypeSchema,
   ParamSchema,
   ParamTypeSchema,
+  PipelineFolderSchema,
   PipelineSchema,
   PipelineVersionSchema,
   PositionSchema,
@@ -374,6 +375,7 @@ const pipeline = {
   ownerId: null,
   name: 'My pipeline',
   concurrency: null,
+  folder: null,
   archived: false,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
@@ -418,6 +420,42 @@ describe('PipelineSchema', () => {
   });
 });
 
+// #1380 — a pipeline's folder lives on the mutable ROW (like `name`), not the
+// immutable version doc: moving a pipeline must not mint a version.
+describe('PipelineFolderSchema (#1380)', () => {
+  it('accepts an ordinary label, spaces inside included', () => {
+    expect(PipelineFolderSchema.parse('Nightly jobs')).toBe('Nightly jobs');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['leading space', ' ops'],
+    ['trailing space', 'ops '],
+    ['a newline', 'ops\nprod'],
+    ['a zero-width space', 'ops\u200bprod'],
+    ['a no-break space', 'ops\u00a0prod'],
+    ['a slash (reserved for nesting)', 'ops/prod'],
+    ['101 characters', 'x'.repeat(101)],
+  ])('refuses %s', (_label, value) => {
+    expect(PipelineFolderSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('says why a slash is refused', () => {
+    const result = PipelineFolderSchema.safeParse('ops/prod');
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toMatch(/cannot contain '\/'/);
+  });
+});
+
+describe('PipelineSchema — folder (#1380)', () => {
+  it('REQUIRES `folder` with NO default (a nullable column always reads present; #473)', () => {
+    const { folder, ...withoutFolder } = pipeline;
+    void folder;
+    expect(() => PipelineSchema.parse(withoutFolder)).toThrow();
+    expect(PipelineSchema.parse({ ...pipeline, folder: 'ops' }).folder).toBe('ops');
+  });
+});
+
 describe('NewPipelineSchema', () => {
   it('accepts a payload without server-set fields', () => {
     // `archived` is server-set too (#3 G5a — always born false, never a create
@@ -448,6 +486,13 @@ describe('NewPipelineSchema', () => {
     expect(
       NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: null }).concurrency,
     ).toBeNull();
+  });
+
+  it('#1380 — defaults folder to null (top level) and refuses a bad folder on write', () => {
+    expect(NewPipelineSchema.parse({ ownerId: null, name: 'p' }).folder).toBeNull();
+    expect(NewPipelineSchema.parse({ ownerId: null, name: 'p', folder: 'ops' }).folder).toBe('ops');
+    expect(() => NewPipelineSchema.parse({ ownerId: null, name: 'p', folder: 'a/b' })).toThrow();
+    expect(() => NewPipelineSchema.parse({ ownerId: null, name: 'p', folder: '' })).toThrow();
   });
 
   it('rejects zero, negative, and non-integer caps on write', () => {
