@@ -22,6 +22,7 @@ import {
   paramDefaultNote,
   paramNameNote,
   withRequired,
+  withoutDefault,
   withVariableType,
 } from './paramRules';
 
@@ -264,16 +265,16 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
       return;
     }
     field.setError(null);
-    if (parsed.has) {
-      update({ ...param, default: parsed.value });
-    } else {
-      // Blank means NO default, which is the absence of the key, not
-      // `default: undefined` — `resolveRunParams` reads it with `hasOwnProperty`.
-      const { default: cleared, ...rest } = param;
-      void cleared; // discard: lint has no ignoreRestSiblings here
-      update(rest);
-    }
+    update(parsed.has ? { ...param, default: parsed.value } : withoutDefault(param));
   }
+
+  // #844 4c — a blank field says "no default", so `''` needs its own control.
+  // Only a `string` has an empty value to offer (a `json` field takes `""`
+  // typed; number/boolean/secret have none), and only a BLANK field needs it,
+  // so the tick box appears on no other row: the clutter that ruled out a
+  // has-default checkbox on every row does not arise.
+  const emptyString = param.type === 'string' && field.draft === '';
+  const isEmptyString = 'default' in param && param.default === '';
 
   return (
     <ContractRow
@@ -327,10 +328,25 @@ export function ParamRow({ store, index, param }: { store: Store; index: number;
           <span className="page-hint">
             {param.required
               ? 'Required, but this stored default already satisfies it — a run is never asked for a value. Blank the field to make the param truly required.'
-              : 'Leave blank for no default.'}
+              : emptyString && isEmptyString
+                ? 'The default is the empty string.'
+                : 'Leave blank for no default.'}
           </span>
         </label>
       )}
+      {emptyString && (!param.required || isEmptyString) ? (
+        <label className="contract-check">
+          <input
+            type="checkbox"
+            aria-label={`param ${index + 1} empty-string default`}
+            checked={isEmptyString}
+            onChange={(e) =>
+              update(e.target.checked ? { ...param, default: '' } : withoutDefault(param))
+            }
+          />
+          Empty string
+        </label>
+      ) : null}
       {field.error ? (
         <p className="error" role="alert">
           {field.error}

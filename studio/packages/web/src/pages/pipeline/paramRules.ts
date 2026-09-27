@@ -263,9 +263,9 @@ export type DefaultParse =
  * referenced even though the run coerces it fine.
  *
  * BLANK means "no default" — not "the empty string". A string param that wants
- * `''` as its default cannot be authored here; that is a known, narrow gap, and
- * the alternative (a separate has-default checkbox on every row) buys one edge
- * case with permanent form clutter.
+ * `''` as its default says so with the row's "Empty string" tick box
+ * (`ParamRow`, #844 4c), which appears only on a blank string field rather than
+ * as a has-default checkbox on every row.
  */
 export function coerceDefaultInput(type: ParamType, raw: string): DefaultParse {
   const text = raw.trim();
@@ -391,8 +391,16 @@ export function paramDefaultNote(p: Param): string | null {
  * doc that arrives holding one.
  */
 export function withRequired(p: Param, required: boolean): Param {
-  if (!required) return { ...p, required: false };
+  return required ? { ...withoutDefault(p), required: true } : { ...p, required: false };
+}
+
+/**
+ * The param with NO default: the key ABSENT, not `default: undefined` —
+ * `resolveRunParams` reads it with `hasOwnProperty`, so a present-but-undefined
+ * key would mean "the default is undefined".
+ */
+export function withoutDefault(p: Param): Param {
   const { default: dropped, ...rest } = p;
   void dropped; // discard: lint has no ignoreRestSiblings here
-  return { ...rest, required: true };
+  return rest;
 }
