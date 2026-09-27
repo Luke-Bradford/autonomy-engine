@@ -75,6 +75,11 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 
 ### D2 — Parameters vs Variables
 
+> **The Variables half is SUPERSEDED by [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md) (V-series, #844).** It keeps what
+> this bullet settled and corrects two premises that no longer hold: there is no `parallel`
+> container (the guard now covers parallel foreach AND unordered DAG nodes, V-D6), and
+> rerun-from-failed must carry variables after all (V-D7). F5a/F5b/F5c/F6 below map onto V1-V5.
+
 - **Params** stay read-only-in-run. Type set = ADF parity **String/Int/Float/Bool/Array/
   Object**. (`SecureString` — see D8; NOT folded into today's `secret`.)
 - **Variables** — NEW, mutable in-run. `VariableDef = { name, type, default? }`. **Types =
@@ -393,10 +398,10 @@ rerun (gated).**
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
 | F3 | `policy.timeout` → `node.failed{code:timeout}` event |
 | F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule — **SHIPPED 2026-09-25** (MVP half of resolved-q2: prohibit, not the opaque handle; built-block below). The catalog-level `secure*Fields` of the D1 contract are NOT part of it — still unowned. No canvas editor for `policy` exists yet (retry/timeout have none either) |
-| F5a | Variables schema + `RunState.variables` state |
-| F5b | `${vars}` substitution namespace + validateRefs |
-| F5c | parallel-mutation hard-reject (determinism guard) |
-| F6 | `set_variable`/`append_variable`/`return` control activities |
+| F5a | Variables schema + `RunState.variables` state — **superseded by V1/V2** ([`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md)) |
+| F5b | `${vars}` substitution namespace + validateRefs — **superseded by V2** |
+| F5c | parallel-mutation hard-reject (determinism guard) — **superseded by V4/V5** (V-D6: parallel foreach + unordered DAG nodes) |
+| F6 | `set_variable`/`append_variable`/`return` control activities — set/append **superseded by V5**; `return` waits on pipeline outputs becoming real |
 | F7a | global_params table + REST |
 | F7b | `${global}` resolver + explicit-namespace validation |
 | F7c | secure globals → secret store |
@@ -465,6 +470,8 @@ rerun (gated).**
    Spec both; build the prohibit first.
 3. **Variables in parallel — hard-reject** (current design), with an explicit
    `allowNondeterministicVars` container opt-in. Matches the engine's deterministic posture.
+   *(2026-09-27: kept by V-D6, which applies it to parallel foreach and unordered DAG nodes, as no
+   `parallel` container exists.)*
 4. **Rerun-from-failed `call_pipeline`** — decided in the RS sub-spec; default lean =
    always spawn a fresh child for any non-frontier call node (provenance-mapping is the
    optimization, only if reuse is needed).
