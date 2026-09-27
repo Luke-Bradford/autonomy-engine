@@ -1092,9 +1092,12 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     sourceRunId: z.string(),
     /** Top-level node ids copied as terminal-`success` (the successful prefix). */
     frontier: z.array(z.string()),
-    /** Per-frontier-node stored outputs (`nodeId → {name → value}`). Subsumes the
-     * spec's `copiedVariables` — the engine's only run-level writable channel is
-     * per-node `outputs`; there is no separate variables store. */
+    /** Per-frontier-node stored outputs (`nodeId → {name → value}`). This once
+     * claimed to subsume the RS spec's `copiedVariables`, when outputs were the
+     * only run-level writable channel. Since #844 V2 `RunState.variables` is a
+     * separate store (seeded from defaults, so a rerun starts from them); V5
+     * carries the copied frontier's writes as `copiedVariableWrites` (spec V-D7),
+     * together with the first thing that can write one. */
     copiedOutputs: z.record(z.string(), z.record(z.string(), z.unknown())),
     /** Fully-completed containers copied as terminal units (`containerId → state`);
      * RS3 decides which containers are copiable, this fold applies them. */

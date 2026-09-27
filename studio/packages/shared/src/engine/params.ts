@@ -2151,8 +2151,10 @@ export function validatePipelineDoc(doc: ValidatedDoc, options: ValidateDocOptio
  * The doc shape the save-time validators read. `variables` (#844 V1) is
  * OPTIONAL here, and only here: the server gate hands over the parsed write doc,
  * which always carries it (the schema defaults it to `[]`), so absence can only
- * come from a caller that has no variables to check. The canvas badge is that
- * caller until V3 gives it a Variables editor (see `validateCanvas`).
+ * come from a caller that has no variables to check, and is read as NONE: a
+ * `${vars.x}` read is then refused, never waved through (`variableMapOf`). The
+ * canvas passes them since V2 (`validateCanvas`); making the field required is
+ * #1359, with V3's editor.
  */
 export type ValidatedDoc = Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> & {
   variables?: readonly VariableDef[];

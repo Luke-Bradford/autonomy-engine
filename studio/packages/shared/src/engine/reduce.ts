@@ -78,7 +78,10 @@ import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 //     or, for `wait: false` (#796 item 2), until `call.detached`.
 // ---------------------------------------------------------------------------
 
-/** The immutable graph the reducer walks. Params/outputs arrive via events. */
+/**
+ * The immutable graph the reducer walks. Params/outputs arrive via events;
+ * variables start from the doc's declared defaults.
+ */
 export type EngineDoc = Pick<PipelineVersion, 'nodes' | 'edges'> & {
   /** Control-flow containers (P2c). Optional/`[]` → a flat P2b DAG walk. */
   containers?: PipelineVersion['containers'];
