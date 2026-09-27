@@ -180,7 +180,15 @@ export function restoreBodyFrom(
   v: PipelineVersion,
   basedOnVersionId: string | null,
 ): PipelineVersionWrite {
-  return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs, basedOnVersionId);
+  return toVersionBody(
+    v.nodes,
+    v.edges,
+    v.containers,
+    v.params,
+    v.outputs,
+    v.variables,
+    basedOnVersionId,
+  );
 }
 
 /**
@@ -198,6 +206,7 @@ export interface DocSnapshot {
   readonly containers: readonly unknown[];
   readonly params: readonly unknown[];
   readonly outputs: readonly unknown[];
+  readonly variables: readonly unknown[];
 }
 
 /**
@@ -219,7 +228,8 @@ export function docUnchanged(before: DocSnapshot, after: DocSnapshot): boolean {
     before.edges === after.edges &&
     before.containers === after.containers &&
     before.params === after.params &&
-    before.outputs === after.outputs
+    before.outputs === after.outputs &&
+    before.variables === after.variables
   );
 }
 

@@ -693,6 +693,9 @@ export function PipelineCanvas({
       // edit can be silently overwritten by the rebase.
       const savedParams = store.getState().params;
       const savedOutputs = store.getState().outputs;
+      // #844 V1 — no action writes `variables` yet (V3 adds the editor), so this
+      // race check cannot fire today; it is here so the editor inherits it.
+      const savedVariables = store.getState().variables;
       try {
         const created = await createPipelineVersion(
           pipelineId,
@@ -702,6 +705,7 @@ export function PipelineCanvas({
             savedContainers,
             savedParams,
             savedOutputs,
+            savedVariables,
             basedOnVersionId,
           ),
         );
@@ -714,6 +718,7 @@ export function PipelineCanvas({
               containers: savedContainers,
               params: savedParams,
               outputs: savedOutputs,
+              variables: savedVariables,
             },
             s,
           )

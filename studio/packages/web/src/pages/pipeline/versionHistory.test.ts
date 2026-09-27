@@ -316,13 +316,14 @@ describe('describePublishRefusal', () => {
 });
 
 describe('restoreBodyFrom', () => {
-  it('carries the five doc arrays of the version it is given', () => {
+  it('carries the six doc arrays of the version it is given', () => {
     const v = version({
       version: 3,
       nodes: [{ id: 'n_z', type: 'http_request', config: {}, position: { x: 1, y: 2 } }],
       edges: [],
       params: [{ name: 'p', type: 'string', required: false }],
       outputs: [{ name: 'o', type: 'string' }],
+      variables: [{ name: 'count', type: 'number', default: 0 }],
     });
 
     expect(restoreBodyFrom(v, 'pv_head')).toEqual({
@@ -331,6 +332,7 @@ describe('restoreBodyFrom', () => {
       containers: v.containers,
       params: v.params,
       outputs: v.outputs,
+      variables: v.variables,
       // #904 — a restore declares its CAS basis like any other save.
       basedOnVersionId: 'pv_head',
     });
@@ -345,6 +347,14 @@ describe('restoreBodyFrom', () => {
       containers: [{ id: 'c_1', kind: 'loop', children: ['n_a'] }],
     });
     expect(restoreBodyFrom(v, null).containers).toEqual(v.containers);
+  });
+
+  // #844 V1 — the same lesson for variables: no UI edits them yet, so a restore
+  // that dropped them would be the only witness, and it would look like a
+  // version that never declared any.
+  it('carries variables', () => {
+    const v = version({ variables: [{ name: 'seen', type: 'array', default: ['a'] }] });
+    expect(restoreBodyFrom(v, null).variables).toEqual(v.variables);
   });
 
   /* The server re-stamps `catalogVersion` and mints the identity, so sending
@@ -413,7 +423,7 @@ describe('docUnchanged', () => {
      action mints a fresh array, so identity is what distinguishes "the operator
      edited during the POST" from "nothing happened". */
   function doc() {
-    return { nodes: [], edges: [], containers: [], params: [], outputs: [] };
+    return { nodes: [], edges: [], containers: [], params: [], outputs: [], variables: [] };
   }
 
   it('holds when the write sees back the arrays it snapshotted', () => {
@@ -426,7 +436,14 @@ describe('docUnchanged', () => {
      actions only `params`/`outputs`. A check that skipped any one of them would
      let that action's edits be silently overwritten by the rebase, which is the
      exact data loss this guard exists to stop. */
-  for (const field of ['nodes', 'edges', 'containers', 'params', 'outputs'] as const) {
+  for (const field of [
+    'nodes',
+    'edges',
+    'containers',
+    'params',
+    'outputs',
+    'variables',
+  ] as const) {
     it(`fails when only \`${field}\` was replaced`, () => {
       const before = doc();
       expect(docUnchanged(before, { ...before, [field]: [] })).toBe(false);

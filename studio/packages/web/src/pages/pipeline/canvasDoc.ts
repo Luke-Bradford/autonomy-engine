@@ -6,6 +6,7 @@ import {
   type Node,
   type Output,
   type Param,
+  type VariableDef,
 } from '@autonomy-studio/shared';
 import type { PipelineVersionWrite } from '../../api/pipelines';
 
@@ -36,6 +37,10 @@ export function toVersionBody(
   containers: Container[],
   params: Param[],
   outputs: Output[],
+  // #844 V1 — carried from the store before any editor exists (V3 adds one):
+  // a version can already declare variables through the API or a git import,
+  // and a body without them would have the write schema default them to `[]`.
+  variables: VariableDef[],
   // #904 — the version this write is based on (`canvasStore.loaded`), or `null`
   // for "this pipeline has no versions yet". A REQUIRED parameter, deliberately
   // not an optional one defaulting to `null`: a caller that forgets it must
@@ -48,6 +53,7 @@ export function toVersionBody(
   return {
     params,
     outputs,
+    variables,
     containers,
     nodes,
     edges,
@@ -67,6 +73,10 @@ export function validateCanvas(
   containers: Container[],
   params: Param[],
 ): string[] {
+  // #844 V1 — `variables` is NOT passed yet, the one deliberate exception to
+  // "the badge shows exactly what the server refuses". Nothing on the canvas can
+  // edit a variable until V3, and a stored one already passed the server gate;
+  // V3 threads them through here with the editor that can make them wrong.
   return validatePipelineDoc({ params, nodes, edges, containers });
 }
 

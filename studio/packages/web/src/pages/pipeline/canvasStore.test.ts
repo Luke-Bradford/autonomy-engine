@@ -1643,6 +1643,56 @@ describe('canvasStore — container membership (U6d)', () => {
   });
 });
 
+/**
+ * #844 V1 — declared variables are carried as WORKING state before any editor
+ * exists (V3 adds one). A version can already declare them through the API or a
+ * git import, and `toVersionBody` builds the save body field by field, so a
+ * store that did not hold them would drop them on the operator's next Save:
+ * the write schema defaults an absent key to `[]`, and nothing would say so.
+ */
+describe('canvasStore — variables ride through a canvas save (#844 V1)', () => {
+  const variables = [
+    { name: 'count', type: 'number' as const, default: 0 },
+    { name: 'seen', type: 'array' as const, default: [{ at: 1 }] },
+  ];
+
+  it('seeds variables from the loaded version and sends them on save', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ variables }));
+    s.getState().addParam(); // an unrelated edit, so this is a real re-save
+    const st = s.getState();
+    const body = toVersionBody(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.params,
+      st.outputs,
+      st.variables,
+      st.loaded?.id ?? null,
+    );
+    expect(body.variables).toEqual(variables);
+  });
+
+  it('deep-copies a nested default rather than aliasing the loaded version', () => {
+    const s = createCanvasStore();
+    const v = version({ variables });
+    s.getState().loadVersion(v);
+    (s.getState().variables[1]!.default as { at: number }[])[0]!.at = 99;
+    expect((v.variables[1]!.default as { at: number }[])[0]!.at).toBe(1);
+  });
+
+  it('keeps variables across an undo, and clears them for a blank canvas', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ variables }));
+    s.getState().addParam();
+    s.getState().undo();
+    expect(s.getState().variables).toEqual(variables);
+
+    s.getState().loadVersion(null);
+    expect(s.getState().variables).toEqual([]);
+  });
+});
+
 describe('canvasStore — params/outputs as WORKING state (U16)', () => {
   it('seeds both from the loaded version', () => {
     const s = createCanvasStore();
@@ -1988,6 +2038,7 @@ describe('canvasStore — back-edges (U6e)', () => {
       st.containers,
       st.params,
       st.outputs,
+      st.variables,
       st.loaded?.id ?? null,
     );
     const persisted = body.edges.find((e) => e.from === 'n_b');
@@ -3161,7 +3212,15 @@ describe('canvasStore — duplicateNode (U21)', () => {
     s.getState().duplicateNode('n_b');
 
     const st = s.getState();
-    const body = toVersionBody(st.nodes, st.edges, st.containers, st.params, st.outputs, null);
+    const body = toVersionBody(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.params,
+      st.outputs,
+      st.variables,
+      null,
+    );
     expect(body.nodes).toHaveLength(3);
     expect(body.nodes.filter((n) => n.type === 'llm_call')).toHaveLength(2);
   });
