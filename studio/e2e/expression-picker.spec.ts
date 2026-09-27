@@ -149,6 +149,37 @@ test.describe('U8a — expression insert flyout', () => {
     await expectQuiet(page, problems);
   });
 
+  test('a declared pipeline VARIABLE is offered, and the read reaches the stored version (#844 V2)', async ({
+    page,
+  }) => {
+    // Seeded through the API: the Variables tab is V3. What this proves is the
+    // whole read path a browser sees — the flyout lists the variable (so the
+    // canvas validator it probes through knows it is declared), and the server
+    // gate accepts `${vars.<name>}` on save.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'v2 read a variable', {
+      nodes: [
+        { id: 'call', type: 'http_request', position: { x: 0, y: 0 }, config: { method: 'GET' } },
+      ],
+      variables: [{ name: 'baseUrl', type: 'string', default: 'https://seed.test' }],
+    });
+
+    await nodeById(page, 'call').click();
+    await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
+    await expect(panel(page).getByText('Pipeline variables')).toBeVisible();
+    await panel(page)
+      .getByRole('button', { name: /^baseUrl/ })
+      .click();
+    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue('${vars.baseUrl}');
+    await panel(page).getByRole('button', { name: 'Apply config' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id, 'call')).toMatchObject({ url: '${vars.baseUrl}' });
+
+    await expectQuiet(page, problems);
+  });
+
   test('a type-checked field offers only what it would accept', async ({ page }) => {
     // A `filter`'s `items` must resolve to an ARRAY and is whole-value, so the
     // picker is in REPLACE mode there. Offering a string reference would destroy
