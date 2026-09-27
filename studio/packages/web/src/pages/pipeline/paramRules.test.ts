@@ -354,7 +354,9 @@ describe('#844 V3 — variable rows', () => {
       true,
     );
     expect(withVariableType(variable({ type: 'string', default: 'hi' }), 'number').default).toBe(0);
-    expect(withVariableType(variable({ type: 'string', default: '' }), 'array').default).toEqual([]);
+    expect(withVariableType(variable({ type: 'string', default: '' }), 'array').default).toEqual(
+      [],
+    );
     expect(withVariableType(variable({ type: 'array', default: [1] }), 'boolean').default).toBe(
       false,
     );
