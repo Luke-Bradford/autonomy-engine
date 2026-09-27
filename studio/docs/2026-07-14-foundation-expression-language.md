@@ -44,7 +44,7 @@ dynamic/dynamic-name sub-fields (ADF parity: `nodes.x.output.rows[params.i].sku`
 | --- | --- | --- |
 | `params.<name>[.deep]` | pipeline parameter (read-only in run) | typed; default < trigger < run-now override. **AMENDED at E7:** a `json` param takes a deep `[]`/`.` path on the same terms as a `json` output — the rule is the root's TYPE, not its namespace |
 | `vars.<name>` | pipeline variable (mutable) | #1 D2; typed |
-| `global.<name>` | workspace global param (read-only) | #1 D3; secure globals resolve ONLY at secret sinks (#1 D8) |
+| `global.<name>` | workspace global param (read-only) | [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md); cleartext only, no secure globals (GL-D5) |
 | `nodes.<id>.output[.deep]` | an upstream node's typed outputs | deep `[]`/`.` into a `json`-typed output = `any` (runtime-validated) unless the output declares a schema. **SHIPPED at E7**; a statically-known SCALAR root (a `string`-typed output, `run.*`, `.status`) carries no deep path — see the E7 block. The "declares a schema" clause is vacuous today: no sub-schema surface exists (#2's `OutputSpec` owns it) |
 | `nodes.<id>.status` | `success \| failure \| skipped` | **NEW (T6)** — enables the ADF `@activity().Status` fan-in/OR pattern. **SHIPPED at E3**; readable only where the node is *guaranteed settled* — see the E3 block below |
 | `run.<field>` | run system vars: `runId`, `startedAt`, `pipelineVersionId`, `triggerId`, `parentRunId` | **NEW (T2/C3)**. **SHIPPED at E3** — `RUN_FIELDS` in `engine/params.ts` is the SSOT; `attempt` is SCOPE-OUT: `NodeRunState.attempts` already exists (incremented by `onRetryRequested`), but it is NODE-scoped while `buildCtx` is RUN-scoped, so exposing it needs a per-node binding decision — #1 D4 |
@@ -217,7 +217,8 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
   is deliberately **no `expr()`** "evaluate string as expression" function.
 - **Secret-sink designation** lives in the ActivityDefinition contract (T10 `SecretRef` secure
   fields); `validateRefs` **rejects** a secure `${global.*}`/`SecretRef` used anywhere but a declared
-  secret sink (e.g. `concat(global.apiKey, …)` fails at save).
+  secret sink (e.g. `concat(global.apiKey, …)` fails at save). *(2026-09-27: no secure global exists,
+  GL-D5 of [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md), so the `${global.*}` half of this rule is vacuous.)*
 - **Resource limits:** the resolver enforces caps (max resolved-value size, max deep-path depth, max
   array length for `map`/`filter`/aggregate) — inertness prevents injection, but not resource abuse
   from a huge `${nodes.http.output.body}`.

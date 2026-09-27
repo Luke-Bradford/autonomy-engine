@@ -1486,7 +1486,7 @@ Decisions worth not re-deriving:
   edit the pipeline itself is the ADF pattern. That slot is now the bottom dock's pipeline panel
   (#844, 2026-09-26), with params and outputs as its **Parameters** / **Outputs** tabs — see U7.
 - **Variables/globals are deferred because there is nothing to author.** *(2026-09-27: variables
-  now have a doc-model spec, [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md); this note holds for globals.)* `PipelineVersionSchema` has
+  now have a doc-model spec, [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md); globals now have one too, [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md), whose GL2 is the Manage page.)* `PipelineVersionSchema` has
   no `variables` or `globals` field; adding one is a doc-model change, not a UI ticket.
 - **`toVersionBody` no longer reads `loaded` at all.** Every field of the save body now comes from
   the store. This is the third field to make that move (`containers` was #746) and the failure is

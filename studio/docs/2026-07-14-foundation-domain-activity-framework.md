@@ -98,6 +98,10 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 
 ### D3 — Global / factory parameters
 
+> **Superseded 2026-09-27 by [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md)** (GL-series), which
+> keeps the explicit read-only namespace below and settles run determinism (GL-D3). It does NOT
+> build secure globals (GL-D5): a credential is a named secret.
+
 Workspace-scoped store `{ name, type, value }`; **`${global.x}` is its own explicit,
 read-only namespace.** It is **NOT** an implicit fallback for same-named `${params}`
 (no name-collision injection). Param resolution stays `pipeline default < trigger
@@ -402,9 +406,9 @@ rerun (gated).**
 | F5b | `${vars}` substitution namespace + validateRefs — **superseded by V2** |
 | F5c | parallel-mutation hard-reject (determinism guard) — **superseded by V4/V5** (V-D6: parallel foreach + unordered DAG nodes) |
 | F6 | `set_variable`/`append_variable`/`return` control activities — set/append **superseded by V5**; `return` waits on pipeline outputs becoming real |
-| F7a | global_params table + REST |
-| F7b | `${global}` resolver + explicit-namespace validation |
-| F7c | secure globals → secret store |
+| F7a | global_params table + REST — **superseded by GL1** ([`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md)) |
+| F7b | `${global}` resolver + explicit-namespace validation — **superseded by GL3** |
+| F7c | secure globals → secret store — **superseded by F15; not built** (GL-D5) |
 | F8a | pipeline props schema (desc/annotations/folder/concurrency) |
 | F8b | per-pipeline concurrency enforcement (scheduler/launcher) — **SHIPPED 2026-07-22 with #5 S6b** (see the D1 note above: the cap lives on the mutable `pipelines` row; launcher both-must-pass admission + pipeline-scoped fair drain) |
 | F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) — **MINIMAL SHIPPED 2026-07-15** (build-order item 3: "minimal contract EARLY, migrations later"). The existing `ActivityCatalogEntry` IS the ActivityDefinition; it gained `kind: 'execution'\|'control'` (the dispatch discriminant — now the executor's PRIMARY branch, checked ahead of the retained `connectionKinds.length > 0` proxy, with a distinct `CONTROL_NOT_DISPATCHABLE` code) + `category`/`ACTIVITY_CATEGORIES` (U5's palette groups, values per spec #4's headings — `agent_task` is `ai`, there is no `agent` class) + an `ActivityDefinition` alias. `cancel`/`timeoutScope`/`secure`/`errorMap`/`inputs` are deliberately NOT declared — each is sequencing behind a named owner (F2a/F3/F4/F15/F9b-d), not an open question. **Production delta is ZERO** and the reducer does not read `kind` yet: **whether A1/A2 route control via this `kind` or a structural discriminant (the `call_pipeline` precedent) is an OPEN FORK no spec settles — #4 owns it.** See the F9a spike-hardened block under D6. |

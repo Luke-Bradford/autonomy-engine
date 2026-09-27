@@ -325,7 +325,8 @@ which has no single meaning under the drain model.
   - their catalog entries declare no `secretSinkFields`, so `scanSecretSinks` refuses a `{$secret}`
     marker in `value`.
 - **When globals land (F7), `${global.<secure>}` must be refused in a `set`/`append` value.** A
-  variable is not a secret sink. This is recorded here so F7 inherits it.
+  variable is not a secret sink. This is recorded here so F7 inherits it. *(Satisfied by
+  construction: the globals spec, [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md), builds no secure globals, GL-D5.)*
 - **Redaction.** `secureEventNodeId` stays total over the event union: the new `variable.*` events
   are listed explicitly as never secure, not left to a default.
 - **No new authorization surface.** Variables live in the version doc, written through the existing
