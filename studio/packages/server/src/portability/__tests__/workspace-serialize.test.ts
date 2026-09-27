@@ -440,6 +440,34 @@ describe('serializeWorkspace', () => {
     expect(Object.keys(JSON.parse(file!.contents).data.versions[0])).not.toContain('variables');
   });
 
+  // #1 F8a — the same rule for the two later late fields: a version without a
+  // description or annotations must serialize to the bytes it had before F8a.
+  it('#1 F8a — no description and no annotations serialize with neither key', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Plain' });
+    createPipelineVersion(db, baseVersion(pipeline.id));
+
+    const [file] = serializeWorkspace(db, 'local');
+    expect(file!.contents).not.toContain('description');
+    expect(file!.contents).not.toContain('annotations');
+  });
+
+  it('#1 F8a — a description and annotations serialize', () => {
+    const { db } = freshDb();
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, baseVersion(pipe.id));
+    const described = createPipeline(db, { ownerId: 'local', name: 'Described' });
+    createPipelineVersion(db, {
+      ...baseVersion(described.id),
+      description: 'Nightly',
+      annotations: ['prod'],
+    });
+    const version = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/described.json').data
+      .versions[0]!;
+    expect(version.description).toBe('Nightly');
+    expect(version.annotations).toEqual(['prod']);
+  });
+
   it('#844 V1 — declared variables serialize, and parse back to the same declaration', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'Stateful' });
@@ -833,6 +861,25 @@ describe('ownedVersionForms — compare (#1018)', () => {
   // re-pull after V1 would mint a duplicate version; and a branch file that
   // declares variables must NOT, or an authored declaration would be discarded
   // as `superseded`.
+  // #1 F8a — the stored row always carries both fields, while a pre-F8a branch
+  // file has neither key: that pair must judge IDENTICAL (or every re-pull mints
+  // a duplicate version), and an authored value must NOT (or it is discarded as
+  // `superseded`).
+  it('#1 F8a — an absent description/annotations match stored empties; authored ones differ', () => {
+    const { db } = freshDb();
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, baseVersion(pipe.id));
+    const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+      .versions[0]!;
+    expect(Object.keys(branch)).not.toContain('description');
+    expect(Object.keys(branch)).not.toContain('annotations');
+
+    const compare = compareFor(db, version.resourceId);
+    expect(compare(branch).identical).toBe(true);
+    expect(compare({ ...branch, description: 'Nightly' }).identical).toBe(false);
+    expect(compare({ ...branch, annotations: ['prod'] }).identical).toBe(false);
+  });
+
   it('#844 V1 — an absent `variables` matches a stored `[]`; a declared one differs', () => {
     const { db } = freshDb();
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });

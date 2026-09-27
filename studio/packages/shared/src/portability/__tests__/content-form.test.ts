@@ -306,3 +306,27 @@ describe('variables in the version content form (#844 V1)', () => {
     expect(pipelineVersionContentForm(declared)).toContain('"count"');
   });
 });
+
+// #1 F8a — `description` and `annotations` joined the version doc after git
+// serialization too, so they take the same rule: empty is the same content as
+// absent, and anything else IS content.
+describe('description + annotations in the version content form (#1 F8a)', () => {
+  const version = pipelineData().versions[0]!;
+  const withProps = (props: Record<string, unknown>) =>
+    ({ ...version, ...props }) as unknown as PipelineExportData['versions'][number];
+
+  it('an empty description and empty annotations are byte-identical to absent keys', () => {
+    expect(Object.keys(version)).not.toContain('description');
+    expect(Object.keys(version)).not.toContain('annotations');
+    const empty = withProps({ description: '', annotations: [] });
+    expect(pipelineVersionContentForm(empty)).toBe(pipelineVersionContentForm(version));
+    expect(pipelineVersionContentForm(empty)).not.toContain('description');
+    expect(pipelineVersionContentForm(empty)).not.toContain('annotations');
+  });
+
+  it('a description IS content, and so is an annotation', () => {
+    const base = pipelineVersionContentForm(version);
+    expect(pipelineVersionContentForm(withProps({ description: 'Nightly load' }))).not.toBe(base);
+    expect(pipelineVersionContentForm(withProps({ annotations: ['prod'] }))).not.toBe(base);
+  });
+});

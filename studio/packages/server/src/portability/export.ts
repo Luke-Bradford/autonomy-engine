@@ -14,7 +14,7 @@ import {
   type PipelineVersion,
   type PipelineVersionExport,
   type TriggerExportData,
-  omitEmptyVariables,
+  omitEmptyLateFields,
 } from '@autonomy-studio/shared';
 import {
   getConnection,
@@ -171,7 +171,7 @@ function toPipelineVersionExport(
     ),
   };
   // #844 V1 — the same file shape as a workspace-git file (`serializePipeline`).
-  omitEmptyVariables(exported);
+  omitEmptyLateFields(exported);
   return exported;
 }
 

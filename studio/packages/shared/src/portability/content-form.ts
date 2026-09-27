@@ -143,29 +143,33 @@ const VERSION_VOLATILE = [
  * drift on what a version's content is. */
 function scrubVersion(version: { nodes: unknown[] }): void {
   omitKeys(version, VERSION_VOLATILE);
-  omitEmptyVariables(version);
+  omitEmptyLateFields(version);
   for (const node of version.nodes) omitKeys(node, ['position']);
 }
 
 /**
- * #844 V1 (spec V-D2) — delete a version's `variables` key IN PLACE when it is
- * an empty list, so "absent" and "empty" are the same content.
+ * Delete a version's LATE fields IN PLACE when they hold their empty value, so
+ * "absent" and "empty" are the same content. The late fields are the ones that
+ * joined the version doc after git serialization existed: `variables` (#844 V1,
+ * spec V-D2), and `description` + `annotations` (#1 F8a).
  *
- * `variables` joined the version doc after git serialization existed. Every
- * committed pipeline file lacks the key, every `sourceBlobSha` hashes a file
- * without it, and every drift/`superseded` decision compares content forms built
- * from such files. Written as `variables: []`, every existing pipeline would read
- * as changed, and the next Commit would rewrite every file with no real change.
+ * Every file committed before a field existed lacks its key, every
+ * `sourceBlobSha` hashes a file without it, and every drift/`superseded`
+ * decision compares content forms built from such files. Written as
+ * `variables: []` or `description: ''`, every existing pipeline would read as
+ * changed, and the next Commit would rewrite every file with no real change.
  * (`containers` never needed this: it predates git serialization.)
  *
  * The ONE definition, applied at both places that matter: the content form
  * (`scrubVersion`) and the bytes of a serialized file (`serializePipeline`, and
- * the portable export for the same shape). A non-empty list is left untouched,
+ * the portable export for the same shape). A non-empty value is left untouched,
  * because then it is content.
  */
-export function omitEmptyVariables(version: object): void {
-  const doc = version as { variables?: unknown };
+export function omitEmptyLateFields(version: object): void {
+  const doc = version as { variables?: unknown; annotations?: unknown; description?: unknown };
   if (Array.isArray(doc.variables) && doc.variables.length === 0) delete doc.variables;
+  if (Array.isArray(doc.annotations) && doc.annotations.length === 0) delete doc.annotations;
+  if (doc.description === '') delete doc.description;
 }
 
 export function pipelineVersionContentForm(

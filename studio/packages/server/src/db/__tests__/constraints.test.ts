@@ -110,6 +110,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -157,6 +159,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -227,6 +231,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -315,6 +321,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -349,6 +357,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -379,6 +389,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -410,6 +422,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -462,6 +476,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -514,6 +530,8 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         edges: [],
         containers: [],
         variables: [],
+        description: '',
+        annotations: [],
         catalogVersion: 1,
         createdAt: 1,
       })

@@ -878,6 +878,56 @@ export type NewPipeline = z.input<typeof NewPipelineSchema>;
  * "latest" — there is deliberately no update path for this schema/table; a
  * new version is always a new row (see the repository layer).
  */
+/**
+ * #1 F8a (spec D1) — the bounds on a version's `description` and `annotations`.
+ * Exported so the canvas (`propertyIssues`) and the write schema below refuse
+ * the same thing with the same words.
+ */
+export const PIPELINE_DESCRIPTION_MAX_CHARS = 4000;
+export const ANNOTATION_MAX_CHARS = 100;
+export const MAX_ANNOTATIONS = 50;
+
+/**
+ * #1 F8a — one annotation: a short free-text tag (ADF's pipeline annotations).
+ * Refused rather than repaired, because the server never rewrites what an author
+ * wrote: surrounding whitespace and control characters (a newline included) are
+ * errors, not something to trim. Write path only — the read schema stays
+ * tolerant, like every other version field.
+ */
+export const AnnotationSchema = z
+  .string()
+  .min(1, { message: 'an annotation cannot be empty' })
+  .max(ANNOTATION_MAX_CHARS, {
+    message: `an annotation can be at most ${ANNOTATION_MAX_CHARS} characters`,
+  })
+  .refine((s) => s.trim() === s, {
+    message: 'an annotation cannot start or end with a space',
+  })
+  // eslint-disable-next-line no-control-regex
+  .refine((s) => !/[\u0000-\u001f\u007f]/.test(s), {
+    message: 'an annotation cannot contain a line break or other control character',
+  });
+
+/**
+ * #1 F8a — duplicates are refused CASE-INSENSITIVELY. An annotation is a label
+ * the run list will filter and group by (U26, U29), so `Prod` and `prod` on one
+ * pipeline could only ever be a typo that splits one group in two.
+ */
+function refuseDuplicateAnnotations(items: readonly string[], ctx: z.RefinementCtx): void {
+  const seen = new Set<string>();
+  for (const [i, item] of items.entries()) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [i],
+        message: `duplicate annotation '${item}' (annotations must be unique, ignoring case)`,
+      });
+    }
+    seen.add(key);
+  }
+}
+
 export const PipelineVersionSchema = z.object({
   id: z.string().min(1),
   /**
@@ -904,10 +954,21 @@ export const PipelineVersionSchema = z.object({
    * which carry no key. It is NOT the #473 hazard. The DB column is `NOT NULL`,
    * so a stored row never reaches this default, and on the import path an absent
    * key can only mean "no variables". An EMPTY list is omitted from the
-   * serialized file and the content form (`omitEmptyVariables`), so absent and
+   * serialized file and the content form (`omitEmptyLateFields`), so absent and
    * empty are the same content.
    */
   variables: z.array(VariableDefSchema).default([]),
+  /**
+   * #1 F8a (spec D1) — what the pipeline is for, and the tags it carries. On the
+   * immutable VERSION, not the mutable row: a run binds a version, so a run is
+   * filtered and grouped by the annotations it actually ran under (U26, U29).
+   * The defaults exist for the reason `variables` has one — old exports and git
+   * blobs carry no key — and are the true value for them. The columns are
+   * `NOT NULL`, so a stored row never reaches either default, and an empty value
+   * is omitted from the serialized file (`omitEmptyLateFields`).
+   */
+  description: z.string().default(''),
+  annotations: z.array(z.string()).default([]),
   catalogVersion: z.number().int(),
   createdAt: z.number().int(),
   /**
@@ -973,6 +1034,18 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   variables: z
     .array(VariableDefSchema)
     .superRefine(refuseDuplicateNames('variable', 'within the pipeline'))
+    .default([]),
+  // #1 F8a — the bounds the read schema above deliberately does not apply.
+  description: z
+    .string()
+    .max(PIPELINE_DESCRIPTION_MAX_CHARS, {
+      message: `the description can be at most ${PIPELINE_DESCRIPTION_MAX_CHARS} characters`,
+    })
+    .default(''),
+  annotations: z
+    .array(AnnotationSchema)
+    .max(MAX_ANNOTATIONS, { message: `a pipeline can have at most ${MAX_ANNOTATIONS} annotations` })
+    .superRefine(refuseDuplicateAnnotations)
     .default([]),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
