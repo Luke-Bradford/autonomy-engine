@@ -321,7 +321,9 @@ describe('runs routes (read-only)', () => {
       const res = await app.inject({ method: 'GET', url: `/api/runs?pipelineId=${pipeline.id}` });
       expect(res.statusCode).toBe(200);
       const byId = new Map(
-        paginatedResponseSchema(RunSummarySchema).parse(res.json()).items.map((r) => [r.id, r.annotations]),
+        paginatedResponseSchema(RunSummarySchema)
+          .parse(res.json())
+          .items.map((r) => [r.id, r.annotations]),
       );
       expect(byId.get(first.id)).toEqual(['grp-old', 'grp shared']);
       expect(byId.get(second.id)).toEqual([]);

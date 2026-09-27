@@ -2957,6 +2957,7 @@ describe('RunDetailPage — the reruns of this run', () => {
   function rerun(id: string): RunSummary {
     return {
       ...run({ id, status: 'running', triggerId: null, rerunOf: 'run_1' }),
+      pipelineId: 'pipe_1',
       pipelineName: 'P',
       pipelineVersion: 1,
       annotations: [],

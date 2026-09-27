@@ -1059,9 +1059,7 @@ describe('U29 runs view toggle', () => {
    */
   it('reads the lane key from ?group=, and writes it back', async () => {
     listMock.mockResolvedValue(
-      pageOf([
-        run({ id: 'run_t', annotations: ['nightly ops'], startedAt: 1, finishedAt: 2 }),
-      ]),
+      pageOf([run({ id: 'run_t', annotations: ['nightly ops'], startedAt: 1, finishedAt: 2 })]),
     );
     const router = createMemoryRouter(ROUTES, {
       initialEntries: ['/monitor/runs?view=timeline&group=annotation'],
