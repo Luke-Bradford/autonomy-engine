@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
+import {
+  fireAndSettle,
+  seedManualTrigger,
+  seedVersion,
+  type SeedDoc,
+} from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
 
 /**
@@ -135,6 +140,64 @@ test('#1065 — a run the reducer had nothing to explain says so, rather than hi
   const section = page.getByRole('region', { name: 'Why this run behaved as it did' });
   await expect(section.getByText(/neutralized nothing on this run/i)).toBeVisible();
   await expect(section.getByRole('table')).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1367 — a run REFUSED at start says why on its own page.
+ *
+ * A run-now override naming a param the pipeline does not declare passes the
+ * fire endpoint (the binding is checked there; the override is not) and is
+ * refused inside `startRun`, before any event is written. So there is no event
+ * to carry a reason, and until #1367 the page showed a bare `interrupted` while
+ * the reason sat in the server log. The diagnostics section is where it lands
+ * now, as a row with no seq, because the Events table beneath it is empty.
+ */
+test('#1367 — a run refused at start shows the refusal reason on the run page', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const doc: SeedDoc = {
+    /* Never dispatched: the start is refused before any node is reached. */
+    nodes: [
+      { id: 'stop', type: 'fail', config: { message: 'never reached' }, position: { x: 0, y: 0 } },
+    ],
+  };
+  const { pipelineVersionId } = await seedVersion(page, '#1367 refused start', doc);
+  const triggerId = await seedManualTrigger(page, pipelineVersionId, '#1367 refused');
+  const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`, {
+    data: { params: { nope: 1 } },
+  });
+  expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
+  const { runId } = (await fired.json()) as { runId: string };
+
+  const reason = "The run did not start: override for undeclared param 'nope'";
+  /* PREMISE, through the API: the run really was refused before it started, and
+     the reason really reached the durable table. */
+  await expect
+    .poll(async () => {
+      const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+      return ((await res.json()) as { status: string }).status;
+    })
+    .toBe('interrupted');
+  const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}/diagnostics`);
+  expect(res.status()).toBe(200);
+  expect(
+    ((await res.json()) as { phase: string; message: string }[]).map((d) => [d.phase, d.message]),
+  ).toEqual([['start', reason]]);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  const section = page.getByRole('region', { name: 'Why this run behaved as it did' });
+  const row = section.getByRole('row').filter({ hasText: reason });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('the run was refused before it started');
+  /* No seq to cross-reference: the log is empty, so the cell is a dash. */
+  await expect(row.getByRole('cell').first()).toHaveText('—');
+  await expect(section.getByText(/neutralized nothing on this run/i)).toHaveCount(0);
 
   await expectQuiet(page, problems);
 });
