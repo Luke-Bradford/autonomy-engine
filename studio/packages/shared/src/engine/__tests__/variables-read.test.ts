@@ -93,9 +93,9 @@ describe('${vars.<name>} at save time', () => {
   // expressed as `[]` rather than an absent key — but the refusal it pins is
   // unchanged: a doc with no variables REFUSES a read, never "anything goes".
   it('refuses a variable read when the doc declares none', () => {
-    expect(
-      validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: [] })),
-    ).toEqual([expect.stringMatching(/is not a declared variable/)]);
+    expect(validateRefs(doc([node('a', { x: '${vars.count}' })], { variables: [] }))).toEqual([
+      expect.stringMatching(/is not a declared variable/),
+    ]);
   });
 
   it('types a read by its declared type', () => {

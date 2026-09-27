@@ -43,7 +43,9 @@ function doc(
 }
 
 /** Does the save gate report a boundary crossing here? */
-function gateSeesCrossing(d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>) {
+function gateSeesCrossing(
+  d: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers' | 'variables'>,
+) {
   return validatePipelineDoc(d).some((e) => e.includes('crosses a container boundary'));
 }
 
