@@ -9,6 +9,7 @@ import {
   type Edge,
   type Node,
   type Param,
+  type VariableDef,
 } from '@autonomy-studio/shared';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { activityLabels } from './activityLabel';
@@ -101,6 +102,7 @@ export function ContainerPanel({
   edges,
   containers,
   params,
+  variables,
   onApply,
   onCopy,
   onDuplicate,
@@ -110,6 +112,7 @@ export function ContainerPanel({
   edges: Edge[];
   containers: Container[];
   params: Param[];
+  variables: VariableDef[];
   onApply: (next: Container) => void;
   /** #935 — put this container and its body on the canvas clipboard. */
   onCopy: () => void;
@@ -130,6 +133,7 @@ export function ContainerPanel({
     edges,
     containers,
     params,
+    variables,
     { kind: 'container', containerId: container.id, field: 'exitWhen' },
     nodeNames,
   );
@@ -138,6 +142,7 @@ export function ContainerPanel({
     edges,
     containers,
     params,
+    variables,
     { kind: 'container', containerId: container.id, field: 'items' },
     nodeNames,
   );
@@ -215,11 +220,11 @@ export function ContainerPanel({
     // report an issue. Memoised because it re-runs the whole doc validator.
     if (unrenderable.length > 0 || illegal.length === 0) return new Set<string>();
     return new Set(
-      validateCanvas(nodes, edges, containers, params)
+      validateCanvas(nodes, edges, containers, params, variables)
         .filter((issue) => issue.includes(`container '${container.id}'`))
         .flatMap((issue) => illegal.filter((name) => issue.includes(name))),
     );
-  }, [unrenderable, illegal, nodes, edges, containers, params, container.id]);
+  }, [unrenderable, illegal, nodes, edges, containers, params, variables, container.id]);
 
   /**
    * Seeded on mount, and re-seeded when the stored CONFIG changes (U17).
@@ -306,7 +311,7 @@ export function ContainerPanel({
     // any rule written here.
     if (
       !confirmContainerEdit(
-        { nodes, edges, containers, params },
+        { nodes, edges, containers, params, variables },
         containersWithUpdated(containers, next),
         recovery(stored, next),
       )

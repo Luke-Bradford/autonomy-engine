@@ -546,6 +546,7 @@ export function PipelineCanvas({
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
+  const variables = useStore(store, (s) => s.variables);
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
   // #852 — read by the folded dock's toggle, so a selection made while the
@@ -608,11 +609,13 @@ export function PipelineCanvas({
     () =>
       // #1312 — `policyIssues` mirrors a THIRD gate, the write schema's
       // `StrictNodeSchema.policy`, and names nodes, so it is rewritten too.
-      [...validateCanvas(nodes, edges, containers, params), ...policyIssues(nodes)].map((raw) => ({
-        raw,
-        text: readableIssue(raw, nodes, edges, containers),
-      })),
-    [nodes, edges, containers, params],
+      [...validateCanvas(nodes, edges, containers, params, variables), ...policyIssues(nodes)].map(
+        (raw) => ({
+          raw,
+          text: readableIssue(raw, nodes, edges, containers),
+        }),
+      ),
+    [nodes, edges, containers, params, variables],
   );
   const issues = useMemo(
     () => [...located.map((issue) => issue.text), ...nameIssues(params, outputs)],
@@ -1345,6 +1348,7 @@ function PropertyPanel({
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
+  const variables = useStore(store, (s) => s.variables);
   // #852 / #844 — the dock's tab choices live HERE, above the panels, because
   // `NodePanel` is keyed per node: selecting another activity remounts it, and
   // the operator should land on the tab they were using, as ADF does.
@@ -1401,6 +1405,7 @@ function PropertyPanel({
         edges={edges}
         containers={containers}
         params={params}
+        variables={variables}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
         onCopy={() => {
           if (store.getState().copyContainer(container.id, pipelineId)) {
@@ -2258,6 +2263,7 @@ function ContainerSection({
   // version here would judge a container against a param contract the operator
   // has already changed.
   const params = useStore(store, (s) => s.params);
+  const variables = useStore(store, (s) => s.variables);
 
   const [kind, setKind] = useState<ContainerKind>('stage');
   const [exitWhen, setExitWhen] = useState('');
@@ -2285,7 +2291,13 @@ function ContainerSection({
     // The gate itself is `confirmContainerEdit`, hoisted into `containerRules`
     // when U23's config panel became its second call site. This wrapper is only
     // the "and then apply it" half, which the two callers below share.
-    if (!confirmContainerEdit({ nodes, edges, containers, params }, nextContainers, recovery)) {
+    if (
+      !confirmContainerEdit(
+        { nodes, edges, containers, params, variables },
+        nextContainers,
+        recovery,
+      )
+    ) {
       return false;
     }
     apply();
@@ -2562,6 +2574,7 @@ export function NodePanel({
   const docEdges = useStore(store, (s) => s.edges);
   const docContainers = useStore(store, (s) => s.containers);
   const docParams = useStore(store, (s) => s.params);
+  const docVariables = useStore(store, (s) => s.variables);
   /**
    * Every activity's identifying name (#878), built ONCE for this panel and read
    * by both surfaces that need one — the heading below and the expression
@@ -2586,6 +2599,7 @@ export function NodePanel({
     docEdges,
     docContainers,
     docParams,
+    docVariables,
     { kind: 'node', nodeId },
     nodeNames,
   );

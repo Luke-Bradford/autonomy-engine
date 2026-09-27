@@ -6,6 +6,7 @@ import {
   type ImplicitRouting,
   type Node,
   type Param,
+  type VariableDef,
   type RoutingPartition,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
@@ -45,6 +46,7 @@ export interface ContainerEditDoc {
   edges: Edge[];
   containers: Container[];
   params: Param[];
+  variables: VariableDef[];
 }
 
 /**
@@ -218,8 +220,10 @@ export function containerEditConsequence(
   doc: ContainerEditDoc,
   nextContainers: Container[],
 ): ContainerEditConsequence {
-  const known = new Set(validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params));
-  const after = validateCanvas(doc.nodes, doc.edges, nextContainers, doc.params);
+  const known = new Set(
+    validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params, doc.variables),
+  );
+  const after = validateCanvas(doc.nodes, doc.edges, nextContainers, doc.params, doc.variables);
   return {
     newIssues: after.filter((issue) => !known.has(issue)),
     routingChange: routingChangeBetween(doc, { ...doc, containers: nextContainers }),

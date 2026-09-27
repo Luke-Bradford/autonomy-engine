@@ -894,7 +894,13 @@ describe('canvasStore — container membership on delete (#746)', () => {
     s.getState().loadVersion(enclosed());
     s.getState().deleteNode('n_b');
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? []);
+    const issues = validateCanvas(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.loaded?.params ?? [],
+      st.variables,
+    );
     expect(issues).toEqual([]);
     expect(canSave({ saving: false, ready: true, issues })).toBe(true);
   });
@@ -979,7 +985,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
     s.getState().deleteNode('n_a');
     const st = s.getState();
     expect(st.containers.map((c) => c.children)).toEqual([[]]);
-    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
   });
 
   /**
@@ -1018,7 +1024,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
     );
     s.getState().deleteNode('n_a');
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, [], []);
     expect(issues.some((m) => m.includes('is not a node in this pipeline'))).toBe(false);
     expect(issues).toEqual([expect.stringContaining('makes no progress')]);
   });
@@ -1049,7 +1055,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
     );
     s.getState().deleteNode('n_a');
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, [], []);
     expect(issues.some((m) => m.includes('is not a node in this pipeline'))).toBe(false);
     // The REFERENCE error the docstring names, not merely "some error" — an
     // `issues.length > 0` would have passed on any unrelated complaint.
@@ -1194,14 +1200,14 @@ describe('canvasStore — deleteContainer (#748)', () => {
     s.getState().loadVersion(boxed('loop', ['n_a']));
     s.getState().deleteNode('n_a');
     const trapped = s.getState();
-    expect(validateCanvas(trapped.nodes, trapped.edges, trapped.containers, [])).toEqual([
+    expect(validateCanvas(trapped.nodes, trapped.edges, trapped.containers, [], [])).toEqual([
       expect.stringContaining('makes no progress'),
     ]);
 
     s.getState().deleteContainer('c_1');
 
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, [], []);
     expect(issues).toEqual([]);
     expect(canSave({ saving: false, ready: true, issues })).toBe(true);
   });
@@ -1238,12 +1244,12 @@ describe('canvasStore — deleteContainer (#748)', () => {
         containers: [{ id: 'c_1', kind: 'foreach', children: ['n_a'], items: '${json("[1]")}' }],
       }),
     );
-    expect(validateCanvas(s.getState().nodes, [], s.getState().containers, [])).toEqual([]);
+    expect(validateCanvas(s.getState().nodes, [], s.getState().containers, [], [])).toEqual([]);
 
     s.getState().deleteContainer('c_1');
 
     const st = s.getState();
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, [], []);
     // The activity itself SURVIVED — this is a scoping consequence, not a delete.
     expect(st.nodes.map((n) => n.id)).toEqual(['n_a']);
     expect(issues).toEqual([expect.stringContaining("'item' is only bound inside")]);
@@ -1263,7 +1269,7 @@ describe('canvasStore — deleteContainer (#748)', () => {
     s.getState().deleteContainer('c_1');
     expect(s.getState().containers).toEqual([]);
     const st = s.getState();
-    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
   });
 });
 
@@ -1464,7 +1470,13 @@ describe('canvasStore — container membership (U6d)', () => {
       s.getState().setNodeContainer('n_b', 'loop_1');
       s.getState().setNodeContainer('n_a', null);
       const st = s.getState();
-      const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? []);
+      const issues = validateCanvas(
+        st.nodes,
+        st.edges,
+        st.containers,
+        st.loaded?.params ?? [],
+        st.variables,
+      );
       expect(st.containers[0]!.children).toEqual(['n_b']);
       expect(issues.some((i) => i.includes('crosses a container boundary'))).toBe(true);
       expect(canSave({ saving: false, ready: true, issues })).toBe(false);
@@ -1881,7 +1893,7 @@ describe('canvasStore — back-edges (U6e)', () => {
     // it is drawn is the #748/U16 trap, and a version is immutable.
     expect(EdgeSchema.safeParse(authored).success).toBe(true);
     const st = s.getState();
-    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual([]);
   });
 
   it('connect still REFUSES a back candidate the save gate would refuse', () => {
@@ -2003,22 +2015,40 @@ describe('canvasStore — back-edges (U6e)', () => {
       }),
     );
     const before = s.getState();
-    expect(validateCanvas(before.nodes, before.edges, before.containers, before.params)).toEqual(
-      [],
-    );
+    expect(
+      validateCanvas(
+        before.nodes,
+        before.edges,
+        before.containers,
+        before.params,
+        before.variables,
+      ),
+    ).toEqual([]);
 
     s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
     const after = s.getState();
     // The edge IS authored — the offer is not refused for this...
     expect(after.edges.some((e) => e.back === true)).toBe(true);
     // ...and the canvas badge is what says the doc no longer validates.
-    const issues = validateCanvas(after.nodes, after.edges, after.containers, after.params);
+    const issues = validateCanvas(
+      after.nodes,
+      after.edges,
+      after.containers,
+      after.params,
+      after.variables,
+    );
     expect(issues.join('\n')).toContain('is not settled here');
     // Reversible by the same control, which is why it warns instead of refusing.
     s.getState().deleteEdge(after.edges.find((e) => e.back === true)!.id);
     const repaired = s.getState();
     expect(
-      validateCanvas(repaired.nodes, repaired.edges, repaired.containers, repaired.params),
+      validateCanvas(
+        repaired.nodes,
+        repaired.edges,
+        repaired.containers,
+        repaired.params,
+        repaired.variables,
+      ),
     ).toEqual([]);
   });
 
@@ -2427,7 +2457,7 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(st.edges.some((e) => e.from === 'n_a' && e.to === copyB.id)).toBe(true);
     // The point of that edge: `validateRefs` scopes a ref to the node's UPSTREAM
     // set, so a copy arriving without it is refused at the save gate.
-    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual([]);
   });
 
   it('drops an external in-edge whose source was deleted after the copy', () => {
@@ -2820,7 +2850,9 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       const copy = st.nodes.at(-1)!;
       expect(promptOf(copy)).toBe('expand ${nodes.n_b.output.text}');
       expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_b', to: copy.id }));
-      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual(
+        [],
+      );
     });
 
     it('a cut pair keeps the edge BETWEEN them and gets back the edge INTO them', () => {
@@ -2838,7 +2870,9 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
       expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_a', to: copyB.id }));
       expect(st.edges).toContainEqual(expect.objectContaining({ from: copyB.id, to: copyC.id }));
       expect(st.edges).toHaveLength(2);
-      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables)).toEqual(
+        [],
+      );
     });
 
     it('a node cut out of a container is pasted back INTO it', () => {
@@ -3026,7 +3060,7 @@ describe('canvasStore — duplicateNode (U21)', () => {
     // scopes `${nodes.n_a.output.body}` to the copy's upstream set, which the
     // copied in-edge is what puts `n_a` in. Without it the copy is a root, and
     // its inherited ref is refused for naming no upstream node.
-    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.params);
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.params, st.variables);
     expect(issues.filter((m) => m.includes('upstream'))).toEqual([]);
   });
 
@@ -3041,7 +3075,7 @@ describe('canvasStore — duplicateNode (U21)', () => {
     const copyId = st.nodes[2]!.id;
 
     const stranded = st.edges.filter((e) => e.to !== copyId);
-    const issues = validateCanvas(st.nodes, stranded, st.containers, st.params);
+    const issues = validateCanvas(st.nodes, stranded, st.containers, st.params, st.variables);
     expect(issues.some((m) => m.includes('upstream'))).toBe(true);
   });
 
@@ -3736,7 +3770,7 @@ describe('canvasStore — overlapping outcomes (#1064)', () => {
     s.getState().loadVersion(version({ edges: redundant }));
     expect(s.getState().edges).toEqual(redundant);
     const st = s.getState();
-    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
   });
 
   it('refuses to connect completion beside an existing success edge', () => {
@@ -3888,7 +3922,7 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     expect(st.edges.filter((e) => e.to === 'n_down')).toHaveLength(1);
     expect(st.edges).toHaveLength(5);
 
-    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
   });
 
   it('a foreach copy keeps reading the OUTER upstream its items names', () => {
@@ -3917,7 +3951,7 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     const copy = st.containers.find((c) => c.id === newId)!;
     expect(copy.items).toBe('${nodes.n_up.output.rows}');
     expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_up', to: newId }));
-    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
   });
 
   it('places the copy clear of the original box, keeping the body layout', () => {
@@ -4044,7 +4078,7 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
       expect(st.edges).toContainEqual(expect.objectContaining({ from: 'n_up', to: copy.id }));
       expect(st.edges.filter((e) => e.to === 'n_down')).toHaveLength(1);
       expect(st.selected).toEqual([{ kind: 'container', id: copy.id }]);
-      expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
     });
 
     it('lands where a duplicate would — clear of the original box, not on the stagger', () => {
@@ -4102,7 +4136,7 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
       expect(st.edges).toHaveLength(2);
       expect(st.edges.some((e) => e.to === copy.id)).toBe(false);
       expect(copy.exitWhen).toBe(`\${equals(nodes.${copy.children[1]}.status, "success")}`);
-      expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+      expect(validateCanvas(st.nodes, st.edges, st.containers, [], [])).toEqual([]);
     });
 
     it('refuses, by name, a foreach whose ITEMS reads an upstream it did not bring', () => {

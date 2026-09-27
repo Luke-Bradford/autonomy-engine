@@ -372,9 +372,20 @@ const MAX_DRIVER_STEPS = 1_000_000;
  */
 const MAX_FINISH_FOLDS = 8;
 
-/** Build the pure engine for a run from its immutable pipeline version's graph. */
+/**
+ * Build the pure engine for a run from its immutable pipeline version's graph.
+ * The ONE production seam (driver, alarms, child, reseed, reconcile, external
+ * wait all come through here), so `variables` (#844 V2) is passed once: its
+ * defaults seed `RunState.variables`, and a version bound without them would
+ * fail every `${vars.x}` read.
+ */
 export function buildEngine(pv: PipelineVersion): Engine {
-  return createEngine({ nodes: pv.nodes, edges: pv.edges, containers: pv.containers });
+  return createEngine({
+    nodes: pv.nodes,
+    edges: pv.edges,
+    containers: pv.containers,
+    variables: pv.variables,
+  });
 }
 
 /**

@@ -38,6 +38,7 @@ function ctx(over: Partial<SubstitutionContext> = {}): SubstitutionContext {
     nodeStatuses: over.nodeStatuses ?? {},
     run: over.run ?? {},
     trigger: over.trigger ?? {},
+    variables: over.variables ?? {},
   };
 }
 

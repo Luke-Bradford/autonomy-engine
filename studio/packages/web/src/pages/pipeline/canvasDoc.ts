@@ -72,12 +72,12 @@ export function validateCanvas(
   edges: Edge[],
   containers: Container[],
   params: Param[],
+  variables: VariableDef[],
 ): string[] {
-  // #844 V1 — `variables` is NOT passed yet, the one deliberate exception to
-  // "the badge shows exactly what the server refuses". Nothing on the canvas can
-  // edit a variable until V3, and a stored one already passed the server gate;
-  // V3 threads them through here with the editor that can make them wrong.
-  return validatePipelineDoc({ params, nodes, edges, containers });
+  // #844 V2 — `variables` is REQUIRED here: without it every `${vars.x}` read
+  // would badge as undeclared though the server accepts it, and the expression
+  // picker (which probes candidates through this) would drop every variable.
+  return validatePipelineDoc({ params, nodes, edges, containers, variables });
 }
 
 /**

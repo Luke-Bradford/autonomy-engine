@@ -30,7 +30,7 @@ import {
 } from '../catalog/types.js';
 import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import { hasSecureOutput, redactSecureEvent, secureEventNodeId } from './secure.js';
-import { callDetaches } from '../schemas/pipeline.js';
+import { callDetaches, type VariableDef } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
   composeFilterExpr,
@@ -78,10 +78,20 @@ import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 //     or, for `wait: false` (#796 item 2), until `call.detached`.
 // ---------------------------------------------------------------------------
 
-/** The immutable graph the reducer walks. Params/outputs arrive via events. */
+/**
+ * The immutable graph the reducer walks. Params/outputs arrive via events;
+ * variables start from the doc's declared defaults.
+ */
 export type EngineDoc = Pick<PipelineVersion, 'nodes' | 'edges'> & {
   /** Control-flow containers (P2c). Optional/`[]` → a flat P2b DAG walk. */
   containers?: PipelineVersion['containers'];
+  /**
+   * #844 V2 — the declared pipeline variables, whose DEFAULTS seed
+   * `RunState.variables`. Optional/`[]` → none; a `${vars.x}` read then fails
+   * the dispatch loudly (`SubstituteError`), never resolves to a stand-in. The
+   * version is immutable, so seeding from it is replay-stable without an event.
+   */
+  variables?: readonly VariableDef[];
 };
 
 /** The engine bound to one pipeline version's graph (the exact 2-arg reduce). */
@@ -497,6 +507,33 @@ export const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILIN
 export function createEngine(doc: EngineDoc): Engine {
   const nodeIds = doc.nodes.map((n) => n.id);
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
+  const variableDefs = doc.variables ?? [];
+
+  /**
+   * #844 V2 (spec V-D3) — a FRESH `name → default` map for a new run's state.
+   * A structured default is copied, so run state never aliases the immutable
+   * doc: a whole-value `${vars.rows}` hands its value to an executor, and
+   * nothing downstream of that may reach back into the bound version. Defaults
+   * are JSON by the save gate (V1's replay-safety walk), so the copy is exact.
+   */
+  function seedVariables(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const v of variableDefs) {
+      const value: unknown =
+        typeof v.default === 'object' && v.default !== null
+          ? JSON.parse(JSON.stringify(v.default))
+          : v.default;
+      // A DATA property, not `out[name] =`: the name rule admits `__proto__`,
+      // and an assignment would set the prototype instead of a variable.
+      Object.defineProperty(out, v.name, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
 
   // Every doc defect the bind detects, reported ONCE per run at `run.started`
   // (drained below). One list, not one per defect class: the write path refuses
@@ -1153,6 +1190,7 @@ export function createEngine(doc: EngineDoc): Engine {
         parentRunId: null,
       },
       trigger,
+      variables: state.variables,
     };
   }
 
@@ -3188,6 +3226,9 @@ export function createEngine(doc: EngineDoc): Engine {
       // crash between the cancel and its `run.finished`, or a start racing the
       // cancel), so cancel-mode `settle` finishes it without dispatching.
       cancelRequested: state.cancelRequested,
+      // #844 V2 — seeded afresh from the defaults (V-D3). Nothing can write a
+      // variable before the run starts, so there is nothing to carry.
+      variables: seedVariables(),
     };
     // RS1 — rerun-from-failed DEFERS dispatch: a `run.started{rerunOf}` seeds the
     // node/container map but must NOT settle, because the immediately-following
@@ -4678,6 +4719,7 @@ export function createEngine(doc: EngineDoc): Engine {
       sessions: {},
       triggerContext: null,
       cancelRequested: null,
+      variables: seedVariables(),
     };
   }
 

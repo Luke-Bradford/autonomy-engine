@@ -45,7 +45,7 @@ describe('applyInsert', () => {
  */
 function issuesWithField(node: Node, field: string) {
   return (value: string) =>
-    validateCanvas([{ ...node, config: { ...node.config, [field]: value } }], [], [], []);
+    validateCanvas([{ ...node, config: { ...node.config, [field]: value } }], [], [], [], []);
 }
 
 describe('insertModeFor', () => {

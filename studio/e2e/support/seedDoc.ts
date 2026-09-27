@@ -126,6 +126,15 @@ export interface SeedDoc {
   containers?: SeedContainer[];
   params?: SeedParam[];
   outputs?: SeedOutput[];
+  variables?: SeedVariable[];
+}
+
+/** A declared pipeline variable (#844). Until V3 the API is the only way to declare one. */
+export interface SeedVariable {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'array';
+  default: unknown;
+  description?: string;
 }
 
 /**
@@ -184,6 +193,8 @@ export async function mintVersion(
         // refuses duplicates on.
         edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
         containers: doc.containers ?? [],
+        // Only when stated, so every other seed's body is unchanged.
+        ...(doc.variables === undefined ? {} : { variables: doc.variables }),
         basedOnVersionId,
       },
     },
