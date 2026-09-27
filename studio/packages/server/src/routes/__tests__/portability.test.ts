@@ -64,6 +64,9 @@ describe('portability routes (export + import)', () => {
         sourceBranch: _sb,
         sourceFilePath: _sfp,
         sourceBlobSha: _sbs,
+        // #844 V1 — an EMPTY `variables` is omitted from an export, so every
+        // pre-V1 file keeps its bytes (spec V-D2).
+        variables: _vars,
         /* eslint-enable @typescript-eslint/no-unused-vars */
         ...versionWithoutProvenance
       } = version;

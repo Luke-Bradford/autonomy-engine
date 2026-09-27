@@ -22,7 +22,8 @@ import {
   type PipelineVersionExport,
   type ResourceKind,
   type Trigger,
-  omitEmptyVariables,} from '@autonomy-studio/shared';
+  omitEmptyVariables,
+} from '@autonomy-studio/shared';
 import {
   getLatestPipelineVersion,
   listConnections,

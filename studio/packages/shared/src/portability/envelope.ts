@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import { ConnectionPublicSchema } from '../schemas/connection.js';
 import { DatasetSchema } from '../schemas/dataset.js';
-import {  NodeSchema,  PipelineSchema,  PipelineVersionSchema,  VariableDefSchema,} from '../schemas/pipeline.js';
+import {
+  NodeSchema,
+  PipelineSchema,
+  PipelineVersionSchema,
+  VariableDefSchema,
+} from '../schemas/pipeline.js';
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { RESOURCE_KINDS } from './paths.js';

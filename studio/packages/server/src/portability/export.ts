@@ -14,7 +14,8 @@ import {
   type PipelineVersion,
   type PipelineVersionExport,
   type TriggerExportData,
-  omitEmptyVariables,} from '@autonomy-studio/shared';
+  omitEmptyVariables,
+} from '@autonomy-studio/shared';
 import {
   getConnection,
   getDataset,

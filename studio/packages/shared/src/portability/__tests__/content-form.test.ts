@@ -291,16 +291,12 @@ describe('variables in the version content form (#844 V1)', () => {
     ({ ...version, variables }) as unknown as PipelineExportData['versions'][number];
 
   it('an empty list is byte-identical to an absent key', () => {
-    const { variables: _absent, ...noKey } = withVars([]);
-    expect(pipelineVersionContentForm(withVars([]))).toBe(
-      pipelineVersionContentForm(noKey as PipelineExportData['versions'][number]),
-    );
+    // `version` is the pre-V1 shape: it has no `variables` key at all.
+    expect(Object.keys(version)).not.toContain('variables');
+    expect(pipelineVersionContentForm(withVars([]))).toBe(pipelineVersionContentForm(version));
     expect(pipelineVersionContentForm(withVars([]))).not.toContain('variables');
     expect(pipelineContentForm({ ...pipelineData(), versions: [withVars([])] })).toBe(
-      pipelineContentForm({
-        ...pipelineData(),
-        versions: [noKey as PipelineExportData['versions'][number]],
-      }),
+      pipelineContentForm(pipelineData()),
     );
   });
 

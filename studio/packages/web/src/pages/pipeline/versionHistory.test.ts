@@ -436,14 +436,7 @@ describe('docUnchanged', () => {
      actions only `params`/`outputs`. A check that skipped any one of them would
      let that action's edits be silently overwritten by the rebase, which is the
      exact data loss this guard exists to stop. */
-  for (const field of [
-    'nodes',
-    'edges',
-    'containers',
-    'params',
-    'outputs',
-    'variables',
-  ] as const) {
+  for (const field of ['nodes', 'edges', 'containers', 'params', 'outputs', 'variables'] as const) {
     it(`fails when only \`${field}\` was replaced`, () => {
       const before = doc();
       expect(docUnchanged(before, { ...before, [field]: [] })).toBe(false);

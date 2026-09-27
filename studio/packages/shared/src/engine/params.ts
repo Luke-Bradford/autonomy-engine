@@ -2104,10 +2104,7 @@ function validateSecretMarker(where: string, value: unknown, errors: string[]): 
  *
  * Returns error strings; `[]` means valid.
  */
-export function validatePipelineDoc(
-  doc: ValidatedDoc,
-  options: ValidateDocOptions = {},
-): string[] {
+export function validatePipelineDoc(doc: ValidatedDoc, options: ValidateDocOptions = {}): string[] {
   return [...validateDoc(doc, options), ...validateRefs(doc)];
 }
 
@@ -2237,10 +2234,7 @@ export const CONTAINER_CONFIG_FIELDS: Record<ContainerKind, readonly ContainerCo
  *  - a `call_pipeline` node introduces no cycle and no path deeper than
  *    `maxCallDepth` over the (statically-resolvable) call graph.
  */
-export function validateDoc(
-  doc: ValidatedDoc,
-  options: ValidateDocOptions = {},
-): string[] {
+export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {}): string[] {
   const errors: string[] = [];
   const nodeIdList = doc.nodes.map((n) => n.id);
   const nodeIdSet = new Set(nodeIdList);
