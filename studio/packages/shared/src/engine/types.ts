@@ -1558,7 +1558,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * non-terminal `captured` ActivityEvent (mirroring `metered`) which the
      * executor maps here, ordered BEFORE the terminal `node.succeeded`/`node.failed`.
      * ONE per provider response — a text call emits one; a structured call emits
-     * one per response, so a repaired attempt emits two (#605).
+     * one per response, so a repaired attempt emits two; a tool loop emits one per
+     * round, each recording the calls and results of the rounds before it (#605).
      *
      * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered` /
      * `node.output`): capture is telemetry, not a typed `${}`-addressable output,
@@ -1583,8 +1584,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * content the author marked secret, and on exactly those nodes it is already
      * scrubbed.
      *
-     * Still deferred to #605: the verbose reasoning trace, and tool-loop rounds
-     * after the first.
+     * Still deferred to #605: the verbose reasoning trace.
      */
     type: z.literal('activity.captured'),
     runId: z.string(),
@@ -1598,11 +1598,25 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     latencyMs: z.number().int().nonnegative(),
     /** The prompt: fingerprints + lengths, plus the text in `full` mode. */
     request: z.object({
-      /** Number of user/assistant turns (the `system` instruction is separate). */
+      /** Number of turns, tool turns included (the `system` instruction is separate). */
       messageCount: z.number().int().nonnegative(),
       /** Present IFF a system instruction was sent. */
       system: CapturedContentSchema.optional(),
-      messages: z.array(CapturedContentSchema.extend({ role: z.enum(['user', 'assistant']) })),
+      messages: z.array(
+        CapturedContentSchema.extend({
+          role: z.enum(['user', 'assistant']),
+          /**
+           * #605 — present on a turn that records one half of an earlier tool
+           * round-trip, ABSENT on an author turn: `calls` is the assistant's
+           * calls as JSON `[{name, args}]`, `result`/`error` one executed call's
+           * tool_result text (`error` for an error result). A MARKER, not a new
+           * `role`, so an older build still parses the event: this object is not
+           * strict and drops the key, where a new enum member would fail its
+           * parse of the whole run log.
+           */
+          toolTurn: z.enum(['calls', 'result', 'error']).optional(),
+        }),
+      ),
     }),
     /**
      * The completion SHAPE. ABSENT when no completion text was extracted (a

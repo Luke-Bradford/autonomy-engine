@@ -164,6 +164,13 @@ export interface LlmUsage {
 }
 
 /**
+ * #605 — which half of a tool round-trip a CAPTURED turn records. Absent on an
+ * author turn. `calls` is the assistant's tool-call turn; `result`/`error` is
+ * one executed call's tool_result, `error` when it was an error result.
+ */
+export type CaptureToolTurn = 'calls' | 'result' | 'error';
+
+/**
  * A debugging CAPTURE fact for ONE `llm_call` provider response (#2 L9a): the
  * prompt/completion SHAPE (hash + length) + provider-call latency — the
  * "redacted" default the spec's telemetry-vs-content hardening prescribes — and,
@@ -179,7 +186,10 @@ export interface LlmCapture {
   request: {
     messageCount: number;
     system?: CapturedContent;
-    messages: (CapturedContent & { role: 'user' | 'assistant' })[];
+    messages: (CapturedContent & {
+      role: 'user' | 'assistant';
+      toolTurn?: CaptureToolTurn;
+    })[];
   };
   completion?: CapturedContent;
 }
