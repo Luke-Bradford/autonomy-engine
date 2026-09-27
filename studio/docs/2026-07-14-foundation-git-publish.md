@@ -46,7 +46,7 @@ without the git-as-database re-write, and layers cleanly on P1c + #1.
 
 - A **file layout** in the repo (git-friendly, one resource per file, stable ids/paths):
   `pipelines/<name>.json` (each = the immutable version doc), `connections/<name>.json`
-  (**config only, NO secret**), `triggers/<name>.json`, `global-params.json`, `workspace.json`
+  (**config only, NO secret**), `triggers/<name>.json`, `global-params.json` *(built as `global-params/<name>.json`, one per global: GL-D6 of [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md))*, `workspace.json`
   (folders/annotations/meta). Version-stamped envelope (reuse P1c's upgrade framework).
 - **Secrets never serialized.** Connection files carry non-secret `config` only. On import, a
   secret-bearing connection lands **disabled / "needs secret"** (mirror P1c's unbound-trigger

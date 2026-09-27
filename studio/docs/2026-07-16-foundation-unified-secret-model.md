@@ -143,6 +143,10 @@ makes the **secret name the single namespace F15 addresses now**; secure globals
 *later* layer whose `${global.secureX}` resolves to a secret name. **Do not build `global_params`
 in this phase.** F7 references this store; this store does not wait on F7.
 
+*(2026-09-27: the globals spec, [`2026-09-27-foundation-global-params.md`](./2026-09-27-foundation-global-params.md) GL-D5, declines the secure-globals layer. A credential is a
+named secret addressed as `{ "$secret": "<name>" }`, and a global is cleartext configuration. F7c is
+superseded by F15.)*
+
 ---
 
 ## §2 — the MARKER: `{ "$secret": "<name>" }` **[SETTLED]**
@@ -337,7 +341,7 @@ S1 → S2 → S3 → S4. Source before sink; gate before resolution; resolution 
 
 ## Non-goals
 
-- `global_params` / secure globals (F7) — a later layer that resolves TO this store.
+- `global_params` / secure globals (F7) — a later layer that resolves TO this store. *(Not built: GL-D5.)*
 - The opaque-secret-handle target for secureOutput (D8) — MVP is prohibit-first (resolved-Q-2).
 - Multi-secret-per-connection / secret-in-connection-config (A10 remainder) — deferred to the
   A11/A14 connectors that need it; resolved *mechanism* recorded (§5).
