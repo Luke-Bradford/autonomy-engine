@@ -38,7 +38,13 @@
  * Note this is deliberately NOT the apply order — that is `APPLY_RANK`'s job,
  * and a dataset must be applied AFTER the connection it names.
  */
-export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger', 'dataset', 'global-param'] as const;
+export const RESOURCE_KINDS = [
+  'pipeline',
+  'connection',
+  'trigger',
+  'dataset',
+  'global-param',
+] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 

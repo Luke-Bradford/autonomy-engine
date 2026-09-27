@@ -91,10 +91,13 @@ export const globalParamsRoutes: FastifyPluginAsync = async (fastify) => {
    * other export route. Owner-checked by `exportGlobalParam`: another owner's id
    * is a 404, the same answer as an unknown one.
    */
-  fastify.get<{ Params: { id: string } }>('/api/global-params/:id/export', async (request, reply) => {
-    const envelope = exportGlobalParam(db, request.params.id, request.principal.ownerId);
-    return reply.type('application/json').send(canonicalStringify(envelope));
-  });
+  fastify.get<{ Params: { id: string } }>(
+    '/api/global-params/:id/export',
+    async (request, reply) => {
+      const envelope = exportGlobalParam(db, request.params.id, request.principal.ownerId);
+      return reply.type('application/json').send(canonicalStringify(envelope));
+    },
+  );
 
   /**
    * Allowed even when a pipeline reads the global (GL-D4): versions are

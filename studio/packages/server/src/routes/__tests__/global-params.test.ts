@@ -371,7 +371,10 @@ describe('global params export and import (#844 GL6)', () => {
     const envelope = (
       await app.inject({ method: 'GET', url: `/api/global-params/${g.id}/export` })
     ).json();
-    const res = await importFile({ ...envelope, data: { ...envelope.data, name: 'CFG', value: 1 } });
+    const res = await importFile({
+      ...envelope,
+      data: { ...envelope.data, name: 'CFG', value: 1 },
+    });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toContain('"cfg" already exists');
     expect(getGlobalParam(app.db, g.id)!.value).toEqual({ region: 'eu' });

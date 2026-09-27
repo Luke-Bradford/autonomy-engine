@@ -2492,9 +2492,10 @@ describe('applyWorkspace — global parameters (#844 GL6)', () => {
 
     expect(result.refused).toBe(false);
     expect(result.diagnostics).toEqual([]);
-    expect(
-      result.applied.filter((a) => a.kind === 'global-param').map((a) => a.action),
-    ).toEqual(['created', 'created']);
+    expect(result.applied.filter((a) => a.kind === 'global-param').map((a) => a.action)).toEqual([
+      'created',
+      'created',
+    ]);
     expect(globalsOf(dst)).toEqual(globalsOf(src));
   });
 

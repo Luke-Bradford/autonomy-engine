@@ -11,6 +11,7 @@ import {
   type GlobalParamType,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
+import { downloadTextFile, exportFileName } from '../api/download';
 import {
   createGlobalParam,
   deleteGlobalParam,
@@ -18,8 +19,11 @@ import {
   listGlobalParams,
   updateGlobalParam,
 } from '../api/globalParams';
+import { exportGlobalParam } from '../api/portability';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { deleteConfirmText } from './globalParamDeleteText';
+import { ImportPanel } from './ImportPanel';
 import { ContractRow } from './pipeline/ContractEditor';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 
@@ -111,6 +115,24 @@ export function GlobalParamsPage() {
     [refresh],
   );
 
+  /** #844 GL6 — save the global's export file, as Datasets does (#1143). */
+  const { active: exporting, run: runExport } = useBusyAction();
+  const onExport = useCallback(
+    (global: GlobalParam) =>
+      runExport(global.id, async () => {
+        setLoadError(null);
+        try {
+          downloadTextFile(
+            exportFileName('global-param', global.name, global.id),
+            await exportGlobalParam(global.id),
+          );
+        } catch (err) {
+          setLoadError(`Could not export “${global.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
+
   const saved = globals ?? [];
 
   return (
@@ -161,6 +183,8 @@ export function GlobalParamsPage() {
           saved={global}
           onDone={refresh}
           onRemove={() => void onDelete(global)}
+          onExport={() => void onExport(global)}
+          exporting={exporting.has(global.id)}
         />
       ))}
       {drafts.map((draft, i) => (
@@ -175,6 +199,8 @@ export function GlobalParamsPage() {
           onRemove={() => dropDraft(draft.key)}
         />
       ))}
+
+      <ImportPanel listKind="global-param" onImported={refresh} />
     </section>
   );
 }
@@ -184,12 +210,17 @@ function GlobalRow({
   saved,
   onDone,
   onRemove,
+  onExport,
+  exporting = false,
 }: {
   index: number;
   /** `null` for a row not yet created. */
   saved: GlobalParam | null;
   onDone: () => Promise<void>;
   onRemove: () => void;
+  /** Absent for a row not yet created: there is nothing stored to export. */
+  onExport?: () => void;
+  exporting?: boolean;
 }) {
   const storedText = saved ? formatDefaultInput(saved.value, saved.type) : '';
   const [row, setRow] = useState<RowFields>(() =>
@@ -305,6 +336,17 @@ function GlobalRow({
         >
           {busy ? 'Saving…' : saved ? 'Save' : 'Create'}
         </button>
+        {saved && onExport ? (
+          <button
+            type="button"
+            aria-label={`Export ${saved.name}`}
+            disabled={exporting}
+            aria-busy={exporting}
+            onClick={onExport}
+          >
+            Export
+          </button>
+        ) : null}
       </ContractRow>
     </div>
   );

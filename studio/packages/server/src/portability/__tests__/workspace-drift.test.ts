@@ -395,7 +395,10 @@ describe('computeDrift — global parameters (#844 GL6)', () => {
     expect(added).toEqual([
       expect.objectContaining({ kind: 'global-param', resourceId: 'apiurl', change: 'added' }),
     ]);
-    const removed = computeDrift(ws(), ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }));
+    const removed = computeDrift(
+      ws(),
+      ws({ globalParams: [parsedGlobal('apiUrl', 'string', 'a')] }),
+    );
     expect(removed[0]).toMatchObject({ kind: 'global-param', change: 'removed' });
   });
 

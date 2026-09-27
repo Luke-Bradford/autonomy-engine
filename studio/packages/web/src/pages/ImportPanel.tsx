@@ -53,6 +53,7 @@ const SECTION: Record<ExportKind, { label: string; path: string }> = {
   connection: { label: 'Manage → Connections', path: '/manage/connections' },
   trigger: { label: 'Manage → Triggers', path: '/manage/triggers' },
   dataset: { label: 'Manage → Datasets', path: '/manage/datasets' },
+  'global-param': { label: 'Manage → Global parameters', path: '/manage/global-params' },
 };
 
 interface Outcome {

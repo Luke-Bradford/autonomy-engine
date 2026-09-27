@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  DIAGNOSTIC_REFUSES_IMPORT,
   appliedActionWroteNothing,
   dispositionWritesNothing,
   formatZodIssues,
@@ -57,8 +58,8 @@ import { formatWhen } from './runs/format';
  *
  * WHY COMMIT LIVES HERE rather than on the pipeline command bar, which is where
  * the settled three-act model (#662: Save / Commit / Publish) puts it: a commit
- * serializes the WHOLE workspace — every pipeline, connection, dataset and trigger — and
- * returns the file set it wrote. It is not an act on the pipeline you happen to
+ * serializes the WHOLE workspace — every pipeline, connection, dataset, trigger and global parameter —
+ * and returns the file set it wrote. It is not an act on the pipeline you happen to
  * have open, and dressing it as one would misreport its blast radius. An import
  * is the same shape in the other direction, which is why it is here too. The
  * command-bar half of U18 is still owed.
@@ -595,8 +596,8 @@ function CommitSection({
     <section aria-labelledby="commit-heading">
       <h3 id="commit-heading">Commit</h3>
       <p className="page-hint">
-        A commit writes the whole workspace — every pipeline, connection, dataset and trigger — to{' '}
-        <code>{status.workingBranch}</code> and pushes it.
+        A commit writes the whole workspace — every pipeline, connection, dataset, trigger and
+        global parameter — to <code>{status.workingBranch}</code> and pushes it.
       </p>
 
       <div className="form-actions">
@@ -1053,7 +1054,12 @@ function ImportOutcomeReport({
           be the silent omission the whole diagnostic channel exists to prevent. */}
       <ParseDiagnostics diagnostics={result.diagnostics} note={null} />
 
-      {changed.length === 0 && result.archived.length === 0 && result.deferred.length === 0 ? (
+      {changed.length === 0 &&
+      result.archived.length === 0 &&
+      result.deferred.length === 0 &&
+      // #844 GL6 — a branch global skipped for a type conflict means the
+      // workspace does NOT match the branch, whatever else wrote nothing.
+      !result.diagnostics.some((d) => d.code === 'global_param_conflict') ? (
         /* The commonest outcome, and the analogue of `committed: false`: every
            resource wrote nothing, so "0 changed" is a success, not a
            failure, and must not be phrased as one. `deferred` is part of the
@@ -1192,10 +1198,12 @@ function ResourceChangeTable({ rows }: { rows: ResourceChangeRow[] }) {
 
 /** #1043 — does this diagnostic make an import REFUSE? Only the branch-side
  * codes do. A DB-side `unserializable_ref` is a resource the comparison left
- * out; the import still runs, so telling the operator it refuses would be a
- * plain falsehood about what is about to happen. */
+ * out, and a `global_param_conflict` (#844 GL6) is one branch global the import
+ * will not write; either way the import still runs, so telling the operator it
+ * refuses would be a plain falsehood about what is about to happen. The table
+ * is shared with the server, exhaustive over the codes. */
 function refusesImport(diagnostic: WorkspaceParseDiagnostic): boolean {
-  return diagnostic.code !== 'unserializable_ref';
+  return DIAGNOSTIC_REFUSES_IMPORT[diagnostic.code];
 }
 
 /**
@@ -1219,7 +1227,7 @@ function ParseDiagnostics({
   if (diagnostics.length === 0) return null;
   return (
     <>
-      <h4>Resources that could not be read or compared</h4>
+      <h4>Resources that could not be read, compared or applied</h4>
       {note !== null && <p>{note}</p>}
       <ul>
         {diagnostics.map((diagnostic) => (

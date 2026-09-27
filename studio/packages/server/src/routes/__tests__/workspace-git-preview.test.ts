@@ -291,14 +291,11 @@ describe('workspace-git import-preview route', () => {
     ]);
     expect(result.diagnostics).toEqual([conflict]);
 
-    const applied = (
-      await app.inject({ method: 'POST', url: '/api/workspace/git/import' })
-    ).json().import;
+    const applied = (await app.inject({ method: 'POST', url: '/api/workspace/git/import' })).json()
+      .import;
     expect(applied.refused).toBe(false);
     expect(applied.diagnostics).toEqual([conflict]);
-    expect(
-      listOwnerGlobalParams(app.db, 'local').map((g) => [g.name, g.type, g.value]),
-    ).toEqual([
+    expect(listOwnerGlobalParams(app.db, 'local').map((g) => [g.name, g.type, g.value])).toEqual([
       ['limit', 'number', 5],
       ['region', 'string', 'eu'],
     ]);
