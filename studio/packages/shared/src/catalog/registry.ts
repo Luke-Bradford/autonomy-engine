@@ -5,6 +5,7 @@ import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
   AGENT_TASK_ACTIVITY_TYPE,
+  APPEND_VARIABLE_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
@@ -18,6 +19,7 @@ import {
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
+  SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
@@ -200,6 +202,47 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({ message: z.string().min(1) }),
+  },
+  {
+    // #844 V5 — the `set_variable` CONTROL activity (spec V-D4). Engine-evaluated
+    // like `fail`/`filter` (`kind:'control'`, no connector, never dispatched): the
+    // reducer evaluates `value` over the scoped run state, checks it against the
+    // declared type, replay safety and `VARIABLE_MAX_BYTES`, and holds the node
+    // `ready` while the driver appends `variable.set` (the write and the node's
+    // success, one event). An unwritable value fails the node `permanent` with a
+    // `VARIABLE_*` code instead. `variable` is a declared variable's literal name —
+    // never `${}`, or the determinism guard could not tell what it writes.
+    // `configSchema` is palette metadata; the save-time rules are `validateDoc`'s
+    // `validateVariableWriteConfig` plus the guard. No outputs: the write IS the
+    // result, read back as `${vars.<name>}`.
+    type: SET_VARIABLE_ACTIVITY_TYPE,
+    title: 'Set variable',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({
+      variable: singleLine(z.string()).min(1),
+      value: singleLine(z.string()),
+    }),
+  },
+  {
+    // #844 V5 — the `append_variable` CONTROL activity (spec V-D4): `set_variable`'s
+    // twin that appends ONE element to an `array` variable. The element is
+    // untyped JSON, so it is not coerced: a literal appends a string, a
+    // whole-value `${}` appends its native value.
+    type: APPEND_VARIABLE_ACTIVITY_TYPE,
+    title: 'Append variable',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({
+      variable: singleLine(z.string()).min(1),
+      value: singleLine(z.string()),
+    }),
   },
   {
     // #4 A8 — the `filter` CONTROL activity. Engine-evaluated like `if`/`switch`/

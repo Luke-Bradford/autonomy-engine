@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EdgeOn, Node, PipelineVersion } from '../types.js';
-import { containerMembership, crossesContainerBoundary, validatePipelineDoc } from '../params.js';
+import { containerMembership, crossesContainerBoundary } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 
 /**
  * `crossesContainerBoundary` — the CONNECT-TIME half of the encapsulation rule

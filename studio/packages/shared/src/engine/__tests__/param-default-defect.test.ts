@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { paramDefaultDefect, resolveRunParams, validatePipelineDoc } from '../params.js';
+import { paramDefaultDefect, resolveRunParams } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import type { Node, Param, ParamType } from '../../index.js';
 
 const NODE: Node = { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };

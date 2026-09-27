@@ -5,7 +5,7 @@ import {
   VariableDefSchema,
   type VariableDef,
 } from '../../schemas/pipeline.js';
-import { validatePipelineDoc } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 
 /**
  * #844 V1 — pipeline variables are DECLARED on the version doc (spec

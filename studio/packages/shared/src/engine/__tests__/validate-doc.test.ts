@@ -12,11 +12,11 @@ import {
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
   validateDoc,
-  validatePipelineDoc,
   validateRefs,
   type ContainerConfigField,
   type PipelineResolver,
 } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 import { ContainerSchema, type ContainerKind } from '../../schemas/pipeline.js';
 import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 
@@ -1605,6 +1605,7 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
     timeout: 30,
     items: '${run.params.rows}',
     batchCount: 2,
+    allowNondeterministicVars: true,
     join: 'all',
   };
 

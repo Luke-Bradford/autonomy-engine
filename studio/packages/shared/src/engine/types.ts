@@ -844,7 +844,50 @@ export const FAILURE_CODES = {
    * says the same, so this is a convenience, not the sole signal.
    */
   FORCED_FAIL: 'forced_fail',
+  /**
+   * #844 V5 (spec V-D4) — a `set_variable` value did not have its variable's
+   * declared type: a whole-value `${}` of another type (no silent conversion), a
+   * literal the param coercion refuses, or text for a non-`string` variable.
+   * Always `permanent` (re-evaluating over the same state re-fails), and a node
+   * failure rather than a run failure, so the graph's failure edges can handle it.
+   */
+  VARIABLE_TYPE_MISMATCH: 'variable_type_mismatch',
+  /**
+   * #844 V5 (spec V-D4) — the variable's value after this write would not fit
+   * `VARIABLE_MAX_BYTES`. The write is NOT made (never truncated: a truncated
+   * value is a silently wrong one). Always `permanent`.
+   */
+  VARIABLE_TOO_LARGE: 'variable_too_large',
+  /**
+   * #844 V5 (spec V-D4) — the value to write holds a non-finite number, which
+   * `JSON.stringify` renders as `null`, so the logged write would replay as a
+   * different value (#547). Always `permanent`.
+   */
+  VARIABLE_NOT_REPLAY_SAFE: 'variable_not_replay_safe',
 } as const;
+
+/**
+ * #844 V5 (spec V-D4) — the most a pipeline variable's value may weigh, as the
+ * UTF-8 bytes of its JSON. `RunState.variables` is held in memory and carried
+ * into every later dispatch's scope, so this is the denial-of-service bound on
+ * run state (V-D8). A write that would exceed it fails the node rather than
+ * truncating. 256 KiB is a judgement, not a measurement (spec open question 2).
+ */
+export const VARIABLE_MAX_BYTES = 256 * 1024;
+
+/**
+ * #844 V5 (spec V-D7) — one variable write, as a rerun carries it in
+ * `run.reseeded.copiedVariableWrites`: the SOURCE run's `nodeId` (instance key
+ * included), the operation, the variable and the value the write recorded — for
+ * an `append`, the ELEMENT appended, never the whole array.
+ */
+export const VariableWriteSchema = z.object({
+  nodeId: z.string(),
+  op: z.enum(['set', 'append']),
+  name: z.string(),
+  value: z.unknown(),
+});
+export type VariableWrite = z.infer<typeof VariableWriteSchema>;
 
 /**
  * The `activity.warned.code` values the engine mints — the ADVISORY twin of
@@ -1092,12 +1135,9 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     sourceRunId: z.string(),
     /** Top-level node ids copied as terminal-`success` (the successful prefix). */
     frontier: z.array(z.string()),
-    /** Per-frontier-node stored outputs (`nodeId → {name → value}`). This once
-     * claimed to subsume the RS spec's `copiedVariables`, when outputs were the
-     * only run-level writable channel. Since #844 V2 `RunState.variables` is a
-     * separate store (seeded from defaults, so a rerun starts from them); V5
-     * carries the copied frontier's writes as `copiedVariableWrites` (spec V-D7),
-     * together with the first thing that can write one. */
+    /** Per-frontier-node stored outputs (`nodeId → {name → value}`). Variables
+     * are a separate store (#844): the copied nodes' writes travel in
+     * `copiedVariableWrites` below (spec V-D7). */
     copiedOutputs: z.record(z.string(), z.record(z.string(), z.unknown())),
     /** Fully-completed containers copied as terminal units (`containerId → state`);
      * RS3 decides which containers are copiable, this fold applies them. */
@@ -1112,6 +1152,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     childLinks: z
       .array(z.object({ callNodeId: z.string(), sourceChildRunId: z.string() }))
       .optional(),
+    /**
+     * #844 V5 (spec V-D7) — the COPIED nodes' variable writes, in the source
+     * run's log order; the fold starts from the version defaults and applies
+     * them in turn. A list, not a final map, because a rerun of THIS run must be
+     * able to filter it again (`copiedVariableWritesOf`). Optional for OLD logs
+     * only: those were written against versions with no variables, so "absent"
+     * is literally "no copied writes". Every new reseed writes it (`reseed.ts`).
+     */
+    copiedVariableWrites: z.array(VariableWriteSchema).optional(),
   }),
   z.object({
     type: z.literal('node.dispatched'),
@@ -1291,6 +1340,40 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     branch: z.string(),
+  }),
+  z.object({
+    /**
+     * #844 V5 (spec V-D4) — a `set_variable` node REPLACED a pipeline variable's
+     * value. The write and the node's success are ONE event because they are one
+     * decision: two events would admit a log where the node succeeded and the
+     * write is missing. Appended by the DRIVER (`pump`) in response to the
+     * reducer's `writeVariable` command, whose value the reducer evaluated and
+     * checked (type, replay safety, `VARIABLE_MAX_BYTES`) at dispatch. The fold
+     * TRUSTS `value` and never evaluates again, so replay cannot diverge even if a
+     * function's behaviour later changes. `attemptId` is the node's current
+     * attempt, so a stale re-append folds as a no-op. Never secure: a `set` node
+     * cannot carry `policy.secureInput`/`secureOutput` (`validateSecurePolicy`).
+     */
+    type: z.literal('variable.set'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    name: z.string(),
+    value: z.unknown(),
+  }),
+  z.object({
+    /**
+     * #844 V5 (spec V-D4) — an `append_variable` node appended ONE element to an
+     * `array` variable. Carries the element, not the array, so an append log grows
+     * by one element per write; the fold appends it to the CURRENT array. Same
+     * driver-own handshake, trust and staleness rules as `variable.set`.
+     */
+    type: z.literal('variable.append'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    name: z.string(),
+    value: z.unknown(),
   }),
   z.object({
     /**
@@ -2211,6 +2294,34 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     error: z.string(),
+    /**
+     * #844 V5 — the `node.failed.code` to record; absent means
+     * `FAILURE_CODES.FORCED_FAIL`, so every pre-V5 emitter (`fail`) is unchanged.
+     * A `set_variable`/`append_variable` whose checked value cannot be written
+     * sends its `VARIABLE_*` code here. `kind` stays `permanent` either way.
+     */
+    code: z.string().optional(),
+  }),
+  z.object({
+    /**
+     * #844 V5 (spec V-D4) — "this `set_variable`/`append_variable` node writes
+     * this value; make the write durable." A driver-OWN command like `failNode`
+     * (no executor, no connector): the driver appends `variable.set` or
+     * `variable.append` carrying exactly these fields, and the fold applies it.
+     * The reducer evaluated `value` over the scoped run state and checked it
+     * before emitting this, so an unwritable value never reaches the log — it
+     * becomes a `failNode` instead. For `append`, `value` is the element.
+     *
+     * `ExecutorCommand` deliberately excludes it, so forgetting the pump branch
+     * is a COMPILE error. The `attemptId` is the node's current attempt, so a
+     * stale re-emit folds as a stale/terminal no-op.
+     */
+    type: z.literal('writeVariable'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    op: z.enum(['set', 'append']),
+    name: z.string(),
+    value: z.unknown(),
   }),
   z.object({
     /**

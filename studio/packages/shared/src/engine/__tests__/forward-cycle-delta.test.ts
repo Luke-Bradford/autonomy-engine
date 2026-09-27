@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EdgeOn, Node, PipelineVersion } from '../types.js';
-import { closesForwardCycle, validatePipelineDoc } from '../params.js';
+import { closesForwardCycle } from '../params.js';
+import { validatePipelineDoc } from '../validate-pipeline.js';
 
 /**
  * `closesForwardCycle` — the CONNECT-TIME half of the DAG rule (U6b).

@@ -17,6 +17,7 @@ import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
 import {
+  APPEND_VARIABLE_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -26,6 +27,7 @@ import {
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
   LLM_CALL_ACTIVITY_TYPE,
+  SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
@@ -1071,7 +1073,14 @@ export function paramDefaultDefect(p: Param): string | null {
   }
 }
 
-function coerce(name: string, type: Param['type'], value: unknown): unknown {
+function coerce(
+  name: string,
+  type: Param['type'],
+  value: unknown,
+  // #844 V5 — `set_variable` reuses this coercion for a literal value, and its
+  // errors must say "variable", not "param".
+  noun: 'param' | 'variable' = 'param',
+): unknown {
   switch (type) {
     case 'number': {
       // Deliberately independent of `expr.ts`'s number-LITERAL grammar, which
@@ -1092,17 +1101,17 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
         const n = Number(value.trim());
         if (Number.isFinite(n)) return n;
       }
-      throw new ParamResolveError(`param '${name}': expected a finite number`);
+      throw new ParamResolveError(`${noun} '${name}': expected a finite number`);
     }
     case 'boolean': {
       if (typeof value === 'boolean') return value;
       if (value === 'true') return true;
       if (value === 'false') return false;
-      throw new ParamResolveError(`param '${name}': expected boolean`);
+      throw new ParamResolveError(`${noun} '${name}': expected boolean`);
     }
     case 'string': {
       if (typeof value === 'string') return value;
-      throw new ParamResolveError(`param '${name}': expected string`);
+      throw new ParamResolveError(`${noun} '${name}': expected string`);
     }
     case 'json':
       // A `json` param accepts any already-parsed structured value as-is.
@@ -1186,6 +1195,163 @@ export function assertJsonReplaySafe(where: string, value: unknown): void {
   const [first] = jsonReplaySafetyErrors(where, value);
   if (first !== undefined) {
     throw new SubstituteError(first);
+  }
+}
+
+// --- variable writes (#844 V5) --------------------------------------------
+
+/**
+ * #844 V5 (spec V-D4) — how a `set_variable`/`append_variable` `value` field is
+ * evaluated: its interpolation mode, classified on the field AS WRITTEN. NOT
+ * trimmed, unlike the whole-value-REQUIRED fields (`validateWholeValue`):
+ * `substitute`, which evaluates the value at run time, does not trim, so
+ * `" ${vars.n} "` IS an interpolated string there, and a save-time verdict that
+ * trimmed would accept a number write that fails every run. One classifier for
+ * both halves. `null` for an unterminated `${`, which the grammar reports.
+ */
+export function variableValueMode(raw: string): 'literal' | 'whole' | 'interpolated' | null {
+  const mode = interpolationMode(raw);
+  return mode.unterminatedAt !== null ? null : mode.mode;
+}
+
+/**
+ * #844 V5 (spec V-D4) — the text a LITERAL `value` (no `${}`) stands for:
+ * `$${` escapes restored, exactly what `substitute` returns for it.
+ */
+export function variableLiteralText(raw: string): string {
+  return restoreEscapes(interpolationMode(raw).scanned);
+}
+
+/**
+ * #844 V5 (spec V-D4) — a `set_variable` value, resolved in `mode`, as the
+ * variable's declared type, or why it cannot be. ONE rule for save (the literal
+ * and interpolated cases, which are decided by the text alone) and run (every
+ * case):
+ *  - a whole-value `${expr}` keeps its native type and must already have the
+ *    declared one — no silent conversion, so `"5"` for a `number` is a mismatch;
+ *  - a literal is coerced as a param would be (`5` → 5, `true` → true), except
+ *    that an `array` has no literal form and must be set from a whole-value `${}`;
+ *  - an interpolated template (`a-${x}`) can only produce a string.
+ * An `append` value is an untyped element and never comes here.
+ */
+export function coerceVariableValue(
+  def: VariableDef,
+  mode: 'literal' | 'whole' | 'interpolated',
+  resolved: unknown,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  const noun = `variable '${def.name}'`;
+  if (mode === 'whole') {
+    return matchesSig(resolved, def.type)
+      ? { ok: true, value: resolved }
+      : { ok: false, error: `${noun}: expected ${articled(def.type)}, got ${typeName(resolved)}` };
+  }
+  if (mode === 'interpolated') {
+    return def.type === 'string'
+      ? { ok: true, value: resolved }
+      : {
+          ok: false,
+          error:
+            `${noun} is ${articled(def.type)}, but text around the \${...} makes the value ` +
+            'a string — write the value as one whole-value ${...} expression',
+        };
+  }
+  if (def.type === 'array') {
+    return {
+      ok: false,
+      error: `${noun} is an array, which is set from a whole-value \${...} expression, not a literal`,
+    };
+  }
+  try {
+    return { ok: true, value: coerce(def.name, def.type, resolved, 'variable') };
+  } catch (e) {
+    if (e instanceof ParamResolveError) return { ok: false, error: e.message };
+    throw e;
+  }
+}
+
+function articled(type: VariableDef['type']): string {
+  return `${type === 'array' ? 'an' : 'a'} ${type}`;
+}
+
+/**
+ * #844 V5 (spec V-D4) — the save-time CONFIG rules of a `set_variable` /
+ * `append_variable` node (`validateDoc`; the whole-value TYPE rule needs a scan
+ * scope and is `scanVariableWriteValue`, and the no-self-reference rule reads the
+ * validators' own reads and lives with the determinism guard):
+ *  - `variable` is the literal name of a declared variable (never `${}` — the
+ *    guard matches writers by name), and an `append` targets an `array`;
+ *  - `value` is text: a literal or a `${}` expression. A structured value (a
+ *    `{$secret}` marker included, which `scanSecretSinks` also refuses) is not;
+ *  - a `set` literal or template must be able to have the variable's type.
+ */
+function validateVariableWriteConfig(
+  node: Node,
+  variables: ReadonlyMap<string, VariableDef>,
+  errors: string[],
+): void {
+  const name = node.config['variable'];
+  let def: VariableDef | undefined;
+  if (typeof name !== 'string' || name === '' || name.includes('${')) {
+    errors.push(
+      `node.${node.id}.variable: must be the literal name of a declared variable ` +
+        '(not a ${...} expression)',
+    );
+  } else {
+    def = variables.get(name);
+    if (def === undefined) {
+      errors.push(`node.${node.id}.variable: '${name}' is not a declared variable`);
+    } else if (node.type === APPEND_VARIABLE_ACTIVITY_TYPE && def.type !== 'array') {
+      errors.push(
+        `node.${node.id}.variable: append_variable needs an array variable, but '${name}' ` +
+          `is ${articled(def.type)} — use set_variable`,
+      );
+      def = undefined;
+    }
+  }
+  const raw = node.config['value'];
+  if (typeof raw !== 'string') {
+    errors.push(
+      `node.${node.id}.value: must be text — a literal or a \${...} expression` +
+        (raw === undefined ? '' : `, got ${typeName(raw)}`),
+    );
+    return;
+  }
+  if (node.type !== SET_VARIABLE_ACTIVITY_TYPE || def === undefined) return;
+  const mode = variableValueMode(raw);
+  // `whole` is typed by `scanVariableWriteValue`; an unterminated `${` by `scan`.
+  if (mode === 'literal' || mode === 'interpolated') {
+    const verdict = coerceVariableValue(
+      def,
+      mode,
+      mode === 'literal' ? variableLiteralText(raw) : '',
+    );
+    if (!verdict.ok) errors.push(`node.${node.id}.value: ${verdict.error}`);
+  }
+}
+
+/**
+ * #844 V5 (spec V-D4) — the static TYPE half of a `set_variable` value: a
+ * whole-value `${expr}` whose inferred type is definitely not the variable's
+ * declared type is refused at save. An `any` passes (its run-time check is
+ * `coerceVariableValue`). Undeclared names and non-text values are
+ * `validateVariableWriteConfig`'s; grammar and ref defects are `scan`'s, which
+ * already walked the field.
+ */
+function scanVariableWriteValue(node: Node, scope: ScanScope, errors: string[]): void {
+  if (node.type !== SET_VARIABLE_ACTIVITY_TYPE) return;
+  const name = node.config['variable'];
+  const raw = node.config['value'];
+  if (typeof name !== 'string' || typeof raw !== 'string') return;
+  const def = scope.variables.get(name);
+  if (def === undefined || variableValueMode(raw) !== 'whole') return;
+  const mode = interpolationMode(raw);
+  if (mode.mode !== 'whole') return;
+  const typed = wholeValueType(mode.body, scope);
+  if (typed !== null && !assignableTo(typed.type, def.type)) {
+    errors.push(
+      `node.${node.id}.value: variable '${name}' is ${articled(def.type)}, but this ` +
+        `expression is ${articled(typed.type as VariableDef['type'])}`,
+    );
   }
 }
 
@@ -1367,6 +1533,9 @@ export function validateRefs(doc: ValidatedDoc, reads?: VariableReads): string[]
     // just scanned its refs; this adds the MODE + TYPE halves, which need the
     // node's `scope`.
     if (node.type === LLM_CALL_ACTIVITY_TYPE) scanLlmHistoryRef(node, scope, errors);
+    // #844 V5 — a `set_variable`'s whole-value value must be able to have the
+    // variable's type (the MODE half is `validateDoc`'s).
+    scanVariableWriteValue(node, scope, errors);
     // #2 L13a — a node's top-level `connectionId` may be a `${}` expression
     // (dynamic connection routing), resolved at dispatch by the reducer against
     // the SAME env `scan` scopes here (params/nodes/run/trigger, plus `${item}`
@@ -2108,43 +2277,9 @@ function validateSecretMarker(where: string, value: unknown, errors: string[]): 
   }
 }
 
-// --- validatePipelineDoc (the ONE composition both gates call) -------------
-
-/**
- * The COMPLETE static validation of a pipeline doc: the union of the two pure
- * validators. This is the SSOT for *which* rules a doc must satisfy, and both
- * gates call it — the canvas badge (`web/.../canvasDoc.ts`) and the server
- * write-gate (`server/.../repo/pipeline-versions.ts`, #444).
- *
- * It exists so those two can never drift apart. Hand-composing the two calls at
- * each site would make "the badge shows exactly what the server refuses" a
- * convention that holds only while every call site is remembered — the same
- * per-site-convention class that silently dropped `containers` in #473. Here it
- * holds by construction.
- *
- * `containers` is load-bearing for BOTH halves, not just the structural one: a
- * LOOP container re-runs its children, which is what makes a
- * `${nodes.<id>.status}` ref unanswerable in that doc (#6 E3).
- *
- * `options` forwards to `validateDoc` and gates the `call_pipeline` cycle+depth
- * analysis (#495). The two gates supply DIFFERENT options ON PURPOSE:
- *  - the CANVAS badge passes NONE (`canvasDoc.ts`) — it has no DB, and enforcing
- *    a rule the canvas never checked would newly 400 a doc that badges clean;
- *  - the SERVER write gate passes `{ selfId, resolvePipeline }` where
- *    `resolvePipeline` is OWNER-SCOPED (`repo/pipeline-versions.ts`, #495).
- * This function stays PURE — it does no I/O and reads no clock. The DB read the
- * call graph needs lives entirely in the resolver the SERVER injects; passing a
- * function is not an effect, and `validateDoc` only invokes whatever resolver it
- * is handed (the pure-core / injected-effect pattern `ValidateDocOptions` was
- * built for). A cycle that only manifests DYNAMICALLY (an unresolvable `${}` or
- * cross-owner callee) is still caught at run time by the reducer's `stalled`
- * backstop (#491), which the static gate does not replace.
- *
- * Returns error strings; `[]` means valid.
- */
-export function validatePipelineDoc(doc: ValidatedDoc, options: ValidateDocOptions = {}): string[] {
-  return [...validateDoc(doc, options), ...validateRefs(doc)];
-}
+// `validatePipelineDoc`, the ONE composition both gates call, lives in
+// `validate-pipeline.ts` (#844 V5): it runs the determinism guard, which imports
+// this module, so hosting it here would be an import cycle.
 
 // --- validateDoc (structural static validation, run at pipeline-SAVE time) --
 
@@ -2265,8 +2400,8 @@ function readsFor(reads: VariableReads | undefined, id: string): { variableReads
  * #844 V4 — the readers of every variable, collected as a SIDE OUTPUT of the
  * two validators' own scans rather than by a second config walker (spec V-D6):
  * a `${}` site a separate collector missed would be a false accept in the
- * determinism guard. V5 threads one map through `validatePipelineDoc`'s own
- * pass instead of calling this.
+ * determinism guard. This IS the two validators' pass: `validatePipelineDoc`
+ * calls it (V5), so the guard reads the map the gate's own scan filled.
  *
  * COMPLETE ONLY WHEN `validatorErrors` IS EMPTY. A ref inside an unknown
  * function's args, or under a refused root, is never reached by `checkRefRoot`
@@ -2275,13 +2410,16 @@ function readsFor(reads: VariableReads | undefined, id: string): { variableReads
  * The errors are returned, not dropped, so a caller cannot mistake the second
  * case for the first.
  */
-export function variableReadsOf(doc: ValidatedDoc): {
+export function variableReadsOf(
+  doc: ValidatedDoc,
+  options: Omit<ValidateDocOptions, 'variableReads'> = {},
+): {
   reads: VariableReads;
   validatorErrors: string[];
 } {
   const reads: VariableReads = new Map();
   const validatorErrors = [
-    ...validateDoc(doc, { variableReads: reads }),
+    ...validateDoc(doc, { ...options, variableReads: reads }),
     ...validateRefs(doc, reads),
   ];
   return { reads, validatorErrors };
@@ -2294,6 +2432,7 @@ export const CONTAINER_CONFIG_FIELD_NAMES = [
   'timeout',
   'items',
   'batchCount',
+  'allowNondeterministicVars',
   'join',
 ] as const;
 export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number];
@@ -2323,7 +2462,7 @@ export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number]
  */
 export const CONTAINER_CONFIG_FIELDS: Record<ContainerKind, readonly ContainerConfigField[]> = {
   loop: ['exitWhen', 'maxRounds', 'timeout', 'join'],
-  foreach: ['items', 'batchCount', 'join'],
+  foreach: ['items', 'batchCount', 'allowNondeterministicVars', 'join'],
   stage: ['join'],
 };
 
@@ -2462,6 +2601,10 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (node.type === SWITCH_ACTIVITY_TYPE) validateSwitchConfig(node, errors);
     // #4 A7 — a `fail`'s `message` presence (save-time half).
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
+    // #844 V5 — a `set_variable`/`append_variable`'s variable + value (save-time half).
+    if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+      validateVariableWriteConfig(node, variables, errors);
+    }
     // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
     // #4 A6 — a `wait`'s `seconds` presence + whole-value shape (number field).
@@ -2705,6 +2848,14 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (c.kind !== 'foreach' && c.batchCount !== undefined) {
       errors.push(
         `container '${c.id}': batchCount is only meaningful on a foreach, not a ${c.kind}`,
+      );
+    }
+    // #844 V5 — the variable-guard opt-in exempts a parallel foreach BODY; a loop
+    // or stage has none, so the field would be dead — refused like `batchCount`.
+    if (c.kind !== 'foreach' && c.allowNondeterministicVars !== undefined) {
+      errors.push(
+        `container '${c.id}': allowNondeterministicVars is only meaningful on a foreach, ` +
+          `not a ${c.kind}`,
       );
     }
     // #4 A4 — a `foreach` iterates its body once per element of `items`; it needs
@@ -4414,6 +4565,16 @@ function validateSecurePolicy(node: Node, errors: string[]): void {
     errors.push(
       `node '${node.id}': policy.${flags} is not supported on '${node.type}' — its result is ` +
         'the branch the run routes on, which is recorded and cannot be withheld',
+    );
+    return;
+  }
+  // #844 V5 (spec V-D4/V-D8) — a variable write lands in `RunState.variables`,
+  // readable everywhere through `${vars}`, and its `variable.*` event is not
+  // redacted, so a "secure" write would be a leak with a padlock on it.
+  if (node.type === SET_VARIABLE_ACTIVITY_TYPE || node.type === APPEND_VARIABLE_ACTIVITY_TYPE) {
+    errors.push(
+      `node '${node.id}': policy.${flags} is not supported on '${node.type}' — the value it ` +
+        'writes is readable everywhere as ${vars.<name>} and is recorded in the run log',
     );
     return;
   }

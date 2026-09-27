@@ -28,11 +28,14 @@ container states. Dispatch then proceeds from the ready set beyond the frontier 
 same walk as a normal run.
 
 **RS1 shape reconciled against the SHIPPED engine (built-block below):**
-- *(2026-09-27: the `copiedVariables` half of this bullet is reversed when V5 of [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md) lands. It
-  adds `copiedVariableWrites`, see V-D7.)* The proposed `copiedNodeStates` + `copiedVariables` fields are DROPPED — the engine has **no
-  `run.variables` concept**; the only run-level writable channel is per-node `outputs`, so
-  `copiedOutputs` (`nodeId → {name → value}`) alone carries the copied prefix, and `frontier` +
-  `copiedOutputs` fully determine the copied node states.
+- The proposed `copiedNodeStates` field is DROPPED: `frontier` + `copiedOutputs`
+  (`nodeId → {name → value}`) fully determine the copied node states. The proposed
+  `copiedVariables` map is REPLACED (#844 V5, V-D7 of
+  [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md))
+  by `copiedVariableWrites`: the copied nodes' variable writes as an ordered list, applied over the
+  version defaults. A list rather than a final map, because a rerun of the rerun must filter it
+  again. *(This bullet once said the engine had no `run.variables` concept; that stopped being
+  true at #844 V2.)*
 - `copiedTriggerContext` is DROPPED as a field — the "reuse R1's `${trigger.*}`" requirement (still
   load-bearing) is met by **REPLAYING R1's `run.triggerContext` before `run.started`** (the existing
   pre-start seed mechanism, single SSOT), exactly as an original trigger-launched run does. RS2's
@@ -53,11 +56,11 @@ same walk as a normal run.
 - **Frontier = the maximal set of nodes that (a) reached `success` in R1 AND (b) every path from them
   to the failed node(s) is via successful predecessors** — i.e. the successful "prefix" whose outputs
   the resumed run needs. Failed / downstream / skipped nodes are NOT copied; they re-run.
-- **Copied:** frontier nodes' `status=success` + their `outputs`; `run.variables` as of the last
-  successful write before the failure *(2026-09-27: superseded by V-D7 of
-  [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md).
-  Variables are carried as the copied nodes' writes in log order, `copiedVariableWrites`, not as a
-  "before the failure" cut, which has no single meaning under the drain model)*; container states for fully-completed containers.
+- **Copied:** frontier nodes' `status=success` + their `outputs`; the copied nodes' variable writes
+  in log order, `copiedVariableWrites` (#844 V5, V-D7 of
+  [`2026-09-27-foundation-pipeline-variables.md`](./2026-09-27-foundation-pipeline-variables.md) —
+  not a "before the failure" cut, which has no single meaning under the drain model); container
+  states for fully-completed containers.
 - **Attempts reset** for re-executed nodes (fresh `attemptId` sequence in R2); copied nodes keep no
   live attempt (they don't execute).
 - **Determinism:** the frontier is computed from R1's event log (pure function of the log), so it is

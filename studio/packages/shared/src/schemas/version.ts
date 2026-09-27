@@ -465,7 +465,15 @@
 // of text. That is the SAFE polarity — the older build stores LESS than the
 // author asked for, never more — and it is not bump 21's "parseable, not
 // runnable as authored": nothing the run computes depends on it.
-export const CATALOG_VERSION = 32;
+// BUMP 32→33 for #844 V5: two new control TYPES, `set_variable` and
+// `append_variable` (the A11 rule — an older build lacks the types, so it must
+// refuse a doc holding them rather than route them as unknown), together with
+// the foreach container's optional `allowNondeterministicVars` opt-in. A
+// pre-V5 build would strip that key (`ContainerSchema` is a plain `z.object`),
+// which is the SAFE polarity on its own (the save gate then refuses the
+// parallel writer rather than admitting it), but it rides the same bump because
+// no doc can use it without a `set`/`append` node.
+export const CATALOG_VERSION = 33;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

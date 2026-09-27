@@ -1,19 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { VariableDef } from '../../schemas/pipeline.js';
-import type { Container, Edge, Node } from '../types.js';
+import type { Container, Edge, EngineEvent, Node, VariableWrite } from '../types.js';
 import { settledRawOf, variableReadsOf } from '../params.js';
-import {
-  copiedIdsOf,
-  copiedVariableWritesOf,
-  variableGuardErrors,
-  type VariableWrite,
-} from '../variable-guard.js';
+import { copiedIdsOf, copiedVariableWritesOf, variableGuardErrors } from '../variable-guard.js';
 
 /**
- * #844 V4 — the V-D6 determinism guard and the V-D7 reseed carry, PURE and
- * UNWIRED (spec `2026-09-27-foundation-pipeline-variables.md`). No catalog entry
- * for `set_variable`/`append_variable` exists until V5, so these docs name the
- * types directly; the guard reads structure, never the catalog.
+ * #844 V4 — the V-D6 determinism guard and the V-D7 reseed carry (spec
+ * `2026-09-27-foundation-pipeline-variables.md`), tested directly. V5 wired
+ * both; `variable-write.test.ts` covers the wiring. Every doc here passes both
+ * validators (`guard` asserts it), because the guard's reader list is complete
+ * only for such a doc.
  */
 
 let seq = 0;
@@ -21,9 +17,10 @@ function node(id: string, config: Record<string, unknown> = {}, type = 'agent_ta
   seq += 1;
   return { id, type, config, position: { x: seq, y: 0 } };
 }
-const set = (id: string, variable = 'v'): Node => node(id, { variable, value: 1 }, 'set_variable');
+const set = (id: string, variable = 'v'): Node =>
+  node(id, { variable, value: '1' }, 'set_variable');
 const append = (id: string, variable = 'list'): Node =>
-  node(id, { variable, value: 1 }, 'append_variable');
+  node(id, { variable, value: '1' }, 'append_variable');
 const read = (id: string, variable = 'v'): Node => node(id, { prompt: `\${vars.${variable}}` });
 const iff = (id: string): Node => node(id, { condition: '${true}' }, 'if');
 
@@ -47,7 +44,9 @@ function doc(nodes: Node[], edges: Edge[] = [], containers: Container[] = []) {
 }
 const guard = (nodes: Node[], edges: Edge[] = [], containers: Container[] = []) => {
   const d = doc(nodes, edges, containers);
-  return variableGuardErrors(d, variableReadsOf(d).reads);
+  const { reads, validatorErrors } = variableReadsOf(d);
+  expect(validatorErrors).toEqual([]);
+  return variableGuardErrors(d, reads);
 };
 
 describe('variableReadsOf — readers are a side output of the validators’ own scans', () => {
@@ -384,7 +383,12 @@ describe('variableGuardErrors — bare back-edge bodies', () => {
 });
 
 describe('copiedVariableWritesOf — V-D7', () => {
-  const w = (nodeId: string, attemptId: string, value: unknown, op: 'set' | 'append' = 'set') => ({
+  const w = (
+    nodeId: string,
+    attemptId: string,
+    value: unknown,
+    op: 'set' | 'append' = 'set',
+  ): EngineEvent => ({
     type: op === 'set' ? 'variable.set' : 'variable.append',
     runId: 'r1',
     nodeId,
@@ -392,14 +396,17 @@ describe('copiedVariableWritesOf — V-D7', () => {
     name: 'v',
     value,
   });
+  // Filler events the carry must skip; only their `type` is read.
+  const other = (type: string, extra: object = {}) =>
+    ({ type, ...extra }) as unknown as EngineEvent;
 
   it('keeps exactly the copied nodes’ writes, in log order', () => {
     const events = [
-      { type: 'run.started' },
+      other('run.started'),
       w('a', 'a1', 1),
       w('b', 'b1', 2),
       w('a', 'a2', 3, 'append'),
-      { type: 'node.succeeded' },
+      other('node.succeeded'),
     ];
     expect(copiedVariableWritesOf(events, new Set(['a']))).toEqual<VariableWrite[]>([
       { nodeId: 'a', op: 'set', name: 'v', value: 1 },
@@ -426,8 +433,8 @@ describe('copiedVariableWritesOf — V-D7', () => {
       { nodeId: 'gone', op: 'set', name: 'v', value: 99 },
     ];
     const events = [
-      { type: 'run.started' },
-      { type: 'run.reseeded', copiedVariableWrites: carried },
+      other('run.started'),
+      other('run.reseeded', { copiedVariableWrites: carried }),
       w('b', 'b1', 20),
       w('c', 'c1', 30),
     ];

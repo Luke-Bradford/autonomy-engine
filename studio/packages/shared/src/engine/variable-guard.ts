@@ -1,7 +1,7 @@
 // #844 V4 — the pipeline-variable DETERMINISM GUARD (spec V-D6) and the
-// rerun-from-failed write carry (V-D7), PURE and not yet wired: no doc can hold
-// a `set_variable`/`append_variable` node until V5 accepts the types, and V5
-// wires both halves in atomically (spec ticket table).
+// rerun-from-failed write carry (V-D7). V5 wired both: the guard runs inside
+// `validatePipelineDoc` (`validate-pipeline.ts`) and the carry in the server's
+// rerun-from-failed reseed.
 import { APPEND_VARIABLE_ACTIVITY_TYPE, SET_VARIABLE_ACTIVITY_TYPE } from '../catalog/types.js';
 import { docNodeIdOf } from './instance-key.js';
 import {
@@ -18,7 +18,7 @@ import {
   type VariableReads,
 } from './params.js';
 import type { ReseedFrontier } from './reduce.js';
-import type { Container, Edge } from './types.js';
+import type { Container, Edge, EngineEvent, VariableWrite } from './types.js';
 
 /**
  * The save-time determinism guard (spec V-D6): a pipeline's final variable
@@ -47,6 +47,9 @@ import type { Container, Edge } from './types.js';
  * rather than skipped: skipping it would leave a writer the guard never checks.
  */
 export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): string[] {
+  // No writer, nothing to guard — and this runs on every save and every canvas
+  // validation, so an ordinary doc pays for none of the analysis below.
+  if (!doc.nodes.some((n) => isVariableWriter(n.type))) return [];
   const containers = doc.containers ?? [];
   const containerById = new Map(containers.map((c) => [c.id, c]));
   const owner = containerMembership(containers).owner;
@@ -81,7 +84,7 @@ export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): st
   };
   const errors: string[] = [];
   for (const n of doc.nodes) {
-    if (n.type !== SET_VARIABLE_ACTIVITY_TYPE && n.type !== APPEND_VARIABLE_ACTIVITY_TYPE) continue;
+    if (!isVariableWriter(n.type)) continue;
     const v = n.config['variable'];
     if (typeof v !== 'string' || v === '' || v.includes('${')) {
       errors.push(
@@ -91,6 +94,16 @@ export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): st
       continue;
     }
     entry(v).writers.add(n.id);
+    // D2's settled no-self-reference rule (ADF parity; spec V-D4 and open
+    // question 1), extended from `set` to `append`, where an array appending
+    // itself is the same hazard. Read off the validators' own scan (`reads`), so
+    // every `${}` site that can hold the read is covered.
+    if (reads.get(n.id)?.has(v) === true) {
+      errors.push(
+        `node '${n.id}' (${n.type}) reads variable '${v}', which it writes — a variable ` +
+          'cannot reference itself; copy it into a second variable first',
+      );
+    }
   }
   for (const [id, names] of reads) for (const name of names) entry(name).readers.add(id);
 
@@ -108,10 +121,13 @@ export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): st
 
     for (const w of [...writers].sort()) {
       const c = containerById.get(owner.get(w) ?? '');
-      if (c !== undefined && isParallelForeach(c)) {
+      // `allowNondeterministicVars` lifts exactly this rule and nothing else: the
+      // author has accepted that item instances race (spec V-D6).
+      if (c !== undefined && isParallelForeach(c) && c.allowNondeterministicVars !== true) {
         errors.push(
           `variable '${name}': ${describe(w)} inside parallel foreach '${c.id}' ` +
-            `(batchCount >= 2), where its item instances race — make the foreach sequential`,
+            `(batchCount >= 2), where its item instances race — make the foreach sequential, ` +
+            'or set allowNondeterministicVars on it to accept a timing-dependent result',
         );
       }
     }
@@ -299,21 +315,6 @@ function outcomeConstraints(
 }
 
 /**
- * One variable write a rerun carries (spec V-D7): `run.reseeded`'s
- * `copiedVariableWrites` entry, and what `copiedVariableWritesOf` returns. The
- * `nodeId` is the source run's, instance key included. Declared here, beside its
- * only producer, until V5 adds `copiedVariableWrites` to the `run.reseeded`
- * schema in `types.ts`; this type is then derived from that schema field
- * rather than kept as a second definition of one shape.
- */
-export interface VariableWrite {
-  nodeId: string;
-  op: 'set' | 'append';
-  name: string;
-  value: unknown;
-}
-
-/**
  * The ids whose writes a rerun copies: the frontier plus the children of every
  * copied container — bodies travel in `copiedContainers`, never in `frontier`.
  */
@@ -328,20 +329,6 @@ export function copiedIdsOf(
     }
   }
   return ids;
-}
-
-// The `variable.*` events and `run.reseeded.copiedVariableWrites` join
-// `EngineEventSchema` in V5, so this reads them structurally until then.
-interface VariableWriteEvent {
-  type: 'variable.set' | 'variable.append';
-  nodeId: string;
-  attemptId: string;
-  name: string;
-  value: unknown;
-}
-interface ReseedWithWrites {
-  type: 'run.reseeded';
-  copiedVariableWrites?: readonly VariableWrite[];
 }
 
 /**
@@ -361,7 +348,7 @@ interface ReseedWithWrites {
  *    its tests pin that this list equals what the fold applied.
  */
 export function copiedVariableWritesOf(
-  sourceEvents: ReadonlyArray<{ readonly type: string }>,
+  sourceEvents: readonly EngineEvent[],
   copiedIds: ReadonlySet<string>,
 ): VariableWrite[] {
   const out: VariableWrite[] = [];
@@ -369,23 +356,27 @@ export function copiedVariableWritesOf(
   const keep = (nodeId: string) => copiedIds.has(docNodeIdOf(nodeId));
   for (const e of sourceEvents) {
     if (e.type === 'run.reseeded') {
-      for (const w of (e as ReseedWithWrites).copiedVariableWrites ?? []) {
+      for (const w of e.copiedVariableWrites ?? []) {
         if (keep(w.nodeId)) out.push({ nodeId: w.nodeId, op: w.op, name: w.name, value: w.value });
       }
       continue;
     }
     if (e.type !== 'variable.set' && e.type !== 'variable.append') continue;
-    const w = e as VariableWriteEvent;
-    if (!keep(w.nodeId)) continue;
-    const key = `${w.nodeId}\u0000${w.attemptId}`;
+    if (!keep(e.nodeId)) continue;
+    const key = `${e.nodeId}\u0000${e.attemptId}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
-      nodeId: w.nodeId,
-      op: w.type === 'variable.set' ? 'set' : 'append',
-      name: w.name,
-      value: w.value,
+      nodeId: e.nodeId,
+      op: e.type === 'variable.set' ? 'set' : 'append',
+      name: e.name,
+      value: e.value,
     });
   }
   return out;
+}
+
+/** A `set_variable`/`append_variable` node type — the guard's writers. */
+function isVariableWriter(type: string): boolean {
+  return type === SET_VARIABLE_ACTIVITY_TYPE || type === APPEND_VARIABLE_ACTIVITY_TYPE;
 }
