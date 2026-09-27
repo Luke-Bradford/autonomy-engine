@@ -1,11 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import {
+  ANNOTATION_MAX_CHARS,
   CATALOG_VERSION,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   paginatedResponseSchema,
   RerunAcceptedSchema,
+  RunAnnotationsResponseSchema,
   RunDetailSchema,
   RunSchema,
   RunSummarySchema,
@@ -224,6 +226,69 @@ describe('runs routes (read-only)', () => {
       expect(foreign.json().items).toEqual([]);
       expect(unknown.statusCode).toBe(foreign.statusCode);
       expect(unknown.json()).toEqual(foreign.json());
+    });
+
+    /** Seed a local version of a fresh pipeline carrying `annotations`, and one run of it. */
+    function runTagged(annotations: string[], ownerId = 'local') {
+      const pipeline = createPipeline(app.db, { ownerId, name: 'Tagged' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        annotations,
+        catalogVersion: CATALOG_VERSION,
+      });
+      return createRun(app.db, {
+        ownerId,
+        pipelineVersionId: version.id,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+    }
+
+    /**
+     * The web builds this query with `URLSearchParams`, which encodes a space as
+     * `+` — so the server must decode `+` back to a space, and `%2B` to a literal
+     * plus, for an exact match to hit. Pinned with the web's own encoder rather
+     * than assumed.
+     */
+    it('filters by an annotation carrying a space, `&`, `+` and non-ASCII, as the web encodes it', async () => {
+      const tag = 'Finance EU & UK+ café';
+      const wanted = runTagged([tag]);
+      const near = runTagged(['Finance EU']);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs?${new URLSearchParams({ annotation: tag }).toString()}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(runIdsOf(res)).toEqual([wanted.id]);
+      expect(runIdsOf(res)).not.toContain(near.id);
+    });
+
+    it.each([
+      ['empty', ''],
+      ['longer than any annotation can be', 'x'.repeat(ANNOTATION_MAX_CHARS + 1)],
+    ])('refuses an annotation that is %s with a 400', async (_label, value) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs?${new URLSearchParams({ annotation: value }).toString()}`,
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("GET /api/runs/annotations lists the caller's run annotations only, and matches the schema", async () => {
+      // The app is shared across this file, so assert on this test's own tags.
+      runTagged(['opt-nightly', 'opt-finance']);
+      runTagged(['opt-finance']);
+      runTagged(['opt-theirs'], 'someone-else');
+      const res = await app.inject({ method: 'GET', url: '/api/runs/annotations' });
+      expect(res.statusCode).toBe(200);
+      const { items } = RunAnnotationsResponseSchema.parse(res.json());
+      expect(items.filter((t) => t.startsWith('opt-'))).toEqual(['opt-finance', 'opt-nightly']);
+      expect(items).toEqual([...items].sort((a, b) => a.localeCompare(b, 'en')));
     });
   });
 
