@@ -150,6 +150,34 @@ describe('#1 F4 — emit-time redaction reaches the stored log', () => {
     });
   });
 
+  // #605 — a structured REPAIR exchange's request carries the model's own
+  // invalid answer back as an `assistant` turn. That is OUTPUT, so a node with
+  // only `secureOutput` must not store it through the request side either.
+  it("secureOutput alone withholds a repair capture's echoed assistant turn", async () => {
+    const repairCapture = (at: { runId: string; nodeId: string; attemptId: string }) => [
+      {
+        type: 'activity.captured' as const,
+        ...at,
+        provider: 'ollama',
+        model: 'm',
+        latencyMs: 1,
+        request: {
+          messageCount: 3,
+          messages: [
+            { role: 'user' as const, chars: 1, contentHash: 'h0', text: 'q' },
+            { role: 'assistant' as const, chars: 3, contentHash: 'h1', text: `${PLAINTEXT}-echo` },
+            { role: 'user' as const, chars: 1, contentHash: 'h2', text: 'fix it' },
+          ],
+        },
+      },
+    ];
+    const { stored } = await drive([node('a', { policy: { secureOutput: true } })], {
+      nodes: { a: { activityEvents: repairCapture } },
+    });
+    expect(stored).toContain('activity.captured');
+    expect(stored).not.toContain(PLAINTEXT);
+  });
+
   it('a node WITHOUT the flag stores its captured text as-is', async () => {
     const { stored } = await drive([node('a')], {
       nodes: { a: { activityEvents: capturedText } },

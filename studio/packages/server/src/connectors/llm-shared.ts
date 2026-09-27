@@ -611,10 +611,38 @@ export type LlmTurn = { role: 'user' | 'assistant'; content: string };
  * - `validated` — a completed 2xx that BILLED (`usage`) whose structured payload
  *   was strict-validated (`result`). `echo` is a bounded, always-non-empty textual
  *   echo of what the model produced, fed into the repair turn on failure.
+ *
+ * #605 — both arms carry what the loop needs to CAPTURE the exchange:
+ * `latencyMs` (from `postJsonAndParse`, returned on both of its arms) and, on
+ * `validated`, `completionText` — the model's UNBOUNDED answer, or `undefined`
+ * when the response held none (absent, never `''`). It is deliberately a
+ * separate field from `echo`: the echo is cut to an excerpt and falls back to a
+ * placeholder, so capturing it would record a completion the model never gave.
+ * `completionText` is a REQUIRED key (it may hold `undefined`) so an adapter
+ * cannot forget it the way it could an optional one.
  */
 export type StructuredCallOutcome =
-  | { type: 'terminal'; event: Extract<ActivityEvent, { type: 'failed' }> }
-  | { type: 'validated'; usage: LlmUsage; result: StructuredValidationResult; echo: string };
+  | { type: 'terminal'; event: Extract<ActivityEvent, { type: 'failed' }>; latencyMs: number }
+  | {
+      type: 'validated';
+      usage: LlmUsage;
+      result: StructuredValidationResult;
+      echo: string;
+      latencyMs: number;
+      completionText: string | undefined;
+    };
+
+/**
+ * #605 — the per-node half of a structured exchange's capture: everything
+ * `buildCapture` needs that does not change between the first call and a repair.
+ * The TURNS are deliberately not here — the loop supplies the turns each call
+ * actually sent, so a repair's capture records the echo + critique.
+ */
+export interface StructuredCaptureContext {
+  model: string;
+  system?: string;
+  captureMode?: LlmCaptureMode;
+}
 
 /**
  * #2 L4c — a bounded, ALWAYS-NON-EMPTY textual echo of a structured response's
@@ -694,20 +722,41 @@ export function buildRepairTurns(turns: LlmTurn[], reason: string, echo: string)
  * terminalizes once — repair is a sub-call, not a new attempt. A run cancelled
  * between calls is caught by the next `llmPost` (it re-checks `ctx.signal.aborted`
  * at entry and returns a `cancelled` terminal), so no repair fires after abort.
+ *
+ * CAPTURE (#605): ONE `captured` fact PER provider call, built HERE rather than
+ * in each adapter so every capture records the `turns` that call really sent —
+ * a repair's capture holds the echoed answer and studio's critique, which is
+ * what went over the wire. Ordering mirrors `runTextWithTools`: after `metered`,
+ * and before any terminal (capture precedes terminal). A `terminal` outcome gets
+ * a request-only capture, as the text path's does — including a `cancelled` one
+ * whose request `llmPost` refused to send, which the text path records alike.
  */
 export async function* runStructuredWithRepair(
   provider: LlmConnectionKind,
   initialTurns: LlmTurn[],
+  capture: StructuredCaptureContext,
   doCall: (turns: LlmTurn[]) => Promise<StructuredCallOutcome>,
 ): AsyncIterable<ActivityEvent> {
   let turns = initialTurns;
   for (let repairIndex = 0; repairIndex <= DEFAULT_STRUCTURED_REPAIRS; repairIndex++) {
     const outcome = await doCall(turns);
+    const captured = (completionText: string | undefined): ActivityEvent => ({
+      type: 'captured',
+      capture: buildCapture({
+        provider,
+        ...capture,
+        latencyMs: outcome.latencyMs,
+        turns,
+        completionText,
+      }),
+    });
     if (outcome.type === 'terminal') {
+      yield captured(undefined);
       yield outcome.event;
       return;
     }
     yield { type: 'metered', usage: outcome.usage };
+    yield captured(outcome.completionText);
     if (outcome.result.ok) {
       yield { type: 'succeeded', outputs: outcome.result.value };
       return;
@@ -965,8 +1014,8 @@ export type ToolRoundOutcome<C> =
  * exchange (request = the author's turns; completion omitted unless the first
  * response was text) — emitted before any terminal, preserving the
  * capture-precedes-terminal invariant. Continuation exchanges carry provider-
- * specific tool turns `LlmCapture.request` cannot represent; their capture is
- * #605's structured-capture plumbing, not silently hashed wrong here.
+ * specific tool turns `LlmCapture.request` cannot represent; capturing them is
+ * still open on #605, and is not silently hashed wrong here.
  *
  * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
  * `toolUse`) is metered HERE. A `terminal` outcome yields no `metered` event from

@@ -1557,8 +1557,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * call the model — spec #2's replay invariant). Emitted by the adapter as a
      * non-terminal `captured` ActivityEvent (mirroring `metered`) which the
      * executor maps here, ordered BEFORE the terminal `node.succeeded`/`node.failed`.
-     * ONE per provider response — a text call emits one; a structured-repair call's
-     * per-response capture is still deferred (#605, see below).
+     * ONE per provider response — a text call emits one; a structured call emits
+     * one per response, so a repaired attempt emits two (#605).
      *
      * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered` /
      * `node.output`): capture is telemetry, not a typed `${}`-addressable output,
@@ -1583,8 +1583,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * content the author marked secret, and on exactly those nodes it is already
      * scrubbed.
      *
-     * Still deferred to #605: structured-mode per-response capture, the verbose
-     * reasoning trace, and tool-loop rounds after the first.
+     * Still deferred to #605: the verbose reasoning trace, and tool-loop rounds
+     * after the first.
      */
     type: z.literal('activity.captured'),
     runId: z.string(),

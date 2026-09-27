@@ -170,25 +170,32 @@ export const ollamaAdapter: ConnectorAdapter = {
     // `parseAndValidateStructured` rejects → the loop re-prompts before
     // terminalizing `permanent`. Covers the no-completion case here too.
     if (structuredOutput !== undefined) {
-      yield* runStructuredWithRepair('ollama', turns, async (msgTurns) => {
-        const res = await postJsonAndParse(
-          ctx,
-          'ollama',
-          model,
-          url,
-          headers,
-          buildBody(wireMessages(msgTurns)),
-          timeoutMs,
-        );
-        if (!res.ok) return { type: 'terminal', event: res.event };
-        const content = (res.json as { message?: { content?: unknown } }).message?.content;
-        return {
-          type: 'validated',
-          usage: usageOf(res.json),
-          result: parseAndValidateStructured(structuredOutput, content),
-          echo: structuredEcho(content),
-        };
-      });
+      yield* runStructuredWithRepair(
+        'ollama',
+        turns,
+        { model, system: systemContent, captureMode },
+        async (msgTurns) => {
+          const res = await postJsonAndParse(
+            ctx,
+            'ollama',
+            model,
+            url,
+            headers,
+            buildBody(wireMessages(msgTurns)),
+            timeoutMs,
+          );
+          if (!res.ok) return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
+          const content = (res.json as { message?: { content?: unknown } }).message?.content;
+          return {
+            type: 'validated',
+            usage: usageOf(res.json),
+            result: parseAndValidateStructured(structuredOutput, content),
+            echo: structuredEcho(content),
+            latencyMs: res.latencyMs,
+            completionText: typeof content === 'string' ? content : undefined,
+          };
+        },
+      );
       return;
     }
 

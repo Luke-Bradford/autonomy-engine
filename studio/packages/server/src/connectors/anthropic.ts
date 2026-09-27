@@ -443,74 +443,91 @@ export const anthropicAdapter: ConnectorAdapter = {
         ],
         choice: { type: 'tool', name: STRUCTURED_TOOL_NAME },
       };
-      yield* runStructuredWithRepair('anthropic_api', messages, async (turns) => {
-        const res = await postJsonAndParse(
-          ctx,
-          'anthropic_api',
-          model,
-          url,
-          headers,
-          buildBody(turns, { toolWire: structuredWire }),
-          timeoutMs,
-        );
-        if (!res.ok) return { type: 'terminal', event: res.event };
-        // Meter FIRST (a 2xx billed, even if the structured payload is invalid —
-        // spec: `activity.metered` on failed-but-billed calls); the loop yields it
-        // before deciding succeed / repair / terminal.
-        const usage = usageOf(res.json);
-        const tool = findStructuredToolInput(res.json);
-        // A missing forced-tool block is now REPAIRABLE (fold into an invalid
-        // result) rather than an immediate terminal — a model that answered with
-        // text instead of the tool may correct on a re-prompt.
-        //
-        // #724 — the `stop_reason` is CARRIED INTO the reason string on BOTH
-        // invalid shapes, and it is the reasoning change that makes it
-        // load-bearing. `max_tokens` caps thinking and the `tool_use` block
-        // TOGETHER, so a node that sets `reasoningEffort` now has thinking
-        // competing for the same budget here. When it exhausts, the block comes
-        // back either ABSENT (no `tool_use` at all) or TRUNCATED (a `tool_use`
-        // whose `input` is short of the schema) — and the two take different
-        // code paths, which is why annotating only the first was not enough:
-        //
-        //   absent    → `!tool.found` below → "carried no ... tool_use block"
-        //   truncated → `validateStructuredOutput` → "category: expected string,
-        //               received undefined"
-        //
-        // The truncated shape is the SHARPER of the two, because its message
-        // reads like a schema defect and blames the model outright. Both now
-        // carry the stop reason, so `max_tokens` names the real cause in the
-        // repair critique and in the durable error. Either shape costs two
-        // billed calls (the repair re-issues under the same budget) before
-        // terminalizing `permanent`.
-        //
-        // Annotated unconditionally rather than only on `max_tokens`: an
-        // `end_turn` is equally diagnostic (the model finished and simply got the
-        // schema wrong), and a value-dependent annotation would make the absence
-        // of the note ambiguous between "not truncated" and "not annotated".
-        const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
-        if (!tool.found) {
+      yield* runStructuredWithRepair(
+        'anthropic_api',
+        messages,
+        { model, system, captureMode },
+        async (turns) => {
+          const res = await postJsonAndParse(
+            ctx,
+            'anthropic_api',
+            model,
+            url,
+            headers,
+            buildBody(turns, { toolWire: structuredWire }),
+            timeoutMs,
+          );
+          if (!res.ok) return { type: 'terminal', event: res.event, latencyMs: res.latencyMs };
+          // Meter FIRST (a 2xx billed, even if the structured payload is invalid —
+          // spec: `activity.metered` on failed-but-billed calls); the loop yields it
+          // before deciding succeed / repair / terminal.
+          const usage = usageOf(res.json);
+          const tool = findStructuredToolInput(res.json);
+          // A missing forced-tool block is now REPAIRABLE (fold into an invalid
+          // result) rather than an immediate terminal — a model that answered with
+          // text instead of the tool may correct on a re-prompt.
+          //
+          // #724 — the `stop_reason` is CARRIED INTO the reason string on BOTH
+          // invalid shapes, and it is the reasoning change that makes it
+          // load-bearing. `max_tokens` caps thinking and the `tool_use` block
+          // TOGETHER, so a node that sets `reasoningEffort` now has thinking
+          // competing for the same budget here. When it exhausts, the block comes
+          // back either ABSENT (no `tool_use` at all) or TRUNCATED (a `tool_use`
+          // whose `input` is short of the schema) — and the two take different
+          // code paths, which is why annotating only the first was not enough:
+          //
+          //   absent    → `!tool.found` below → "carried no ... tool_use block"
+          //   truncated → `validateStructuredOutput` → "category: expected string,
+          //               received undefined"
+          //
+          // The truncated shape is the SHARPER of the two, because its message
+          // reads like a schema defect and blames the model outright. Both now
+          // carry the stop reason, so `max_tokens` names the real cause in the
+          // repair critique and in the durable error. Either shape costs two
+          // billed calls (the repair re-issues under the same budget) before
+          // terminalizing `permanent`.
+          //
+          // Annotated unconditionally rather than only on `max_tokens`: an
+          // `end_turn` is equally diagnostic (the model finished and simply got the
+          // schema wrong), and a value-dependent annotation would make the absence
+          // of the note ambiguous between "not truncated" and "not annotated".
+          const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
+          if (!tool.found) {
+            // #605 — a model that answered in TEXT instead of the forced tool is
+            // exactly what a capture is for, so its text is the completion (the
+            // OpenAI/Ollama adapters likewise capture an invalid `content`). No
+            // text either → absent.
+            const answered = extractText(res.json);
+            return {
+              type: 'validated',
+              usage,
+              result: {
+                ok: false,
+                reason:
+                  `response carried no ${STRUCTURED_TOOL_NAME} tool_use block ` +
+                  `(stop_reason: ${stopReason})`,
+              },
+              echo: structuredEcho(undefined),
+              latencyMs: res.latencyMs,
+              completionText: 'text' in answered ? answered.text : undefined,
+            };
+          }
+          const validated = validateStructuredOutput(structuredOutput, tool.input);
           return {
             type: 'validated',
             usage,
-            result: {
-              ok: false,
-              reason:
-                `response carried no ${STRUCTURED_TOOL_NAME} tool_use block ` +
-                `(stop_reason: ${stopReason})`,
-            },
-            echo: structuredEcho(undefined),
+            result: validated.ok
+              ? validated
+              : { ok: false, reason: `${validated.reason} (stop_reason: ${stopReason})` },
+            echo: structuredEcho(tool.input),
+            latencyMs: res.latencyMs,
+            // #605 — the forced tool's `input` arrives PARSED, so the captured
+            // completion (and its hash) is studio's re-serialization of it, not
+            // the provider's raw bytes.
+            completionText: tool.input === undefined ? undefined : JSON.stringify(tool.input),
           };
-        }
-        const validated = validateStructuredOutput(structuredOutput, tool.input);
-        return {
-          type: 'validated',
-          usage,
-          result: validated.ok
-            ? validated
-            : { ok: false, reason: `${validated.reason} (stop_reason: ${stopReason})` },
-          echo: structuredEcho(tool.input),
-        };
-      });
+        },
+      );
       return;
     }
 

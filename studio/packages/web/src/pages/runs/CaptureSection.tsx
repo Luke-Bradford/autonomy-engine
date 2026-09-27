@@ -16,7 +16,8 @@ import type { CapturedText, NodeCapture } from './runSummary';
  *  - a SECURE node's texts arrive as the marker, and say why here rather than
  *    through `SecureMarkerHint`, whose copy names Secure OUTPUT alone — a
  *    capture is withheld under either flag;
- *  - an ABSENT completion (the exchange failed, or asked for a tool) and an
+ *  - an ABSENT completion (the exchange failed, asked for a tool, or returned
+ *    no structured result) and an
  *    EMPTY one (the model returned nothing) are different facts.
  */
 
@@ -71,8 +72,8 @@ export function CaptureSection({ captures }: { captures: NodeCapture[] }) {
               <CapturedBlock label="Completion" field={c.completion} />
             ) : (
               <p className="page-hint">
-                No completion was recorded: this exchange ended without readable text (it failed, or
-                the model asked for a tool).
+                No completion was recorded: this exchange ended without readable text (it failed,
+                the model asked for a tool, or it returned no structured result).
               </p>
             )}
           </details>
