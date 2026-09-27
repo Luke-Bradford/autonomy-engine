@@ -55,7 +55,9 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await connectionForm.getByLabel('Kind').selectOption('agent_cli');
   await connectionForm.getByLabel('command', { exact: true }).fill('/bin/echo');
   await connectionForm.getByRole('button', { name: 'Create connection' }).click();
-  await expect(page.getByRole('button', { name: `Export ${CONNECTION}`, exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: `Export ${CONNECTION}`, exact: true }),
+  ).toBeVisible();
 
   // 2. Author → a new pipeline: an Agent Task, then a Wait, wired on success.
   await openCanvas(page, PIPELINE);
