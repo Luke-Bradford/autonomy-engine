@@ -60,6 +60,7 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
     ownerId: 'local',
     name: 'My pipeline',
     concurrency: null,
+    folder: null,
     archived: false,
     createdAt: 1,
     updatedAt: 1,

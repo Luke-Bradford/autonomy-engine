@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router';
 import { useStore } from 'zustand';
 import {
@@ -13,6 +13,7 @@ import {
   AddRegular,
   ChevronDownRegular,
   ChevronRightRegular,
+  FolderRegular,
   MoreHorizontalRegular,
 } from '@fluentui/react-icons';
 import type { Pipeline } from '@autonomy-studio/shared';
@@ -22,6 +23,7 @@ import {
   deletePipeline,
   describeDeleteFailure,
   duplicatePipeline,
+  movePipelineToFolder,
   renamePipeline,
 } from '../../api/pipelines';
 import { downloadTextFile, exportFileName } from '../../api/download';
@@ -38,26 +40,68 @@ const NEW_PIPELINE_BUTTON_ID = 'factory-new-pipeline';
 const CANVAS_ROUTE = '/author/pipelines/:pipelineId';
 
 /**
- * An in-progress name entry. All three actions are "give me a name", so they
- * share one inline row rather than three dialogs.
+ * An in-progress text entry. Every action is "type one short label", so they
+ * share one inline row rather than four dialogs.
  *
  * `create` and `duplicate` both MINT a pipeline, so their row sits at the top of
- * the tree where the new entry will appear; `rename` replaces the row it acts on,
- * which is where the user is already looking.
+ * the tree where the new entry will appear; `rename` and `move` replace the row
+ * they act on, which is where the user is already looking.
+ *
+ * For `move` (#1380) the text is the FOLDER, and empty is a real answer: it
+ * means "no folder", where an empty pipeline name means nothing at all.
  */
 type Draft =
   | { kind: 'create'; name: string }
   /* The whole source row, not just its id: a duplicate copies the source's
-     `concurrency` cap as well as its graph. */
+     `concurrency` cap and folder as well as its graph. */
   | { kind: 'duplicate'; source: Pipeline; name: string }
-  | { kind: 'rename'; pipelineId: string; name: string };
+  | { kind: 'rename'; pipelineId: string; name: string }
+  | { kind: 'move'; pipelineId: string; name: string };
 
 /** The label on the draft row's confirm button — also how a test names it. */
 const DRAFT_ACTION: Record<Draft['kind'], string> = {
   create: 'Create',
   duplicate: 'Duplicate',
   rename: 'Rename',
+  move: 'Move',
 };
+
+/** The drafts that stand in for an existing row, rather than a new one. */
+function replacesRow(draft: Draft): draft is Extract<Draft, { pipelineId: string }> {
+  return draft.kind === 'rename' || draft.kind === 'move';
+}
+
+/** A folder and the (filtered) pipelines filed in it. */
+interface FolderGroup {
+  name: string;
+  pipelines: Pipeline[];
+}
+
+/**
+ * #1380 — split the list into folders, in name order, and the pipelines filed
+ * nowhere, in the list's own order. A folder exists only while a pipeline is in
+ * it: it is a label on the row, not a resource of its own.
+ */
+function groupByFolder(pipelines: readonly Pipeline[]): {
+  folders: FolderGroup[];
+  loose: Pipeline[];
+} {
+  const byName = new Map<string, Pipeline[]>();
+  const loose: Pipeline[] = [];
+  for (const p of pipelines) {
+    if (p.folder === null) {
+      loose.push(p);
+      continue;
+    }
+    const filed = byName.get(p.folder);
+    if (filed) filed.push(p);
+    else byName.set(p.folder, [p]);
+  }
+  const folders = [...byName]
+    .map(([name, filed]) => ({ name, pipelines: filed }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'en'));
+  return { folders, loose };
+}
 
 interface FactoryResourcesProps {
   /** The Author hub, whose `sections[0]` is the tree's group header. */
@@ -74,16 +118,18 @@ interface FactoryResourcesProps {
  * / delete.
  *
  * NOT an ARIA `tree`. A real `role="tree"` owes the user roving tabindex, typeahead
- * and arrow-key traversal across a structure that is, today, one flat group — and
- * a half-implemented tree is less usable than the list it replaced. A disclosure
- * button over a list of links is a well-trodden pattern that browsers and screen
- * readers already handle, and it keeps `NavLink`'s `isActive` as the ONE source of
- * "which one am I on" (the same reason `@fluentui/react-nav` was rejected for the
- * pane in U3: its `selectedValue` would be a second opinion beside the router's).
- * Revisit when the tree gains real nesting — U20 (`call_pipeline` authoring brings
- * non-pipeline resources into it) or U22 (a version picker under a pipeline). NOT
- * U5, which this used to name: U5's toolbox is a canvas-column surface and never
- * touches the pane.
+ * and arrow-key traversal, and a half-implemented tree is less usable than the
+ * list it replaced. A disclosure button over a list of links is a well-trodden
+ * pattern that browsers and screen readers already handle, and it keeps
+ * `NavLink`'s `isActive` as the ONE source of "which one am I on" (the same reason
+ * `@fluentui/react-nav` was rejected for the pane in U3: its `selectedValue` would
+ * be a second opinion beside the router's).
+ *
+ * Folders (#1380) keep that shape rather than reopening it: each is the SAME
+ * disclosure-over-a-list, one level down, so Tab still walks every control and
+ * nothing depends on arrow keys. Folders are flat (a folder name may not contain
+ * `/`), so this is the whole depth. Revisit if they ever nest, or when the tree
+ * gains non-pipeline resources (U20) or a version picker under a pipeline (U22).
  *
  * The group HEADER is the hub's own section link, not a new label: `HUBS` stays
  * the single source of the pane's navigation, so the section still reaches the
@@ -103,6 +149,9 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState(true);
+  /* #1380 — folders are open unless closed, so a new folder is never hidden. */
+  const [collapsedFolders, setCollapsedFolders] = useState<ReadonlySet<string>>(new Set());
+  const folderIdPrefix = useId();
   const [draft, setDraft] = useState<Draft | null>(null);
   /**
    * Id of the control to hand focus back to when the DRAFT row closes.
@@ -214,8 +263,17 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
    */
   const activeDraft = useMemo(
     () =>
-      draft?.kind === 'rename' && !pipelines.some((p) => p.id === draft.pipelineId) ? null : draft,
+      draft && replacesRow(draft) && !pipelines.some((p) => p.id === draft.pipelineId)
+        ? null
+        : draft,
     [draft, pipelines],
+  );
+
+  const grouped = useMemo(() => groupByFolder(visible), [visible]);
+  /* Every folder in use, filter or not — what the move row offers to pick from. */
+  const folderNames = useMemo(
+    () => groupByFolder(pipelines).folders.map((f) => f.name),
+    [pipelines],
   );
 
   /* Focus lives INSIDE the row being unmounted, so closing the draft — or
@@ -242,10 +300,10 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          rather than leaving it pending is what stops it firing later, on some
          unrelated refresh, once its row is long gone. */
       deletingRow.current = null;
-      /* ...but the row it came from may itself be GONE. Only a `rename` draft
-         replaces its row; a `duplicate` leaves the source row live and deletable
+      /* ...but the row it came from may itself be GONE. Only a `rename` or `move`
+         draft replaces its row; a `duplicate` leaves the source row live and deletable
          underneath the open draft, and `activeDraft` never nulls out for it
-         (that reconciliation is rename-only), so the delete's own restoration
+         (that reconciliation is rename/move-only), so the delete's own restoration
          stands down and this branch is what eventually runs — against a `⋯`
          button that no longer exists. Falling back to the pane's one stable
          control is the difference between landing somewhere and stranding on
@@ -309,15 +367,19 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     if (!activeDraft) return;
     const draft = activeDraft;
     const name = draft.name.trim();
-    if (name === '') return;
+    if (name === '' && draft.kind !== 'move') return;
 
     const ok = await run(
       () => {
         if (draft.kind === 'create') return createPipeline({ name });
         if (draft.kind === 'duplicate') return duplicatePipeline(draft.source, name);
+        if (draft.kind === 'move') return movePipelineToFolder(draft.pipelineId, name || null);
         return renamePipeline(draft.pipelineId, name);
       },
-      (err) => `Could not ${draft.kind} “${name}”: ${messageOf(err)}`,
+      (err) =>
+        draft.kind === 'move'
+          ? `Could not move to ${name === '' ? 'the top level' : `“${name}”`}: ${messageOf(err)}`
+          : `Could not ${draft.kind} “${name}”: ${messageOf(err)}`,
     );
     if (ok) closeDraft();
   }, [activeDraft, closeDraft, run]);
@@ -376,6 +438,85 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     },
     [editing, hub.path, navigate, run, section],
   );
+
+  /** One pipeline's row — or the draft standing in for it (rename, move). */
+  const renderRow = (p: Pipeline) =>
+          activeDraft && replacesRow(activeDraft) && activeDraft.pipelineId === p.id ? (
+            <li key={p.id}>
+              <NameRow
+                draft={activeDraft}
+                busy={busy}
+                folderNames={folderNames}
+                onChange={(name) => setDraft({ ...activeDraft, name })}
+                onSubmit={() => void submitDraft()}
+                onCancel={closeDraft}
+              />
+            </li>
+          ) : (
+            <li key={p.id} className="factory-resources__row">
+              <NavLink
+                to={pipelinePath(p.id)}
+                className={({ isActive }) =>
+                  `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
+                }
+              >
+                {p.name}
+              </NavLink>
+              <Menu>
+                <MenuTrigger disableButtonEnhancement>
+                  <button
+                    id={rowMenuId(p.id)}
+                    type="button"
+                    className="icon-button factory-resources__icon-button"
+                    aria-label={`More actions for ${p.name}`}
+                  >
+                    <MoreHorizontalRegular aria-hidden="true" />
+                  </button>
+                </MenuTrigger>
+                {/* Fluent's DEFAULT body portal — the U0 spike forbids
+                    reparenting a surface into the React Flow viewport, and the
+                    pane clips its own overflow, so an in-flow popover would be
+                    sliced off at the pane's edge. */}
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem
+                      onClick={() =>
+                        openDraft(
+                          { kind: 'rename', pipelineId: p.id, name: p.name },
+                          rowMenuId(p.id),
+                        )
+                      }
+                    >
+                      Rename
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() =>
+                        openDraft(
+                          { kind: 'move', pipelineId: p.id, name: p.folder ?? '' },
+                          rowMenuId(p.id),
+                        )
+                      }
+                    >
+                      Move to folder…
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => {
+                        setExpanded(true);
+                        openDraft(
+                          { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
+                          rowMenuId(p.id),
+                        );
+                      }}
+                    >
+                      Duplicate
+                    </MenuItem>
+                    <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
+                    <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
+            </li>
+          );
 
   const listLabel = section?.label ?? hub.label;
 
@@ -458,11 +599,12 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
         aria-label={listLabel}
         hidden={!expanded}
       >
-        {activeDraft && activeDraft.kind !== 'rename' && (
+        {activeDraft && !replacesRow(activeDraft) && (
           <li>
             <NameRow
               draft={activeDraft}
               busy={busy}
+              folderNames={folderNames}
               onChange={(name) => setDraft({ ...activeDraft, name })}
               onSubmit={() => void submitDraft()}
               onCancel={closeDraft}
@@ -470,73 +612,50 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
           </li>
         )}
 
-        {visible.map((p) =>
-          activeDraft?.kind === 'rename' && activeDraft.pipelineId === p.id ? (
-            <li key={p.id}>
-              <NameRow
-                draft={activeDraft}
-                busy={busy}
-                onChange={(name) => setDraft({ ...activeDraft, name })}
-                onSubmit={() => void submitDraft()}
-                onCancel={closeDraft}
-              />
-            </li>
-          ) : (
-            <li key={p.id} className="factory-resources__row">
-              <NavLink
-                to={pipelinePath(p.id)}
-                className={({ isActive }) =>
-                  `secondary-pane__link${isActive ? ' secondary-pane__link--active' : ''}`
-                }
+        {grouped.folders.map((folder, i) => {
+          const open = !collapsedFolders.has(folder.name);
+          /* An index, not the name: a folder name may hold a space, and an id
+             is one token. */
+          const listId = `${folderIdPrefix}-folder-${i}`;
+          return (
+            <li key={`folder:${folder.name}`} className="factory-resources__folder">
+              <div className="factory-resources__folder-header">
+                <button
+                  type="button"
+                  className="icon-button factory-resources__disclosure"
+                  aria-expanded={open}
+                  aria-controls={listId}
+                  aria-label={`${open ? 'Collapse' : 'Expand'} folder ${folder.name}`}
+                  onClick={() =>
+                    setCollapsedFolders((closed) => {
+                      const next = new Set(closed);
+                      if (!next.delete(folder.name)) next.add(folder.name);
+                      return next;
+                    })
+                  }
+                >
+                  {open ? (
+                    <ChevronDownRegular aria-hidden="true" />
+                  ) : (
+                    <ChevronRightRegular aria-hidden="true" />
+                  )}
+                </button>
+                <FolderRegular aria-hidden="true" className="factory-resources__folder-icon" />
+                <span className="factory-resources__folder-name">{folder.name}</span>
+              </div>
+              <ul
+                id={listId}
+                className="secondary-pane__list factory-resources__folder-list"
+                aria-label={`Folder ${folder.name}`}
+                hidden={!open}
               >
-                {p.name}
-              </NavLink>
-              <Menu>
-                <MenuTrigger disableButtonEnhancement>
-                  <button
-                    id={rowMenuId(p.id)}
-                    type="button"
-                    className="icon-button factory-resources__icon-button"
-                    aria-label={`More actions for ${p.name}`}
-                  >
-                    <MoreHorizontalRegular aria-hidden="true" />
-                  </button>
-                </MenuTrigger>
-                {/* Fluent's DEFAULT body portal — the U0 spike forbids
-                    reparenting a surface into the React Flow viewport, and the
-                    pane clips its own overflow, so an in-flow popover would be
-                    sliced off at the pane's edge. */}
-                <MenuPopover>
-                  <MenuList>
-                    <MenuItem
-                      onClick={() =>
-                        openDraft(
-                          { kind: 'rename', pipelineId: p.id, name: p.name },
-                          rowMenuId(p.id),
-                        )
-                      }
-                    >
-                      Rename
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        setExpanded(true);
-                        openDraft(
-                          { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
-                          rowMenuId(p.id),
-                        );
-                      }}
-                    >
-                      Duplicate
-                    </MenuItem>
-                    <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
-                    <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
-                  </MenuList>
-                </MenuPopover>
-              </Menu>
+                {folder.pipelines.map(renderRow)}
+              </ul>
             </li>
-          ),
-        )}
+          );
+        })}
+
+        {grouped.loose.map(renderRow)}
       </ul>
 
       {/* "There are none" and "we could not find out" are different facts, so
@@ -592,6 +711,8 @@ function rowMenuId(pipelineId: string): string {
 interface NameRowProps {
   draft: Draft;
   busy: boolean;
+  /** #1380 — the folders already in use, offered while moving. */
+  folderNames: readonly string[];
   onChange: (name: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
@@ -610,7 +731,10 @@ interface NameRowProps {
  * exists because the user just asked for it, and its whole purpose is to be
  * typed into.
  */
-function NameRow({ draft, busy, onChange, onSubmit, onCancel }: NameRowProps) {
+function NameRow({ draft, busy, folderNames, onChange, onSubmit, onCancel }: NameRowProps) {
+  const suggestions = useId();
+  const moving = draft.kind === 'move';
+  const label = moving ? 'Folder' : 'Pipeline name';
   return (
     <form
       className="factory-resources__name-row"
@@ -621,8 +745,11 @@ function NameRow({ draft, busy, onChange, onSubmit, onCancel }: NameRowProps) {
     >
       <input
         type="text"
-        aria-label="Pipeline name"
-        placeholder="Pipeline name"
+        aria-label={label}
+        placeholder={moving ? 'Folder (empty for none)' : label}
+        /* Picking an existing folder beats retyping it: two spellings of one
+           folder would split it in two. */
+        list={moving ? suggestions : undefined}
         value={draft.name}
         disabled={busy}
         autoFocus
@@ -638,7 +765,15 @@ function NameRow({ draft, busy, onChange, onSubmit, onCancel }: NameRowProps) {
           }
         }}
       />
-      <button type="submit" disabled={busy || draft.name.trim() === ''}>
+      {moving && (
+        <datalist id={suggestions}>
+          {folderNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      )}
+      {/* An empty folder means "no folder", so only a NAME must be non-empty. */}
+      <button type="submit" disabled={busy || (!moving && draft.name.trim() === '')}>
         {DRAFT_ACTION[draft.kind]}
       </button>
       <button type="button" onClick={onCancel} disabled={busy}>

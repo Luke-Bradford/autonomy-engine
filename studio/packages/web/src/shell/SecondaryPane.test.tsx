@@ -173,6 +173,7 @@ describe('SecondaryPane — per-hub content', () => {
         ownerId: 'local',
         name: 'Alpha',
         concurrency: null,
+        folder: null,
         archived: false,
         createdAt: 1,
         updatedAt: 1,

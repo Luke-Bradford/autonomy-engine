@@ -17,6 +17,7 @@ vi.mock('../../api/pipelines', async (importActual) => ({
   listPipelines: vi.fn(),
   createPipeline: vi.fn(),
   renamePipeline: vi.fn(),
+  movePipelineToFolder: vi.fn(),
   duplicatePipeline: vi.fn(),
   deletePipeline: vi.fn(),
 }));
@@ -38,6 +39,7 @@ const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const renameMock = vi.mocked(pipelinesApi.renamePipeline);
+const moveMock = vi.mocked(pipelinesApi.movePipelineToFolder);
 const duplicateMock = vi.mocked(pipelinesApi.duplicatePipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
 
@@ -48,6 +50,7 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
     ownerId: 'local',
     name: 'Alpha',
     concurrency: null,
+    folder: null,
     archived: false,
     createdAt: 1,
     updatedAt: 1,
@@ -91,6 +94,7 @@ beforeEach(() => {
   listMock.mockResolvedValue([ALPHA, BETA]);
   createMock.mockResolvedValue(pipeline({ id: 'pl_3', name: 'Gamma' }));
   renameMock.mockResolvedValue(pipeline({ name: 'Renamed' }));
+  moveMock.mockResolvedValue(pipeline({ folder: 'Ops' }));
   duplicateMock.mockResolvedValue(pipeline({ id: 'pl_3', name: 'Alpha (copy)' }));
   deleteMock.mockResolvedValue(undefined);
 });
@@ -247,6 +251,98 @@ describe('FactoryResources — create', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('server said no');
     // The typed name survives, so a retry is one click and not a re-type.
     expect(screen.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Gamma');
+  });
+});
+
+/**
+ * #1380 — a pipeline's folder is one flat label on its row, and the pane groups
+ * by it: folders first, in name order, then the pipelines filed nowhere.
+ */
+describe('FactoryResources — folders', () => {
+  const NIGHTLY = pipeline({ id: 'pl_3', name: 'Gamma', folder: 'Nightly' });
+  const OPS = pipeline({ id: 'pl_4', name: 'Delta', folder: 'Ops' });
+
+  it('groups filed pipelines under their folder, folders first and in order', async () => {
+    listMock.mockResolvedValue([ALPHA, OPS, NIGHTLY, BETA]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    const nightly = screen.getByRole('list', { name: 'Folder Nightly' });
+    expect(within(nightly).getByRole('link', { name: 'Gamma' })).toBeInTheDocument();
+    expect(within(nightly).queryByRole('link', { name: 'Alpha' })).toBeNull();
+    const ops = screen.getByRole('list', { name: 'Folder Ops' });
+    expect(within(ops).getByRole('link', { name: 'Delta' })).toBeInTheDocument();
+
+    // Document order: Nightly, Ops, then the loose rows in the list's order.
+    expect(tree().getAllByRole('link').map((a) => a.textContent)).toEqual([
+      'Gamma',
+      'Delta',
+      'Alpha',
+      'Beta',
+    ]);
+  });
+
+  it('collapses one folder without touching the others', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ALPHA, OPS, NIGHTLY]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Gamma' });
+
+    const toggle = screen.getByRole('button', { name: 'Collapse folder Nightly' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await user.click(toggle);
+    expect(screen.getByRole('button', { name: 'Expand folder Nightly' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.queryByRole('link', { name: 'Gamma' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Delta' })).toBeInTheDocument();
+  });
+
+  it('hides a folder the filter leaves empty', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ALPHA, OPS, NIGHTLY]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Gamma' });
+
+    await user.type(screen.getByRole('searchbox', { name: 'Filter pipelines' }), 'gam');
+    expect(screen.getByRole('list', { name: 'Folder Nightly' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Folder Ops' })).toBeNull();
+  });
+
+  it('moves a pipeline into a folder from its row menu', async () => {
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to folder…' }));
+    const field = screen.getByRole('combobox', { name: 'Folder' });
+    expect(field).toHaveValue('');
+    await user.type(field, 'Ops');
+    await user.click(screen.getByRole('button', { name: 'Move' }));
+
+    await waitFor(() => expect(moveMock).toHaveBeenCalledWith('pl_1', 'Ops'));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('moves a pipeline back to the top level by clearing the folder', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([ALPHA, NIGHTLY]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Gamma' });
+
+    await openRowMenu(user, 'Gamma');
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to folder…' }));
+    const field = screen.getByRole('combobox', { name: 'Folder' });
+    expect(field).toHaveValue('Nightly');
+    await user.clear(field);
+    // An EMPTY folder is a real answer here ("no folder"), unlike an empty name.
+    const move = screen.getByRole('button', { name: 'Move' });
+    expect(move).toBeEnabled();
+    await user.click(move);
+
+    await waitFor(() => expect(moveMock).toHaveBeenCalledWith('pl_3', null));
   });
 });
 
