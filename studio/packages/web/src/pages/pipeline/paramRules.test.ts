@@ -62,7 +62,9 @@ describe('propertyIssues — the General tab’s save gate (#1 F8a)', () => {
   });
 
   it('names the annotation row a refusal is about, in the write schema’s words', () => {
-    expect(propertyIssues('', ['prod', ''])).toEqual(['annotation 2: an annotation cannot be empty']);
+    expect(propertyIssues('', ['prod', ''])).toEqual([
+      'annotation 2: an annotation cannot be empty',
+    ]);
     expect(propertyIssues('', ['prod', 'Prod'])).toEqual([
       "annotation 2: duplicate annotation 'Prod' (annotations must be unique, ignoring case)",
     ]);

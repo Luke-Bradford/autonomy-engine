@@ -1,5 +1,6 @@
 import { useStore } from 'zustand';
 import { PIPELINE_DESCRIPTION_MAX_CHARS } from '@autonomy-studio/shared';
+import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
 import { ContractSection } from './ContractEditor';
 
@@ -25,16 +26,18 @@ export function PipelineGeneral({ store }: { store: Store }) {
     <>
       <section className="contract-section">
         <h4>General</h4>
-        <label>
-          Description
-          <textarea
-            aria-label="pipeline description"
-            rows={3}
-            maxLength={PIPELINE_DESCRIPTION_MAX_CHARS}
-            value={description}
-            onChange={(e) => store.getState().setDescription(e.target.value)}
-          />
-        </label>
+        <LabelledControl label="Description">
+          {(id) => (
+            <textarea
+              id={id}
+              aria-label="pipeline description"
+              rows={3}
+              maxLength={PIPELINE_DESCRIPTION_MAX_CHARS}
+              value={description}
+              onChange={(e) => store.getState().setDescription(e.target.value)}
+            />
+          )}
+        </LabelledControl>
       </section>
       <ContractSection
         heading="Annotations"

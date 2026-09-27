@@ -79,7 +79,9 @@ describe('toVersionBody', () => {
   });
 
   it('omits catalogVersion so the server stamps the current one on save', () => {
-    expect(toVersionBody([], [], [], [], [], [], '', [], null)).not.toHaveProperty('catalogVersion');
+    expect(toVersionBody([], [], [], [], [], [], '', [], null)).not.toHaveProperty(
+      'catalogVersion',
+    );
   });
 
   /**

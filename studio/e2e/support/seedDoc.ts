@@ -127,6 +127,9 @@ export interface SeedDoc {
   params?: SeedParam[];
   outputs?: SeedOutput[];
   variables?: SeedVariable[];
+  /** #1 F8a — the version's General-tab fields. */
+  description?: string;
+  annotations?: string[];
 }
 
 /** A declared pipeline variable (#844). Until V3 the API is the only way to declare one. */
@@ -195,6 +198,8 @@ export async function mintVersion(
         containers: doc.containers ?? [],
         // Only when stated, so every other seed's body is unchanged.
         ...(doc.variables === undefined ? {} : { variables: doc.variables }),
+        ...(doc.description === undefined ? {} : { description: doc.description }),
+        ...(doc.annotations === undefined ? {} : { annotations: doc.annotations }),
         basedOnVersionId,
       },
     },
