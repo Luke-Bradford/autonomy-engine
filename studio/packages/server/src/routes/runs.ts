@@ -4,6 +4,8 @@ import {
   computeRunCost,
   CompleteExternalWaitBodySchema,
   RUN_SINCE_MS,
+  RunAnnotationFilterSchema,
+  type RunAnnotationsResponse,
   RunSinceSchema,
   RunStatusSchema,
   type CompleteExternalWaitBody,
@@ -13,7 +15,13 @@ import {
   type ApiErrorBody,
   type RunDetail,
 } from '@autonomy-studio/shared';
-import { getRun, listRunDiagnostics, listRunEvents, listRunSummariesPage } from '../repo/index.js';
+import {
+  getRun,
+  listRunAnnotations,
+  listRunDiagnostics,
+  listRunEvents,
+  listRunSummariesPage,
+} from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeDocResolver } from '../run/driver.js';
@@ -59,6 +67,9 @@ const ListRunsQuerystringSchema = z.object({
    * `0`) would otherwise have become an always-empty upper bound with no error.
    */
   since: RunSinceSchema.optional(),
+  // U26 — exact match against the bound version's annotations. Shape-checked
+  // by the ONE schema the web also reads the URL with (see its docblock).
+  annotation: RunAnnotationFilterSchema.optional(),
 });
 
 /**
@@ -117,8 +128,16 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * indistinguishable: both match none of the caller's runs.
    */
   fastify.get('/api/runs', async (request) => {
-    const { pipelineVersionId, triggerId, parentRunId, rerunOf, status, pipelineId, since } =
-      ListRunsQuerystringSchema.parse(request.query);
+    const {
+      pipelineVersionId,
+      triggerId,
+      parentRunId,
+      rerunOf,
+      status,
+      pipelineId,
+      since,
+      annotation,
+    } = ListRunsQuerystringSchema.parse(request.query);
     const page = listRunSummariesPage(
       db,
       {
@@ -128,12 +147,20 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         rerunOf,
         status,
         pipelineId,
+        annotation,
         startedAfter: since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since],
         ownerId: request.principal.ownerId,
       },
       pageArgsFromQuery(request.query),
     );
     return { items: page.items, nextCursor: page.nextCursor };
+  });
+
+  // U26 — the annotation filter's options, scoped by `runs.owner_id` like the
+  // list itself (`listRunAnnotations` has the why). A static route, so it wins
+  // over `/api/runs/:id` for this exact path.
+  fastify.get('/api/runs/annotations', async (request): Promise<RunAnnotationsResponse> => {
+    return { items: listRunAnnotations(db, request.principal.ownerId) };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id', async (request) => {

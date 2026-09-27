@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { RunCostSchema } from '../pricing/run-cost.js';
 import { TriggerContextSchema } from './trigger-context.js';
+import { ANNOTATION_MAX_CHARS } from './pipeline.js';
 
 export const RunStatusSchema = z.enum([
   'pending',
@@ -434,3 +435,25 @@ export const RUN_SINCE_MS: Record<RunSince, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
 };
+
+/**
+ * U26 — the runs list's ANNOTATION axis (`?annotation=`), one schema for both
+ * sides: the server parses the query with it and the web keeps a URL value only
+ * if it passes, so a link the page honours can never be a 400 from the API.
+ *
+ * Shape-checked like the opaque ids, NOT through `AnnotationSchema`'s write
+ * rules: an annotation is open vocabulary, and the write rule may tighten after
+ * older versions were saved under the looser one. A filter validated by the
+ * write rule would then 400 on a value the options list still offers. A value
+ * that could never be an annotation simply matches nothing, like an unknown
+ * `pipelineId`.
+ */
+export const RunAnnotationFilterSchema = z.string().min(1).max(ANNOTATION_MAX_CHARS);
+
+/**
+ * `GET /api/runs/annotations` — the annotation filter's options: every distinct
+ * annotation on a version one of the caller's runs is bound to, so each option
+ * can match at least one run. Sorted for display.
+ */
+export const RunAnnotationsResponseSchema = z.object({ items: z.array(z.string()) });
+export type RunAnnotationsResponse = z.infer<typeof RunAnnotationsResponseSchema>;

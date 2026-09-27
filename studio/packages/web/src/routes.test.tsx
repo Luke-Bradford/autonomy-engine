@@ -68,6 +68,8 @@ vi.mock('./api/runs', async (importActual) => {
     // `page.items`, so a stale `[]` here throws inside the hook rather than
     // rendering an empty list.
     listRuns: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    // U26 — the runs page's annotation picker loads its options on mount.
+    listRunAnnotations: vi.fn().mockResolvedValue([]),
     getRunEvents: vi.fn().mockResolvedValue([]),
     // #1065 — the run detail page's diagnostics section loads on mount, so it
     // needs a resolved default here for the same reason as the rest of this

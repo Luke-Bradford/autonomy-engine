@@ -1,4 +1,9 @@
-import { RUN_SINCE_WINDOWS, RunSinceSchema, RunStatusSchema } from '@autonomy-studio/shared';
+import {
+  RUN_SINCE_WINDOWS,
+  RunAnnotationFilterSchema,
+  RunSinceSchema,
+  RunStatusSchema,
+} from '@autonomy-studio/shared';
 import type { RunSince, RunStatus } from '@autonomy-studio/shared';
 
 /**
@@ -24,7 +29,7 @@ import type { RunSince, RunStatus } from '@autonomy-studio/shared';
  * joins the server-side set — the same fix the first paragraph says is missing,
  * now with a second reason to want it.
  *
- * The URL is the single authority for all four axes, exactly as `?tab=` already
+ * The URL is the single authority for every axis, exactly as `?tab=` already
  * is — a filtered view has to be linkable, survive a reload, and be undoable
  * with Back. There is deliberately no `useState` mirror to disagree with it.
  *
@@ -37,6 +42,7 @@ export interface RunFilters {
   pipelineId?: string;
   triggerId?: string;
   since?: RunSince;
+  annotation?: string;
 }
 
 /** The URL param names, in one place — the page writes them and reads them. */
@@ -45,6 +51,7 @@ export const RUN_FILTER_PARAMS = {
   pipelineId: 'pipeline',
   triggerId: 'trigger',
   since: 'since',
+  annotation: 'annotation',
 } as const;
 
 /**
@@ -84,6 +91,7 @@ export function readRunFilters(params: URLSearchParams): RunFilters {
   const since = params.get(RUN_FILTER_PARAMS.since);
   const pipelineId = params.get(RUN_FILTER_PARAMS.pipelineId);
   const triggerId = params.get(RUN_FILTER_PARAMS.triggerId);
+  const annotation = RunAnnotationFilterSchema.safeParse(params.get(RUN_FILTER_PARAMS.annotation));
   return {
     ...(isRunStatus(status) ? { status } : {}),
     ...(isRunSince(since) ? { since } : {}),
@@ -92,6 +100,9 @@ export function readRunFilters(params: URLSearchParams): RunFilters {
     // 400 from the server's `min(1)` shape check.
     ...(pipelineId ? { pipelineId } : {}),
     ...(triggerId ? { triggerId } : {}),
+    // Kept only if the SERVER's own schema accepts it, so a link the page
+    // honours can never be a 400 — the empty string included.
+    ...(annotation.success ? { annotation: annotation.data } : {}),
   };
 }
 

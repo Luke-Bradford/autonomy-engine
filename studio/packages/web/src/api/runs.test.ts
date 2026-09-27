@@ -5,6 +5,7 @@ import {
   getRunDiagnostics,
   getRunEvents,
   listExternalWaits,
+  listRunAnnotations,
   listRuns,
   RUNS_PAGE_SIZE,
 } from './runs';
@@ -139,6 +140,23 @@ describe('runs API', () => {
     const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
     expect(url.searchParams.get('limit')).toBe('5');
     expect(url.searchParams.get('cursor')).toBeNull();
+  });
+
+  it('reads the annotation options from their own route, through the shared schema', async () => {
+    const fetchMock = stubFetch(200, { items: ['finance', 'nightly'] });
+    await expect(listRunAnnotations()).resolves.toEqual(['finance', 'nightly']);
+    expect(new URL(fetchMock.mock.calls[0]![0] as string, 'http://x').pathname).toBe(
+      '/api/runs/annotations',
+    );
+    stubFetch(200, { items: [1] });
+    await expect(listRunAnnotations()).rejects.toThrow();
+  });
+
+  it('sends an annotation encoded, so the server can decode it back exactly', async () => {
+    const fetchMock = stubFetch(200, { items: [], nextCursor: null });
+    await listRuns({ annotation: 'Finance EU & UK+' });
+    const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
+    expect(url.searchParams.get('annotation')).toBe('Finance EU & UK+');
   });
 
   /**

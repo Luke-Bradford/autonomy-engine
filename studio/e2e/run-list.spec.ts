@@ -198,6 +198,63 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
 });
 
 /**
+ * U26 — the ANNOTATION axis. A run is matched by the annotations of the version
+ * it BOUND (F8a), exactly; the picker offers the annotations of the caller's
+ * runs; the choice is a linkable URL. The tag deliberately carries a space, `&`,
+ * `+` and a non-ASCII letter: it crosses the hash URL AND the API query string,
+ * and each would silently turn an exact match into none if mis-encoded.
+ */
+test('U26 — the runs list filters by annotation, from a picker of the run annotations', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const stamp = Date.now();
+  const tag = `Finance & ops+ café ${stamp}`;
+  const { pipelineVersionId: taggedVersion } = await seedVersion(page, `Tagged ${stamp}`, {
+    nodes: [{ id: 'n1', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+    annotations: [tag, `other ${stamp}`],
+  });
+  const { pipelineVersionId: plainVersion } = await seedVersion(page, `Untagged ${stamp}`, {
+    nodes: [{ id: 'n1', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+    annotations: [`other ${stamp}`],
+  });
+  const taggedRun = await fireAndSettle(page, taggedVersion, `e2e tagged ${stamp}`);
+  const plainRun = await fireAndSettle(page, plainVersion, `e2e untagged ${stamp}`);
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  const rowFor = (runId: string) => page.getByRole('row').filter({ hasText: runId });
+  await expect(rowFor(taggedRun)).toHaveCount(1);
+  await expect(rowFor(plainRun)).toHaveCount(1);
+
+  // Anchored for the reason the Pipeline picker is (see the test above).
+  const picker = page.getByLabel(/^Annotation/);
+  await picker.selectOption({ label: tag });
+  await expect(rowFor(taggedRun)).toHaveCount(1);
+  await expect(rowFor(plainRun)).toHaveCount(0);
+  expect(page.url()).toContain('annotation=');
+
+  // Linkable: a reload lands on the same exact-match view, the control still
+  // naming the applied tag.
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(page.getByLabel(/^Annotation/)).toHaveValue(tag);
+  await expect(rowFor(taggedRun)).toHaveCount(1);
+  await expect(rowFor(plainRun)).toHaveCount(0);
+
+  // A tag both versions carry keeps both runs.
+  await page.getByLabel(/^Annotation/).selectOption({ label: `other ${stamp}` });
+  await expect(rowFor(taggedRun)).toHaveCount(1);
+  await expect(rowFor(plainRun)).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  expect(page.url()).not.toContain('annotation=');
+
+  await expectQuiet(page, problems);
+});
+
+/**
  * #1083 — `GET /api/runs` was the last list route with no `limit` and no
  * `cursor`, over the one table with no retention policy: the whole run history
  * came back in one body, and this page rendered all of it.

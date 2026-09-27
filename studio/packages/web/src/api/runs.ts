@@ -3,6 +3,7 @@ import {
   paginatedResponseSchema,
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
+  RunAnnotationsResponseSchema,
   RunCancelAcceptedSchema,
   RunDetailSchema,
   RunDiagnosticSchema,
@@ -91,6 +92,8 @@ export interface ListRunsQuery {
   pipelineId?: string;
   triggerId?: string;
   since?: RunSince;
+  /** U26 — exact match on the annotations of the version each run BOUND. */
+  annotation?: string;
   rerunOf?: string;
 }
 
@@ -151,6 +154,18 @@ export function listRuns(
     schema: RunPageSchema,
     signal,
   });
+}
+
+/**
+ * U26 — the annotation filter's options (`GET /api/runs/annotations`): each
+ * distinct annotation on a version one of the caller's runs is bound to, sorted.
+ */
+export async function listRunAnnotations(signal?: AbortSignal): Promise<string[]> {
+  const { items } = await apiFetch('/api/runs/annotations', {
+    schema: RunAnnotationsResponseSchema,
+    signal,
+  });
+  return items;
 }
 
 /** One run by id (`GET /api/runs/:id`); 404 → `ApiError(404)`. */

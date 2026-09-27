@@ -101,6 +101,9 @@ export interface ListRunSummariesFilter extends ListRunsFilter {
   /** Every run of every version of this pipeline (`countActiveRunsForPipeline`'s
    * join, reused). */
   pipelineId?: string;
+  /** U26 — runs whose BOUND version carries this annotation, matched exactly
+   * (case-sensitive, like the version doc stores it). */
+  annotation?: string;
 }
 
 function listRunsConditions(filter: ListRunsFilter) {
@@ -205,7 +208,10 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * the plan is UNCHANGED for owner-only, owner+status, owner+startedAfter,
  * owner+pipeline and all four together — SQLite still drives on
  * `runs_owner_id_idx` with a `USE TEMP B-TREE FOR ORDER BY` (the pipeline filter
- * only re-orders the join so `pipelines` leads). `listRuns` issues no
+ * only re-orders the join so `pipelines` leads). MEASURED again for the
+ * `annotation` axis: still `runs_owner_id_idx` + the temp b-tree, plus one
+ * correlated `SCAN je EXISTS VIRTUAL TABLE` per joined version row — a scan of
+ * that version's own annotations, at most `MAX_ANNOTATIONS`. `listRuns` issues no
  * `ORDER BY` at all, yet the page consuming it
  * claimed rows arrived "newest-first as the server returns them" — SQLite's row
  * order is an implementation detail, so that was never a promise anything kept.
@@ -249,11 +255,21 @@ export function listRunSummariesPage(
     const resume = beforeCursor(runs.startedAt, runs.id, args.cursor);
     if (resume) conditions.push(resume);
   }
-  // U26 — the one axis that cannot live in `listRunsConditions`: it reads a
-  // JOINED column. Expressed over the join this query already makes, exactly as
+  // U26 — the two axes that cannot live in `listRunsConditions`, because they
+  // read JOINED columns: this one and `annotation` below. The pipeline axis is
+  // expressed over the join this query already makes, exactly as
   // `countActiveRunsForPipeline` does, rather than as a subquery.
   if (filter.pipelineId !== undefined) {
     conditions.push(eq(pipelineVersions.pipelineId, filter.pipelineId));
+  }
+  // U26 — the annotation axis reads the JOINED version's `annotations` (a JSON
+  // array), so the run is judged by the tags it RAN under, not the pipeline's
+  // current ones. The value is a bound parameter compared by `=` on
+  // `json_each`'s `value`: BINARY collation, an exact match.
+  if (filter.annotation !== undefined) {
+    conditions.push(
+      sql`exists (select 1 from json_each(${pipelineVersions.annotations}) as je where je.value = ${filter.annotation})`,
+    );
   }
   /* #931 — the rows and their costs are read inside ONE transaction, so both come
      from a single consistent SQLite snapshot and a metered event appended between
@@ -689,6 +705,32 @@ export function cancelQueuedRun(db: Db, id: string): boolean {
     .where(and(eq(runs.id, id), eq(runs.status, 'queued')))
     .run();
   return result.changes > 0;
+}
+
+/**
+ * U26 — the annotation filter's options: every distinct annotation on a version
+ * that one of `ownerId`'s runs is bound to, sorted for display.
+ *
+ * Drawn from RUNS, not from every saved version, on purpose. Every Save mints an
+ * immutable version, so "all versions" would offer every tag ever typed and
+ * never lose one, most of them matching nothing. Keyed on `runs.owner_id`, the
+ * same column the list itself is scoped by, so an option is exactly a value the
+ * caller's list can match — and the owner proof is the run's, as it is there.
+ *
+ * Exact strings, NOT case-folded: the filter is an exact match, so `Finance` and
+ * `finance` (legal together across versions) are two options, each matching its
+ * own runs. Not paginated: it is a vocabulary of distinct authored tags, not a
+ * list of rows.
+ */
+export function listRunAnnotations(db: Db, ownerId: string): string[] {
+  const rows = db.all<{ value: string }>(
+    sql`select distinct je.value as value
+        from ${pipelineVersions}, json_each(${pipelineVersions.annotations}) as je
+        where ${pipelineVersions.id} in (
+          select ${runs.pipelineVersionId} from ${runs} where ${runs.ownerId} = ${ownerId}
+        )`,
+  );
+  return rows.map((r) => r.value).sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 /**
