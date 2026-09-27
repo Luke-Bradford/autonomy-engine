@@ -284,7 +284,7 @@ export type ActivityEvent =
        * #2 L2 / #725 — the metering FACT for a provider exchange this failure
        * DISCARDED. The executor mints an `activity.metered` from it, ordered before
        * the `node.failed` (the same slot relative to the TERMINAL that the success
-       * path's `metered` holds; on the text/tool paths a `captured` event sits
+       * path's `metered` holds; on the text/tool/structured paths a `captured` event sits
        * between them, so it is not the same slot relative to `captured`). This is
        * what makes "an `activity.metered` per provider response, including
        * failed-but-billed calls" (`llm-shared.ts`) hold on the failure paths of the

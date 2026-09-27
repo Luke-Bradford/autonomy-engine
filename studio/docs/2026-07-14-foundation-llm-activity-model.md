@@ -200,11 +200,26 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > rather than being dropped, so "withheld" stays distinguishable from "metadata
 > mode". The run drill-in renders it (`CaptureSection`). No `CATALOG_VERSION`
 > bump: an older build strips the key and captures less, the safe polarity.
+> **L9b slice 2 — structured-mode capture, AS BUILT (#605):** a `structured`
+> `llm_call` now emits `activity.captured` in both modes, ONE per provider
+> response — so a repaired attempt records two. `runStructuredWithRepair` builds
+> each one (not the adapters), from the turns THAT call sent: a repair's request
+> holds the model's echoed answer and studio's critique, because that is what
+> went over the wire. The system field is likewise the system text sent (on
+> OpenAI/Ollama the author's system plus the schema directive). The completion is
+> the model's unbounded answer — Anthropic's forced-tool `input` re-serialized,
+> or its TEXT when it skipped the tool; OpenAI/Ollama's raw `content` — and is
+> ABSENT when there is none, never the bounded repair echo. Ordering matches the
+> text path: `metered`, then `captured`, before any terminal; a transport
+> terminal gets a request-only capture. Secure nodes need nothing new: the
+> emit-time seam redacts every message, so a repair's echoed answer is withheld
+> under `secureOutput` alone. No `CATALOG_VERSION` bump (no config shape change;
+> an older build captures nothing for these nodes, the safe polarity).
 > **Still on #605:** the keyed-HMAC hash (deferred: the unsalted hash is an
 > oracle only for secret-marked content, and on exactly those nodes F4 already
-> scrubs it), structured-mode capture, the verbose reasoning trace, and tool-loop
-> rounds after the first. `capture: 'full'` is knowingly inert on all three of
-> those and on an `agent_cli`-bound node.
+> scrubs it), the verbose reasoning trace, and tool-loop rounds after the first.
+> `capture: 'full'` is knowingly inert on the last two and on an
+> `agent_cli`-bound node.
 
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
 
@@ -273,8 +288,8 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > boundary; tool traffic is `activity.toolCalled` telemetry). An EMPTY completion
 > appends no assistant turn (never a manufactured empty turn; `stopReason`
 > carries why). `emitMessages`+structured is refused in v1 (the transcript's
-> final turn IS the text completion; structured capture is deferred with L9b
-> #605). A hand-declared `messages` row without the flag is refused at save (it
+> final turn IS the text completion, and a structured node's result is not a
+> text turn). A hand-declared `messages` row without the flag is refused at save (it
 > could only ever fail `missing declared output`). Chains COMPOUND with no
 > state: `history: '${nodes.a.output.messages}'` — and when F5 variables land,
 > `${vars.history}` + `append_variable` feed the SAME input (the run-variable

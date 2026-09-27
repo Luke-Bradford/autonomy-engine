@@ -1014,8 +1014,8 @@ export type ToolRoundOutcome<C> =
  * exchange (request = the author's turns; completion omitted unless the first
  * response was text) — emitted before any terminal, preserving the
  * capture-precedes-terminal invariant. Continuation exchanges carry provider-
- * specific tool turns `LlmCapture.request` cannot represent; their capture is
- * #605's structured-capture plumbing, not silently hashed wrong here.
+ * specific tool turns `LlmCapture.request` cannot represent; capturing them is
+ * still open on #605, and is not silently hashed wrong here.
  *
  * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
  * `toolUse`) is metered HERE. A `terminal` outcome yields no `metered` event from
