@@ -40,9 +40,9 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await openGeneral(page);
     await page.getByLabel('pipeline description').fill('Loads the nightly batch');
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 1').fill('prod');
+    await page.getByLabel('annotation 1', { exact: true }).fill('prod');
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 2').fill('finance');
+    await page.getByLabel('annotation 2', { exact: true }).fill('finance');
 
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -52,8 +52,8 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await openGeneral(page);
     await expect(page.getByLabel('pipeline description')).toHaveValue('Loads the nightly batch');
-    await expect(page.getByLabel('annotation 1')).toHaveValue('prod');
-    await expect(page.getByLabel('annotation 2')).toHaveValue('finance');
+    await expect(page.getByLabel('annotation 1', { exact: true })).toHaveValue('prod');
+    await expect(page.getByLabel('annotation 2', { exact: true })).toHaveValue('finance');
 
     const latest = await latestVersion(page, id);
     expect(latest.description).toBe('Loads the nightly batch');
@@ -71,7 +71,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
 
     await openGeneral(page);
     await page.getByRole('button', { name: 'Add annotation' }).click();
-    await page.getByLabel('annotation 2').fill('Prod');
+    await page.getByLabel('annotation 2', { exact: true }).fill('Prod');
 
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
     await expect(page.locator('.badge-list li')).toContainText([
