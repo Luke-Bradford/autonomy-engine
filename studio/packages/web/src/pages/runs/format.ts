@@ -233,6 +233,22 @@ export function failureClass(kind: string | undefined, code: string | undefined)
   return [kind, code].filter((v): v is string => typeof v === 'string' && v.length > 0).join(' · ');
 }
 
+/**
+ * A logged value as compact JSON, total over `unknown`: a string comes back
+ * QUOTED, and a value JSON cannot express falls back to `String`. The whole
+ * text, uncapped; a caller bounds it (`formatOutputValue`, `CappedValue`).
+ */
+export function jsonText(value: unknown): string {
+  try {
+    // `undefined` (and a function) stringify to `undefined`, not a string.
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    // A `bigint`, or a cycle — neither reaches here through a parsed event,
+    // but a formatter must not be the thing that crashes the run page.
+    return String(value);
+  }
+}
+
 /** The cap on a streamed output value's inline rendering, in UTF-16 units. */
 export const MAX_INLINE_OUTPUT_CHARS = 80;
 
@@ -248,19 +264,7 @@ export const MAX_INLINE_OUTPUT_CHARS = 80;
  * budget cuts with it too) and says it was cut.
  */
 export function formatOutputValue(value: unknown): string {
-  let text: string;
-  if (typeof value === 'string') {
-    text = value;
-  } else {
-    try {
-      // `undefined` (and a function) stringify to `undefined`, not a string.
-      text = JSON.stringify(value) ?? String(value);
-    } catch {
-      // A `bigint`, or a cycle — neither reaches here through a parsed event,
-      // but a formatter must not be the thing that crashes the run page.
-      text = String(value);
-    }
-  }
+  const text = typeof value === 'string' ? value : jsonText(value);
   if (text.length <= MAX_INLINE_OUTPUT_CHARS) return text;
   return `${text.slice(0, surrogateSafeCut(text, MAX_INLINE_OUTPUT_CHARS))}…`;
 }

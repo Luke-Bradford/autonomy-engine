@@ -3014,3 +3014,100 @@ describe('RunDetailPage — the reruns of this run', () => {
     expect(note.closest('[role="alert"],[role="status"],[aria-live]')).toBeNull();
   });
 });
+
+/**
+ * #844 V7 — the Variables section, through the PAGE, because the page decides
+ * what it is handed: the bound version's declaration, the one projection (and
+ * so whether replay finished), and whether the run has settled.
+ */
+describe('RunDetailPage — the run’s variables (#844 V7)', () => {
+  const withVariables = () =>
+    version({
+      nodes: [
+        {
+          id: 's',
+          type: 'set_variable',
+          position: { x: 0, y: 0 },
+          config: { variable: 'count', value: '5' },
+        },
+      ],
+      edges: [],
+      variables: [{ name: 'count', type: 'number', default: 0 }],
+    });
+  const section = () => screen.getByRole('region', { name: 'Variables' });
+
+  /** `run.started` + the write, on the attempt the reducer assigned. */
+  function writtenLog(): RunEvent[] {
+    const started = envelope({
+      type: 'run.started',
+      runId: 'run_1',
+      pipelineVersionId: 'pv_1',
+      params: {},
+    });
+    const p = projectRun(withVariables(), [started]);
+    const attemptId = p.ok ? p.state.nodes.s?.currentAttemptId : undefined;
+    if (attemptId === undefined) throw new Error('fixture: `s` must be ready with an attempt');
+    return [
+      started,
+      envelope({
+        type: 'variable.set',
+        runId: 'run_1',
+        nodeId: 's',
+        attemptId,
+        name: 'count',
+        value: 5,
+      }),
+    ];
+  }
+
+  it('shows the engine’s value, live while the run is going', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'running' }),
+      pipelineVersion: withVariables(),
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: writtenLog() }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('region', { name: 'Variables' });
+    expect(
+      within(section()).getByText('Current values, updated as the run writes them.'),
+    ).toBeInTheDocument();
+    expect(within(section()).getByRole('row', { name: /count number 5/ })).toBeInTheDocument();
+  });
+
+  it('says the values are final once the run has settled', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'success', finishedAt: 1_700_000_001_000 }),
+      pipelineVersion: withVariables(),
+    });
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          ...writtenLog(),
+          envelope({ type: 'run.finished', runId: 'run_1', outcome: 'success' }),
+        ],
+        phase: 'closed',
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('region', { name: 'Variables' });
+    expect(within(section()).getByText('Final values.')).toBeInTheDocument();
+  });
+
+  it('shows no values from a half-replayed log, and says why', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'running' }),
+      pipelineVersion: withVariables(),
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: writtenLog(), replayComplete: false }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('region', { name: 'Variables' });
+    expect(section().textContent).toContain('Variable values are unavailable.');
+    expect(within(section()).queryByRole('table')).toBeNull();
+  });
+
+  it('has no Variables section for a pipeline that declares none', async () => {
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('region', { name: 'Cost & usage' });
+    expect(screen.queryByRole('region', { name: 'Variables' })).toBeNull();
+  });
+});

@@ -16,6 +16,7 @@ import {
   type RunEvent,
   type RunLifecycleStatus,
   type RunState,
+  type VariableWrite,
   type WaitingReason,
 } from '@autonomy-studio/shared';
 
@@ -299,6 +300,17 @@ export interface NodeActivity {
    * id it minted and the executor reports only for a child it really created.
    */
   copiedChildRunId: string | undefined;
+  /**
+   * #844 V7 (spec V-D9) — the variable write a `set_variable`/`append_variable`
+   * node's latest result recorded: the op, the variable and the value, taken
+   * from its `variable.*` event (for an `append`, the ELEMENT appended, never
+   * the whole array — that is what the event carries). For a COPIED writer it
+   * is the last of the reseed's `copiedVariableWrites` for that node.
+   *
+   * Result-scoped like `outputValues`, so a re-opened writer drops it.
+   * `undefined` on every other node, and on a writer that has not written yet.
+   */
+  variableWrite: Omit<VariableWrite, 'nodeId'> | undefined;
   /**
    * The RAW node id the result on show came from, when it differed from the
    * canvas node id this row folds onto (`w@1` → `w`) — set by EVERY terminal
@@ -690,6 +702,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         outputValues: undefined,
         copiedFromRunId: undefined,
         copiedChildRunId: undefined,
+        variableWrite: undefined,
         instanceId: undefined,
         startedAtMs: undefined,
         endedAtMs: undefined,
@@ -739,6 +752,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     n.outputValues = undefined;
     n.copiedFromRunId = undefined;
     n.copiedChildRunId = undefined;
+    n.variableWrite = undefined;
     n.instanceId = undefined;
   };
 
@@ -1103,12 +1117,18 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // an `if`, and THIS is its terminal-success event (reduce.ts
         // `onVariableWritten`): the write and the success are one event. Its
         // catalog entry declares `outputs: []`, so `{}` is exact; the value it
-        // wrote is shown by the run page's variables view (V7).
+        // wrote is shown by the run page's Variables section and, per node, by
+        // `variableWrite` (V7).
         const n = ensure(e.nodeId);
         clearResult(n);
         n.status = 'success';
         n.attempts += 1;
         n.outputValues = {};
+        n.variableWrite = {
+          op: e.type === 'variable.set' ? 'set' : 'append',
+          name: e.name,
+          value: e.value,
+        };
         n.instanceId = instanceOf(e.nodeId);
         break;
       }
@@ -1219,6 +1239,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           n.copiedFromRunId = e.sourceRunId;
           /* RS4 — see `copiedChildRunId`. */
           n.copiedChildRunId = e.childLinks?.find((l) => l.callNodeId === nodeId)?.sourceChildRunId;
+          /* #844 V7 — a copied writer's write. The LAST one for this node, since
+             the list is in the source run's log order and a writer re-run by a
+             loop round wrote once per round. Absent on old logs (no writes). */
+          const write = e.copiedVariableWrites?.findLast((w) => w.nodeId === nodeId);
+          n.variableWrite =
+            write === undefined
+              ? undefined
+              : { op: write.op, name: write.name, value: write.value };
           /* Dead for every frontier RS2 can produce (its contract is top-level
              ids only) and kept for symmetry with every other terminal branch —
              a doc may legitimately carry a literal `x@2` id, which `ensure`
@@ -1475,9 +1503,22 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       open && settled && last !== undefined && last.endedAtMs === undefined
         ? row.spans.slice(0, -1)
         : row.spans;
+    /* #844 V7 — a write is shown only where the engine holds the node
+       `success`, i.e. where it APPLIED one. The fold records every `variable.*`
+       event, but the reducer drops a stale one (a write for a node a loop
+       timeout abandoned folds as a no-op and the node settles `skipped`), and a
+       loop round re-opens a writer with no event at all. Keeping the fold's
+       write there would show a value the run's Variables section does not.
+
+       Not reached for a PARALLEL foreach's body writer (only legal under
+       `allowNondeterministicVars`): the engine holds no bare-id entry for it,
+       so the early return above keeps the fold's row whole, write included.
+       Its row already folds several items' writes onto one (last one wins),
+       and the Variables section, read from the engine, stays the authority. */
+    const variableWrite = engine.status === 'success' ? row.variableWrite : undefined;
     return open && settled
-      ? { ...row, status: engine.status, startedAtMs: undefined, spans }
-      : { ...row, status: engine.status };
+      ? { ...row, status: engine.status, startedAtMs: undefined, spans, variableWrite }
+      : { ...row, status: engine.status, variableWrite };
   });
 
   const seen = new Set(reconciled.map((row) => row.nodeId));
@@ -1534,6 +1575,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          the fold instead, which is what fixed them showing no Outputs. */
       copiedFromRunId: undefined,
       copiedChildRunId: undefined,
+      variableWrite: undefined,
       instanceId: undefined,
       /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
          Same rule as the fields above: an absent fact is rendered as absent,

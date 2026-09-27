@@ -32,6 +32,8 @@ const NO_LLM_ACTIVITY = {
   input: undefined,
   params: undefined,
   inputInstanceId: undefined,
+  /* #844 V7 — only a `set_variable`/`append_variable` node records a write. */
+  variableWrite: undefined,
 };
 
 let seq = 0;
@@ -3442,5 +3444,165 @@ describe('deriveNodeActivity — the dispatched input (#890)', () => {
       'w',
     );
     expect(r.params).toEqual(recordOf('{"i":1}'));
+  });
+});
+
+describe('deriveNodeActivity — the variable a writer node wrote (#844 V7)', () => {
+  const started = envelope({
+    type: 'run.started',
+    runId: 'r',
+    pipelineVersionId: 'pv',
+    params: {},
+  });
+  const dispatched = (nodeId: string, attemptId: string) =>
+    envelope({ type: 'node.dispatched', runId: 'r', nodeId, attemptId, idempotent: true });
+
+  it('records the op, the name and the value from a `variable.set` / `variable.append`', () => {
+    const rows = deriveNodeActivity([
+      started,
+      envelope({
+        type: 'variable.set',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: 's#0',
+        name: 'count',
+        value: 5,
+      }),
+      envelope({
+        type: 'variable.append',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        name: 'rows',
+        value: { id: 1 },
+      }),
+    ]);
+    const byId = new Map(rows.map((r) => [r.nodeId, r]));
+    expect(byId.get('s')?.variableWrite).toEqual({ op: 'set', name: 'count', value: 5 });
+    // The ELEMENT, never the array: that is what the event carries.
+    expect(byId.get('a')?.variableWrite).toEqual({ op: 'append', name: 'rows', value: { id: 1 } });
+  });
+
+  it('is attempt-scoped: a writer re-opened by a later round drops the previous write', () => {
+    const [row] = deriveNodeActivity([
+      started,
+      envelope({
+        type: 'variable.set',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: 's#0',
+        name: 'count',
+        value: 1,
+      }),
+      dispatched('s', 's#1'),
+    ]);
+    expect(row?.variableWrite).toBeUndefined();
+  });
+
+  it('carries a COPIED writer’s write from the reseed, the last one for that node', () => {
+    const rows = deriveNodeActivity([
+      envelope({
+        type: 'run.started',
+        runId: 'r2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'r1',
+      }),
+      envelope({
+        type: 'run.reseeded',
+        runId: 'r2',
+        sourceRunId: 'r1',
+        frontier: ['s', 'x'],
+        copiedOutputs: {},
+        copiedContainers: {},
+        copiedVariableWrites: [
+          { nodeId: 's', op: 'set', name: 'count', value: 1 },
+          { nodeId: 'other', op: 'set', name: 'count', value: 7 },
+          { nodeId: 's', op: 'set', name: 'count', value: 2 },
+        ],
+      }),
+    ]);
+    const byId = new Map(rows.map((r) => [r.nodeId, r]));
+    expect(byId.get('s')?.variableWrite).toEqual({ op: 'set', name: 'count', value: 2 });
+    // A copied node that wrote nothing claims no write.
+    expect(byId.get('x')?.variableWrite).toBeUndefined();
+  });
+
+  it('claims no write on an ordinary node', () => {
+    const [row] = deriveNodeActivity([
+      started,
+      dispatched('n', 'n#0'),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'n', attemptId: 'n#0', outputs: {} }),
+    ]);
+    expect(row?.variableWrite).toBeUndefined();
+  });
+});
+
+describe('reconcileNodeActivity — a write the engine did not apply (#844 V7)', () => {
+  const DOC: EngineDoc = {
+    nodes: [
+      {
+        id: 's',
+        type: 'set_variable',
+        position: { x: 0, y: 0 },
+        config: { variable: 'count', value: '5' },
+      },
+    ],
+    edges: [],
+    variables: [{ name: 'count', type: 'number', default: 0 }],
+  };
+  const started = envelope({
+    type: 'run.started',
+    runId: 'r',
+    pipelineVersionId: 'pv',
+    params: {},
+  });
+
+  function reconciled(events: RunEvent[]) {
+    const projection = projectRun(DOC, events);
+    if (!projection.ok) throw new Error(`fixture: must project — ${projection.reason}`);
+    const [row] = reconcileNodeActivity(deriveNodeActivity(events), projection.state);
+    return { row, variables: projection.state.variables };
+  }
+
+  function currentAttempt(): string {
+    const p = projectRun(DOC, [started]);
+    const id = p.ok ? p.state.nodes.s?.currentAttemptId : undefined;
+    if (id === undefined) throw new Error('fixture: `s` must be ready with an attempt');
+    return id;
+  }
+
+  it('keeps the write the engine applied', () => {
+    const { row, variables } = reconciled([
+      started,
+      envelope({
+        type: 'variable.set',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: currentAttempt(),
+        name: 'count',
+        value: 5,
+      }),
+    ]);
+    expect(variables).toEqual({ count: 5 });
+    expect(row?.status).toBe('success');
+    expect(row?.variableWrite).toEqual({ op: 'set', name: 'count', value: 5 });
+  });
+
+  it('drops a STALE write the reducer folded as a no-op, so the drill-in cannot contradict the Variables section', () => {
+    const { row, variables } = reconciled([
+      started,
+      envelope({
+        type: 'variable.set',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: 'stale#9',
+        name: 'count',
+        value: 99,
+      }),
+    ]);
+    expect(variables).toEqual({ count: 0 });
+    expect(row?.status).not.toBe('success');
+    expect(row?.variableWrite).toBeUndefined();
   });
 });
