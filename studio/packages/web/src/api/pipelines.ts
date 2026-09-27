@@ -48,6 +48,9 @@ export type PipelineWrite = z.input<typeof PipelineWriteSchema>;
  */
 const PipelineRenameSchema = PipelineWriteSchema.pick({ name: true });
 
+/** #1380 — the folder-move body, `pick`ed for the same reason as the rename. */
+const PipelineFolderBodySchema = PipelineWriteSchema.pick({ folder: true });
+
 /**
  * #904 — the version-write body is the SHARED `CreatePipelineVersionBodySchema`
  * rather than a second local `NewPipelineVersionSchema.omit({ pipelineId })`.
@@ -320,6 +323,24 @@ export async function renamePipeline(id: string, name: string): Promise<Pipeline
 }
 
 /**
+ * #1380 — file a pipeline under a folder, or back at the top level with `null`
+ * (`PATCH /api/pipelines/:id`). A blank or all-space folder is `null` here, for
+ * the reason `renamePipeline` trims: the field is free text, and "no folder" is
+ * what an emptied field means.
+ *
+ * Its own `pick`, like the rename body, so the PATCH carries `folder` alone and
+ * the write shape's defaults never reach the other fields.
+ */
+export async function movePipelineToFolder(id: string, folder: string | null): Promise<Pipeline> {
+  const trimmed = folder?.trim() ?? '';
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: PipelineFolderBodySchema.parse({ folder: trimmed === '' ? null : trimmed }),
+    schema: PipelineSchema,
+  });
+}
+
+/**
  * The highest-numbered version of a pipeline, or `null` when it has none yet.
  *
  * Highest `version`, NOT the last element: the server's ordering is its own
@@ -367,11 +388,13 @@ export async function duplicatePipeline(source: Pipeline, name: string): Promise
        where nothing was created. */
     copy = await createPipeline({
       name: name.trim(),
-      // A copy, not a re-authoring: `concurrency` is the only other
-      // user-settable field on a pipeline, and letting the write schema's
-      // `.default(null)` silently uncap the copy would be the same class of
+      // A copy, not a re-authoring: `concurrency` and `folder` (#1380) are the
+      // other user-settable fields on a pipeline, and letting the write
+      // schema's `.default(null)` silently uncap the copy, or file it at the top
+      // level away from its source, would be the same class of
       // manufactured-absence the project bans elsewhere (#473).
       concurrency: source.concurrency,
+      folder: source.folder,
     });
     const latest = latestVersion(await listPipelineVersions(source.id));
     if (latest) {

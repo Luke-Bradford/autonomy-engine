@@ -4,6 +4,7 @@ import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
   NewPipelineSchema,
+  PipelineFolderSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
   canonicalStringify,
@@ -35,14 +36,16 @@ import { exportPipeline } from '../portability/index.js';
 const PipelineWriteBodySchema = NewPipelineSchema.omit({ ownerId: true });
 
 /**
- * PATCH body: like the write shape but with NO `.default()` on `concurrency` —
- * `.partial()` over a defaulted field still APPLIES the default, so a rename
- * PATCH would silently manufacture `concurrency: null` and clear the cap
- * (#473's shape: an absent fact must never become a value). Absent = preserve;
- * explicit `null` = clear; the positive-int write rule still holds.
+ * PATCH body: like the write shape but with NO `.default()` on `concurrency` or
+ * `folder` — `.partial()` over a defaulted field still APPLIES the default, so a
+ * rename PATCH would silently manufacture `concurrency: null` and clear the cap,
+ * and `folder: null` and unfile the pipeline (#473's shape: an absent fact must
+ * never become a value). Absent = preserve; explicit `null` = clear; the write
+ * rules still hold.
  */
 const PipelinePatchBodySchema = PipelineWriteBodySchema.extend({
   concurrency: z.number().int().positive().nullable(),
+  folder: PipelineFolderSchema.nullable(),
 }).partial();
 
 /**

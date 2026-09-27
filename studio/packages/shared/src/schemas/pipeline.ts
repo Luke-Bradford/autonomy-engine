@@ -799,6 +799,42 @@ export const ContainerSchema = z.object({
 });
 export type Container = z.infer<typeof ContainerSchema>;
 
+/**
+ * Characters a short LABEL (an annotation, a folder) may not contain: control
+ * characters (a newline among them), Unicode line/paragraph separators,
+ * invisible format characters (zero-width space, joiners, BOM) and any space
+ * other than U+0020 (a no-break space). Each renders as nothing, or as an
+ * ordinary space, so it would make two labels that LOOK the same and are not.
+ */
+export const LABEL_REFUSED_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/u;
+
+export const PIPELINE_FOLDER_MAX_CHARS = 100;
+
+/**
+ * #1380 — one folder name. Refused rather than repaired, like an annotation:
+ * the server never rewrites what an author wrote.
+ *
+ * FLAT, and `/` is refused to keep it that way for now. A folder path would be
+ * the obvious way to nest later, and refusing the separator today means no
+ * stored folder can ever be reinterpreted when it gains that meaning.
+ */
+export const PipelineFolderSchema = z
+  .string()
+  .min(1, { message: 'a folder name cannot be empty' })
+  .max(PIPELINE_FOLDER_MAX_CHARS, {
+    message: `a folder name can be at most ${PIPELINE_FOLDER_MAX_CHARS} characters`,
+  })
+  .refine((s) => s.trim() === s, {
+    message: 'a folder name cannot start or end with a space',
+  })
+  .refine((s) => !LABEL_REFUSED_CHARS.test(s), {
+    message:
+      'a folder name cannot contain a line break, an invisible character, or a space other than an ordinary one',
+  })
+  .refine((s) => !s.includes('/'), {
+    message: "a folder name cannot contain '/' (folders do not nest)",
+  });
+
 export const PipelineSchema = z.object({
   id: z.string().min(1),
   /**
@@ -834,6 +870,23 @@ export const PipelineSchema = z.object({
    */
   concurrency: z.number().nullable().default(null),
   /**
+   * #1380 — the folder the Factory Resources pane files this pipeline under;
+   * `null` = top level. One flat label (see `PipelineFolderSchema`).
+   *
+   * On the MUTABLE row, beside `name`, and NOT on the immutable version doc
+   * that spec #1 D1 first named: a folder is organisational, never behavioural.
+   * On the doc, moving a pipeline would mint a version that changes nothing a
+   * run does — yet a DB-only workspace's triggers bind to the LATEST version,
+   * and the pane lists ROWS, so it would also need every row's latest version
+   * just to group the list.
+   *
+   * REQUIRED with NO `.default()` (#473): the column is always present on a
+   * read, so an absent key is a corrupt row, not a top-level pipeline. The
+   * export envelope is the one place an absent key is legitimate, and
+   * `PipelineExportSchema` says so for itself.
+   */
+  folder: z.string().nullable(),
+  /**
    * #3 G5a (item ②) — a real ARCHIVED state on the MUTABLE pipeline row. An
    * archived pipeline is soft-deleted: its immutable versions + runs (audit
    * history) are PRESERVED, it drops off the default list, and it can never
@@ -867,6 +920,8 @@ export const NewPipelineSchema = PipelineSchema.omit({
   // WRITE shape: only a positive-integer cap (or null = uncapped) may be
   // stored — see the read/write asymmetry note on `PipelineSchema.concurrency`.
   concurrency: z.number().int().positive().nullable().default(null),
+  // #1380 — born at top level unless a folder is named.
+  folder: PipelineFolderSchema.nullable().default(null),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.
@@ -903,12 +958,9 @@ export const AnnotationSchema = z
   .refine((s) => s.trim() === s, {
     message: 'an annotation cannot start or end with a space',
   })
-  // Control characters (a newline among them), Unicode line/paragraph
-  // separators, invisible format characters (zero-width space, joiners, BOM) and
-  // any space other than U+0020 (a no-break space). Each renders as nothing, or
-  // as an ordinary space, so it would make two annotations that LOOK the same and
-  // pass the duplicate check below.
-  .refine((s) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/u.test(s), {
+  // See `LABEL_REFUSED_CHARS`: such a character would make two annotations
+  // that LOOK the same and pass the duplicate check below.
+  .refine((s) => !LABEL_REFUSED_CHARS.test(s), {
     message:
       'an annotation cannot contain a line break, an invisible character, or a space other than an ordinary one',
   });

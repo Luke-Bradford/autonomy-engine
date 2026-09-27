@@ -152,6 +152,8 @@ function importPipelineEnvelopeInTx(
     ownerId,
     name: exportedPipeline.name,
     concurrency: exportedPipeline.concurrency,
+    // #1380 — absent (top level, or a pre-#1380 file) and `null` both mean no folder.
+    folder: exportedPipeline.folder ?? null,
   });
 
   // Only nodes actually recorded here HAD a connection stripped on export —

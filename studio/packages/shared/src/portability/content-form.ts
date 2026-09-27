@@ -172,6 +172,20 @@ export function omitEmptyLateFields(version: object): void {
   if (doc.description === '') delete doc.description;
 }
 
+/**
+ * #1380 — the ROW's counterpart to `omitEmptyLateFields`: a pipeline with no
+ * folder is written WITHOUT the key. A DB row always carries `folder: null`, and
+ * every pipeline file committed before #1380 has no key at all, so leaving the
+ * null in would change the bytes (and the content form) of every one of them.
+ * Applied in the same places: the content form, `serializePipeline`, and the
+ * portable export. A literal `null` in a hand-written file is dropped too, so it
+ * compares equal to an absent key.
+ */
+export function omitEmptyRowFields(pipeline: object): void {
+  const row = pipeline as { folder?: unknown };
+  if (row.folder === null || row.folder === undefined) delete row.folder;
+}
+
 export function pipelineVersionContentForm(
   version: PipelineExportData['versions'][number],
 ): string {
@@ -190,7 +204,7 @@ export function pipelineVersionContentForm(
  * to come back here. Note `name` is already excluded (it is `RESOURCE_VOLATILE`)
  * — the reconcile carries the name difference as its own independent signal.
  *
- * This is WIDER than the apply's `rowPatch` (`name` + `concurrency`) by design,
+ * This is WIDER than the apply's `rowPatch` (`name` + `concurrency` + `folder`) by design,
  * and one field makes that concrete today: `strippedConnectionRefs`, which this
  * app's own commit path always writes as `[]` and the apply never reads. A
  * hand-authored branch file carrying a non-empty one therefore previews as
@@ -206,6 +220,7 @@ export function pipelineRowContentForm(data: PipelineExportData): string {
 export function pipelineContentForm(data: PipelineExportData): string {
   const clone = jsonClone(data);
   omitKeys(clone.pipeline, RESOURCE_VOLATILE);
+  omitEmptyRowFields(clone.pipeline);
   for (const version of clone.versions) scrubVersion(version);
   return canonicalStringify(clone);
 }

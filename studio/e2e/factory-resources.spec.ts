@@ -136,6 +136,68 @@ test.describe('U4 Factory Resources pane', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * #1380 — a folder is a label on the pipeline ROW, and the pane groups by it.
+   * Reloads prove the move PERSISTED (not just a store echo), and the collapse
+   * step reads real visibility: jsdom only sees the `hidden` attribute, while an
+   * author `display` rule would still paint a "collapsed" folder here.
+   */
+  test('#1380 files a pipeline in a folder, keeps it there across a rename, and moves it out', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await gotoAuthor(page);
+
+    const name = 'e2e 1380 filed';
+    const folderName = 'e2e 1380 folder';
+    const folder = () => pane(page).getByRole('list', { name: `Folder ${folderName}` });
+    await createInPane(page, name);
+
+    await openRowMenu(page, name);
+    await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
+    const field = page.getByRole('combobox', { name: 'Folder' });
+    await expect(field).toHaveValue('');
+    await field.fill(folderName);
+    await page.getByRole('button', { name: 'Move', exact: true }).click();
+    await expect(folder().getByRole('link', { name, exact: true })).toBeVisible();
+
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(folder().getByRole('link', { name, exact: true })).toBeVisible();
+
+    // Collapsing the folder really hides its rows, and only its rows.
+    await pane(page)
+      .getByRole('button', { name: `Collapse folder ${folderName}` })
+      .click();
+    await expect(pane(page).getByRole('link', { name, exact: true })).toBeHidden();
+    await pane(page)
+      .getByRole('button', { name: `Expand folder ${folderName}` })
+      .click();
+    await expect(folder().getByRole('link', { name, exact: true })).toBeVisible();
+
+    // A rename PATCHes the name alone, so the pipeline stays filed.
+    const renamed = 'e2e 1380 filed renamed';
+    await openRowMenu(page, name);
+    await page.getByRole('menuitem', { name: 'Rename' }).click();
+    await page.getByRole('textbox', { name: 'Pipeline name' }).fill(renamed);
+    await page.getByRole('button', { name: 'Rename', exact: true }).click();
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(folder().getByRole('link', { name: renamed, exact: true })).toBeVisible();
+
+    // Emptying the folder field moves it back to the top level, and the folder,
+    // which only existed while something was in it, is gone.
+    await openRowMenu(page, renamed);
+    await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
+    await expect(page.getByRole('combobox', { name: 'Folder' })).toHaveValue(folderName);
+    await page.getByRole('combobox', { name: 'Folder' }).fill('');
+    await page.getByRole('button', { name: 'Move', exact: true }).click();
+    await expect(folder()).toHaveCount(0);
+    await expect(tree(page).getByRole('link', { name: renamed, exact: true })).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
   test('duplicates a pipeline, defaulting the copy’s name', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoAuthor(page);

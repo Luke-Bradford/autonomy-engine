@@ -14,6 +14,7 @@ import {
   listArchivedPipelines,
   listPipelines,
   listPipelineVersions,
+  movePipelineToFolder,
   renamePipeline,
 } from './pipelines';
 
@@ -23,6 +24,7 @@ const pipeline = {
   ownerId: 'local',
   name: 'My pipeline',
   concurrency: null,
+  folder: null,
   archived: false,
   createdAt: 1,
   updatedAt: 1,
@@ -213,7 +215,11 @@ describe('pipelines API', () => {
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(init.method).toBe('POST');
     // The write schema's default makes the uncapped state explicit on create.
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'My pipeline', concurrency: null });
+    expect(JSON.parse(init.body as string)).toEqual({
+      name: 'My pipeline',
+      concurrency: null,
+      folder: null,
+    });
   });
 
   it('deletePipeline DELETEs and resolves void on 204', async () => {
@@ -259,6 +265,27 @@ describe('pipelines API', () => {
   it('renamePipeline refuses an empty name before it reaches the network', async () => {
     const fetchMock = stubFetch(200, pipeline);
     await expect(renamePipeline('pl_1', '   ')).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('#1380 movePipelineToFolder PATCHes ONLY the folder; blank means the top level', async () => {
+    const fetchMock = stubFetch(200, { ...pipeline, folder: 'Ops' });
+    const out = await movePipelineToFolder('pl/1', '  Ops ');
+    expect(out.folder).toBe('Ops');
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1');
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ folder: 'Ops' });
+
+    await movePipelineToFolder('pl_1', '   ');
+    expect(JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)).toEqual({
+      folder: null,
+    });
+  });
+
+  it('#1380 movePipelineToFolder refuses a nested folder before it reaches the network', async () => {
+    const fetchMock = stubFetch(200, pipeline);
+    await expect(movePipelineToFolder('pl_1', 'a/b')).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -329,8 +356,8 @@ describe('pipelines API', () => {
       expect(copied.variables).toEqual(variables);
     });
 
-    it('carries the source’s concurrency cap onto the copy', async () => {
-      const capped = { ...pipeline, concurrency: 3 };
+    it('carries the source’s concurrency cap and folder onto the copy', async () => {
+      const capped = { ...pipeline, concurrency: 3, folder: 'Nightly' };
       const fetchMock = stubFetchSequence([
         { status: 201, body: { ...capped, id: 'pl_2' } },
         { status: 200, body: [] },
@@ -343,6 +370,7 @@ describe('pipelines API', () => {
       expect(JSON.parse(initOf(fetchMock, 0).body as string)).toEqual({
         name: 'Copy',
         concurrency: 3,
+        folder: 'Nightly',
       });
     });
 

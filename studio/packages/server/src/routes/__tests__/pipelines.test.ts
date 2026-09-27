@@ -127,6 +127,62 @@ describe('pipelines routes', () => {
     expect(plain.json().concurrency).toBeNull();
   });
 
+  it('#1380 — folder: create in one, a rename PATCH keeps it, move, clear with null, refuse a bad one', async () => {
+    const created = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'Filed', folder: 'Nightly' },
+      })
+    ).json();
+    expect(created.folder).toBe('Nightly');
+    const reread = async () =>
+      (await app.inject({ method: 'GET', url: `/api/pipelines/${created.id}` })).json().folder;
+
+    // Absent from a PATCH → preserved. The write schema's `.default(null)` must
+    // not reach the PATCH, or every rename would quietly unfile the pipeline.
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { name: 'Filed, renamed' },
+    });
+    expect(await reread()).toBe('Nightly');
+
+    const move = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { folder: 'Ops' },
+    });
+    expect(move.statusCode).toBe(200);
+    expect(await reread()).toBe('Ops');
+
+    const clear = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { folder: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(await reread()).toBeNull();
+
+    for (const bad of ['', ' Ops', 'a/b']) {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/pipelines/${created.id}`,
+        payload: { folder: bad },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(await reread()).toBeNull();
+
+    // A default create is top level.
+    const plain = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      payload: { name: 'Loose' },
+    });
+    expect(plain.json().folder).toBeNull();
+  });
+
   it('PipelineVersion: create + immutability (no update/delete route), version increments', async () => {
     const pipelineRes = await app.inject({
       method: 'POST',

@@ -658,6 +658,41 @@ body {
   align-items: center;
 }
 
+/* #1380 — a folder is the group header's shape one level down: chevron, then
+   the label, then its own indented list. */
+.factory-resources__folder-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 24px;
+}
+
+.factory-resources__folder-header .factory-resources__disclosure {
+  margin-left: 0;
+}
+
+.factory-resources__folder-icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.factory-resources__folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.factory-resources__folder-list {
+  padding-left: 1.1rem;
+}
+
+/* See `.activity-toolbox__list[hidden]` below: any author `display` beats the
+   UA's `[hidden]`, so a collapsed folder must not depend on nobody adding one. */
+.factory-resources__folder-list[hidden] {
+  display: none;
+}
+
 .factory-resources__row .secondary-pane__link {
   flex: 1 1 auto;
   min-width: 0;

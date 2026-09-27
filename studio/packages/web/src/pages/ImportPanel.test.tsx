@@ -43,6 +43,7 @@ function pipelineResult(overrides: Partial<PipelineImportResult> = {}): Pipeline
       ownerId: 'own_1',
       name: 'Imported flow',
       concurrency: 1,
+      folder: null,
       archived: false,
       createdAt: 1_754_438_400_000,
       updatedAt: 1_754_438_400_000,

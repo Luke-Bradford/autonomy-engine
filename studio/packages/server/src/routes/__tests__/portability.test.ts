@@ -53,8 +53,10 @@ describe('portability routes (export + import)', () => {
         payload: emptyVersionBody,
       });
       const version = versionRes.json();
+      // #1380 — and a top-level pipeline's `folder: null` is omitted, so the
+      // export keeps the bytes it had before folders existed.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { archived: _archived, ...pipelineWithoutArchived } = pipeline;
+      const { archived: _archived, folder: _folder, ...pipelineWithoutArchived } = pipeline;
       // #3 G6b — git provenance is LOCAL derived state, stripped on export like
       // `archived`. A version authored via the API has it all `null`; the export
       // omits it, so the expected envelope version is the DB row MINUS provenance.

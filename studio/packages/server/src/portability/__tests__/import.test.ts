@@ -13,6 +13,7 @@ import {
   createPipelineVersion,
   createSecret,
   createTrigger,
+  getPipeline,
   getPipelineVersion,
   listPipelineVersions,
   listPipelines,
@@ -71,6 +72,24 @@ describe('importEnvelope: pipeline', () => {
 
     // Actually persisted via the real repo — not just an in-memory echo.
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
+  });
+
+  it('#1380 — a folder survives export → import, and a top-level pipeline exports with no key', () => {
+    const { db } = freshDb();
+    const filed = createPipeline(db, { ownerId: 'owner-a', name: 'Filed', folder: 'Nightly' });
+    const loose = createPipeline(db, { ownerId: 'owner-a', name: 'Loose' });
+
+    const looseEnvelope = exportPipeline(db, loose.id, 'owner-a');
+    expect(JSON.stringify(looseEnvelope)).not.toContain('folder');
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, filed.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    // Re-read, not the create response (#473's shape: a dropped column echoes fine).
+    expect(getPipeline(db, result.pipeline.id)?.folder).toBe('Nightly');
+
+    const again = importEnvelope(db, 'owner-b', looseEnvelope);
+    if (again.kind !== 'pipeline') throw new Error('unreachable');
+    expect(getPipeline(db, again.pipeline.id)?.folder).toBeNull();
   });
 
   it('#2 L13a — a ${} (dynamic) connectionId survives export → import unchanged, no rebind', () => {
