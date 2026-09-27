@@ -2415,9 +2415,9 @@ export function globalSnapshotDefect(snapshot: Record<string, unknown>): string 
  * stored global predates the rule.
  */
 export function globalParamNameDefect(name: string): string | null {
-  // #844 GL3 — `__proto__` is reserved: zod's `z.record` DROPS that key, so a
-  // run's logged snapshot (`run.started.globals`) would lose it when the log is
-  // read back, and a replay would fail a read the live run resolved.
+  // #844 GL3 — `__proto__` is reserved: zod's `z.record` DROPS that key, and
+  // every event is parsed before it is folded, so a run's snapshot
+  // (`run.started.globals`) would lose it and no run could ever read it.
   if (name === '__proto__') {
     return `global '${name}' is a reserved name`;
   }
@@ -2501,7 +2501,10 @@ export interface ValidateDocOptions {
 /** #844 GL3 — the globals a scan may read, and where it collects the reads. */
 type GlobalScope = Pick<ScanScope, 'globals' | 'globalReads'>;
 
-/** No globals: the flyout's scopes until GL4 gives it the workspace's. */
+/**
+ * No globals: a trigger binding and a tool expression, whose closed root sets
+ * exclude `global`, and the flyout's scopes until GL4 gives it the workspace's.
+ */
 const NO_GLOBALS: GlobalScope = { globals: new Map() };
 
 function globalScopeOf(options: Pick<ValidateDocOptions, 'globals' | 'globalReads'>): GlobalScope {
@@ -3802,7 +3805,7 @@ function scanLlmToolRefs(node: Node, errors: string[]): void {
     const scope: ScanScope = {
       declared: new Map(),
       variables: new Map(),
-      globals: new Map(),
+      ...NO_GLOBALS,
       guaranteed: new Set(),
       settled: new Set(),
       reachable: new Set(),
@@ -4603,7 +4606,7 @@ export function validateTriggerBindings(
   const scope: ScanScope = {
     declared: new Map(),
     variables: new Map(),
-    globals: new Map(),
+    ...NO_GLOBALS,
     guaranteed: new Set(),
     settled: new Set(),
     reachable: new Set(),

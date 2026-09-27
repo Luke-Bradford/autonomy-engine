@@ -246,6 +246,26 @@ describe('a run snapshots the globals its version reads', () => {
     );
   });
 
+  it('refuses a version that does not exist, rather than read it as none', () => {
+    const { db } = freshDb();
+    expect(() => resolveRunGlobals(db, { ownerId: 'local', pipelineVersionId: 'pv_nope' })).toThrow(
+      GlobalStartError,
+    );
+  });
+
+  // The row decoder checks shape only, and `JSON.parse('1e400')` is Infinity,
+  // which the log would store as null. It is refused as a START refusal, so
+  // the run page and the run-now 400 can say why.
+  it('refuses a stored non-finite value as a start refusal', () => {
+    const { db } = freshDb();
+    const g = global(db, 'n', 'number', 1);
+    const pvId = seedVersion(db, [node('a', { u: '${global.n}' })]);
+    db.run(sql`update global_params set value = '1e400' where id = ${g.id}`);
+    expect(() => resolveRunGlobals(db, { ownerId: 'local', pipelineVersionId: pvId })).toThrow(
+      GlobalStartError,
+    );
+  });
+
   it('refuses a snapshot over the bound: values can grow after the save', () => {
     const { db } = freshDb();
     const names = ['g1', 'g2', 'g3', 'g4', 'g5'];

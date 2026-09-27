@@ -190,8 +190,8 @@ describe('the reads a version records', () => {
 });
 
 describe('global names and the snapshot bound', () => {
-  // zod's `z.record` DROPS a `__proto__` key, so a logged snapshot holding one
-  // would lose it on replay from the database while the live fold kept it.
+  // zod's `z.record` DROPS a `__proto__` key and every event is parsed before
+  // it is folded, so a snapshot holding one would lose it.
   it('refuses __proto__ as a name', () => {
     expect(globalParamNameDefect('__proto__')).toMatch(/reserved/);
     expect(globalParamNameDefect('proto')).toBeNull();

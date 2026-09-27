@@ -1,4 +1,8 @@
-import { assertJsonReplaySafe, globalSnapshotDefect } from '@autonomy-studio/shared';
+import {
+  SubstituteError,
+  assertJsonReplaySafe,
+  globalSnapshotDefect,
+} from '@autonomy-studio/shared';
 import { listOwnerGlobalParamsNamed } from '../repo/global-params.js';
 import { getGlobalReads } from '../repo/pipeline-versions.js';
 import type { Db } from '../repo/types.js';
@@ -34,7 +38,13 @@ export function resolveRunGlobals(
   run: { ownerId: string | null; pipelineVersionId: string },
 ): Record<string, unknown> | undefined {
   const reads = getGlobalReads(db, run.pipelineVersionId);
-  if (reads === null || reads.length === 0) return undefined;
+  // A missing version is not one that reads nothing: refuse rather than start
+  // it without its values (every caller has already resolved the doc, so this
+  // is a guard, not a path).
+  if (reads === null) {
+    throw new GlobalStartError(`pipeline version '${run.pipelineVersionId}' not found`);
+  }
+  if (reads.length === 0) return undefined;
   const live = new Map(
     listOwnerGlobalParamsNamed(
       db,
@@ -69,7 +79,14 @@ export function resolveRunGlobals(
   const tooBig = globalSnapshotDefect(snapshot);
   if (tooBig !== null) throw new GlobalStartError(tooBig);
   // A stored value passed the replay-safety walk on write, but the row decoder
-  // checks shape only; a non-finite number must never reach the log.
-  assertJsonReplaySafe('global parameter snapshot', snapshot);
+  // checks shape only; a non-finite number must never reach the log. Its
+  // `SubstituteError` is re-thrown as this module's refusal, so the run page and
+  // the run-now 400 say why.
+  try {
+    assertJsonReplaySafe('global parameter snapshot', snapshot);
+  } catch (err) {
+    if (err instanceof SubstituteError) throw new GlobalStartError(err.message);
+    throw err;
+  }
   return snapshot;
 }
