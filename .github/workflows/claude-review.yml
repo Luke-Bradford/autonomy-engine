@@ -211,9 +211,14 @@ jobs:
           # succeeds only on valid JSON with is_error=false, so a persistent
           # failure exhausts the retries and falls through to the fail-closed
           # extractor below.
+          # Model is PINNED (claude-sonnet-5-5, 2026-09-28), not the `sonnet`
+          # alias: the alias resolves per installed CLI version, so the model
+          # silently changed with each runner-side `claude update`. A CLI older
+          # than the model prints `[claude-code:unrecognized_model]` to STDERR
+          # and still serves it (verified on 2.1.280); stdout JSON is unaffected.
           run_review() {
             claude -p \
-              --model sonnet \
+              --model claude-sonnet-5-5 \
               --allowedTools "" \
               --setting-sources "" \
               --output-format json < prompt.txt > response.json 2> claude-stderr.log
