@@ -15,7 +15,7 @@ import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-v
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
 import { triggers } from '../../db/schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { armWakeup, getWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import { armWakeup, getWakeup } from '../../repo/scheduled-wakeups.js';
 import { listRuns } from '../../repo/runs.js';
 import type { Db } from '../../repo/types.js';
 import {
@@ -37,6 +37,7 @@ import {
   type ScheduleTickLauncher,
   type ScheduleTickRef,
 } from '../schedule-tick.js';
+import { pendingTicks } from './pending-ticks.js';
 import { silentLog } from './testLog.js';
 
 /**
@@ -133,10 +134,6 @@ function armTick(db: Db, trigger: Trigger, dueAt: number) {
     dueAt,
     discriminator: `tick-${dueAt}`,
   });
-}
-
-function pendingTicks(db: Db) {
-  return listPendingWakeups(db).filter((w) => w.kind === SCHEDULE_TICK_KIND);
 }
 
 describe('schedule_tick handler — fire + continue the chain', () => {
