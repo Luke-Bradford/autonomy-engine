@@ -5,7 +5,6 @@ import {
   type Node,
   type Recurrence,
   type RunWindow,
-  type ScheduledWakeup,
   type Trigger,
   type TriggerMode,
 } from '@autonomy-studio/shared';
@@ -18,11 +17,12 @@ import {
   serializeWorkspace,
 } from '../../portability/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { armWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import { armWakeup } from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
 import { createAlarmClock } from '../alarms.js';
 import { createScheduler, type SchedulerDeps } from '../scheduler.js';
 import { createScheduleTickHandler, SCHEDULE_TICK_KIND } from '../schedule-tick.js';
+import { pendingTicks } from './pending-ticks.js';
 import { silentLog } from './testLog.js';
 
 /**
@@ -93,10 +93,6 @@ function makeScheduler(db: Db, now: () => number = () => NOON) {
     now,
   });
   return createScheduler({ db, arm: clock.arm, log: silentLog(), now });
-}
-
-function pendingTicks(db: Db): ScheduledWakeup[] {
-  return listPendingWakeups(db).filter((w) => w.kind === SCHEDULE_TICK_KIND);
 }
 
 /** The `{triggerId, dueAt}` of each pending schedule_tick, for compact asserts. */

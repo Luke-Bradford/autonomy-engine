@@ -10,8 +10,7 @@ import {
   createWorkspaceGit,
 } from '../../repo/index.js';
 import { getRun } from '../../repo/runs.js';
-import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
-import { SCHEDULE_TICK_KIND } from '../../scheduler/schedule-tick.js';
+import { pendingTicks } from '../../scheduler/__tests__/pending-ticks.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 function triggerBody(pipelineVersionId: string) {
@@ -614,14 +613,6 @@ describe('triggers routes', () => {
   });
 
   describe('#5 S5b-1 — recurrence authoring', () => {
-    function scheduleTicksFor(app: FastifyInstance, triggerId: string) {
-      return listPendingWakeups(app.db).filter(
-        (w) =>
-          w.kind === SCHEDULE_TICK_KIND &&
-          (w.ref as { triggerId?: string }).triggerId === triggerId,
-      );
-    }
-
     it('creates a schedule trigger from a recurrence, derives the cron, and SEEDS a durable tick', async () => {
       const res = await app.inject({
         method: 'POST',
@@ -645,7 +636,7 @@ describe('triggers routes', () => {
       // THE LIVE-PRODUCER PROOF: the POST's `scheduler.sync()` armed a durable
       // schedule_tick against the DERIVED cron — a recurrence trigger fires on
       // schedule through the exact S5a chain, no new firing path.
-      const ticks = scheduleTicksFor(app, created.id);
+      const ticks = pendingTicks(app.db, created.id);
       expect(ticks).toHaveLength(1);
       expect((ticks[0]!.ref as { schedule: string }).schedule).toBe('30 9 * * *');
     });
@@ -670,7 +661,7 @@ describe('triggers routes', () => {
       expect(patch.statusCode).toBe(200);
       expect(patch.json().schedule).toBe('0 8 * * 1');
 
-      const ticks = scheduleTicksFor(app, id);
+      const ticks = pendingTicks(app.db, id);
       expect(ticks).toHaveLength(1);
       expect((ticks[0]!.ref as { schedule: string }).schedule).toBe('0 8 * * 1');
     });
@@ -838,7 +829,7 @@ describe('triggers routes', () => {
       // The seeded tick carries the bounds in its ref (so a later bounds edit is
       // detectable) and is armed for the first IN-WINDOW slot, which the 10:00
       // opening pushes to 09:00 on the following day.
-      const ticks = scheduleTicksFor(app, created.id);
+      const ticks = pendingTicks(app.db, created.id);
       expect(ticks).toHaveLength(1);
       expect(ticks[0]!.ref).toMatchObject({ schedule: '0 9 * * *', startTime, endTime });
       expect(ticks[0]!.dueAt).toBe(firstSlotMs);
