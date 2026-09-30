@@ -147,12 +147,13 @@ export class UnboundTriggerError extends Error {
  */
 export class ArchivedPipelineError extends Error {
   constructor(
-    public readonly triggerId: string,
+    /** `null` for a run started from the editor (#1395), which has no trigger. */
+    public readonly triggerId: string | null,
     public readonly pipelineId: string,
   ) {
     super(
-      `pipeline '${pipelineId}' is archived — an archived pipeline never dispatches ` +
-        `(trigger '${triggerId}')`,
+      `pipeline '${pipelineId}' is archived — an archived pipeline never dispatches` +
+        (triggerId === null ? '' : ` (trigger '${triggerId}')`),
     );
     this.name = 'ArchivedPipelineError';
   }
@@ -174,6 +175,22 @@ export interface RunLauncher {
    *   and/or payload that seed the run's durable `run.triggerContext`.
    */
   fire(trigger: Trigger, fireContext?: FireContext): FireResult;
+  /**
+   * #1395 OR4 — start a run of one saved version NOW, with no trigger: the
+   * editor's Run button. The run row carries `triggerId = null` and no trigger
+   * context, so `${trigger.*}` reads `null`.
+   *
+   * The same dispatch gates as `fire()`, minus the trigger's own: a stopping
+   * launcher skips, an archived pipeline throws `ArchivedPipelineError`, and a
+   * pipeline at its `concurrency` cap SKIPS with the cap in the reason. It never
+   * queues: the queue drain is keyed by trigger, so a trigger-less `queued` row
+   * would never be admitted. Unlike a rerun (`reseed.ts`), which follows a run
+   * that has already given its slot back, this adds a run to the pipeline, so the
+   * operator's own cap binds it.
+   *
+   * The caller validates `params` against the version first; this does not.
+   */
+  runNow(input: RunNowInput): FireResult;
   /** Resolve once every in-flight AND queued run has reached quiescence — for
    * tests and (optionally) graceful shutdown. */
   whenIdle(): Promise<void>;
@@ -193,6 +210,13 @@ export interface RunLauncher {
    * instance's or a fresh app's), unlike the old in-memory queue this cleared.
    * Idempotent. */
   stop(): void;
+}
+
+/** What `RunLauncher.runNow` starts: one version, for one owner, with run-now params. */
+export interface RunNowInput {
+  ownerId: string;
+  pipelineVersionId: string;
+  params: Record<string, unknown>;
 }
 
 export interface RunLauncherDeps extends DriveDeps {
@@ -749,5 +773,33 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     unsubscribeTerminalDrain?.();
   }
 
-  return { fire, whenIdle, recoverQueued, stop };
+  function runNow(input: RunNowInput): FireResult {
+    if (stopped) {
+      return { outcome: 'skipped', reason: SHUTDOWN_SKIP_REASON };
+    }
+    // `fire()`'s order: archived before capacity, so the reason a caller sees is
+    // the one it can act on. A version whose row is gone resolves `null`, and the
+    // drive's doc-resolve fault owns it (the same bypass `fire()` documents).
+    const pipelineId = getPipelineIdForVersion(db, input.pipelineVersionId);
+    if (pipelineId !== null && isPipelineArchived(db, pipelineId)) {
+      throw new ArchivedPipelineError(null, pipelineId);
+    }
+    if (pipelineId !== null && !pipelineHasRoom(pipelineId)) {
+      return {
+        outcome: 'skipped',
+        reason: `the pipeline is already running its maximum of ${String(pipelineCapacity(pipelineId))} at once`,
+      };
+    }
+    const run = createRun(db, {
+      ownerId: input.ownerId,
+      pipelineVersionId: input.pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: input.params,
+    });
+    driveRun(run, undefined);
+    return { outcome: 'started', runId: run.id };
+  }
+
+  return { fire, runNow, whenIdle, recoverQueued, stop };
 }

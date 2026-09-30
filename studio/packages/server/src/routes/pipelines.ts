@@ -3,13 +3,17 @@ import { z } from 'zod';
 import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
+  ManualRunRequestSchema,
   NewPipelineSchema,
   PipelineFolderSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
+  ParamResolveError,
   canonicalStringify,
+  resolveRunParams,
   rollupFromAggregates,
   type ActivePipelineVersion,
+  type FireResult,
 } from '@autonomy-studio/shared';
 import {
   aggregatePipelineCost,
@@ -28,7 +32,8 @@ import {
   restorePipeline,
   updatePipeline,
 } from '../repo/index.js';
-import { NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
+import { BadRequestError, NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
+import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportPipeline } from '../portability/index.js';
 
@@ -430,6 +435,62 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       reply.status(201).send(created);
     },
   );
+
+  /**
+   * #1395 OR4 — `POST /api/pipelines/:id/runs`: run one saved version of this
+   * pipeline now, with no trigger (the editor's Run button). `202` with a
+   * `FireResult`: `started` + `runId` (the run drives in the background), or
+   * `skipped` + `reason` when the pipeline is at its concurrency cap or the
+   * server is stopping.
+   *
+   * Checks, in order, each before a run row exists:
+   *  - the pipeline is the caller's (`requireOwned`) and the version is THIS
+   *    pipeline's — a missing version and another pipeline's both read 404, the
+   *    publish route's no-leak rule;
+   *  - the params resolve against the version's declared params. DELIBERATELY
+   *    stricter than a trigger fire, which lets a bad run-now value surface as an
+   *    interrupted run (`triggers.ts`): here the operator is at the form that
+   *    typed the value, so a 400 naming the param is the useful answer.
+   *    `resolveRunParams` is pure and never echoes a secret's value;
+   *  - the globals the version reads resolve (the fire route's GL3 pre-check);
+   *  - the launcher's dispatch gates: archived → 409, cap → skipped.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/runs', async (request, reply) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const body = ManualRunRequestSchema.parse(request.body ?? {});
+    const version = getPipelineVersion(db, body.pipelineVersionId);
+    if (version === null || version.pipelineId !== pipeline.id) {
+      throw new NotFoundError('pipeline version', body.pipelineVersionId);
+    }
+    const params = body.params ?? {};
+    try {
+      resolveRunParams(version, params);
+    } catch (err) {
+      if (err instanceof ParamResolveError) {
+        throw new BadRequestError(`the run cannot start: ${err.message}`);
+      }
+      throw err;
+    }
+    try {
+      resolveRunGlobals(db, { ownerId: request.principal.ownerId, pipelineVersionId: version.id });
+    } catch (err) {
+      if (err instanceof GlobalStartError) {
+        throw new BadRequestError(`the run cannot start: ${err.message}`);
+      }
+      throw err;
+    }
+    const result: FireResult = fastify.runLauncher.runNow({
+      ownerId: request.principal.ownerId,
+      pipelineVersionId: version.id,
+      params,
+    });
+    return reply.status(202).send(result);
+  });
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/versions', async (request) => {
     const pipeline = requireOwned(
