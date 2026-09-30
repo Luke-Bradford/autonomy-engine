@@ -12,7 +12,6 @@ import {
   type MutableRefObject,
 } from 'react';
 import { useStore } from 'zustand';
-import { uiStore } from '../../stores/uiStore';
 import {
   Background,
   ControlButton,
@@ -114,6 +113,7 @@ import {
   type Selection,
 } from './canvasStore';
 import { namedList } from '../../lib/namedList';
+import { uiStore } from '../../stores/uiStore';
 import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issueContext';
 import { subjectKey, type SubjectIssue } from './containerRules';
 
