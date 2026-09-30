@@ -260,7 +260,13 @@ test.describe('U3 command bar', () => {
     await page.goto('/#/monitor/runs/run_e2e_u3');
     await fluentRootReady(page);
 
-    await expect(trail(page).getByRole('listitem')).toHaveText(['Monitor', 'Runs', 'run_e2e_u3']);
+    // #1392 — no such run exists, so no name is published and the crumb is
+    // the route's fallback: the (already short) id, labelled as a run.
+    await expect(trail(page).getByRole('listitem')).toHaveText([
+      'Monitor',
+      'Runs',
+      'Run run_e2e_u3',
+    ]);
     await trail(page).getByRole('link', { name: 'Runs' }).click();
     await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
   });
