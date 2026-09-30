@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
@@ -20,6 +20,7 @@ import {
   assembleConfig,
   deriveConfigFields,
   emptyControlValue,
+  parseFieldInput,
   sameControlValue,
   seedFieldInputs,
   unrepresentableFields,
@@ -356,17 +357,22 @@ export function ContainerPanel({
       ) : (
         <div className="contract-section">
           {fields.map((field) => (
-            <ConfigFieldControl
-              key={field.name}
-              field={field}
-              value={inputs[field.name] ?? emptyControlValue(field)}
-              onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
-              picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
-            />
+            <Fragment key={field.name}>
+              <ConfigFieldControl
+                field={field}
+                value={inputs[field.name] ?? emptyControlValue(field)}
+                onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+                picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
+              />
+              {container.kind === 'foreach' && field.name === 'batchCount' && (
+                <ForeachModeHint
+                  container={container}
+                  field={field}
+                  input={inputs.batchCount ?? emptyControlValue(field)}
+                />
+              )}
+            </Fragment>
           ))}
-          {container.kind === 'foreach' && (
-            <ForeachModeHint container={container} batchCount={inputs.batchCount} />
-          )}
           {illegal.length > 0 && (
             <p className="contract-advisory">
               {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on a{' '}
@@ -431,13 +437,23 @@ function recovery(before: Record<string, unknown>, after: Container): string {
 /**
  * #1420 OR26 — what the typed `batchCount` MEANS. The field is a number, but the
  * choice an author is making is sequential vs parallel, and absent vs `1` vs `2`
- * read alike in a text box. Judged by the schema's own bounds and the engine's
- * own `isParallelForeach`, so the line cannot disagree with what will run. A
- * value the schema refuses claims neither mode: Apply reports why.
+ * read alike in a text box. The text is read by the SAME parser Apply uses, then
+ * judged by the schema's bounds and the engine's `isParallelForeach`, so the line
+ * cannot claim a mode for a value Apply would store differently. A value Apply
+ * refuses claims neither mode: Apply says why.
  */
-function ForeachModeHint({ container, batchCount }: { container: Container; batchCount: unknown }) {
-  const text = typeof batchCount === 'string' ? batchCount.trim() : '';
-  const parsed = ContainerSchema.shape.batchCount.safeParse(text === '' ? undefined : Number(text));
+function ForeachModeHint({
+  container,
+  field,
+  input,
+}: {
+  container: Container;
+  field: ConfigField;
+  input: FieldInput;
+}) {
+  const typed = parseFieldInput(field, input);
+  if (!typed.ok) return null;
+  const parsed = ContainerSchema.shape.batchCount.safeParse(typed.omit ? undefined : typed.value);
   if (!parsed.success) return null;
   const n = parsed.data;
   return (

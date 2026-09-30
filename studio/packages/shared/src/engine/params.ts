@@ -1939,11 +1939,9 @@ export function availableRefs(
  * elements, so the answer is its own `items`'. Anything else (a param, a
  * function call, a deep path) has no declared element shape and yields none.
  *
- * Orientation only, never typing: `${item.<field>}` is legal wherever `${item}`
- * is (E4: an element is `any`), so under-answering costs an offer, not a save.
- * Inherited limit, recorded: a `map`/`count` lambda inside the field rebinds
- * `item` again, which a per-site offer cannot see — the plain `${item}` offer
- * has the same limit.
+ * Under-answering costs an offer, never a save: `${item.<field>}` is legal
+ * wherever `${item}` is. Inherited limit: a `map`/`count` lambda inside the
+ * field rebinds `item`, which a per-site offer cannot see (nor can `${item}`'s).
  */
 function elementFieldsOf(nodes: readonly Node[], source: unknown): readonly Output[] {
   const seen = new Set<string>();

@@ -502,8 +502,12 @@ describe('ContainerPanel — a foreach says whether it runs in parallel', () => 
   it('claims neither mode for a value that is not a batch count', () => {
     mount({ ...FOREACH, batchCount: 3 });
     expect(screen.getByText(/^Parallel: up to 3 items/)).toBeDefined();
-    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '2.5' } });
-    expect(screen.queryByText(/^(Sequential|Parallel):/)).toBeNull();
+    // A fraction the schema refuses, and number literals `Number()` reads but
+    // Apply's own parser refuses — each would otherwise claim a mode.
+    for (const value of ['2.5', '0x3', '+3', '99']) {
+      fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value } });
+      expect(screen.queryByText(/^(Sequential|Parallel):/), value).toBeNull();
+    }
   });
 
   it('is a foreach line only', () => {

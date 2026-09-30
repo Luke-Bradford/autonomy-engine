@@ -202,7 +202,8 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
     E6 owns the *type* check. Nothing is orphaned.
 - **`${item}` is valid in a `foreach` body OR inside a `filter`/`map`/`count` array form** — the
   nearest enclosing iteration binds it (Round-2 M1 / round-1 T4). The `filter` activity's output array
-  is named **`.items`** (`${nodes.<filter>.output.items}`).
+  is named **`.result`** (`${nodes.<filter>.output.result}`, `FILTER_RESULT_OUTPUT`; this line said
+  `.items` until #1420, which the built activity never used).
 - **Container output projection is concrete:** an `until`/`loop`/`foreach` container declares
   `outputs: OutputSpec[]`, each projected from a named child output of the **last completed round**
   (`draft := nodes.generate.output.text`); `foreach` additionally exposes the order-stable aggregate
@@ -245,6 +246,10 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     (`ret`) is the honest exception: nothing reads it today (flattening every `ret` to `'any'` keeps
     the suite green), it is declared FOR **E6**, which consumes the same signature data for
     inference and owns closing the edit-time gap.
+  - **#1420 (2026-09-30): the picker knows a few element shapes, the typer still does not.** A catalog
+    entry may declare `outputElements` (today only `file_list.entries` → `name`, `type`), and the
+    expression picker offers them as `${item.<field>}` inside a foreach or filter over that output.
+    That is orientation only. `${item}` still infers `any`, so the decision above stands.
 - **The function calling-convention needs a redesign.** `map/filter/count` predicates must be
   captured as **unevaluated ASTs re-run per element with `item` bound** (lazy, per-element) — the flat
   `impl(args)` (eager-map-all-args) model can't express it. Spec a per-fn convention: **eager args vs

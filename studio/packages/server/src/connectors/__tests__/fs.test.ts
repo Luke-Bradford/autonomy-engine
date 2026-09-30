@@ -14,6 +14,7 @@ vi.mock('node:fs/promises', async (importActual) => {
 });
 import type { FileHandle } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { getActivity } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -543,6 +544,19 @@ describe('fs connector — A12 file_list', () => {
     expect(byName.get('d')).toBe('directory');
     expect(byName.get('l')).toBe('symlink'); // a symlink entry is reported, never followed
     expect(outputs.entries).toHaveLength(3);
+  });
+
+  it('each entry carries exactly the fields the catalog tells the picker about (#1420)', async () => {
+    // The expression picker offers `${item.<field>}` inside a foreach over
+    // `entries` from `outputElements`; this keeps that list the adapter's own.
+    await writeFile(join(root, 'f.txt'), 'x', 'utf8');
+    const events = await drain(invoke(ctx('file_list', { path: '.' })));
+    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs as {
+      entries: Record<string, unknown>[];
+    };
+    const declared = getActivity('file_list')?.outputElements?.entries?.map((f) => f.name);
+    expect(declared).toBeDefined();
+    expect(Object.keys(outputs.entries[0]!).sort()).toEqual([...declared!].sort());
   });
 
   it('returns an empty entries array for an empty directory', async () => {
