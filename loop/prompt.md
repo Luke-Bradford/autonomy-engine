@@ -31,6 +31,29 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 `studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list is the dependency BACKGROUND THE QUEUE draws from, never a queue to read instead of it. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
 - `#1 foundation-domain-activity-framework.md` (F0-F15) · `#6 foundation-expression-language.md` (E1-E8) · `#5 foundation-scheduler-lifecycle.md` (S1-S12) · `#2 foundation-llm-activity-model.md` (L1-L14) · `#4 foundation-activity-library.md` (A0-A17) · `#3 foundation-git-publish.md` (G1-G10) · `RS foundation-rerun-from-failed.md` (RS1-RS6) · UI `adf-grade-ui-design.md` (U0-U29, R1-R3).
 
+## CURRENT PRIORITY — the operator review epic #1416 (operator, 2026-09-30) — READ FIRST
+
+After MVP-ready (#1390) the operator drove the product themselves and asked for polish, a stable
+editor that does not shift on edit, readable activity cards, forms and actions to a corporate
+standard, real monitoring, data preview, scripts with managed dependencies, ADF-parity data
+movement, robustness and performance, and help docs. That review is **epic #1416**. Its child issues
+**#1392–#1415 (OR1–OR24)** carry file:line evidence and acceptance criteria.
+
+- **The next work item is the first OPEN, unblocked child of #1416, in the epic's listed order**
+  (tranche 1 → 5). This supersedes the UI-epic queue below, which is historical and complete.
+  SEVERE defects (band 1 of the drain order) still come first.
+- **These are band 2 ("THE SPEC")**: the operator's actual ask, not our debt. The one-time jump in
+  the open-issue count from filing #1392–#1416 on 2026-09-30 is **not** backlog growth. Measure the
+  "backlog must trend down" rule from the 2026-09-30 count after they were filed, so that this
+  filing does not force sweeps.
+- **SPEC items (OR12 #1403 scripts, OR16 #1407 transforms)** deliver a design doc plus tickets first.
+  The likely `[operator-decision]` forks are already named in those issues: script isolation
+  default, and debug-run version storage in OR4. Raise them as decisions when you reach them; do not
+  guess.
+- **UI work is judged in the browser.** Each tranche-1 PR attaches a before/after screenshot pair and
+  its e2e. OR2's layout-stability e2e becomes a standing regression gate.
+- Tick the epic's checklist as children close (plain `gh issue close`, not PR-body keywords).
+
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
 **Why the monitoring section still heads THE QUEUE.** `#917` shipped it (operator, 2026-08-05:
