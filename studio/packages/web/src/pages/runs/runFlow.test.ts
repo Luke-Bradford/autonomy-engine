@@ -15,6 +15,7 @@ import {
   runFlowEdges,
   runFlowNodes,
   runNodeFacts,
+  runNodeOverlay,
   type RunDoc,
   type RunNodeData,
   type RunNodeMeasure,
@@ -815,5 +816,69 @@ describe('runNodeFacts', () => {
     for (const bad of ['3', -1, 1.5, Number.NaN, Infinity, null]) {
       expect(runNodeFacts('copy', measured(undefined, undefined, { rowsWritten: bad }))).toBeNull();
     }
+  });
+});
+
+/* #1395 OR4 slice 2 — the authoring canvas's live overlay reads the monitor's
+   words through `runNodeOverlay`, so the two views cannot describe one node
+   differently. */
+describe('runNodeOverlay', () => {
+  it('carries each node’s worded status, tone and type — the monitor’s own words', () => {
+    const overlay = runNodeOverlay(DOC, projected());
+    expect(overlay.get('a')).toEqual({
+      type: 'http_request',
+      status: 'success',
+      tone: 'success',
+      facts: null,
+    });
+    expect(overlay.get('c')).toMatchObject({ status: 'skipped', tone: 'skipped' });
+  });
+
+  it('has NO entry while nothing is projected — never "not projected" on an editor', () => {
+    expect(runNodeOverlay(DOC, null).size).toBe(0);
+  });
+
+  it('carries the facts the run measured on a settled node', () => {
+    const activity = new Map<string, RunNodeMeasure>([
+      [
+        'a',
+        { startedAtMs: 0, endedAtMs: 1500, outputValues: undefined, copiedFromRunId: undefined },
+      ],
+    ]);
+    // `a` alone: in DOC it sits on a back edge's cycle, whose facts are withheld.
+    const single: RunDoc = { nodes: [DOC.nodes[0]!], edges: [], containers: [] };
+    const facts = runNodeOverlay(single, projected(), activity).get('a')?.facts;
+    expect(facts).toBe(runNodeFacts('http_request', activity.get('a')));
+    expect(facts).not.toBeNull();
+  });
+
+  it('carries a foreach’s ITEM progress, as the monitor’s box words it', () => {
+    const doc: RunDoc = {
+      ...CONTAINER_DOC,
+      containers: [{ id: 'stg', kind: 'foreach', children: ['a', 'b'], items: '${params.l}' }],
+    };
+    const state: RunState = {
+      ...projected(),
+      containers: {
+        stg: { status: 'active', round: 1, outputs: {}, items: [1, 2], results: [{}] },
+      },
+    };
+    expect(runNodeOverlay(doc, state).get('stg')).toMatchObject({
+      type: 'foreach',
+      facts: '1 of 2 items',
+    });
+  });
+
+  it('carries a container’s status and its progress, keyed by the container id', () => {
+    const state: RunState = {
+      ...projected(),
+      containers: { stg: { status: 'active', round: 2, outputs: {} } },
+    };
+    expect(runNodeOverlay(CONTAINER_DOC, state).get('stg')).toEqual({
+      type: 'stage',
+      status: 'running',
+      tone: 'running',
+      facts: 'round 2',
+    });
   });
 });

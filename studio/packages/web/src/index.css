@@ -3386,6 +3386,51 @@ td button + button {
   font-size: 0.7rem;
 }
 
+/* #1395 OR4 — the run the editor started, under each AUTHORING card. Absolute,
+   so it is outside the box's measured size: a run arriving moves no node and
+   re-routes no edge (#1393). The tone is a left rule rather than the monitor's
+   outline, because the author canvas's outline is the SELECTION ring. Inert to
+   the pointer so it never swallows a click on whatever lies beneath it. */
+.flow-node-run {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-left: 0.4rem;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.flow-node-run--neutral {
+  border-left-color: var(--muted);
+}
+
+.flow-node-run--running {
+  border-left-color: var(--accent);
+}
+
+.flow-node-run--holding {
+  border-left-color: var(--warning);
+}
+
+.flow-node-run--success {
+  border-left-color: var(--success);
+}
+
+.flow-node-run--failure {
+  border-left-color: var(--error);
+}
+
+.flow-node-run--skipped {
+  border-left-color: var(--muted);
+  border-left-style: dashed;
+}
+
 /* Containers take the same tones on their own border. Theirs is already dashed
    (every container box is), so `skipped` is distinguished by the label text
    rather than by a second dash.

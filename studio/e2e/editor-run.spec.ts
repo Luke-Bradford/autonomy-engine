@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openSeededCanvas } from './support/seedDoc';
+import { nodeById, openSeededCanvas } from './support/seedDoc';
 
 /**
  * #1395 OR4 slice 1 — Run from the editor. The operator presses Run in the
@@ -8,8 +8,8 @@ import { openSeededCanvas } from './support/seedDoc';
  * trigger: nothing is created or fired on the Triggers page, and the run that
  * lands carries `triggerId: null`.
  *
- * Slice 2 (the live overlay on this canvas) extends this spec; until then the
- * run's outcome is read on the run page the notice links to.
+ * Slice 2 adds the live overlay: the run's node states on THIS canvas, and the
+ * selected node's part in the run in the dock, without leaving the editor.
  */
 
 /** The run page's header pill, scoped off the node table's own status words. */
@@ -95,6 +95,84 @@ test('#1395 — Run is refused, with the reason, before the pipeline has a saved
     'title',
     'Save a version first: Run starts the latest saved version.',
   );
+
+  await expectQuiet(page, problems);
+});
+
+test('#1395 — the run started in the editor plays out on the authoring canvas, and a node’s output shows in the dock', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const triggerCalls: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() !== 'GET' && req.url().includes('/api/triggers')) triggerCalls.push(req.url());
+  });
+
+  await openSeededCanvas(page, 'or4 live overlay', {
+    params: [
+      // Long enough that the wait is SEEN live before it settles.
+      { name: 'secs', type: 'number', required: false, default: 3 },
+      { name: 'nums', type: 'json', required: false, default: [1, 2, 3] },
+    ],
+    nodes: [
+      { id: 'hold', type: 'wait', config: { seconds: '${params.secs}' }, position: { x: 0, y: 0 } },
+      {
+        id: 'pick',
+        type: 'filter',
+        config: { items: '${params.nums}', predicate: '${greater(item, 1)}' },
+        position: { x: 260, y: 0 },
+      },
+    ],
+    edges: [{ id: 'e1', from: 'hold', to: 'pick', on: 'success' }],
+  });
+  const editorUrl = page.url();
+
+  const holdStatus = nodeById(page, 'hold').getByTestId('node-run-status');
+  const pickStatus = nodeById(page, 'pick').getByTestId('node-run-status');
+  // No run, no overlay.
+  await expect(holdStatus).toHaveCount(0);
+
+  const canvas = page.locator('.react-flow');
+  const canvasBefore = await canvas.boundingBox();
+  const holdBefore = await nodeById(page, 'hold').boundingBox();
+
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Run v1' })
+    .getByRole('button', { name: 'Start run' })
+    .click();
+
+  // Live first — the wait is parked on its timer, and the filter has not run —
+  // then settled, on the cards of the canvas being edited.
+  await expect(holdStatus).toContainText('waiting', { timeout: 10_000 });
+  // The filter's chip is THERE, saying it has not run — not merely absent.
+  await expect(pickStatus).toHaveCount(1);
+  await expect(pickStatus).not.toContainText('success');
+  await expect(holdStatus).toContainText('success', { timeout: 20_000 });
+  await expect(pickStatus).toContainText('success', { timeout: 20_000 });
+  await expect(nodeById(page, 'pick').locator('.flow-node')).toHaveAttribute(
+    'data-run-status',
+    'success',
+  );
+
+  // The overlay is drawn OUTSIDE the boxes: nothing on the canvas moved (#1393).
+  expect(await canvas.boundingBox()).toEqual(canvasBefore);
+  expect(await nodeById(page, 'hold').boundingBox()).toEqual(holdBefore);
+  const chip = await holdStatus.boundingBox();
+  expect(chip!.y).toBeGreaterThanOrEqual(holdBefore!.y + holdBefore!.height);
+
+  // Selecting a node shows its part in the run in the dock: its outputs included.
+  await nodeById(page, 'pick').click();
+  const drawer = page.getByRole('complementary', { name: 'Node Filter 1' });
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toContainText('success');
+  await expect(drawer.getByRole('heading', { name: 'Outputs' })).toBeVisible();
+  await expect(drawer).toContainText('result');
+  await expect(page.getByRole('link', { name: 'Open full run' })).toBeVisible();
+
+  // All of it without leaving the editor, and without a trigger.
+  expect(page.url()).toBe(editorUrl);
+  expect(triggerCalls).toEqual([]);
 
   await expectQuiet(page, problems);
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -139,6 +139,8 @@ import {
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { RunNowPanel } from './RunNowPanel';
+import { EditorRunDrawer, EditorRunProvider } from './editorRun';
+import { EditorRunContext, type EditorRun } from './editorRunContext';
 import { runDetailPath } from '../runs/runPath';
 import { runDisabledReason, runTitle } from './runNowRules';
 import { useShellUnsaved } from '../../shell/shellLabel';
@@ -228,10 +230,14 @@ export function PipelineCanvas({
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   // #1395 OR4 — the Run form's open state, and the last run it started. Its
   // notice links to the run page, and stays until the next press of Run — the
-  // save line's rule — so the link is there for as long as it is wanted. Slice 2
-  // of #1395 puts the live run on this canvas instead.
+  // save line's rule — so the link is there for as long as it is wanted.
   const [runOpen, setRunOpen] = useState(false);
   const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
+  /* #1395 OR4 — the run drawn over the canvas. Held apart from `runStarted`,
+     which pressing Run clears to open the form: the overlay stays until the
+     next run actually STARTS, so a finished run's outcome is still on the cards
+     while the next one's params are being typed. */
+  const [editorRun, setEditorRun] = useState<EditorRun | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
      says whether the last save landed.
@@ -1197,6 +1203,7 @@ export function PipelineCanvas({
                 onStarted={(runId) => {
                   setRunOpen(false);
                   setRunStarted({ text: `Run started from v${String(head.version)}.`, runId });
+                  setEditorRun({ runId, version: head });
                 }}
               />
             )}
@@ -1407,132 +1414,148 @@ export function PipelineCanvas({
         /* #863 — one provider over the canvas AND the property panel, so a box's
            badge and the panel's list read the same attribution. */
         <SubjectIssuesContext.Provider value={bySubject}>
-          <div className="canvas-grid">
-            {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
+          {/* #1395 OR4 — the editor's run, over the canvas and in the dock. */}
+          <EditorRunProvider run={editorRun}>
+            <div className="canvas-grid">
+              {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
-            <ActivityToolbox store={store} />
-            {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
+              <ActivityToolbox store={store} />
+              {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
                 properties sit under it (ADF's layout), and one dock serves both
                 the activity forms and the pipeline's params/outputs. */}
-            <div className="canvas-main">
-              <div className="canvas-wrap">
-                <ReactFlowProvider>
-                  <FlowCanvas
-                    store={store}
-                    fitSignal={fitSignal}
-                    measuredSizesRef={measuredSizesRef}
-                    datasets={datasets}
-                  />
-                </ReactFlowProvider>
-              </div>
-              <div
-                className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
-              >
-                <div className="property-dock__header">
-                  <button
-                    type="button"
-                    className="property-dock__toggle"
-                    aria-expanded={dockOpen}
-                    aria-controls={dockBodyId}
-                    onClick={() => setDockOpen((open) => !open)}
-                  >
-                    {/* Folded, a selection would otherwise change nothing on screen
+              <div className="canvas-main">
+                <div className="canvas-wrap">
+                  <ReactFlowProvider>
+                    <FlowCanvas
+                      store={store}
+                      fitSignal={fitSignal}
+                      measuredSizesRef={measuredSizesRef}
+                      datasets={datasets}
+                    />
+                  </ReactFlowProvider>
+                </div>
+                <div
+                  className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
+                >
+                  <div className="property-dock__header">
+                    <button
+                      type="button"
+                      className="property-dock__toggle"
+                      aria-expanded={dockOpen}
+                      aria-controls={dockBodyId}
+                      onClick={() => setDockOpen((open) => !open)}
+                    >
+                      {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
                       the operator folded it to look at the graph, and a click or a
                       drag selects — so the toggle says what is waiting instead. */}
-                    {dockOpen
-                      ? 'Hide properties'
-                      : selectedCount > 0
-                        ? `Show properties (${String(selectedCount)} selected)`
-                        : 'Show properties'}
-                  </button>
-                  {/* #1393 — the count is on the header, so a folded dock still
+                      {dockOpen
+                        ? 'Hide properties'
+                        : selectedCount > 0
+                          ? `Show properties (${String(selectedCount)} selected)`
+                          : 'Show properties'}
+                    </button>
+                    {/* #1393 — the count is on the header, so a folded dock still
                     says why Save is refused. Opening Problems from a folded
                     dock opens the dock too: a toggle whose effect is hidden
                     would read as broken. */}
-                  <button
-                    type="button"
-                    className="property-dock__toggle"
-                    aria-expanded={dockOpen && problemsOpen}
-                    aria-controls={problemsId}
-                    onClick={() => {
-                      if (!dockOpen) {
-                        setDockOpen(true);
-                        setProblemsOpen(true);
-                      } else setProblemsOpen((open) => !open);
-                    }}
-                  >
-                    Problems{' '}
-                    <span
-                      className={
-                        issues.length > 0 ? 'count-badge count-badge--error' : 'count-badge'
-                      }
+                    <button
+                      type="button"
+                      className="property-dock__toggle"
+                      aria-expanded={dockOpen && problemsOpen}
+                      aria-controls={problemsId}
+                      onClick={() => {
+                        if (!dockOpen) {
+                          setDockOpen(true);
+                          setProblemsOpen(true);
+                        } else setProblemsOpen((open) => !open);
+                      }}
                     >
-                      {issues.length}
-                    </span>
-                  </button>
-                  {/* The page's ONE announcer of a blocked save (#1249). Here
+                      Problems{' '}
+                      <span
+                        className={
+                          issues.length > 0 ? 'count-badge count-badge--error' : 'count-badge'
+                        }
+                      >
+                        {issues.length}
+                      </span>
+                    </button>
+                    {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a
                       `display: none` region announces nothing. Always mounted,
                       because a live region is announced only if it already
                       exists when its content changes. */}
-                  <span className="visually-hidden" role="status">
-                    {issues.length > 0
-                      ? `${String(issues.length)} validation issue(s) — fix these to save.`
-                      : ''}
-                  </span>
-                </div>
-                {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
+                    <span className="visually-hidden" role="status">
+                      {issues.length > 0
+                        ? `${String(issues.length)} validation issue(s) — fix these to save.`
+                        : ''}
+                    </span>
+                  </div>
+                  {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
                     the dock to look at the graph must not throw away. */}
-                <div id={dockBodyId} className="property-dock__body" hidden={!dockOpen}>
-                  <PropertyPanel
-                    store={store}
-                    connections={connections}
-                    datasets={datasets}
-                    pipelineId={pipelineId}
-                    onNotice={showCanvasMsg}
-                  />
-                  {/* #1393 — the validation list, moved here from above the
+                  <div id={dockBodyId} className="property-dock__body" hidden={!dockOpen}>
+                    <SelectedRunDrawer store={store} />
+                    <PropertyPanel
+                      store={store}
+                      connections={connections}
+                      datasets={datasets}
+                      pipelineId={pipelineId}
+                      onNotice={showCanvasMsg}
+                    />
+                    {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
                       keystroke. Plain text: the header above announces. */}
-                  <aside
-                    id={problemsId}
-                    className="problems-panel"
-                    aria-label="Problems"
-                    hidden={!problemsOpen}
-                  >
-                    {issues.length === 0 && <p className="page-hint">No problems.</p>}
-                    {issues.length > 0 && (
-                      <div className="badge-list">
-                        {/* #444: this used to say "you can still save … a run will refuse an
+                    <aside
+                      id={problemsId}
+                      className="problems-panel"
+                      aria-label="Problems"
+                      hidden={!problemsOpen}
+                    >
+                      {issues.length === 0 && <p className="page-hint">No problems.</p>}
+                      {issues.length > 0 && (
+                        <div className="badge-list">
+                          {/* #444: this used to say "you can still save … a run will refuse an
                                 invalid graph". Both halves were wrong — nothing refused a save,
                                 and no run refused the doc either. The server now refuses it on
                                 save, so the copy states what actually happens, and no more: the
                                 graph on screen is an editable draft, so anything about immutable
                                 stored versions would just read as "yours is unfixable". */}
-                        <strong>{issues.length} validation issue(s)</strong> — fix these to save.
-                        <ul>
-                          {issues.map((msg, i) => (
-                            // Indexed, because the messages are NOT unique: three params sharing
-                            // a name emit the identical duplicate-name string twice, and a bare
-                            // `key={msg}` makes that a React duplicate-key warning — which the
-                            // e2e console guard treats as a failure.
-                            <li key={`${String(i)}-${msg}`}>{msg}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </aside>
+                          <strong>{issues.length} validation issue(s)</strong> — fix these to save.
+                          <ul>
+                            {issues.map((msg, i) => (
+                              // Indexed, because the messages are NOT unique: three params sharing
+                              // a name emit the identical duplicate-name string twice, and a bare
+                              // `key={msg}` makes that a React duplicate-key warning — which the
+                              // e2e console guard treats as a failure.
+                              <li key={`${String(i)}-${msg}`}>{msg}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </aside>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </EditorRunProvider>
         </SubjectIssuesContext.Provider>
       )}
     </section>
   );
+}
+
+/** #1395 OR4 — the editor run's drawer for the ONE selected activity, if any. */
+function SelectedRunDrawer({ store }: { store: ReturnType<typeof createCanvasStore> }) {
+  const selected = singleSelection(useStore(store, (s) => s.selected));
+  const nodeId = selected?.kind === 'node' ? selected.id : null;
+  const type = useStore(store, (s) =>
+    nodeId === null ? null : (s.nodes.find((n) => n.id === nodeId)?.type ?? null),
+  );
+  // Keyed so a Close lasts only while the same node of the same run is selected.
+  const runId = useContext(EditorRunContext)?.runId ?? '';
+  return <EditorRunDrawer key={`${runId}:${nodeId ?? ''}`} nodeId={nodeId} type={type} />;
 }
 
 /** Edits the currently-selected node, edge or container; empty when nothing is. */

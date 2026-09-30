@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { DatasetAddress, EngineDoc, EngineEvent, RunEvent } from '@autonomy-studio/shared';
+import type {
+  DatasetAddress,
+  EngineDoc,
+  EngineEvent,
+  RunEvent,
+  RunState,
+} from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 import {
   deriveNodeActivity,
   emptyNodeCost,
   deriveRunLifecycle,
   reconcileNodeActivity,
+  runLifecycleView,
   runStreamUrl,
+  streamStillLive,
   type AttemptSpan,
   type NodeActivity,
 } from './runSummary';
@@ -3618,5 +3626,43 @@ describe('reconcileNodeActivity — a write the engine did not apply (#844 V7)',
     expect(variables).toEqual({ count: 0 });
     expect(row?.status).not.toBe('success');
     expect(row?.variableWrite).toBeUndefined();
+  });
+});
+
+/* #1395 — moved out of RunDetailPage so the editor's run overlay reads the same
+   precedence; pinned here now that it has two consumers. */
+describe('runLifecycleView', () => {
+  const parked = {
+    ready: true as const,
+    state: { status: 'waiting', waitingReason: 'waiting_timer' } as RunState,
+  };
+
+  it('a terminal from the log wins over a parked projection', () => {
+    const done = { status: 'success' as const, waitingReason: null, cancelRequested: false };
+    expect(runLifecycleView(done, parked)).toBe(done);
+  });
+
+  it('the engine says PARKED, with its reason, over a fold that un-parked', () => {
+    const fold = { status: 'running' as const, waitingReason: null, cancelRequested: true };
+    expect(runLifecycleView(fold, parked)).toEqual({
+      status: 'waiting',
+      waitingReason: 'waiting_timer',
+      cancelRequested: true,
+    });
+  });
+
+  it('without a projection, the fold stands', () => {
+    const fold = { status: 'running' as const, waitingReason: null, cancelRequested: false };
+    expect(runLifecycleView(fold, { ready: false, reason: 'x' })).toBe(fold);
+    expect(runLifecycleView(null, { ready: false, reason: 'x' })).toBeNull();
+  });
+});
+
+describe('streamStillLive', () => {
+  it('only with the stream live AND the run not terminal', () => {
+    expect(streamStillLive('live', 'running')).toBe(true);
+    expect(streamStillLive('live', 'success')).toBe(false);
+    expect(streamStillLive('live', 'skipped')).toBe(false);
+    expect(streamStillLive('replaying', 'running')).toBe(false);
   });
 });
