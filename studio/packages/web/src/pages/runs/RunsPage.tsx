@@ -29,6 +29,7 @@ import {
   RUN_SINCE_OPTIONS,
 } from './runFilters';
 import {
+  NO_RUNS_YET,
   filterRunsByTab,
   isRunTab,
   RUN_TAB_HINT,
@@ -121,8 +122,8 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
 }
 
 /**
- * The Runs list — the entry to the P6 live monitor. Runs are created by the
- * engine/scheduler (fire a trigger, or a scheduled window), never here, so this
+ * The Runs list — the entry to the P6 live monitor. Runs are created elsewhere
+ * (a trigger, a scheduled window, or the editor's Run — #1395), never here, so this
  * page is read-only: it lists what has run and links each to its live detail
  * view. A run that is still executing is watched live on the detail page (the
  * WebSocket tail); this list itself is a point-in-time snapshot, refreshed on
@@ -512,7 +513,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           "none MATCH" sends them to the Clear control right above, and saying
           the first when the second is true is simply false. */}
       {runs !== null && runs.length === 0 && pageError === null && !filtered && (
-        <p>No runs yet. Fire a trigger on the Triggers page to start one.</p>
+        <p>{NO_RUNS_YET}</p>
       )}
       {runs !== null && runs.length === 0 && pageError === null && filtered && (
         <p>No runs match these filters. Widen them, or clear them, to see more.</p>

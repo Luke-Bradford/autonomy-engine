@@ -59,3 +59,31 @@ export const FireRequestSchema = z
     addParamsReplaySafetyIssues(body.params, ctx);
   });
 export type FireRequest = z.infer<typeof FireRequestSchema>;
+
+/**
+ * #1395 OR4 — the body of a RUN FROM THE EDITOR (`POST /api/pipelines/:id/runs`):
+ * run one saved version of the pipeline now, with no trigger. Its reply is the
+ * `FireResultSchema` above (`started` with a `runId`, or `skipped` with a
+ * `reason`), so it lives beside the fire contract rather than in a file of its
+ * own.
+ *
+ * `pipelineVersionId` is the version the operator was SHOWN on the Run button,
+ * sent explicitly so a save landing between the click and the request cannot
+ * change what runs. The server refuses a version of a different pipeline.
+ *
+ * `params` is the run-now layer over the version's defaults. Unlike a trigger
+ * fire, the route checks it against the version's declared params BEFORE a run
+ * row exists, so a bad value is a 400 the operator can correct, not an
+ * interrupted run.
+ */
+export const ManualRunRequestSchema = z
+  .object({
+    pipelineVersionId: z.string().min(1),
+    params: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((body, ctx) => {
+    // The same write-boundary refusal as `FireRequestSchema`, for the same reason.
+    if (body.params === undefined) return;
+    addParamsReplaySafetyIssues(body.params, ctx);
+  });
+export type ManualRunRequest = z.infer<typeof ManualRunRequestSchema>;

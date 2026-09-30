@@ -13,7 +13,7 @@ import {
   type Trigger,
   type WindowConfig,
 } from '@autonomy-studio/shared';
-import { archivePipelineRow, createPipeline } from '../../repo/pipelines.js';
+import { archivePipelineRow, createPipeline, updatePipeline } from '../../repo/pipelines.js';
 import {
   createPipelineVersion,
   getPipelineIdForVersion,
@@ -36,7 +36,12 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { syncRunLifecycle, type DocResolver, type DriveDeps, type Executor } from '../driver.js';
 import { createRunDrives } from '../drives.js';
 import { createRunEventBus, type RunEventBus } from '../event-bus.js';
-import { ArchivedPipelineError, createRunLauncher, UnboundTriggerError } from '../launcher.js';
+import {
+  ArchivedPipelineError,
+  createRunLauncher,
+  SHUTDOWN_SKIP_REASON,
+  UnboundTriggerError,
+} from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -1664,5 +1669,85 @@ describe('RunLauncher — recoverQueued survives a corrupt queued run row (#646)
     };
     expect(badStatus.status).toBe('queued');
     expect(getRun(db, good.id)?.status).toBe('running');
+  });
+});
+
+describe('RunLauncher.runNow — #1395 OR4, a run started from the editor', () => {
+  it('starts a trigger-less run of the version with the given params and drives it to success', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')], [], [strParam('a', 'da'), strParam('b', 'db')]);
+    const launcher = createRunLauncher(deps(db));
+
+    const result = launcher.runNow({
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      params: { b: 'now' },
+    });
+    expect(result.outcome).toBe('started');
+    await launcher.whenIdle();
+
+    const run = getRun(db, result.runId!)!;
+    expect(run.triggerId).toBeNull();
+    expect(run.parentRunId).toBeNull();
+    expect(run.rerunOf).toBeNull();
+    expect(run.status).toBe('success');
+    // Pipeline default < run-now, with no trigger layer between them.
+    expect(startedParams(db, run.id)).toEqual({ a: 'da', b: 'now' });
+    // No trigger, so no `run.triggerContext` event: `${trigger.*}` reads null.
+    expect(loadEngineEvents(db, run.id).some((e) => e.type === 'run.triggerContext')).toBe(false);
+  });
+
+  it('skips, and creates no row, when the pipeline is at its concurrency cap — never queues', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const pipelineId = getPipelineIdForVersion(db, pvId)!;
+    updatePipeline(db, pipelineId, { concurrency: 1 });
+    const occupier = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, occupier.id, { status: 'running' });
+    const launcher = createRunLauncher(deps(db));
+
+    const result = launcher.runNow({ ownerId: 'local', pipelineVersionId: pvId, params: {} });
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'the pipeline is already running its maximum of 1 at once',
+    });
+    expect(listRuns(db, { pipelineVersionId: pvId }).map((r) => r.id)).toEqual([occupier.id]);
+  });
+
+  it('throws ArchivedPipelineError, naming no trigger, and creates no row for an archived pipeline', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const pipelineId = getPipelineIdForVersion(db, pvId)!;
+    archivePipelineRow(db, pipelineId);
+    const launcher = createRunLauncher(deps(db));
+
+    let caught: unknown;
+    try {
+      launcher.runNow({ ownerId: 'local', pipelineVersionId: pvId, params: {} });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ArchivedPipelineError);
+    expect((caught as Error).message).not.toContain('trigger');
+    expect(listRuns(db, { pipelineVersionId: pvId })).toHaveLength(0);
+  });
+
+  it('skips with the shutdown reason once the launcher is stopped', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const launcher = createRunLauncher(deps(db));
+    launcher.stop();
+
+    expect(launcher.runNow({ ownerId: 'local', pipelineVersionId: pvId, params: {} })).toEqual({
+      outcome: 'skipped',
+      reason: SHUTDOWN_SKIP_REASON,
+    });
+    expect(listRuns(db, { pipelineVersionId: pvId })).toHaveLength(0);
   });
 });

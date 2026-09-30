@@ -23,9 +23,11 @@ export type RunOrigin = (typeof RUN_ORIGINS)[number];
  * MEASURED reachability, because "backed by current data" is a claim about the
  * engine as it stands, not about the schema:
  *  - `triggered` — the ordinary path; a fired trigger stamps `triggerId`.
- *  - `manual` — a RERUN. `run/reseed.ts` sets `triggerId = null, parentRunId = null`
- *    deliberately ("a rerun is an explicit operator action"), so reruns are
- *    precisely the runs no trigger and no parent produced.
+ *  - `manual` — a run the operator started by hand without a trigger: the
+ *    editor's Run (#1395, `launcher.runNow`) or a RERUN (`run/reseed.ts`). Both
+ *    set `triggerId = null, parentRunId = null` deliberately ("an explicit
+ *    operator action"), so they are precisely the runs no trigger and no parent
+ *    produced.
  *  - `child` — a run a `call_pipeline` node spawned. It carries rows since P3b
  *    slice 1 (#796) landed the spawn seam: `run/child.ts` creates the child with
  *    `parentRunId` set, against the CALLED pipeline's version. This docblock said
@@ -83,7 +85,7 @@ export const RUN_TAB_HINT: Record<RunTab, string> = {
   // does not have to carry that caveat alone.
   all: 'Every run, whatever started it',
   triggered: 'Started by a trigger, including a manual fire of one',
-  manual: 'Runs with no trigger — today, reruns',
+  manual: 'Runs with no trigger — started from the editor, or reruns',
   // #1231 — the parenthetical was a live falsehood on the operator's own strip:
   // #796 landed the spawn seam on 2026-08-12 and this tab has been populated
   // since, as this module's own docblock already recorded. A hint that tells a
@@ -117,3 +119,10 @@ export function filterRunsByTab<T extends Pick<Run, 'triggerId' | 'parentRunId'>
 export function isRunTab(value: unknown): value is RunTab {
   return typeof value === 'string' && (RUN_TABS as readonly string[]).includes(value);
 }
+
+/**
+ * What an empty run list says. One string, because the Runs page and Home both
+ * show it, and it names every way a run starts (#1395 added the editor's Run).
+ */
+export const NO_RUNS_YET =
+  "No runs yet. Press Run in a pipeline's editor, or fire a trigger, to start one.";

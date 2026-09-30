@@ -4,6 +4,7 @@ import { HUBS } from '../shell/hubs';
 import { listRuns } from '../api/runs';
 import { usePagedList } from '../hooks/usePagedList';
 import { runStatusLabel } from './runs/runStatus';
+import { NO_RUNS_YET } from './runs/runOrigin';
 import { runDetailPath } from './runs/runPath';
 import { formatWhen } from './runs/format';
 
@@ -78,9 +79,7 @@ export function HomePage() {
             draws the null/`[]` distinction at all. */}
         {loading && error === null && <p>Loading runs…</p>}
 
-        {runs !== null && runs.length === 0 && error === null && (
-          <p>No runs yet. Fire a trigger on the Triggers page to start one.</p>
-        )}
+        {runs !== null && runs.length === 0 && error === null && <p>{NO_RUNS_YET}</p>}
 
         {runs !== null && runs.length > 0 && (
           <ul className="recent-runs">

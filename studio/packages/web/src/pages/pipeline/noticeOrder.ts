@@ -4,6 +4,8 @@ export interface TransientNotice {
   text: string | null;
   /** `status` for a message a keyboard act raised that changes nothing visible. */
   role?: 'status';
+  /** #1395 — one in-app link after the text, e.g. "Open run" for a run just started. */
+  link?: { to: string; label: string };
 }
 
 /**

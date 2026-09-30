@@ -90,7 +90,8 @@ describe('HomePage', () => {
     listRunsMock.mockResolvedValue({ items: [], nextCursor: null });
     renderHome();
 
-    expect(await screen.findByText(/No runs yet/)).toBeInTheDocument();
+    // #1395 — names the editor's Run, not only the Triggers page.
+    expect(await screen.findByText(/Press Run in a pipeline's editor/)).toBeInTheDocument();
   });
 
   it('renders NEITHER rows nor the empty state while the first page is still loading', async () => {

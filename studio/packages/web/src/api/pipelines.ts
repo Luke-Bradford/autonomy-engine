@@ -15,6 +15,10 @@ import {
   type PipelineVersion,
   type PublishPipelineBody,
   type PublishPipelineResult,
+  FireResultSchema,
+  ManualRunRequestSchema,
+  type FireResult,
+  type ManualRunRequest,
 } from '@autonomy-studio/shared';
 import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -465,6 +469,24 @@ export function publishPipeline(
     method: 'POST',
     body: PublishPipelineBodySchema.parse(body),
     schema: PublishPipelineResultSchema,
+  });
+}
+
+/**
+ * #1395 OR4 — run one saved version of the pipeline now, with no trigger
+ * (`POST /api/pipelines/:id/runs`, the editor's Run). `started` carries the
+ * `runId`; `skipped` carries the `reason` (the pipeline is at its concurrency
+ * cap, or the server is stopping). A param the version cannot take is a 400
+ * naming it, raised as an `ApiError` before any run exists.
+ */
+export function runPipelineVersion(
+  pipelineId: string,
+  body: ManualRunRequest,
+): Promise<FireResult> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs`, {
+    method: 'POST',
+    body: ManualRunRequestSchema.parse(body),
+    schema: FireResultSchema,
   });
 }
 
