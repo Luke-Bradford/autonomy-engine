@@ -67,6 +67,15 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
+    /* Vertical slack, for THIS drag only. CHAIN's height binds the fit, so
+       `n_a`'s ports sit near the TOP of the pane, and a reconnect drag that
+       starts inside React Flow's auto-pan margin pans the viewport under the
+       pointer, so the drop misses the port it was aimed at. Measured on #1393:
+       the fitted port sat 20px into the pane and the viewport panned ~20px
+       mid-drag. At 1000px it sat just outside the margin, which is why this only
+       flaked before; #1393's fixed status strip took the last of that slack.
+       Not the whole describe: the target-end drags below are laid out for 1000. */
+    await page.setViewportSize({ width: 1600, height: 1150 });
     await openSeededCanvas(page, 'e2e u19s2 retype', CHAIN);
 
     await selectEdge(page);
