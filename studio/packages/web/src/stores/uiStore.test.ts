@@ -299,5 +299,7 @@ describe('uiStore minimap (#1394 OR3)', () => {
     createUiStore(storage).getState().setMinimapHidden(true);
     expect(storage.data.get(MINIMAP_STORAGE_KEY)).toBe('true');
     expect(createUiStore(storage).getState().minimapHidden).toBe(true);
+    createUiStore(storage).getState().setMinimapHidden(false);
+    expect(createUiStore(storage).getState().minimapHidden).toBe(false);
   });
 });

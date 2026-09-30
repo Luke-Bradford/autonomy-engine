@@ -111,22 +111,23 @@ test('the map folds away, and stays folded after a reload', async ({ page }) => 
   const map = page.locator('.react-flow__minimap');
   await expect(map).toBeVisible();
 
-  await page.getByRole('button', { name: 'Hide map' }).click();
+  const toggle = page.getByRole('button', { name: 'Map', exact: true });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(toggle).toHaveAttribute('title', 'Hide map');
+
+  await toggle.click();
   await expect(map).toHaveCount(0);
-  const show = page.getByRole('button', { name: 'Show map' });
-  await expect(show).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).toHaveAttribute('title', 'Show map');
 
   await page.reload();
   await fluentRootReady(page);
   await page.locator('.react-flow__renderer').waitFor();
-  await expect(show).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(map).toHaveCount(0);
 
-  await show.click();
+  await toggle.click();
   await expect(map).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Hide map' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   await expectQuiet(page, problems);
 });

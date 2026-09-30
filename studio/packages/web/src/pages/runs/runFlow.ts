@@ -1,5 +1,6 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import {
+  COPY_ACTIVITY_TYPE,
   containerMembership,
   type Node,
   type PipelineVersion,
@@ -29,7 +30,7 @@ import {
   nodeStatusTone,
   type StatusTone,
 } from './nodeStatus';
-import { formatNodeDuration, isMeasurableSpan } from './format';
+import { formatCount, formatNodeDuration, isMeasurableSpan } from './format';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -91,7 +92,10 @@ export interface RunNodeData extends Record<string, unknown> {
 }
 
 /** What `runNodeFacts` reads off a node's activity row. */
-export type RunNodeMeasure = Pick<NodeActivity, 'startedAtMs' | 'endedAtMs' | 'outputValues'>;
+export type RunNodeMeasure = Pick<
+  NodeActivity,
+  'startedAtMs' | 'endedAtMs' | 'outputValues' | 'copiedFromRunId'
+>;
 
 /** The version-derived half of a run card — see `RunNodeData.card`. */
 export interface RunCard {
@@ -109,28 +113,52 @@ export function runCards(
   datasetName: (id: string) => string | undefined = () => undefined,
 ): Map<string, RunCard> {
   return new Map(
-    doc.nodes.map((n) => [
-      n.id,
-      { type: n.type, summary: activitySummary(n, datasetName), badges: activityBadges(n) },
-    ]),
+    doc.nodes.map((n) => {
+      const next: RunCard = {
+        type: n.type,
+        summary: activitySummary(n, datasetName),
+        badges: activityBadges(n),
+      };
+      /* Reuse this node's last card when it is equal: the dataset names arrive
+         AFTER the first paint, and a fresh object for every node would re-render
+         the whole graph (and blink every edge) to change only the Copy cards.
+         Keyed by the doc's own node object, which a version never replaces. */
+      const prev = lastCard.get(n);
+      if (prev !== undefined && sameCard(prev, next)) return [n.id, prev];
+      lastCard.set(n, next);
+      return [n.id, next];
+    }),
+  );
+}
+
+const lastCard = new WeakMap<Node, RunCard>();
+
+function sameCard(a: RunCard, b: RunCard): boolean {
+  return (
+    a.type === b.type &&
+    a.summary === b.summary &&
+    a.badges.length === b.badges.length &&
+    a.badges.every((x, i) => x.key === b.badges[i]!.key && x.label === b.badges[i]!.label)
   );
 }
 
 /**
  * #1394 OR3 — the numbers a run card shows under its status: the settled
- * duration and, for a node that declares them (Copy Data), the rows it wrote.
+ * duration and, for a Copy Data node, the rows it wrote.
  *
- * Only what was MEASURED. An open span has no duration yet (the node table
+ * Only what THIS run measured. An open span has no duration yet (the node table
  * counts that one up live), and `formatNodeDuration`'s em-dash is the table's
- * way of saying so in a cell — on a card the absence is simply nothing. Rows come
- * from the node's recorded DECLARED outputs, so a node that never reported them
- * shows none rather than `0 rows`.
+ * way of saying so in a cell — on a card the absence is simply nothing. A node a
+ * rerun COPIED ran in the source run, so its recorded rows are that run's and it
+ * says nothing here. Rows are read only off a Copy node, whose catalog entry
+ * declares them: any other node's `rowsWritten` output (a webhook's, a child
+ * pipeline's) is a value it was handed, not a count it made.
  */
-export function runNodeFacts(activity: RunNodeMeasure | undefined): string | null {
-  if (activity === undefined) return null;
+export function runNodeFacts(type: string, activity: RunNodeMeasure | undefined): string | null {
+  if (activity === undefined || activity.copiedFromRunId !== undefined) return null;
   const parts: string[] = [];
   if (isMeasurableSpan(activity)) parts.push(formatNodeDuration(activity));
-  const out = activity.outputValues;
+  const out = type === COPY_ACTIVITY_TYPE ? activity.outputValues : undefined;
   const written = out?.['rowsWritten'];
   if (isCount(written)) {
     parts.push(`${formatCount(written)} ${written === 1 ? 'row' : 'rows'}`);
@@ -145,35 +173,59 @@ function isCount(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 }
 
-/** Thousands-grouped, in one fixed locale so a card reads the same everywhere. */
-function formatCount(n: number): string {
-  return n.toLocaleString('en-US');
-}
-
 /**
- * The nodes inside a `foreach` or `loop` box, at any depth. Such a node runs once
- * per item or round, but its activity row holds only the LATEST attempt's span
- * and outputs — so a card would state one iteration's `1 row` for a copy that
- * wrote three. Its card says nothing measured instead; the box already states
- * the progress (`3 of 3 items`), and the node table has the per-attempt detail.
+ * The nodes that can run MORE THAN ONCE in a run: those inside a `foreach` or
+ * `loop` box at any depth, and those on a back edge's cycle. Such a node's
+ * activity row holds only the LATEST attempt's span and outputs, so a card would
+ * state one iteration's `1 row` for a copy that wrote three. Its card says
+ * nothing measured instead; a box already states its progress (`3 of 3 items`),
+ * and the node table has the per-attempt detail. Cached per doc, like the cards.
  */
+const repeatedCache = new WeakMap<RunDoc, Set<string>>();
 function repeatedNodeIds(doc: RunDoc): Set<string> {
-  const containers = doc.containers ?? [];
-  if (containers.length === 0) return new Set();
-  const { owner } = containerMembership(containers);
-  const kind = new Map(containers.map((c) => [c.id, c.kind]));
+  const hit = repeatedCache.get(doc);
+  if (hit !== undefined) return hit;
   const out = new Set<string>();
-  for (const n of doc.nodes) {
-    // Walk up the owners; `seen` bounds a malformed cyclic membership.
-    const seen = new Set<string>();
-    for (let c = owner.get(n.id); c !== undefined && !seen.has(c); c = owner.get(c)) {
-      seen.add(c);
-      if (kind.get(c) !== 'stage') {
-        out.add(n.id);
-        break;
+  const containers = doc.containers ?? [];
+  if (containers.length > 0) {
+    const { owner } = containerMembership(containers);
+    const kind = new Map(containers.map((c) => [c.id, c.kind]));
+    for (const n of doc.nodes) {
+      // Walk up the owners; `seen` bounds a malformed cyclic membership.
+      const seen = new Set<string>();
+      for (let c = owner.get(n.id); c !== undefined && !seen.has(c); c = owner.get(c)) {
+        seen.add(c);
+        if (kind.get(c) !== 'stage') {
+          out.add(n.id);
+          break;
+        }
       }
     }
   }
+  /* A back edge `from → to` re-runs every node on a forward path from `to` to
+     `from`: reachable forward from `to` AND reaching `from`, over the forward
+     edges alone. */
+  const forward = doc.edges.filter((e) => e.back !== true);
+  const reach = (start: string, next: (id: string) => string[]) => {
+    const seen = new Set([start]);
+    const stack = [start];
+    while (stack.length > 0) {
+      for (const m of next(stack.pop()!)) {
+        if (!seen.has(m)) {
+          seen.add(m);
+          stack.push(m);
+        }
+      }
+    }
+    return seen;
+  };
+  const succ = (id: string) => forward.filter((e) => e.from === id).map((e) => e.to);
+  const pred = (id: string) => forward.filter((e) => e.to === id).map((e) => e.from);
+  for (const back of doc.edges.filter((e) => e.back === true)) {
+    const reachesFrom = reach(back.from, pred);
+    for (const id of reach(back.to, succ)) if (reachesFrom.has(id)) out.add(id);
+  }
+  repeatedCache.set(doc, out);
   return out;
 }
 
@@ -182,27 +234,13 @@ function repeatedNodeIds(doc: RunDoc): Set<string> {
  * view never measures anything, so the container boxes around the cards are
  * drawn from this same number (`runFlowNodes`), and a card taller than it would
  * poke out of its box. It fits a two-line name, the summary row and the status
- * row; the name is clamped to two lines, so nothing can make the card taller.
+ * row, and the card is drawn at exactly this height (`RunCanvas`), so it cannot
+ * outgrow its box whatever the content.
  */
 export const RUN_NODE_BASE_HEIGHT = 104;
 
 export function runNodeHeight(portCount: number): number {
   return Math.max(RUN_NODE_BASE_HEIGHT, nodeBoxHeight(portCount));
-}
-
-/**
- * The cards `runFlowNodes` falls back to when the caller passes none — cached
- * per doc so repeated calls still hand out the SAME card objects, which is what
- * keeps `mergeRunNodes`' identity check meaningful on that path too.
- */
-const defaultCards = new WeakMap<RunDoc, Map<string, RunCard>>();
-function defaultCardsOf(doc: RunDoc): Map<string, RunCard> {
-  let cards = defaultCards.get(doc);
-  if (cards === undefined) {
-    cards = runCards(doc);
-    defaultCards.set(doc, cards);
-  }
-  return cards;
 }
 
 export interface RunContainerData extends Record<string, unknown> {
@@ -257,8 +295,8 @@ export interface RunFlowOptions {
    */
   showStatus?: boolean;
   /**
-   * #1394 OR3 — each node's card, from `runCards`. Pass a MEMOIZED map: absent,
-   * a per-doc cache stands in, without dataset names.
+   * #1394 OR3 — each node's card, from `runCards`; absent, built here without
+   * dataset names.
    */
   cards?: ReadonlyMap<string, RunCard>;
   /** #1394 OR3 — the page's per-node activity rows, keyed by doc node id, for
@@ -287,7 +325,7 @@ export function runFlowNodes(
   options: RunFlowOptions = {},
 ): FlowNode[] {
   const showStatus = options.showStatus ?? true;
-  const cards = options.cards ?? defaultCardsOf(doc);
+  const cards = options.cards ?? runCards(doc);
   const repeated = repeatedNodeIds(doc);
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
@@ -344,7 +382,12 @@ export function runFlowNodes(
         portIds: portIdsOf(portsOf(n.id, n)),
         // Unreachable fallback: `runCards` is built from this very array.
         card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
-        facts: showStatus && !repeated.has(n.id) ? runNodeFacts(options.activity?.get(n.id)) : null,
+        /* Only on a SETTLED node: a held, re-opened or skipped node's row can
+           still carry an earlier attempt's span, which is not this state's. */
+        facts:
+          (status === 'success' || status === 'failure') && !repeated.has(n.id)
+            ? runNodeFacts(n.type, options.activity?.get(n.id))
+            : null,
       } satisfies RunNodeData,
       ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };

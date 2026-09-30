@@ -2388,7 +2388,10 @@ export function FlowCanvas({
           <ControlButton
             onClick={() => setMinimapHidden(!minimapHidden)}
             aria-pressed={!minimapHidden}
-            aria-label={minimapHidden ? 'Show map' : 'Hide map'}
+            /* ONE name, with the state in `aria-pressed` — a label that flipped
+               as well would be read as "Hide map, pressed". The tooltip says
+               what a click will do. */
+            aria-label="Map"
             title={minimapHidden ? 'Show map' : 'Hide map'}
             className="minimap-toggle"
           >

@@ -86,7 +86,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   return (
     <div
       className={`flow-node run-node${toneClass('run-node', d.tone)}`}
-      style={{ minHeight: runNodeHeight(ports.length) }}
+      style={{ height: runNodeHeight(ports.length) }}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="run-node-card">
@@ -107,7 +107,11 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
           {/* #1394 OR3 — the duration and rows this run measured, beside the
               word rather than inside it: the status span's text is the U25
               vocabulary the node table shares, and stays exactly that. */}
-          {d.facts !== null && <span className="run-node-facts">{d.facts}</span>}
+          {d.facts !== null && (
+            <span className="run-node-facts" title={d.facts}>
+              {d.facts}
+            </span>
+          )}
         </span>
       )}
       <SourcePorts ports={ports} />
