@@ -1421,10 +1421,55 @@ describe('canvasStore — container membership (U6d)', () => {
       expect(s.getState().containers).toEqual([]);
     });
 
-    it('refuses a childless container, so a loop can never be born empty', () => {
+    it('admits a childless container — the palette authors an empty box to drag into (#1420)', () => {
       const s = loaded();
       s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: [] });
+      expect(s.getState().containers).toEqual([{ id: 'stage_1', kind: 'stage', children: [] }]);
+    });
+  });
+
+  describe("addContainer (#1420) — the palette's ForEach / Until / Stage", () => {
+    function loaded() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version());
+      return s;
+    }
+
+    it('adds an EMPTY container of that kind, anchored where it was dropped, and selects it', () => {
+      const s = loaded();
+      s.getState().addContainer('foreach', { x: 300, y: 120 });
+      const [c] = s.getState().containers;
+      expect(c).toMatchObject({ kind: 'foreach', children: [] });
+      expect(s.getState().containerAnchors[c!.id]).toEqual({ x: 300, y: 120 });
+      // Selected, so its config panel (Items) is what the operator sees next.
+      expect(s.getState().selected).toEqual([{ kind: 'container', id: c!.id }]);
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    it('staggers an unpositioned add (a click) so two clicks do not stack', () => {
+      const s = loaded();
+      s.getState().addContainer('stage');
+      s.getState().addContainer('stage');
+      const [a, b] = s.getState().containers;
+      expect(a!.id).not.toBe(b!.id);
+      expect(s.getState().containerAnchors[a!.id]).not.toEqual(
+        s.getState().containerAnchors[b!.id],
+      );
+    });
+
+    it('is undone as one step, and the anchor never reaches the doc', () => {
+      const s = loaded();
+      s.getState().addContainer('loop', { x: 1, y: 2 });
+      expect(Object.keys(s.getState().containers[0]!)).toEqual(['id', 'kind', 'children']);
+      s.getState().undo();
       expect(s.getState().containers).toEqual([]);
+    });
+
+    it('forgets every anchor on load — they describe the previous document', () => {
+      const s = loaded();
+      s.getState().addContainer('loop', { x: 1, y: 2 });
+      s.getState().loadVersion(version());
+      expect(s.getState().containerAnchors).toEqual({});
     });
 
     it('refuses a container ContainerSchema rejects', () => {

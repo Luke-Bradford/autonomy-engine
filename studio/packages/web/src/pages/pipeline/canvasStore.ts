@@ -993,6 +993,16 @@ export interface CanvasState {
    */
   addCount: number;
   /**
+   * #1420 — where each palette-authored EMPTY container is drawn, by container
+   * id. View state, not doc: a container stores no position (its box is its
+   * children's bounds, `containerRects`), and an empty one cannot be saved as
+   * it stands — an empty loop/foreach fails `validateDoc` and an empty stage
+   * fails `emptyContainerIssues` — so an anchor never needs to outlive the
+   * session. Excluded from undo snapshots for `addCount`'s reason, and cleared
+   * by `loadVersion` because it describes the previous document.
+   */
+  containerAnchors: Readonly<Record<string, { x: number; y: number }>>;
+  /**
    * U17 — the edit history, oldest first. `past[past.length - 1]` is the doc as
    * it stood BEFORE the most recent edit, so one undo is one pop.
    *
@@ -1207,12 +1217,20 @@ export interface CanvasState {
    * would not be the container the store created.
    *
    * Refuses (silent no-op) a container the schema rejects, one whose id collides
-   * with an existing node or container — they share one namespace — one with no
-   * children at all, and one naming a child that is not a current node. Silent
+   * with an existing node or container — they share one namespace — and one
+   * naming a child that is not a current node. A container with NO children is
+   * admitted (#1420): see `addContainer`. Silent
    * for the same reason `connect` is: the canvas is where a refusal is explained,
    * because it is where the operator is.
    */
   createContainer(container: Container): void;
+  /**
+   * #1420 — the palette's ForEach / Until / Stage: a new EMPTY container of
+   * `kind`, anchored at `position` (a drop) or at the next stagger slot (a
+   * click), and SELECTED so its config panel is the next thing on screen. The
+   * operator then drags activities into the box.
+   */
+  addContainer(kind: ContainerKind, position?: { x: number; y: number }): void;
   /**
    * U6d — move a node into `containerId`, or out of every container when it is
    * `null`.
@@ -1244,8 +1262,7 @@ export interface CanvasState {
    * `setNodeContainer`, which alone takes the child out of whatever container
    * held it, and to `deleteNode`, which prunes (#746); routing membership
    * through here would bypass both and could author the duplicate-child doc
-   * `validateDoc` refuses — or the empty container `createContainer` is careful
-   * never to mint (#748).
+   * `validateDoc` refuses.
    *
    * None of the three is reachable from `ContainerPanel`, which filters all
    * three out of its form and lets `assembleConfig` pass them through from the
@@ -1501,6 +1518,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       selected: [],
       dirty: false,
       addCount: 0,
+      containerAnchors: {},
       past: [],
       future: [],
 
@@ -1609,6 +1627,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           selected: [],
           dirty: false,
           addCount: 0,
+          containerAnchors: {},
           past: [],
           future: [],
         });
@@ -1961,14 +1980,31 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // One namespace for node and container ids (`validateDoc` says so), so a
         // collision check has to look at both.
         if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
-        // Never born empty: an empty `loop`/`foreach` is a doc `validateDoc`
-        // refuses, and an empty `stage` validates clean and mints itself into an
-        // immutable version forever — the two halves of #748's trap.
-        if (c.children.length === 0) return;
+        // Born EMPTY is admitted since #1420 (the palette's drop-then-fill box).
+        // #748's trap was an empty box the operator could not act on; it now has
+        // a ✕ and undo, an empty `loop`/`foreach` is a save badge from
+        // `validateDoc`, and an empty `stage` is one from `emptyContainerIssues`
+        // — so none of them can mint into an immutable version.
         // A container whose children are not current nodes is the phantom-child
         // doc #746 was filed about, authored fresh instead of left behind.
         if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;
         edit((st) => ({ containers: containersWithNew(st.containers, c) }));
+      },
+
+      addContainer(kind, position) {
+        const parsed = ContainerSchema.safeParse({ id: newLocalId(kind), kind, children: [] });
+        if (!parsed.success) return;
+        const c = parsed.data;
+        const n = get().addCount;
+        // The same stagger `addNode` uses, from the same counter, so a clicked
+        // container and a clicked activity never land on one spot.
+        const at = position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 };
+        edit((st) => ({
+          containers: containersWithNew(st.containers, c),
+          containerAnchors: { ...st.containerAnchors, [c.id]: at },
+          addCount: position ? st.addCount : st.addCount + 1,
+        }));
+        get().select({ kind: 'container', id: c.id });
       },
 
       setNodeContainer(nodeId, containerId) {

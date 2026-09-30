@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import {
   ACTIVITY_DND_MIME,
+  CONTAINER_DND_MIME,
   hasActivityDragType,
+  hasCanvasDragType,
+  hasContainerDragKind,
   readActivityDragType,
+  readContainerDragKind,
   setActivityDragType,
+  setContainerDragKind,
 } from './activityDnd';
 
 /** A drag carrying a real activity, as the toolbox writes it. */
@@ -76,5 +81,44 @@ describe('hasActivityDragType (the dragover gate)', () => {
   it('is false for a null dataTransfer, which a synthetic event can carry', () => {
     expect(hasActivityDragType(null)).toBe(false);
     expect(readActivityDragType(null)).toBeNull();
+  });
+});
+
+describe('container drags (#1420) — the Containers palette group', () => {
+  function containerDrag(kind: string, protectedMode = false): DataTransfer {
+    const dt = fakeDataTransfer({ protectedMode });
+    dt.setData(CONTAINER_DND_MIME, kind);
+    return dt;
+  }
+
+  it('round-trips each container kind, as a copy', () => {
+    for (const kind of ['foreach', 'loop', 'stage'] as const) {
+      const dt = fakeDataTransfer();
+      setContainerDragKind(dt, kind);
+      expect(dt.effectAllowed).toBe('copy');
+      expect(readContainerDragKind(dt)).toBe(kind);
+    }
+  });
+
+  it('is its own drag shape — never mistaken for an activity drag, nor the reverse', () => {
+    const dt = containerDrag('foreach');
+    expect(hasContainerDragKind(dt)).toBe(true);
+    expect(hasActivityDragType(dt)).toBe(false);
+    expect(readActivityDragType(dt)).toBeNull();
+    expect(hasContainerDragKind(activityDrag('http_request'))).toBe(false);
+    expect(hasCanvasDragType(dt)).toBe(true);
+    expect(hasCanvasDragType(activityDrag('http_request'))).toBe(true);
+    expect(hasCanvasDragType(fakeDataTransfer())).toBe(false);
+  });
+
+  it('refuses a payload that is not a container kind', () => {
+    const dt = containerDrag('iterate');
+    expect(hasContainerDragKind(dt)).toBe(true);
+    expect(readContainerDragKind(dt)).toBeNull();
+  });
+
+  it('gates dragover on the SHAPE alone — the payload is unreadable there', () => {
+    const dt = containerDrag('stage', true);
+    expect(hasContainerDragKind(dt)).toBe(true);
   });
 });

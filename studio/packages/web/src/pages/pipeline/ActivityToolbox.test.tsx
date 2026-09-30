@@ -3,7 +3,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { ActivityToolbox } from './ActivityToolbox';
-import { ACTIVITY_DND_MIME } from './activityDnd';
+import { ACTIVITY_DND_MIME, CONTAINER_DND_MIME } from './activityDnd';
+import { CONTAINER_PALETTE } from './activityGroups';
 import { createCanvasStore } from './canvasStore';
 
 function renderToolbox() {
@@ -55,7 +56,7 @@ describe('ActivityToolbox', () => {
     // `node.call` blob the generic config form could not, so the palette offers
     // the whole catalog and nothing is left unreachable from the canvas.
     const store = renderToolbox();
-    expect(offeredNames()).toHaveLength(catalog.size);
+    expect(offeredNames()).toHaveLength(catalog.size + CONTAINER_PALETTE.length);
     fireEvent.click(screen.getByRole('button', { name: 'Execute Pipeline' }));
     expect(store.getState().nodes[0]!.type).toBe('execute_pipeline');
   });
@@ -250,5 +251,53 @@ describe('ActivityToolbox', () => {
     );
     expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
     expect(screen.getByRole('button', { name: 'LLM Call' })).toBeTruthy();
+  });
+
+  describe('the Containers group (#1420) — ForEach, Until and Stage', () => {
+    it('offers all three under their own heading, next to the activities', () => {
+      renderToolbox();
+      const group = screen.getByRole('list', { name: 'Containers' });
+      for (const title of ['ForEach', 'Until', 'Stage']) {
+        expect(within(group).getByRole('button', { name: title })).toBeTruthy();
+      }
+    });
+
+    it('a click adds an EMPTY container of that kind and selects it', () => {
+      const store = renderToolbox();
+      fireEvent.click(screen.getByRole('button', { name: 'ForEach' }));
+      const [c] = store.getState().containers;
+      expect(c).toMatchObject({ kind: 'foreach', children: [] });
+      expect(store.getState().selected).toEqual([{ kind: 'container', id: c!.id }]);
+      fireEvent.click(screen.getByRole('button', { name: 'Until' }));
+      expect(store.getState().containers[1]!.kind).toBe('loop');
+    });
+
+    it('a drag carries the container kind, not an activity type', () => {
+      renderToolbox();
+      const dataTransfer = {
+        setData: vi.fn(),
+        effectAllowed: 'uninitialized',
+      } as unknown as DataTransfer;
+      fireEvent.dragStart(screen.getByRole('button', { name: 'Stage' }), { dataTransfer });
+      expect(dataTransfer.setData).toHaveBeenCalledWith(CONTAINER_DND_MIME, 'stage');
+      expect(dataTransfer.setData).not.toHaveBeenCalledWith(ACTIVITY_DND_MIME, expect.anything());
+    });
+
+    it('filters with the search box, by title or by kind', async () => {
+      renderToolbox();
+      await userEvent.type(filterBox(), 'foreach');
+      const group = screen.getByRole('list', { name: 'Containers' });
+      expect(within(group).getByRole('button', { name: 'ForEach' })).toBeTruthy();
+      expect(within(group).queryByRole('button', { name: 'Stage' })).toBeNull();
+      await userEvent.clear(filterBox());
+      await userEvent.type(filterBox(), 'loop');
+      expect(screen.getByRole('button', { name: 'Until' })).toBeTruthy();
+    });
+
+    it('collapses like any other group', () => {
+      renderToolbox();
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse Containers' }));
+      expect(screen.queryByRole('button', { name: 'ForEach' })).toBeNull();
+    });
   });
 });

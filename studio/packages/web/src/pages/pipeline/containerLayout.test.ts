@@ -11,6 +11,7 @@ import {
   appearedSelected,
   onScreen,
   revealReady,
+  containerAtPoint,
   containerRects,
   emptyContainerIds,
   liveNodeRects,
@@ -723,5 +724,57 @@ describe('containerHandles — the stated port bounds of a derived box', () => {
         expect(h.x).toBe(h.type === 'target' ? -HANDLE_SIZE / 2 : 200 - HANDLE_SIZE / 2);
       }
     }
+  });
+});
+
+describe('#1420 — an empty box the operator placed (palette drop)', () => {
+  it('draws an anchored empty box AT its anchor, and it does not follow the content', () => {
+    const anchors = new Map([['fe', { x: 40, y: 60 }]]);
+    const near = containerRects([stage('fe', [])], new Map([['a', rect(0, 0)]]), anchors);
+    const far = containerRects([stage('fe', [])], new Map([['a', rect(900, 0)]]), anchors);
+    expect(near.get('fe')).toEqual({ x: 40, y: 60, ...EMPTY_CONTAINER_SIZE, childCount: 0 });
+    // The same box however far a node is dragged: a box that fled the pointer
+    // could never be dropped into.
+    expect(far.get('fe')).toEqual(near.get('fe'));
+  });
+
+  it('ignores the anchor once the container has a child — the box is its children again', () => {
+    const anchors = new Map([['fe', { x: 40, y: 60 }]]);
+    const box = containerRects([stage('fe', ['a'])], new Map([['a', rect(500, 500)]]), anchors);
+    expect(box.get('fe')!.x).toBe(500 - CONTAINER_PADDING);
+  });
+
+  it('leaves an unanchored empty box on the stacked fallback', () => {
+    const anchors = new Map([['other', { x: 40, y: 60 }]]);
+    const box = containerRects([stage('e', [])], new Map([['a', rect(0, 0)]]), anchors).get('e')!;
+    expect(box.x).toBe(150 + CONTAINER_GAP);
+  });
+});
+
+describe('containerAtPoint (#1420) — which box a dragged activity was dropped into', () => {
+  const box = (x: number, y: number, width: number, height: number) => ({
+    x,
+    y,
+    width,
+    height,
+    childCount: 1,
+  });
+  const boxes = new Map([
+    ['big', box(0, 0, 1000, 1000)],
+    ['small', box(100, 100, 200, 200)],
+  ]);
+
+  it('returns the SMALLEST box containing the point', () => {
+    expect(containerAtPoint(boxes, { x: 150, y: 150 }, null)).toBe('small');
+    expect(containerAtPoint(boxes, { x: 600, y: 600 }, null)).toBe('big');
+  });
+
+  it("never returns the excluded box (the node's current owner)", () => {
+    expect(containerAtPoint(boxes, { x: 150, y: 150 }, 'small')).toBe('big');
+  });
+
+  it('returns null outside every box, and on the edge counts as inside', () => {
+    expect(containerAtPoint(boxes, { x: 1001, y: 5 }, null)).toBeNull();
+    expect(containerAtPoint(boxes, { x: 1000, y: 1000 }, null)).toBe('big');
   });
 });

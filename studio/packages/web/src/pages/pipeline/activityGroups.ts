@@ -4,6 +4,7 @@ import {
   catalog,
   type ActivityCatalogEntry,
   type ActivityCategory,
+  type ContainerKind,
 } from '@autonomy-studio/shared';
 
 /*
@@ -71,4 +72,45 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
   }
 
   return groups;
+}
+
+/** One entry of the toolbox's Containers group (#1420). */
+export interface ContainerPaletteEntry {
+  kind: ContainerKind;
+  /** The name an ADF author looks for — `loop` is ADF's Until. */
+  title: string;
+  /** What the box does, shown as the entry's tooltip. */
+  description: string;
+}
+
+/** The Containers group's heading. */
+export const CONTAINER_GROUP_LABEL = 'Containers';
+
+/**
+ * #1420 — ForEach, Until and Stage in the palette, beside If and Switch where an
+ * ADF author looks for them. Before this the only way to make one was the
+ * selected node's Settings → New container. Not catalog activities (a container
+ * is a box that holds nodes, not a node), so they are listed here rather than
+ * in the shared catalog, in the order an ADF author meets them.
+ */
+export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
+  {
+    kind: 'foreach',
+    title: 'ForEach',
+    description: 'Run the activities inside once for each item of an array',
+  },
+  {
+    kind: 'loop',
+    title: 'Until',
+    description: 'Repeat the activities inside until a condition is true',
+  },
+  { kind: 'stage', title: 'Stage', description: 'Group activities into one step' },
+];
+
+/** The Containers entries a search query keeps — by title or by kind, like `toolboxGroups`. */
+export function containerToolboxEntries(query: string): ContainerPaletteEntry[] {
+  const needle = query.trim().toLowerCase();
+  return CONTAINER_PALETTE.filter(
+    (e) => needle === '' || e.title.toLowerCase().includes(needle) || e.kind.includes(needle),
+  );
 }

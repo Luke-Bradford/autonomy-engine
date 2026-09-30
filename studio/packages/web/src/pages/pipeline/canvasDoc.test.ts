@@ -9,6 +9,7 @@ import {
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
 import {
   canSave,
+  emptyContainerIssues,
   nodePolicyIssues,
   policyIssues,
   saveDisabledReason,
@@ -325,5 +326,36 @@ describe('policyIssues + nodePolicyIssues (#1312)', () => {
     const issues = policyIssues([withPolicy('a', { retryIntervalSeconds: 60 })]);
     expect(nodePolicyIssues(issues, 'a', [])).toEqual(issues);
     expect(nodePolicyIssues(issues, 'ab', [])).toEqual([]);
+  });
+});
+
+describe('emptyContainerIssues (#1420) — an empty stage is a save badge', () => {
+  const node = { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } } as Node;
+
+  it("badges an empty stage, in the `container '<id>':` form the canvas attributes", () => {
+    expect(emptyContainerIssues([{ id: 'stage_1', kind: 'stage', children: [] }], [node])).toEqual([
+      "container 'stage_1': a stage needs at least one child — drag an activity into it, or remove it with ✕",
+    ]);
+  });
+
+  it('counts only children that are current nodes, as validateDoc does for a loop', () => {
+    expect(
+      emptyContainerIssues([{ id: 'stage_1', kind: 'stage', children: ['n_ghost'] }], [node]),
+    ).toHaveLength(1);
+    expect(
+      emptyContainerIssues([{ id: 'stage_1', kind: 'stage', children: ['n_a'] }], [node]),
+    ).toEqual([]);
+  });
+
+  it('leaves an empty loop and foreach to validateDoc, which already refuses them', () => {
+    expect(
+      emptyContainerIssues(
+        [
+          { id: 'loop_1', kind: 'loop', children: [] },
+          { id: 'foreach_1', kind: 'foreach', children: [] },
+        ],
+        [node],
+      ),
+    ).toEqual([]);
   });
 });

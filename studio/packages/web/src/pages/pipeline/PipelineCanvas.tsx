@@ -96,6 +96,7 @@ import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEdi
 import {
   isOwnPolicyIssue,
   policyIssues,
+  emptyContainerIssues,
   saveDisabledReason,
   toVersionBody,
   validateCanvas,
@@ -647,6 +648,8 @@ export function PipelineCanvas({
       [
         ...validateCanvas(nodes, edges, containers, params, variables, globals),
         ...policyIssues(nodes),
+        // #1420 — an empty stage, the one empty box `validateDoc` passes.
+        ...emptyContainerIssues(containers, nodes),
       ].map((raw) => ({
         raw,
         text: readableIssue(raw, nodes, edges, containers),

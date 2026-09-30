@@ -113,6 +113,28 @@ export function validateCanvas(
  * Read through `StrictNodeSchema.shape.policy`, so the rules are the schema's
  * own and nothing here restates a bound.
  */
+/**
+ * #1420 — an EMPTY `stage` as a save badge. `validateDoc` refuses an empty loop
+ * and foreach but passes an empty stage (it succeeds at once at run time), so
+ * before the palette could author an empty box one could only be reached by
+ * emptying a stage — and it then saved clean and minted itself into every later
+ * immutable version (#748, symptom B).
+ *
+ * Kept on the CANVAS, not added to `validateDoc`: that is the server's write
+ * gate AND the run-time check, and a stage emptied before #746 may already sit
+ * in a minted version. Refusing it there would make such a version unrunnable
+ * to fix a hygiene problem; here it only asks the next save to drop the box.
+ */
+export function emptyContainerIssues(containers: Container[], nodes: Node[]): string[] {
+  const ids = new Set(nodes.map((n) => n.id));
+  return containers
+    .filter((c) => c.kind === 'stage' && !c.children.some((ch) => ids.has(ch)))
+    .map(
+      (c) =>
+        `container '${c.id}': a stage needs at least one child — drag an activity into it, or remove it with ✕`,
+    );
+}
+
 export function policyIssues(nodes: Node[]): string[] {
   const schema = StrictNodeSchema.shape.policy;
   return nodes.flatMap((n) => {

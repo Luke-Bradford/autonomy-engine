@@ -1,10 +1,17 @@
 import { useId, useMemo, useState } from 'react';
-import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
+import type { ReactNode } from 'react';
+import {
+  ArrowRepeatAllRegular,
+  ArrowSyncRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
+  GroupRegular,
+} from '@fluentui/react-icons';
 import type { StoreApi } from 'zustand';
-import type { ActivityCategory } from '@autonomy-studio/shared';
-import { setActivityDragType } from './activityDnd';
+import type { ContainerKind } from '@autonomy-studio/shared';
+import { setActivityDragType, setContainerDragKind } from './activityDnd';
 import { ActivityGlyph } from './ActivityGlyph';
-import { toolboxGroups } from './activityGroups';
+import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
 
 /**
@@ -41,7 +48,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
    * relationship, which is what `useId` exists to prevent.
    */
   const uid = useId();
-  const listId = (category: ActivityCategory) => `${uid}-${category}`;
+  const listId = (key: string) => `${uid}-${key}`;
   const [query, setQuery] = useState('');
   /**
    * Which category groups the operator has collapsed.
@@ -50,9 +57,11 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
    * seeding from the catalog and a category added later is open by default
    * rather than silently hidden.
    */
-  const [collapsed, setCollapsed] = useState<ReadonlySet<ActivityCategory>>(new Set());
+  // Keyed by a catalog category, or `CONTAINERS_KEY` for the Containers group.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
   const groups = useMemo(() => toolboxGroups(query), [query]);
+  const containerEntries = useMemo(() => containerToolboxEntries(query), [query]);
 
   /**
    * A SEARCH SUSPENDS EVERY COLLAPSE — and, with it, the disclosures themselves.
@@ -73,12 +82,61 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
    */
   const searching = query.trim() !== '';
 
-  function toggle(category: ActivityCategory) {
+  function toggle(key: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (!next.delete(category)) next.add(category);
+      if (!next.delete(key)) next.add(key);
       return next;
     });
+  }
+
+  /** A group's heading and list — shared by the catalog groups and Containers. */
+  function group(key: string, label: string, items: ReactNode) {
+    const isCollapsed = collapsed.has(key);
+    return (
+      <div className="activity-toolbox__group" key={key}>
+        {searching ? (
+          /* A STATIC heading while searching — not a disclosure.
+             Every group is expanded during a search, so a toggle here would
+             be a control that cannot take effect, and one whose label is
+             guaranteed to disagree with what the user sees: it would read
+             "Collapse" over an expanded list, and clicking it would silently
+             rewrite the saved preference without changing anything on
+             screen. Removing the control while it has nothing to control
+             retires that whole class rather than picking which of the two
+             states it should lie about. The list keeps its `aria-label`, so
+             the grouping is still conveyed. */
+          <p className="activity-toolbox__heading">{label}</p>
+        ) : (
+          <button
+            type="button"
+            className="icon-button activity-toolbox__disclosure"
+            aria-expanded={!isCollapsed}
+            aria-controls={listId(key)}
+            aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${label}`}
+            onClick={() => toggle(key)}
+          >
+            {/* `aria-hidden`, like U4's identical pair: the button already
+                carries an explicit `aria-label`, and a decorative glyph must
+                not join the accessible name. */}
+            {isCollapsed ? (
+              <ChevronRightRegular aria-hidden="true" />
+            ) : (
+              <ChevronDownRegular aria-hidden="true" />
+            )}
+            <span aria-hidden="true">{label}</span>
+          </button>
+        )}
+        <ul
+          id={listId(key)}
+          className="activity-toolbox__list"
+          aria-label={label}
+          hidden={isCollapsed && !searching}
+        >
+          {items}
+        </ul>
+      </div>
+    );
   }
 
   return (
@@ -101,81 +159,81 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
           unit nor the e2e test can see this difference; it is a correctness
           decision, not a tested one.) */}
       <p className="activity-toolbox__empty" role="status">
-        {groups.length === 0 ? `No activities match “${query.trim()}”.` : ''}
+        {groups.length === 0 && containerEntries.length === 0
+          ? `No activities match “${query.trim()}”.`
+          : ''}
       </p>
 
-      {groups.map((group) => {
-        const isCollapsed = collapsed.has(group.category);
-        return (
-          <div className="activity-toolbox__group" key={group.category}>
-            {searching ? (
-              /* A STATIC heading while searching — not a disclosure.
-                 Every group is expanded during a search, so a toggle here would
-                 be a control that cannot take effect, and one whose label is
-                 guaranteed to disagree with what the user sees: it would read
-                 "Collapse" over an expanded list, and clicking it would silently
-                 rewrite the saved preference without changing anything on
-                 screen. Removing the control while it has nothing to control
-                 retires that whole class rather than picking which of the two
-                 states it should lie about. The list keeps its `aria-label`, so
-                 the grouping is still conveyed. */
-              <p className="activity-toolbox__heading">{group.label}</p>
-            ) : (
+      {groups.map((g) =>
+        group(
+          g.category,
+          g.label,
+          g.entries.map((entry) => (
+            <li key={entry.type}>
               <button
                 type="button"
-                className="icon-button activity-toolbox__disclosure"
-                aria-expanded={!isCollapsed}
-                aria-controls={listId(group.category)}
-                aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${group.label}`}
-                onClick={() => toggle(group.category)}
+                className="activity-toolbox__item"
+                draggable
+                title={entry.type}
+                onDragStart={(e) => {
+                  // A synthetic event can carry a null dataTransfer; a real
+                  // dragstart never does.
+                  if (e.dataTransfer) setActivityDragType(e.dataTransfer, entry.type);
+                }}
+                onClick={() => store.getState().addNode(entry.type)}
               >
-                {/* `aria-hidden`, like U4's identical pair: the button already
-                    carries an explicit `aria-label`, and a decorative glyph must
-                    not join the accessible name. */}
-                {isCollapsed ? (
-                  <ChevronRightRegular aria-hidden="true" />
-                ) : (
-                  <ChevronDownRegular aria-hidden="true" />
-                )}
-                <span aria-hidden="true">{group.label}</span>
+                {/* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
+                    point rather than an economy: the palette is where an
+                    operator learns what a shape means, so a different icon
+                    here would teach nothing. Decorative — the button's text
+                    is its accessible name. */}
+                <span aria-hidden="true" className="activity-toolbox__icon">
+                  <ActivityGlyph type={entry.type} category={entry.category} />
+                </span>
+                <span>{entry.title}</span>
               </button>
-            )}
-            <ul
-              id={listId(group.category)}
-              className="activity-toolbox__list"
-              aria-label={group.label}
-              hidden={isCollapsed && !searching}
-            >
-              {group.entries.map((entry) => (
-                <li key={entry.type}>
-                  <button
-                    type="button"
-                    className="activity-toolbox__item"
-                    draggable
-                    title={entry.type}
-                    onDragStart={(e) => {
-                      // A synthetic event can carry a null dataTransfer; a real
-                      // dragstart never does.
-                      if (e.dataTransfer) setActivityDragType(e.dataTransfer, entry.type);
-                    }}
-                    onClick={() => store.getState().addNode(entry.type)}
-                  >
-                    {/* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
-                        point rather than an economy: the palette is where an
-                        operator learns what a shape means, so a different icon
-                        here would teach nothing. Decorative — the button's text
-                        is its accessible name. */}
-                    <span aria-hidden="true" className="activity-toolbox__icon">
-                      <ActivityGlyph type={entry.type} category={entry.category} />
-                    </span>
-                    <span>{entry.title}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })}
+            </li>
+          )),
+        ),
+      )}
+      {/* #1420 — the containers, last: they hold activities, so an operator
+          meets the activities first. A click or a drop adds an EMPTY box that
+          activities are then dragged into; wrapping an existing node stays in
+          its Settings → Container. */}
+      {containerEntries.length > 0 &&
+        group(
+          CONTAINERS_KEY,
+          CONTAINER_GROUP_LABEL,
+          containerEntries.map((entry) => (
+            <li key={entry.kind}>
+              <button
+                type="button"
+                className="activity-toolbox__item"
+                draggable
+                title={entry.description}
+                onDragStart={(e) => {
+                  if (e.dataTransfer) setContainerDragKind(e.dataTransfer, entry.kind);
+                }}
+                onClick={() => store.getState().addContainer(entry.kind)}
+              >
+                <span aria-hidden="true" className="activity-toolbox__icon">
+                  <ContainerGlyph kind={entry.kind} />
+                </span>
+                <span>{entry.title}</span>
+              </button>
+            </li>
+          )),
+        )}
     </aside>
   );
+}
+
+/** Not a catalog category, so it cannot collide with one. */
+const CONTAINERS_KEY = 'containers';
+
+/** A container entry's icon. Decorative, like `ActivityGlyph`. */
+function ContainerGlyph({ kind }: { kind: ContainerKind }) {
+  if (kind === 'foreach') return <ArrowRepeatAllRegular />;
+  if (kind === 'loop') return <ArrowSyncRegular />;
+  return <GroupRegular />;
 }
