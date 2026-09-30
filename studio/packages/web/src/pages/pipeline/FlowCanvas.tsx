@@ -349,7 +349,9 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('container', id);
-  const run = useEditorRunNode(id);
+  const runEntry = useEditorRunNode(id);
+  // #1395 OR4 — only while the draft's box is still the KIND the run's was.
+  const run = runEntry?.type === d.kind ? runEntry : undefined;
 
   /* Reported UP rather than acted on here, because the bounds this state moves
      are stated where the node object is built — see `onFanChange`'s docblock on
@@ -386,10 +388,11 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
       className={`flow-container${d.selected ? ' flow-container--selected' : ''}${issues.length > 0 ? ' flow-container--invalid' : ''}`}
       data-ports-expanded={expanded ? 'true' : 'false'}
       data-ports-named={named ? 'true' : 'false'}
+      data-run-status={run?.status}
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <span className="flow-container-label" data-run-status={run?.status}>
+      <span className="flow-container-label">
         {d.label}
         {/* #1395 OR4 — the run monitor's box says the same (`RunContainerNode`). */}
         {run !== undefined && ` · ${run.status}`}

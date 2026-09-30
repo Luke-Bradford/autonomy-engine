@@ -111,7 +111,7 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
   await openSeededCanvas(page, 'or4 live overlay', {
     params: [
       // Long enough that the wait is SEEN live before it settles.
-      { name: 'secs', type: 'number', required: false, default: 2 },
+      { name: 'secs', type: 'number', required: false, default: 3 },
       { name: 'nums', type: 'json', required: false, default: [1, 2, 3] },
     ],
     nodes: [
@@ -145,6 +145,8 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
   // Live first — the wait is parked on its timer, and the filter has not run —
   // then settled, on the cards of the canvas being edited.
   await expect(holdStatus).toContainText('waiting', { timeout: 10_000 });
+  // The filter's chip is THERE, saying it has not run — not merely absent.
+  await expect(pickStatus).toHaveCount(1);
   await expect(pickStatus).not.toContainText('success');
   await expect(holdStatus).toContainText('success', { timeout: 20_000 });
   await expect(pickStatus).toContainText('success', { timeout: 20_000 });

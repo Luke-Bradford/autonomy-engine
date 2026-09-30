@@ -852,13 +852,30 @@ describe('runNodeOverlay', () => {
     expect(facts).not.toBeNull();
   });
 
+  it('carries a foreach’s ITEM progress, as the monitor’s box words it', () => {
+    const doc: RunDoc = {
+      ...CONTAINER_DOC,
+      containers: [{ id: 'stg', kind: 'foreach', children: ['a', 'b'], items: '${params.l}' }],
+    };
+    const state: RunState = {
+      ...projected(),
+      containers: {
+        stg: { status: 'active', round: 1, outputs: {}, items: [1, 2], results: [{}] },
+      },
+    };
+    expect(runNodeOverlay(doc, state).get('stg')).toMatchObject({
+      type: 'foreach',
+      facts: '1 of 2 items',
+    });
+  });
+
   it('carries a container’s status and its progress, keyed by the container id', () => {
     const state: RunState = {
       ...projected(),
       containers: { stg: { status: 'active', round: 2, outputs: {} } },
     };
     expect(runNodeOverlay(CONTAINER_DOC, state).get('stg')).toEqual({
-      type: null,
+      type: 'stage',
       status: 'running',
       tone: 'running',
       facts: 'round 2',

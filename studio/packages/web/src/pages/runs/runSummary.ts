@@ -5,6 +5,7 @@ import {
   nodeCostFromTotals,
   parseInstanceKey,
   TERMINAL_NODE,
+  TERMINAL_RUN_ROW_STATUS,
   TERMINAL_RUN_STATUS,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
@@ -15,6 +16,7 @@ import {
   type MeteredTotals,
   type NodeCost,
   type NodeRunStatus,
+  type RunStatus,
   type RunEvent,
   type RunLifecycleStatus,
   type RunState,
@@ -24,6 +26,7 @@ import {
 
 import { parseEngineEvent } from './parsedEvent';
 import type { Overlay } from './useRunProjection';
+import type { StreamPhase } from './useRunStream';
 
 /**
  * PURE derivations the live-run view renders from a run's event log. They take
@@ -1807,4 +1810,15 @@ export function runLifecycleView(
     };
   }
   return lifecycle;
+}
+
+/**
+ * #890 — whether a view of this run would still hear a node settle: the stream
+ * live with its replay complete (`live` is set only after `replay_complete`, so
+ * a truncated log never counts), and the run not yet terminal by the ROW set,
+ * because a status can fall back to the REST row's `queued`/`skipped`. The run
+ * page and the editor's run overlay (#1395) both read it.
+ */
+export function streamStillLive(phase: StreamPhase, status: RunStatus): boolean {
+  return phase === 'live' && !TERMINAL_RUN_ROW_STATUS.has(status);
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -140,7 +140,7 @@ import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
-import type { EditorRun } from './editorRunContext';
+import { EditorRunContext, type EditorRun } from './editorRunContext';
 import { runDetailPath } from '../runs/runPath';
 import { runDisabledReason, runTitle } from './runNowRules';
 import { useShellUnsaved } from '../../shell/shellLabel';
@@ -230,13 +230,13 @@ export function PipelineCanvas({
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   // #1395 OR4 — the Run form's open state, and the last run it started. Its
   // notice links to the run page, and stays until the next press of Run — the
-  // save line's rule — so the link is there for as long as it is wanted. Slice 2
-  // of #1395 puts the live run on this canvas instead.
+  // save line's rule — so the link is there for as long as it is wanted.
   const [runOpen, setRunOpen] = useState(false);
   const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
   /* #1395 OR4 — the run drawn over the canvas. Held apart from `runStarted`,
-     which is a transient notice the next save replaces: the overlay stays until
-     the next Run, so a finished run's outcome is still on the cards. */
+     which pressing Run clears to open the form: the overlay stays until the
+     next run actually STARTS, so a finished run's outcome is still on the cards
+     while the next one's params are being typed. */
   const [editorRun, setEditorRun] = useState<EditorRun | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
@@ -1546,12 +1546,19 @@ export function PipelineCanvas({
   );
 }
 
-/** Edits the currently-selected node, edge or container; empty when nothing is. */
 /** #1395 OR4 — the editor run's drawer for the ONE selected activity, if any. */
 function SelectedRunDrawer({ store }: { store: ReturnType<typeof createCanvasStore> }) {
   const selected = singleSelection(useStore(store, (s) => s.selected));
-  return <EditorRunDrawer nodeId={selected?.kind === 'node' ? selected.id : null} />;
+  const nodeId = selected?.kind === 'node' ? selected.id : null;
+  const type = useStore(store, (s) =>
+    nodeId === null ? null : (s.nodes.find((n) => n.id === nodeId)?.type ?? null),
+  );
+  // Keyed so a Close lasts only while the same node of the same run is selected.
+  const runId = useContext(EditorRunContext)?.runId ?? '';
+  return <EditorRunDrawer key={`${runId}:${nodeId ?? ''}`} nodeId={nodeId} type={type} />;
 }
+
+/** Edits the currently-selected node, edge or container; empty when nothing is. */
 
 function PropertyPanel({
   store,

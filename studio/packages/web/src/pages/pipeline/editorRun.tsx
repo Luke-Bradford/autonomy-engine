@@ -1,6 +1,6 @@
-import { useContext, useMemo, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { TERMINAL_RUN_ROW_STATUS, type RunStatus } from '@autonomy-studio/shared';
+import type { RunStatus } from '@autonomy-studio/shared';
 import { NodeActivityPanel } from '../runs/NodeActivityPanel';
 import { runNodeOverlay } from '../runs/runFlow';
 import { runDetailPath } from '../runs/runPath';
@@ -9,6 +9,7 @@ import {
   deriveRunLifecycle,
   reconcileNodeActivity,
   runLifecycleView,
+  streamStillLive,
 } from '../runs/runSummary';
 import { useRunProjection } from '../runs/useRunProjection';
 import { useRunStream } from '../runs/useRunStream';
@@ -23,9 +24,11 @@ import { EditorRunContext, type EditorRun, type EditorRunView } from './editorRu
  * context's readers, not the whole editor with its drafts. `children` arrive
  * already built, so a frame does not rebuild them.
  *
- * Folds the log exactly as the run page does — one projection, the fold
- * reconciled against it, the same lifecycle precedence — so a node cannot read
- * one way on the canvas and another on "Open run".
+ * The stream lives one level further down, in `EditorRunStream`, KEYED BY RUN.
+ * `useRunStream` resets its log in an effect, i.e. one commit AFTER the run id
+ * changes, so a hook held here would project the previous run's log onto the
+ * next run's version for a frame. A fresh mount starts from an empty log, and a
+ * view is only provided for the run it was folded from.
  */
 export function EditorRunProvider({
   run,
@@ -34,8 +37,30 @@ export function EditorRunProvider({
   run: EditorRun | null;
   children: ReactNode;
 }) {
-  const stream = useRunStream(run?.runId ?? null);
-  const doc = run?.version ?? null;
+  const [view, setView] = useState<EditorRunView | null>(null);
+  const value = run !== null && view?.runId === run.runId ? view : null;
+  return (
+    <EditorRunContext.Provider value={value}>
+      {run !== null && <EditorRunStream key={run.runId} run={run} onView={setView} />}
+      {children}
+    </EditorRunContext.Provider>
+  );
+}
+
+/**
+ * Folds the run's log exactly as the run page does — one projection, the fold
+ * reconciled against it, the same lifecycle and liveness rules — so a node
+ * cannot read one way on the canvas and another on "Open run". Renders nothing.
+ */
+function EditorRunStream({
+  run,
+  onView,
+}: {
+  run: EditorRun;
+  onView: (view: EditorRunView) => void;
+}) {
+  const stream = useRunStream(run.runId);
+  const doc = run.version;
   const projection = useRunProjection(doc, stream);
   const folded = useMemo(() => deriveNodeActivity(stream.events), [stream.events]);
   const nodes = useMemo(
@@ -44,11 +69,10 @@ export function EditorRunProvider({
   );
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
   const status: RunStatus = runLifecycleView(lifecycle, projection)?.status ?? 'pending';
-  const live = stream.phase === 'live' && !TERMINAL_RUN_ROW_STATUS.has(status);
-  const names = useMemo(() => (doc === null ? null : activityLabels(doc.nodes)), [doc]);
+  const live = streamStillLive(stream.phase, status);
+  const names = useMemo(() => activityLabels(doc.nodes), [doc]);
 
-  const value = useMemo((): EditorRunView | null => {
-    if (run === null || doc === null) return null;
+  const view = useMemo((): EditorRunView => {
     const activity = new Map(nodes.map((n) => [n.nodeId, n]));
     return {
       runId: run.runId,
@@ -56,11 +80,14 @@ export function EditorRunProvider({
       nodes,
       status,
       live,
-      nameOf: (id) => names?.get(id) ?? null,
+      nameOf: (id) => names.get(id) ?? null,
     };
-  }, [run, doc, nodes, projection, status, live, names]);
+  }, [run.runId, doc, nodes, projection, status, live, names]);
 
-  return <EditorRunContext.Provider value={value}>{children}</EditorRunContext.Provider>;
+  useEffect(() => {
+    onView(view);
+  }, [view, onView]);
+  return null;
 }
 
 /**
@@ -68,24 +95,28 @@ export function EditorRunProvider({
  * and outputs, streamed — drawn by the run page's own drill-in panel, plus the
  * way to the whole run.
  *
- * Nothing when there is no run, or the node has no row in it (a node the draft
- * added since, or one the run has not reached and the engine has no opinion on
- * yet). Close hides it for THAT node; selecting another brings it back.
+ * Nothing when there is no run, when the node has no row in it (a node the
+ * draft added since, or one the run has not reached), or when the draft has
+ * re-typed the node since — the canvas's chip declines the same case. Close
+ * hides it; the caller keys it by run and node, so selecting the node again,
+ * or the next run, brings it back.
  */
-export function EditorRunDrawer({ nodeId }: { nodeId: string | null }) {
+export function EditorRunDrawer({ nodeId, type }: { nodeId: string | null; type: string | null }) {
   const run = useContext(EditorRunContext);
-  const [closed, setClosed] = useState<string | null>(null);
-  if (run === null || nodeId === null || closed === nodeId) return null;
+  const [closed, setClosed] = useState(false);
+  if (run === null || nodeId === null || closed) return null;
+  const entry = run.overlay.get(nodeId);
+  if (entry !== undefined && entry.type !== type) return null;
   const node = run.nodes.find((n) => n.nodeId === nodeId);
   if (node === undefined) return null;
   return (
-    <div className="editor-run-drawer">
+    <div>
       <NodeActivityPanel
         node={node}
         name={run.nameOf(nodeId)}
         runStatus={run.status}
         live={run.live}
-        onClose={() => setClosed(nodeId)}
+        onClose={() => setClosed(true)}
       />
       <p className="page-hint">
         <Link to={runDetailPath(run.runId)}>Open full run</Link>

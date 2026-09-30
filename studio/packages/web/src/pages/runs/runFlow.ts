@@ -496,11 +496,11 @@ export function runFlowNodes(
 }
 
 /** #1395 OR4 — what the authoring canvas draws over one box while a run it
- * started is live. `type` is the activity's type in the RUN's version (`null`
- * for a container), so a box whose draft type has since changed can decline an
+ * started is live. `type` is the activity's type — or the container's kind — in
+ * the RUN's version, so a box whose draft has since changed it can decline an
  * entry that no longer describes it. */
 export interface RunOverlayEntry {
-  type: string | null;
+  type: string;
   status: string;
   tone: StatusTone | null;
   /** A settled activity's duration and rows, or a container's progress. */
@@ -522,19 +522,27 @@ export function runNodeOverlay(
   activity?: ReadonlyMap<string, RunNodeMeasure>,
 ): Map<string, RunOverlayEntry> {
   const out = new Map<string, RunOverlayEntry>();
-  const types = new Map(doc.nodes.map((n) => [n.id, n.type]));
+  const types = new Map<string, string>([
+    ...doc.nodes.map((n) => [n.id, n.type] as const),
+    ...(doc.containers ?? []).map((c) => [c.id, c.kind] as const),
+  ]);
   for (const n of runFlowNodes(doc, state, activity === undefined ? {} : { activity })) {
     if (n.type === 'runContainer') {
       const d = n.data as RunContainerData;
       if (d.status === null) continue;
       const progress =
         d.items ?? (d.round !== null && d.round > 0 ? `round ${String(d.round)}` : null);
-      out.set(n.id, { type: null, status: d.status, tone: d.tone, facts: progress });
+      out.set(n.id, {
+        type: types.get(n.id) ?? '',
+        status: d.status,
+        tone: d.tone,
+        facts: progress,
+      });
     } else {
       const d = n.data as RunNodeData;
       if (d.status === null) continue;
       out.set(n.id, {
-        type: types.get(n.id) ?? null,
+        type: types.get(n.id) ?? '',
         status: d.status,
         tone: d.tone,
         facts: d.facts,

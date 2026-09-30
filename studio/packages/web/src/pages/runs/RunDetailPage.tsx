@@ -16,6 +16,7 @@ import {
   deriveRunLifecycle,
   reconcileNodeActivity,
   runLifecycleView,
+  streamStillLive,
 } from './runSummary';
 import { eventGloss, failureClass, formatClock, formatOutputValue, formatWhen } from './format';
 import { activityLabels } from '../pipeline/activityLabel';
@@ -293,7 +294,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
      cancelled run's never-closed span, which must not tick forever. The ROW
      set, as `RunCostSummary`'s `settled` below, because `status` can fall back
      to the REST row's `queued`/`skipped`. */
-  const countingLive = stream.phase === 'live' && !TERMINAL_RUN_ROW_STATUS.has(status);
+  const countingLive = streamStillLive(stream.phase, status);
 
   /* CX4 (#1320) — "Cancelling…": the cancel is FOLDED (the log carries
      `run.cancelRequested`) but the run has not finished, because in-flight work

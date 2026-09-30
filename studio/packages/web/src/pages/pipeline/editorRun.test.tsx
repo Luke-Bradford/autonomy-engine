@@ -130,13 +130,25 @@ describe('the authoring canvas under an editor run', () => {
     const { container } = mountCanvas(
       view({
         overlay: new Map([
-          ['c_1', { type: null, status: 'running', tone: 'running', facts: 'round 2' }],
+          ['c_1', { type: 'stage', status: 'running', tone: 'running', facts: 'round 2' }],
         ]),
       }),
     );
     expect(container.querySelector('.flow-container-label')?.textContent).toBe(
       'stage 1 · running · round 2',
     );
+  });
+
+  it('declines a container entry once the draft’s box is a different KIND', () => {
+    const { container } = mountCanvas(
+      view({
+        overlay: new Map([
+          ['c_1', { type: 'loop', status: 'running', tone: 'running', facts: null }],
+        ]),
+      }),
+    );
+    expect(container.querySelector('.flow-container-label')?.textContent).toBe('stage 1');
+    expect(container.querySelector('.flow-container')?.getAttribute('data-run-status')).toBeNull();
   });
 
   it('draws nothing at all with no run', () => {
@@ -161,10 +173,14 @@ describe('EditorRunDrawer', () => {
     nameOf: (id) => (id === 'n_a' ? 'HTTP Request 1' : null),
   });
 
-  function mountDrawer(value: EditorRunView | null, nodeId: string | null) {
+  function mountDrawer(
+    value: EditorRunView | null,
+    nodeId: string | null,
+    type: string | null = 'http_request',
+  ) {
     return renderWithRouter(
       <EditorRunContext.Provider value={value}>
-        <EditorRunDrawer nodeId={nodeId} />
+        <EditorRunDrawer nodeId={nodeId} type={type} />
       </EditorRunContext.Provider>,
     );
   }
@@ -182,6 +198,17 @@ describe('EditorRunDrawer', () => {
     expect(container.innerHTML).toBe('');
     const again = mountDrawer(null, 'n_a');
     expect(again.container.innerHTML).toBe('');
+  });
+
+  it('shows nothing for a node the draft has RE-TYPED since the run — as the chip does', () => {
+    const typed = {
+      ...run,
+      overlay: new Map([
+        ['n_a', { type: 'http_request', status: 'success', tone: 'success' as const, facts: null }],
+      ]),
+    };
+    expect(mountDrawer(typed, 'n_a', 'copy').container.innerHTML).toBe('');
+    expect(mountDrawer(typed, 'n_a', 'http_request').container.innerHTML).not.toBe('');
   });
 
   it('Close hides it for that node', async () => {
