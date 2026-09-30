@@ -510,8 +510,12 @@ export function revealTransform(
  * boxes from the doc's positions rather than from React Flow's measurements. A
  * box there can sit a few pixels loose around its children; membership, which is
  * the part that carries meaning, is unaffected.
+ *
+ * The WIDTH is `.flow-node`'s fixed width (220 since #1394 OR3), which both
+ * canvases draw. At the old nominal 150 a run-canvas container would have
+ * under-covered its children by 70px once the card widened.
  */
-export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
+export const UNMEASURED_NODE_SIZE = { width: 220, height: 52 };
 
 /**
  * The size assumed for a node with a known number of source ports.
@@ -621,3 +625,14 @@ export function containerHandles(
 export function containerAriaLabel(name: string, childCount: number): string {
   return `${name} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
 }
+
+/**
+ * #1394 OR3 — how far a FIT may zoom in: no further than 1:1.
+ *
+ * React Flow's default lets `fitView` zoom to 2x, so a graph of one or two
+ * activities opened with cards twice their size — the "huge cards" of the
+ * operator review. Capping the FIT, not the zoom, leaves the operator free to
+ * zoom in by hand. Shared by the author and run canvases so both frame a graph
+ * the same way.
+ */
+export const FIT_VIEW_OPTIONS = { maxZoom: 1 } as const;

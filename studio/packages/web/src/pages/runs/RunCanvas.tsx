@@ -15,6 +15,7 @@ import type { RunState } from '@autonomy-studio/shared';
 import { EdgeMarkers } from '../pipeline/EdgeMarkers';
 import { nodeBoxHeight, portsFromIds, TARGET_PORT_ID } from '../pipeline/ports';
 import { SourcePorts } from '../pipeline/SourcePorts';
+import { FIT_VIEW_OPTIONS } from '../pipeline/containerLayout';
 import {
   mergeRunNodes,
   NO_STATUS_LABEL,
@@ -191,6 +192,7 @@ export function RunCanvas({ doc, state, showStatus = true }: RunCanvasProps) {
           deleteKeyCode={null}
           onlyRenderVisibleElements
           fitView
+          fitViewOptions={FIT_VIEW_OPTIONS}
           proOptions={{ hideAttribution: true }}
         >
           <Background />

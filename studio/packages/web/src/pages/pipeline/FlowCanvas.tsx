@@ -39,10 +39,12 @@ import {
   getActivity,
   implicitRouting,
   type ContainerKind,
+  type Dataset,
   type Position as DomainPosition,
 } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
+import { activityBadges, activitySummary, type ActivityBadge } from './activitySummary';
 import {
   confirmContainerEdit,
   confirmNewContainer,
@@ -82,6 +84,7 @@ import {
   unmeasuredNodeSize,
   type ContainerBox,
   type Rect,
+  FIT_VIEW_OPTIONS,
 } from './containerLayout';
 import type { MeasuredSizes } from './autoLayout';
 import {
@@ -120,6 +123,10 @@ interface ActivityData extends Record<string, unknown> {
   type: string;
   /** U19 — one outgoing port per outcome this source can route. */
   ports: readonly SourcePort[];
+  /** #1394 OR3 — what this step is configured to do (`activitySummary`). */
+  summary: string | null;
+  /** #1394 OR3 — retry / timeout / secure, from the node's policy. */
+  badges: readonly ActivityBadge[];
 }
 
 /**
@@ -234,7 +241,31 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
       <span className="flow-node-icon" aria-hidden="true">
         <ActivityGlyph type={d.type} category={getActivity(d.type)?.category} />
       </span>
-      <strong className="flow-node-title">{d.title}</strong>
+      {/* #1394 OR3 — the name WRAPS to two lines and the whole of it is the
+          tooltip; under it, one line saying what this step does, and the policy
+          badges. The summary row is drawn even when empty, so filling in a field
+          never resizes the box (OR2). */}
+      <span className="flow-node-body">
+        <strong className="flow-node-title" title={d.title}>
+          {d.title}
+        </strong>
+        <span className="flow-node-meta">
+          <span className="flow-node-summary" title={d.summary ?? undefined}>
+            {d.summary}
+          </span>
+          {d.badges.map((b) => (
+            <span
+              key={b.key}
+              className={`flow-node-badge flow-node-badge--${b.key}`}
+              role="img"
+              aria-label={b.label}
+              title={b.label}
+            >
+              {b.text}
+            </span>
+          ))}
+        </span>
+      </span>
       <IssueBadge issues={issues} />
       {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
           "no connection" or "connection bound" in grey — a per-node CONFIG state
@@ -507,10 +538,14 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * of this line, which the spec above
  * pins.
  */
+/** A STABLE default: a fresh `[]` per render would re-derive every node, every render. */
+const NO_DATASETS: readonly Dataset[] = [];
+
 export function FlowCanvas({
   store,
   fitSignal = 0,
   measuredSizesRef,
+  datasets = NO_DATASETS,
 }: {
   store: StoreApi<CanvasState>;
   /**
@@ -544,8 +579,14 @@ export function FlowCanvas({
    * the read needs.
    */
   measuredSizesRef?: MutableRefObject<MeasuredSizes>;
+  /** #1394 OR3 — the workspace's datasets, so a Copy Data card names its ends. */
+  datasets?: readonly Dataset[];
 }) {
   const nodes = useStore(store, (s) => s.nodes);
+  const datasetName = useMemo(() => {
+    const names = new Map(datasets.map((d) => [d.id, d.name]));
+    return (id: string) => names.get(id);
+  }, [datasets]);
   const edges = useStore(store, (s) => s.edges);
   const selected = useStore(store, (s) => s.selected);
   // #746 — the containers, straight off the store. This used to select `loaded`
@@ -874,6 +915,8 @@ export function FlowCanvas({
             title: nodeLabels.get(n.id) ?? activityLabel(n),
             type: n.type,
             ports: portsOf(n.id),
+            summary: activitySummary(n, datasetName),
+            badges: activityBadges(n),
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
           // the spread above. The store is the single authority on what is
@@ -901,7 +944,7 @@ export function FlowCanvas({
         };
       });
     });
-  }, [nodes, nodeLabels, portsOf, selected, setFlowNodes]);
+  }, [nodes, nodeLabels, portsOf, selected, setFlowNodes, datasetName]);
 
   /**
    * U6c — the container boxes, DERIVED from the activity nodes rather than held
@@ -1448,7 +1491,7 @@ export function FlowCanvas({
   useEffect(() => {
     if (fitSignal <= 0 || fitSignal === lastFittedSignal.current) return;
     lastFittedSignal.current = fitSignal;
-    void fitView();
+    void fitView(FIT_VIEW_OPTIONS);
   }, [fitSignal, fitView]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
@@ -2327,6 +2370,7 @@ export function FlowCanvas({
         onSelectionDragStop={onNodesDragStop}
         onlyRenderVisibleElements
         fitView
+        fitViewOptions={FIT_VIEW_OPTIONS}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

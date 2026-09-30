@@ -1717,21 +1717,25 @@ td button + button {
   gap: 0.6rem;
 }
 
-/* A node is an ICON AND A NAME on one line, and the row is the whole design.
+/* A node is an ICON beside a BODY: the name, then one line saying what this step
+ * does (#1394 OR3).
  *
- * It used to be a stacked title with a grey second line repeating a per-node
- * config state on every box. On a graph of eight that is a wall of text an
- * operator has to READ to navigate. The glyph is what makes it scannable: the
- * shape says "this writes a file" before the words are parsed, and the name then
- * says WHICH one. */
+ * It was once a stacked title with a grey second line repeating a per-node
+ * config STATE ("connection bound") on every box — the same words eight times,
+ * which is a wall of text. Then it was an icon and an eliding name, and the
+ * operator could not tell steps apart: "Copy Data 1" and "Copy Data 2" said
+ * nothing about which file went where. The summary line is different from the
+ * old state line because it differs per node — `orders.csv → orders table`,
+ * `wait 30s` — which is exactly what makes a graph readable without opening
+ * every box. The glyph still says the kind before the words are parsed. */
 .flow-node {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
   /* A FIXED width, not a minimum, and it is load-bearing rather than cosmetic.
-     The title is `nowrap` so it can elide, which means an unconstrained box
-     GROWS with its name: measured, "HTTP Request 1" made a node 188 flow units
+     The summary line is `nowrap` so it can elide, which means an unconstrained box
+     GROWS with its content: measured, "HTTP Request 1" made a node 188 flow units
      wide against the ~120 a wrapping title used to produce. Wide nodes pushed
      the right-hand one's source port PAST the canvas pane, where a reverse drag
      lands on the property panel and starts nothing at all — the exact failure
@@ -1743,13 +1747,13 @@ td button + button {
      elide, and nothing is lost — the ellipsis is visual only, so the accessible
      name and the property panel still carry the whole title.
 
-     168 is the readable size. 132 was tried first and kept the suite green by
-     truncating "Copy File 1" to "Copy…", which is not shippable; 144 read
-     correctly but cleared the pane by FOUR pixels, and a margin that thin is a
-     spec that goes red the next time the shell's chrome changes by a hair. So
-     the card takes the size it needs and `WIDE_CANVAS` gives the specs the room
-     — measured there, 2000 leaves the worst port 81px inside the pane. */
-  width: 168px;
+     #1394 OR3 widened it from 168 to 220 so a summary like
+     `orders.csv → orders table` fits. The narrower sizes were chosen to keep the
+     e2e ports inside the pane, which is a test-layout constraint rather than a
+     reading one: the card takes the size it needs, and `WIDE_CANVAS` gives the
+     specs the room. `UNMEASURED_NODE_SIZE` states the same width, so a box
+     derived before (or without) a measurement covers its children. */
+  width: 220px;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -1770,14 +1774,58 @@ td button + button {
   height: 18px;
 }
 
-/* The name takes the remaining width and elides rather than wrapping — a node
-   that grows with its title makes the layout jump as it is renamed. */
+/* #1394 OR3 — the name, its summary line and the badges, stacked beside the glyph. */
+.flow-node-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* The name WRAPS to at most two lines and clamps past that; the whole of it is
+   the element's `title`, so a clamped name is still one hover away (and the
+   accessible name never clamps). It used to elide on one line, and a card
+   reading "Webhook (external…" was the operator's first complaint. */
 .flow-node-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+/* The summary row is RESERVED — `min-height` holds it when there is nothing to
+   say yet — so filling in a node's first field never resizes its box (the OR2
+   rule: the editor does not shift when you edit). The badges share the row
+   rather than adding one, for the same reason. */
+.flow-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.1rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.flow-node-summary {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+}
+
+.flow-node-badge {
+  flex: none;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .flow-node.selected {

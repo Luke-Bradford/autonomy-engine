@@ -1357,6 +1357,7 @@ export function PipelineCanvas({
                     store={store}
                     fitSignal={fitSignal}
                     measuredSizesRef={measuredSizesRef}
+                    datasets={datasets}
                   />
                 </ReactFlowProvider>
               </div>

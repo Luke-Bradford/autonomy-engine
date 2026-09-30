@@ -87,7 +87,7 @@ const CASES: Record<string, [Node, string]> = {
     'callback · timeout 1h 00m',
   ],
   [EXECUTE_PIPELINE_ACTIVITY_TYPE]: [
-    node(EXECUTE_PIPELINE_ACTIVITY_TYPE, { call: { pipelineVersionId: 'v1', wait: false } }),
+    node(EXECUTE_PIPELINE_ACTIVITY_TYPE, { call: { pipelineVersionId: 'v1', params: {}, wait: false } }),
     'starts a pipeline',
   ],
   [FILE_READ_ACTIVITY_TYPE]: [
@@ -163,7 +163,7 @@ describe('activitySummary', () => {
   });
 
   it('names a structural call node by whether it waits', () => {
-    const n = node('call_pipeline', { call: { pipelineVersionId: 'v', wait: true } });
+    const n = node('call_pipeline', { call: { pipelineVersionId: 'v', params: {}, wait: true } });
     expect(activitySummary(n, () => undefined)).toBe('runs a pipeline and waits');
   });
 });
