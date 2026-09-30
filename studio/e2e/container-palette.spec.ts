@@ -1,0 +1,157 @@
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { toolbox } from './support/canvasGraph';
+import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { nodeById, openSeededCanvas } from './support/seedDoc';
+
+/**
+ * #1420 — ForEach / Until / Stage in the Activities palette, and filling a box
+ * by dragging.
+ *
+ * The operator could not find ForEach: the only way to make a container was the
+ * selected node's Settings → New container. This walks the ADF gesture instead —
+ * drop an EMPTY box from the palette, then drag activities into it — through the
+ * real canvas, because the pieces it proves are cross-cutting (the palette's drag
+ * payload, the drop handler, the anchored empty box in `containerRects`, the
+ * drag-stop hit test, and the save badges) and jsdom measures every node 0×0.
+ */
+
+function pane(page: Page): Locator {
+  return page.locator('.react-flow__pane');
+}
+
+/** The box of the one container whose accessible name starts with `name`. */
+function containerBox(page: Page, name: string): Locator {
+  return page.getByRole('group', { name: new RegExp(`^${name} container`) });
+}
+
+/** Drop a palette entry at a screen point, via the pane (HTML5 drag, see activity-toolbox.spec). */
+async function dropFromPalette(page: Page, title: string, at: { x: number; y: number }) {
+  const paneBox = (await pane(page).boundingBox())!;
+  await toolbox(page)
+    .getByRole('button', { name: title, exact: true })
+    .dragTo(pane(page), { targetPosition: { x: at.x - paneBox.x, y: at.y - paneBox.y } });
+}
+
+/** Drag a node by its body so that its CENTRE ends at `to` (screen coords). */
+async function dragNodeCentreTo(page: Page, id: string, to: { x: number; y: number }) {
+  const b = (await nodeById(page, id).boundingBox())!;
+  const grab = { x: b.x + b.width / 2, y: b.y + 6 };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  const dx = to.x - (b.x + b.width / 2);
+  const dy = to.y - (b.y + b.height / 2);
+  await page.mouse.move(grab.x + dx, grab.y + dy, { steps: 12 });
+  await page.mouse.up();
+}
+
+function centre(b: { x: number; y: number; width: number; height: number }) {
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/** The container an activity belongs to, as its Settings → Container select names it. */
+async function membershipOf(page: Page, id: string): Promise<string> {
+  await nodeById(page, id).click();
+  return page
+    .getByRole('combobox', { name: 'Container membership' })
+    .locator('option:checked')
+    .innerText();
+}
+
+/** The Problems panel's messages (`[]` when there are none). */
+async function issues(page: Page): Promise<string> {
+  const list = page.locator('.badge-list li');
+  return (await list.count()) === 0 ? '' : (await list.allTextContents()).join('\n');
+}
+
+test.describe('#1420 containers in the Activities palette', () => {
+  test.beforeEach(({ page }) => {
+    // The first container on an edge-less graph changes its inferred routing,
+    // which is confirmed — accepted here; the dialog itself is `containerRules`'.
+    page.on('dialog', (d) => void d.accept());
+  });
+
+  test('drop a ForEach as an empty box, then drag an activity into it', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'palette-foreach', {
+      nodes: [{ id: 'b', position: { x: 0, y: 0 } }],
+    });
+
+    const group = page.getByRole('list', { name: 'Containers' });
+    for (const title of ['ForEach', 'Until', 'Stage']) {
+      await expect(group.getByRole('button', { name: title, exact: true })).toBeVisible();
+    }
+
+    const node = (await nodeById(page, 'b').boundingBox())!;
+    const dropAt = { x: node.x + node.width + 220, y: node.y };
+    await dropFromPalette(page, 'ForEach', dropAt);
+
+    const box = containerBox(page, 'foreach 1');
+    await expect(box).toHaveAttribute('aria-label', 'foreach 1 container, 0 activities');
+    // The box is where it was dropped, not stacked off to the side of the graph.
+    const boxRect = (await box.boundingBox())!;
+    expect(Math.abs(boxRect.x - dropAt.x)).toBeLessThan(12);
+    expect(Math.abs(boxRect.y - dropAt.y)).toBeLessThan(12);
+    // Empty, it is a save badge rather than a silently-saved junk box.
+    expect(await issues(page)).toContain('needs at least one child');
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    await dragNodeCentreTo(page, 'b', centre(boxRect));
+
+    await expect(box).toHaveAttribute('aria-label', 'foreach 1 container, 1 activity');
+    expect(await membershipOf(page, 'b')).toBe('foreach 1');
+    expect(await issues(page)).not.toContain('needs at least one child');
+
+    await expectQuiet(page, problems);
+  });
+
+  test('an activity dropped from the palette onto an empty Stage goes inside it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'palette-stage', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+    });
+
+    const node = (await nodeById(page, 'a').boundingBox())!;
+    await dropFromPalette(page, 'Stage', { x: node.x + node.width + 220, y: node.y });
+    const box = containerBox(page, 'stage 1');
+    await expect(box).toHaveAttribute('aria-label', 'stage 1 container, 0 activities');
+    // An empty stage is the one empty box `validateDoc` passes — the canvas refuses it.
+    expect(await issues(page)).toContain('a stage needs at least one child');
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    const boxRect = (await box.boundingBox())!;
+    await dropFromPalette(page, 'HTTP Request', { x: boxRect.x + 30, y: boxRect.y + 40 });
+
+    await expect(box).toHaveAttribute('aria-label', 'stage 1 container, 1 activity');
+    expect(await issues(page)).not.toContain('a stage needs at least one child');
+
+    await expectQuiet(page, problems);
+  });
+
+  test('nudging an activity that already sits inside a box it is not in does not join it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    // `b` is drawn INSIDE stage_1's box (the box spans a..c) without being a member.
+    await openSeededCanvas(page, 'palette-nudge', {
+      nodes: [
+        { id: 'a', position: { x: 0, y: 0 } },
+        { id: 'b', position: { x: 220, y: 0 } },
+        { id: 'c', position: { x: 440, y: 0 } },
+      ],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['a', 'c'] }],
+    });
+
+    const b = (await nodeById(page, 'b').boundingBox())!;
+    await dragNodeCentreTo(page, 'b', { x: centre(b).x + 8, y: centre(b).y + 4 });
+
+    expect(await membershipOf(page, 'b')).toBe('— none —');
+    await expect(containerBox(page, 'stage 1')).toHaveAttribute(
+      'aria-label',
+      'stage 1 container, 2 activities',
+    );
+
+    await expectQuiet(page, problems);
+  });
+});
