@@ -63,10 +63,7 @@ const CASES: Record<string, [Node, string]> = {
     node(SWITCH_ACTIVITY_TYPE, { config: { on: '${params.region}', cases: ['eu', 'us'] } }),
     'on ${params.region} · 2 cases',
   ],
-  [FAIL_ACTIVITY_TYPE]: [
-    node(FAIL_ACTIVITY_TYPE, { config: { message: 'no rows' } }),
-    'no rows',
-  ],
+  [FAIL_ACTIVITY_TYPE]: [node(FAIL_ACTIVITY_TYPE, { config: { message: 'no rows' } }), 'no rows'],
   [SET_VARIABLE_ACTIVITY_TYPE]: [
     node(SET_VARIABLE_ACTIVITY_TYPE, { config: { variable: 'count', value: 3 } }),
     'count = 3',
@@ -87,7 +84,9 @@ const CASES: Record<string, [Node, string]> = {
     'callback · timeout 1h 00m',
   ],
   [EXECUTE_PIPELINE_ACTIVITY_TYPE]: [
-    node(EXECUTE_PIPELINE_ACTIVITY_TYPE, { call: { pipelineVersionId: 'v1', params: {}, wait: false } }),
+    node(EXECUTE_PIPELINE_ACTIVITY_TYPE, {
+      call: { pipelineVersionId: 'v1', params: {}, wait: false },
+    }),
     'starts a pipeline',
   ],
   [FILE_READ_ACTIVITY_TYPE]: [
@@ -137,7 +136,10 @@ describe('activitySummary', () => {
 
   it('gives no line for an unconfigured node of any catalog type', () => {
     for (const type of catalog.keys()) {
-      expect(activitySummary(node(type), () => undefined), type).toBeNull();
+      expect(
+        activitySummary(node(type), () => undefined),
+        type,
+      ).toBeNull();
     }
   });
 

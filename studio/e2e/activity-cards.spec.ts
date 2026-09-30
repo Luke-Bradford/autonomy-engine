@@ -45,7 +45,12 @@ test.describe('#1394 readable activity cards', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'cards-long-name', {
       nodes: [
-        { id: 'hook', type: 'webhook', config: { timeoutSeconds: '${3600}' }, position: { x: 0, y: 0 } },
+        {
+          id: 'hook',
+          type: 'webhook',
+          config: { timeoutSeconds: '${3600}' },
+          position: { x: 0, y: 0 },
+        },
         {
           id: 'w',
           type: 'wait',
@@ -70,9 +75,9 @@ test.describe('#1394 readable activity cards', () => {
 
     await expect(summaryOf(page, 'hook')).toHaveText('callback · timeout 1h 00m');
     await expect(summaryOf(page, 'w')).toHaveText('wait 30s');
-    await expect(nodeById(page, 'w').getByRole('img', { name: 'Retries up to 2 times' })).toHaveText(
-      '↻ 2',
-    );
+    await expect(
+      nodeById(page, 'w').getByRole('img', { name: 'Retries up to 2 times' }),
+    ).toHaveText('↻ 2');
     await expectQuiet(page, problems);
   });
 
