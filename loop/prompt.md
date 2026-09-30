@@ -47,9 +47,9 @@ movement, robustness and performance, and help docs. That review is **epic #1416
   "backlog must trend down" rule from the 2026-09-30 count after they were filed, so that this
   filing does not force sweeps.
 - **SPEC items (OR12 #1403 scripts, OR16 #1407 transforms)** deliver a design doc plus tickets first.
-  The likely `[operator-decision]` forks are already named in those issues: script isolation
-  default, and debug-run version storage in OR4. Raise them as decisions when you reach them; do not
-  guess.
+  Their open choices are **already settled by CONFIG OVER DECISIONS** (below): script isolation,
+  debug-run retention and the transform engine each become configuration with a default. Do not
+  raise them as `[operator-decision]`s.
 - **UI work is judged in the browser.** Each tranche-1 PR attaches a before/after screenshot pair and
   its e2e. OR2's layout-stability e2e becomes a standing regression gate.
 - Tick the epic's checklist as children close (plain `gh issue close`, not PR-body keywords).
@@ -487,8 +487,38 @@ Your `gh` token is the operator's own (`repo` scope, owner identity), so it *cou
 ## TIDY
 Clean tree at end of every fire. Configure `store-dir` so no stray `.pnpm-store` lands in the repo root. Delete merged branches. No unexplained diff.
 
+## CONFIG OVER DECISIONS — the standing rule for design forks (operator, 2026-09-30)
+
+*"It should be config driven by who wants to host it and what they want to use, we can offer
+defaults, but have overrides, either pickable or a way for them to integrate when possible from
+other sources. If we're using third party services, a way to keep them up to date, check versioning
+etc."*
+
+studio is self-hosted and open-source: **the person hosting it chooses the stack.** So a fork of the
+form *which runtime / engine / provider / store / retention / limit / model / format* is **never** an
+`[operator-decision]`. Resolve it as configuration and build it:
+- **A default that works out of the box.** Pick it yourself and write down why in the spec.
+- **An override** at the right scope (workspace setting, connection, or node), chosen from a
+  **pickable list** of supported options.
+- **An integration seam**, where feasible, so a hoster can bring their own (an adapter interface, a
+  command, an image, an endpoint), not only the options we ship.
+- **Third-party pieces are version-managed**, including runtimes, drivers, SDKs, container images and
+  CLIs:
+  - a pinned version,
+  - "installed vs latest" visible in the app,
+  - a supported-version range,
+  - an update path. No silent drift.
+  - #1418 is the shared home for this.
+
+Only forks that are genuinely product direction or irreversible (see PAUSE) go to the operator.
+Examples already settled this way:
+- **Script isolation:** host process with limits by default, a container image as an option.
+- **Debug-run versions:** kept, with retention configurable (default 7 days).
+- **Transform engine:** embedded DuckDB by default, SQL push-down when source and sink share a
+  database, and a pluggable engine seam.
+
 ## PAUSE — operator-gated forks (you are headless; STOP + SIGNAL, don't guess)
-Open a `[operator-decision] <question>` issue (label `operator-decision`) with context + your recommendation, leave `main`/branch clean, END the fire, if the ONLY way forward needs: renaming the repo/`studio/` dir/`@autonomy-studio/*` scopes; an irreducible design decision NOT settled in a spec (e.g. a genuinely ambiguous D4 hold-vs-reopen or #3 working-copy choice after reading the specs). The OLD-engine autonomy loops stay PAUSED — never start/resume/wire a bash/python supervisor loop; that is unchanged and is NOT what C3 is. **Retiring the engine root is NO LONGER an `[operator-decision]`** (operator, 2026-08-05: *"I'm not using the old system, so do what you want with it"*) — it is C3: the CUTOVER block above owns how, THE QUEUE owns when. Outside that, do not touch the engine root except a TIDY that can't affect engine behavior.
+Open a `[operator-decision] <question>` issue (label `operator-decision`) with context + your recommendation, leave `main`/branch clean, END the fire, if the ONLY way forward needs: renaming the repo/`studio/` dir/`@autonomy-studio/*` scopes; an irreducible design decision NOT settled in a spec AND not resolvable as configuration under CONFIG OVER DECISIONS (e.g. a genuinely ambiguous D4 hold-vs-reopen or #3 working-copy choice after reading the specs). The OLD-engine autonomy loops stay PAUSED — never start/resume/wire a bash/python supervisor loop; that is unchanged and is NOT what C3 is. **Retiring the engine root is NO LONGER an `[operator-decision]`** (operator, 2026-08-05: *"I'm not using the old system, so do what you want with it"*) — it is C3: the CUTOVER block above owns how, THE QUEUE owns when. Outside that, do not touch the engine root except a TIDY that can't affect engine behavior.
 
 ## Reporting
 Your work IS the report: commits, PRs, merges on `main`. Blocker/fork → the `[operator-decision]`/`[loop-blocked]` issue. Do not fabricate progress — no mergeable progress this fire → say so in an issue and stop cleanly rather than thrash.
