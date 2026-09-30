@@ -1,5 +1,10 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
-import type { Node, PipelineVersion, RunState } from '@autonomy-studio/shared';
+import {
+  containerMembership,
+  type Node,
+  type PipelineVersion,
+  type RunState,
+} from '@autonomy-studio/shared';
 import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import {
   containerAriaLabel,
@@ -118,7 +123,9 @@ export function runCards(
  * from the node's recorded DECLARED outputs, so a node that never reported them
  * shows none rather than `0 rows`.
  */
-export function runNodeFacts(activity: NodeActivity | undefined): string | null {
+export function runNodeFacts(
+  activity: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs' | 'outputValues'> | undefined,
+): string | null {
   if (activity === undefined) return null;
   const parts: string[] = [];
   if (isMeasurableSpan(activity)) parts.push(formatNodeDuration(activity));
@@ -140,6 +147,33 @@ function isCount(v: unknown): v is number {
 /** Thousands-grouped, in one fixed locale so a card reads the same everywhere. */
 function formatCount(n: number): string {
   return n.toLocaleString('en-US');
+}
+
+/**
+ * The nodes inside a `foreach` or `loop` box, at any depth. Such a node runs once
+ * per item or round, but its activity row holds only the LATEST attempt's span
+ * and outputs — so a card would state one iteration's `1 row` for a copy that
+ * wrote three. Its card says nothing measured instead; the box already states
+ * the progress (`3 of 3 items`), and the node table has the per-attempt detail.
+ */
+function repeatedNodeIds(doc: RunDoc): Set<string> {
+  const containers = doc.containers ?? [];
+  if (containers.length === 0) return new Set();
+  const { owner } = containerMembership(containers);
+  const kind = new Map(containers.map((c) => [c.id, c.kind]));
+  const out = new Set<string>();
+  for (const n of doc.nodes) {
+    // Walk up the owners; `seen` bounds a malformed cyclic membership.
+    const seen = new Set<string>();
+    for (let c = owner.get(n.id); c !== undefined && !seen.has(c); c = owner.get(c)) {
+      seen.add(c);
+      if (kind.get(c) !== 'stage') {
+        out.add(n.id);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -253,6 +287,7 @@ export function runFlowNodes(
 ): FlowNode[] {
   const showStatus = options.showStatus ?? true;
   const cards = options.cards ?? defaultCardsOf(doc);
+  const repeated = repeatedNodeIds(doc);
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
      would otherwise be two boxes reading "HTTP Request", in the view whose job
@@ -308,7 +343,7 @@ export function runFlowNodes(
         portIds: portIdsOf(portsOf(n.id, n)),
         // Unreachable fallback: `runCards` is built from this very array.
         card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
-        facts: showStatus ? runNodeFacts(options.activity?.get(n.id)) : null,
+        facts: showStatus && !repeated.has(n.id) ? runNodeFacts(options.activity?.get(n.id)) : null,
       } satisfies RunNodeData,
       ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };

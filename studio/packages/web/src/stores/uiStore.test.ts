@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_THEME_MODE } from '../theme/fluentTheme';
 import {
+  MINIMAP_STORAGE_KEY,
   PANE_DEFAULT_WIDTH,
   PANE_MAX_WIDTH,
   PANE_MIN_WIDTH,
@@ -282,5 +283,21 @@ describe('ambientStorage', () => {
     // ...and the store then reads through it rather than ignoring it.
     createUiStore();
     expect(real.getItem).toHaveBeenCalledWith(THEME_STORAGE_KEY);
+  });
+});
+
+describe('uiStore minimap (#1394 OR3)', () => {
+  it('is shown by default and ignores a garbage stored value', () => {
+    expect(createUiStore(fakeStorage()).getState().minimapHidden).toBe(false);
+    expect(
+      createUiStore(fakeStorage({ [MINIMAP_STORAGE_KEY]: 'yes' })).getState().minimapHidden,
+    ).toBe(false);
+  });
+
+  it('persists a fold, and a fresh store (a reload) keeps it', () => {
+    const storage = fakeStorage();
+    createUiStore(storage).getState().setMinimapHidden(true);
+    expect(storage.data.get(MINIMAP_STORAGE_KEY)).toBe('true');
+    expect(createUiStore(storage).getState().minimapHidden).toBe(true);
   });
 });

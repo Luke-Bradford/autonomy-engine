@@ -3,7 +3,18 @@ import { ContainerRunStatusSchema, type RunState } from '@autonomy-studio/shared
 import { encodeCondition, OPERATIONAL_CONDITIONS } from '../pipeline/ports';
 import { containerStatusLabel, containerStatusTone } from './nodeStatus';
 import { projectRun } from './runProjection';
-import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
+import {
+  mergeRunNodes,
+  NO_STATUS_LABEL,
+  RUN_NODE_BASE_HEIGHT,
+  runCards,
+  runFlowEdges,
+  runFlowNodes,
+  runNodeFacts,
+  type RunDoc,
+  type RunNodeData,
+} from './runFlow';
+import type { NodeActivity } from './runSummary';
 
 const DOC: RunDoc = {
   nodes: [
@@ -598,5 +609,116 @@ describe('runFlowNodes — statusless', () => {
     const nodes = runFlowNodes(DOC, null);
     for (const n of nodes) expect(n.data.showStatus).toBe(true);
     expect(nodes[0]!.ariaLabel).toContain(NO_STATUS_LABEL);
+  });
+});
+
+describe('#1394 OR3 — run cards', () => {
+  const COPY_DOC: RunDoc = {
+    nodes: [
+      {
+        id: 'cp',
+        type: 'copy',
+        position: { x: 0, y: 0 },
+        config: {},
+        datasetIds: { source: 'ds-in', sink: 'ds-out' },
+        policy: { retry: 2 },
+      },
+    ],
+    edges: [],
+  };
+
+  it('carries the authoring card — type, summary with dataset NAMES, badges', () => {
+    const cards = runCards(COPY_DOC, (id) => ({ 'ds-in': 'orders.csv', 'ds-out': 'orders' })[id]);
+    const data = runFlowNodes(COPY_DOC, null, { cards })[0]!.data as RunNodeData;
+    expect(data.card.type).toBe('copy');
+    expect(data.card.summary).toBe('orders.csv → orders');
+    expect(data.card.badges.map((b) => b.key)).toEqual(['retry']);
+    // The SAME object the caller built — what keeps node identity across events.
+    expect(data.card).toBe(cards.get('cp'));
+  });
+
+  it('puts the measured facts on a node, and none on a view with no run', () => {
+    const activity = new Map([
+      [
+        'cp',
+        {
+          startedAtMs: 1_000,
+          endedAtMs: 2_500,
+          outputValues: { rowsWritten: 1204, rowsFailed: 0 },
+        } as NodeActivity,
+      ],
+    ]);
+    const run = runFlowNodes(COPY_DOC, null, { activity })[0]!.data as RunNodeData;
+    expect(run.facts).toBe('1s · 1,204 rows');
+    const preview = runFlowNodes(COPY_DOC, null, { activity, showStatus: false })[0]!
+      .data as RunNodeData;
+    expect(preview.facts).toBeNull();
+  });
+
+  it('states no facts on a node that repeats inside a foreach/loop — only the last run would show', () => {
+    const doc = {
+      nodes: [
+        { id: 'in', type: 'copy', position: { x: 0, y: 0 }, config: {} },
+        { id: 'deep', type: 'copy', position: { x: 0, y: 200 }, config: {} },
+        { id: 'staged', type: 'copy', position: { x: 400, y: 0 }, config: {} },
+      ],
+      edges: [],
+      containers: [
+        { id: 'fe', kind: 'foreach', children: ['in', 'inner'] },
+        { id: 'inner', kind: 'stage', children: ['deep'] },
+        { id: 'stg', kind: 'stage', children: ['staged'] },
+      ],
+    } as unknown as RunDoc;
+    const row = { startedAtMs: 0, endedAtMs: 10, outputValues: { rowsWritten: 1 } } as NodeActivity;
+    const activity = new Map(['in', 'deep', 'staged'].map((id) => [id, row]));
+    const facts = Object.fromEntries(
+      runFlowNodes(doc, null, { activity })
+        .filter((n) => n.type === 'runActivity')
+        .map((n) => [n.id, (n.data as RunNodeData).facts]),
+    );
+    expect(facts).toEqual({ in: null, deep: null, staged: '10ms · 1 row' });
+  });
+
+  it('draws container boxes from the card’s own fixed height', () => {
+    const doc: RunDoc = {
+      nodes: [{ id: 'a', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: 1 } }],
+      edges: [],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    } as RunDoc;
+    const box = runFlowNodes(doc, null).find((n) => n.type === 'runContainer')!;
+    // The box must reach below the card's bottom edge (child at y=0), or the
+    // card pokes out of it — the unmeasured 52px guess left it 32px short.
+    expect(box.position.y + box.height!).toBeGreaterThanOrEqual(RUN_NODE_BASE_HEIGHT);
+  });
+});
+
+describe('runNodeFacts', () => {
+  const at = (
+    startedAtMs: number | undefined,
+    endedAtMs: number | undefined,
+    outputValues?: Record<string, unknown>,
+  ) => ({ startedAtMs, endedAtMs, outputValues });
+
+  it('states a settled duration', () => {
+    expect(runNodeFacts(at(0, 250))).toBe('250ms');
+  });
+
+  it('says nothing for an open span or no row at all — never an em-dash or 0', () => {
+    expect(runNodeFacts(at(0, undefined))).toBeNull();
+    expect(runNodeFacts(undefined)).toBeNull();
+  });
+
+  it('counts rows written, singular for one, and failed rows only when there are some', () => {
+    expect(runNodeFacts(at(undefined, undefined, { rowsWritten: 1, rowsFailed: 0 }))).toBe('1 row');
+    expect(runNodeFacts(at(0, 2_000, { rowsWritten: 3, rowsFailed: 2 }))).toBe(
+      '2s · 3 rows · 2 failed',
+    );
+    expect(runNodeFacts(at(undefined, undefined, { rowsWritten: 0 }))).toBe('0 rows');
+  });
+
+  it('ignores a recorded value that is not a count', () => {
+    for (const bad of ['3', -1, 1.5, Number.NaN, Infinity, null]) {
+      expect(runNodeFacts(at(undefined, undefined, { rowsWritten: bad }))).toBeNull();
+    }
   });
 });
