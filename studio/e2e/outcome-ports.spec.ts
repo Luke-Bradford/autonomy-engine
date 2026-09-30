@@ -251,20 +251,23 @@ test.describe('U19 outcome ports', () => {
    * "spill over neighbouring nodes". Clicking a node focuses it, focus held the
    * fan open, and every word followed the fan.
    *
-   * The arrow key is the half a CSS `:focus-visible` reveal would have failed:
-   * Chromium turns `:focus-visible` on for an already-focused element as soon
-   * as a key is pressed, so nudging a clicked node would have named every port.
-   * `useNodeFan` records how focus ARRIVED instead, and that stays "pointer".
+   * The arrow key is why `useNodeFan` records how focus ARRIVED rather than
+   * leaving it to `:focus-visible`: measured while writing this spec, the
+   * clicked node matches `:focus-visible` once the key has been pressed, so that
+   * selector cannot tell it from a node reached by Tab. The recorded arrival
+   * stays "pointer".
    */
   test('a clicked node does not name its ports, even after a key is pressed', async ({ page }) => {
     await openSeededCanvas(page, 'u19 labels selected', TWO_NODES);
 
     const node = page.locator('.react-flow__node[data-id="a"]');
+    // The pointer STAYS on the node: that is the fan open and the node selected,
+    // which is the state the operator saw.
     await node.locator('.flow-node').click();
     await expect(node).toHaveClass(/selected/);
-    await page.mouse.move(0, 0);
     await page.keyboard.press('ArrowRight');
 
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
     await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'false');
     for (const word of ['success', 'failure', 'completion']) {
       await expect(node.locator('.flow-port-label').filter({ hasText: word })).toHaveCSS(

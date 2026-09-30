@@ -74,11 +74,10 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
      `:focus-visible` arm. A mouse click selects a node and focuses its wrapper
      too, and naming every port for that is the spill the operator reported: a
      selected node's column of words sitting on its neighbours. `:focus-visible`
-     tells the two apart at the moment of focus, but Chromium turns it on for an
-     element that already has focus as soon as a key is pressed, so a CSS arm
-     keyed on it would bring the spill back the first time a clicked node was
-     nudged with an arrow key. Captured here, the answer holds until focus
-     leaves. */
+     tells the two apart at the moment of focus, but a clicked node matches it
+     too once a key is pressed (measured in Chromium, `outcome-ports.spec.ts`),
+     so a CSS arm keyed on it could not tell a nudged node from a tabbed one.
+     Captured here, the answer holds until focus leaves. */
   const [keyboard, setKeyboard] = useState(false);
   useEffect(() => {
     const wrapper = boxRef.current?.parentElement;

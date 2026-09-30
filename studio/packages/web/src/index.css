@@ -2271,8 +2271,8 @@ td button + button {
      is no single port a keyboard user can be "on"; `useNodeFan` sets
      `data-ports-named` only when focus ARRIVED by keyboard, so a click never
      does. It is decided there, not by a `:focus-visible` selector here, because
-     Chromium switches `:focus-visible` on for a clicked node the moment a key
-     is pressed, and the spill would come back on the first arrow-key nudge.
+     a clicked node matches `:focus-visible` once a key is pressed, so the
+     selector cannot tell a nudged node from a tabbed one.
 
    Both arms stay behind `data-ports-expanded`, the state the dots are drawn
    from, so a word never shows while the port it names is still collapsed at
