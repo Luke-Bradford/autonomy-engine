@@ -138,6 +138,9 @@ import {
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
+import { RunNowPanel } from './RunNowPanel';
+import { runDetailPath } from '../runs/runPath';
+import { runDisabledReason, runTitle } from './runNowRules';
 import { useShellUnsaved } from '../../shell/shellLabel';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -223,6 +226,10 @@ export function PipelineCanvas({
   const unsavedId = useId();
   const saveReasonId = useId();
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // #1395 OR4 — the Run form's open state, and the last run it started (its
+  // notice links to the run page until the live overlay lands on this canvas).
+  const [runOpen, setRunOpen] = useState(false);
+  const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
      says whether the last save landed.
@@ -691,6 +698,12 @@ export function PipelineCanvas({
    * once and only with `true`, so it never goes back.
    */
   const saveReason = saveDisabledReason({ saving, ready, issues, previewing });
+  const runReason = runDisabledReason({
+    ready,
+    archived,
+    headVersion,
+    previewing: previewing !== null,
+  });
 
   /**
    * Save the working graph as a new version, based on `basedOnVersionId`.
@@ -1150,6 +1163,32 @@ export function PipelineCanvas({
               {saveReason}
             </span>
           )}
+          {/* #1395 OR4 — Run the latest saved version, with no trigger. The
+              anchor positions the form over the canvas, so opening it moves
+              nothing (#1393). */}
+          <span className="run-now-anchor">
+            <button
+              type="button"
+              aria-expanded={runOpen}
+              disabled={runReason !== null}
+              title={runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)}
+              onClick={() => setRunOpen((o) => !o)}
+            >
+              <span aria-hidden="true">▶ </span>Run
+            </button>
+            {runOpen && runReason === null && head !== null && (
+              <RunNowPanel
+                key={head.id}
+                pipelineId={pipelineId}
+                version={head}
+                onClose={() => setRunOpen(false)}
+                onStarted={(runId) => {
+                  setRunOpen(false);
+                  setRunStarted({ text: `Run started from v${String(head.version)}.`, runId });
+                }}
+              />
+            )}
+          </span>
         </div>
       </div>
 
@@ -1277,6 +1316,13 @@ export function PipelineCanvas({
           // nothing an operator is looking at — is still announced.
           { key: 'canvas', text: canvasMsg, role: 'status' },
           { key: 'save', text: saveMsg },
+          {
+            key: 'run',
+            text: runStarted?.text ?? null,
+            ...(runStarted !== null
+              ? { link: { to: runDetailPath(runStarted.runId), label: 'Open run' } }
+              : {}),
+          },
         ]}
       />
 

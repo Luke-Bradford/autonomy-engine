@@ -1681,6 +1681,36 @@ td button + button {
   font-size: 0.8rem;
 }
 
+/* #1395 OR4 — the editor's Run form, OVER the canvas like the notice list
+   below: opening it moves nothing (#1393). Anchored to the Run button's right
+   edge so it opens under the button that summoned it. */
+.run-now-anchor {
+  position: relative;
+}
+
+.run-now-panel {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(22rem, 90vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px var(--shadow);
+}
+
+.run-now-panel h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 /* The full list OVER the canvas, not in the flow: opening it moves nothing. */
 .editor-status-strip__list {
   position: absolute;

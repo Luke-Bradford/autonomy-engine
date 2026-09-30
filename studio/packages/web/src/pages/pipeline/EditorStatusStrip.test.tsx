@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { newestFirst } from './noticeOrder';
 
@@ -92,5 +93,21 @@ describe('EditorStatusStrip', () => {
     expect(container.querySelector('.editor-status-strip')).not.toBeNull();
     expect(container.querySelector('.notice')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('#1395 — draws a notice\'s link after its text, inside the same line', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <EditorStatusStrip
+          standing={[]}
+          transient={[
+            { key: 'run', text: 'Run started (v2).', link: { to: '/monitor/runs/r1', label: 'Open run' } },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    const notice = container.querySelector('.editor-status-strip__transient .notice');
+    expect(notice?.textContent).toBe('Run started (v2). Open run');
+    expect(screen.getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe('/monitor/runs/r1');
   });
 });

@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { Link } from 'react-router';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { newestFirst, type TransientNotice } from './noticeOrder';
 
@@ -70,6 +71,12 @@ export function EditorStatusStrip({
   const message = (n: TransientNotice & { text: string }) => (
     <p key={n.key} className="notice" role={n.role} title={n.text}>
       {n.text}
+      {n.link && (
+        <>
+          {' '}
+          <Link to={n.link.to}>{n.link.label}</Link>
+        </>
+      )}
     </p>
   );
 

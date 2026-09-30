@@ -79,7 +79,7 @@ export function HomePage() {
         {loading && error === null && <p>Loading runs…</p>}
 
         {runs !== null && runs.length === 0 && error === null && (
-          <p>No runs yet. Fire a trigger on the Triggers page to start one.</p>
+          <p>No runs yet. Press Run in a pipeline's editor, or fire a trigger, to start one.</p>
         )}
 
         {runs !== null && runs.length > 0 && (
