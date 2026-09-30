@@ -88,8 +88,15 @@ export interface RunContainerData extends Record<string, unknown> {
    */
   status: string | null;
   tone: StatusTone | null;
-  /** A container's own progress; `null` until it has started. */
+  /**
+   * A loop's or stage's own progress; `null` until it has started, and always
+   * `null` for a foreach, whose `round` is the 0-based index of the item in
+   * flight — a finished 3-item foreach would read "round 2" (#1420).
+   */
   round: number | null;
+  /** #1420 — a foreach's progress, worded (`2 of 3 items`); `null` for loop/stage
+   * and before the foreach has resolved its `items`. */
+  items: string | null;
   /** U19 — a container is a legal edge SOURCE too. Same encoding, same reason. */
   portIds: string;
   /*
@@ -245,6 +252,7 @@ export function runFlowNodes(
        accessible name reads `…, not projected`. Worth knowing before reading the
        sentence above as stronger than it is. */
     const label = status === null ? null : containerStatusLabel(status, state?.status);
+    const items = c.kind === 'foreach' ? foreachProgress(cs) : null;
     return {
       id: c.id,
       type: 'runContainer',
@@ -272,7 +280,8 @@ export function runFlowNodes(
         name,
         status: label,
         tone: status === null ? null : containerStatusTone(status, state?.status),
-        round: cs?.round ?? null,
+        round: c.kind === 'foreach' ? null : (cs?.round ?? null),
+        items,
         portIds: portIdsOf(portsOf(c.id, undefined)),
       } satisfies RunContainerData,
       ariaRole: 'group',
@@ -280,13 +289,27 @@ export function runFlowNodes(
       // `containerAriaLabel` documents — announcing an ordinal the picture does
       // not show would move the mismatch rather than close it.
       ariaLabel: showStatus
-        ? `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`
+        ? `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}` +
+          (items === null ? '' : `, ${items}`)
         : containerAriaLabel(name, rect.childCount),
     };
   });
 
   // Containers first, so a box paints BEHIND the activities it encloses.
   return [...boxes, ...activities];
+}
+
+/**
+ * #1420 — how many of a foreach's items have COMPLETED. `results` holds one entry
+ * per completed item in sequential mode, and is seeded full-length with `null`
+ * holes for the in-flight ones in parallel mode (`ContainerRunState.results`),
+ * so counting non-null entries is right for both.
+ */
+function foreachProgress(cs: RunState['containers'][string] | null): string | null {
+  if (cs?.items === undefined) return null;
+  const total = cs.items.length;
+  const done = (cs.results ?? []).filter((r) => r !== null).length;
+  return `${done} of ${total} ${total === 1 ? 'item' : 'items'}`;
 }
 
 /**

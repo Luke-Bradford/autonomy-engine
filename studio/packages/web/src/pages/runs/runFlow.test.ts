@@ -259,6 +259,67 @@ describe('runFlowNodes', () => {
     expect(box.data.round).toBe(2);
   });
 
+  /* #1420 — a foreach says how many ITEMS it has done, not its `round`, which
+     for a foreach is the 0-based index of the item in flight: a finished
+     3-file foreach read "round 2", i.e. two passes, on the operator's own run. */
+  describe('a foreach box counts items, not rounds', () => {
+    const FOREACH_DOC: RunDoc = {
+      ...CONTAINER_DOC,
+      containers: [{ id: 'stg', kind: 'foreach', children: ['a', 'b'], items: '${params.l}' }],
+    };
+    const box = (cs: RunState['containers'][string]) =>
+      runFlowNodes(FOREACH_DOC, { ...projected(), containers: { stg: cs } })[0]!;
+
+    it('sequential: completed results over the snapshotted items', () => {
+      const b = box({ status: 'active', round: 1, outputs: {}, items: [1, 2, 3], results: [{}] });
+      expect(b.data.items).toBe('1 of 3 items');
+      expect(b.data.round).toBeNull();
+      expect(b.ariaLabel).toContain('1 of 3 items');
+    });
+
+    it('parallel: null holes are items still in flight, not done', () => {
+      const b = box({
+        status: 'active',
+        round: 0,
+        outputs: {},
+        items: ['x', 'y', 'z'],
+        results: [{}, null, {}],
+        nextItem: 3,
+      });
+      expect(b.data.items).toBe('2 of 3 items');
+    });
+
+    it('finished, and singular for one item', () => {
+      expect(
+        box({ status: 'success', round: 2, outputs: {}, items: [1, 2, 3], results: [{}, {}, {}] })
+          .data.items,
+      ).toBe('3 of 3 items');
+      expect(
+        box({ status: 'success', round: 0, outputs: {}, items: [1], results: [{}] }).data.items,
+      ).toBe('1 of 1 item');
+    });
+
+    it('a failed item is not counted as done', () => {
+      const b = box({ status: 'failure', round: 1, outputs: {}, items: [1, 2, 3], results: [{}] });
+      expect(b.data.items).toBe('1 of 3 items');
+      expect(b.ariaLabel).toContain('1 of 3 items');
+    });
+
+    it('before enter there is nothing to count', () => {
+      const b = box({ status: 'pending', round: 0, outputs: {} });
+      expect(b.data.items).toBeNull();
+    });
+
+    it('a stage or loop keeps its round and has no item count', () => {
+      const stage = runFlowNodes(CONTAINER_DOC, {
+        ...projected(),
+        containers: { stg: { status: 'active', round: 2, outputs: {} } },
+      })[0]!;
+      expect(stage.data.items).toBeNull();
+      expect(stage.data.round).toBe(2);
+    });
+  });
+
   /* CX4 (#1320) — the graph words a cancelled run's leftovers as the table
      does: it reads the projection's own run status, not the page's. */
   it('says a cancelled run stopped what it left live, on the box and its accessible name', () => {

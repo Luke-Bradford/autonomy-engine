@@ -71,6 +71,9 @@ export interface SeedNode {
    * learn at fire time whether it resolves.
    */
   datasetIds?: { source: string; sink: string };
+  /** Per-dispatch overrides of each dataset's declared `parameters` (#1304) —
+   * values may be `${}` expressions, e.g. a foreach body's per-item path. */
+  datasetParams?: { source?: Record<string, unknown>; sink?: Record<string, unknown> };
   position: { x: number; y: number };
 }
 
