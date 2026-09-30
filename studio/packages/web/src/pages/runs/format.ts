@@ -11,13 +11,13 @@ export function formatWhen(ms: number | null): string {
   return ms === null ? '—' : new Date(ms).toLocaleString();
 }
 
-/** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
 /** #1394 OR3 — a count, thousands-grouped in one fixed locale so a card reads
  * the same on every machine. */
 export function formatCount(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+/** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
 export function formatElapsed(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   const totalSeconds = Math.floor(ms / 1_000);
