@@ -1924,8 +1924,7 @@ export function availableRefs(
       // child of a foreach body — plus the one FIELD that binds it on its own,
       // exactly as `scanFilterRefs` scopes it.
       itemInScope:
-        containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) ||
-        bindsOwnItem,
+        containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) || bindsOwnItem,
       itemFields: elementFieldsOf(doc.nodes, itemSource),
       offerRescued: true,
     },

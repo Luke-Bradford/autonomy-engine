@@ -435,17 +435,9 @@ function recovery(before: Record<string, unknown>, after: Container): string {
  * own `isParallelForeach`, so the line cannot disagree with what will run. A
  * value the schema refuses claims neither mode: Apply reports why.
  */
-function ForeachModeHint({
-  container,
-  batchCount,
-}: {
-  container: Container;
-  batchCount: unknown;
-}) {
+function ForeachModeHint({ container, batchCount }: { container: Container; batchCount: unknown }) {
   const text = typeof batchCount === 'string' ? batchCount.trim() : '';
-  const parsed = ContainerSchema.shape.batchCount.safeParse(
-    text === '' ? undefined : Number(text),
-  );
+  const parsed = ContainerSchema.shape.batchCount.safeParse(text === '' ? undefined : Number(text));
   if (!parsed.success) return null;
   const n = parsed.data;
   return (
