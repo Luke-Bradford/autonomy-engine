@@ -1335,7 +1335,13 @@ export function PipelineCanvas({
               by a 20-node one would stay at the first version's viewport with
               the rest culled by `onlyRenderVisibleElements`. Remounting is the
               same answer this page already gives for the editor. */}
-          <RunCanvas key={previewed.id} doc={previewed} state={null} showStatus={false} />
+          <RunCanvas
+            key={previewed.id}
+            doc={previewed}
+            state={null}
+            showStatus={false}
+            datasets={datasets}
+          />
         </div>
       )}
 

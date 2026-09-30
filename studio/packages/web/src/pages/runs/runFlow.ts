@@ -5,11 +5,13 @@ import {
   containerAriaLabel,
   containerHandles,
   containerRects,
-  unmeasuredNodeSize,
+  UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
+import { activityBadges, activitySummary, type ActivityBadge } from '../pipeline/activitySummary';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
+  nodeBoxHeight,
   portIdsOf,
   sourcePortsOf,
   usedConditionsBySource,
@@ -22,6 +24,8 @@ import {
   nodeStatusTone,
   type StatusTone,
 } from './nodeStatus';
+import { formatNodeDuration, isMeasurableSpan } from './format';
+import type { NodeActivity } from './runSummary';
 
 /**
  * U11 — the doc + run state → React Flow arrays, as PURE functions.
@@ -66,6 +70,104 @@ export interface RunNodeData extends Record<string, unknown> {
    * cannot tell them which of the two absences they are looking at.
    */
   showStatus: boolean;
+  /**
+   * #1394 OR3 — the authoring card's content: type (for the glyph), what the
+   * step does, and its policy badges. A fact of the VERSION, so it is built once
+   * per doc (`runCards`) and carried by reference: `sameRenderedData` compares
+   * with `Object.is`, and a fresh object per event would re-render every node.
+   */
+  card: RunCard;
+  /**
+   * #1394 OR3 — what this run measured on the node, worded (`1.2s · 3 rows`),
+   * or `null` when nothing is on record. A primitive for the same `Object.is`
+   * reason `portIds` is one.
+   */
+  facts: string | null;
+}
+
+/** The version-derived half of a run card — see `RunNodeData.card`. */
+export interface RunCard {
+  type: string;
+  summary: string | null;
+  badges: readonly ActivityBadge[];
+}
+
+/**
+ * Every node's card, built ONCE per doc. The caller memoizes the result (on the
+ * doc and its dataset names) so each card keeps its identity across run events.
+ */
+export function runCards(
+  doc: RunDoc,
+  datasetName: (id: string) => string | undefined = () => undefined,
+): Map<string, RunCard> {
+  return new Map(
+    doc.nodes.map((n) => [
+      n.id,
+      { type: n.type, summary: activitySummary(n, datasetName), badges: activityBadges(n) },
+    ]),
+  );
+}
+
+/**
+ * #1394 OR3 — the numbers a run card shows under its status: the settled
+ * duration and, for a node that declares them (Copy Data), the rows it wrote.
+ *
+ * Only what was MEASURED. An open span has no duration yet (the node table
+ * counts that one up live), and `formatNodeDuration`'s em-dash is the table's
+ * way of saying so in a cell — on a card the absence is simply nothing. Rows come
+ * from the node's recorded DECLARED outputs, so a node that never reported them
+ * shows none rather than `0 rows`.
+ */
+export function runNodeFacts(activity: NodeActivity | undefined): string | null {
+  if (activity === undefined) return null;
+  const parts: string[] = [];
+  if (isMeasurableSpan(activity)) parts.push(formatNodeDuration(activity));
+  const out = activity.outputValues;
+  const written = out?.['rowsWritten'];
+  if (isCount(written)) {
+    parts.push(`${formatCount(written)} ${written === 1 ? 'row' : 'rows'}`);
+    const failed = out?.['rowsFailed'];
+    if (isCount(failed) && failed > 0) parts.push(`${formatCount(failed)} failed`);
+  }
+  return parts.length === 0 ? null : parts.join(' · ');
+}
+
+/** A recorded output is `unknown`: only a whole, non-negative number is a count. */
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** Thousands-grouped, in one fixed locale so a card reads the same everywhere. */
+function formatCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+/**
+ * #1394 OR3 — a run card's height. FIXED rather than measured-then-grown: this
+ * view never measures anything, so the container boxes around the cards are
+ * drawn from this same number (`runFlowNodes`), and a card taller than it would
+ * poke out of its box. It fits a two-line name, the summary row and the status
+ * row; the name is clamped to two lines, so nothing can make the card taller.
+ */
+export const RUN_NODE_BASE_HEIGHT = 104;
+
+export function runNodeHeight(portCount: number): number {
+  return Math.max(RUN_NODE_BASE_HEIGHT, nodeBoxHeight(portCount));
+}
+
+/**
+ * The cards `runFlowNodes` falls back to when the caller passes none — cached
+ * per doc so repeated calls still hand out the SAME card objects, which is what
+ * keeps `mergeRunNodes`' identity check meaningful on that path too.
+ */
+const defaultCards = new WeakMap<RunDoc, Map<string, RunCard>>();
+function defaultCardsOf(doc: RunDoc): Map<string, RunCard> {
+  let cards = defaultCards.get(doc);
+  if (cards === undefined) {
+    cards = runCards(doc);
+    defaultCards.set(doc, cards);
+  }
+  return cards;
 }
 
 export interface RunContainerData extends Record<string, unknown> {
@@ -119,6 +221,14 @@ export interface RunFlowOptions {
    * folded yet still owes the operator "not projected".
    */
   showStatus?: boolean;
+  /**
+   * #1394 OR3 — each node's card, from `runCards`. Pass a MEMOIZED map: absent,
+   * a per-doc cache stands in, without dataset names.
+   */
+  cards?: ReadonlyMap<string, RunCard>;
+  /** #1394 OR3 — the page's per-node activity rows, keyed by doc node id, for
+   * `runNodeFacts`. Absent on a view with no run behind it. */
+  activity?: ReadonlyMap<string, NodeActivity>;
 }
 
 /** What a node says when the run has no state for it. */
@@ -142,6 +252,7 @@ export function runFlowNodes(
   options: RunFlowOptions = {},
 ): FlowNode[] {
   const showStatus = options.showStatus ?? true;
+  const cards = options.cards ?? defaultCardsOf(doc);
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
      would otherwise be two boxes reading "HTTP Request", in the view whose job
@@ -195,6 +306,9 @@ export function runFlowNodes(
         tone: status === null ? null : nodeStatusTone(status, state?.status),
         showStatus,
         portIds: portIdsOf(portsOf(n.id, n)),
+        // Unreachable fallback: `runCards` is built from this very array.
+        card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
+        facts: showStatus ? runNodeFacts(options.activity?.get(n.id)) : null,
       } satisfies RunNodeData,
       ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };
@@ -222,7 +336,10 @@ export function runFlowNodes(
         {
           x: n.position.x,
           y: n.position.y,
-          ...unmeasuredNodeSize(portCounts.get(n.id) ?? 0),
+          width: UNMEASURED_NODE_SIZE.width,
+          // #1394 OR3 — the card's own fixed height, not the author canvas's
+          // unmeasured guess: see `RUN_NODE_BASE_HEIGHT`.
+          height: runNodeHeight(portCounts.get(n.id) ?? 0),
         },
       ]),
     ),

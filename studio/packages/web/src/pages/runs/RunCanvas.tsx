@@ -11,16 +11,21 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import type { RunState } from '@autonomy-studio/shared';
+import type { Dataset, RunState } from '@autonomy-studio/shared';
+import { ActivityCardBody } from '../pipeline/ActivityCardBody';
+import { datasetNameLookup } from '../pipeline/activitySummary';
+import type { NodeActivity } from './runSummary';
 import { EdgeMarkers } from '../pipeline/EdgeMarkers';
-import { nodeBoxHeight, portsFromIds, TARGET_PORT_ID } from '../pipeline/ports';
+import { portsFromIds, TARGET_PORT_ID } from '../pipeline/ports';
 import { SourcePorts } from '../pipeline/SourcePorts';
 import { FIT_VIEW_OPTIONS } from '../pipeline/containerLayout';
 import {
   mergeRunNodes,
   NO_STATUS_LABEL,
+  runCards,
   runFlowEdges,
   runFlowNodes,
+  runNodeHeight,
   toneClass,
   type RunContainerData,
   type RunDoc,
@@ -81,16 +86,29 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   return (
     <div
       className={`flow-node run-node${toneClass('run-node', d.tone)}`}
-      style={{ minHeight: nodeBoxHeight(ports.length) }}
+      style={{ minHeight: runNodeHeight(ports.length) }}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <strong>{d.title}</strong>
+      <span className="run-node-card">
+        <ActivityCardBody
+          type={d.card.type}
+          title={d.title}
+          summary={d.card.summary}
+          badges={d.card.badges}
+        />
+      </span>
       {/* #903 — no run behind this view means no status line at all, rather
           than the "not projected" that a null `status` means when there IS a
           run. The two absences are different facts and only `data` can tell
           them apart here. */}
       {d.showStatus && (
-        <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
+        <span className="run-node-foot">
+          <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
+          {/* #1394 OR3 — the duration and rows this run measured, beside the
+              word rather than inside it: the status span's text is the U25
+              vocabulary the node table shares, and stays exactly that. */}
+          {d.facts !== null && <span className="run-node-facts">{d.facts}</span>}
+        </span>
       )}
       <SourcePorts ports={ports} />
     </div>
@@ -140,6 +158,15 @@ export interface RunCanvasProps {
    * exist.
    */
   showStatus?: boolean;
+  /**
+   * #1394 OR3 — the page's per-node activity rows (`deriveNodeActivity`, as
+   * reconciled), for each card's duration and row count. Absent on a view with
+   * no run behind it.
+   */
+  activity?: readonly NodeActivity[];
+  /** #1394 OR3 — the workspace's datasets, so a Copy card can name its source
+   * and sink rather than reading "a dataset". */
+  datasets?: readonly Dataset[];
 }
 
 /**
@@ -156,7 +183,7 @@ export interface RunCanvasProps {
  * read-only version preview makes too, and `loadVersion` dropping edges is
  * exactly what a version preview must not do.
  */
-export function RunCanvas({ doc, state, showStatus = true }: RunCanvasProps) {
+export function RunCanvas({ doc, state, showStatus = true, activity, datasets }: RunCanvasProps) {
   /* React Flow owns the VIEW array so it can attach and KEEP each node's
      measured dimensions across renders — the author canvas holds them the same
      way, and for the same reason. `onNodesChange` is wired for that alone: with
@@ -165,9 +192,19 @@ export function RunCanvas({ doc, state, showStatus = true }: RunCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const edges = useMemo(() => runFlowEdges(doc), [doc]);
 
+  /* Built once per doc and dataset list, so each card keeps its identity across
+     run events and `mergeRunNodes` still sees an unchanged node as unchanged. */
+  const cards = useMemo(() => runCards(doc, datasetNameLookup(datasets ?? [])), [doc, datasets]);
+  const activityById = useMemo(
+    () => (activity === undefined ? undefined : new Map(activity.map((a) => [a.nodeId, a]))),
+    [activity],
+  );
+
   useEffect(() => {
-    setNodes((prev) => mergeRunNodes(prev, runFlowNodes(doc, state, { showStatus })));
-  }, [doc, state, showStatus, setNodes]);
+    setNodes((prev) =>
+      mergeRunNodes(prev, runFlowNodes(doc, state, { showStatus, cards, activity: activityById })),
+    );
+  }, [doc, state, showStatus, cards, activityById, setNodes]);
 
   return (
     <div className="run-canvas" data-testid="run-canvas">

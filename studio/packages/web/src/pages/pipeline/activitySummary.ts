@@ -202,3 +202,15 @@ function joined(parts: (string | undefined)[], sep = ' · '): string | null {
   const present = parts.filter((p): p is string => p !== undefined);
   return present.length === 0 ? null : present.join(sep);
 }
+
+/**
+ * #1394 OR3 — the dataset-name lookup `activitySummary` takes, from the
+ * workspace's dataset list. One home for it: the authoring canvas and the run
+ * canvas both build one.
+ */
+export function datasetNameLookup(
+  datasets: readonly { id: string; name: string }[],
+): (id: string) => string | undefined {
+  const names = new Map(datasets.map((d) => [d.id, d.name]));
+  return (id) => names.get(id);
+}

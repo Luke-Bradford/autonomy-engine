@@ -18,12 +18,20 @@ export interface UiState {
   paneCollapsed: boolean;
   setPaneWidth: (width: number) => void;
   setPaneCollapsed: (collapsed: boolean) => void;
+  /**
+   * #1394 OR3 — whether the authoring canvas's MiniMap is folded away. One
+   * preference for every pipeline: it is about the operator's screen, not the
+   * graph.
+   */
+  minimapHidden: boolean;
+  setMinimapHidden: (hidden: boolean) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
 
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
+export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -119,6 +127,10 @@ function parseThemeMode(raw: string): ThemeMode | undefined {
   return raw === 'light' || raw === 'dark' ? raw : undefined;
 }
 
+function parseBoolean(raw: string): boolean | undefined {
+  return raw === 'true' ? true : raw === 'false' ? false : undefined;
+}
+
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
   width: number;
@@ -186,6 +198,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setPaneCollapsed: (paneCollapsed) => {
         persistPane({ width: get().paneWidth, collapsed: paneCollapsed });
         set({ paneCollapsed });
+      },
+
+      minimapHidden: readStored(storage, MINIMAP_STORAGE_KEY, parseBoolean, false),
+      setMinimapHidden: (minimapHidden) => {
+        writeStored(storage, MINIMAP_STORAGE_KEY, String(minimapHidden));
+        set({ minimapHidden });
       },
     };
   });
