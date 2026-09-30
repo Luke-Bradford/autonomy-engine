@@ -759,9 +759,12 @@ describe('containerAtPoint (#1420) — which box a dragged activity was dropped 
     height,
     childCount: 1,
   });
+  // The small box FIRST, so neither "first match" nor "last match" can pass
+  // the smallest-wins case by iteration order alone.
   const boxes = new Map([
-    ['big', box(0, 0, 1000, 1000)],
     ['small', box(100, 100, 200, 200)],
+    ['big', box(0, 0, 1000, 1000)],
+    ['huge', box(-10, -10, 2000, 2000)],
   ]);
 
   it('returns the SMALLEST box containing the point', () => {
@@ -774,7 +777,7 @@ describe('containerAtPoint (#1420) — which box a dragged activity was dropped 
   });
 
   it('returns null outside every box, and on the edge counts as inside', () => {
-    expect(containerAtPoint(boxes, { x: 1001, y: 5 }, null)).toBeNull();
+    expect(containerAtPoint(boxes, { x: 2500, y: 5 }, null)).toBeNull();
     expect(containerAtPoint(boxes, { x: 1000, y: 1000 }, null)).toBe('big');
   });
 });

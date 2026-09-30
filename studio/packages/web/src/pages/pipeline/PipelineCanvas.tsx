@@ -2106,16 +2106,17 @@ function ConditionChoice({
 }
 
 /**
- * U6d — the selected activity's container membership, and the one gesture that
- * CREATES a container.
+ * U6d — the selected activity's container membership, and the gesture that
+ * wraps an EXISTING activity in a new container (#1420 added the palette's
+ * empty-box path beside it).
  *
  * Membership lives on the container (`children: string[]`), but disjointness
  * makes it a per-NODE fact, which is why one `<select>` on the node is the whole
  * control: picking a container joins it, picking `— none —` leaves, and "New
  * container" is the same act against a container that does not exist yet. There
- * is no multi-select to group N nodes at once (U21), and no drop target to drag
- * one in (U23) — a derived box only HINTS at enclosure until React Flow
- * `parentId` subflows make it authoritative.
+ * is no multi-select to group N nodes at once (U21). Dragging a node INTO a
+ * box joins it since #1420 (`FlowCanvas`'s drag-stop hit test); dragging one
+ * OUT is still this select, because a derived box grows with its dragged child.
  *
  * A container is created around the SELECTED node rather than empty, which is
  * what keeps a `loop`/`foreach` past its one-child rule the moment it exists.

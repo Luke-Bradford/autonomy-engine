@@ -1224,8 +1224,9 @@ export function FlowCanvas({
            cannot be RF-selected. U23 gave the box its own CONFIG panel without
            relaxing this line: the ⚙ writes the store's `Selection` directly, so
            a container is selectable in the STORE's sense and not in RF's, which
-           is the whole point. DRAGGING one in, and the RF `parentId` mapping that
-           would make a container draggable as a group, is still U23's part 2. */
+           is the whole point. Dragging a NODE in (#1420) is a drag-stop hit test
+           against the derived boxes, not RF's `parentId`; the mapping that would
+           make a container draggable as a group is still U23's part 2. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
