@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { FireOutcomeSchema, FireRequestSchema, FireResultSchema } from './fire-result.js';
+import {
+  FireOutcomeSchema,
+  FireRequestSchema,
+  FireResultSchema,
+  ManualRunRequestSchema,
+} from './fire-result.js';
 
 describe('FireOutcomeSchema', () => {
   it('accepts the three launcher outcomes', () => {
@@ -66,5 +71,23 @@ describe('FireRequestSchema (run-now override — #5 S12b + #547)', () => {
     expect(() => FireRequestSchema.parse({ params: { cfg: { deep: [Number.NaN] } } })).toThrow(
       /non-finite number refused/,
     );
+  });
+});
+
+describe("ManualRunRequestSchema (#1395 — the editor's Run)", () => {
+  it('needs the version it runs; params are optional', () => {
+    expect(ManualRunRequestSchema.safeParse({ pipelineVersionId: 'pv_1' }).success).toBe(true);
+    expect(ManualRunRequestSchema.safeParse({}).success).toBe(false);
+    expect(ManualRunRequestSchema.safeParse({ pipelineVersionId: '' }).success).toBe(false);
+  });
+
+  it('refuses a non-finite number in params, as a trigger fire does', () => {
+    expect(
+      ManualRunRequestSchema.safeParse({ pipelineVersionId: 'pv_1', params: { n: Infinity } })
+        .success,
+    ).toBe(false);
+    expect(
+      ManualRunRequestSchema.safeParse({ pipelineVersionId: 'pv_1', params: { n: 1 } }).success,
+    ).toBe(true);
   });
 });

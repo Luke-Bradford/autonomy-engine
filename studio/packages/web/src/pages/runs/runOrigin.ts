@@ -119,3 +119,10 @@ export function filterRunsByTab<T extends Pick<Run, 'triggerId' | 'parentRunId'>
 export function isRunTab(value: unknown): value is RunTab {
   return typeof value === 'string' && (RUN_TABS as readonly string[]).includes(value);
 }
+
+/**
+ * What an empty run list says. One string, because the Runs page and Home both
+ * show it, and it names every way a run starts (#1395 added the editor's Run).
+ */
+export const NO_RUNS_YET =
+  "No runs yet. Press Run in a pipeline's editor, or fire a trigger, to start one.";

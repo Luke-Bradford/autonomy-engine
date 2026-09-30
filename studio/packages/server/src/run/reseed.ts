@@ -51,7 +51,8 @@ import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
  * CONSCIOUS NON-GOAL (RS2): a rerun drives immediately and does NOT pass through
  * the launcher's concurrency admission (`launcher.ts`) — an explicit operator
  * rerun is not gated by the trigger/pipeline caps that bound AUTOMATED fires.
- * Routing reruns through admission is a later refinement, not a defect.
+ * Routing reruns through admission is a later refinement, not a defect. (The
+ * editor's Run, `launcher.runNow` — #1395 — IS capped, and says why.)
  */
 export interface ReseedService {
   /**

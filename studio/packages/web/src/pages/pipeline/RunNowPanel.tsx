@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import type { Param, PipelineVersion } from '@autonomy-studio/shared';
 import { messageOf } from '../../api/client';
@@ -18,27 +18,35 @@ import { buildRunNowParams, runNowRows } from './runNowRules';
 export function RunNowPanel({
   pipelineId,
   version,
+  dirty,
   onStarted,
   onClose,
 }: {
   pipelineId: string;
   version: PipelineVersion;
+  /** The canvas holds edits not in `version`: said in the form, not only in a tooltip. */
+  dirty: boolean;
   onStarted: (runId: string) => void;
   onClose: () => void;
 }) {
   const [rows, setRows] = useState(() => runNowRows(version.params));
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // A ref, not `starting`: two submits in one tick (Enter held, a double click)
+  // both read the same stale state, and each would start a run.
+  const inFlight = useRef(false);
   const heading = `Run v${String(version.version)}`;
 
   async function onStart(e: FormEvent) {
     e.preventDefault();
+    if (inFlight.current) return;
     const built = buildRunNowParams(rows, version.params);
     if (!built.ok) {
       setError(built.error);
       return;
     }
     setError(null);
+    inFlight.current = true;
     setStarting(true);
     try {
       const result = await runPipelineVersion(pipelineId, {
@@ -53,6 +61,7 @@ export function RunNowPanel({
     } catch (err) {
       setError(messageOf(err));
     } finally {
+      inFlight.current = false;
       setStarting(false);
     }
   }
@@ -72,6 +81,11 @@ export function RunNowPanel({
       onKeyDown={onKeyDown}
     >
       <h3>{heading}</h3>
+      {dirty && (
+        <p className="page-hint">
+          This runs the saved v{String(version.version)}. Your unsaved edits are not included.
+        </p>
+      )}
       {version.params.length === 0 ? (
         <p className="page-hint">This pipeline takes no parameters.</p>
       ) : (

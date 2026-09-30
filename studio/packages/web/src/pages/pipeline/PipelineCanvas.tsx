@@ -226,8 +226,10 @@ export function PipelineCanvas({
   const unsavedId = useId();
   const saveReasonId = useId();
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  // #1395 OR4 — the Run form's open state, and the last run it started (its
-  // notice links to the run page until the live overlay lands on this canvas).
+  // #1395 OR4 — the Run form's open state, and the last run it started. Its
+  // notice links to the run page, and stays until the next press of Run — the
+  // save line's rule — so the link is there for as long as it is wanted. Slice 2
+  // of #1395 puts the live run on this canvas instead.
   const [runOpen, setRunOpen] = useState(false);
   const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
@@ -704,6 +706,10 @@ export function PipelineCanvas({
     headVersion,
     previewing: previewing !== null,
   });
+  // A refusal arriving (a preview opened, the pipeline archived) CLOSES the Run
+  // form rather than hiding it, so it does not spring back open with reset
+  // values when the refusal lifts. Render-phase, like `EditorStatusStrip`'s.
+  if (runOpen && runReason !== null) setRunOpen(false);
 
   /**
    * Save the working graph as a new version, based on `basedOnVersionId`.
@@ -1172,7 +1178,12 @@ export function PipelineCanvas({
               aria-expanded={runOpen}
               disabled={runReason !== null}
               title={runReason ?? (headVersion !== null ? runTitle(headVersion, dirty) : undefined)}
-              onClick={() => setRunOpen((o) => !o)}
+              onClick={() => {
+                // Like every save opening with `setSaveMsg(null)`: the next Run
+                // owns the notice, so it always describes the latest run.
+                setRunStarted(null);
+                setRunOpen((o) => !o);
+              }}
             >
               <span aria-hidden="true">▶ </span>Run
             </button>
@@ -1181,6 +1192,7 @@ export function PipelineCanvas({
                 key={head.id}
                 pipelineId={pipelineId}
                 version={head}
+                dirty={dirty}
                 onClose={() => setRunOpen(false)}
                 onStarted={(runId) => {
                   setRunOpen(false);

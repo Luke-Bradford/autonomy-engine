@@ -22,9 +22,15 @@ const version = {
   catalogVersion: CATALOG_VERSION,
 } as unknown as PipelineVersion;
 
-function panel(onStarted = vi.fn(), onClose = vi.fn()) {
+function panel(onStarted = vi.fn(), onClose = vi.fn(), v = version, dirty = false) {
   render(
-    <RunNowPanel pipelineId="p_1" version={version} onStarted={onStarted} onClose={onClose} />,
+    <RunNowPanel
+      pipelineId="p_1"
+      version={v}
+      dirty={dirty}
+      onStarted={onStarted}
+      onClose={onClose}
+    />,
   );
   return { onStarted, onClose };
 }
@@ -78,5 +84,55 @@ describe('RunNowPanel (#1395 OR4)', () => {
     fireEvent.keyDown(screen.getByLabelText('city'), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('says in the form, when the canvas has unsaved edits, that they are not included', () => {
+    panel(vi.fn(), vi.fn(), version, true);
+    expect(screen.getByText(/Your unsaved edits are not included/)).toHaveTextContent(
+      'This runs the saved v4. Your unsaved edits are not included.',
+    );
+  });
+
+  it('says nothing about unsaved edits when there are none', () => {
+    panel();
+    expect(screen.queryByText(/unsaved edits/)).toBeNull();
+  });
+
+  it('offers a boolean as a choice and json as a text area, and sends them typed', async () => {
+    runPipelineVersion.mockResolvedValue({ outcome: 'started', runId: 'run_1' });
+    const typed = {
+      ...version,
+      params: [
+        { name: 'dry', type: 'boolean', required: false, default: false },
+        { name: 'opts', type: 'json', required: false },
+      ],
+    } as unknown as PipelineVersion;
+    const { onStarted } = panel(vi.fn(), vi.fn(), typed);
+    const dry = screen.getByLabelText('dry');
+    const opts = screen.getByLabelText('opts');
+    expect(dry.tagName).toBe('SELECT');
+    expect(opts.tagName).toBe('TEXTAREA');
+    fireEvent.change(dry, { target: { value: 'true' } });
+    fireEvent.change(opts, { target: { value: '{"a":1}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+    await waitFor(() => expect(onStarted).toHaveBeenCalled());
+    expect(runPipelineVersion).toHaveBeenCalledWith('p_1', {
+      pipelineVersionId: 'pv_1',
+      params: { dry: true, opts: { a: 1 } },
+    });
+  });
+
+  it('starts ONE run for two submits in the same tick', async () => {
+    let resolve: (v: unknown) => void = () => undefined;
+    runPipelineVersion.mockReturnValue(new Promise((r) => (resolve = r)));
+    panel();
+    fireEvent.change(screen.getByLabelText('count'), { target: { value: '1' } });
+    const start = screen.getByRole('button', { name: 'Start run' });
+    fireEvent.click(start);
+    fireEvent.submit(start.closest('form')!);
+    // Both submits reach the request synchronously, so a second call would be here now.
+    expect(runPipelineVersion).toHaveBeenCalledTimes(1);
+    resolve({ outcome: 'started', runId: 'run_1' });
+    await waitFor(() => expect(start).not.toBeDisabled());
   });
 });

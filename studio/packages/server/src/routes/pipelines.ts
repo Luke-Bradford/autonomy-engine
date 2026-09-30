@@ -34,6 +34,7 @@ import {
 } from '../repo/index.js';
 import { BadRequestError, NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
 import { GlobalStartError, resolveRunGlobals } from '../run/globals.js';
+import { ArchivedPipelineError } from '../run/launcher.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportPipeline } from '../portability/index.js';
 
@@ -453,7 +454,9 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
    *    typed the value, so a 400 naming the param is the useful answer.
    *    `resolveRunParams` is pure and never echoes a secret's value;
    *  - the globals the version reads resolve (the fire route's GL3 pre-check);
-   *  - the launcher's dispatch gates: archived → 409, cap → skipped.
+   *  - the pipeline is not archived (409) — ahead of the params, as `fire()`
+   *    orders it, so the refusal the operator can act on is the one they see;
+   *  - the launcher's dispatch gates: archived again, and the cap → skipped.
    */
   fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/runs', async (request, reply) => {
     const pipeline = requireOwned(
@@ -466,6 +469,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     const version = getPipelineVersion(db, body.pipelineVersionId);
     if (version === null || version.pipelineId !== pipeline.id) {
       throw new NotFoundError('pipeline version', body.pipelineVersionId);
+    }
+    // Archived first, as `fire()` orders it: it is the refusal the operator can
+    // act on, so a bad param must not mask it. The launcher checks again at
+    // dispatch.
+    if (pipeline.archived) {
+      throw new ArchivedPipelineError(null, pipeline.id);
     }
     const params = body.params ?? {};
     try {

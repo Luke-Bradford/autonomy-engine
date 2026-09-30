@@ -29,6 +29,7 @@ import {
   RUN_SINCE_OPTIONS,
 } from './runFilters';
 import {
+  NO_RUNS_YET,
   filterRunsByTab,
   isRunTab,
   RUN_TAB_HINT,
@@ -512,7 +513,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           "none MATCH" sends them to the Clear control right above, and saying
           the first when the second is true is simply false. */}
       {runs !== null && runs.length === 0 && pageError === null && !filtered && (
-        <p>No runs yet. Press Run in a pipeline's editor, or fire a trigger, to start one.</p>
+        <p>{NO_RUNS_YET}</p>
       )}
       {runs !== null && runs.length === 0 && pageError === null && filtered && (
         <p>No runs match these filters. Widen them, or clear them, to see more.</p>

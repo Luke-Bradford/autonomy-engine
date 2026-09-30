@@ -184,9 +184,15 @@ export interface RunLauncher {
    * launcher skips, an archived pipeline throws `ArchivedPipelineError`, and a
    * pipeline at its `concurrency` cap SKIPS with the cap in the reason. It never
    * queues: the queue drain is keyed by trigger, so a trigger-less `queued` row
-   * would never be admitted. Unlike a rerun (`reseed.ts`), which follows a run
-   * that has already given its slot back, this adds a run to the pipeline, so the
-   * operator's own cap binds it.
+   * would never be admitted.
+   *
+   * A DELIBERATE difference from RS2's rerun, which `reseed.ts` leaves uncapped
+   * as a conscious non-goal: both are explicit operator acts, but a rerun resumes
+   * a run that has already ended, while this adds a brand-new one, and the cap is
+   * the operator's own statement of how many may run at once. Like `fire()`'s
+   * `parallel` path, it does not yield to fires already QUEUED for the pipeline:
+   * a slot that frees is taken by whichever arrives first, and the queue drains
+   * again when this run settles.
    *
    * The caller validates `params` against the version first; this does not.
    */
