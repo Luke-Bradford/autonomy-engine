@@ -2400,7 +2400,9 @@ export function FlowCanvas({
           style={{ width: 160, height: 120 }}
           nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
         />
-        <Controls />
+        {/* The Fit button is a fit too — capped with the mount-time fit, or one
+            press would undo it (#1394 OR3). */}
+        <Controls fitViewOptions={FIT_VIEW_OPTIONS} />
         {routing !== null && (
           /* #788 — see `routing` above. NOT a live region, and that is
              deliberate. The page already runs TWO polite regions — the toolbox's

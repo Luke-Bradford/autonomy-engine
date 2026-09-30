@@ -199,7 +199,7 @@ export function RunCanvas({ doc, state, showStatus = true }: RunCanvasProps) {
           {/* `showInteractive={false}` removes the lock toggle — it flips
               `nodesDraggable`/`elementsSelectable` back ON, which would undo
               every line above from the UI. */}
-          <Controls showInteractive={false} />
+          <Controls showInteractive={false} fitViewOptions={FIT_VIEW_OPTIONS} />
         </ReactFlow>
       </ReactFlowProvider>
     </div>

@@ -1798,15 +1798,17 @@ td button + button {
   font-weight: 600;
 }
 
-/* The summary row is RESERVED — `min-height` holds it when there is nothing to
-   say yet — so filling in a node's first field never resizes its box (the OR2
-   rule: the editor does not shift when you edit). The badges share the row
-   rather than adding one, for the same reason. */
+/* The summary row is RESERVED at a FIXED height — drawn when there is nothing
+   to say yet, and no taller when there is — so filling in a node's first field
+   never resizes its box (the OR2 rule: the editor does not shift when you
+   edit). A `min-height` was not enough: the text's own line box came out 2px
+   taller than it. The badges share the row rather than adding one. */
 .flow-node-meta {
   display: flex;
   align-items: center;
   gap: 0.3rem;
-  min-height: 1.1rem;
+  height: 1.25rem;
+  line-height: 1.25rem;
   color: var(--muted);
   font-size: 0.72rem;
 }
