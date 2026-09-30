@@ -126,7 +126,7 @@ export function PolicyEditor({
         </p>
       )}
       {/* Plain visible text, not a live region: recomputed state that changes as
-          the author edits, and the canvas's own badge list already announces the
+          the author edits, and the dock header's status line already announces the
           save being blocked (#1249's one-announcer concern). */}
       {issues.length > 0 && (
         <ul className="contract-advisory">

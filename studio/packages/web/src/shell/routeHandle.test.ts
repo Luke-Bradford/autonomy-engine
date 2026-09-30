@@ -194,6 +194,10 @@ describe('documentTitle', () => {
     expect(documentTitle([{ label: 'Home', to: '/' }])).toBe('Home — autonomy studio');
   });
 
+  it('leads with a dot while the page holds unsaved work (#1393)', () => {
+    expect(documentTitle([{ label: 'Home', to: '/' }], true)).toBe('• Home — autonomy studio');
+  });
+
   it('falls back to the app name with no crumbs at all', () => {
     expect(documentTitle([])).toBe('autonomy studio');
   });

@@ -137,6 +137,8 @@ import {
   type ActiveVersionState,
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
+import { EditorStatusStrip } from './EditorStatusStrip';
+import { useShellUnsaved } from '../../shell/shellLabel';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
 
@@ -213,6 +215,13 @@ export function PipelineCanvas({
   // #852 — the property dock can be folded away to give the canvas the height.
   const [dockOpen, setDockOpen] = useState(true);
   const dockBodyId = useId();
+  /* #1393 — the Problems column beside the properties. Open by default, and
+     present while open whether or not anything is wrong, so an issue arriving
+     never narrows the properties it sits beside. */
+  const [problemsOpen, setProblemsOpen] = useState(true);
+  const problemsId = useId();
+  const unsavedId = useId();
+  const saveReasonId = useId();
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
@@ -573,6 +582,8 @@ export function PipelineCanvas({
   const description = useStore(store, (s) => s.description);
   const annotations = useStore(store, (s) => s.annotations);
   const dirty = useStore(store, (s) => s.dirty);
+  // #1393 — and the tab title carries it, for the operator who tabs away.
+  useShellUnsaved(dirty);
   // #852 — read by the folded dock's toggle, so a selection made while the
   // properties are folded away still gets a visible answer.
   const selectedCount = useStore(store, (s) => s.selected.length);
@@ -1110,9 +1121,35 @@ export function PipelineCanvas({
                — is stated once in `saveDisabledReason`. */
             disabled={saveReason !== null}
             title={saveReason ?? undefined}
+            /* Both, by id: a present `aria-describedby` REPLACES `title` as the
+               description, so naming only the dirty note would silence the
+               refusal reason on the case that has both — the usual one. */
+            aria-describedby={
+              [dirty ? unsavedId : null, saveReason !== null ? saveReasonId : null]
+                .filter((id) => id !== null)
+                .join(' ') || undefined
+            }
           >
             {saving ? 'Saving…' : 'Save version'}
+            {/* #1393 — the dirty state is this dot, not a paragraph under the
+                canvas that shrank it on the first edit. Always rendered and
+                hidden by `visibility`, so the button does not widen when it
+                appears. Out of the accessible NAME ("Save version" stays
+                stable); the description carries it. */}
+            <span className="dirty-dot" aria-hidden="true" data-dirty={dirty}>
+              •
+            </span>
           </button>
+          {dirty && (
+            <span id={unsavedId} className="visually-hidden">
+              Unsaved changes
+            </span>
+          )}
+          {saveReason !== null && (
+            <span id={saveReasonId} className="visually-hidden">
+              {saveReason}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1125,120 +1162,123 @@ export function PipelineCanvas({
           them: this is a standing FACT about the pipeline that must be acted
           on, not a message about the last thing that happened — and it carries
           the act that resolves it. */}
-      {archived && (
-        <div className="notice-conflict" role="alert">
-          {/* The trailing clause is the SHARED constant, not a second copy:
+      {/* #1393 — every notice lives in ONE fixed-height strip, so none of them
+          resizes the canvas by arriving or leaving. The standing ones keep their
+          role, class and buttons unchanged; only where they are drawn moved.
+          Order is priority, but at most one of them can hold at a time: an
+          archived pipeline's save is refused before it can conflict, and a
+          failed load has nothing to save. */}
+      <EditorStatusStrip
+        standing={[
+          archived && {
+            key: 'archived',
+            node: (
+              <div className="notice-conflict" role="alert">
+                {/* The trailing clause is the SHARED constant, not a second copy:
               the pipelines-list archive confirmation (#1058) states the same
               contract, and two hand-written copies would drift. */}
-          <p>
-            This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
-            {TRIGGERS_STAY_DISABLED_NOTE}.
-          </p>
-          {unarchiveError !== null && <p>Unarchive failed: {unarchiveError}</p>}
-          <div className="form-actions">
-            <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
-              {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {saveMsg && <p className="notice">{saveMsg}</p>}
-      {/* `role="status"` so a keyboard-driven copy/paste — which changes
-          nothing an operator is looking at — is still announced. */}
-      {canvasMsg && (
-        <p className="notice" role="status">
-          {canvasMsg}
-        </p>
-      )}
-
-      {/* #904 — a refused save. `role="alert"` because it is the ONE save
-          outcome that is not self-explanatory and that the operator must act
-          on: unannounced, the Save button simply appears to have done nothing.
-          Distinct from the `.notice` above rather than folded into it, because
-          this one carries the two acts that resolve it. */}
-      {conflict && (
-        <div className="notice-conflict" role="alert">
-          <p>{describeSaveConflict(conflict.version)}</p>
-          <div className="form-actions">
-            <button
-              type="button"
-              onClick={() => {
-                // Show them the version that landed, in the surface that
-                // already exists for it (#903) — a prose pointer to a panel
-                // they then have to find is not the same thing.
-                setHistoryOpen(true);
-                setPreviewing(conflict.version);
-              }}
-              // The same lock every other route into the preview carries: this
-              // is a fourth one, and the reported bug was precisely a route
-              // nobody had enumerated.
-              disabled={previewLocked}
-              // The NAMED reason, not a second hardcoded sentence: this button
-              // is locked by `restoring` too, and a fixed "Saving…" would be
-              // flatly wrong on that arm — reachable, and walked by the e2e.
-              title={historyDisabledReason ?? undefined}
-            >
-              {`Preview v${String(conflict.version)}`}
-            </button>
-            <button
-              type="button"
-              // Re-declares the CAS basis as the head that refused us — an
-              // informed assertion, not a bypass. If a THIRD save has landed in
-              // the meantime, this is refused again and lands right back here
-              // with the newer head, which is the correct behaviour and not a
-              // loop to be short-circuited.
-              onClick={() => void saveWith(conflict.id)}
-              // EXACTLY the Save button's gate, from the same expression — not a
-              // second one written to match. Two of its terms are load-bearing
-              // here. `previewing`, because this writes the WORKING graph, which
-              // is not what is on screen while a version is previewed, so the
-              // one route this banner offers would otherwise mint a version of
-              // something the operator cannot see. And `issues` (#1141), because
-              // this button used to be the ONE save path that escaped the badge
-              // gate: an author who hit the 409, then edited the doc into an
-              // invalid state, found Save dead and this one alive, and clicking
-              // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
-              // before the request was even made. Refusing here is not a new
-              // refusal — the write was always going to be refused; it is the
-              // refusal finally being stated where the author can read it.
-              //
-              // It cannot dead-end them, and that is worth saying because it is
-              // the obvious objection. `conflict` is only ever set from the 409
-              // branch, which does not touch the store, so reaching this banner
-              // required a Save — which required `issues` to be empty. Every
-              // issue on screen is therefore an edit made since, and Undo
-              // (live: nothing is previewing or in flight) walks back out.
-              disabled={saveReason !== null}
-              title={saveReason ?? undefined}
-            >
-              {saveAnywayLabel(conflict.version)}
-            </button>
-          </div>
-        </div>
-      )}
-      {loadError && <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>}
-
-      {issues.length > 0 && (
-        <div className="badge-list" role="status">
-          {/* #444: this used to say "you can still save … a run will refuse an
-              invalid graph". Both halves were wrong — nothing refused a save,
-              and no run refused the doc either. The server now refuses it on
-              save, so the copy states what actually happens, and no more: the
-              graph on screen is an editable draft, so anything about immutable
-              stored versions would just read as "yours is unfixable". */}
-          <strong>{issues.length} validation issue(s)</strong> — fix these to save.
-          <ul>
-            {issues.map((msg, i) => (
-              // Indexed, because the messages are NOT unique: three params sharing
-              // a name emit the identical duplicate-name string twice, and a bare
-              // `key={msg}` makes that a React duplicate-key warning — which the
-              // e2e console guard treats as a failure.
-              <li key={`${String(i)}-${msg}`}>{msg}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+                {/* `title`: the strip draws this on one line and truncates it. */}
+                <p
+                  title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
+                >
+                  This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
+                  {TRIGGERS_STAY_DISABLED_NOTE}.
+                </p>
+                {unarchiveError !== null && (
+                  <p title={`Unarchive failed: ${unarchiveError}`}>
+                    Unarchive failed: {unarchiveError}
+                  </p>
+                )}
+                <div className="form-actions">
+                  <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
+                    {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
+                  </button>
+                </div>
+              </div>
+            ),
+          },
+          /* #904 — a refused save. `role="alert"` because it is the ONE save
+             outcome that is not self-explanatory and that the operator must act
+             on: unannounced, the Save button simply appears to have done nothing.
+             Distinct from the `.notice` messages rather than folded into them,
+             because this one carries the two acts that resolve it. */
+          conflict && {
+            key: 'conflict',
+            node: (
+              <div className="notice-conflict" role="alert">
+                <p title={describeSaveConflict(conflict.version)}>
+                  {describeSaveConflict(conflict.version)}
+                </p>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Show them the version that landed, in the surface that
+                      // already exists for it (#903) — a prose pointer to a panel
+                      // they then have to find is not the same thing.
+                      setHistoryOpen(true);
+                      setPreviewing(conflict.version);
+                    }}
+                    // The same lock every other route into the preview carries: this
+                    // is a fourth one, and the reported bug was precisely a route
+                    // nobody had enumerated.
+                    disabled={previewLocked}
+                    // The NAMED reason, not a second hardcoded sentence: this button
+                    // is locked by `restoring` too, and a fixed "Saving…" would be
+                    // flatly wrong on that arm — reachable, and walked by the e2e.
+                    title={historyDisabledReason ?? undefined}
+                  >
+                    {`Preview v${String(conflict.version)}`}
+                  </button>
+                  <button
+                    type="button"
+                    // Re-declares the CAS basis as the head that refused us — an
+                    // informed assertion, not a bypass. If a THIRD save has landed in
+                    // the meantime, this is refused again and lands right back here
+                    // with the newer head, which is the correct behaviour and not a
+                    // loop to be short-circuited.
+                    onClick={() => void saveWith(conflict.id)}
+                    // EXACTLY the Save button's gate, from the same expression — not a
+                    // second one written to match. Two of its terms are load-bearing
+                    // here. `previewing`, because this writes the WORKING graph, which
+                    // is not what is on screen while a version is previewed, so the
+                    // one route this banner offers would otherwise mint a version of
+                    // something the operator cannot see. And `issues` (#1141), because
+                    // this button used to be the ONE save path that escaped the badge
+                    // gate: an author who hit the 409, then edited the doc into an
+                    // invalid state, found Save dead and this one alive, and clicking
+                    // it threw a raw ZodError out of `PipelineVersionWriteSchema.parse`
+                    // before the request was even made. Refusing here is not a new
+                    // refusal — the write was always going to be refused; it is the
+                    // refusal finally being stated where the author can read it.
+                    //
+                    // It cannot dead-end them, and that is worth saying because it is
+                    // the obvious objection. `conflict` is only ever set from the 409
+                    // branch, which does not touch the store, so reaching this banner
+                    // required a Save — which required `issues` to be empty. Every
+                    // issue on screen is therefore an edit made since, and Undo
+                    // (live: nothing is previewing or in flight) walks back out.
+                    disabled={saveReason !== null}
+                    title={saveReason ?? undefined}
+                  >
+                    {saveAnywayLabel(conflict.version)}
+                  </button>
+                </div>
+              </div>
+            ),
+          },
+          loadError !== null && {
+            key: 'load',
+            node: <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>,
+          },
+        ].filter((n) => n !== false && n !== null)}
+        transient={[
+          // `role="status"` so a keyboard-driven copy/paste — which changes
+          // nothing an operator is looking at — is still announced.
+          { key: 'canvas', text: canvasMsg, role: 'status' },
+          { key: 'save', text: saveMsg },
+        ]}
+      />
 
       {/* `ready` gates the panel, because `versions` is `[]` both before the
           load resolves AND forever after it fails — and the panel's empty state
@@ -1323,23 +1363,61 @@ export function PipelineCanvas({
               <div
                 className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
               >
-                <button
-                  type="button"
-                  className="property-dock__toggle"
-                  aria-expanded={dockOpen}
-                  aria-controls={dockBodyId}
-                  onClick={() => setDockOpen((open) => !open)}
-                >
-                  {/* Folded, a selection would otherwise change nothing on screen
+                <div className="property-dock__header">
+                  <button
+                    type="button"
+                    className="property-dock__toggle"
+                    aria-expanded={dockOpen}
+                    aria-controls={dockBodyId}
+                    onClick={() => setDockOpen((open) => !open)}
+                  >
+                    {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
                       the operator folded it to look at the graph, and a click or a
                       drag selects — so the toggle says what is waiting instead. */}
-                  {dockOpen
-                    ? 'Hide properties'
-                    : selectedCount > 0
-                      ? `Show properties (${String(selectedCount)} selected)`
-                      : 'Show properties'}
-                </button>
+                    {dockOpen
+                      ? 'Hide properties'
+                      : selectedCount > 0
+                        ? `Show properties (${String(selectedCount)} selected)`
+                        : 'Show properties'}
+                  </button>
+                  {/* #1393 — the count is on the header, so a folded dock still
+                    says why Save is refused. Opening Problems from a folded
+                    dock opens the dock too: a toggle whose effect is hidden
+                    would read as broken. */}
+                  <button
+                    type="button"
+                    className="property-dock__toggle"
+                    aria-expanded={dockOpen && problemsOpen}
+                    aria-controls={problemsId}
+                    onClick={() => {
+                      if (!dockOpen) {
+                        setDockOpen(true);
+                        setProblemsOpen(true);
+                      } else setProblemsOpen((open) => !open);
+                    }}
+                  >
+                    Problems{' '}
+                    <span
+                      className={
+                        issues.length > 0 ? 'count-badge count-badge--error' : 'count-badge'
+                      }
+                    >
+                      {issues.length}
+                    </span>
+                  </button>
+                  {/* The page's ONE announcer of a blocked save (#1249). Here
+                      in the always-shown header, not on the list: the list is
+                      `hidden` whenever Problems or the dock is folded, and a
+                      `display: none` region announces nothing. Always mounted,
+                      because a live region is announced only if it already
+                      exists when its content changes. */}
+                  <span className="visually-hidden" role="status">
+                    {issues.length > 0
+                      ? `${String(issues.length)} validation issue(s) — fix these to save.`
+                      : ''}
+                  </span>
+                </div>
                 {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
                     the dock to look at the graph must not throw away. */}
@@ -1351,15 +1429,42 @@ export function PipelineCanvas({
                     pipelineId={pipelineId}
                     onNotice={showCanvasMsg}
                   />
+                  {/* #1393 — the validation list, moved here from above the
+                      canvas, where it grew by one line per issue on every
+                      keystroke. Plain text: the header above announces. */}
+                  <aside
+                    id={problemsId}
+                    className="problems-panel"
+                    aria-label="Problems"
+                    hidden={!problemsOpen}
+                  >
+                    {issues.length === 0 && <p className="page-hint">No problems.</p>}
+                    {issues.length > 0 && (
+                      <div className="badge-list">
+                        {/* #444: this used to say "you can still save … a run will refuse an
+                                invalid graph". Both halves were wrong — nothing refused a save,
+                                and no run refused the doc either. The server now refuses it on
+                                save, so the copy states what actually happens, and no more: the
+                                graph on screen is an editable draft, so anything about immutable
+                                stored versions would just read as "yours is unfixable". */}
+                        <strong>{issues.length} validation issue(s)</strong> — fix these to save.
+                        <ul>
+                          {issues.map((msg, i) => (
+                            // Indexed, because the messages are NOT unique: three params sharing
+                            // a name emit the identical duplicate-name string twice, and a bare
+                            // `key={msg}` makes that a React duplicate-key warning — which the
+                            // e2e console guard treats as a failure.
+                            <li key={`${String(i)}-${msg}`}>{msg}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </aside>
                 </div>
               </div>
             </div>
           </div>
         </SubjectIssuesContext.Provider>
-      )}
-
-      {dirty && previewing === null && (
-        <p className="page-hint">Unsaved changes — click “Save version” to persist.</p>
       )}
     </section>
   );
@@ -1828,7 +1933,6 @@ export function EdgePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{edge.back === true ? 'Back-edge' : 'Edge'}</h3>
-      <SubjectIssues issues={edgeIssues} />
       {edge.back === true && <BounceCapField store={store} edge={edge} />}
       {/**
        * U19 slice 2 — the outcome picker, retired as a `<select>`.
@@ -1892,6 +1996,10 @@ export function EdgePanel({
       <button type="button" onClick={() => store.getState().deleteEdge(edge.id)}>
         Delete edge
       </button>
+      {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
+          the control being edited out from under the pointer. The Problems column
+          beside the panel lists it too. */}
+      <SubjectIssues issues={edgeIssues} />
     </aside>
   );
 }
@@ -2686,7 +2794,6 @@ export function NodePanel({
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
-        <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
         <PanelTabs
           label="Activity properties"
           selected={tab}
@@ -2718,6 +2825,10 @@ export function NodePanel({
             },
           ]}
         />
+        {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
+            the control being edited out from under the pointer. The Problems column
+            beside the panel lists it too. */}
+        <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
       </aside>
     );
   }
@@ -2725,7 +2836,6 @@ export function NodePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
-      <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
       {/* #852 — ADF's split: what the activity DOES under Settings, how it RUNS
           (retry, timeout, secure input/output) under General. Policy was already
           outside the config form's Apply draft (#1312), so the tab boundary
@@ -3030,6 +3140,10 @@ export function NodePanel({
           },
         ]}
       />
+      {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
+          the control being edited out from under the pointer. The Problems column
+          beside the panel lists it too. */}
+      <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
     </aside>
   );
 }

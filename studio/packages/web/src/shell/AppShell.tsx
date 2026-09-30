@@ -62,14 +62,29 @@ export function AppShell() {
      api object is created once, so a page's publishing effect does not re-run
      every time the shell re-renders. */
   const [published, setPublished] = useState<PublishedLabels>({});
+  /* #1393 — the paths holding unsaved work. A path, not a flag, for the same
+     reason labels are keyed by one: a page's cleanup and the next page's
+     publish can land in either order. */
+  const [unsavedPaths, setUnsavedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const labelApi = useMemo<ShellLabelApi>(
-    () => ({ publish: (path, label) => setPublished((prev) => withLabel(prev, path, label)) }),
+    () => ({
+      publish: (path, label) => setPublished((prev) => withLabel(prev, path, label)),
+      markUnsaved: (path, unsaved) =>
+        setUnsavedPaths((prev) => {
+          const key = normalizePath(path);
+          if (prev.has(key) === unsaved) return prev;
+          const next = new Set(prev);
+          if (unsaved) next.add(key);
+          else next.delete(key);
+          return next;
+        }),
+    }),
     [],
   );
   const { pathname } = useLocation();
   const crumbs = crumbsFrom(matches, published[normalizePath(pathname)]);
 
-  const title = documentTitle(crumbs);
+  const title = documentTitle(crumbs, unsavedPaths.has(normalizePath(pathname)));
   useEffect(() => {
     document.title = title;
   }, [title]);

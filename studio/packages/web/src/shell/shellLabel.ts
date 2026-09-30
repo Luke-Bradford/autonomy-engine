@@ -20,6 +20,8 @@ import { normalizePath, type PublishedLabels } from './routeHandle';
  */
 export interface ShellLabelApi {
   publish(pathname: string, label: string | undefined): void;
+  /** #1393 — whether the page at `pathname` holds unsaved work (the tab title's dot). */
+  markUnsaved(pathname: string, unsaved: boolean): void;
 }
 
 /** `null` outside `AppShell` — a page rendered alone (a unit test) publishes nowhere. */
@@ -58,4 +60,19 @@ export function useShellLabel(label: string | undefined): void {
     api.publish(pathname, label);
     return () => api.publish(pathname, undefined);
   }, [api, pathname, label]);
+}
+
+/**
+ * #1393 — a page with unsaved work says so in the tab title, for the operator
+ * who has tabbed away. Keyed by path like the label, and withdrawn on unmount,
+ * so leaving an editor never strands a dot on the next page's title.
+ */
+export function useShellUnsaved(unsaved: boolean): void {
+  const api = useContext(ShellLabelContext);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (!api || !unsaved) return;
+    api.markUnsaved(pathname, true);
+    return () => api.markUnsaved(pathname, false);
+  }, [api, pathname, unsaved]);
 }

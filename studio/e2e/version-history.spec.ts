@@ -315,7 +315,11 @@ test.describe('pipeline version history', () => {
     await seedThreeVersions(page, 'history-refusal');
 
     await addActivity(page, 'HTTP Request');
-    await expect(page.getByText(/Unsaved changes/)).toBeVisible();
+    // #1393 — dirty is the mark on Save (its description), not a paragraph.
+    await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
+    await expect(page.getByRole('button', { name: 'Save version' })).toHaveAccessibleDescription(
+      'Unsaved changes',
+    );
 
     await historyButton(page).click();
     await rows(page).nth(2).click();
@@ -464,7 +468,7 @@ test.describe('pipeline version history', () => {
 
     // Both buttons dead, for the SAME stated reason: that is the property, not
     // just that the override happens to be disabled.
-    const reason = 'Fix the 1 validation issue(s) listed below to save.';
+    const reason = 'Fix the 1 validation issue(s) in the Problems panel to save.';
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
     await expect(override).toBeDisabled();
     await expect(override).toHaveAttribute('title', reason);

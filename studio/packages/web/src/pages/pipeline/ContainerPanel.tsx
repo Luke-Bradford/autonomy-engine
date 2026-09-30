@@ -340,7 +340,6 @@ export function ContainerPanel({
        landmark four other specs address the panel by would vanish. */
     <aside className="property-panel" aria-label="Properties">
       <h3>{label}</h3>
-      <SubjectIssues issues={ownIssues} />
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
         inside. Which activity belongs to which container is edited on the activity itself.
@@ -393,6 +392,10 @@ export function ContainerPanel({
       <button type="button" onClick={onDuplicate}>
         Duplicate container
       </button>
+      {/* #1393 — AFTER the fields, not above them: an issue arriving must not push
+          the control being edited out from under the pointer. The Problems column
+          beside the panel lists it too. */}
+      <SubjectIssues issues={ownIssues} />
     </aside>
   );
 }

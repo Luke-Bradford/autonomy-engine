@@ -128,8 +128,8 @@ interface ActivityData extends Record<string, unknown> {
  * none`, so a tooltip could never open, and its count is already in the box's
  * own accessible name (see `containerNodes`) — exposing both would read it
  * twice. The property panel lists the messages in full once the element is
- * selected. Not a live region — the canvas's badge list is
- * the page's announcer for a blocked save (#1249).
+ * selected. Not a live region — the dock header's status line is the
+ * page's announcer for a blocked save (#1249, moved there by #1393).
  */
 function IssueBadge({
   issues,
@@ -2330,7 +2330,7 @@ export function FlowCanvas({
              This one is the direct answer to a gesture the operator just made,
              which is what assertive is for. It is plain markup rather than a
              Fluent `MessageBar` to keep the lazy canvas chunk light — the shell's
-             own badge list is the same idiom. */
+             own notice strip is the same idiom. */
           <Panel position="bottom-center" className="canvas-refusal">
             <span role="alert">{refusal.message}</span>
             {backOffer !== null && (

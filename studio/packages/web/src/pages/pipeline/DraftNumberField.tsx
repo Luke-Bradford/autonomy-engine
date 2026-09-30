@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
 
@@ -40,6 +40,8 @@ export function DraftNumberField<V extends number | undefined>({
   const text = stored === undefined ? '' : String(stored);
   const [draft, setDraft] = useState(text);
   const [error, setError] = useState<string | null>(null);
+  const hintId = useId();
+  const errorId = useId();
   /* Re-seed when the STORED value changes underneath the draft. Callers key the
      panel by element id, so switching elements remounts; an undo changes the
      value of the SAME element, which remounts nothing, and without this the
@@ -90,18 +92,37 @@ export function DraftNumberField<V extends number | undefined>({
             spellCheck={false}
             placeholder={placeholder}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            aria-invalid={error !== null}
+            aria-describedby={error !== null ? `${errorId} ${hintId}` : hintId}
+            onChange={(e) => {
+              const raw = e.target.value;
+              setDraft(raw);
+              // #1393 — a standing error clears the moment the text is fine
+              // again, not on the next blur: an operator who has already fixed
+              // the value should not go on reading that it is wrong. Only ever
+              // CLEARS here; a new error is still raised by blur alone, so
+              // typing through an intermediate value does not shout.
+              if (error !== null && (raw === text || parse(raw).ok)) setError(null);
+            }}
             onBlur={(e) => commit(e.target.value)}
           />
         )}
       </LabelledControl>
-      {error !== null ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : (
-        <p className="page-hint">{hint}</p>
-      )}
+      <p id={hintId} className="page-hint">
+        {hint}
+      </p>
+      {/* #1393 — a RESERVED slot, always mounted and a line tall, so an error
+          arriving does not push every field below it down. It used to REPLACE
+          the hint, which moved them by the difference in height. The alert is
+          only the populated line inside: an empty `role="alert"` would still
+          be found by every page-wide alert query. */}
+      <div className="field-error-slot">
+        {error !== null && (
+          <p id={errorId} className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     </>
   );
 }
