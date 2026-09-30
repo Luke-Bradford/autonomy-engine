@@ -156,7 +156,7 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
       await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
     ).json()) as { type: string; payload: Record<string, unknown> }[];
     const sources = events
-      .filter((e) => e.type === 'node.dispatched' && String(e.payload.nodeId).startsWith('load'))
+      .filter((e) => e.type === 'node.dispatched' && /^load(@\d+)?$/.test(String(e.payload.nodeId)))
       .map((e) => (e.payload.datasetAddresses as { source: { store: string } }).source.store)
       .sort();
     expect(sources).toEqual(Object.keys(FILES).map((f) => join(inDir, f)));

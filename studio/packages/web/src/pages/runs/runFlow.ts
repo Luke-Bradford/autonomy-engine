@@ -252,7 +252,7 @@ export function runFlowNodes(
        accessible name reads `…, not projected`. Worth knowing before reading the
        sentence above as stronger than it is. */
     const label = status === null ? null : containerStatusLabel(status, state?.status);
-    const items = c.kind === 'foreach' && showStatus ? foreachProgress(cs) : null;
+    const items = c.kind === 'foreach' ? foreachProgress(cs) : null;
     return {
       id: c.id,
       type: 'runContainer',
@@ -300,11 +300,6 @@ export function runFlowNodes(
 }
 
 /**
- * The edges — the author canvas's own `toFlowEdge`, with every interaction
- * affordance off. Shared as CODE, so the two views cannot come to draw the same
- * edge differently.
- */
-/**
  * #1420 — how many of a foreach's items have COMPLETED. `results` holds one entry
  * per completed item in sequential mode, and is seeded full-length with `null`
  * holes for the in-flight ones in parallel mode (`ContainerRunState.results`),
@@ -317,6 +312,11 @@ function foreachProgress(cs: RunState['containers'][string] | null): string | nu
   return `${done} of ${total} ${total === 1 ? 'item' : 'items'}`;
 }
 
+/**
+ * The edges — the author canvas's own `toFlowEdge`, with every interaction
+ * affordance off. Shared as CODE, so the two views cannot come to draw the same
+ * edge differently.
+ */
 export function runFlowEdges(doc: RunDoc): FlowEdge[] {
   return doc.edges.map((e) => ({ ...toFlowEdge(e), selectable: false, focusable: false }));
 }

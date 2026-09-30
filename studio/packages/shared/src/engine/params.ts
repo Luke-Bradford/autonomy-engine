@@ -5405,7 +5405,8 @@ export function partitionReadiness(
 }
 
 interface Graph {
-  /** nodeId → node ids whose SUCCESS is guaranteed on every path to it. */
+  /** nodeId → node ids whose SUCCESS is guaranteed on every path to it. A
+   * container child also holds its container's (#1420, `computeGraph`). */
   guaranteed: Map<string, Set<string>>;
   /** nodeId → node ids guaranteed TERMINAL (settled) on every path to it. */
   settled: Map<string, Set<string>>;
@@ -5540,9 +5541,32 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   // CONTAINER precedes every child. Without this a body root has no predecessors
   // and a child could read nothing from outside its box. The container itself is
   // NOT added: its output does not exist until every child is done.
+  //
+  // One exception, applied to `guaranteed`/`settled` in the walk below: a node a
+  // back-edge can RESET. A bounce needs only its own body terminal, not this
+  // container, so it can clear an outer producer while the body is still running
+  // and a later item or round would dispatch against the cleared output. Such a
+  // node stays `reachable` (so `default()` can rescue it) but is never inherited.
+  // Over-refusing is the safe direction; the reset body is the reducer's own.
+  const resettable = new Set<string>();
+  if (part.backEdges.length > 0) {
+    const descendants = nodeDescendants(doc);
+    for (const be of part.backEdges) {
+      for (const id of backEdgeResetBody(be, nodeIds, descendants, containerById)) {
+        resettable.add(id);
+      }
+    }
+  }
+  // Real node children of a real container only — the reducer's own `kept` rule.
+  const keptOwner = new Map<string, string>();
+  const childrenOf = new Map<string, string[]>();
   for (const [child, owner] of childToContainer) {
-    const into = reachable.get(child);
-    if (into === undefined) continue;
+    if (!nodeIdSet.has(child) || !endpointIds.has(owner)) continue;
+    keptOwner.set(child, owner);
+    const siblings = childrenOf.get(owner);
+    if (siblings === undefined) childrenOf.set(owner, [child]);
+    else siblings.push(child);
+    const into = reachable.get(child)!;
     for (const r of reachable.get(owner) ?? []) into.add(r);
   }
 
@@ -5554,11 +5578,8 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   const indegWork = new Map(indeg);
   // #1420 — hold each child until its container is processed, so the inheritance
   // below reads the container's FINAL sets.
-  const childrenOf = new Map<string, string[]>();
-  for (const [child, owner] of childToContainer) {
-    if (!endpointIds.has(child) || !endpointIds.has(owner)) continue;
-    indegWork.set(child, (indegWork.get(child) ?? 0) + 1);
-    childrenOf.set(owner, [...(childrenOf.get(owner) ?? []), child]);
+  for (const children of childrenOf.values()) {
+    for (const child of children) indegWork.set(child, (indegWork.get(child) ?? 0) + 1);
   }
   const queue = [...endpointIds].filter((id) => (indegWork.get(id) ?? 0) === 0);
   for (const id of endpointIds) {
@@ -5625,10 +5646,10 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
     // #1420 — a child also holds everything its container was guaranteed on entry
     // (see the `reachable` note above). A union, not an intersection: those facts
     // hold on EVERY path into the body, whatever internal edge led here.
-    const owner = childToContainer.get(id);
-    if (owner !== undefined && endpointIds.has(owner)) {
-      for (const g of guaranteed.get(owner) ?? []) guaranteed.get(id)!.add(g);
-      for (const t of settled.get(owner) ?? []) settled.get(id)!.add(t);
+    const owner = keptOwner.get(id);
+    if (owner !== undefined) {
+      for (const g of guaranteed.get(owner)!) if (!resettable.has(g)) guaranteed.get(id)!.add(g);
+      for (const t of settled.get(owner)!) if (!resettable.has(t)) settled.get(id)!.add(t);
     }
     // Applied HERE, inside the topological pass rather than as a post-pass, so a
     // descendant reading this node's set can only ever read the zeroed one.

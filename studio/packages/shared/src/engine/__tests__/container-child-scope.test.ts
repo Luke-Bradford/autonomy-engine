@@ -80,6 +80,36 @@ describe('#1420 — a container child inherits the container’s upstream', () =
     });
   }
 
+  /* A bounce needs only ITS OWN body terminal, not the container, so it can reset
+     an outer producer while the body is still running — measured through the
+     real engine by the pre-PR review: the next item's dispatch failed
+     `unknown node output`. Such a producer is not inherited. */
+  describe('a producer a back-edge can reset is not inherited', () => {
+    for (const kind of ['stage', 'foreach', 'loop'] as const) {
+      const bounced = (ref: string) => {
+        const d = docWith(kind, ref, { nodes: [node('side')], edges: [edge('src', 'side')] });
+        d.edges.push({ ...edge('side', 'src'), id: 'bounce', back: true, maxBounces: 2 } as Edge);
+        return d;
+      };
+
+      it(`${kind}: a bare ref is refused`, () => {
+        expect(validatePipelineDoc(bounced('${nodes.src.output.path}')).join('\n')).toMatch(
+          /not guaranteed here/,
+        );
+      });
+
+      it(`${kind}: default() still rescues it`, () => {
+        expect(validatePipelineDoc(bounced("${default(nodes.src.output.path, '')}"))).toEqual([]);
+      });
+    }
+  });
+
+  it('a stage child may read an outer node’s STATUS (the settled set is inherited too)', () => {
+    expect(validatePipelineDoc(docWith('stage', '${nodes.src.status}'))).toEqual([]);
+    const side = docWith('stage', '${nodes.side.status}', { nodes: [producer('side')] });
+    expect(validatePipelineDoc(side).join('\n')).toMatch(/does not name an upstream node/);
+  });
+
   it('the expression picker offers the upstream output inside the body', () => {
     const d = docWith('foreach', 'x');
     const refs = availableRefs(d, { kind: 'node', nodeId: 'body' }).map((s) => s.ref);

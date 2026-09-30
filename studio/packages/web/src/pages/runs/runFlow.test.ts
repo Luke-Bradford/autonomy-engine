@@ -299,6 +299,12 @@ describe('runFlowNodes', () => {
       ).toBe('1 of 1 item');
     });
 
+    it('a failed item is not counted as done', () => {
+      const b = box({ status: 'failure', round: 1, outputs: {}, items: [1, 2, 3], results: [{}] });
+      expect(b.data.items).toBe('1 of 3 items');
+      expect(b.ariaLabel).toContain('1 of 3 items');
+    });
+
     it('before enter there is nothing to count', () => {
       const b = box({ status: 'pending', round: 0, outputs: {} });
       expect(b.data.items).toBeNull();
