@@ -151,6 +151,13 @@ export const FAIL_ACTIVITY_TYPE = 'fail';
 export const FILTER_ACTIVITY_TYPE = 'filter';
 
 /**
+ * The one output a `filter` produces: its input array, filtered. Named once
+ * because the reducer WRITES it, the catalog DECLARES it, and the expression
+ * picker (#1420) READS it to follow a filtered array back to its source.
+ */
+export const FILTER_RESULT_OUTPUT = 'result';
+
+/**
  * The `Node.type` of the `wait` control activity (#4 A6). Same constant-SSOT
  * rationale as the other control types: a typed identifier read STRUCTURALLY by
  * the reducer's control-dispatch discriminant (`reduce.ts`), the save-time config
@@ -390,6 +397,14 @@ export interface ActivityCatalogEntry {
   datasetKinds?: { source: DatasetKind[]; sink?: DatasetKind[] };
   /** Canonical outputs (UI/metadata). See the class doc — not the runtime SSOT. */
   outputs: Output[];
+  /**
+   * #1420 — the known fields of each ELEMENT of an array output, keyed by output
+   * name: what the expression picker offers as `${item.<field>}` inside a foreach
+   * over that output. UI metadata only. It never reaches typing, which keeps a
+   * foreach element run-time-typed (E4: `${item}` infers `any`), so a field
+   * missing here is a missed offer and never a refusal.
+   */
+  outputElements?: Readonly<Record<string, readonly Output[]>>;
   /** Zod schema for this activity's non-secret config settings blob. */
   configSchema: z.ZodType;
   /**

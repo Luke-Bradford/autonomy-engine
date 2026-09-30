@@ -118,11 +118,62 @@ const ABSENT_CONTRACT = doc({
   edges: [edge('plain', 'reader')],
 });
 
+/**
+ * #1420 OR26 — the operator's recipe: List Directory → Filter → ForEach. A
+ * `file_list`'s `entries` elements have a KNOWN shape (`{name, type}`), and a
+ * `filter` keeps its input's elements, so both boxes' children are offered
+ * `${item.name}`/`${item.type}`. `plainLoop` iterates a param, whose element
+ * shape nobody declared, and `inner` is a filter INSIDE `rawLoop` whose own
+ * elements come from that param too.
+ */
+const FOLDER = doc({
+  params: [{ name: 'rows', type: 'json', required: true }],
+  nodes: [
+    node('list', {
+      type: 'file_list',
+      config: {
+        path: 'in',
+        outputs: [
+          { name: 'entries', type: 'json' },
+          { name: 'path', type: 'string' },
+        ],
+      },
+    }),
+    node('files', {
+      type: 'filter',
+      config: { items: '${nodes.list.output.entries}', predicate: '${item}' },
+    }),
+    node('copy'),
+    node('direct'),
+    node('inner', { type: 'filter', config: { items: '${params.rows}', predicate: '${item}' } }),
+    node('plain'),
+  ],
+  edges: [edge('list', 'files'), edge('files', 'eachFile'), edge('list', 'rawLoop')],
+  containers: [
+    {
+      id: 'eachFile',
+      kind: 'foreach',
+      children: ['copy'],
+      join: 'all',
+      items: '${nodes.files.output.result}',
+    },
+    {
+      id: 'rawLoop',
+      kind: 'foreach',
+      children: ['direct', 'inner'],
+      join: 'all',
+      items: ' ${nodes.list.output.entries} ',
+    },
+    { id: 'plainLoop', kind: 'foreach', children: ['plain'], join: 'all', items: '${params.rows}' },
+  ],
+});
+
 const FIXTURES: [string, Doc][] = [
   ['a linear chain', CHAIN],
   ['a failure branch', FAILURE_BRANCH],
   ['a foreach body', FOREACH],
   ['an absent output contract', ABSENT_CONTRACT],
+  ['a foreach over a folder listing', FOLDER],
 ];
 
 // --- the property ------------------------------------------------------------
@@ -579,5 +630,63 @@ describe('availableRefs — a filter binds ${item} per FIELD (#864)', () => {
   it('a predicate-named field on any OTHER activity binds nothing', () => {
     const other = withConfig(CHAIN, 'c', 'predicate', 'x');
     expect(fieldRefs(other, 'c', 'predicate')).not.toContain('item');
+  });
+});
+
+// --- #1420 OR26: the KNOWN fields of a foreach element ------------------------
+
+const itemFields = (offers: RefSuggestion[]) =>
+  offers.filter((s) => s.kind === 'item' && s.name !== undefined);
+
+describe('availableRefs — item fields from a known element shape (#1420)', () => {
+  it("offers a List Directory entry's fields to a child of a foreach over its entries", () => {
+    const offered = availableRefs(FOLDER, { kind: 'node', nodeId: 'direct' });
+    expect(offered.map((s) => s.ref)).toContain('item');
+    expect(itemFields(offered)).toEqual([
+      {
+        ref: 'item.name',
+        insert: '${item.name}',
+        kind: 'item',
+        name: 'name',
+        declaredType: 'string',
+        availability: 'available',
+      },
+      {
+        ref: 'item.type',
+        insert: '${item.type}',
+        kind: 'item',
+        name: 'type',
+        declaredType: 'string',
+        availability: 'available',
+      },
+    ]);
+  });
+
+  it("follows a filter's result back to the array it filtered", () => {
+    expect(refsFor(FOLDER, 'copy')).toEqual(expect.arrayContaining(['item.name', 'item.type']));
+  });
+
+  it('offers only ${item} when the element shape is not declared anywhere', () => {
+    expect(refsFor(FOLDER, 'plain')).toContain('item');
+    expect(itemFields(availableRefs(FOLDER, { kind: 'node', nodeId: 'plain' }))).toEqual([]);
+  });
+
+  it("a filter predicate is offered its OWN elements' fields, never the enclosing box's", () => {
+    expect(fieldRefs(FOLDER, 'files', 'predicate')).toContain('item.type');
+    // `inner` sits in a box over entries, but its predicate's `item` is a param
+    // row — offering `item.name` there would describe the wrong element.
+    expect(fieldRefs(FOLDER, 'inner', 'predicate')).not.toContain('item.name');
+    // …while its `items` field reads the BOX's item, whose shape is known.
+    expect(fieldRefs(FOLDER, 'inner', 'items')).toContain('item.name');
+  });
+
+  it('offers no item field where ${item} itself is not bound', () => {
+    expect(fieldRefs(FOLDER, 'files', 'items').some((r) => r.startsWith('item'))).toBe(false);
+    expect(refsFor(FOLDER, 'list').some((r) => r.startsWith('item'))).toBe(false);
+    expect(
+      availableRefs(FOLDER, { kind: 'container', containerId: 'rawLoop', field: 'items' }).some(
+        (s) => s.kind === 'item',
+      ),
+    ).toBe(false);
   });
 });

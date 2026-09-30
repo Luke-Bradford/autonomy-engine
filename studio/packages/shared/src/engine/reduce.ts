@@ -27,6 +27,7 @@ import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  FILTER_RESULT_OUTPUT,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -2351,7 +2352,7 @@ export function createEngine(doc: EngineDoc): Engine {
     if (!Array.isArray(out)) {
       throw new SubstituteError(`filter node '${node.id}' did not resolve to an array`);
     }
-    return { result: out };
+    return { [FILTER_RESULT_OUTPUT]: out };
   }
 
   /**
