@@ -71,6 +71,7 @@ function EditorRunStream({
   const status: RunStatus = runLifecycleView(lifecycle, projection)?.status ?? 'pending';
   const live = streamStillLive(stream.phase, status);
   const names = useMemo(() => activityLabels(doc.nodes), [doc]);
+  const types = useMemo(() => new Map(doc.nodes.map((n) => [n.id, n.type])), [doc]);
 
   const view = useMemo((): EditorRunView => {
     const activity = new Map(nodes.map((n) => [n.nodeId, n]));
@@ -81,8 +82,9 @@ function EditorRunStream({
       status,
       live,
       nameOf: (id) => names.get(id) ?? null,
+      typeOf: (id) => types.get(id) ?? null,
     };
-  }, [run.runId, doc, nodes, projection, status, live, names]);
+  }, [run.runId, doc, nodes, projection, status, live, names, types]);
 
   useEffect(() => {
     onView(view);
@@ -105,8 +107,9 @@ export function EditorRunDrawer({ nodeId, type }: { nodeId: string | null; type:
   const run = useContext(EditorRunContext);
   const [closed, setClosed] = useState(false);
   if (run === null || nodeId === null || closed) return null;
-  const entry = run.overlay.get(nodeId);
-  if (entry !== undefined && entry.type !== type) return null;
+  /* Against the VERSION, not the overlay: the fold can hold a row for a node
+     the projection has no entry for yet, and the guard must not lapse then. */
+  if (run.typeOf(nodeId) !== type) return null;
   const node = run.nodes.find((n) => n.nodeId === nodeId);
   if (node === undefined) return null;
   return (

@@ -21,6 +21,8 @@ export interface EditorRunView {
   live: boolean;
   /** The run version's name for a node, or `null` where it names none. */
   nameOf: (nodeId: string) => string | null;
+  /** The run version's type for a node, or `null` where it has no such node. */
+  typeOf: (nodeId: string) => string | null;
 }
 
 export const EditorRunContext = createContext<EditorRunView | null>(null);

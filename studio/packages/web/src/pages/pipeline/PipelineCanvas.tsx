@@ -1559,7 +1559,6 @@ function SelectedRunDrawer({ store }: { store: ReturnType<typeof createCanvasSto
 }
 
 /** Edits the currently-selected node, edge or container; empty when nothing is. */
-
 function PropertyPanel({
   store,
   connections,

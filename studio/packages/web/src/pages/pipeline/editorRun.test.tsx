@@ -56,6 +56,7 @@ function view(over: Partial<EditorRunView> = {}): EditorRunView {
     status: 'running',
     live: true,
     nameOf: () => null,
+    typeOf: () => null,
     ...over,
   };
 }
@@ -171,6 +172,7 @@ describe('EditorRunDrawer', () => {
     status: 'success',
     live: false,
     nameOf: (id) => (id === 'n_a' ? 'HTTP Request 1' : null),
+    typeOf: (id) => (id === 'n_a' ? 'http_request' : null),
   });
 
   function mountDrawer(
@@ -201,14 +203,11 @@ describe('EditorRunDrawer', () => {
   });
 
   it('shows nothing for a node the draft has RE-TYPED since the run — as the chip does', () => {
-    const typed = {
-      ...run,
-      overlay: new Map([
-        ['n_a', { type: 'http_request', status: 'success', tone: 'success' as const, facts: null }],
-      ]),
-    };
-    expect(mountDrawer(typed, 'n_a', 'copy').container.innerHTML).toBe('');
-    expect(mountDrawer(typed, 'n_a', 'http_request').container.innerHTML).not.toBe('');
+    // `run` has a ROW for `n_a` and NO overlay entry, i.e. the fold ahead of the
+    // projection: the guard reads the version, so it holds then too.
+    expect(run.overlay.size).toBe(0);
+    expect(mountDrawer(run, 'n_a', 'copy').container.innerHTML).toBe('');
+    expect(mountDrawer(run, 'n_a', 'http_request').container.innerHTML).not.toBe('');
   });
 
   it('Close hides it for that node', async () => {
