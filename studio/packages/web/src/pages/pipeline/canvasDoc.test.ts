@@ -234,12 +234,12 @@ describe('saveDisabledReason (#1141)', () => {
     // missing, so an invalid doc reached `PipelineVersionWriteSchema.parse` and
     // came back as a raw ZodError.
     const reason = saveDisabledReason({ ...OK, issues: ["node 'c' needs a call config"] });
-    expect(reason).toBe('Fix the 1 validation issue(s) listed below to save.');
+    expect(reason).toBe('Fix the 1 validation issue(s) in the Problems panel to save.');
   });
 
   it('counts the issues rather than saying "some"', () => {
     expect(saveDisabledReason({ ...OK, issues: ['a', 'b', 'c'] })).toBe(
-      'Fix the 3 validation issue(s) listed below to save.',
+      'Fix the 3 validation issue(s) in the Problems panel to save.',
     );
   });
 

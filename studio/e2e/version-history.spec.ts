@@ -464,7 +464,7 @@ test.describe('pipeline version history', () => {
 
     // Both buttons dead, for the SAME stated reason: that is the property, not
     // just that the override happens to be disabled.
-    const reason = 'Fix the 1 validation issue(s) listed below to save.';
+    const reason = 'Fix the 1 validation issue(s) in the Problems panel to save.';
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
     await expect(override).toBeDisabled();
     await expect(override).toHaveAttribute('title', reason);

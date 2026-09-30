@@ -148,9 +148,11 @@ export const APP_TITLE = 'autonomy studio';
  * that tell two tabs apart earn a place — and a page that IS its hub (Home) is
  * named once.
  */
-export function documentTitle(crumbs: readonly Crumb[]): string {
+export function documentTitle(crumbs: readonly Crumb[], unsaved = false): string {
   const page = crumbs.at(-1)?.label;
   const hub = crumbs[0]?.label;
   const parts = [page, hub !== page ? hub : undefined, APP_TITLE];
-  return parts.filter((p): p is string => p !== undefined).join(' — ');
+  const title = parts.filter((p): p is string => p !== undefined).join(' — ');
+  // #1393 — the editor's dirty dot, where an operator on another tab sees it.
+  return unsaved ? `• ${title}` : title;
 }

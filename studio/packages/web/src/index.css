@@ -1225,7 +1225,7 @@ td button + button {
      a case the current fixture can demonstrate. */
   grid-template-rows: minmax(0, 1fr);
   gap: 0.75rem;
-  margin-top: 1rem;
+  margin-top: 0.5rem; /* #1393 — the status strip above takes the rest of the gap. */
   /* Take the leftover height from `.canvas-page`, and allow shrinking below
      intrinsic content height (same reason as the `minmax` above). */
   flex: 1 1 auto;
@@ -1562,6 +1562,142 @@ td button + button {
   overflow-y: auto;
 }
 
+/* #1393 — the dock's header row: the fold toggle and the Problems toggle. */
+.property-dock__header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* #1393 — the validation list, as a FIXED-width column beside the properties.
+   Fixed, and present while open whether or not anything is wrong, so an issue
+   arriving never re-flows the form beside it. It scrolls inside the dock's
+   height like the panel does. */
+.problems-panel:not([hidden]) {
+  flex: 0 0 20rem;
+  overflow-y: auto;
+  margin-left: 0.5rem;
+  min-height: 0;
+}
+
+.problems-panel .badge-list {
+  margin-top: 0;
+}
+
+.count-badge {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 0.35em;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.count-badge--error {
+  background: var(--error);
+  color: #fff;
+}
+
+/* #1393 — Save's dirty mark. Always laid out, shown by `visibility`, so the
+   button keeps one width whether or not there is unsaved work. */
+.dirty-dot {
+  margin-left: 0.35em;
+  visibility: hidden;
+}
+
+.dirty-dot[data-dirty='true'] {
+  visibility: visible;
+}
+
+/* #1393 — a field's error line is RESERVED, so raising one moves nothing. */
+.field-error-slot {
+  min-height: 1.3rem;
+}
+
+.field-error-slot > .error {
+  margin: 0;
+}
+
+/* #1393 — ONE fixed-height line for every editor notice. `height`, not
+   `min-height`: a notice that could grow it would bring the shift back. What
+   does not fit is truncated here and read in full from the overlay list. */
+.editor-status-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.editor-status-strip__standing {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.editor-status-strip__transient {
+  flex: 0 1 auto;
+  max-width: 45%;
+  min-width: 0;
+}
+
+.editor-status-strip .notice,
+.editor-status-strip .error {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The banners' multi-line card, flattened to one row in the strip. */
+.editor-status-strip__standing > .notice-conflict {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.editor-status-strip__standing > .notice-conflict p {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.editor-status-strip__standing > .notice-conflict .form-actions {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.editor-status-strip__more {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+/* The full list OVER the canvas, not in the flow: opening it moves nothing. */
+.editor-status-strip__list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
+}
+
 /* A form stretched across a 1200px dock is hard to read: a row of inputs
    running the width of the screen. Cap the content, not the dock. */
 .property-dock__body > .property-panel > *,
@@ -1686,7 +1822,7 @@ td button + button {
 }
 
 .subject-issues {
-  margin-bottom: 0.75rem;
+  margin-top: 0.75rem;
 }
 
 .flow-node.selected .flow-node-icon {

@@ -221,11 +221,11 @@ export function saveDisabledReason({
   if (!ready) return 'Wait for the pipeline to load.';
   // Says how many and where they are, rather than restating them: the badge
   // list already names each one, and its own copy is
-  // "N validation issue(s) — fix these to save." "Below" is accurate for both
-  // buttons that read this — the list renders after the toolbar AND after the
-  // conflict banner, though it sits ABOVE the graph canvas itself.
+  // "N validation issue(s) — fix these to save." Named by its panel, not by a
+  // direction: since #1393 it is the dock's Problems column, which is below the
+  // toolbar but beside the properties.
   if (issues.length > 0)
-    return `Fix the ${String(issues.length)} validation issue(s) listed below to save.`;
+    return `Fix the ${String(issues.length)} validation issue(s) in the Problems panel to save.`;
   return null;
 }
 
