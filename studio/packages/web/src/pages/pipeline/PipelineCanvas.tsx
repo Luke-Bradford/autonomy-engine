@@ -221,6 +221,7 @@ export function PipelineCanvas({
   const [problemsOpen, setProblemsOpen] = useState(true);
   const problemsId = useId();
   const unsavedId = useId();
+  const saveReasonId = useId();
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
@@ -1120,7 +1121,14 @@ export function PipelineCanvas({
                — is stated once in `saveDisabledReason`. */
             disabled={saveReason !== null}
             title={saveReason ?? undefined}
-            aria-describedby={dirty ? unsavedId : undefined}
+            /* Both, by id: a present `aria-describedby` REPLACES `title` as the
+               description, so naming only the dirty note would silence the
+               refusal reason on the case that has both — the usual one. */
+            aria-describedby={
+              [dirty ? unsavedId : null, saveReason !== null ? saveReasonId : null]
+                .filter((id) => id !== null)
+                .join(' ') || undefined
+            }
           >
             {saving ? 'Saving…' : 'Save version'}
             {/* #1393 — the dirty state is this dot, not a paragraph under the
@@ -1135,6 +1143,11 @@ export function PipelineCanvas({
           {dirty && (
             <span id={unsavedId} className="visually-hidden">
               Unsaved changes
+            </span>
+          )}
+          {saveReason !== null && (
+            <span id={saveReasonId} className="visually-hidden">
+              {saveReason}
             </span>
           )}
         </div>
@@ -1164,11 +1177,18 @@ export function PipelineCanvas({
                 {/* The trailing clause is the SHARED constant, not a second copy:
               the pipelines-list archive confirmation (#1058) states the same
               contract, and two hand-written copies would drift. */}
-                <p>
+                {/* `title`: the strip draws this on one line and truncates it. */}
+                <p
+                  title={`This pipeline is archived, so saving is refused. Unarchive it to edit again — ${TRIGGERS_STAY_DISABLED_NOTE}.`}
+                >
                   This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
                   {TRIGGERS_STAY_DISABLED_NOTE}.
                 </p>
-                {unarchiveError !== null && <p>Unarchive failed: {unarchiveError}</p>}
+                {unarchiveError !== null && (
+                  <p title={`Unarchive failed: ${unarchiveError}`}>
+                    Unarchive failed: {unarchiveError}
+                  </p>
+                )}
                 <div className="form-actions">
                   <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
                     {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
@@ -1186,7 +1206,9 @@ export function PipelineCanvas({
             key: 'conflict',
             node: (
               <div className="notice-conflict" role="alert">
-                <p>{describeSaveConflict(conflict.version)}</p>
+                <p title={describeSaveConflict(conflict.version)}>
+                  {describeSaveConflict(conflict.version)}
+                </p>
                 <div className="form-actions">
                   <button
                     type="button"
@@ -1384,6 +1406,17 @@ export function PipelineCanvas({
                       {issues.length}
                     </span>
                   </button>
+                  {/* The page's ONE announcer of a blocked save (#1249). Here
+                      in the always-shown header, not on the list: the list is
+                      `hidden` whenever Problems or the dock is folded, and a
+                      `display: none` region announces nothing. Always mounted,
+                      because a live region is announced only if it already
+                      exists when its content changes. */}
+                  <span className="visually-hidden" role="status">
+                    {issues.length > 0
+                      ? `${String(issues.length)} validation issue(s) — fix these to save.`
+                      : ''}
+                  </span>
                 </div>
                 {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
@@ -1398,10 +1431,7 @@ export function PipelineCanvas({
                   />
                   {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
-                      keystroke. HIDDEN rather than unmounted when folded, like
-                      the panel beside it: it is the page's ONE announcer of a
-                      blocked save (#1249), and a live region is announced
-                      only if it already exists when its content changes. */}
+                      keystroke. Plain text: the header above announces. */}
                   <aside
                     id={problemsId}
                     className="problems-panel"
@@ -1410,7 +1440,7 @@ export function PipelineCanvas({
                   >
                     {issues.length === 0 && <p className="page-hint">No problems.</p>}
                     {issues.length > 0 && (
-                      <div className="badge-list" role="status">
+                      <div className="badge-list">
                         {/* #444: this used to say "you can still save … a run will refuse an
                                 invalid graph". Both halves were wrong — nothing refused a save,
                                 and no run refused the doc either. The server now refuses it on

@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { newestFirst, type TransientNotice } from './noticeOrder';
 
 /** A standing fact about the pipeline that carries the act resolving it. */
@@ -29,11 +29,11 @@ function textsOf(notices: readonly TransientNotice[]): Record<string, string | n
  *   priority: the save message never clears by itself, so a fixed order would
  *   bury every later copy/paste notice behind an old "Saved v2.".
  *
- * Anything not shown is counted on the disclosure, which lists EVERY notice in
- * full — the shown ones too, since a one-line slot truncates and a tooltip is
- * unreadable from the keyboard. The list is an overlay, rendered only while
- * open, so it neither moves the canvas nor puts a second copy of a notice on
- * the page while closed.
+ * Anything not shown is counted on the `+N more` disclosure, which lists those
+ * notices in full, with their buttons. Only those: a second copy of a shown
+ * banner would put two alerts and two of each button on the page. A shown
+ * notice that the line truncates carries its full text as a `title`. The list
+ * is an overlay, rendered only while open, so it moves nothing.
  */
 export function EditorStatusStrip({
   standing,
@@ -62,7 +62,10 @@ export function EditorStatusStrip({
   const total = standing.length + live.length;
   const shown = (standing.length > 0 ? 1 : 0) + (live.length > 0 ? 1 : 0);
   const hidden = total - shown;
-  if (open && total === 0) setOpen(false);
+  if (open && hidden === 0) setOpen(false);
+  const closeOnEscape = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') setOpen(false);
+  };
 
   const message = (n: TransientNotice & { text: string }) => (
     <p key={n.key} className="notice" role={n.role} title={n.text}>
@@ -74,26 +77,24 @@ export function EditorStatusStrip({
     <div className="editor-status-strip" data-testid="editor-status-strip">
       <div className="editor-status-strip__standing">{standing[0]?.node}</div>
       <div className="editor-status-strip__transient">{live[0] && message(live[0])}</div>
-      {total > 0 && (
+      {hidden > 0 && (
         <button
           type="button"
           className="editor-status-strip__more"
           aria-expanded={open}
-          aria-controls={listId}
+          aria-controls={open ? listId : undefined}
           onClick={() => setOpen((o) => !o)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setOpen(false);
-          }}
+          onKeyDown={closeOnEscape}
         >
-          {hidden > 0 ? `+${String(hidden)} more` : 'All notices'}
+          {`+${String(hidden)} more`}
         </button>
       )}
       {open && (
-        <div id={listId} className="editor-status-strip__list">
-          {standing.map((n) => (
+        <div id={listId} className="editor-status-strip__list" onKeyDown={closeOnEscape}>
+          {standing.slice(1).map((n) => (
             <div key={n.key}>{n.node}</div>
           ))}
-          {live.map(message)}
+          {live.slice(1).map(message)}
         </div>
       )}
     </div>

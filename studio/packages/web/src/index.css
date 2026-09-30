@@ -1191,9 +1191,11 @@ td button + button {
   min-height: 0;
 }
 
-/* Header, notices and validation badges are content-sized; the editor grid takes
-   everything that is left. A flex column rather than explicit grid rows because
-   the children are CONDITIONAL (save message, load error, issue list) — a
+/* Header, notice strip and version history are content-sized; the editor grid
+   takes everything that is left. Since #1393 the notice strip is a FIXED height
+   and the issue list lives in the dock, so only version history still comes and
+   goes. A flex column rather than explicit grid rows because a child can be
+   CONDITIONAL — a
    `grid-template-rows` listing them would silently mis-assign the `1fr` row the
    moment one of them is absent. */
 .canvas-page {

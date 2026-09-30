@@ -187,8 +187,10 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     // #852 — the assertions below need a WIDTH-bound fit (vertical slack, so the
     // box is off the right edge only). The bottom dock made the default canvas
     // wide and short, which binds the fit on height instead; a narrower, taller
-    // viewport restores the shape this fixture was laid out for.
-    await page.setViewportSize({ width: 1000, height: 1000 });
+    // viewport restores the shape this fixture was laid out for. #1393's
+    // fixed status strip takes a constant line off the canvas, which cost the
+    // fit that vertical slack at 1000px, so the viewport is taller again.
+    await page.setViewportSize({ width: 1000, height: 1150 });
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 

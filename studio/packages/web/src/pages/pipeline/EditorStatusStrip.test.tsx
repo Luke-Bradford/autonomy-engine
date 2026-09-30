@@ -67,10 +67,11 @@ describe('EditorStatusStrip', () => {
     const { container } = render(strip('Save failed: archived', null, ['Archived.']));
     expect(screen.getByRole('alert').textContent).toBe('Archived.');
     expect(container.querySelector('.notice')?.textContent).toBe('Save failed: archived');
-    expect(screen.getByRole('button', { name: 'All notices' })).toBeTruthy();
+    // Both are drawn, so there is nothing more to disclose.
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('lists every notice in full only while the disclosure is open', () => {
+  it('lists the notices the line could not draw, only while open', () => {
     const { container } = render(strip('Saved v2.', null, ['Conflict.', 'Archived.']));
     expect(screen.getAllByRole('alert')).toHaveLength(1);
     const more = screen.getByRole('button', { name: '+1 more' });
@@ -78,8 +79,11 @@ describe('EditorStatusStrip', () => {
     fireEvent.click(more);
     expect(more.getAttribute('aria-expanded')).toBe('true');
     const list = container.querySelector('.editor-status-strip__list');
-    expect(list?.textContent).toBe('Conflict.Archived.Saved v2.');
-    fireEvent.keyDown(more, { key: 'Escape' });
+    // The hidden one only: a second copy of the shown banner would be a
+    // second alert with a second set of its buttons.
+    expect(list?.textContent).toBe('Archived.');
+    expect(screen.getAllByRole('alert')).toHaveLength(2);
+    fireEvent.keyDown(list!, { key: 'Escape' });
     expect(container.querySelector('.editor-status-strip__list')).toBeNull();
   });
 

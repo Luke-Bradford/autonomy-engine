@@ -112,6 +112,14 @@ test.describe('#1393 the editor does not shift when you edit', () => {
     const problemsList = page.getByRole('complementary', { name: 'Problems' });
     await expect(problemsList.locator('.badge-list li')).toContainText(['needs a call config']);
     await expect(boxes.save(page)).toBeDisabled();
+    // Announced from the dock header, which stays shown when the list folds.
+    await expect(page.locator('.property-dock__header [role="status"]')).toHaveText(
+      '1 validation issue(s) — fix these to save.',
+    );
+    // Save's description keeps the refusal reason beside the dirty note.
+    await expect(boxes.save(page)).toHaveAccessibleDescription(
+      'Unsaved changes Fix the 1 validation issue(s) in the Problems panel to save.',
+    );
     await expectUnmoved(page, baseline, 'validation issue');
 
     // Undone, so the doc can save again.
