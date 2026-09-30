@@ -79,10 +79,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
-  // #1392 — the names R1 resolves alongside the doc. `null` on the fallback path
-  // (the doc would not resolve), where the page shows ids as before.
-  const [names, setNames] = useState<{ pipeline: string; trigger: string | null } | null>(null);
-  useShellLabel(names ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
+  // #1392 — the names R1 resolves alongside the doc. A `null` name (none the
+  // owner may see), or no names at all on the fallback path (the doc would not
+  // resolve), leaves the page showing ids, as it did before.
+  const [names, setNames] = useState<{ pipeline: string | null; trigger: string | null } | null>(
+    null,
+  );
+  useShellLabel(names?.pipeline ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -463,7 +466,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             copyable. Until the names load (or on the doc-less fallback) the
             heading is the run's short id, as the breadcrumb is. */}
         <h2 id="run-heading">
-          {names && doc ? (
+          {names?.pipeline && doc ? (
             <>
               {names.pipeline} <span className="run-heading__version">v{doc.version}</span>
             </>
@@ -558,10 +561,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </dd>
           <dt>Pipeline</dt>
           <dd>
-            {names && doc ? (
-              <Link to={pipelinePath(doc.pipelineId)}>
-                {names.pipeline} v{doc.version}
-              </Link>
+            {/* The link carries the NAME only: the canvas opens the pipeline's
+                latest version, which need not be the one this run is bound to. */}
+            {names?.pipeline && doc ? (
+              <>
+                <Link to={pipelinePath(doc.pipelineId)}>{names.pipeline}</Link> v{doc.version}
+              </>
             ) : (
               <code>{run.pipelineVersionId}</code>
             )}

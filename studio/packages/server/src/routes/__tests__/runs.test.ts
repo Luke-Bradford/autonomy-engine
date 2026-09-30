@@ -826,6 +826,45 @@ describe('runs routes (read-only)', () => {
       expect(after.triggerName).toBeNull();
     });
 
+    it("#1392 — withholds a name the run's owner does not own", async () => {
+      // Not reachable through the API (a run is created only from its owner's
+      // trigger), so built at the repo layer: the check must hold on its own.
+      const foreign = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not yours' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: foreign.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const trigger = createTrigger(app.db, {
+        ownerId: 'someone-else',
+        name: 'Also not yours',
+        pipelineVersionId: version.id,
+        params: {},
+        mode: 'schedule',
+        schedule: '0 2 * * *',
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: true,
+      });
+      const run = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: version.id,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+      });
+
+      const detail = RunDetailSchema.parse(
+        (await app.inject({ method: 'GET', url: `/api/runs/${run.id}/detail` })).json(),
+      );
+      expect(detail.pipelineName).toBeNull();
+      expect(detail.triggerName).toBeNull();
+    });
+
     it("404s for a run belonging to a different owner — a run handle must not leak someone else's doc", async () => {
       // The version doc carries node config and param defaults, so this route
       // hands out strictly MORE than `GET /api/runs/:id`. The ownership proof is

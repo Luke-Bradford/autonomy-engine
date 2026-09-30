@@ -2972,6 +2972,26 @@ td button + button {
   overflow-wrap: anywhere;
 }
 
+/* #1392 — the version beside the pipeline's name in the run heading reads as a
+   qualifier, not as part of the name. */
+.run-heading__version {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+/* #1392 — a short id, its copy button and the copy result on one line. The
+   status is always mounted (it is a live region) and simply empty until used. */
+.copyable-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.copyable-id__status {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 /* RS6 — the start time beside each link in the run detail page's `Reruns` row:
    secondary to the link, the same weight as the `<dt>` labels. */
 .rerun-history-when {

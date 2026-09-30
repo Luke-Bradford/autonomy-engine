@@ -165,7 +165,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('RunDetailPage', () => {
   it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    expect(await screen.findByRole('link', { name: 'Test pipeline v1' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Test pipeline' })).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
 
@@ -187,7 +187,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_V1StGXR8_Z5jdHi6B-myT" />);
 
     expect(await screen.findByRole('heading', { name: 'Nightly load v1' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Nightly load v1' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
       'href',
       '/author/pipelines/pl_1',
     );
@@ -203,6 +203,18 @@ describe('RunDetailPage', () => {
     await user.click(screen.getByRole('button', { name: 'Copy run id' }));
     expect(await navigator.clipboard.readText()).toBe('run_V1StGXR8_Z5jdHi6B-myT');
     expect(screen.getByText('Copied')).toBeInTheDocument();
+  });
+
+  it('keeps the pipeline-version id when the pipeline has no name to give', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run(),
+      pipelineVersion: version(),
+      pipelineName: null,
+      triggerName: null,
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('pv_1')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Run run_1' })).toBeInTheDocument();
   });
 
   it('keeps the trigger id when the trigger has no name to give', async () => {
@@ -771,7 +783,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        await screen.findByRole('link', { name: 'Test pipeline v1' });
+        await screen.findByRole('link', { name: 'Test pipeline' });
         expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
@@ -1960,7 +1972,7 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline v1' });
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   /* A BLOCK body, not `() => mock.mockResolvedValue(…)`: that returns the mock,
@@ -2084,7 +2096,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline v1' });
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   let confirmSpy: ReturnType<typeof vi.spyOn>;
@@ -2907,7 +2919,7 @@ describe('RunDetailPage — the parent a child run was called by', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline v1' });
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   it('links up to the run that called this one', async () => {
@@ -3044,7 +3056,7 @@ describe('RunDetailPage — the reruns of this run', () => {
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByRole('link', { name: 'Test pipeline v1' });
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   function rerun(id: string): RunSummary {

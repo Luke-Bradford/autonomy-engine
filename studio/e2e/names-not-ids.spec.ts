@@ -62,12 +62,12 @@ test('a run is named by its pipeline, with the run id short and copyable', async
 
   const short = runId.slice(-8);
   await expectNamed(page, `${name} · run ${short}`, 'Monitor', runId);
-  await expect(page.getByRole('heading', { level: 2 })).toHaveText(`${name} v1`);
+  await expect(page.locator('#run-heading')).toHaveText(`${name} v1`);
 
   // The metadata links by NAME, and holds the run id short with the full one
   // in its tooltip — never the pipeline-version or trigger ids.
   const meta = page.locator('.run-meta');
-  await expect(meta.getByRole('link', { name: `${name} v1` })).toHaveAttribute(
+  await expect(meta.getByRole('link', { name, exact: true })).toHaveAttribute(
     'href',
     `#/author/pipelines/${pipelineId}`,
   );

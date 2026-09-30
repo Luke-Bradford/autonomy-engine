@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useBusyAction } from '../hooks/useBusyAction';
 import { shortId } from './ids';
 
 /**
@@ -12,10 +13,15 @@ import { shortId } from './ids';
  * The copy button is feature-detected, as in `pages/runs/CappedValue.tsx`:
  * `navigator.clipboard` is absent outside a secure context, and offering a
  * control that cannot work is worse than not offering one. A rejected write is
- * reported, never treated as success.
+ * reported, never treated as success, and the write is single-flighted through
+ * `useBusyAction` for the same reason as there: two overlapping writes would
+ * race for the one status line.
  */
+const COPY_KEY = 'copy';
+
 export function CopyableId({ id, noun }: { id: string; noun: string }) {
   const [result, setResult] = useState<'copied' | 'failed' | null>(null);
+  const copy = useBusyAction();
   const canCopy = typeof navigator !== 'undefined' && navigator.clipboard !== undefined;
   return (
     <span className="copyable-id">
@@ -25,10 +31,13 @@ export function CopyableId({ id, noun }: { id: string; noun: string }) {
           type="button"
           className="copyable-id__copy"
           aria-label={`Copy ${noun} id`}
+          disabled={copy.active.has(COPY_KEY)}
           onClick={() => {
-            navigator.clipboard.writeText(id).then(
-              () => setResult('copied'),
-              () => setResult('failed'),
+            void copy.run(COPY_KEY, () =>
+              navigator.clipboard.writeText(id).then(
+                () => setResult('copied'),
+                () => setResult('failed'),
+              ),
             );
           }}
         >

@@ -210,14 +210,16 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     // an escaping `ZodError` for the unparseable one, which the handler turns
     // into a 400 `validation_error` on a GET with no request body.
     const pipelineVersion = resolveDoc(run.pipelineVersionId);
-    // #1392 — the names ride the SAME ownership proof as the doc (see above):
-    // the pipeline is the version's, the trigger is the one the run was created
-    // from. `?? pipelineId` is unreachable — the run pins its version (restrict
-    // FK) and the version pins its pipeline — but keeps a read total rather than
-    // throwing.
-    const pipelineName =
-      getPipeline(db, pipelineVersion.pipelineId)?.name ?? pipelineVersion.pipelineId;
-    const triggerName = run.triggerId ? (getTrigger(db, run.triggerId)?.name ?? null) : null;
+    // #1392 — the names. The pipeline is the version's and the trigger is the
+    // one the run was created from, so by the argument above both are the
+    // run owner's already; the owner check is repeated per row anyway, because
+    // a name is the one thing here that is cheap to withhold and a leak of it
+    // would be silent. A name that fails it, or a row that is gone, is `null`
+    // — never an id dressed as a name.
+    const nameFor = (row: { ownerId: string | null; name: string } | null) =>
+      row && row.ownerId === run.ownerId ? row.name : null;
+    const pipelineName = nameFor(getPipeline(db, pipelineVersion.pipelineId));
+    const triggerName = run.triggerId ? nameFor(getTrigger(db, run.triggerId)) : null;
     return { run, pipelineVersion, pipelineName, triggerName } satisfies RunDetail;
   });
 
