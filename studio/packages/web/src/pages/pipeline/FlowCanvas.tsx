@@ -14,6 +14,7 @@ import {
 import { useStore } from 'zustand';
 import {
   Background,
+  ControlButton,
   Controls,
   Handle,
   MiniMap,
@@ -36,7 +37,6 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   containerMembership,
-  getActivity,
   implicitRouting,
   type ContainerKind,
   type Dataset,
@@ -44,7 +44,12 @@ import {
 } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
-import { activityBadges, activitySummary, type ActivityBadge } from './activitySummary';
+import {
+  activityBadges,
+  activitySummary,
+  datasetNameLookup,
+  type ActivityBadge,
+} from './activitySummary';
 import {
   confirmContainerEdit,
   confirmNewContainer,
@@ -57,7 +62,7 @@ import { CONTAINER_PALETTE } from './activityGroups';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { useNodeFan } from './useNodeFan';
-import { ActivityGlyph } from './ActivityGlyph';
+import { ActivityCardBody } from './ActivityCardBody';
 import { SpreadEdge } from './SpreadEdge';
 import { parallelEdgeOffsets } from './parallelEdges';
 import { SourcePorts } from './SourcePorts';
@@ -108,6 +113,7 @@ import {
   type Selection,
 } from './canvasStore';
 import { namedList } from '../../lib/namedList';
+import { uiStore } from '../../stores/uiStore';
 import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issueContext';
 import { subjectKey, type SubjectIssue } from './containerRules';
 
@@ -235,37 +241,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      {/* The glyph is DECORATIVE and says so: the name beside it is the
-          accessible content, and a second reading of "copy file" would just make
-          a screen reader say it twice. */}
-      <span className="flow-node-icon" aria-hidden="true">
-        <ActivityGlyph type={d.type} category={getActivity(d.type)?.category} />
-      </span>
-      {/* #1394 OR3 — the name WRAPS to two lines and the whole of it is the
-          tooltip; under it, one line saying what this step does, and the policy
-          badges. The summary row is drawn even when empty, so filling in a field
-          never resizes the box (OR2). */}
-      <span className="flow-node-body">
-        <strong className="flow-node-title" title={d.title}>
-          {d.title}
-        </strong>
-        <span className="flow-node-meta">
-          <span className="flow-node-summary" title={d.summary ?? undefined}>
-            {d.summary}
-          </span>
-          {d.badges.map((b) => (
-            <span
-              key={b.key}
-              className={`flow-node-badge flow-node-badge--${b.key}`}
-              role="img"
-              aria-label={b.label}
-              title={b.label}
-            >
-              {b.text}
-            </span>
-          ))}
-        </span>
-      </span>
+      <ActivityCardBody type={d.type} title={d.title} summary={d.summary} badges={d.badges} />
       <IssueBadge issues={issues} />
       {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
           "no connection" or "connection bound" in grey — a per-node CONFIG state
@@ -583,12 +559,11 @@ export function FlowCanvas({
   datasets?: readonly Dataset[];
 }) {
   const nodes = useStore(store, (s) => s.nodes);
-  const datasetName = useMemo(() => {
-    const names = new Map(datasets.map((d) => [d.id, d.name]));
-    return (id: string) => names.get(id);
-  }, [datasets]);
+  const datasetName = useMemo(() => datasetNameLookup(datasets), [datasets]);
   const edges = useStore(store, (s) => s.edges);
   const selected = useStore(store, (s) => s.selected);
+  const minimapHidden = useStore(uiStore, (s) => s.minimapHidden);
+  const setMinimapHidden = useStore(uiStore, (s) => s.setMinimapHidden);
   // #746 — the containers, straight off the store. This used to select `loaded`
   // WHOLE and reach into it, because `s.loaded?.containers ?? []` allocates a
   // fresh array on every store read and zustand compares selector results with
@@ -2379,10 +2354,11 @@ export function FlowCanvas({
             solid blob in the same colour as the activities it encloses, on top of
             them (containers come first, so they paint first). Classed instead, so
             the CSS can draw it as an outline the way it reads on the canvas. */}
-        <MiniMap
-          pannable
-          zoomable
-          /* SIZED THROUGH THE COMPONENT, never in CSS. React Flow renders the map
+        {!minimapHidden && (
+          <MiniMap
+            pannable
+            zoomable
+            /* SIZED THROUGH THE COMPONENT, never in CSS. React Flow renders the map
              as `<svg width={elementWidth} height={elementHeight} viewBox=…>`
              taken from THESE props (200x150 by default); a stylesheet that
              shrinks the container leaves the svg at its old size, so the box
@@ -2397,12 +2373,42 @@ export function FlowCanvas({
              maps without distortion. `usableExtent` (containerLayout.ts) still reserves the
              larger default footprint, which now merely leaves extra clearance —
              the direction that is safe. */
-          style={{ width: 160, height: 120 }}
-          nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
-        />
+            style={{ width: 160, height: 120 }}
+            nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
+          />
+        )}
         {/* The Fit button is a fit too — capped with the mount-time fit, or one
             press would undo it (#1394 OR3). */}
-        <Controls fitViewOptions={FIT_VIEW_OPTIONS} />
+        <Controls fitViewOptions={FIT_VIEW_OPTIONS}>
+          {/* #1394 OR3 — the map can be folded away, and stays folded across
+              pipelines and reloads (`uiStore`). In the Controls rather than a
+              panel of its own: a second bottom-right panel would sit ON the map.
+              `usableExtent` still reserves the map's corner while it is hidden —
+              extra clearance, the safe direction. */}
+          <ControlButton
+            onClick={() => setMinimapHidden(!minimapHidden)}
+            aria-pressed={!minimapHidden}
+            /* ONE name, with the state in `aria-pressed` — a label that flipped
+               as well would be read as "Hide map, pressed". The tooltip says
+               what a click will do. */
+            aria-label="Map"
+            title={minimapHidden ? 'Show map' : 'Hide map'}
+            className="minimap-toggle"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect
+                x="1.5"
+                y="2.5"
+                width="13"
+                height="11"
+                rx="1"
+                fill="none"
+                stroke="currentColor"
+              />
+              <rect x="8" y="8" width="5" height="4" fill="currentColor" />
+            </svg>
+          </ControlButton>
+        </Controls>
         {routing !== null && (
           /* #788 — see `routing` above. NOT a live region, and that is
              deliberate. The page already runs TWO polite regions — the toolbox's

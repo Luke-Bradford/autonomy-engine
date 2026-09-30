@@ -1,5 +1,8 @@
-import type { PipelineVersion } from '@autonomy-studio/shared';
+import { useEffect, useState } from 'react';
+import type { Dataset, PipelineVersion } from '@autonomy-studio/shared';
+import { listDatasets } from '../../api/datasets';
 import { RunCanvas } from './RunCanvas';
+import type { NodeActivity } from './runSummary';
 import type { Overlay } from './useRunProjection';
 
 /**
@@ -18,14 +21,37 @@ import type { Overlay } from './useRunProjection';
  * was already in the entry chunk either way (`vite.config.ts` has the
  * measurement).
  */
-export function RunGraph({ doc, overlay }: { doc: PipelineVersion; overlay: Overlay }) {
+export function RunGraph({
+  doc,
+  overlay,
+  activity,
+}: {
+  doc: PipelineVersion;
+  overlay: Overlay;
+  activity: readonly NodeActivity[];
+}) {
+  /* #1394 OR3 — the dataset NAMES a Copy card shows. Fetched once; a failed
+     read leaves the list empty, so the card says "a dataset" (the summary's own
+     no-name fallback) rather than an id or an error on a monitor whose job is
+     the run. */
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    listDatasets(ctrl.signal).then(setDatasets, () => undefined);
+    return () => ctrl.abort();
+  }, []);
   return (
     <>
       {/* The graph is drawn whether or not the run projects onto it — the
           authored shape is a fact of the version, and the run state is an
           overlay ON it. With no overlay the nodes say so, rather than being
           coloured as if nothing had run. */}
-      <RunCanvas doc={doc} state={overlay.ready ? overlay.state : null} />
+      <RunCanvas
+        doc={doc}
+        state={overlay.ready ? overlay.state : null}
+        activity={activity}
+        datasets={datasets}
+      />
       {!overlay.ready && (
         <p className="page-hint" role="status">
           {overlay.reason}

@@ -740,7 +740,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
            bytes, because eager code already imported the engine barrel and
            `reduce.js` was placed in the entry chunk regardless. */
         <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
-          <RunGraph doc={doc} overlay={overlay} />
+          <RunGraph doc={doc} overlay={overlay} activity={nodes} />
         </Suspense>
       )}
 

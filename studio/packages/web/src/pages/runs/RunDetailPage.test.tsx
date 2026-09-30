@@ -55,6 +55,14 @@ vi.mock('../../api/runs', async (importActual) => ({
      trigger it. */
   completeExternalWait: vi.fn().mockResolvedValue(undefined),
 }));
+/* #1394 OR3 — the run graph reads the workspace's dataset NAMES from a mount
+   effect, for its Copy cards; the mount-effect reason on `listExternalWaits`
+   above applies verbatim. `[]` is honest for every test here: none of their docs
+   has a Copy node. */
+vi.mock('../../api/datasets', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/datasets')>()),
+  listDatasets: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./useRunStream')>()),
   useRunStream: vi.fn(),

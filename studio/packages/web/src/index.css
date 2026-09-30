@@ -3238,16 +3238,47 @@ td button + button {
  * visual pass only ever opened the authoring canvas.
  *
  * The width is kept so the two canvases still draw boxes of one size; only the
- * DIRECTION goes back. The title wraps here rather than eliding, which is what
- * it did before and is right for a view whose job is to be read rather than
- * edited. */
+ * DIRECTION goes back.
+ *
+ * #1394 OR3 — the top line is now the author canvas's whole card (glyph, the
+ * two-line name, summary, badges) in `.run-node-card`, which is the author's
+ * ROW again; the status and what the run measured sit under it in one
+ * fixed-height foot, so a duration arriving on settle never resizes the box. */
 .run-node {
   outline: 2px solid transparent;
   outline-offset: 2px;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 0.25rem;
+}
+
+.run-node-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.run-node-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  height: 1.1rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.run-node-status {
+  flex: none;
+}
+
+.run-node-facts {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .run-node-neutral {

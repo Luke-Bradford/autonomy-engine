@@ -1,15 +1,23 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
-import type { Node, PipelineVersion, RunState } from '@autonomy-studio/shared';
+import {
+  COPY_ACTIVITY_TYPE,
+  containerMembership,
+  type Node,
+  type PipelineVersion,
+  type RunState,
+} from '@autonomy-studio/shared';
 import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import {
   containerAriaLabel,
   containerHandles,
   containerRects,
-  unmeasuredNodeSize,
+  UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
+import { activityBadges, activitySummary, type ActivityBadge } from '../pipeline/activitySummary';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
+  nodeBoxHeight,
   portIdsOf,
   sourcePortsOf,
   usedConditionsBySource,
@@ -22,6 +30,8 @@ import {
   nodeStatusTone,
   type StatusTone,
 } from './nodeStatus';
+import { formatCount, formatNodeDuration, isMeasurableSpan } from './format';
+import type { NodeActivity } from './runSummary';
 
 /**
  * U11 — the doc + run state → React Flow arrays, as PURE functions.
@@ -66,6 +76,171 @@ export interface RunNodeData extends Record<string, unknown> {
    * cannot tell them which of the two absences they are looking at.
    */
   showStatus: boolean;
+  /**
+   * #1394 OR3 — the authoring card's content: type (for the glyph), what the
+   * step does, and its policy badges. A fact of the VERSION, so it is built once
+   * per doc (`runCards`) and carried by reference: `sameRenderedData` compares
+   * with `Object.is`, and a fresh object per event would re-render every node.
+   */
+  card: RunCard;
+  /**
+   * #1394 OR3 — what this run measured on the node, worded (`1.2s · 3 rows`),
+   * or `null` when nothing is on record. A primitive for the same `Object.is`
+   * reason `portIds` is one.
+   */
+  facts: string | null;
+}
+
+/** What `runNodeFacts` reads off a node's activity row. */
+export type RunNodeMeasure = Pick<
+  NodeActivity,
+  'startedAtMs' | 'endedAtMs' | 'outputValues' | 'copiedFromRunId'
+>;
+
+/** The version-derived half of a run card — see `RunNodeData.card`. */
+export interface RunCard {
+  type: string;
+  summary: string | null;
+  badges: readonly ActivityBadge[];
+}
+
+/**
+ * Every node's card, built ONCE per doc. The caller memoizes the result (on the
+ * doc and its dataset names) so each card keeps its identity across run events.
+ */
+export function runCards(
+  doc: RunDoc,
+  datasetName: (id: string) => string | undefined = () => undefined,
+): Map<string, RunCard> {
+  return new Map(
+    doc.nodes.map((n) => {
+      const next: RunCard = {
+        type: n.type,
+        summary: activitySummary(n, datasetName),
+        badges: activityBadges(n),
+      };
+      /* Reuse this node's last card when it is equal: the dataset names arrive
+         AFTER the first paint, and a fresh object for every node would re-render
+         the whole graph (and blink every edge) to change only the Copy cards.
+         Keyed by the doc's own node object, which a version never replaces. */
+      const prev = lastCard.get(n);
+      if (prev !== undefined && sameCard(prev, next)) return [n.id, prev];
+      lastCard.set(n, next);
+      return [n.id, next];
+    }),
+  );
+}
+
+const lastCard = new WeakMap<Node, RunCard>();
+
+function sameCard(a: RunCard, b: RunCard): boolean {
+  return (
+    a.type === b.type &&
+    a.summary === b.summary &&
+    a.badges.length === b.badges.length &&
+    a.badges.every((x, i) => x.key === b.badges[i]!.key && x.label === b.badges[i]!.label)
+  );
+}
+
+/**
+ * #1394 OR3 — the numbers a run card shows under its status: the settled
+ * duration and, for a Copy Data node, the rows it wrote.
+ *
+ * Only what THIS run measured. An open span has no duration yet (the node table
+ * counts that one up live), and `formatNodeDuration`'s em-dash is the table's
+ * way of saying so in a cell — on a card the absence is simply nothing. A node a
+ * rerun COPIED ran in the source run, so its recorded rows are that run's and it
+ * says nothing here. Rows are read only off a Copy node, whose catalog entry
+ * declares them: any other node's `rowsWritten` output (a webhook's, a child
+ * pipeline's) is a value it was handed, not a count it made.
+ */
+export function runNodeFacts(type: string, activity: RunNodeMeasure | undefined): string | null {
+  if (activity === undefined || activity.copiedFromRunId !== undefined) return null;
+  const parts: string[] = [];
+  if (isMeasurableSpan(activity)) parts.push(formatNodeDuration(activity));
+  const out = type === COPY_ACTIVITY_TYPE ? activity.outputValues : undefined;
+  const written = out?.['rowsWritten'];
+  if (isCount(written)) {
+    parts.push(`${formatCount(written)} ${written === 1 ? 'row' : 'rows'}`);
+    const failed = out?.['rowsFailed'];
+    if (isCount(failed) && failed > 0) parts.push(`${formatCount(failed)} failed`);
+  }
+  return parts.length === 0 ? null : parts.join(' · ');
+}
+
+/** A recorded output is `unknown`: only a whole, non-negative number is a count. */
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/**
+ * The nodes that can run MORE THAN ONCE in a run: those inside a `foreach` or
+ * `loop` box at any depth, and those on a back edge's cycle. Such a node's
+ * activity row holds only the LATEST attempt's span and outputs, so a card would
+ * state one iteration's `1 row` for a copy that wrote three. Its card says
+ * nothing measured instead; a box already states its progress (`3 of 3 items`),
+ * and the node table has the per-attempt detail. Cached per doc, like the cards.
+ */
+const repeatedCache = new WeakMap<RunDoc, Set<string>>();
+function repeatedNodeIds(doc: RunDoc): Set<string> {
+  const hit = repeatedCache.get(doc);
+  if (hit !== undefined) return hit;
+  const out = new Set<string>();
+  const containers = doc.containers ?? [];
+  if (containers.length > 0) {
+    const { owner } = containerMembership(containers);
+    const kind = new Map(containers.map((c) => [c.id, c.kind]));
+    for (const n of doc.nodes) {
+      // Walk up the owners; `seen` bounds a malformed cyclic membership.
+      const seen = new Set<string>();
+      for (let c = owner.get(n.id); c !== undefined && !seen.has(c); c = owner.get(c)) {
+        seen.add(c);
+        if (kind.get(c) !== 'stage') {
+          out.add(n.id);
+          break;
+        }
+      }
+    }
+  }
+  /* A back edge `from → to` re-runs every node on a forward path from `to` to
+     `from`: reachable forward from `to` AND reaching `from`, over the forward
+     edges alone. */
+  const forward = doc.edges.filter((e) => e.back !== true);
+  const reach = (start: string, next: (id: string) => string[]) => {
+    const seen = new Set([start]);
+    const stack = [start];
+    while (stack.length > 0) {
+      for (const m of next(stack.pop()!)) {
+        if (!seen.has(m)) {
+          seen.add(m);
+          stack.push(m);
+        }
+      }
+    }
+    return seen;
+  };
+  const succ = (id: string) => forward.filter((e) => e.from === id).map((e) => e.to);
+  const pred = (id: string) => forward.filter((e) => e.to === id).map((e) => e.from);
+  for (const back of doc.edges.filter((e) => e.back === true)) {
+    const reachesFrom = reach(back.from, pred);
+    for (const id of reach(back.to, succ)) if (reachesFrom.has(id)) out.add(id);
+  }
+  repeatedCache.set(doc, out);
+  return out;
+}
+
+/**
+ * #1394 OR3 — a run card's height. FIXED rather than measured-then-grown: this
+ * view never measures anything, so the container boxes around the cards are
+ * drawn from this same number (`runFlowNodes`), and a card taller than it would
+ * poke out of its box. It fits a two-line name, the summary row and the status
+ * row, and the card is drawn at exactly this height (`RunCanvas`), so it cannot
+ * outgrow its box whatever the content.
+ */
+export const RUN_NODE_BASE_HEIGHT = 104;
+
+export function runNodeHeight(portCount: number): number {
+  return Math.max(RUN_NODE_BASE_HEIGHT, nodeBoxHeight(portCount));
 }
 
 export interface RunContainerData extends Record<string, unknown> {
@@ -119,6 +294,14 @@ export interface RunFlowOptions {
    * folded yet still owes the operator "not projected".
    */
   showStatus?: boolean;
+  /**
+   * #1394 OR3 — each node's card, from `runCards`; absent, built here without
+   * dataset names.
+   */
+  cards?: ReadonlyMap<string, RunCard>;
+  /** #1394 OR3 — the page's per-node activity rows, keyed by doc node id, for
+   * `runNodeFacts`. Absent on a view with no run behind it. */
+  activity?: ReadonlyMap<string, RunNodeMeasure>;
 }
 
 /** What a node says when the run has no state for it. */
@@ -142,6 +325,8 @@ export function runFlowNodes(
   options: RunFlowOptions = {},
 ): FlowNode[] {
   const showStatus = options.showStatus ?? true;
+  const cards = options.cards ?? runCards(doc);
+  const repeated = repeatedNodeIds(doc);
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
      would otherwise be two boxes reading "HTTP Request", in the view whose job
@@ -195,6 +380,14 @@ export function runFlowNodes(
         tone: status === null ? null : nodeStatusTone(status, state?.status),
         showStatus,
         portIds: portIdsOf(portsOf(n.id, n)),
+        // Unreachable fallback: `runCards` is built from this very array.
+        card: cards.get(n.id) ?? { type: n.type, summary: null, badges: [] },
+        /* Only on a SETTLED node: a held, re-opened or skipped node's row can
+           still carry an earlier attempt's span, which is not this state's. */
+        facts:
+          (status === 'success' || status === 'failure') && !repeated.has(n.id)
+            ? runNodeFacts(n.type, options.activity?.get(n.id))
+            : null,
       } satisfies RunNodeData,
       ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };
@@ -222,7 +415,10 @@ export function runFlowNodes(
         {
           x: n.position.x,
           y: n.position.y,
-          ...unmeasuredNodeSize(portCounts.get(n.id) ?? 0),
+          width: UNMEASURED_NODE_SIZE.width,
+          // #1394 OR3 — the card's own fixed height, not the author canvas's
+          // unmeasured guess: see `RUN_NODE_BASE_HEIGHT`.
+          height: runNodeHeight(portCounts.get(n.id) ?? 0),
         },
       ]),
     ),

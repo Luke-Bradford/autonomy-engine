@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { ContainerRunStatusSchema, type RunState } from '@autonomy-studio/shared';
+import {
+  ContainerRunStatusSchema,
+  type NodeRunStatus,
+  type RunState,
+} from '@autonomy-studio/shared';
 import { encodeCondition, OPERATIONAL_CONDITIONS } from '../pipeline/ports';
 import { containerStatusLabel, containerStatusTone } from './nodeStatus';
 import { projectRun } from './runProjection';
-import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
+import {
+  mergeRunNodes,
+  NO_STATUS_LABEL,
+  RUN_NODE_BASE_HEIGHT,
+  runCards,
+  runFlowEdges,
+  runFlowNodes,
+  runNodeFacts,
+  type RunDoc,
+  type RunNodeData,
+  type RunNodeMeasure,
+} from './runFlow';
 
 const DOC: RunDoc = {
   nodes: [
@@ -598,5 +613,207 @@ describe('runFlowNodes — statusless', () => {
     const nodes = runFlowNodes(DOC, null);
     for (const n of nodes) expect(n.data.showStatus).toBe(true);
     expect(nodes[0]!.ariaLabel).toContain(NO_STATUS_LABEL);
+  });
+});
+
+/** A run state with these node statuses — all `runNodeFacts` gating reads. */
+function settled(statuses: Record<string, NodeRunStatus>): RunState {
+  return {
+    ...projected(),
+    nodes: Object.fromEntries(
+      Object.entries(statuses).map(([id, status]) => [id, { status, attempts: 1, retries: 0 }]),
+    ),
+  };
+}
+
+const measured = (
+  startedAtMs: number | undefined,
+  endedAtMs: number | undefined,
+  outputValues?: Record<string, unknown>,
+  copiedFromRunId?: string,
+): RunNodeMeasure => ({ startedAtMs, endedAtMs, outputValues, copiedFromRunId });
+
+describe('#1394 OR3 — run cards', () => {
+  const COPY_DOC: RunDoc = {
+    nodes: [
+      {
+        id: 'cp',
+        type: 'copy',
+        position: { x: 0, y: 0 },
+        config: {},
+        datasetIds: { source: 'ds-in', sink: 'ds-out' },
+        policy: { retry: 2 },
+      },
+    ],
+    edges: [],
+    containers: [],
+  };
+
+  it('carries the authoring card — type, summary with dataset NAMES, badges', () => {
+    const cards = runCards(COPY_DOC, (id) => ({ 'ds-in': 'orders.csv', 'ds-out': 'orders' })[id]);
+    const data = runFlowNodes(COPY_DOC, null, { cards })[0]!.data as RunNodeData;
+    expect(data.card.type).toBe('copy');
+    expect(data.card.summary).toBe('orders.csv → orders');
+    expect(data.card.badges.map((b) => b.key)).toEqual(['retry']);
+    // The SAME object the caller built — what keeps node identity across events.
+    expect(data.card).toBe(cards.get('cp'));
+  });
+
+  it('reuses an equal card from the previous build, and replaces a changed one', () => {
+    const doc: RunDoc = {
+      ...COPY_DOC,
+      nodes: [
+        ...COPY_DOC.nodes,
+        { id: 'w', type: 'wait', position: { x: 0, y: 200 }, config: { seconds: 1 } },
+      ],
+    };
+    const before = runCards(doc);
+    // The dataset names arrive: only the Copy card's summary changes.
+    const after = runCards(doc, (id) => (id === 'ds-in' ? 'orders.csv' : undefined));
+    expect(after.get('w')).toBe(before.get('w'));
+    expect(after.get('cp')).not.toBe(before.get('cp'));
+    expect(after.get('cp')!.summary).toBe('orders.csv → a dataset');
+  });
+
+  it('puts the measured facts on a SETTLED node, and none on a view with no run', () => {
+    const activity = new Map([
+      ['cp', measured(1_000, 2_500, { rowsWritten: 1204, rowsFailed: 0 })],
+    ]);
+    const state = settled({ cp: 'success' });
+    const run = runFlowNodes(COPY_DOC, state, { activity })[0]!.data as RunNodeData;
+    expect(run.facts).toBe('1s · 1,204 rows');
+    const preview = runFlowNodes(COPY_DOC, state, { activity, showStatus: false })[0]!
+      .data as RunNodeData;
+    expect(preview.facts).toBeNull();
+  });
+
+  it('says nothing measured on a node that is not settled — its row may be an earlier attempt’s', () => {
+    const activity = new Map([['cp', measured(1_000, 2_500, { rowsWritten: 3 })]]);
+    for (const status of ['retry_pending', 'dispatched', 'skipped', 'pending'] as const) {
+      const data = runFlowNodes(COPY_DOC, settled({ cp: status }), { activity })[0]!
+        .data as RunNodeData;
+      expect(data.facts, status).toBeNull();
+    }
+    expect((runFlowNodes(COPY_DOC, null, { activity })[0]!.data as RunNodeData).facts).toBeNull();
+  });
+
+  it('states no facts on a node that repeats inside a foreach/loop — only the last run would show', () => {
+    const doc = {
+      nodes: [
+        { id: 'in', type: 'copy', position: { x: 0, y: 0 }, config: {} },
+        { id: 'deep', type: 'copy', position: { x: 0, y: 200 }, config: {} },
+        { id: 'staged', type: 'copy', position: { x: 400, y: 0 }, config: {} },
+      ],
+      edges: [],
+      containers: [
+        { id: 'fe', kind: 'foreach', children: ['in', 'inner'] },
+        { id: 'inner', kind: 'stage', children: ['deep'] },
+        { id: 'stg', kind: 'stage', children: ['staged'] },
+      ],
+    } as unknown as RunDoc;
+    const row = measured(0, 10, { rowsWritten: 1 });
+    const activity = new Map(['in', 'deep', 'staged'].map((id) => [id, row]));
+    const state = settled({ in: 'success', deep: 'success', staged: 'success' });
+    const facts = Object.fromEntries(
+      runFlowNodes(doc, state, { activity })
+        .filter((n) => n.type === 'runActivity')
+        .map((n) => [n.id, (n.data as RunNodeData).facts]),
+    );
+    expect(facts).toEqual({ in: null, deep: null, staged: '10ms · 1 row' });
+  });
+
+  it('states no facts on a node on a back edge’s cycle, and keeps them off it', () => {
+    // a → b → c, with c ⇢ b back: b and c re-run, a and d do not.
+    const doc: RunDoc = {
+      nodes: ['a', 'b', 'c', 'd'].map((id, i) => ({
+        id,
+        type: 'wait',
+        position: { x: i * 300, y: 0 },
+        config: { seconds: 1 },
+      })),
+      edges: [
+        { id: 'e1', from: 'a', to: 'b', on: 'success' },
+        { id: 'e2', from: 'b', to: 'c', on: 'success' },
+        { id: 'e3', from: 'c', to: 'b', on: 'failure', back: true, maxBounces: 2 },
+        { id: 'e4', from: 'c', to: 'd', on: 'success' },
+      ],
+      containers: [],
+    };
+    const activity = new Map(['a', 'b', 'c', 'd'].map((id) => [id, measured(0, 5)]));
+    const state = settled({ a: 'success', b: 'success', c: 'success', d: 'success' });
+    const facts = Object.fromEntries(
+      runFlowNodes(doc, state, { activity }).map((n) => [n.id, (n.data as RunNodeData).facts]),
+    );
+    expect(facts).toEqual({ a: '5ms', b: null, c: null, d: '5ms' });
+  });
+
+  it('a changed fact replaces the node; an unchanged one keeps it', () => {
+    const state = settled({ cp: 'success' });
+    const cards = runCards(COPY_DOC);
+    const first = runFlowNodes(COPY_DOC, state, {
+      cards,
+      activity: new Map([['cp', measured(0, 5)]]),
+    });
+    const same = mergeRunNodes(
+      first,
+      runFlowNodes(COPY_DOC, state, { cards, activity: new Map([['cp', measured(0, 5)]]) }),
+    );
+    expect(same[0]).toBe(first[0]);
+    const grown = mergeRunNodes(
+      first,
+      runFlowNodes(COPY_DOC, state, { cards, activity: new Map([['cp', measured(0, 9)]]) }),
+    );
+    expect(grown[0]).not.toBe(first[0]);
+  });
+
+  it('draws container boxes from the card’s own fixed height', () => {
+    const doc: RunDoc = {
+      nodes: [{ id: 'a', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: 1 } }],
+      edges: [],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    } as RunDoc;
+    const box = runFlowNodes(doc, null).find((n) => n.type === 'runContainer')!;
+    // The box must reach below the card's bottom edge (child at y=0), or the
+    // card pokes out of it — the unmeasured 52px guess left it 32px short.
+    expect(box.position.y + box.height!).toBeGreaterThanOrEqual(RUN_NODE_BASE_HEIGHT);
+  });
+});
+
+describe('runNodeFacts', () => {
+  it('states a settled duration', () => {
+    expect(runNodeFacts('wait', measured(0, 250))).toBe('250ms');
+  });
+
+  it('says nothing for an open span or no row at all — never an em-dash or 0', () => {
+    expect(runNodeFacts('wait', measured(0, undefined))).toBeNull();
+    expect(runNodeFacts('wait', undefined)).toBeNull();
+  });
+
+  it('counts a Copy node’s rows written, singular for one, and failed rows only when there are some', () => {
+    expect(
+      runNodeFacts('copy', measured(undefined, undefined, { rowsWritten: 1, rowsFailed: 0 })),
+    ).toBe('1 row');
+    expect(runNodeFacts('copy', measured(0, 2_000, { rowsWritten: 3, rowsFailed: 2 }))).toBe(
+      '2s · 3 rows · 2 failed',
+    );
+    expect(runNodeFacts('copy', measured(undefined, undefined, { rowsWritten: 0 }))).toBe('0 rows');
+  });
+
+  it('reads rows off a Copy node only — another node’s `rowsWritten` is a value it was handed', () => {
+    for (const type of ['call_pipeline', 'webhook', 'wait']) {
+      expect(runNodeFacts(type, measured(0, 5, { rowsWritten: 3 })), type).toBe('5ms');
+    }
+  });
+
+  it('says nothing for a node a rerun COPIED — it ran in the source run', () => {
+    expect(
+      runNodeFacts('copy', measured(undefined, undefined, { rowsWritten: 3 }, 'run_src')),
+    ).toBeNull();
+  });
+
+  it('ignores a recorded value that is not a count', () => {
+    for (const bad of ['3', -1, 1.5, Number.NaN, Infinity, null]) {
+      expect(runNodeFacts('copy', measured(undefined, undefined, { rowsWritten: bad }))).toBeNull();
+    }
   });
 });
