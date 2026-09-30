@@ -154,7 +154,10 @@ function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
 
 beforeEach(() => {
   getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run(), pipelineVersion: version() });
+    ...NAMES,
+    run: run(),
+    pipelineVersion: version(),
+  });
   useRunStreamMock.mockReturnValue(stream());
 });
 afterEach(() => vi.restoreAllMocks());
@@ -580,7 +583,7 @@ describe('RunDetailPage', () => {
      */
     it('shows a `queued` row through the shared vocabulary, with a doc loaded', async () => {
       getRunDetailMock.mockResolvedValue({
-      ...NAMES,
+        ...NAMES,
         run: run({ status: 'queued' }),
         pipelineVersion: version(),
       });
@@ -639,7 +642,10 @@ describe('RunDetailPage', () => {
           envelope({ type: 'run.finished', runId: 'run_1', outcome: 'failure' }),
         ];
         getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run(), pipelineVersion: waitDoc() });
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events: terminated }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
@@ -670,7 +676,10 @@ describe('RunDetailPage', () => {
           }),
         ];
         getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run(), pipelineVersion: waitDoc() });
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
@@ -755,7 +764,10 @@ describe('RunDetailPage', () => {
           }),
         ];
         getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run(), pipelineVersion: waitDoc() });
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
@@ -901,7 +913,7 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
          keyed on. Never an invented placeholder — `nameOf` returning something
          readable-but-false here is the defect, not the fallback. */
       getRunDetailMock.mockResolvedValue({
-      ...NAMES,
+        ...NAMES,
         run: run(),
         pipelineVersion: version({
           nodes: [{ id: 'x@2', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
@@ -2067,7 +2079,10 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
 
   async function mountWithStatus(status: Run['status']) {
     getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run({ status }), pipelineVersion: version() });
+      ...NAMES,
+      run: run({ status }),
+      pipelineVersion: version(),
+    });
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByRole('link', { name: 'Test pipeline v1' });
   }
@@ -2238,7 +2253,10 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     doc = approvalDoc(),
   ) {
     getRunDetailMock.mockResolvedValue({
-      ...NAMES, run: run({ status: 'waiting' }), pipelineVersion: doc });
+      ...NAMES,
+      run: run({ status: 'waiting' }),
+      pipelineVersion: doc,
+    });
     useRunStreamMock.mockReturnValue(stream({ events: parkedOn(reason) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByText('Run');

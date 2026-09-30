@@ -157,13 +157,16 @@ describe('crumbsFrom — page-published labels', () => {
   ];
 
   it('replaces the fallback crumb with the label published for that path', () => {
-    expect(crumbsFrom(trail, { '/author/pipelines/pipe_x': 'Test Pipe' }).map((c) => c.label)).toEqual(
-      ['Author', 'Pipelines', 'Test Pipe'],
-    );
+    expect(
+      crumbsFrom(trail, { '/author/pipelines/pipe_x': 'Test Pipe' }).map((c) => c.label),
+    ).toEqual(['Author', 'Pipelines', 'Test Pipe']);
   });
 
   it('matches a trailing-slash pathname to the same label', () => {
-    const slashed = [...trail.slice(0, 2), match('/author/pipelines/pipe_x/', { crumb: () => 'pipe_x' })];
+    const slashed = [
+      ...trail.slice(0, 2),
+      match('/author/pipelines/pipe_x/', { crumb: () => 'pipe_x' }),
+    ];
     expect(crumbsFrom(slashed, { '/author/pipelines/pipe_x': 'Test Pipe' }).at(-1)?.label).toBe(
       'Test Pipe',
     );

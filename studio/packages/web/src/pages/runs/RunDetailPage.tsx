@@ -81,9 +81,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
   // #1392 — the names R1 resolves alongside the doc. `null` on the fallback path
   // (the doc would not resolve), where the page shows ids as before.
-  const [names, setNames] = useState<{ pipeline: string; trigger: string | null } | null>(
-    null,
-  );
+  const [names, setNames] = useState<{ pipeline: string; trigger: string | null } | null>(null);
   useShellLabel(names ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
