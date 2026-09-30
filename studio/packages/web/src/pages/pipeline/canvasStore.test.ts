@@ -1465,6 +1465,44 @@ describe('canvasStore — container membership (U6d)', () => {
       expect(s.getState().containers).toEqual([]);
     });
 
+    it('an activity added INTO a box is one edit — one Undo takes the whole drop back', () => {
+      const s = loaded();
+      s.getState().addContainer('stage', { x: 0, y: 0 });
+      const box = s.getState().containers[0]!.id;
+      const before = s.getState().nodes.length;
+      s.getState().addNode('http_request', { x: 10, y: 10 }, box);
+      const added = s.getState().nodes[s.getState().nodes.length - 1]!;
+      expect(s.getState().containers[0]!.children).toEqual([added.id]);
+      s.getState().undo();
+      expect(s.getState().nodes).toHaveLength(before);
+      expect(s.getState().containers[0]!.children).toEqual([]);
+    });
+
+    it('addNode ignores a container id that does not exist', () => {
+      const s = loaded();
+      s.getState().addNode('http_request', { x: 10, y: 10 }, 'stage_nope');
+      expect(s.getState().containers).toEqual([]);
+      expect(s.getState().nodes.length).toBeGreaterThan(0);
+    });
+
+    it('setNodesContainer joins a group as ONE edit', () => {
+      const s = loaded();
+      const ids = s.getState().nodes.map((n) => n.id);
+      expect(ids.length).toBeGreaterThanOrEqual(2);
+      s.getState().addContainer('stage', { x: 0, y: 0 });
+      const box = s.getState().containers[0]!.id;
+      s.getState().setNodesContainer(ids, box);
+      expect(s.getState().containers[0]!.children).toEqual(ids);
+      s.getState().undo();
+      expect(s.getState().containers[0]!.children).toEqual([]);
+    });
+
+    it('setNodesContainer refuses an unknown container and leaves the canvas clean', () => {
+      const s = loaded();
+      s.getState().setNodesContainer([s.getState().nodes[0]!.id], 'stage_nope');
+      expect(s.getState().dirty).toBe(false);
+    });
+
     it('forgets every anchor on load — they describe the previous document', () => {
       const s = loaded();
       s.getState().addContainer('loop', { x: 1, y: 2 });

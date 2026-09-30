@@ -6,6 +6,12 @@ import {
   type ActivityCategory,
   type ContainerKind,
 } from '@autonomy-studio/shared';
+import {
+  ArrowRepeatAllRegular,
+  ArrowSyncRegular,
+  GroupRegular,
+  type FluentIcon,
+} from '@fluentui/react-icons';
 
 /*
  * The toolbox's pure grouping/filtering rules (U5).
@@ -81,6 +87,8 @@ export interface ContainerPaletteEntry {
   title: string;
   /** What the box does, shown as the entry's tooltip. */
   description: string;
+  /** The entry's decorative icon. */
+  icon: FluentIcon;
 }
 
 /** The Containers group's heading. */
@@ -98,19 +106,31 @@ export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
     kind: 'foreach',
     title: 'ForEach',
     description: 'Run the activities inside once for each item of an array',
+    icon: ArrowRepeatAllRegular,
   },
   {
     kind: 'loop',
     title: 'Until',
-    description: 'Repeat the activities inside until a condition is true',
+    // The canvas names the box by its kind ("loop 1"), so the tooltip says so.
+    description: 'Repeat the activities inside until a condition is true (a loop)',
+    icon: ArrowSyncRegular,
   },
-  { kind: 'stage', title: 'Stage', description: 'Group activities into one step' },
+  {
+    kind: 'stage',
+    title: 'Stage',
+    description: 'Group activities into one step',
+    icon: GroupRegular,
+  },
 ];
 
-/** The Containers entries a search query keeps — by title or by kind, like `toolboxGroups`. */
+/**
+ * The Containers entries a search query keeps — by title or by kind, like
+ * `toolboxGroups`, and all of them for a search naming the group itself.
+ */
 export function containerToolboxEntries(query: string): ContainerPaletteEntry[] {
   const needle = query.trim().toLowerCase();
+  if (CONTAINER_GROUP_LABEL.toLowerCase().includes(needle)) return [...CONTAINER_PALETTE];
   return CONTAINER_PALETTE.filter(
-    (e) => needle === '' || e.title.toLowerCase().includes(needle) || e.kind.includes(needle),
+    (e) => e.title.toLowerCase().includes(needle) || e.kind.includes(needle),
   );
 }

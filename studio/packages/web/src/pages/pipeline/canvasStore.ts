@@ -357,13 +357,14 @@ export function containersWithNew(containers: Container[], container: Container)
  */
 export function buildContainer(
   kind: ContainerKind,
-  firstChildId: string,
+  // `null` = an EMPTY box, the palette's (#1420); a node id wraps that node.
+  firstChildId: string | null,
   config: { exitWhen?: string; maxRounds?: number; items?: string },
 ): { container: Container } | { error: string } {
   const candidate = {
     id: newLocalId(kind),
     kind,
-    children: [firstChildId],
+    children: firstChildId === null ? [] : [firstChildId],
     ...(config.exitWhen !== undefined && config.exitWhen !== ''
       ? { exitWhen: config.exitWhen }
       : {}),
@@ -377,6 +378,15 @@ export function buildContainer(
     };
   }
   return { container: parsed.data };
+}
+
+/**
+ * Where an UNPOSITIONED add (a toolbox click) lands: the `addCount`-th slot of
+ * a five-step diagonal, so repeated clicks do not stack exactly. One formula
+ * for activities and containers (#1420), from the one counter.
+ */
+function staggerPosition(addCount: number): { x: number; y: number } {
+  return { x: 80 + (addCount % 5) * 40, y: 80 + (addCount % 5) * 40 };
 }
 
 /** The doc a clone is grafted onto — the live graph, plus its stagger counter. */
@@ -1026,9 +1036,11 @@ export interface CanvasState {
   /**
    * Append a node of `type`. `position` is the FLOW-coordinate placement for a
    * node dropped from the toolbox (U5); omit it and the node takes the next
-   * staggered default, as a clicked add does.
+   * staggered default, as a clicked add does. `containerId` (#1420) puts it
+   * straight into that container — an activity dropped onto a box — as ONE
+   * edit, so a single Undo takes the whole drop back; an unknown id is ignored.
    */
-  addNode(type: string, position?: Position): void;
+  addNode(type: string, position?: Position, containerId?: string): void;
   /**
    * U21 — append a copy of the node `id`: same type, same config, offset beside
    * it, and selected so the copy is what the panel edits next.
@@ -1240,6 +1252,12 @@ export interface CanvasState {
    * reverses the edit.
    */
   setNodeContainer(nodeId: string, containerId: string | null): void;
+  /**
+   * #1420 — `setNodeContainer` for a GROUP, as one edit: a selection dragged
+   * into a box joins together and one Undo takes it back out together. Unknown
+   * node ids are skipped; an unknown container refuses the whole call.
+   */
+  setNodesContainer(nodeIds: readonly string[], containerId: string | null): void;
   /**
    * U23 — replace the container `id` with `next`, its config edited.
    *
@@ -1637,7 +1655,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         set({ loaded: v });
       },
 
-      addNode(type, position) {
+      addNode(type, position, containerId) {
         if (!getActivity(type)) return; // unknown catalog type — ignore rather than author garbage
         // #425 — a structural-call activity (`execute_pipeline`) is now authorable.
         // It is added with NO `call` blob: there is no honest default target, and
@@ -1656,7 +1674,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // caller's object would let that caller mutate a node's position from
           // outside the actions — the single mutation point this store's doc
           // claims. Otherwise, stagger so repeated adds don't stack exactly.
-          position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
+          position: position ? { ...position } : staggerPosition(n),
         };
         // #526 — seed the declared output contract through the SAME composition the
         // server and the load path use, rather than reaching into the catalog entry
@@ -1666,6 +1684,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const node = lowerPipelineNodes([created])[0]!;
         edit((s) => ({
           nodes: [...s.nodes, node],
+          ...(containerId !== undefined && s.containers.some((c) => c.id === containerId)
+            ? { containers: assignContainerChild(s.containers, node.id, containerId) }
+            : {}),
           // Only a stagger consumes a slot — see the `addCount` doc.
           addCount: position ? s.addCount : s.addCount + 1,
         }));
@@ -1992,13 +2013,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       addContainer(kind, position) {
-        const parsed = ContainerSchema.safeParse({ id: newLocalId(kind), kind, children: [] });
-        if (!parsed.success) return;
-        const c = parsed.data;
-        const n = get().addCount;
+        const built = buildContainer(kind, null, {});
+        if ('error' in built) return;
+        const c = built.container;
         // The same stagger `addNode` uses, from the same counter, so a clicked
         // container and a clicked activity never land on one spot.
-        const at = position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 };
+        const at = position ? { ...position } : staggerPosition(get().addCount);
         edit((st) => ({
           containers: containersWithNew(st.containers, c),
           containerAnchors: { ...st.containerAnchors, [c.id]: at },
@@ -2008,10 +2028,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       setNodeContainer(nodeId, containerId) {
+        get().setNodesContainer([nodeId], containerId);
+      },
+
+      setNodesContainer(nodeIds, containerId) {
         const s = get();
-        if (!s.nodes.some((n) => n.id === nodeId)) return;
         if (containerId !== null && !s.containers.some((c) => c.id === containerId)) return;
-        const next = assignContainerChild(s.containers, nodeId, containerId);
+        const next = nodeIds
+          .filter((id) => s.nodes.some((n) => n.id === id))
+          .reduce((acc, id) => assignContainerChild(acc, id, containerId), s.containers);
         // Re-picking the container a node is already in must not mark the canvas
         // dirty — an unchanged graph that reports itself as edited is how a "you
         // have unsaved changes" prompt loses the operator's trust.

@@ -2118,8 +2118,9 @@ function ConditionChoice({
  * box joins it since #1420 (`FlowCanvas`'s drag-stop hit test); dragging one
  * OUT is still this select, because a derived box grows with its dragged child.
  *
- * A container is created around the SELECTED node rather than empty, which is
- * what keeps a `loop`/`foreach` past its one-child rule the moment it exists.
+ * THIS path creates a container around the SELECTED node, so a `loop`/`foreach`
+ * made here is past its one-child rule the moment it exists. (The palette's
+ * empty box, #1420, starts short of it — as a save badge until filled.)
  */
 function ContainerSection({
   store,

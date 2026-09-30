@@ -45,6 +45,7 @@ import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import {
   confirmContainerEdit,
+  confirmNewContainer,
   containerLabels,
   routingChangeBetween,
   routingSentence,
@@ -2081,105 +2082,79 @@ export function FlowCanvas({
   }
 
   /**
-   * #1420 — DRAG AN ACTIVITY INTO A BOX. Where each dragged node's centre was
-   * when the drag began, so the stop can tell "moved into a box" from "nudged
-   * while already inside one it is not a member of" — a box is its children's
-   * bounding rectangle and can legitimately be drawn over a non-member, and a
-   * reposition there must not become a membership change.
+   * #1420 — DRAG AN ACTIVITY INTO A BOX, decided by the POINTER: where it was
+   * released, and where it was when the drag began.
+   *
+   * The pointer rather than a node's centre because it is the one point that
+   * means the same thing for every gesture: a single node, a selection dragged
+   * by any of its members or by the selection rectangle (where no node is "the
+   * one under the pointer"), and a palette drop — all of which are then judged
+   * by the same rule. The START point tells "moved into a box" from "nudged
+   * while already inside one": a box is its children's bounding rectangle and
+   * can be drawn over a non-member, and a reposition there must not become a
+   * membership change.
    */
-  const dragStartCentres = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const centreOf = useCallback(
-    (n: FlowNode) => {
-      const nominal = unmeasuredNodeSize(portsOf(n.id).length);
-      return {
-        x: n.position.x + (n.measured?.width ?? nominal.width) / 2,
-        y: n.position.y + (n.measured?.height ?? nominal.height) / 2,
-      };
+  const dragStartPoint = useRef<{ x: number; y: number } | null>(null);
+  const flowPointOf = useCallback(
+    (event: MouseEvent | TouchEvent | ReactMouseEvent) => {
+      const at = 'changedTouches' in event ? event.changedTouches[0] : event;
+      return at === undefined ? null : screenToFlowPosition({ x: at.clientX, y: at.clientY });
     },
-    [portsOf],
+    [screenToFlowPosition],
   );
   const onNodesDragStart = useCallback(
-    (_event: unknown, dragged: FlowNode[]) => {
-      dragStartCentres.current = new Map(dragged.map((n) => [n.id, centreOf(n)]));
+    (event: MouseEvent | TouchEvent | ReactMouseEvent) => {
+      dragStartPoint.current = flowPointOf(event);
     },
-    [centreOf],
+    [flowPointOf],
   );
   /**
-   * The primary node decides the target (the one under the pointer), and every
-   * dragged activity joins it — a group dragged into a box goes in together.
-   * Joining is `setNodeContainer`, gated by `confirmContainerEdit` exactly as
-   * the node's Settings → Container select is, since the move can orphan an
-   * edge or an `${item}`. Dragging OUT of a box stays on that select and the
-   * box's ✕: the box grows with its dragged child, so "outside it" has no
-   * stable meaning at drop time.
+   * Every dragged activity joins the box the pointer was released over, as ONE
+   * edit (`setNodesContainer`), gated by `confirmContainerEdit` exactly as the
+   * node's Settings → Container select is — a join can orphan an edge or an
+   * `${item}`. The box that already holds EVERY dragged node is excluded (its
+   * box contains them by construction). Dragging OUT stays on that select and
+   * the box's ✕: a box grows with its dragged child, so "outside it" has no
+   * stable meaning at release.
    */
   const onNodesDragStop = useCallback(
-    (primary: FlowNode, dragged: FlowNode[]) => {
-      const starts = dragStartCentres.current;
-      dragStartCentres.current = new Map();
+    (event: MouseEvent | TouchEvent | ReactMouseEvent, dragged: FlowNode[]) => {
+      const start = dragStartPoint.current;
+      dragStartPoint.current = null;
+      const end = flowPointOf(event);
+      if (end === null) return;
       const state = store.getState();
       const { owner } = containerMembership(state.containers);
-      const target = containerAtPoint(
-        containerBoxes,
-        centreOf(primary),
-        owner.get(primary.id) ?? null,
-      );
+      const ids = dragged.map((n) => n.id).filter((id) => state.nodes.some((n) => n.id === id));
+      const owners = new Set(ids.map((id) => owner.get(id) ?? null));
+      const shared = owners.size === 1 ? [...owners][0]! : null;
+      const target = containerAtPoint(containerBoxes, end, shared);
       if (target === null) return;
       const box = containerBoxes.get(target)!;
-      const start = starts.get(primary.id);
-      if (
-        start !== undefined &&
-        containerAtPoint(new Map([[target, box]]), start, null) === target
-      ) {
+      if (start !== null && containerAtPoint(new Map([[target, box]]), start, null) === target) {
         return;
       }
-      const ids = dragged
-        .map((n) => n.id)
-        .filter((id) => state.nodes.some((n) => n.id === id) && owner.get(id) !== target);
-      if (ids.length === 0) return;
-      const next = ids.reduce((acc, id) => assignContainerChild(acc, id, target), state.containers);
-      if (
-        !confirmContainerEdit(
-          {
-            nodes: state.nodes,
-            edges: state.edges,
-            containers: state.containers,
-            params: state.params,
-            variables: state.variables,
-            globals: state.globals,
-          },
-          next,
-          'Undo (⌘Z) takes it back out.',
-        )
-      ) {
-        return;
-      }
-      for (const id of ids) state.setNodeContainer(id, target);
+      const joining = ids.filter((id) => owner.get(id) !== target);
+      if (joining.length === 0) return;
+      const next = joining.reduce(
+        (acc, id) => assignContainerChild(acc, id, target),
+        state.containers,
+      );
+      if (!confirmContainerEdit(state, next, 'Undo (⌘Z) takes it back out.')) return;
+      state.setNodesContainer(joining, target);
     },
-    [store, containerBoxes, centreOf],
+    [store, containerBoxes, flowPointOf],
   );
 
   /**
    * #1420 — a palette container dropped on the canvas: an EMPTY box whose
    * top-left is under the pointer, which activities are then dragged into.
-   *
-   * Confirmed ONLY when it changes routing. `confirmContainerEdit` also diffs
-   * the validator's issues, but an empty loop/foreach is born failing it by
-   * construction (no child, no items yet) — a dialog on every drop listing what
-   * the operator is about to fill in would be noise, and Undo takes the box back.
-   * The routing half is not noise: the first container on an edge-less graph
-   * turns its inferred chain into parallel partitions (`implicitRouting`).
+   * `confirmNewContainer` says why only a routing change is confirmed.
    */
   function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
     const state = store.getState();
-    const routing = routingSentence(
-      routingChangeBetween(state, {
-        ...state,
-        containers: [...state.containers, { id: '\u0000probe', kind, children: [] }],
-      }),
-    );
     const title = CONTAINER_PALETTE.find((e) => e.kind === kind)?.title ?? kind;
-    if (routing !== null && !window.confirm(`Add a ${title} container?\n\n${routing}`)) return;
+    if (!confirmNewContainer(state, kind, title)) return;
     state.addContainer(kind, position);
   }
 
@@ -2210,17 +2185,12 @@ export function FlowCanvas({
        false precision. `screenToFlowPosition` accounts for the live zoom + pan,
        so the placement is correct under any viewport transform. */
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const target = containerAtPoint(containerBoxes, position, null);
-    const before = store.getState().nodes;
-    store.getState().addNode(type, position);
     /* #1420 — released over a box: the new activity goes IN it, the ADF gesture
-       for filling a ForEach. No confirm, unlike dragging an existing node in: a
-       node born this instant has no edges and no `${}` references, so joining
-       can orphan nothing. */
-    const after = store.getState().nodes;
-    if (target !== null && after.length === before.length + 1) {
-      store.getState().setNodeContainer(after[after.length - 1]!.id, target);
-    }
+       for filling a ForEach, as the same one edit that adds it. No confirm,
+       unlike dragging an existing node in: a node born this instant has no
+       edges and no `${}` references, so joining can orphan nothing. */
+    const target = containerAtPoint(containerBoxes, position, null);
+    store.getState().addNode(type, position, target ?? undefined);
   }
 
   return (
@@ -2351,10 +2321,10 @@ export function FlowCanvas({
         isValidConnection={isValidConnection}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        onNodeDragStart={(e, _node, dragged) => onNodesDragStart(e, dragged)}
-        onNodeDragStop={(_e, node, dragged) => onNodesDragStop(node, dragged)}
-        onSelectionDragStart={(e, dragged) => onNodesDragStart(e, dragged)}
-        onSelectionDragStop={(_e, dragged) => dragged[0] && onNodesDragStop(dragged[0], dragged)}
+        onNodeDragStart={onNodesDragStart}
+        onNodeDragStop={(e, _node, dragged) => onNodesDragStop(e, dragged)}
+        onSelectionDragStart={onNodesDragStart}
+        onSelectionDragStop={onNodesDragStop}
         onlyRenderVisibleElements
         fitView
         proOptions={{ hideAttribution: true }}

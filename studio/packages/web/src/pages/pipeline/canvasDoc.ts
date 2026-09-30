@@ -101,19 +101,6 @@ export function validateCanvas(
 }
 
 /**
- * #1312 — the write SCHEMA's refusals of a node's `policy`, as save badges.
- *
- * Kept OUT of `validateCanvas` for the reason `nameIssues` is: that function is
- * exactly `validatePipelineDoc`, the server's doc gate, and these rules belong to
- * a different gate — `StrictNodeSchema` on the write body (an interval with no
- * retry, the timeout typo ceiling, unknown keys). Without them a policy the
- * editor let through would reach the save's client-side parse and surface as a
- * raw ZodError instead of a badge that names the node.
- *
- * Read through `StrictNodeSchema.shape.policy`, so the rules are the schema's
- * own and nothing here restates a bound.
- */
-/**
  * #1420 — an EMPTY `stage` as a save badge. `validateDoc` refuses an empty loop
  * and foreach but passes an empty stage (it succeeds at once at run time), so
  * before the palette could author an empty box one could only be reached by
@@ -135,6 +122,19 @@ export function emptyContainerIssues(containers: Container[], nodes: Node[]): st
     );
 }
 
+/**
+ * #1312 — the write SCHEMA's refusals of a node's `policy`, as save badges.
+ *
+ * Kept OUT of `validateCanvas` for the reason `nameIssues` is: that function is
+ * exactly `validatePipelineDoc`, the server's doc gate, and these rules belong to
+ * a different gate — `StrictNodeSchema` on the write body (an interval with no
+ * retry, the timeout typo ceiling, unknown keys). Without them a policy the
+ * editor let through would reach the save's client-side parse and surface as a
+ * raw ZodError instead of a badge that names the node.
+ *
+ * Read through `StrictNodeSchema.shape.policy`, so the rules are the schema's
+ * own and nothing here restates a bound.
+ */
 export function policyIssues(nodes: Node[]): string[] {
   const schema = StrictNodeSchema.shape.policy;
   return nodes.flatMap((n) => {

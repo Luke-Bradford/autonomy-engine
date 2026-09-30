@@ -118,7 +118,11 @@ describe('container drags (#1420) — the Containers palette group', () => {
   });
 
   it('gates dragover on the SHAPE alone — the payload is unreadable there', () => {
+    // Protected mode is `dragover`'s: `getData` returns ''. The gate must still
+    // accept the drag, while the payload reader correctly authors nothing.
     const dt = containerDrag('stage', true);
     expect(hasContainerDragKind(dt)).toBe(true);
+    expect(hasCanvasDragType(dt)).toBe(true);
+    expect(readContainerDragKind(dt)).toBeNull();
   });
 });

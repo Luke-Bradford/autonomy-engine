@@ -294,6 +294,26 @@ describe('ActivityToolbox', () => {
       expect(screen.getByRole('button', { name: 'Until' })).toBeTruthy();
     });
 
+    it('a search naming the group keeps all three', async () => {
+      renderToolbox();
+      await userEvent.type(filterBox(), 'contain');
+      const group = screen.getByRole('list', { name: 'Containers' });
+      expect(within(group).getAllByRole('button')).toHaveLength(3);
+    });
+
+    it('a click asks first when the box would change routing, and a No adds nothing', () => {
+      const store = renderToolbox();
+      // Two edge-less activities are an inferred CHAIN; the first container
+      // turns that into parallel partitions (`implicitRouting`).
+      store.getState().addNode('http_request');
+      store.getState().addNode('http_request');
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(store.getState().containers).toEqual([]);
+      confirm.mockRestore();
+    });
+
     it('collapses like any other group', () => {
       renderToolbox();
       fireEvent.click(screen.getByRole('button', { name: 'Collapse Containers' }));

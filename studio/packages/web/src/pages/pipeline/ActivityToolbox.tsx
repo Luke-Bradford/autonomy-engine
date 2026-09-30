@@ -1,18 +1,15 @@
 import { useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import {
-  ArrowRepeatAllRegular,
-  ArrowSyncRegular,
-  ChevronDownRegular,
-  ChevronRightRegular,
-  GroupRegular,
-} from '@fluentui/react-icons';
+import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import type { StoreApi } from 'zustand';
-import type { ContainerKind } from '@autonomy-studio/shared';
 import { setActivityDragType, setContainerDragKind } from './activityDnd';
 import { ActivityGlyph } from './ActivityGlyph';
 import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
+import { confirmNewContainer } from './containerRules';
+
+/** The Containers group's collapse key — not a catalog category, so it cannot collide with one. */
+const CONTAINERS_KEY = 'containers';
 
 /**
  * The Activities toolbox (U5) — the canvas's searchable, categorized palette.
@@ -214,10 +211,16 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
                 onDragStart={(e) => {
                   if (e.dataTransfer) setContainerDragKind(e.dataTransfer, entry.kind);
                 }}
-                onClick={() => store.getState().addContainer(entry.kind)}
+                onClick={() => {
+                  // The drop's confirm, so the two ways to add one agree.
+                  const state = store.getState();
+                  if (confirmNewContainer(state, entry.kind, entry.title)) {
+                    state.addContainer(entry.kind);
+                  }
+                }}
               >
                 <span aria-hidden="true" className="activity-toolbox__icon">
-                  <ContainerGlyph kind={entry.kind} />
+                  <entry.icon />
                 </span>
                 <span>{entry.title}</span>
               </button>
@@ -226,14 +229,4 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
         )}
     </aside>
   );
-}
-
-/** Not a catalog category, so it cannot collide with one. */
-const CONTAINERS_KEY = 'containers';
-
-/** A container entry's icon. Decorative, like `ActivityGlyph`. */
-function ContainerGlyph({ kind }: { kind: ContainerKind }) {
-  if (kind === 'foreach') return <ArrowRepeatAllRegular />;
-  if (kind === 'loop') return <ArrowSyncRegular />;
-  return <GroupRegular />;
 }

@@ -2,6 +2,7 @@ import {
   implicitRouting,
   scanTemplateRefs,
   type Container,
+  type ContainerKind,
   type Edge,
   type ImplicitRouting,
   type Node,
@@ -819,6 +820,32 @@ export function confirmContainerEdit(
     recovery,
   );
   return message === null || window.confirm(message);
+}
+
+/**
+ * #1420 — confirm adding a NEW EMPTY container (the palette's click and drop),
+ * or `true` when there is nothing to confirm.
+ *
+ * Only the ROUTING half of `confirmContainerEdit`. The validator half would fire
+ * on every add: an empty loop/foreach is born failing `validateDoc` by
+ * construction (no child, no items yet), so a dialog listing what the operator
+ * is about to fill in would be noise — and Undo takes the box back. Routing is
+ * not noise: the first container on an edge-less graph turns its inferred chain
+ * into parallel partitions (`implicitRouting`), which changes what a run does.
+ */
+export function confirmNewContainer(
+  doc: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
+  kind: ContainerKind,
+  title: string,
+): boolean {
+  const routing = routingSentence(
+    routingChangeBetween(doc, {
+      ...doc,
+      // A probe, never stored: `\u0000` cannot occur in a minted local id.
+      containers: [...doc.containers, { id: '\u0000probe', kind, children: [] }],
+    }),
+  );
+  return routing === null || window.confirm(`Add a ${title} container?\n\n${routing}`);
 }
 
 /**

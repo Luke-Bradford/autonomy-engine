@@ -283,17 +283,10 @@ function axisPan(near: number, size: number, extent: number): number {
 }
 
 /**
- * Which containers are drawn as the EMPTY fallback box.
- *
- * `childCount` and not `children.length`, for the same reason the box announces
- * that count: a container whose every listed child is a phantom draws the
- * fallback and IS empty on screen, whatever its array still says.
- */
-/**
  * #1420 — the container whose box a dropped activity landed in: the SMALLEST
  * box containing `point` (so a box drawn inside a bigger one wins), never
- * `exclude` — the node's current owner, whose box contains the node by
- * construction. `null` when the point is in no other box.
+ * `exclude` — the box that already holds every dragged node, which contains
+ * them by construction. `null` when the point is in no other box.
  */
 export function containerAtPoint(
   boxes: ReadonlyMap<string, Rect>,
@@ -314,6 +307,13 @@ export function containerAtPoint(
   return best;
 }
 
+/**
+ * Which containers are drawn as the EMPTY fallback box.
+ *
+ * `childCount` and not `children.length`, for the same reason the box announces
+ * that count: a container whose every listed child is a phantom draws the
+ * fallback and IS empty on screen, whatever its array still says.
+ */
 export function emptyContainerIds(boxes: ReadonlyMap<string, ContainerBox>): Set<string> {
   const empty = new Set<string>();
   for (const [id, box] of boxes) if (box.childCount === 0) empty.add(id);
