@@ -110,6 +110,7 @@ const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
         {d.name}
         {d.status !== null && ` · ${d.status}`}
         {d.round !== null && d.round > 0 && ` · round ${d.round}`}
+        {d.items !== null && ` · ${d.items}`}
       </span>
       <SourcePorts ports={ports} />
     </div>
