@@ -30,7 +30,9 @@ function panel(onStarted = vi.fn(), onClose = vi.fn()) {
 }
 
 describe('RunNowPanel (#1395 OR4)', () => {
-  beforeEach(() => runPipelineVersion.mockReset());
+  beforeEach(() => {
+    runPipelineVersion.mockReset();
+  });
 
   it('prefills each param with its default and names the version it runs', () => {
     panel();
@@ -65,7 +67,9 @@ describe('RunNowPanel (#1395 OR4)', () => {
     const { onStarted } = panel();
     fireEvent.change(screen.getByLabelText('count'), { target: { value: '1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('The run did not start: at its cap.');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The run did not start: at its cap.',
+    );
     expect(onStarted).not.toHaveBeenCalled();
   });
 

@@ -1678,7 +1678,11 @@ describe('RunLauncher.runNow — #1395 OR4, a run started from the editor', () =
     const pvId = seedVersion(db, [node('a')], [], [strParam('a', 'da'), strParam('b', 'db')]);
     const launcher = createRunLauncher(deps(db));
 
-    const result = launcher.runNow({ ownerId: 'local', pipelineVersionId: pvId, params: { b: 'now' } });
+    const result = launcher.runNow({
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      params: { b: 'now' },
+    });
     expect(result.outcome).toBe('started');
     await launcher.whenIdle();
 
@@ -1693,7 +1697,7 @@ describe('RunLauncher.runNow — #1395 OR4, a run started from the editor', () =
     expect(loadEngineEvents(db, run.id).some((e) => e.type === 'run.triggerContext')).toBe(false);
   });
 
-  it("skips, and creates no row, when the pipeline is at its concurrency cap — never queues", () => {
+  it('skips, and creates no row, when the pipeline is at its concurrency cap — never queues', () => {
     const { db } = freshDb();
     const pvId = seedVersion(db);
     const pipelineId = getPipelineIdForVersion(db, pvId)!;

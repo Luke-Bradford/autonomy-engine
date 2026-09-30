@@ -25,7 +25,7 @@ describe('POST /api/pipelines/:id/runs', () => {
     return { pipelineId: pipeline.id, versionId: version.id };
   }
 
-  function run(pipelineId: string, payload: unknown) {
+  function run(pipelineId: string, payload: Record<string, unknown>) {
     return app.inject({ method: 'POST', url: `/api/pipelines/${pipelineId}/runs`, payload });
   }
 

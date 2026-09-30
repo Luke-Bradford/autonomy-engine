@@ -91,7 +91,9 @@ export function RunNowPanel({
                   <span id={`${id}-hint`} className="page-hint">
                     {p.type}
                     {p.required ? ' · required' : ''}
-                    {p.description !== undefined && p.description !== '' ? ` — ${p.description}` : ''}
+                    {p.description !== undefined && p.description !== ''
+                      ? ` — ${p.description}`
+                      : ''}
                   </span>
                 </>
               )}

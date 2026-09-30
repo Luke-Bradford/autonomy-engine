@@ -95,19 +95,25 @@ describe('EditorStatusStrip', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('#1395 — draws a notice\'s link after its text, inside the same line', () => {
+  it("#1395 — draws a notice's link after its text, inside the same line", () => {
     const { container } = render(
       <MemoryRouter>
         <EditorStatusStrip
           standing={[]}
           transient={[
-            { key: 'run', text: 'Run started (v2).', link: { to: '/monitor/runs/r1', label: 'Open run' } },
+            {
+              key: 'run',
+              text: 'Run started (v2).',
+              link: { to: '/monitor/runs/r1', label: 'Open run' },
+            },
           ]}
         />
       </MemoryRouter>,
     );
     const notice = container.querySelector('.editor-status-strip__transient .notice');
     expect(notice?.textContent).toBe('Run started (v2). Open run');
-    expect(screen.getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe('/monitor/runs/r1');
+    expect(screen.getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe(
+      '/monitor/runs/r1',
+    );
   });
 });

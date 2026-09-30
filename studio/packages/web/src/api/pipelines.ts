@@ -479,7 +479,10 @@ export function publishPipeline(
  * cap, or the server is stopping). A param the version cannot take is a 400
  * naming it, raised as an `ApiError` before any run exists.
  */
-export function runPipelineVersion(pipelineId: string, body: ManualRunRequest): Promise<FireResult> {
+export function runPipelineVersion(
+  pipelineId: string,
+  body: ManualRunRequest,
+): Promise<FireResult> {
   return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs`, {
     method: 'POST',
     body: ManualRunRequestSchema.parse(body),
