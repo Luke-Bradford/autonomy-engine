@@ -22,7 +22,8 @@ import { properties } from './support/panels';
 const boxes = {
   canvas: (page: Page) => page.locator('.canvas-wrap'),
   dock: (page: Page) => page.locator('.property-dock'),
-  firstField: (page: Page) => properties(page).locator('input, textarea, select').first(),
+  firstField: (page: Page) =>
+    properties(page).locator('input:visible, textarea:visible, select:visible').first(),
   belowRetries: (page: Page) =>
     properties(page).getByRole('textbox', { name: 'Retry interval (seconds)' }),
   save: (page: Page) => page.getByRole('button', { name: 'Save version' }),
@@ -124,6 +125,10 @@ test.describe('#1393 the editor does not shift when you edit', () => {
     await expect(page.locator('.notice', { hasText: 'Saved v2.' })).toBeVisible();
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'hidden');
     await expect(page).toHaveTitle(title);
+    // A save reloads the working graph, which drops the selection; the same
+    // node re-selected must come back to the same place.
+    await page.getByTestId('rf__node-a').click();
+    await expect(retries).toBeVisible();
     await expectUnmoved(page, baseline, 'save');
 
     await expectQuiet(page, problems);
