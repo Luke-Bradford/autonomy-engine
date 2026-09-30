@@ -97,20 +97,60 @@ function crumbLabel(handle: ShellRouteHandle, params: RouteParams): string | und
 }
 
 /**
+ * Labels pages have published for the path they are mounted at (#1392), keyed
+ * by `normalizePath(location.pathname)`. See `shellLabel.ts`.
+ */
+export type PublishedLabels = Readonly<Record<string, string>>;
+
+/** One key per page however the path is spelled: no trailing `/` except root. */
+export function normalizePath(pathname: string): string {
+  return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+}
+
+/**
  * The breadcrumb trail for a match list, outermost first.
  *
  * Matches with no usable handle contribute nothing, and so does a dynamic crumb
  * whose label comes back empty: an empty `<li>` in a breadcrumb is a clickable
  * target with no accessible name, which is worse than an absent crumb and
  * invisible in a screenshot.
+ *
+ * #1392 — `pageLabel` is the label the mounted page PUBLISHED (the resource's
+ * name, once loaded). It replaces the crumb of the DEEPEST match only, and only
+ * if that match declares a crumb: the page is always the leaf, and a section's
+ * index route (`/monitor/runs`) declares none, so a label can never relabel the
+ * section above it. For a detail route the route's own crumb is then just the
+ * short-id fallback shown before the name arrives.
+ *
+ * Applied to the leaf rather than looked up by `match.pathname`, because the
+ * page keys its label by `location.pathname` and the two do not agree: the
+ * location is still percent-encoded, the match is decoded.
  */
-export function crumbsFrom(matches: readonly ShellMatch[]): Crumb[] {
+export function crumbsFrom(matches: readonly ShellMatch[], pageLabel?: string): Crumb[] {
   const crumbs: Crumb[] = [];
-  for (const match of matches) {
+  matches.forEach((match, i) => {
     const handle = readShellHandle(match.handle);
-    if (!handle) continue;
-    const label = crumbLabel(handle, match.params);
+    if (!handle) return;
+    const isLeaf = i === matches.length - 1;
+    const label = (isLeaf && pageLabel) || crumbLabel(handle, match.params);
     if (label) crumbs.push({ label, to: match.pathname });
-  }
+  });
   return crumbs;
+}
+
+/** The product name as a browser tab shows it. */
+export const APP_TITLE = 'autonomy studio';
+
+/**
+ * #1392 — the browser tab's title for a breadcrumb trail: the page, then its
+ * hub, then the app (`Test Pipe — Author — autonomy studio`). The middle crumbs
+ * are left out — a tab title is truncated from the right, so only the words
+ * that tell two tabs apart earn a place — and a page that IS its hub (Home) is
+ * named once.
+ */
+export function documentTitle(crumbs: readonly Crumb[]): string {
+  const page = crumbs.at(-1)?.label;
+  const hub = crumbs[0]?.label;
+  const parts = [page, hub !== page ? hub : undefined, APP_TITLE];
+  return parts.filter((p): p is string => p !== undefined).join(' — ');
 }

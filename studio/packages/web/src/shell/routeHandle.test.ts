@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { activeHubId, crumbsFrom, readShellHandle, type ShellMatch } from './routeHandle';
+import {
+  activeHubId,
+  crumbsFrom,
+  documentTitle,
+  readShellHandle,
+  type ShellMatch,
+} from './routeHandle';
 
 /**
  * These are the PURE functions behind the shell chrome — "which hub am I in"
@@ -136,5 +142,59 @@ describe('crumbsFrom', () => {
     expect(
       crumbsFrom([match('/monitor/runs/', { crumb: (p: { runId?: string }) => p.runId ?? '' })]),
     ).toEqual([]);
+  });
+});
+
+/**
+ * #1392 — a page that knows its resource's NAME publishes it, and it replaces
+ * the leaf route's id-derived fallback crumb.
+ */
+describe('crumbsFrom — the page-published label', () => {
+  const trail = [
+    match('/author', { hub: 'author' }),
+    match('/author/pipelines', { crumb: 'Pipelines' }),
+    match('/author/pipelines/pipe_x', { crumb: () => 'pipe_x' }),
+  ];
+
+  it('replaces the leaf crumb with the published label', () => {
+    expect(crumbsFrom(trail, 'Test Pipe').map((c) => c.label)).toEqual([
+      'Author',
+      'Pipelines',
+      'Test Pipe',
+    ]);
+  });
+
+  it('keeps the fallback when nothing was published', () => {
+    expect(crumbsFrom(trail).at(-1)?.label).toBe('pipe_x');
+    expect(crumbsFrom(trail, '').at(-1)?.label).toBe('pipe_x');
+  });
+
+  it('never relabels a section above an index route that declares no crumb', () => {
+    const list = [
+      match('/monitor', { hub: 'monitor' }),
+      match('/monitor/runs', { crumb: 'Runs' }),
+      match('/monitor/runs', undefined),
+    ];
+    expect(crumbsFrom(list, 'Stale name').map((c) => c.label)).toEqual(['Monitor', 'Runs']);
+  });
+});
+
+describe('documentTitle', () => {
+  it('names the page, then its hub, then the app', () => {
+    expect(
+      documentTitle([
+        { label: 'Author', to: '/author' },
+        { label: 'Pipelines', to: '/author/pipelines' },
+        { label: 'Test Pipe', to: '/author/pipelines/pipe_x' },
+      ]),
+    ).toBe('Test Pipe — Author — autonomy studio');
+  });
+
+  it('does not repeat a page that IS its hub', () => {
+    expect(documentTitle([{ label: 'Home', to: '/' }])).toBe('Home — autonomy studio');
+  });
+
+  it('falls back to the app name with no crumbs at all', () => {
+    expect(documentTitle([])).toBe('autonomy studio');
   });
 });

@@ -101,13 +101,16 @@ test.describe('U2 hub rail', () => {
     await expect(page.getByRole('heading', { name: 'Connections' })).toBeVisible();
   });
 
-  test('an unknown route lands on Home rather than a blank page', async ({ page }) => {
+  // #1392 — it used to redirect to Home; it now says the page was not found,
+  // stays on the URL the operator followed, and links Home.
+  test('an unknown route shows a not-found page rather than a blank one', async ({ page }) => {
     const problems = collectPageProblems(page);
     await page.goto('/#/no/such/route');
     await fluentRootReady(page);
 
-    await expect.poll(() => hash(page)).toBe('#/');
-    await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+    expect(hash(page)).toBe('#/no/such/route');
+    await expect(page.getByRole('link', { name: 'Go to Home' })).toBeVisible();
     await expectQuiet(page, problems);
   });
 

@@ -22,8 +22,10 @@ interface CommandBarProps {
  * than left standing. The reason is the one this comment already gave: every
  * action on that row needs canvas state — the working graph, `dirty`, the
  * preview lock — and the command bar is a SHELL component that deliberately
- * subscribes to no page-domain store (see U4's note on why the `:pipelineId`
- * crumb is the id and not the name). Lifting Arrange up here would have meant
+ * subscribes to no page-domain store. (#1392 kept that line for the
+ * breadcrumb too: the crumb now shows the pipeline's NAME, but the page
+ * publishes it as a plain string through `shellLabel.ts` — the shell still
+ * reads no page state.) Lifting Arrange up here would have meant
  * either that coupling or a context/portal seam built for one button, when the
  * canvas already has a toolbar holding Undo, Redo, Version history and Save —
  * the actions Arrange belongs beside, since undoing it is literally the button

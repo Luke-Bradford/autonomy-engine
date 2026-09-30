@@ -1,12 +1,27 @@
-import { Suspense, useCallback, useRef, type CSSProperties } from 'react';
-import { Outlet, useMatches } from 'react-router';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
+import { Outlet, useLocation, useMatches } from 'react-router';
 import { useStore } from 'zustand';
 import { HubRail } from './HubRail';
 import { CommandBar } from './CommandBar';
 import { PaneSplitter } from './PaneSplitter';
 import { PANE_ELEMENT_ID, SecondaryPane } from './SecondaryPane';
 import { hubById } from './hubs';
-import { activeHubId, crumbsFrom } from './routeHandle';
+import {
+  activeHubId,
+  crumbsFrom,
+  documentTitle,
+  normalizePath,
+  type PublishedLabels,
+} from './routeHandle';
+import { ShellLabelContext, withLabel, type ShellLabelApi } from './shellLabel';
 import { uiStore } from '../stores/uiStore';
 import { UpdateBanner } from './UpdateBanner';
 
@@ -42,7 +57,22 @@ const PANE_WIDTH_VAR = '--pane-width';
 export function AppShell() {
   const matches = useMatches();
   const hub = hubById(activeHubId(matches));
-  const crumbs = crumbsFrom(matches);
+
+  /* #1392 — the names pages publish for their own paths (`shellLabel.ts`). The
+     api object is created once, so a page's publishing effect does not re-run
+     every time the shell re-renders. */
+  const [published, setPublished] = useState<PublishedLabels>({});
+  const labelApi = useMemo<ShellLabelApi>(
+    () => ({ publish: (path, label) => setPublished((prev) => withLabel(prev, path, label)) }),
+    [],
+  );
+  const { pathname } = useLocation();
+  const crumbs = crumbsFrom(matches, published[normalizePath(pathname)]);
+
+  const title = documentTitle(crumbs);
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
 
   /* The singleton, with no injectable seam. `HubRail`/`ThemeToggle` take one
      because their own unit tests render them in isolation; the shell is only
@@ -71,34 +101,35 @@ export function AppShell() {
   const paneStyle = { [PANE_WIDTH_VAR]: `${paneWidth}px` } as CSSProperties;
 
   return (
-    <div className="app-shell" ref={shellRef} style={paneStyle}>
-      {/* The rail runs on the `uiStore` singleton too — which is what
+    <ShellLabelContext.Provider value={labelApi}>
+      <div className="app-shell" ref={shellRef} style={paneStyle}>
+        {/* The rail runs on the `uiStore` singleton too — which is what
           `App.test.tsx` asserts the theme provider shares. */}
-      <HubRail />
+        <HubRail />
 
-      {/* Mounted-but-`hidden` when collapsed, so the toggle's `aria-controls`
+        {/* Mounted-but-`hidden` when collapsed, so the toggle's `aria-controls`
           keeps naming an element that exists. `display: none` also takes it out
           of the grid, which is what reclaims its column. */}
-      {hasPane && <SecondaryPane hub={hub!} collapsed={paneCollapsed} />}
-      {paneShown && (
-        <PaneSplitter
-          width={paneWidth}
-          onPreview={previewPaneWidth}
-          onCommit={setPaneWidth}
-          controls={PANE_ELEMENT_ID}
-        />
-      )}
+        {hasPane && <SecondaryPane hub={hub!} collapsed={paneCollapsed} />}
+        {paneShown && (
+          <PaneSplitter
+            width={paneWidth}
+            onPreview={previewPaneWidth}
+            onCommit={setPaneWidth}
+            controls={PANE_ELEMENT_ID}
+          />
+        )}
 
-      <div className="workspace">
-        <CommandBar
-          crumbs={crumbs}
-          pane={
-            hasPane
-              ? { collapsed: paneCollapsed, onToggle: () => setPaneCollapsed(!paneCollapsed) }
-              : undefined
-          }
-        />
-        {/* #698 — the code-splitting boundary sits INSIDE `<main>`, not around
+        <div className="workspace">
+          <CommandBar
+            crumbs={crumbs}
+            pane={
+              hasPane
+                ? { collapsed: paneCollapsed, onToggle: () => setPaneCollapsed(!paneCollapsed) }
+                : undefined
+            }
+          />
+          {/* #698 — the code-splitting boundary sits INSIDE `<main>`, not around
             the shell. Two reasons. Rendered: the rail, command bar and pane stay
             painted while a lazy route's chunk loads, so only the workspace
             swaps — a shell that blanks entirely would be a worse experience
@@ -107,13 +138,14 @@ export function AppShell() {
             the boundary above `AppShell` would suspend the chrome those tests
             query. The fallback is deliberately empty — a spinner here would
             flash on a local-first app whose chunks load in milliseconds. */}
-        <UpdateBanner />
-        <main className="content">
-          <Suspense fallback={null}>
-            <Outlet />
-          </Suspense>
-        </main>
+          <UpdateBanner />
+          <main className="content">
+            <Suspense fallback={null}>
+              <Outlet />
+            </Suspense>
+          </main>
+        </div>
       </div>
-    </div>
+    </ShellLabelContext.Provider>
   );
 }

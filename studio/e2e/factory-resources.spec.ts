@@ -64,7 +64,7 @@ test.describe('U4 Factory Resources pane', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await expect(page.getByRole('heading', { name })).toBeVisible();
 
-    // The breadcrumb gained a third crumb — the id, per the `:runId` precedent.
+    // The breadcrumb gained a third crumb — the pipeline's name (#1392).
     const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('listitem');
     await expect(crumbs).toHaveCount(3);
     await expect(crumbs.nth(1)).toHaveText('Pipelines');

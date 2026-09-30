@@ -16,7 +16,9 @@ import {
   type RunDetail,
 } from '@autonomy-studio/shared';
 import {
+  getPipeline,
   getRun,
+  getTrigger,
   listRunAnnotations,
   listRunDiagnostics,
   listRunEvents,
@@ -208,7 +210,17 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     // an escaping `ZodError` for the unparseable one, which the handler turns
     // into a 400 `validation_error` on a GET with no request body.
     const pipelineVersion = resolveDoc(run.pipelineVersionId);
-    return { run, pipelineVersion } satisfies RunDetail;
+    // #1392 — the names. The pipeline is the version's and the trigger is the
+    // one the run was created from, so by the argument above both are the
+    // run owner's already; the owner check is repeated per row anyway, because
+    // a name is the one thing here that is cheap to withhold and a leak of it
+    // would be silent. A name that fails it, or a row that is gone, is `null`
+    // — never an id dressed as a name.
+    const nameFor = (row: { ownerId: string | null; name: string } | null) =>
+      row && row.ownerId === run.ownerId ? row.name : null;
+    const pipelineName = nameFor(getPipeline(db, pipelineVersion.pipelineId));
+    const triggerName = run.triggerId ? nameFor(getTrigger(db, run.triggerId)) : null;
+    return { run, pipelineVersion, pipelineName, triggerName } satisfies RunDetail;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {

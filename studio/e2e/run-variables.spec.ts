@@ -74,7 +74,7 @@ test('#844 V7 — a run shows its variables, and a writer’s drill-in shows its
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  const section = page.getByRole('region', { name: 'Variables' });
+  const section = page.getByRole('region', { name: 'Variables', exact: true });
   await expect(section.getByText('Final values.')).toBeVisible();
   /* One read of every row, rather than a locator per cell. */
   const rows = await section

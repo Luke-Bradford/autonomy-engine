@@ -8,6 +8,7 @@ import type {
   EngineEvent,
   PipelineVersion,
   Run,
+  RunDetail,
   RunEvent,
   RunSummary,
 } from '@autonomy-studio/shared';
@@ -60,6 +61,8 @@ vi.mock('./useRunStream', async (importActual) => ({
 }));
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
+/** #1392 — the names R1 resolves beside the doc; most cases do not read them. */
+const NAMES = { pipelineName: 'Test pipeline', triggerName: null } as const;
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const cancelRunMock = vi.mocked(runsApi.cancelRun);
 const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
@@ -150,7 +153,11 @@ function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
 }
 
 beforeEach(() => {
-  getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: version() });
+  getRunDetailMock.mockResolvedValue({
+    ...NAMES,
+    run: run(),
+    pipelineVersion: version(),
+  });
   useRunStreamMock.mockReturnValue(stream());
 });
 afterEach(() => vi.restoreAllMocks());
@@ -158,9 +165,77 @@ afterEach(() => vi.restoreAllMocks());
 describe('RunDetailPage', () => {
   it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByRole('link', { name: 'Test pipeline' })).toBeInTheDocument();
+    expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
+  });
+
+  /**
+   * #1392 — the page leads with NAMES: the heading is the pipeline and the
+   * version the run is bound to, the metadata links to the pipeline and the
+   * trigger by name, and the run's own id stays available, short and copyable.
+   */
+  it('names the pipeline, version and trigger instead of showing their ids', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ id: 'run_V1StGXR8_Z5jdHi6B-myT' }),
+      pipelineVersion: version(),
+      pipelineName: 'Nightly load',
+      triggerName: 'Every night',
+    });
+    // `setup()` before render: it installs the clipboard jsdom lacks, and the
+    // copy control is feature-detected at render.
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_V1StGXR8_Z5jdHi6B-myT" />);
+
+    expect(await screen.findByRole('heading', { name: 'Nightly load v1' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Nightly load' })).toHaveAttribute(
+      'href',
+      '/author/pipelines/pl_1',
+    );
+    expect(screen.getByRole('link', { name: 'Every night' })).toHaveAttribute(
+      'href',
+      '/manage/triggers',
+    );
+    expect(screen.queryByText('pv_1')).not.toBeInTheDocument();
+    expect(screen.queryByText('trg_1')).not.toBeInTheDocument();
+    // The run id: short on screen, whole in the tooltip and on the clipboard.
+    const id = screen.getByText('Hi6B-myT');
+    expect(id).toHaveAttribute('title', 'run_V1StGXR8_Z5jdHi6B-myT');
+    await user.click(screen.getByRole('button', { name: 'Copy run id' }));
+    expect(await navigator.clipboard.readText()).toBe('run_V1StGXR8_Z5jdHi6B-myT');
+    expect(screen.getByText('Copied')).toBeInTheDocument();
+  });
+
+  it('keeps the pipeline-version id when the pipeline has no name to give', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run(),
+      pipelineVersion: version(),
+      pipelineName: null,
+      triggerName: null,
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('pv_1')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Run run_1' })).toBeInTheDocument();
+  });
+
+  it('keeps the trigger id when the trigger has no name to give', async () => {
+    getRunDetailMock.mockResolvedValue({
+      run: run(),
+      pipelineVersion: version(),
+      pipelineName: 'Nightly load',
+      triggerName: null,
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('heading', { name: 'Nightly load v1' });
+    expect(screen.getByText('trg_1')).toBeInTheDocument();
+  });
+
+  it('falls back to ids when the read-model will not resolve', async () => {
+    getRunDetailMock.mockRejectedValue(new Error('gone'));
+    vi.mocked(runsApi.getRun).mockResolvedValue(run());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('trg_1')).toBeInTheDocument();
-    expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Run run_1' })).toBeInTheDocument();
   });
 
   /**
@@ -315,7 +390,7 @@ describe('RunDetailPage', () => {
     expect(within(nodeRow).getByText('success')).toBeInTheDocument();
 
     // The run's derived lifecycle overrides the (running) REST status.
-    expect(screen.getByText('run_1').closest('h2')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Test pipeline v1' })).toBeInTheDocument();
     const hint = screen.getByText('● live').closest('p')!;
     expect(within(hint).getByText('success')).toBeInTheDocument();
 
@@ -520,6 +595,7 @@ describe('RunDetailPage', () => {
      */
     it('shows a `queued` row through the shared vocabulary, with a doc loaded', async () => {
       getRunDetailMock.mockResolvedValue({
+        ...NAMES,
         run: run({ status: 'queued' }),
         pipelineVersion: version(),
       });
@@ -577,7 +653,11 @@ describe('RunDetailPage', () => {
           ...events,
           envelope({ type: 'run.finished', runId: 'run_1', outcome: 'failure' }),
         ];
-        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        getRunDetailMock.mockResolvedValue({
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events: terminated }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
@@ -607,7 +687,11 @@ describe('RunDetailPage', () => {
             previousAttemptId: 'hold#99',
           }),
         ];
-        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        getRunDetailMock.mockResolvedValue({
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
@@ -655,8 +739,8 @@ describe('RunDetailPage', () => {
            contention. Landing it a macrotask out reproduces the losing side
            deterministically, so this test can actually fail. */
         getRunDetailMock.mockReturnValue(
-          new Promise<{ run: Run; pipelineVersion: PipelineVersion }>((resolve) =>
-            setTimeout(() => resolve({ run: run(), pipelineVersion: waitDoc() }), 50),
+          new Promise<RunDetail>((resolve) =>
+            setTimeout(() => resolve({ ...NAMES, run: run(), pipelineVersion: waitDoc() }), 50),
           ),
         );
         useRunStreamMock.mockReturnValue(stream({ events }));
@@ -691,11 +775,15 @@ describe('RunDetailPage', () => {
             previousAttemptId: 'hold#0',
           }),
         ];
-        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        getRunDetailMock.mockResolvedValue({
+          ...NAMES,
+          run: run(),
+          pipelineVersion: waitDoc(),
+        });
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        await screen.findByText('pv_1');
+        await screen.findByRole('link', { name: 'Test pipeline' });
         expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
@@ -837,6 +925,7 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
          keyed on. Never an invented placeholder — `nameOf` returning something
          readable-but-false here is the defect, not the fallback. */
       getRunDetailMock.mockResolvedValue({
+        ...NAMES,
         run: run(),
         pipelineVersion: version({
           nodes: [{ id: 'x@2', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
@@ -1021,6 +1110,7 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
 
   beforeEach(() => {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run(),
       pipelineVersion: approvalDoc([{ name: 'decision', type: 'string' }]),
     });
@@ -1877,11 +1967,12 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
         run they navigated to fresh. */
   async function mountWithStatus(status: Run['status'], overrides: Partial<Run> = {}) {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status, finishedAt: 1_700_000_001_000, ...overrides }),
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByText('pv_1');
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   /* A BLOCK body, not `() => mock.mockResolvedValue(…)`: that returns the mock,
@@ -1999,9 +2090,13 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     envelope({ type: 'run.cancelRequested', runId: 'run_1', source: { kind: 'operator' } });
 
   async function mountWithStatus(status: Run['status']) {
-    getRunDetailMock.mockResolvedValue({ run: run({ status }), pipelineVersion: version() });
+    getRunDetailMock.mockResolvedValue({
+      ...NAMES,
+      run: run({ status }),
+      pipelineVersion: version(),
+    });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByText('pv_1');
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   let confirmSpy: ReturnType<typeof vi.spyOn>;
@@ -2169,7 +2264,11 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     reason: 'waiting_timer' | 'waiting_external' = 'waiting_external',
     doc = approvalDoc(),
   ) {
-    getRunDetailMock.mockResolvedValue({ run: run({ status: 'waiting' }), pipelineVersion: doc });
+    getRunDetailMock.mockResolvedValue({
+      ...NAMES,
+      run: run({ status: 'waiting' }),
+      pipelineVersion: doc,
+    });
     useRunStreamMock.mockReturnValue(stream({ events: parkedOn(reason) }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
     await screen.findByText('Run');
@@ -2278,6 +2377,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
        that batching. */
     listExternalWaitsMock.mockResolvedValue([WAIT]);
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'waiting' }),
       pipelineVersion: approvalDoc(),
     });
@@ -2352,6 +2452,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     const second = { ...WAIT, nodeId: 'approve2', attemptId: 'approve2#0' };
     listExternalWaitsMock.mockResolvedValue([WAIT, second]);
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'waiting' }),
       pipelineVersion: approvalDoc(),
     });
@@ -2510,6 +2611,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     listExternalWaitsMock.mockResolvedValue([WAIT, OTHER]);
     const first = parkedOn('waiting_external');
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'waiting' }),
       pipelineVersion: approvalDoc(),
     });
@@ -2576,6 +2678,7 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
 
   async function renderRun(over: Partial<RunStreamState>, runOver: Partial<Run> = {}) {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'success', finishedAt: 1_700_000_001_000, ...runOver }),
       pipelineVersion: version(),
     });
@@ -2811,11 +2914,12 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
 describe('RunDetailPage — the parent a child run was called by', () => {
   async function mountRun(overrides: Partial<Run> = {}) {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'success', finishedAt: 1_700_000_001_000, ...overrides }),
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByText('pv_1');
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   it('links up to the run that called this one', async () => {
@@ -2947,11 +3051,12 @@ describe('RunDetailPage — the reruns of this run', () => {
 
   async function mountRun() {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'failure', finishedAt: 1_700_000_001_000 }),
       pipelineVersion: version(),
     });
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await screen.findByText('pv_1');
+    await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
   function rerun(id: string): RunSummary {
@@ -3064,6 +3169,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
 
   it('shows the engine’s value, live while the run is going', async () => {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'running' }),
       pipelineVersion: withVariables(),
     });
@@ -3078,6 +3184,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
 
   it('says the values are final once the run has settled', async () => {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'success', finishedAt: 1_700_000_001_000 }),
       pipelineVersion: withVariables(),
     });
@@ -3097,6 +3204,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
 
   it('shows no values from a half-replayed log, and says why', async () => {
     getRunDetailMock.mockResolvedValue({
+      ...NAMES,
       run: run({ status: 'running' }),
       pipelineVersion: withVariables(),
     });

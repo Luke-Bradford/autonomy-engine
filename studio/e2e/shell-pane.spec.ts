@@ -252,15 +252,22 @@ test.describe('U3 command bar', () => {
   });
 
   /**
-   * The three-deep trail, whose deepest crumb is the run id — the case that
-   * required nesting `:runId` under `runs` so the middle crumb has a real path
-   * to link back to.
+   * The three-deep trail on a run detail route — the case that required
+   * nesting `:runId` under `runs` so the middle crumb has a real path to link
+   * back to. The deepest crumb is the run's pipeline name once it loads
+   * (#1392); this run does not exist, so it stays the short-id fallback.
    */
-  test('reads Monitor > Runs > <run id> on a run detail route', async ({ page }) => {
+  test('reads Monitor > Runs > Run <short id> on a run detail route', async ({ page }) => {
     await page.goto('/#/monitor/runs/run_e2e_u3');
     await fluentRootReady(page);
 
-    await expect(trail(page).getByRole('listitem')).toHaveText(['Monitor', 'Runs', 'run_e2e_u3']);
+    // #1392 — no such run exists, so no name is published and the crumb is
+    // the route's fallback: the (already short) id, labelled as a run.
+    await expect(trail(page).getByRole('listitem')).toHaveText([
+      'Monitor',
+      'Runs',
+      'Run run_e2e_u3',
+    ]);
     await trail(page).getByRole('link', { name: 'Runs' }).click();
     await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
   });

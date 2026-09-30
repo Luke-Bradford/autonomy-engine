@@ -10,3 +10,18 @@
 export function newLocalId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
+
+/**
+ * #1392 — the short form of a server id, for a page that shows a NAME and wants
+ * the id available without leading with it.
+ *
+ * Server ids are `${prefix}_${nanoid()}` (`server/src/repo/ids.ts`), whose doc
+ * says callers must never parse the prefix. So this keeps the TAIL rather than
+ * stripping a prefix: the last eight characters of a random id are as
+ * distinguishing as any eight, and the rule holds for any id shape. An id no
+ * longer than twelve characters is returned whole — cutting `run_e2e_u3` to
+ * `n_e2e_u3` would be shorter and strictly less readable.
+ */
+export function shortId(id: string): string {
+  return id.length <= 12 ? id : id.slice(-8);
+}

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -81,11 +81,16 @@ vi.mock('./api/runs', async (importActual) => {
       Promise.resolve({
         pipelineVersion: {
           id: 'pv_1',
+          pipelineId: 'pipe_nightly',
+          version: 3,
           nodes: [],
           edges: [],
           containers: [],
         },
         run: runRow(runId),
+        // #1392 — the names the page publishes to the breadcrumb and title.
+        pipelineName: 'Nightly load',
+        triggerName: null,
       }),
     ),
     // #1206 — the detail page reads the run on its own too (the R1 fallback, and
@@ -335,7 +340,10 @@ describe('route tree', () => {
 
   it('renders the run detail page at /monitor/runs/:runId', async () => {
     renderAt('/monitor/runs/run_42');
-    expect(await page().findByText('run_42')).toBeInTheDocument();
+    // #1392 — the heading swaps from the short id to the pipeline's name once
+    // R1 lands, so wait for the settled page before reading the id off it.
+    expect(await page().findByRole('heading', { name: 'Nightly load v3' })).toBeInTheDocument();
+    expect(page().getByText('run_42')).toBeInTheDocument();
   });
 
   /**
@@ -529,7 +537,17 @@ describe('route tree', () => {
    */
   it('decodes :runId exactly once', async () => {
     renderAt(`/monitor/runs/${encodeURIComponent('run%20x')}`);
-    expect(await page().findByText('run%20x')).toBeInTheDocument();
+    await page().findByRole('heading', { name: 'Nightly load v3' });
+    expect(page().getByText('run%20x')).toBeInTheDocument();
+    // #1392 — the page keys its published name by the ENCODED location while
+    // the router's match is decoded; the crumb must still find it.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
+          .getAllByRole('listitem')
+          .at(-1)?.textContent,
+      ).toBe('Nightly load · run run%20x'),
+    );
   });
 
   /**
@@ -542,12 +560,20 @@ describe('route tree', () => {
    */
   it('remounts the run detail page when the run id changes', async () => {
     const getRunDetail = vi.mocked((await import('./api/runs')).getRunDetail);
+    // Put the factory's default back afterwards: a later test that reads the
+    // run page's NAMES (#1392) would otherwise see this test's `B pipe`.
+    const factoryDefault = getRunDetail.getMockImplementation();
+    onTestFinished(() => {
+      if (factoryDefault) getRunDetail.mockImplementation(factoryDefault);
+    });
     getRunDetail.mockImplementation((runId: string) =>
       runId === 'run_a'
         ? Promise.reject(new Error('run_a exploded'))
         : Promise.resolve({
             run: { id: runId },
-            pipelineVersion: { id: 'pv_1', nodes: [], edges: [], containers: [] },
+            pipelineVersion: { id: 'pv_1', version: 1, nodes: [], edges: [], containers: [] },
+            pipelineName: 'B pipe',
+            triggerName: null,
           } as never),
     );
 
@@ -557,12 +583,20 @@ describe('route tree', () => {
 
     await router.navigate('/monitor/runs/run_b');
 
-    expect(await page().findByText('run_b')).toBeInTheDocument();
+    await page().findByRole('heading', { name: 'B pipe v1' });
+    expect(page().getByText('run_b')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('run_a exploded')).not.toBeInTheDocument());
   });
 
-  it('sends an unknown path to Home', async () => {
-    expect(await landedAt('/nope/not/a/route')).toBe('/');
+  /* #1392 — an unknown path used to redirect to Home, silently showing a page
+     the operator had not asked for. It now stays put and says so. */
+  it('renders a not-found page for an unknown path, and stays on it', async () => {
+    const { router } = renderAt('/nope/not/a/route');
+    expect(await page().findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    expect(page().getByText('/nope/not/a/route')).toBeInTheDocument();
+    expect(page().getByRole('link', { name: 'Go to Home' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/nope/not/a/route');
+    await waitFor(() => expect(document.title).toBe('Not found — autonomy studio'));
   });
 
   /**
@@ -608,7 +642,8 @@ describe('route tree', () => {
   it('redirects a legacy run-detail path, keeping the run id', async () => {
     const { router } = renderAt('/runs/run_42');
     await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs/run_42'));
-    expect(await page().findByText('run_42')).toBeInTheDocument();
+    await page().findByRole('heading', { name: 'Nightly load v3' });
+    expect(page().getByText('run_42')).toBeInTheDocument();
   });
 
   /**
@@ -723,8 +758,8 @@ describe('shell chrome over the real route tree', () => {
     ['/', ['Home']],
     ['/author/pipelines', ['Author', 'Pipelines']],
     ['/monitor/runs', ['Monitor', 'Runs']],
-    ['/author/pipelines/pl_42', ['Author', 'Pipelines', 'pl_42']],
-    ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
+    ['/author/pipelines/pl_42', ['Author', 'Pipelines', 'Pipeline pl_42']],
+    ['/monitor/runs/run_42', ['Monitor', 'Runs', 'Nightly load · run run_42']],
     ['/manage/connections', ['Manage', 'Connections']],
     ['/manage/datasets', ['Manage', 'Datasets']],
     ['/manage/secrets', ['Manage', 'Secrets']],
@@ -740,6 +775,45 @@ describe('shell chrome over the real route tree', () => {
           .map((li) => li.textContent),
       ).toEqual(expected),
     );
+  });
+
+  /**
+   * #1392 — the tab title names the page, then its hub. For a detail route that
+   * is the NAME the page published, never the id in the URL.
+   */
+  it.each([
+    ['/', 'Home — autonomy studio'],
+    ['/manage/triggers', 'Triggers — Manage — autonomy studio'],
+    ['/author/pipelines/pl_42', 'Pipeline pl_42 — Author — autonomy studio'],
+    ['/monitor/runs/run_42', 'Nightly load · run run_42 — Monitor — autonomy studio'],
+  ])('titles %s as %j', async (path, expected) => {
+    renderAt(path);
+    await waitFor(() => expect(document.title).toBe(expected));
+  });
+
+  /**
+   * #1392 — a page withdraws its published name when it unmounts. Proved by
+   * coming BACK to the same run while its detail never resolves: a label left
+   * behind would show the old name on a page that has not loaded one.
+   */
+  it('does not carry a name over to a later visit that has not loaded it', async () => {
+    const { router } = renderAt('/monitor/runs/run_42');
+    const leaf = () =>
+      trail()
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+        .at(-1);
+    await waitFor(() => expect(leaf()).toBe('Nightly load · run run_42'));
+
+    await router.navigate('/monitor/runs');
+    await waitFor(() => expect(leaf()).toBe('Runs'));
+
+    const getRunDetail = vi.mocked((await import('./api/runs')).getRunDetail);
+    getRunDetail.mockImplementationOnce(() => new Promise(() => {}));
+    await router.navigate('/monitor/runs/run_42');
+    await page().findByRole('heading', { name: 'Run run_42' });
+    expect(leaf()).toBe('Run run_42');
+    expect(document.title).toBe('Run run_42 — Monitor — autonomy studio');
   });
 
   /**

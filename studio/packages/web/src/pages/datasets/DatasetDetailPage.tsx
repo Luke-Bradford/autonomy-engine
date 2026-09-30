@@ -12,6 +12,7 @@ import { getDataset, getDatasetReferences } from '../../api/datasets';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { pipelinePath } from '../author/pipelinePath';
 import { StoreCell } from './StoreCell';
+import { useShellLabel } from '../../shell/shellLabel';
 
 /**
  * #996 M9 (#1185) — the dataset detail page: which of this owner's pipelines
@@ -88,6 +89,9 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // #1392 — the breadcrumb and tab title name the dataset, not its id.
+  useShellLabel(dataset?.name);
 
   return (
     <section aria-labelledby="dataset-detail-heading">

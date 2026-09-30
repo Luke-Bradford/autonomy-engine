@@ -20,6 +20,8 @@ import { AiActivityPage } from './pages/monitor/AiActivityPage';
 import { AuditPage } from './pages/monitor/AuditPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
 import { LegacyRunRedirect } from './pages/runs/LegacyRunRedirect';
+import { NotFoundPage } from './pages/NotFoundPage';
+import { shortId } from './lib/ids';
 
 /**
  * U3r — compatibility redirects for the MVP's pre-hub paths.
@@ -122,15 +124,15 @@ export const ROUTES: RouteObject[] = [
               {
                 path: ':pipelineId',
                 element: <PipelineCanvasRoute />,
-                /* The id, not the pipeline's NAME. A name crumb would need the
-                   shell to subscribe to a page-domain store (or a route loader)
-                   to know it, and to re-render when it arrived — a coupling the
-                   shell has deliberately avoided, for a label the canvas's own
-                   heading already shows. `:runId` sets the precedent. U9 owns
-                   the command bar's per-pipeline region and can carry the name
-                   there. `useParams` has already decoded this. */
+                /* #1392 — the crumb the operator reads is the pipeline's NAME,
+                   which the canvas publishes once it has loaded the pipeline
+                   (`useShellLabel`); the shell still subscribes to no page
+                   store. This is only the FALLBACK, for the moment before the
+                   load and for a pipeline that does not exist — and even then a
+                   short id, not the full `pipe_…` one. `useParams` has already
+                   decoded this. */
                 handle: {
-                  crumb: (params) => params.pipelineId ?? '',
+                  crumb: (params) => shortId(params.pipelineId ?? ''),
                 } satisfies ShellRouteHandle,
               },
             ],
@@ -156,10 +158,11 @@ export const ROUTES: RouteObject[] = [
               {
                 path: ':runId',
                 element: <RunDetailRoute />,
-                /* The label IS the URL segment. `useParams` has already decoded
-                   it, so this is the id as the page shows it. */
+                /* #1392 — the page publishes `<pipeline> · run <short id>`
+                   once the run detail loads; this is the fallback before that,
+                   or when the run's pipeline cannot be resolved. */
                 handle: {
-                  crumb: (params) => params.runId ?? '',
+                  crumb: (params) => (params.runId ? `Run ${shortId(params.runId)}` : ''),
                 } satisfies ShellRouteHandle,
               },
             ],
@@ -198,9 +201,10 @@ export const ROUTES: RouteObject[] = [
               {
                 path: ':datasetId',
                 element: <DatasetDetailRoute />,
-                /* The label IS the URL segment, already decoded by `useParams`. */
+                /* #1392 — the dataset page publishes the NAME; this short id is
+                   the fallback before it loads. */
                 handle: {
-                  crumb: (params) => params.datasetId ?? '',
+                  crumb: (params) => shortId(params.datasetId ?? ''),
                 } satisfies ShellRouteHandle,
               },
             ],
@@ -254,10 +258,14 @@ export const ROUTES: RouteObject[] = [
       })),
       { path: 'runs/:runId', element: <LegacyRunRedirect /> },
 
-      /* Catch-all. A genuinely unknown path renders Home rather than a dead
-         end — and `replace` so the bad URL does not sit in history waiting for
-         Back. */
-      { path: '*', element: <Navigate to="/" replace /> },
+      /* Catch-all (#1392). A genuinely unknown path renders a not-found page
+         that says so and links Home. It used to redirect to Home, which hid
+         the bad link behind a page the operator had not asked for. */
+      {
+        path: '*',
+        element: <NotFoundPage />,
+        handle: { crumb: 'Not found' } satisfies ShellRouteHandle,
+      },
     ],
   },
 ];

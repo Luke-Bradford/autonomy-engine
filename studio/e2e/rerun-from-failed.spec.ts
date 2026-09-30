@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, seedVersion, type SeedDoc } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
@@ -21,6 +21,15 @@ import { fluentRootReady } from './support/theme';
  * `validateWaitConfig` refuses a bare literal at save time). That second class
  * is recorded in `seedDoc.ts`'s own docblock alongside the other two.
  */
+/**
+ * Which run a detail page is showing. Since #1392 the heading names the
+ * PIPELINE (a source run and its rerun share one), so the run is identified by
+ * its id in the metadata: shown short, carried whole in the tooltip.
+ */
+function runIdShown(page: Page, runId: string): Locator {
+  return page.locator('.run-meta').getByTitle(runId, { exact: true });
+}
+
 const FAILING_DOC = {
   nodes: [{ id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 0, y: 0 } }],
 };
@@ -97,7 +106,7 @@ test('#895 — a failed run reruns from the monitor, and the new run says where 
   // The drill BACK. The row is a way to the source run, not merely a label of
   // one — which is the whole reason it is a control rather than a `<code>`.
   await sourceLink.click();
-  await expect(page.getByRole('heading', { name: new RegExp(sourceRunId) })).toBeVisible();
+  await expect(runIdShown(page, sourceRunId)).toBeVisible();
   expect(page.url(), 'the lineage link must land on the SOURCE run').toContain(sourceRunId);
   // …and the source run is a rerun of nothing, so it carries no lineage row.
   await expect(page.getByText('Rerun of')).toHaveCount(0);
@@ -135,12 +144,12 @@ test('RS6 — a failed run lists its reruns, and the runs list says which runs a
 
   // Back up to the source: it now lists the rerun, as a link that resolves.
   await page.getByRole('link', { name: `Source run ${sourceRunId}` }).click();
-  await expect(page.getByRole('heading', { name: new RegExp(sourceRunId) })).toBeVisible();
+  await expect(runIdShown(page, sourceRunId)).toBeVisible();
   await expect(page.getByText('Reruns', { exact: true })).toBeVisible();
   const rerunLink = page.getByRole('link', { name: `Rerun run ${rerunId}` });
   await expect(rerunLink).toHaveAttribute('href', new RegExp(`/monitor/runs/${rerunId}$`));
   await rerunLink.click();
-  await expect(page.getByRole('heading', { name: new RegExp(rerunId) })).toBeVisible();
+  await expect(runIdShown(page, rerunId)).toBeVisible();
 
   // The runs list: the rerun's Type cell says so and names its source; the
   // source reads Original.
