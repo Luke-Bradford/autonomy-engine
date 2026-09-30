@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { addActivity, canvasNodes } from './support/canvasGraph';
+import { addActivity, canvasNodes, validationIssues } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
 import { resolvedPaletteColor, setTheme } from './support/theme';
@@ -24,12 +24,6 @@ import { properties } from './support/panels';
  * in a browser, not in review — which is why this spec builds its doc by clicking
  * the toolbox rather than by seeding one.
  */
-
-/** The validation badge's messages, or `[]` when there is no badge. */
-async function validationIssues(page: Page): Promise<string[]> {
-  const list = page.locator('.badge-list li');
-  return (await list.count()) === 0 ? [] : list.allTextContents();
-}
 
 /** The canvas-minted id of the nth activity on the canvas. */
 async function mintedId(page: Page, index: number): Promise<string> {

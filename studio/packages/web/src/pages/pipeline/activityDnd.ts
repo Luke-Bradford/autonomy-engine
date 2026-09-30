@@ -1,4 +1,4 @@
-import { getActivity } from '@autonomy-studio/shared';
+import { ContainerKindSchema, getActivity, type ContainerKind } from '@autonomy-studio/shared';
 
 /**
  * The drag-and-drop PROTOCOL between the activity toolbox (drag source) and the
@@ -68,4 +68,40 @@ export function readActivityDragType(dataTransfer: DataTransfer | null): string 
   const type = dataTransfer!.getData(ACTIVITY_DND_MIME);
   if (type === '' || !getActivity(type)) return null;
   return type;
+}
+
+/**
+ * #1420 — the same protocol for the palette's CONTAINERS group (ForEach, Until,
+ * Stage). A second MIME type rather than a prefix inside the activity payload:
+ * a container is not a catalog activity, so `readActivityDragType` must keep
+ * refusing it, and a drop handler that sees both shapes has to be able to tell
+ * them apart from `types` alone during `dragover` (protected mode, see above).
+ */
+export const CONTAINER_DND_MIME = 'application/x-autonomy-container';
+
+/** Arm a drag with the container kind it carries. Called from `dragstart`. */
+export function setContainerDragKind(dataTransfer: DataTransfer, kind: ContainerKind): void {
+  dataTransfer.setData(CONTAINER_DND_MIME, kind);
+  dataTransfer.effectAllowed = 'copy';
+}
+
+/** Is this a container drag? Reads `types` only, for the reason `hasActivityDragType` does. */
+export function hasContainerDragKind(dataTransfer: DataTransfer | null): boolean {
+  return dataTransfer != null && Array.from(dataTransfer.types).includes(CONTAINER_DND_MIME);
+}
+
+/** Either palette drag — the canvas's one `dragover`/`drop` gate. */
+export function hasCanvasDragType(dataTransfer: DataTransfer | null): boolean {
+  return hasActivityDragType(dataTransfer) || hasContainerDragKind(dataTransfer);
+}
+
+/**
+ * The container kind this drop should author, or `null`. Re-validated against
+ * `ContainerKindSchema` for the reason `readActivityDragType` re-checks the
+ * catalog: the payload is a string from outside this document.
+ */
+export function readContainerDragKind(dataTransfer: DataTransfer | null): ContainerKind | null {
+  if (!hasContainerDragKind(dataTransfer)) return null;
+  const parsed = ContainerKindSchema.safeParse(dataTransfer!.getData(CONTAINER_DND_MIME));
+  return parsed.success ? parsed.data : null;
 }

@@ -35,6 +35,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+  containerMembership,
   getActivity,
   implicitRouting,
   type ContainerKind,
@@ -42,8 +43,15 @@ import {
 } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
-import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
-import { hasActivityDragType, readActivityDragType } from './activityDnd';
+import {
+  confirmContainerEdit,
+  confirmNewContainer,
+  containerLabels,
+  routingChangeBetween,
+  routingSentence,
+} from './containerRules';
+import { hasCanvasDragType, readActivityDragType, readContainerDragKind } from './activityDnd';
+import { CONTAINER_PALETTE } from './activityGroups';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { useNodeFan } from './useNodeFan';
@@ -61,6 +69,7 @@ import {
 import {
   appearedIds,
   appearedSelected,
+  containerAtPoint,
   onScreen,
   revealReady,
   containerAriaLabel,
@@ -88,6 +97,7 @@ import {
   type SourcePort,
 } from './ports';
 import {
+  assignContainerChild,
   cascadeDeleteContainer,
   nextSelection,
   singleSelection,
@@ -546,6 +556,8 @@ export function FlowCanvas({
   // selected directly, and this component no longer re-renders on a `rebaseLoaded`
   // that changes nothing it draws.
   const containers = useStore(store, (s) => s.containers);
+  /** #1420 — where each palette-authored empty box was put (`containerRects`). */
+  const containerAnchors = useStore(store, (s) => s.containerAnchors);
 
   /**
    * #788 — the implicit success chain, said out loud.
@@ -1083,9 +1095,10 @@ export function FlowCanvas({
         ),
         new Set(nodes.map((n) => n.id)),
       ),
+      new Map(Object.entries(containerAnchors)),
     );
     return rects;
-  }, [containers, nodes, flowNodes, portsOf]);
+  }, [containers, nodes, flowNodes, portsOf, containerAnchors]);
 
   /**
    * #1066 — which container boxes currently have their ports fanned out.
@@ -1212,8 +1225,9 @@ export function FlowCanvas({
            cannot be RF-selected. U23 gave the box its own CONFIG panel without
            relaxing this line: the ⚙ writes the store's `Selection` directly, so
            a container is selectable in the STORE's sense and not in RF's, which
-           is the whole point. DRAGGING one in, and the RF `parentId` mapping that
-           would make a container draggable as a group, is still U23's part 2. */
+           is the whole point. Dragging a NODE in (#1420) is a drag-stop hit test
+           against the derived boxes, not RF's `parentId`; the mapping that would
+           make a container draggable as a group is still U23's part 2. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
@@ -2062,9 +2076,86 @@ export function FlowCanvas({
    * `activityDnd.ts`.
    */
   function onDragOver(event: DragEvent<HTMLDivElement>) {
-    if (!hasActivityDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
+    if (!hasCanvasDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
+  }
+
+  /**
+   * #1420 — DRAG AN ACTIVITY INTO A BOX, decided by the POINTER: where it was
+   * released, and where it was when the drag began.
+   *
+   * The pointer rather than a node's centre because it is the one point that
+   * means the same thing for every gesture: a single node, a selection dragged
+   * by any of its members or by the selection rectangle (where no node is "the
+   * one under the pointer"), and a palette drop — all of which are then judged
+   * by the same rule. The START point tells "moved into a box" from "nudged
+   * while already inside one": a box is its children's bounding rectangle and
+   * can be drawn over a non-member, and a reposition there must not become a
+   * membership change.
+   */
+  const dragStartPoint = useRef<{ x: number; y: number } | null>(null);
+  const flowPointOf = useCallback(
+    (event: MouseEvent | TouchEvent | ReactMouseEvent) => {
+      const at = 'changedTouches' in event ? event.changedTouches[0] : event;
+      return at === undefined ? null : screenToFlowPosition({ x: at.clientX, y: at.clientY });
+    },
+    [screenToFlowPosition],
+  );
+  const onNodesDragStart = useCallback(
+    (event: MouseEvent | TouchEvent | ReactMouseEvent) => {
+      dragStartPoint.current = flowPointOf(event);
+    },
+    [flowPointOf],
+  );
+  /**
+   * Every dragged activity joins the box the pointer was released over, as ONE
+   * edit (`setNodesContainer`), gated by `confirmContainerEdit` exactly as the
+   * node's Settings → Container select is — a join can orphan an edge or an
+   * `${item}`. The box that already holds EVERY dragged node is excluded (its
+   * box contains them by construction). Dragging OUT stays on that select and
+   * the box's ✕: a box grows with its dragged child, so "outside it" has no
+   * stable meaning at release.
+   */
+  const onNodesDragStop = useCallback(
+    (event: MouseEvent | TouchEvent | ReactMouseEvent, dragged: FlowNode[]) => {
+      const start = dragStartPoint.current;
+      dragStartPoint.current = null;
+      const end = flowPointOf(event);
+      if (end === null) return;
+      const state = store.getState();
+      const { owner } = containerMembership(state.containers);
+      const ids = dragged.map((n) => n.id).filter((id) => state.nodes.some((n) => n.id === id));
+      const owners = new Set(ids.map((id) => owner.get(id) ?? null));
+      const shared = owners.size === 1 ? ([...owners][0] ?? null) : null;
+      const target = containerAtPoint(containerBoxes, end, shared);
+      if (target === null) return;
+      const box = containerBoxes.get(target)!;
+      if (start !== null && containerAtPoint(new Map([[target, box]]), start, null) === target) {
+        return;
+      }
+      const joining = ids.filter((id) => owner.get(id) !== target);
+      if (joining.length === 0) return;
+      const next = joining.reduce(
+        (acc, id) => assignContainerChild(acc, id, target),
+        state.containers,
+      );
+      if (!confirmContainerEdit(state, next, 'Undo (⌘Z) takes it back out.')) return;
+      state.setNodesContainer(joining, target);
+    },
+    [store, containerBoxes, flowPointOf],
+  );
+
+  /**
+   * #1420 — a palette container dropped on the canvas: an EMPTY box whose
+   * top-left is under the pointer, which activities are then dragged into.
+   * `confirmNewContainer` says why only a routing change is confirmed.
+   */
+  function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
+    const state = store.getState();
+    const title = CONTAINER_PALETTE.find((e) => e.kind === kind)?.title ?? kind;
+    if (!confirmNewContainer(state, kind, title)) return;
+    state.addContainer(kind, position);
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -2077,8 +2168,13 @@ export function FlowCanvas({
        `text/uri-list` would navigate the page to the dropped URL — discarding an
        unsaved graph with no confirmation. Claim every drop we invited, THEN
        decide whether it authors anything. */
-    if (!hasActivityDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
+    if (!hasCanvasDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
     event.preventDefault();
+    const kind = readContainerDragKind(event.dataTransfer);
+    if (kind !== null) {
+      dropContainer(kind, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+      return;
+    }
     // Ours, but not something we can author (an uncatalogued or structural-call
     // type from another tab or an older build): a no-op, not a default action.
     const type = readActivityDragType(event.dataTransfer);
@@ -2089,7 +2185,12 @@ export function FlowCanvas({
        false precision. `screenToFlowPosition` accounts for the live zoom + pan,
        so the placement is correct under any viewport transform. */
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    store.getState().addNode(type, position);
+    /* #1420 — released over a box: the new activity goes IN it, the ADF gesture
+       for filling a ForEach, as the same one edit that adds it. No confirm,
+       unlike dragging an existing node in: a node born this instant has no
+       edges and no `${}` references, so joining can orphan nothing. */
+    const target = containerAtPoint(containerBoxes, position, null);
+    store.getState().addNode(type, position, target ?? undefined);
   }
 
   return (
@@ -2220,6 +2321,10 @@ export function FlowCanvas({
         isValidConnection={isValidConnection}
         onDragOver={onDragOver}
         onDrop={onDrop}
+        onNodeDragStart={onNodesDragStart}
+        onNodeDragStop={(e, _node, dragged) => onNodesDragStop(e, dragged)}
+        onSelectionDragStart={onNodesDragStart}
+        onSelectionDragStop={onNodesDragStop}
         onlyRenderVisibleElements
         fitView
         proOptions={{ hideAttribution: true }}

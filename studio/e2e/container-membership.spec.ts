@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { scaleOf } from './support/canvasGraph';
+import { scaleOf, validationIssues } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
@@ -68,12 +68,6 @@ async function deleteActivity(page: Page, id: string): Promise<void> {
   await nodeById(page, id).click();
   await page.getByRole('button', { name: 'Delete node' }).click();
   await expect(nodeById(page, id)).toHaveCount(0);
-}
-
-/** The validation badge's messages, or `[]` when there is no badge. */
-async function validationIssues(page: Page): Promise<string[]> {
-  const list = page.locator('.badge-list li');
-  return (await list.count()) === 0 ? [] : list.allTextContents();
 }
 
 test.describe('#746 container membership follows a delete', () => {

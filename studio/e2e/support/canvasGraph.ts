@@ -795,3 +795,12 @@ export function pathStyle(
     return getComputedStyle(el)[prop as 'stroke' | 'strokeDasharray' | 'strokeWidth'];
   }, property);
 }
+
+/**
+ * The validation badge's messages, or `[]` when there is no badge. One reader
+ * for every spec — it was five identical local copies before #1420 made a sixth.
+ */
+export async function validationIssues(page: Page): Promise<string[]> {
+  const list = page.locator('.badge-list li');
+  return (await list.count()) === 0 ? [] : list.allTextContents();
+}

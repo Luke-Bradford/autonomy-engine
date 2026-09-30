@@ -30,16 +30,16 @@ test.describe('U5 activities toolbox', () => {
     await openCanvas(page, 'e2e u5 filter');
 
     // Groups are present and populated before any filtering.
-    await expect(toolbox(page).getByRole('list', { name: 'General' })).toBeVisible();
-    await expect(toolbox(page).getByRole('list', { name: 'AI' })).toBeVisible();
+    await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
+    await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toBeVisible();
     await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
 
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
     await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
     await expect(toolbox(page).getByRole('button', { name: 'LLM Call' })).toHaveCount(0);
     // A heading over nothing would be a false "this category has matches" signal.
-    await expect(toolbox(page).getByRole('list', { name: 'AI' })).toHaveCount(0);
-    await expect(toolbox(page).getByRole('list', { name: 'General' })).toBeVisible();
+    await expect(toolbox(page).getByRole('list', { name: 'AI', exact: true })).toHaveCount(0);
+    await expect(toolbox(page).getByRole('list', { name: 'General', exact: true })).toBeVisible();
 
     await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('zzzz');
     await expect(toolbox(page).getByRole('status')).toContainText('No activities match');

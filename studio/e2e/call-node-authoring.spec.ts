@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { addActivity, canvasNodes } from './support/canvasGraph';
+import { addActivity, canvasNodes, validationIssues } from './support/canvasGraph';
 import { openSeededCanvas, seedVersion } from './support/seedDoc';
 import { properties } from './support/panels';
 
@@ -32,11 +32,6 @@ import { properties } from './support/panels';
  */
 function arg(page: Page, name: string) {
   return properties(page).getByRole('textbox', { name: new RegExp(`^${name}`) });
-}
-
-async function validationIssues(page: Page): Promise<string[]> {
-  const list = page.locator('.badge-list li');
-  return (await list.count()) === 0 ? [] : list.allTextContents();
 }
 
 const CHILD = 'e2e 425 child';

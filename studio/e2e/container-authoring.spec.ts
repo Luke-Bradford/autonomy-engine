@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { validationIssues } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
@@ -22,12 +23,6 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
 async function select(page: Page, id: string): Promise<void> {
   await nodeById(page, id).click();
   await expect(page.getByLabel('Container membership')).toBeVisible();
-}
-
-/** The validation badge's messages, or `[]` when there is no badge. */
-async function validationIssues(page: Page): Promise<string[]> {
-  const list = page.locator('.badge-list li');
-  return (await list.count()) === 0 ? [] : list.allTextContents();
 }
 
 /**

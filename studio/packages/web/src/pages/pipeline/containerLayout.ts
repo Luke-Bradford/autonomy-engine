@@ -150,6 +150,12 @@ function union(a: Rect, b: Rect): Rect {
 export function containerRects(
   containers: Container[],
   nodeRects: ReadonlyMap<string, Rect>,
+  /* #1420 — where the operator PUT an empty box: a palette drop. Consulted
+     only while the container has nothing to enclose; once it does, the box is
+     its children's bounds again. Without it the stacked fallback below sits
+     right of ALL content, so dragging an activity towards the box widened the
+     content and pushed the box away — a drop target that flees the pointer. */
+  anchors: ReadonlyMap<string, { x: number; y: number }> = new Map(),
 ): Map<string, ContainerBox> {
   const { owner } = containerMembership(containers);
 
@@ -190,6 +196,11 @@ export function containerRects(
   const rects = new Map<string, ContainerBox>();
   for (const c of containers) {
     const children = drawable.get(c.id) ?? [];
+    const anchor = anchors.get(c.id);
+    if (children.length === 0 && anchor !== undefined) {
+      rects.set(c.id, { x: anchor.x, y: anchor.y, ...EMPTY_CONTAINER_SIZE, childCount: 0 });
+      continue;
+    }
     if (children.length === 0) {
       rects.set(c.id, {
         x: fallbackX,
@@ -269,6 +280,31 @@ function axisPan(near: number, size: number, extent: number): number {
   if (near >= 0 && far <= extent) return 0;
   const pan = far > extent - REVEAL_MARGIN ? extent - REVEAL_MARGIN - far : 0;
   return near + pan < REVEAL_MARGIN ? REVEAL_MARGIN - near : pan;
+}
+
+/**
+ * #1420 — the container whose box a dropped activity landed in: the SMALLEST
+ * box containing `point` (so a box drawn inside a bigger one wins), never
+ * `exclude` — the box that already holds every dragged node, which contains
+ * them by construction. `null` when the point is in no other box.
+ */
+export function containerAtPoint(
+  boxes: ReadonlyMap<string, Rect>,
+  point: { x: number; y: number },
+  exclude: string | null,
+): string | null {
+  let best: string | null = null;
+  let bestArea = Infinity;
+  for (const [id, b] of boxes) {
+    if (id === exclude) continue;
+    const inside =
+      point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + b.height;
+    if (inside && b.width * b.height < bestArea) {
+      best = id;
+      bestArea = b.width * b.height;
+    }
+  }
+  return best;
 }
 
 /**

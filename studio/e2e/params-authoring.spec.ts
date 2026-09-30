@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { deselect } from './support/canvasGraph';
+import { deselect, validationIssues } from './support/canvasGraph';
 import { openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
 
@@ -18,12 +18,6 @@ import { properties } from './support/panels';
  * write gate and an immutable version mint; no jsdom test can see it, and it is
  * exactly what a regression to the old carry-forward would silently break.
  */
-
-/** The validation badge's messages, or `[]` when there is no badge. */
-async function validationIssues(page: Page): Promise<string[]> {
-  const list = page.locator('.badge-list li');
-  return (await list.count()) === 0 ? [] : list.allTextContents();
-}
 
 test.describe('U16 — pipeline params/outputs authoring', () => {
   test('a param authored on the canvas SURVIVES a save and reload', async ({ page }) => {
