@@ -40,6 +40,7 @@ import {
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FilterPicker } from './FilterPicker';
 import { RUN_GROUP_BYS, type RunGroupBy } from './runBars';
+import { versionLabel } from '../../lib/versionLabel';
 
 /**
  * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
@@ -604,7 +605,10 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                             not lost: it stays reachable as the cell's title, for
                             the rare case someone needs the opaque key. */}
                         <span title={r.pipelineVersionId}>
-                          {r.pipelineName} <span className="run-version">v{r.pipelineVersion}</span>
+                          {r.pipelineName}{' '}
+                          <span className="run-version">
+                            {versionLabel(r.pipelineVersion, r.debug)}
+                          </span>
                         </span>
                       </td>
                       {/* `null` for a rerun, or a run whose trigger was deleted —

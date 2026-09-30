@@ -70,7 +70,7 @@ vi.mock('./useRunStream', async (importActual) => ({
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 /** #1392 — the names R1 resolves beside the doc; most cases do not read them. */
-const NAMES = { pipelineName: 'Test pipeline', triggerName: null } as const;
+const NAMES = { pipelineName: 'Test pipeline', triggerName: null, debug: false } as const;
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const cancelRunMock = vi.mocked(runsApi.cancelRun);
 const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
@@ -186,6 +186,7 @@ describe('RunDetailPage', () => {
     getRunDetailMock.mockResolvedValue({
       run: run({ id: 'run_V1StGXR8_Z5jdHi6B-myT' }),
       pipelineVersion: version(),
+      debug: false,
       pipelineName: 'Nightly load',
       triggerName: 'Every night',
     });
@@ -217,6 +218,7 @@ describe('RunDetailPage', () => {
     getRunDetailMock.mockResolvedValue({
       run: run(),
       pipelineVersion: version(),
+      debug: false,
       pipelineName: null,
       triggerName: null,
     });
@@ -229,6 +231,7 @@ describe('RunDetailPage', () => {
     getRunDetailMock.mockResolvedValue({
       run: run(),
       pipelineVersion: version(),
+      debug: false,
       pipelineName: 'Nightly load',
       triggerName: null,
     });
@@ -3071,6 +3074,7 @@ describe('RunDetailPage — the reruns of this run', () => {
     return {
       ...run({ id, status: 'running', triggerId: null, rerunOf: 'run_1' }),
       pipelineId: 'pipe_1',
+      debug: false,
       pipelineName: 'P',
       pipelineVersion: 1,
       annotations: [],

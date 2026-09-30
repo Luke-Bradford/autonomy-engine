@@ -39,6 +39,9 @@ declare module 'fastify' {
      * fires" + concurrency admission. Per-app so its in-flight/queue state
      * never leaks across instances. */
     runLauncher: RunLauncher;
+    /** #1395 — the resolved `DEBUG_RETENTION_DAYS` window in days (`null` =
+     * kept forever), reported by the debug route so the editor can say it. */
+    debugRetentionDays: number | null;
     /** #4 A13 — completes a parked `webhook` node from an inbound callback (the
      * `POST /api/external-wait/:token` route). Per-app, sharing this instance's
      * driver boundary so the completion append + downstream drive run under the same

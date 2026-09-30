@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
+  DebugRunRequestSchema,
   ManualRunRequestSchema,
   NewPipelineSchema,
   PipelineFolderSchema,
@@ -13,8 +14,11 @@ import {
   resolveRunParams,
   rollupFromAggregates,
   type ActivePipelineVersion,
+  type DebugRunResult,
   type FireResult,
+  type PipelineVersion,
 } from '@autonomy-studio/shared';
+import { deleteUnrunDebugVersion } from '../repo/debug-versions.js';
 import {
   aggregatePipelineCost,
   appendWorkspaceEvent,
@@ -27,6 +31,7 @@ import {
   getPipeline,
   getPipelineVersion,
   getWorkspaceGit,
+  isDebugVersion,
   listPipelineVersions,
   listPipelinesPage,
   restorePipeline,
@@ -78,6 +83,33 @@ const ListPipelinesQuerystringSchema = z.object({
 
 export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
+
+  // #1395 — the two pre-start checks the editor's Run and Debug share, each a
+  // 400 naming what is wrong before any run row exists. `resolveRunParams` is
+  // pure and never echoes a secret's value.
+  const refuseUnresolvableParams = (
+    doc: Pick<PipelineVersion, 'params'>,
+    params: Record<string, unknown>,
+  ): void => {
+    try {
+      resolveRunParams(doc, params);
+    } catch (err) {
+      if (err instanceof ParamResolveError) {
+        throw new BadRequestError(`the run cannot start: ${err.message}`);
+      }
+      throw err;
+    }
+  };
+  const refuseUnresolvableGlobals = (ownerId: string, pipelineVersionId: string): void => {
+    try {
+      resolveRunGlobals(db, { ownerId, pipelineVersionId });
+    } catch (err) {
+      if (err instanceof GlobalStartError) {
+        throw new BadRequestError(`the run cannot start: ${err.message}`);
+      }
+      throw err;
+    }
+  };
 
   fastify.post('/api/pipelines', async (request, reply) => {
     const body = PipelineWriteBodySchema.parse(request.body);
@@ -295,6 +327,15 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     if (version === null || version.pipelineId !== pipeline.id) {
       throw new NotFoundError('pipeline version', toVersionId);
     }
+    // #1395 — a DEBUG version is the editor's throwaway draft, deleted after
+    // `DEBUG_RETENTION_DAYS`. Refused BY NAME, not left to the provenance check
+    // below that happens to catch it today: the exclusion is a rule, and a rule
+    // resting on a coincidence stops holding when the coincidence does.
+    if (isDebugVersion(db, version.id) === true) {
+      throw new PublishRefusedError(
+        `pipeline version "${toVersionId}" is a debug version and cannot be published — save the pipeline and publish a saved version`,
+      );
+    }
     // CAS publishes only from a version whose git source commit/blob is KNOWN
     // (G6b). A NON-git-minted version (authored via the versions route, portable
     // import) has null provenance and is not a deployable git artifact.
@@ -477,22 +518,8 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       throw new ArchivedPipelineError(null, pipeline.id);
     }
     const params = body.params ?? {};
-    try {
-      resolveRunParams(version, params);
-    } catch (err) {
-      if (err instanceof ParamResolveError) {
-        throw new BadRequestError(`the run cannot start: ${err.message}`);
-      }
-      throw err;
-    }
-    try {
-      resolveRunGlobals(db, { ownerId: request.principal.ownerId, pipelineVersionId: version.id });
-    } catch (err) {
-      if (err instanceof GlobalStartError) {
-        throw new BadRequestError(`the run cannot start: ${err.message}`);
-      }
-      throw err;
-    }
+    refuseUnresolvableParams(version, params);
+    refuseUnresolvableGlobals(request.principal.ownerId, version.id);
     const result: FireResult = fastify.runLauncher.runNow({
       ownerId: request.principal.ownerId,
       pipelineVersionId: version.id,
@@ -500,6 +527,70 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     });
     return reply.status(202).send(result);
   });
+
+  /**
+   * #1395 OR4 — `POST /api/pipelines/:id/debug-runs`: run the editor's UNSAVED
+   * draft (the Debug button). The draft is minted as a hidden DEBUG version
+   * (`createPipelineVersion(…, { debug: true })`): the same write gate as a save,
+   * so a draft that could not be saved cannot be debugged either, but numbered
+   * apart, absent from every version listing and the head, unbindable by a
+   * trigger, and deleted with its runs after `DEBUG_RETENTION_DAYS`
+   * (`repo/debug-versions.ts`). `202` with a `DebugRunResult`.
+   *
+   * The same checks as Run, in the same order, and a version exists only if the
+   * run started:
+   *  - ownership, then archived (409);
+   *  - params against the DRAFT's declared params — pure, before anything is
+   *    written;
+   *  - mint + the globals pre-check in ONE transaction, so a refused globals
+   *    check (or an invalid doc, 400) rolls the version back;
+   *  - `runNow` last. It never queues; a `skipped` or a throw deletes the
+   *    version it was minted for, which has no run to keep.
+   */
+  fastify.post<{ Params: { id: string } }>(
+    '/api/pipelines/:id/debug-runs',
+    async (request, reply) => {
+      const pipeline = requireOwned(
+        getPipeline(db, request.params.id),
+        request.principal,
+        'pipeline',
+        request.params.id,
+      );
+      if (pipeline.archived) {
+        throw new ArchivedPipelineError(null, pipeline.id);
+      }
+      const body = DebugRunRequestSchema.parse(request.body ?? {});
+      const params = body.params ?? {};
+      refuseUnresolvableParams(body.version, params);
+      const ownerId = request.principal.ownerId;
+      // better-sqlite3 drops `createPipelineVersion`'s own transaction to a
+      // SAVEPOINT inside this one (see the save route above).
+      const version = db.transaction(() => {
+        const minted = createPipelineVersion(
+          db,
+          { ...body.version, pipelineId: pipeline.id },
+          { debug: true },
+        );
+        refuseUnresolvableGlobals(ownerId, minted.id);
+        return minted;
+      });
+      let result: FireResult;
+      try {
+        result = fastify.runLauncher.runNow({ ownerId, pipelineVersionId: version.id, params });
+      } catch (err) {
+        deleteUnrunDebugVersion(db, version.id);
+        throw err;
+      }
+      const retentionDays = fastify.debugRetentionDays;
+      if (result.outcome !== 'started') {
+        deleteUnrunDebugVersion(db, version.id);
+        return reply.status(202).send({ ...result, retentionDays } satisfies DebugRunResult);
+      }
+      return reply
+        .status(202)
+        .send({ ...result, pipelineVersion: version, retentionDays } satisfies DebugRunResult);
+    },
+  );
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/versions', async (request) => {
     const pipeline = requireOwned(

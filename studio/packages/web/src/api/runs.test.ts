@@ -37,6 +37,7 @@ const sampleRunSummary = {
   pipelineId: 'pl_1',
   pipelineName: 'Nightly report',
   pipelineVersion: 3,
+  debug: false,
   annotations: [],
   triggerName: 'Every morning',
   /* #931 — the summary now carries the run's cost. `computeRunCost([])` rather

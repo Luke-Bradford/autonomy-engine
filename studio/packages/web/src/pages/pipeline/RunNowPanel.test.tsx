@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CATALOG_VERSION, type PipelineVersion } from '@autonomy-studio/shared';
-import { RunNowPanel } from './RunNowPanel';
+import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 
 const runPipelineVersion = vi.fn();
+const debugPipelineDraft = vi.fn();
 vi.mock('../../api/pipelines', () => ({
   runPipelineVersion: (...args: unknown[]) => runPipelineVersion(...args) as unknown,
+  debugPipelineDraft: (...args: unknown[]) => debugPipelineDraft(...args) as unknown,
 }));
 
 const version = {
@@ -134,5 +136,80 @@ describe('RunNowPanel (#1395 OR4)', () => {
     expect(runPipelineVersion).toHaveBeenCalledTimes(1);
     resolve({ outcome: 'started', runId: 'run_1' });
     await waitFor(() => expect(start).not.toBeDisabled());
+  });
+});
+
+describe('DebugRunPanel (#1395 slice 3)', () => {
+  beforeEach(() => {
+    debugPipelineDraft.mockReset();
+  });
+
+  const draftDoc = {
+    params: [],
+    outputs: [],
+    nodes: [],
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  };
+
+  it('sends the draft as it is AT START with typed params, then hands up the debug version', async () => {
+    const debugVersion = { ...version, id: 'pv_debug', version: 1 };
+    debugPipelineDraft.mockResolvedValue({
+      outcome: 'started',
+      runId: 'run_d',
+      pipelineVersion: debugVersion,
+      retentionDays: 7,
+    });
+    let current = { ...draftDoc, description: 'at open' };
+    const onStarted = vi.fn();
+    render(
+      <DebugRunPanel
+        pipelineId="p_1"
+        params={version.params}
+        draft={() => current}
+        onStarted={onStarted}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('dialog', { name: 'Debug the draft' })).toBeInTheDocument();
+    expect(screen.getByText(/not added to the versions/)).toBeInTheDocument();
+    current = { ...draftDoc, description: 'at start' };
+    fireEvent.change(screen.getByLabelText('count'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    await waitFor(() =>
+      expect(onStarted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run_d',
+          pipelineVersion: debugVersion,
+          retentionDays: 7,
+        }),
+      ),
+    );
+    expect(debugPipelineDraft).toHaveBeenCalledWith('p_1', {
+      version: { ...draftDoc, description: 'at start' },
+      params: { city: 'Leeds', count: 2 },
+    });
+  });
+
+  it('says why when the server skips the debug run', async () => {
+    debugPipelineDraft.mockResolvedValue({
+      outcome: 'skipped',
+      reason: 'the pipeline is already running its maximum of 1 at once',
+      retentionDays: 7,
+    });
+    const onStarted = vi.fn();
+    render(
+      <DebugRunPanel
+        pipelineId="p_1"
+        params={[]}
+        draft={() => draftDoc}
+        onStarted={onStarted}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('maximum of 1');
+    expect(onStarted).not.toHaveBeenCalled();
   });
 });

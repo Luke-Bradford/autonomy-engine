@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Param } from '@autonomy-studio/shared';
-import { buildRunNowParams, runDisabledReason, runNowRows, runTitle } from './runNowRules';
+import {
+  buildRunNowParams,
+  debugDisabledReason,
+  debugStartedText,
+  runDisabledReason,
+  runNowRows,
+  runTitle,
+} from './runNowRules';
 
 const params: Param[] = [
   { name: 'city', type: 'string', required: false, default: 'Leeds' },
@@ -79,5 +86,30 @@ describe('runTitle', () => {
     expect(runTitle(3, true)).toBe(
       'Run v3, the latest saved version. Your unsaved edits are not included.',
     );
+  });
+});
+
+describe('debugDisabledReason (#1395 slice 3)', () => {
+  const ok = { ready: true, archived: false, previewing: false, issueCount: 0 };
+
+  it('allows Debug with no saved version at all', () => {
+    expect(debugDisabledReason(ok)).toBeNull();
+  });
+
+  it('refuses while loading, archived, previewing, or with validation issues', () => {
+    expect(debugDisabledReason({ ...ok, ready: false })).toMatch(/load/);
+    expect(debugDisabledReason({ ...ok, archived: true })).toMatch(/archived/);
+    expect(debugDisabledReason({ ...ok, previewing: true })).toMatch(/preview/);
+    expect(debugDisabledReason({ ...ok, issueCount: 2 })).toBe(
+      'Fix the 2 validation issue(s) in the Problems panel to debug.',
+    );
+  });
+});
+
+describe('debugStartedText (#1395 slice 3)', () => {
+  it('says how long the debug run is kept, or that it is kept until deleted', () => {
+    expect(debugStartedText(7)).toContain('kept for 7 days');
+    expect(debugStartedText(1)).toContain('kept for 1 day)');
+    expect(debugStartedText(null)).toContain('kept until deleted');
   });
 });

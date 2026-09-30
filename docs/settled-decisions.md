@@ -532,6 +532,20 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     separately; this script is meant to be deleted when that lands.
     *(#1124; PR for #1124/#985/#969.)*
 
+- **Debug runs are kept for a configurable window, not forever — the one sanctioned run deletion.**
+    The editor's Debug mints the unsaved draft as a hidden DEBUG version
+    (`pipeline_versions.debug = 1`): numbered in its own sequence, excluded from
+    every version listing, the head, triggers, publish, git and export, and a
+    literal `call_pipeline` pin to one is refused at save (each refused by name). Debug
+    versions AND their runs are deleted after `DEBUG_RETENTION_DAYS` (default 7;
+    `0` = forever), aged by the version's `created_at`, skipping any version with
+    a run still in flight. This is a deliberate exception to "runs are immutable
+    audit history, never swept" (`PipelineHasRunsError`): runs reference their
+    version ON DELETE RESTRICT, so a debug version cannot be retired without its
+    runs. Saved versions stay undeletable (the 0045 trigger refuses any other
+    row). Until swept, debug runs block deleting their pipeline like any run.
+    *(Operator 2026-09-30 via CONFIG OVER DECISIONS; #1395 slice 3.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

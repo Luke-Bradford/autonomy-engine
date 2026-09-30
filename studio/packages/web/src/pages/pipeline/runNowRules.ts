@@ -53,7 +53,7 @@ export function buildRunNowParams(
 /**
  * Why the header's Run cannot be pressed, or `null` when it can. Run starts the
  * LATEST SAVED version, never the working graph — running the unsaved draft is
- * Debug, a later slice of #1395.
+ * Debug (`debugDisabledReason`).
  */
 export function runDisabledReason({
   ready,
@@ -79,4 +79,48 @@ export function runDisabledReason({
 export function runTitle(headVersion: number, dirty: boolean): string {
   const what = `Run v${String(headVersion)}, the latest saved version`;
   return dirty ? `${what}. Your unsaved edits are not included.` : `${what}.`;
+}
+
+/**
+ * #1395 OR4 slice 3 — why the header's Debug cannot be pressed, or `null` when it
+ * can. Debug runs the WORKING graph, so it needs no saved version, but it goes
+ * through the same write gate as a save: a draft with validation issues would
+ * only bounce off the server, so it is refused here with the save's own
+ * pointer to the Problems panel.
+ */
+export function debugDisabledReason({
+  ready,
+  archived,
+  previewing,
+  issueCount,
+}: {
+  ready: boolean;
+  archived: boolean;
+  previewing: boolean;
+  issueCount: number;
+}): string | null {
+  if (!ready) return 'Wait for the pipeline to load.';
+  if (archived) return 'This pipeline is archived, so it cannot run. Unarchive it first.';
+  // A preview shows an older version while the working graph is hidden: Debug
+  // would run something that is not on screen.
+  if (previewing) return 'Leave the preview to debug your working graph.';
+  if (issueCount > 0) {
+    return `Fix the ${String(issueCount)} validation issue(s) in the Problems panel to debug.`;
+  }
+  return null;
+}
+
+/** What an enabled Debug says it will do. */
+export const DEBUG_TITLE = 'Run what is on the canvas now, without saving it as a version.';
+
+/**
+ * The status line after a Debug starts: that it ran the draft, and how long the
+ * run is kept (`DEBUG_RETENTION_DAYS`, reported by the server; `null` = forever).
+ */
+export function debugStartedText(retentionDays: number | null): string {
+  const kept =
+    retentionDays === null
+      ? 'kept until deleted'
+      : `kept for ${String(retentionDays)} day${retentionDays === 1 ? '' : 's'}`;
+  return `Debug run started from the unsaved draft (not added to the versions; ${kept}).`;
 }

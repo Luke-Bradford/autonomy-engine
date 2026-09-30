@@ -36,6 +36,7 @@ import { pipelinePath } from '../author/pipelinePath';
 import { CopyableId } from '../../lib/CopyableId';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
+import { versionLabel } from '../../lib/versionLabel';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -79,9 +80,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // #1392 — the names R1 resolves alongside the doc. A `null` name (none the
   // owner may see), or no names at all on the fallback path (the doc would not
   // resolve), leaves the page showing ids, as it did before.
-  const [names, setNames] = useState<{ pipeline: string | null; trigger: string | null } | null>(
-    null,
-  );
+  const [names, setNames] = useState<{
+    pipeline: string | null;
+    trigger: string | null;
+    /** #1395 — the doc is a DEBUG version, so it reads `debug <n>`, not `v<n>`. */
+    debug: boolean;
+  } | null>(null);
   useShellLabel(names?.pipeline ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
@@ -160,7 +164,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       .then((d) => {
         setRun(d.run);
         setDoc(d.pipelineVersion);
-        setNames({ pipeline: d.pipelineName, trigger: d.triggerName });
+        setNames({ pipeline: d.pipelineName, trigger: d.triggerName, debug: d.debug });
       })
       .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
@@ -427,7 +431,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <h2 id="run-heading">
           {names?.pipeline && doc ? (
             <>
-              {names.pipeline} <span className="run-heading__version">v{doc.version}</span>
+              {names.pipeline}{' '}
+              <span className="run-heading__version">{versionLabel(doc.version, names.debug)}</span>
             </>
           ) : (
             <>
@@ -524,7 +529,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 latest version, which need not be the one this run is bound to. */}
             {names?.pipeline && doc ? (
               <>
-                <Link to={pipelinePath(doc.pipelineId)}>{names.pipeline}</Link> v{doc.version}
+                <Link to={pipelinePath(doc.pipelineId)}>{names.pipeline}</Link>{' '}
+                {versionLabel(doc.version, names.debug)}
               </>
             ) : (
               <code>{run.pipelineVersionId}</code>

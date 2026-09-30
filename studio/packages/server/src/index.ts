@@ -50,6 +50,7 @@ import { datasetsRoutes } from './routes/datasets.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { globalParamsRoutes } from './routes/global-params.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
+import { drainDebugVersions } from './repo/debug-versions.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { eventsRoutes } from './routes/events.js';
@@ -115,6 +116,16 @@ export const DEFAULT_WAKEUP_RETENTION_MS = 30 * MS_PER_DAY;
  * append-per-delivery ledger from growing without bound.
  */
 export const DEFAULT_WEBHOOK_RETENTION_MS = 30 * MS_PER_DAY;
+
+/**
+ * #1395 OR4 — how long a DEBUG version (the editor's unsaved draft) and its runs
+ * are kept. Settled 2026-09-30 as configuration with this default: long enough
+ * to come back to a debug run after a weekend, short enough that the throwaway
+ * versions a day of debugging mints do not pile up. `DEBUG_RETENTION_DAYS`
+ * overrides it; `0` keeps them forever. One instance is one workspace today (the
+ * single `local` principal), so the instance setting IS the workspace setting.
+ */
+export const DEFAULT_DEBUG_RETENTION_MS = 7 * MS_PER_DAY;
 
 /*
  * #988's default retention floor is NOT restated here. It is derived from
@@ -227,6 +238,8 @@ export interface BuildAppOptions {
   webhookRetentionMs?: number;
   /** #988 — overrides `EXTERNAL_ACTIVITY_RETENTION_DAYS`/the 30-day default (ms). `0` disables the reported-activity retention sweep. Call-time only, for test isolation + operator override. */
   externalActivityRetentionMs?: number;
+  /** #1395 — overrides `DEBUG_RETENTION_DAYS`/the 7-day default (ms). `0` keeps debug versions and their runs forever. Call-time only, for test isolation + operator override. */
+  debugRetentionMs?: number;
   /** #464/#421 — overrides the retention sweep interval (ms) for EVERY sweep; defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable a sweep via its `*RetentionMs: 0`) to avoid a real hour-long timer. */
   retentionSweepMs?: number;
   /** #559 — overrides `RETENTION_BATCH_ROWS`/`RETENTION_BATCH` (default 1000): rows per bounded DELETE batch, SHARED by every retention sweep. Must be a positive integer. Call-time only, for test isolation + operator override. */
@@ -859,7 +872,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // `onClose` teardown is registered — an interval armed then abandoned would keep
   // firing hourly against the open `db`.
   const resolveRetentionWindow = (
-    label: 'wakeup' | 'webhook' | 'externalActivity',
+    label: 'wakeup' | 'webhook' | 'externalActivity' | 'debug',
     overrideMs: number | undefined,
     envName: string,
     defaultMs: number,
@@ -890,6 +903,18 @@ export async function buildApp(opts?: BuildAppOptions) {
     opts?.externalActivityRetentionMs,
     'EXTERNAL_ACTIVITY_RETENTION_DAYS',
     DEFAULT_EXTERNAL_ACTIVITY_RETENTION_MS,
+  );
+  const debugRetentionMs = resolveRetentionWindow(
+    'debug',
+    opts?.debugRetentionMs,
+    'DEBUG_RETENTION_DAYS',
+    DEFAULT_DEBUG_RETENTION_MS,
+  );
+  // The debug route reports the window back ("kept for N days"), so the editor
+  // says what the hoster configured rather than a hardcoded 7.
+  fastify.decorate(
+    'debugRetentionDays',
+    debugRetentionMs === 0 ? null : debugRetentionMs / MS_PER_DAY,
   );
 
   // #559 — the SHARED sweep bounds (rows-per-batch, max-batches-per-recurring
@@ -926,7 +951,10 @@ export async function buildApp(opts?: BuildAppOptions) {
   // A degenerate `retentionSweepMs <= 0` would make `setInterval` fire
   // continuously — only matters once at least one sweep is enabled.
   if (
-    (wakeupRetentionMs > 0 || webhookRetentionMs > 0 || externalActivityRetentionMs > 0) &&
+    (wakeupRetentionMs > 0 ||
+      webhookRetentionMs > 0 ||
+      externalActivityRetentionMs > 0 ||
+      debugRetentionMs > 0) &&
     (!Number.isFinite(retentionSweepMs) || retentionSweepMs <= 0)
   ) {
     throw new Error(`Invalid retentionSweepMs ${retentionSweepMs} — must be a finite number > 0`);
@@ -936,7 +964,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // `undefined` when disabled) so `onClose` can clear it. Reached only after all
   // validation above, so no timer is armed before a possible throw.
   const startRetentionSweep = (
-    label: 'wakeup' | 'webhook' | 'externalActivity',
+    label: 'wakeup' | 'webhook' | 'externalActivity' | 'debug',
     retentionMs: number,
     drain: (before: number, maxBatches?: number) => number,
   ): ReturnType<typeof setInterval> | undefined => {
@@ -989,6 +1017,13 @@ export async function buildApp(opts?: BuildAppOptions) {
     externalActivityRetentionMs,
     (before, maxBatches) =>
       drainExternalAgentActivity(db, { before, batch: retentionBatch, maxBatches }),
+  );
+  // #1395 — debug versions and their runs, by the VERSION's `created_at`. A
+  // version with a run still in flight is skipped until it settles. Its own,
+  // smaller batch (`DEBUG_VERSION_BATCH`) rather than the shared row count: one
+  // version carries all its runs and their event logs.
+  const debugRetentionTimer = startRetentionSweep('debug', debugRetentionMs, (before, maxBatches) =>
+    drainDebugVersions(db, { before, maxBatches }),
   );
 
   // Auth seam + the one global error handler, registered before any route so
@@ -1117,6 +1152,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     if (externalActivityRetentionTimer !== undefined) {
       clearInterval(externalActivityRetentionTimer);
     }
+    if (debugRetentionTimer !== undefined) clearInterval(debugRetentionTimer);
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });

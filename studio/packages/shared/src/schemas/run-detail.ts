@@ -35,6 +35,12 @@ export const RunDetailSchema = z.object({
   run: RunSchema,
   pipelineVersion: PipelineVersionSchema,
   /**
+   * #1395 — `pipelineVersion` is a DEBUG version (the editor's unsaved draft).
+   * A sibling rather than a doc field because `debug` is server-only: on the doc
+   * it would reach the content form and git (see `pipeline_versions.debug`).
+   */
+  debug: z.boolean(),
+  /**
    * #1392 — the NAMES the page shows instead of ids: the pipeline's CURRENT
    * name (so a rename reaches an open run page), and the trigger's. Either is
    * `null` when there is no name this run's owner may see — no trigger, a
