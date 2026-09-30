@@ -17,6 +17,9 @@ import {
   createPipeline,
   createPipelineVersion,
   createRun,
+  createTrigger,
+  deleteTrigger,
+  updatePipeline,
 } from '../../repo/index.js';
 import { eq } from 'drizzle-orm';
 import { pipelineVersions, runs } from '../../db/schema.js';
@@ -774,6 +777,53 @@ describe('runs routes (read-only)', () => {
       // The DOC is the whole point — U11 cannot project node state without it.
       expect(detail.pipelineVersion.nodes.map((n) => n.id)).toEqual(['a', 'b']);
       expect(detail.pipelineVersion.edges).toHaveLength(1);
+    });
+
+    it('#1392 — names the pipeline and trigger, so the page never has to show their ids', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Named pipe' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const trigger = createTrigger(app.db, {
+        ownerId: 'local',
+        name: 'Nightly',
+        pipelineVersionId: version.id,
+        params: {},
+        mode: 'schedule',
+        schedule: '0 2 * * *',
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: true,
+      });
+      const run = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: version.id,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+      });
+      // The CURRENT name, not the name at run time: a rename must reach the page.
+      updatePipeline(app.db, pipeline.id, { name: 'Renamed pipe' });
+
+      const detail = RunDetailSchema.parse(
+        (await app.inject({ method: 'GET', url: `/api/runs/${run.id}/detail` })).json(),
+      );
+      expect(detail.pipelineName).toBe('Renamed pipe');
+      expect(detail.triggerName).toBe('Nightly');
+
+      // A deleted trigger `set null`s the run's link, so there is no name to give.
+      deleteTrigger(app.db, trigger.id);
+      const after = RunDetailSchema.parse(
+        (await app.inject({ method: 'GET', url: `/api/runs/${run.id}/detail` })).json(),
+      );
+      expect(after.run.triggerId).toBeNull();
+      expect(after.triggerName).toBeNull();
     });
 
     it("404s for a run belonging to a different owner — a run handle must not leak someone else's doc", async () => {

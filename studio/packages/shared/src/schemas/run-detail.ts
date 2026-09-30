@@ -34,5 +34,15 @@ import { RunSchema } from './run.js';
 export const RunDetailSchema = z.object({
   run: RunSchema,
   pipelineVersion: PipelineVersionSchema,
+  /**
+   * #1392 — the NAMES the page shows instead of ids: the pipeline's CURRENT
+   * name (so a rename reaches an open run page), and the trigger's, or `null`
+   * when the run has no trigger or its trigger has since been deleted
+   * (`runs.trigger_id` is `on delete set null`). Resolved here rather than by
+   * two more client fetches for the same reason the doc is: one ownership proof,
+   * no waterfall. `RunSummarySchema` carries the same two names for the list.
+   */
+  pipelineName: z.string(),
+  triggerName: z.string().nullable(),
 });
 export type RunDetail = z.infer<typeof RunDetailSchema>;

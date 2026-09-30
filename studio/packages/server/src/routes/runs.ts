@@ -16,7 +16,9 @@ import {
   type RunDetail,
 } from '@autonomy-studio/shared';
 import {
+  getPipeline,
   getRun,
+  getTrigger,
   listRunAnnotations,
   listRunDiagnostics,
   listRunEvents,
@@ -208,7 +210,15 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     // an escaping `ZodError` for the unparseable one, which the handler turns
     // into a 400 `validation_error` on a GET with no request body.
     const pipelineVersion = resolveDoc(run.pipelineVersionId);
-    return { run, pipelineVersion } satisfies RunDetail;
+    // #1392 — the names ride the SAME ownership proof as the doc (see above):
+    // the pipeline is the version's, the trigger is the one the run was created
+    // from. `?? pipelineId` is unreachable — the run pins its version (restrict
+    // FK) and the version pins its pipeline — but keeps a read total rather than
+    // throwing.
+    const pipelineName =
+      getPipeline(db, pipelineVersion.pipelineId)?.name ?? pipelineVersion.pipelineId;
+    const triggerName = run.triggerId ? (getTrigger(db, run.triggerId)?.name ?? null) : null;
+    return { run, pipelineVersion, pipelineName, triggerName } satisfies RunDetail;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {
