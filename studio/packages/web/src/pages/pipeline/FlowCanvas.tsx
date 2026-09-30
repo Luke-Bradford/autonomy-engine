@@ -500,6 +500,9 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
   return target instanceof Element && target.closest(CANVAS_CHROME_SELECTOR) === null;
 }
 
+/** A STABLE default: a fresh `[]` per render would re-derive every node, every render. */
+const NO_DATASETS: readonly Dataset[] = [];
+
 /**
  * Renders the working graph with React Flow. The zustand store is the DOMAIN
  * source of truth (Node/Edge schema shapes); React Flow owns the VIEW node
@@ -538,9 +541,6 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * of this line, which the spec above
  * pins.
  */
-/** A STABLE default: a fresh `[]` per render would re-derive every node, every render. */
-const NO_DATASETS: readonly Dataset[] = [];
-
 export function FlowCanvas({
   store,
   fitSignal = 0,

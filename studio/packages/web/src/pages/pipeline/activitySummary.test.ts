@@ -165,6 +165,9 @@ describe('activitySummary', () => {
   it('never shows credentials written into a URL', () => {
     const n = node('http_request', { config: { url: 'https://user:tok@api.example.com/v1?k=1' } });
     expect(activitySummary(n, () => undefined)).toBe('GET api.example.com/v1');
+    // An `@` in the query is not userinfo: the host survives.
+    const q = node('http_request', { config: { url: 'https://host?email=a@b' } });
+    expect(activitySummary(q, () => undefined)).toBe('GET host');
   });
 
   it('shows a dataset reference as written, and an empty value as ""', () => {

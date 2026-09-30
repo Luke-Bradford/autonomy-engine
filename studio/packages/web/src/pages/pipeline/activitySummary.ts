@@ -61,7 +61,7 @@ export function activitySummary(
       const method = (text(c.method) ?? 'GET').toUpperCase();
       return `${method} ${url
         .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
-        .replace(/^[^/@]*@/, '')
+        .replace(/^[^/?#]*@/, '')
         .replace(/[?#].*$/, '')}`;
     }
     case LLM_CALL_ACTIVITY_TYPE:
