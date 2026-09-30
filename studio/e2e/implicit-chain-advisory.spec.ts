@@ -24,8 +24,10 @@ import { openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
 const ADVISORY = '.canvas-advisory';
 
+/* 320 apart, for a 220px card: an edge needs open canvas between two boxes to be
+   clicked, and at a pitch equal to the card's width the boxes touch (#1394). */
 function chainDoc(ids: string[]): SeedDoc {
-  return { nodes: ids.map((id, i) => ({ id, position: { x: i * 220, y: 0 } })) };
+  return { nodes: ids.map((id, i) => ({ id, position: { x: i * 320, y: 0 } })) };
 }
 
 test.describe('implicit-chain advisory (#788)', () => {

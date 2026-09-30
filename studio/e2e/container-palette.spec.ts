@@ -83,9 +83,9 @@ test.describe('#1420 containers in the Activities palette', () => {
 
   test('drop a ForEach as an empty box, then drag an activity into it', async ({ page }) => {
     const problems = collectPageProblems(page);
-    // A second, distant node so `fitView` settles at a normal zoom: a lone node
-    // is fitted at 2x, where the reveal's minimum pan to the new box pushes `b`
-    // off screen (and `onlyRenderVisibleElements` culls it).
+    // A second, distant node so `fitView` frames a wide graph: a lone node is
+    // fitted at the 1:1 cap, centred, and the reveal's minimum pan to the new box
+    // can push `b` off screen (where `onlyRenderVisibleElements` culls it).
     await openSeededCanvas(page, 'palette-foreach', {
       nodes: [
         { id: 'b', position: { x: 0, y: 0 } },
