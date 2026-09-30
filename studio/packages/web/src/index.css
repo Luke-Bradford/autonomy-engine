@@ -1596,7 +1596,7 @@ td button + button {
 
 .count-badge--error {
   background: var(--error);
-  color: #fff;
+  color: var(--bg);
 }
 
 /* #1393 — Save's dirty mark. Always laid out, shown by `visibility`, so the
@@ -1695,7 +1695,7 @@ td button + button {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
+  box-shadow: 0 8px 20px var(--shadow);
 }
 
 /* A form stretched across a 1200px dock is hard to read: a row of inputs
