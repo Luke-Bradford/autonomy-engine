@@ -156,6 +156,8 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
   // The overlay is drawn OUTSIDE the boxes: nothing on the canvas moved (#1393).
   expect(await canvas.boundingBox()).toEqual(canvasBefore);
   expect(await nodeById(page, 'hold').boundingBox()).toEqual(holdBefore);
+  const chip = await holdStatus.boundingBox();
+  expect(chip!.y).toBeGreaterThanOrEqual(holdBefore!.y + holdBefore!.height);
 
   // Selecting a node shows its part in the run in the dock: its outputs included.
   await nodeById(page, 'pick').click();
