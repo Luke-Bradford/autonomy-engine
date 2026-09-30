@@ -115,6 +115,8 @@ import {
 import { namedList } from '../../lib/namedList';
 import { uiStore } from '../../stores/uiStore';
 import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issueContext';
+import { useEditorRunNode } from './editorRunContext';
+import type { RunOverlayEntry } from '../runs/runFlow';
 import { subjectKey, type SubjectIssue } from './containerRules';
 
 interface ActivityData extends Record<string, unknown> {
@@ -203,6 +205,11 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('node', id);
+  /* #1395 OR4 — the run the editor started, over this card. Only while the
+     draft's node is still the TYPE the run's version had under this id: a
+     node re-typed since would otherwise wear another activity's facts. */
+  const runEntry = useEditorRunNode(id);
+  const run = runEntry?.type === d.type ? runEntry : undefined;
 
   /* React Flow caches each handle's position in `internals.handleBounds`,
      measured from the DOM once (`getBoundingClientRect`) — it does NOT re-read
@@ -238,12 +245,14 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
          directly, and so the collapsed case stays the plain default. */
       data-ports-expanded={expanded ? 'true' : 'false'}
       data-ports-named={named ? 'true' : 'false'}
+      data-run-status={run?.status}
       style={{ minHeight: nodeBoxHeight(d.ports.length) }}
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <ActivityCardBody type={d.type} title={d.title} summary={d.summary} badges={d.badges} />
       <IssueBadge issues={issues} />
+      {run !== undefined && <RunChip entry={run} />}
       {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
           "no connection" or "connection bound" in grey — a per-node CONFIG state
           repeated on every box, which is what turns eight activities into a wall
@@ -255,6 +264,29 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
     </div>
   );
 });
+
+/**
+ * #1395 OR4 — a run's status under an authoring card: the monitor's word, then
+ * what the run measured. Drawn OUTSIDE the box (`position: absolute` below it),
+ * so a run arriving or settling changes no node's measured size and nothing on
+ * the canvas moves (#1393), and inert to the pointer, so it never takes a click
+ * meant for whatever sits beneath it.
+ */
+function RunChip({ entry }: { entry: RunOverlayEntry }) {
+  return (
+    <span
+      className={`flow-node-run${entry.tone === null ? '' : ` flow-node-run--${entry.tone}`}`}
+      data-testid="node-run-status"
+    >
+      <span className="run-node-status">{entry.status}</span>
+      {entry.facts !== null && (
+        <span className="run-node-facts" title={entry.facts}>
+          {entry.facts}
+        </span>
+      )}
+    </span>
+  );
+}
 
 interface ContainerData extends Record<string, unknown> {
   kind: ContainerKind;
@@ -317,6 +349,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('container', id);
+  const run = useEditorRunNode(id);
 
   /* Reported UP rather than acted on here, because the bounds this state moves
      are stated where the node object is built — see `onFanChange`'s docblock on
@@ -356,7 +389,12 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <span className="flow-container-label">{d.label}</span>
+      <span className="flow-container-label" data-run-status={run?.status}>
+        {d.label}
+        {/* #1395 OR4 — the run monitor's box says the same (`RunContainerNode`). */}
+        {run !== undefined && ` · ${run.status}`}
+        {run?.facts != null && ` · ${run.facts}`}
+      </span>
       <IssueBadge issues={issues} decorative />
       {/* #748 — the box's own chrome is inert, and this is the one part of it
           that is not. (The edge HANDLES above are hit-testable too, and predate

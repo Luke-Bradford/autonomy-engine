@@ -188,6 +188,10 @@ describe('U6a edge variant hues', () => {
     const nodeTones = new Set(NodeRunStatusSchema.options.map((s) => nodeStatusTone(s)));
     for (const tone of nodeTones) {
       expect(ruleBody(css, `.run-node-${tone}`), `no .run-node-${tone} rule`).not.toBe('');
+      // #1395 OR4 — the authoring canvas's run overlay draws the same tones.
+      expect(ruleBody(css, `.flow-node-run--${tone}`), `no .flow-node-run--${tone} rule`).not.toBe(
+        '',
+      );
     }
     const containerTones = new Set(
       ContainerRunStatusSchema.options.map((s) => containerStatusTone(s)),

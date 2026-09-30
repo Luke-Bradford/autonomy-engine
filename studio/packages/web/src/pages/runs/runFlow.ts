@@ -495,6 +495,55 @@ export function runFlowNodes(
   return [...boxes, ...activities];
 }
 
+/** #1395 OR4 — what the authoring canvas draws over one box while a run it
+ * started is live. `type` is the activity's type in the RUN's version (`null`
+ * for a container), so a box whose draft type has since changed can decline an
+ * entry that no longer describes it. */
+export interface RunOverlayEntry {
+  type: string | null;
+  status: string;
+  tone: StatusTone | null;
+  /** A settled activity's duration and rows, or a container's progress. */
+  facts: string | null;
+}
+
+/**
+ * #1395 OR4 — the run's state per box, for the AUTHORING canvas's overlay.
+ *
+ * Read off `runFlowNodes` rather than worded again, so the editor and the
+ * monitor share one status vocabulary, one tone map, and one rule for when a
+ * node's facts are its own (settled, not repeated). An unprojected box has NO
+ * entry: "not projected" is a monitor's sentence about a run it is showing, and
+ * an editor with no state yet simply shows its cards.
+ */
+export function runNodeOverlay(
+  doc: RunDoc,
+  state: RunState | null,
+  activity?: ReadonlyMap<string, RunNodeMeasure>,
+): Map<string, RunOverlayEntry> {
+  const out = new Map<string, RunOverlayEntry>();
+  const types = new Map(doc.nodes.map((n) => [n.id, n.type]));
+  for (const n of runFlowNodes(doc, state, activity === undefined ? {} : { activity })) {
+    if (n.type === 'runContainer') {
+      const d = n.data as RunContainerData;
+      if (d.status === null) continue;
+      const progress =
+        d.items ?? (d.round !== null && d.round > 0 ? `round ${String(d.round)}` : null);
+      out.set(n.id, { type: null, status: d.status, tone: d.tone, facts: progress });
+    } else {
+      const d = n.data as RunNodeData;
+      if (d.status === null) continue;
+      out.set(n.id, {
+        type: types.get(n.id) ?? null,
+        status: d.status,
+        tone: d.tone,
+        facts: d.facts,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * #1420 — how many of a foreach's items have COMPLETED. `results` holds one entry
  * per completed item in sequential mode, and is seeded full-length with `null`
