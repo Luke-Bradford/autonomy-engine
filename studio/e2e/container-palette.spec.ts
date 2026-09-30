@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { toolbox } from './support/canvasGraph';
+import { toolbox, viewportSettled, WIDE_CANVAS } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
@@ -35,7 +35,9 @@ async function dropFromPalette(page: Page, title: string, at: { x: number; y: nu
 /** Drag a node by its body so that its CENTRE ends at `to` (screen coords). */
 async function dragNodeCentreTo(page: Page, id: string, to: { x: number; y: number }) {
   const b = (await nodeById(page, id).boundingBox())!;
-  const grab = { x: b.x + b.width / 2, y: b.y + 6 };
+  // The body's centre, not `dragNodeBy`'s top+6: the seeded canvas fits a lone
+  // node at a high zoom, where the top band is a port and would start a CONNECTION.
+  const grab = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   await page.mouse.move(grab.x, grab.y);
   await page.mouse.down();
   const dx = to.x - (b.x + b.width / 2);
@@ -64,7 +66,10 @@ async function issues(page: Page): Promise<string> {
 }
 
 test.describe('#1420 containers in the Activities palette', () => {
-  test.beforeEach(({ page }) => {
+  test.beforeEach(async ({ page }) => {
+    // Room for the box beside the graph without the reveal pan pushing the
+    // activity under the toolbox.
+    await page.setViewportSize(WIDE_CANVAS);
     // The first container on an edge-less graph changes its inferred routing,
     // which is confirmed — accepted here; the dialog itself is `containerRules`'.
     page.on('dialog', (d) => void d.accept());
@@ -72,8 +77,14 @@ test.describe('#1420 containers in the Activities palette', () => {
 
   test('drop a ForEach as an empty box, then drag an activity into it', async ({ page }) => {
     const problems = collectPageProblems(page);
+    // A second, distant node so `fitView` settles at a normal zoom: a lone node
+    // is fitted at 2x, where the reveal's minimum pan to the new box pushes `b`
+    // off screen (and `onlyRenderVisibleElements` culls it).
     await openSeededCanvas(page, 'palette-foreach', {
-      nodes: [{ id: 'b', position: { x: 0, y: 0 } }],
+      nodes: [
+        { id: 'b', position: { x: 0, y: 0 } },
+        { id: 'far', position: { x: 900, y: 450 } },
+      ],
     });
 
     const group = page.getByRole('list', { name: 'Containers' });
@@ -82,22 +93,28 @@ test.describe('#1420 containers in the Activities palette', () => {
     }
 
     const node = (await nodeById(page, 'b').boundingBox())!;
-    const dropAt = { x: node.x + node.width + 220, y: node.y };
+    // BELOW the node: the stacked fallback an unanchored empty box gets is to
+    // the RIGHT of the graph, so this placement cannot be reached by accident.
+    const dropAt = { x: node.x, y: node.y + node.height + 60 };
     await dropFromPalette(page, 'ForEach', dropAt);
 
     const box = containerBox(page, 'foreach 1');
-    await expect(box).toHaveAttribute('aria-label', 'foreach 1 container, 0 activities');
-    // The box is where it was dropped, not stacked off to the side of the graph.
+    await expect(box).toHaveAttribute('aria-label', /^foreach 1 container, 0 activities\b/);
+    await viewportSettled(page);
+    // The box is where it was dropped, not on the stacked fallback beside the
+    // graph. Measured RELATIVE to the node: selecting the new box opens its
+    // config panel, and the reveal may pan the view — a pan keeps offsets.
     const boxRect = (await box.boundingBox())!;
-    expect(Math.abs(boxRect.x - dropAt.x)).toBeLessThan(12);
-    expect(Math.abs(boxRect.y - dropAt.y)).toBeLessThan(12);
+    const nodeNow = (await nodeById(page, 'b').boundingBox())!;
+    expect(Math.abs(boxRect.x - nodeNow.x - (dropAt.x - node.x))).toBeLessThan(12);
+    expect(Math.abs(boxRect.y - nodeNow.y - (dropAt.y - node.y))).toBeLessThan(12);
     // Empty, it is a save badge rather than a silently-saved junk box.
     expect(await issues(page)).toContain('needs at least one child');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     await dragNodeCentreTo(page, 'b', centre(boxRect));
 
-    await expect(box).toHaveAttribute('aria-label', 'foreach 1 container, 1 activity');
+    await expect(box).toHaveAttribute('aria-label', /^foreach 1 container, 1 activity\b/);
     expect(await membershipOf(page, 'b')).toBe('foreach 1');
     expect(await issues(page)).not.toContain('needs at least one child');
 
@@ -115,7 +132,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     const node = (await nodeById(page, 'a').boundingBox())!;
     await dropFromPalette(page, 'Stage', { x: node.x + node.width + 220, y: node.y });
     const box = containerBox(page, 'stage 1');
-    await expect(box).toHaveAttribute('aria-label', 'stage 1 container, 0 activities');
+    await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 0 activities\b/);
     // An empty stage is the one empty box `validateDoc` passes — the canvas refuses it.
     expect(await issues(page)).toContain('a stage needs at least one child');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
@@ -123,7 +140,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     const boxRect = (await box.boundingBox())!;
     await dropFromPalette(page, 'HTTP Request', { x: boxRect.x + 30, y: boxRect.y + 40 });
 
-    await expect(box).toHaveAttribute('aria-label', 'stage 1 container, 1 activity');
+    await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 1 activity\b/);
     expect(await issues(page)).not.toContain('a stage needs at least one child');
 
     await expectQuiet(page, problems);
@@ -149,7 +166,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     expect(await membershipOf(page, 'b')).toBe('— none —');
     await expect(containerBox(page, 'stage 1')).toHaveAttribute(
       'aria-label',
-      'stage 1 container, 2 activities',
+      /^stage 1 container, 2 activities\b/,
     );
 
     await expectQuiet(page, problems);
