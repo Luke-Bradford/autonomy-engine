@@ -4,6 +4,7 @@ import {
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
   formatZodIssues,
+  isParallelForeach,
   type Container,
   type ContainerConfigField,
   type Edge,
@@ -363,6 +364,9 @@ export function ContainerPanel({
               picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
             />
           ))}
+          {container.kind === 'foreach' && (
+            <ForeachModeHint container={container} batchCount={inputs.batchCount} />
+          )}
           {illegal.length > 0 && (
             <p className="contract-advisory">
               {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on a{' '}
@@ -422,4 +426,33 @@ function recovery(before: Record<string, unknown>, after: Container): string {
       : `setting ${name} back to ${JSON.stringify(was)}`;
   });
   return `You can undo it by ${parts.join(' and ')}.`;
+}
+
+/**
+ * #1420 OR26 — what the typed `batchCount` MEANS. The field is a number, but the
+ * choice an author is making is sequential vs parallel, and absent vs `1` vs `2`
+ * read alike in a text box. Judged by the schema's own bounds and the engine's
+ * own `isParallelForeach`, so the line cannot disagree with what will run. A
+ * value the schema refuses claims neither mode: Apply reports why.
+ */
+function ForeachModeHint({
+  container,
+  batchCount,
+}: {
+  container: Container;
+  batchCount: unknown;
+}) {
+  const text = typeof batchCount === 'string' ? batchCount.trim() : '';
+  const parsed = ContainerSchema.shape.batchCount.safeParse(
+    text === '' ? undefined : Number(text),
+  );
+  if (!parsed.success) return null;
+  const n = parsed.data;
+  return (
+    <p className="page-hint">
+      {isParallelForeach({ ...container, batchCount: n })
+        ? `Parallel: up to ${n} items run at once. Each item still runs its activities in order.`
+        : 'Sequential: items run one at a time, in order. Set batchCount above 1 to run items in parallel.'}
+    </p>
+  );
 }
