@@ -90,6 +90,9 @@ export interface RunNodeData extends Record<string, unknown> {
   facts: string | null;
 }
 
+/** What `runNodeFacts` reads off a node's activity row. */
+export type RunNodeMeasure = Pick<NodeActivity, 'startedAtMs' | 'endedAtMs' | 'outputValues'>;
+
 /** The version-derived half of a run card — see `RunNodeData.card`. */
 export interface RunCard {
   type: string;
@@ -123,9 +126,7 @@ export function runCards(
  * from the node's recorded DECLARED outputs, so a node that never reported them
  * shows none rather than `0 rows`.
  */
-export function runNodeFacts(
-  activity: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs' | 'outputValues'> | undefined,
-): string | null {
+export function runNodeFacts(activity: RunNodeMeasure | undefined): string | null {
   if (activity === undefined) return null;
   const parts: string[] = [];
   if (isMeasurableSpan(activity)) parts.push(formatNodeDuration(activity));
@@ -262,7 +263,7 @@ export interface RunFlowOptions {
   cards?: ReadonlyMap<string, RunCard>;
   /** #1394 OR3 — the page's per-node activity rows, keyed by doc node id, for
    * `runNodeFacts`. Absent on a view with no run behind it. */
-  activity?: ReadonlyMap<string, NodeActivity>;
+  activity?: ReadonlyMap<string, RunNodeMeasure>;
 }
 
 /** What a node says when the run has no state for it. */

@@ -14,7 +14,6 @@ import {
   type RunDoc,
   type RunNodeData,
 } from './runFlow';
-import type { NodeActivity } from './runSummary';
 
 const DOC: RunDoc = {
   nodes: [
@@ -625,6 +624,7 @@ describe('#1394 OR3 — run cards', () => {
       },
     ],
     edges: [],
+    containers: [],
   };
 
   it('carries the authoring card — type, summary with dataset NAMES, badges', () => {
@@ -645,7 +645,7 @@ describe('#1394 OR3 — run cards', () => {
           startedAtMs: 1_000,
           endedAtMs: 2_500,
           outputValues: { rowsWritten: 1204, rowsFailed: 0 },
-        } as NodeActivity,
+        },
       ],
     ]);
     const run = runFlowNodes(COPY_DOC, null, { activity })[0]!.data as RunNodeData;
@@ -669,7 +669,7 @@ describe('#1394 OR3 — run cards', () => {
         { id: 'stg', kind: 'stage', children: ['staged'] },
       ],
     } as unknown as RunDoc;
-    const row = { startedAtMs: 0, endedAtMs: 10, outputValues: { rowsWritten: 1 } } as NodeActivity;
+    const row = { startedAtMs: 0, endedAtMs: 10, outputValues: { rowsWritten: 1 } };
     const activity = new Map(['in', 'deep', 'staged'].map((id) => [id, row]));
     const facts = Object.fromEntries(
       runFlowNodes(doc, null, { activity })

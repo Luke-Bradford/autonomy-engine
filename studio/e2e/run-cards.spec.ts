@@ -72,7 +72,7 @@ test('a run card says what the step does and what the run measured, inside its b
     title: 'Wait 1',
     summary: 'wait 1s',
     badges: ['Retries up to 2 times'],
-    status: 'Succeeded',
+    status: 'success',
     glyph: true,
     // One FIXED height (`RUN_NODE_BASE_HEIGHT`), which the box is drawn from.
     height: 104,
