@@ -175,10 +175,19 @@ export function createPipelineVersion(
   // would break silently a week later. Only a LITERAL target can be checked
   // here; a `${}` target is resolved at run time, where a swept callee meets the
   // existing missing-version path.
+  // OWNER-SCOPED like `resolvePipeline` below: another owner's version is never
+  // classified, so the refusal can never confirm that someone else's id exists.
   const debugCallees = lowered.nodes
     .map((n) => n.call?.pipelineVersionId)
     .filter((id): id is string => id !== undefined && !id.includes('${'))
-    .filter((id) => isDebugVersion(db, id) === true);
+    .filter((id) => {
+      const calleePipelineId = getPipelineIdForVersion(db, id);
+      return (
+        calleePipelineId !== null &&
+        ownerIdOf(calleePipelineId) === callerOwnerId &&
+        isDebugVersion(db, id) === true
+      );
+    });
   if (debugCallees.length > 0) {
     throw new InvalidPipelineDocError(
       debugCallees.map(

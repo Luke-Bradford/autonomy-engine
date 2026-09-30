@@ -144,6 +144,15 @@ describe('a call_pipeline pin to a debug version (#1395 OR4)', () => {
     expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
     expect(createPipelineVersion(db, caller(pipeline.id, saved.id)).version).toBe(1);
   });
+
+  it('never classifies ANOTHER owner’s version, so the refusal is no existence oracle', () => {
+    const { db, pipeline } = setup();
+    const foreign = createPipeline(db, { ownerId: 'someone-else', name: 'Theirs' });
+    const theirDebug = createPipelineVersion(db, doc(foreign.id), { debug: true });
+    expect(() => createPipelineVersion(db, caller(pipeline.id, theirDebug.id))).not.toThrow(
+      /debug version/,
+    );
+  });
 });
 
 describe('debug version retention (#1395 OR4)', () => {
