@@ -160,11 +160,15 @@ function text(v: unknown): string | undefined {
   return line === '' ? undefined : line;
 }
 
-/** A duration field: whole seconds read as a duration, anything else as written. */
+/**
+ * A duration field. These are `${}` expressions by rule (`validateWaitConfig`), so
+ * a LITERAL is `${30}`: that reads as a duration, and anything else — a
+ * reference, a function call — is shown as written.
+ */
 function duration(v: unknown): string | undefined {
   const s = text(v);
-  if (s === undefined || !/^\d+$/.test(s)) return s;
-  return formatElapsed(Number(s) * 1000);
+  const literal = s === undefined ? null : /^\$\{\s*(\d+)\s*\}$/.exec(s);
+  return literal === null ? s : formatElapsed(Number(literal[1]) * 1000);
 }
 
 function dataset(id: string | undefined, name: (id: string) => string | undefined) {

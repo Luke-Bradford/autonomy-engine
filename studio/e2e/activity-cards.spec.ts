@@ -1,6 +1,14 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { scaleOf, viewportSettled, WIDE_CANVAS } from './support/canvasGraph';
+import {
+  addActivity,
+  canvasNodes,
+  fitAndSettle,
+  scaleOf,
+  viewportSettled,
+  WIDE_CANVAS,
+} from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { properties } from './support/panels';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { resolvedPaletteColor, setTheme } from './support/theme';
 
@@ -37,11 +45,11 @@ test.describe('#1394 readable activity cards', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'cards-long-name', {
       nodes: [
-        { id: 'hook', type: 'webhook', config: { timeoutSeconds: '3600' }, position: { x: 0, y: 0 } },
+        { id: 'hook', type: 'webhook', config: { timeoutSeconds: '${3600}' }, position: { x: 0, y: 0 } },
         {
           id: 'w',
           type: 'wait',
-          config: { seconds: '30' },
+          config: { seconds: '${30}' },
           policy: { retry: 2 },
           position: { x: 320, y: 0 },
         },
@@ -70,22 +78,33 @@ test.describe('#1394 readable activity cards', () => {
 
   test('filling in a first field does not resize the card', async ({ page }) => {
     await openSeededCanvas(page, 'cards-reserved-row', {
-      // Unconfigured: nothing to summarise yet, so the row is empty.
-      nodes: [{ id: 'w', type: 'wait', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'a', type: 'wait', config: { seconds: '${5}' }, position: { x: 0, y: 0 } }],
     });
-    const card = nodeById(page, 'w').locator('.flow-node');
-    await expect(summaryOf(page, 'w')).toHaveText('');
-    const before = await card.evaluate((e) => (e as HTMLElement).offsetHeight);
+    // Added from the palette, so unconfigured: nothing to summarise yet.
+    await addActivity(page, 'Wait');
+    await fitAndSettle(page, 1);
+    const added = canvasNodes(page).nth(1);
+    const summary = added.locator('.flow-node-summary');
+    await expect(summary).toHaveText('');
+    // Both the box and the summary row: a box with several ports is held tall
+    // by its port column (`nodeBoxHeight`), so the ROW is what shows a reserve.
+    const height = () =>
+      added.locator('.flow-node').evaluate((e) => {
+        const meta = e.querySelector('.flow-node-meta') as HTMLElement;
+        return [(e as HTMLElement).offsetHeight, meta.offsetHeight];
+      });
+    const before = await height();
 
-    await nodeById(page, 'w').click();
-    await page.getByRole('textbox', { name: /seconds/i }).fill('45');
-    await expect(summaryOf(page, 'w')).toHaveText('wait 45s');
-    expect(await card.evaluate((e) => (e as HTMLElement).offsetHeight)).toBe(before);
+    await added.click();
+    await properties(page).getByLabel('seconds', { exact: true }).fill('${45}');
+    await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+    await expect(summary).toHaveText('wait 45s');
+    expect(await height()).toEqual(before);
   });
 
   test('a small graph is framed at 1:1, not blown up', async ({ page }) => {
     await openSeededCanvas(page, 'cards-fit-zoom', {
-      nodes: [{ id: 'a', type: 'wait', config: { seconds: '5' }, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'a', type: 'wait', config: { seconds: '${5}' }, position: { x: 0, y: 0 } }],
     });
     // React Flow's default fit zooms a lone node to 2x.
     expect(Number(scaleOf(await viewportSettled(page)))).toBeLessThanOrEqual(1);
@@ -93,7 +112,7 @@ test.describe('#1394 readable activity cards', () => {
 
   test('the summary is muted text in both themes', async ({ page }) => {
     await openSeededCanvas(page, 'cards-themes', {
-      nodes: [{ id: 'w', type: 'wait', config: { seconds: '30' }, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'w', type: 'wait', config: { seconds: '${30}' }, position: { x: 0, y: 0 } }],
     });
     const colours: string[] = [];
     for (const theme of ['dark', 'light'] as const) {

@@ -81,9 +81,9 @@ const CASES: Record<string, [Node, string]> = {
     }),
     "${nodes.list.output.entries} where ${equals(item.type, 'file')}",
   ],
-  [WAIT_ACTIVITY_TYPE]: [node(WAIT_ACTIVITY_TYPE, { config: { seconds: '30' } }), 'wait 30s'],
+  [WAIT_ACTIVITY_TYPE]: [node(WAIT_ACTIVITY_TYPE, { config: { seconds: '${30}' } }), 'wait 30s'],
   [WEBHOOK_ACTIVITY_TYPE]: [
-    node(WEBHOOK_ACTIVITY_TYPE, { config: { timeoutSeconds: '3600' } }),
+    node(WEBHOOK_ACTIVITY_TYPE, { config: { timeoutSeconds: '${3600}' } }),
     'callback · timeout 1h 00m',
   ],
   [EXECUTE_PIPELINE_ACTIVITY_TYPE]: [
@@ -145,6 +145,14 @@ describe('activitySummary', () => {
     expect(activitySummary(node('custom_thing', { config: { path: 'x' } }), () => undefined)).toBe(
       null,
     );
+  });
+
+  it('reads a spaced literal as a duration, and a bare number as written', () => {
+    const spaced = node(WAIT_ACTIVITY_TYPE, { config: { seconds: '${ 90 }' } });
+    expect(activitySummary(spaced, () => undefined)).toBe('wait 1m 30s');
+    // Not a `${}` expression, so the save gate refuses it — never read as 30s.
+    const bare = node(WAIT_ACTIVITY_TYPE, { config: { seconds: '30' } });
+    expect(activitySummary(bare, () => undefined)).toBe('wait 30');
   });
 
   it('shows an expression as written when a duration is not a number', () => {
