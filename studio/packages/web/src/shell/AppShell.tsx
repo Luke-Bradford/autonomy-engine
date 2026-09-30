@@ -7,14 +7,20 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import { Outlet, useMatches } from 'react-router';
+import { Outlet, useLocation, useMatches } from 'react-router';
 import { useStore } from 'zustand';
 import { HubRail } from './HubRail';
 import { CommandBar } from './CommandBar';
 import { PaneSplitter } from './PaneSplitter';
 import { PANE_ELEMENT_ID, SecondaryPane } from './SecondaryPane';
 import { hubById } from './hubs';
-import { activeHubId, crumbsFrom, documentTitle, type PublishedLabels } from './routeHandle';
+import {
+  activeHubId,
+  crumbsFrom,
+  documentTitle,
+  normalizePath,
+  type PublishedLabels,
+} from './routeHandle';
 import { ShellLabelContext, withLabel, type ShellLabelApi } from './shellLabel';
 import { uiStore } from '../stores/uiStore';
 import { UpdateBanner } from './UpdateBanner';
@@ -60,7 +66,8 @@ export function AppShell() {
     () => ({ publish: (path, label) => setPublished((prev) => withLabel(prev, path, label)) }),
     [],
   );
-  const crumbs = crumbsFrom(matches, published);
+  const { pathname } = useLocation();
+  const crumbs = crumbsFrom(matches, published[normalizePath(pathname)]);
 
   const title = documentTitle(crumbs);
   useEffect(() => {

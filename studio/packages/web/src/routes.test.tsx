@@ -539,6 +539,15 @@ describe('route tree', () => {
     renderAt(`/monitor/runs/${encodeURIComponent('run%20x')}`);
     await page().findByRole('heading', { name: 'Nightly load v3' });
     expect(page().getByText('run%20x')).toBeInTheDocument();
+    // #1392 — the page keys its published name by the ENCODED location while
+    // the router's match is decoded; the crumb must still find it.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
+          .getAllByRole('listitem')
+          .at(-1)?.textContent,
+      ).toBe('Nightly load · run run%20x'),
+    );
   });
 
   /**
@@ -780,6 +789,31 @@ describe('shell chrome over the real route tree', () => {
   ])('titles %s as %j', async (path, expected) => {
     renderAt(path);
     await waitFor(() => expect(document.title).toBe(expected));
+  });
+
+  /**
+   * #1392 — a page withdraws its published name when it unmounts. Proved by
+   * coming BACK to the same run while its detail never resolves: a label left
+   * behind would show the old name on a page that has not loaded one.
+   */
+  it('does not carry a name over to a later visit that has not loaded it', async () => {
+    const { router } = renderAt('/monitor/runs/run_42');
+    const leaf = () =>
+      trail()
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+        .at(-1);
+    await waitFor(() => expect(leaf()).toBe('Nightly load · run run_42'));
+
+    await router.navigate('/monitor/runs');
+    await waitFor(() => expect(leaf()).toBe('Runs'));
+
+    const getRunDetail = vi.mocked((await import('./api/runs')).getRunDetail);
+    getRunDetail.mockImplementationOnce(() => new Promise(() => {}));
+    await router.navigate('/monitor/runs/run_42');
+    await page().findByRole('heading', { name: 'Run run_42' });
+    expect(leaf()).toBe('Run run_42');
+    expect(document.title).toBe('Run run_42 — Monitor — autonomy studio');
   });
 
   /**

@@ -146,41 +146,36 @@ describe('crumbsFrom', () => {
 });
 
 /**
- * #1392 — a page that knows its resource's NAME publishes it for its own
- * matched path, and it replaces the route's id-derived fallback crumb.
+ * #1392 — a page that knows its resource's NAME publishes it, and it replaces
+ * the leaf route's id-derived fallback crumb.
  */
-describe('crumbsFrom — page-published labels', () => {
+describe('crumbsFrom — the page-published label', () => {
   const trail = [
     match('/author', { hub: 'author' }),
     match('/author/pipelines', { crumb: 'Pipelines' }),
     match('/author/pipelines/pipe_x', { crumb: () => 'pipe_x' }),
   ];
 
-  it('replaces the fallback crumb with the label published for that path', () => {
-    expect(
-      crumbsFrom(trail, { '/author/pipelines/pipe_x': 'Test Pipe' }).map((c) => c.label),
-    ).toEqual(['Author', 'Pipelines', 'Test Pipe']);
-  });
-
-  it('matches a trailing-slash pathname to the same label', () => {
-    const slashed = [
-      ...trail.slice(0, 2),
-      match('/author/pipelines/pipe_x/', { crumb: () => 'pipe_x' }),
-    ];
-    expect(crumbsFrom(slashed, { '/author/pipelines/pipe_x': 'Test Pipe' }).at(-1)?.label).toBe(
+  it('replaces the leaf crumb with the published label', () => {
+    expect(crumbsFrom(trail, 'Test Pipe').map((c) => c.label)).toEqual([
+      'Author',
+      'Pipelines',
       'Test Pipe',
-    );
+    ]);
   });
 
-  it('keeps the fallback when nothing was published for that path', () => {
-    expect(crumbsFrom(trail, { '/author/pipelines/pipe_other': 'Other' }).at(-1)?.label).toBe(
-      'pipe_x',
-    );
+  it('keeps the fallback when nothing was published', () => {
+    expect(crumbsFrom(trail).at(-1)?.label).toBe('pipe_x');
+    expect(crumbsFrom(trail, '').at(-1)?.label).toBe('pipe_x');
   });
 
-  it('never gives a crumb to a match whose route declares none', () => {
-    // A label for a path the route tree does not crumb must not invent one.
-    expect(crumbsFrom([match('/', undefined)], { '/': 'Sneaky' })).toEqual([]);
+  it('never relabels a section above an index route that declares no crumb', () => {
+    const list = [
+      match('/monitor', { hub: 'monitor' }),
+      match('/monitor/runs', { crumb: 'Runs' }),
+      match('/monitor/runs', undefined),
+    ];
+    expect(crumbsFrom(list, 'Stale name').map((c) => c.label)).toEqual(['Monitor', 'Runs']);
   });
 });
 

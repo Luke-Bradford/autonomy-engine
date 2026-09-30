@@ -12,9 +12,11 @@ import { normalizePath, type PublishedLabels } from './routeHandle';
  * page publishes the name, keyed by its own pathname, and the shell only reads
  * a map of strings. No shell code learns what a pipeline or a run is.
  *
- * Keyed by pathname rather than held as a single "current label" so a label can
- * never outlive its page onto the next one: a stale entry for another path is
- * simply not looked up, and the hook removes its own entry on unmount anyway.
+ * Keyed by `location.pathname` rather than held as a single "current label" so
+ * a label can never outlive its page onto the next one: the shell looks up only
+ * the CURRENT location's entry, and the hook removes its own on unmount anyway.
+ * The shell reads the same `location.pathname`, so both sides agree on the
+ * (still percent-encoded) spelling.
  */
 export interface ShellLabelApi {
   publish(pathname: string, label: string | undefined): void;
