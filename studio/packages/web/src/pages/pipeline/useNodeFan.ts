@@ -18,6 +18,10 @@ import { useHoverIntent } from '../../hooks/useHoverIntent';
  * DOM and must call `updateNodeInternals` when this flips, while a container's
  * bounds are STATED (`containerHandles`) and a re-measure of one is discarded.
  * Both facts are the caller's to act on, so neither is hidden in here.
+ *
+ * #1394 added `named`, which says whether EVERY port's word should show. Which
+ * words show is a separate question from whether the dots are fanned, but it is
+ * decided by the same focus events, so it lives here too.
  */
 export interface NodeFan {
   /** Whether the ports are fanned out right now. */
@@ -83,9 +87,13 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
     const wrapper = boxRef.current?.parentElement;
     if (!wrapper) return;
     const focusIn = (event: FocusEvent) => {
-      setKeyboard(event.target instanceof Element && event.target.matches(':focus-visible'));
+      setKeyboard(event.target instanceof Element && focusVisible(event.target));
       onFocus();
     };
+    /* A press on a node that was reached by keyboard makes it a pointer user's
+       node again. Focus does not move, so no `focusin` would re-decide it, and
+       the column would stay named on a node just clicked. */
+    const pointerDown = () => setKeyboard(false);
     const focusOut = () => {
       setKeyboard(false);
       onBlur();
@@ -95,9 +103,11 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
     // between them.
     wrapper.addEventListener('focusin', focusIn);
     wrapper.addEventListener('focusout', focusOut);
+    wrapper.addEventListener('pointerdown', pointerDown);
     return () => {
       wrapper.removeEventListener('focusin', focusIn);
       wrapper.removeEventListener('focusout', focusOut);
+      wrapper.removeEventListener('pointerdown', pointerDown);
     };
   }, [boxRef, onFocus, onBlur]);
 
@@ -109,4 +119,14 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
     named: expanded && keyboard,
     handlers: { onPointerEnter: handlers.onPointerEnter, onPointerLeave: handlers.onPointerLeave },
   };
+}
+
+/** `:focus-visible`, or `false` in an engine that cannot parse it (Safari
+    before 15.4 throws), where the fan still opens and only the words stay off. */
+function focusVisible(el: Element): boolean {
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
 }

@@ -1894,7 +1894,8 @@ td button + button {
  * node by ~30%, and `addNode` staggers a new node only 40px diagonally — so each
  * freshly-added activity landed on top of the previous one's ports, and thirteen
  * e2e specs began failing on intercepted pointer events. They are revealed on
- * hover or keyboard focus rather than drawn permanently, for the same reason:
+ * request rather than drawn permanently (since #1394: the one port under the
+ * pointer, or every port on a node reached by keyboard), for the same reason:
  * four to eleven words stacked beside every node, on top of the edges leaving
  * it, is not legible at canvas zoom. The colour and the accessible name are
  * always there; the words are what needs asking for.
@@ -2060,8 +2061,7 @@ td button + button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow-node .flow-port.react-flow__handle,
-  .flow-port-label {
+  .flow-node .flow-port.react-flow__handle {
     transition: none;
   }
 }
@@ -2253,11 +2253,22 @@ td button + button {
   font-size: 0.62rem;
   line-height: 1.2;
   letter-spacing: 0.01em;
+  /* Wider than the bare word's old 4rem by the chip's padding and border, so
+     `completion` and a short switch case still fit whole. */
   max-width: 6rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* AFTER the rule above, not in the handle's reduced-motion block further up: the
+   two selectors have equal specificity, so an earlier override loses to the
+   later `transition` and the chip would still fade. */
+@media (prefers-reduced-motion: reduce) {
+  .flow-port-label {
+    transition: none;
+  }
 }
 
 /* #1394 — WHICH words show. The operator's report was a selected node's whole
@@ -2277,10 +2288,10 @@ td button + button {
    Both arms stay behind `data-ports-expanded`, the state the dots are drawn
    from, so a word never shows while the port it names is still collapsed at
    the middle (#997). The accessible name carries every label at all times, so
-   a screen reader never depended on any of this. Touch has neither hover nor
-   keyboard focus and gets the words from the accessible name and the panel's
-   outcome picker only; that is the same "hidden visually is fine" line #997
-   drew. */
+   a screen reader never depended on any of this. TOUCH loses the words: a tap
+   used to show the column because it focused the node, and it no longer does,
+   since a tap is a pointer arrival. The panel's outcome picker names every
+   outcome, and the canvas words were never the only place they are said. */
 [data-ports-expanded='true'] .flow-port.react-flow__handle:hover + .flow-port-label,
 [data-ports-expanded='true'][data-ports-named='true'] .flow-port-label {
   opacity: 1;
@@ -2288,7 +2299,9 @@ td button + button {
 
 /* The lift the chip needs, for an ACTIVITY only. React Flow writes each node's
    `z-index` inline, which is why this needs `!important`, and it is held only
-   while a word is showing. A container is NOT lifted: raising its box would
+   while a word is showing. The number only has to clear React Flow's own
+   selected-node elevation (+1000), so the node being read sits above a selected
+   neighbour too. A container is NOT lifted: raising its box would
    paint it over its own children. */
 .react-flow__node:has(> .flow-node[data-ports-expanded='true'] .flow-port:hover),
 .react-flow__node:has(> .flow-node[data-ports-expanded='true'][data-ports-named='true']) {

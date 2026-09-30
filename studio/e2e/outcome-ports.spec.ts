@@ -286,17 +286,31 @@ test.describe('U19 outcome ports', () => {
     await openSeededCanvas(page, 'u19 labels keyboard', TWO_NODES);
 
     const node = page.locator('.react-flow__node[data-id="a"]');
+    const label = (word: string) => node.locator('.flow-port-label').filter({ hasText: word });
+    // A keypress first, so the focus below counts as keyboard focus: Chromium
+    // matches `:focus-visible` for a scripted focus that follows keyboard input.
     await page.keyboard.press('Shift');
     await node.focus();
 
     await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'true');
-    await expect(node.locator('.flow-port-label').filter({ hasText: 'failure' })).toHaveCSS(
-      'opacity',
-      '1',
-    );
-    await expect(node.locator('.flow-port-label').filter({ hasText: 'success' })).toHaveCSS(
-      'opacity',
-      '1',
+    await expect(label('failure')).toHaveCSS('opacity', '1');
+    await expect(label('success')).toHaveCSS('opacity', '1');
+
+    // Then CLICKING it makes it a pointer user's node. Focus does not move, so
+    // no `focusin` re-decides this; the press does.
+    await node.locator('.flow-node').click();
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'false');
+    await expect(label('failure')).toHaveCSS('opacity', '0');
+  });
+
+  /** #997's reduced-motion clause, for the words as well as the dots. */
+  test('a port label does not fade under reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await openSeededCanvas(page, 'u19 labels reduced motion', TWO_NODES);
+    await expect(page.locator('.react-flow__node[data-id="a"] .flow-port-label').first()).toHaveCSS(
+      'transition-duration',
+      '0s',
     );
   });
 
