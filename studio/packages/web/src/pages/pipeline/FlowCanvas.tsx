@@ -69,6 +69,7 @@ import {
   type ConnectRejection,
 } from './connectRules';
 import {
+  FIT_VIEW_OPTIONS,
   appearedIds,
   appearedSelected,
   containerAtPoint,
@@ -84,7 +85,6 @@ import {
   unmeasuredNodeSize,
   type ContainerBox,
   type Rect,
-  FIT_VIEW_OPTIONS,
 } from './containerLayout';
 import type { MeasuredSizes } from './autoLayout';
 import {
@@ -562,7 +562,7 @@ export function FlowCanvas({
   /**
    * #1005 — an OUT parameter: what React Flow has measured, published to the
    * owner so Arrange can pack columns from real widths instead of the nominal
-   * 150 (see `autoLayout`'s size section for why that mattered).
+   * size (see `autoLayout`'s size section for why that mattered).
    *
    * A ref rather than a callback prop or lifted state because this is data the
    * owner READS AT THE MOMENT OF A CLICK, never renders. Routing it through

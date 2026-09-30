@@ -35,10 +35,12 @@ import { sourcePortsOf, usedConditionsBySource } from './ports';
  *
  * ## Sizes, and what the overlap guarantees are conditional on
  *
- * A node's real width is whatever its title makes it — `.flow-node` sets
- * `min-width: 120px` and no maximum — so sizing every node at the nominal 150
- * drew anything past `150 + LAYOUT_GAP` straight through the column to its
- * right (#1005). So the caller may pass what React Flow MEASURED, and
+ * A node's real width USED to be whatever its title made it (`.flow-node` had a
+ * `min-width: 120px` and no maximum), so sizing every node at the then-nominal
+ * 150 drew anything past `150 + LAYOUT_GAP` straight through the column to its
+ * right (#1005). The card is now a fixed 220 and so is the nominal size
+ * (#1394), but a measurement is still the better answer: a container, or a
+ * future card, need not match. So the caller may pass what React Flow MEASURED, and
  * `unmeasuredNodeSize` is the per-node FALLBACK rather than the flat answer.
  *
  * That closes the gap but does not make the function omniscient, and the

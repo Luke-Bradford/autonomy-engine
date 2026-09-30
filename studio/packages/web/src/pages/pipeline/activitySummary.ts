@@ -38,9 +38,11 @@ import { formatElapsed } from '../runs/format';
  *
  * Values are shown AS WRITTEN, expressions included: `if ${equals(...)}` is what
  * the author typed and what they will look for. Two things are deliberately left
- * out. A URL loses its query string and fragment, which is where a literal token
- * would sit. And no config value is ever replaced by an id: a dataset the
- * workspace no longer lists reads "a dataset", matching OR1's names-not-ids rule.
+ * out. A URL loses its credentials (`user:pass@`), query string and fragment,
+ * which is where a literal secret would sit; headers and body are never read.
+ * And no config value is ever replaced by an id: a dataset the workspace no
+ * longer lists reads "a dataset", matching OR1's names-not-ids rule — while a
+ * `${}` dataset reference is shown as written.
  */
 export function activitySummary(
   node: Node,
@@ -57,7 +59,10 @@ export function activitySummary(
       const url = text(c.url);
       if (url === undefined) return null;
       const method = (text(c.method) ?? 'GET').toUpperCase();
-      return `${method} ${url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[?#].*$/, '')}`;
+      return `${method} ${url
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+        .replace(/^[^/@]*@/, '')
+        .replace(/[?#].*$/, '')}`;
     }
     case LLM_CALL_ACTIVITY_TYPE:
       return joined([text(c.model), c.outputMode === 'structured' ? 'structured' : undefined]);
@@ -172,7 +177,9 @@ function duration(v: unknown): string | undefined {
 }
 
 function dataset(id: string | undefined, name: (id: string) => string | undefined) {
-  return id === undefined ? undefined : (name(id) ?? 'a dataset');
+  if (id === undefined) return undefined;
+  // Either end may be a `${}` expression (dynamic routing), resolved at dispatch.
+  return name(id) ?? (id.includes('${') ? id : 'a dataset');
 }
 
 function prefixed(prefix: string, s: string | undefined): string | null {
@@ -186,7 +193,8 @@ function arrow(from: string | undefined, to: string | undefined): string | null 
 function assignment(variable: unknown, op: string, value: unknown): string | null {
   const name = text(variable);
   if (name === undefined) return null;
-  const v = text(value);
+  // An empty string is a value (set it to ""), not an unset one.
+  const v = value === '' ? '""' : text(value);
   return v === undefined ? name : `${name} ${op} ${v}`;
 }
 

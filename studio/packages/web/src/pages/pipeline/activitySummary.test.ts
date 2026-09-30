@@ -162,6 +162,20 @@ describe('activitySummary', () => {
     expect(activitySummary(n, () => undefined)).toBe('wait ${params.delay}');
   });
 
+  it('never shows credentials written into a URL', () => {
+    const n = node('http_request', { config: { url: 'https://user:tok@api.example.com/v1?k=1' } });
+    expect(activitySummary(n, () => undefined)).toBe('GET api.example.com/v1');
+  });
+
+  it('shows a dataset reference as written, and an empty value as ""', () => {
+    const copy = node(COPY_ACTIVITY_TYPE, {
+      datasetIds: { source: 'ds_src', sink: '${params.sink}' },
+    });
+    expect(activitySummary(copy, (id) => NAMES.get(id))).toBe('orders.csv → ${params.sink}');
+    const set = node(SET_VARIABLE_ACTIVITY_TYPE, { config: { variable: 'v', value: '' } });
+    expect(activitySummary(set, () => undefined)).toBe('v = ""');
+  });
+
   it('defaults an http method to GET', () => {
     const n = node('http_request', { config: { url: 'http://h/p' } });
     expect(activitySummary(n, () => undefined)).toBe('GET h/p');

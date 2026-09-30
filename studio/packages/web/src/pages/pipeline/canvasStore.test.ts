@@ -4175,7 +4175,7 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
     // Clear of everything in its row — the source body AND `n_down` beyond it
     // (x 800) — by more than a node's width, so no derived box overlaps another
     // and membership is never ambiguous.
-    expect(copyLeft).toBeGreaterThan(pos('n_down').x + 168);
+    expect(copyLeft).toBeGreaterThan(pos('n_down').x + unmeasuredNodeSize(0).width);
     // The body's internal layout survives: same relative offset between copies.
     const [cx, cy] = copy.children.map((id) => pos(id));
     expect({ dx: cy!.x - cx!.x, dy: cy!.y - cx!.y }).toEqual({ dx: 200, dy: 100 });
@@ -4192,7 +4192,9 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
       st.containers
         .find((c) => c.id === cid)!
         .children.map((id) => st.nodes.find((n) => n.id === id)!.position.x);
-    expect(Math.min(...xsOf(second))).toBeGreaterThan(Math.max(...xsOf(first)) + 168);
+    expect(Math.min(...xsOf(second))).toBeGreaterThan(
+      Math.max(...xsOf(first)) + unmeasuredNodeSize(0).width,
+    );
   });
 
   it('an EMPTY container copies to an empty copy', () => {
