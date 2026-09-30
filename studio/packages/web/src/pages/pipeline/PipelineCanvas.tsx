@@ -96,7 +96,6 @@ import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEdi
 import {
   isOwnPolicyIssue,
   policyIssues,
-  emptyContainerIssues,
   saveDisabledReason,
   toVersionBody,
   validateCanvas,
@@ -648,8 +647,6 @@ export function PipelineCanvas({
       [
         ...validateCanvas(nodes, edges, containers, params, variables, globals),
         ...policyIssues(nodes),
-        // #1420 — an empty stage, the one empty box `validateDoc` passes.
-        ...emptyContainerIssues(containers, nodes),
       ].map((raw) => ({
         raw,
         text: readableIssue(raw, nodes, edges, containers),
@@ -2120,7 +2117,7 @@ function ConditionChoice({
  *
  * THIS path creates a container around the SELECTED node, so a `loop`/`foreach`
  * made here is past its one-child rule the moment it exists. (The palette's
- * empty box, #1420, starts short of it — as a save badge until filled.)
+ * empty box, #1420, starts short of it — a save badge until filled.)
  */
 function ContainerSection({
   store,

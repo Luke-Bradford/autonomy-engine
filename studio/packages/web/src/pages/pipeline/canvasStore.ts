@@ -1005,11 +1005,12 @@ export interface CanvasState {
   /**
    * #1420 — where each palette-authored EMPTY container is drawn, by container
    * id. View state, not doc: a container stores no position (its box is its
-   * children's bounds, `containerRects`), and an empty one cannot be saved as
-   * it stands — an empty loop/foreach fails `validateDoc` and an empty stage
-   * fails `emptyContainerIssues` — so an anchor never needs to outlive the
-   * session. Excluded from undo snapshots for `addCount`'s reason, and cleared
-   * by `loadVersion` because it describes the previous document.
+   * children's bounds, `containerRects`), and an anchor only matters until the
+   * box gets its first activity. An empty loop/foreach cannot be saved at all
+   * (`validateDoc`); an empty stage can, as since #748, and reloads onto the
+   * stacked fallback like any emptied box. Excluded from undo snapshots for
+   * `addCount`'s reason, and cleared by `loadVersion` because it describes the
+   * previous document.
    */
   containerAnchors: Readonly<Record<string, { x: number; y: number }>>;
   /**
@@ -2003,9 +2004,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
         // Born EMPTY is admitted since #1420 (the palette's drop-then-fill box).
         // #748's trap was an empty box the operator could not act on; it now has
-        // a ✕ and undo, an empty `loop`/`foreach` is a save badge from
-        // `validateDoc`, and an empty `stage` is one from `emptyContainerIssues`
-        // — so none of them can mint into an immutable version.
+        // a ✕ and undo, and an empty `loop`/`foreach` is a save badge from
+        // `validateDoc`. An empty `stage` saves, as it has since #748 settled
+        // that a removable empty box is not a trap (it succeeds at run time).
         // A container whose children are not current nodes is the phantom-child
         // doc #746 was filed about, authored fresh instead of left behind.
         if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;

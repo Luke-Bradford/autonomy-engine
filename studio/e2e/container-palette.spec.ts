@@ -118,7 +118,7 @@ test.describe('#1420 containers in the Activities palette', () => {
     const nodeNow = (await nodeById(page, 'b').boundingBox())!;
     expect(Math.abs(boxRect.x - nodeNow.x - (dropAt.x - node.x))).toBeLessThan(12);
     expect(Math.abs(boxRect.y - nodeNow.y - (dropAt.y - node.y))).toBeLessThan(12);
-    // Empty, it is a save badge rather than a silently-saved junk box.
+    // An empty ForEach cannot be saved: `validateDoc` needs a child (and items).
     expect(await issues(page)).toContain('needs at least one child');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
@@ -143,15 +143,11 @@ test.describe('#1420 containers in the Activities palette', () => {
     await dropFromPalette(page, 'Stage', { x: node.x + node.width + 220, y: node.y });
     const box = containerBox(page, 'stage 1');
     await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 0 activities\b/);
-    // An empty stage is the one empty box `validateDoc` passes — the canvas refuses it.
-    expect(await issues(page)).toContain('a stage needs at least one child');
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     const boxRect = (await box.boundingBox())!;
     await dropFromPalette(page, 'HTTP Request', { x: boxRect.x + 30, y: boxRect.y + 40 });
 
     await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 1 activity\b/);
-    expect(await issues(page)).not.toContain('a stage needs at least one child');
 
     // The click path (the keyboard-reachable one) adds an empty box too.
     await toolbox(page).getByRole('button', { name: 'Until', exact: true }).click();
