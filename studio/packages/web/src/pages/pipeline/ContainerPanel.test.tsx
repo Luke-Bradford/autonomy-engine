@@ -478,3 +478,40 @@ describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 });
+
+// #1420 OR26 — batchCount is a number whose MEANING is a mode, so the panel says
+// which mode the value in the box means, as it is typed.
+describe('ContainerPanel — a foreach says whether it runs in parallel', () => {
+  const FOREACH: Container = {
+    id: 'fe_1',
+    kind: 'foreach',
+    children: ['n_a'],
+    items: '${createArray(1)}',
+  };
+
+  it('reads as sequential with no batchCount, and as parallel once one is typed', () => {
+    mount(FOREACH);
+    expect(screen.getByText(/^Sequential: items run one at a time, in order\./)).toBeDefined();
+    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '4' } });
+    expect(screen.getByText(/^Parallel: up to 4 items run at once\./)).toBeDefined();
+    expect(screen.queryByText(/^Sequential:/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '1' } });
+    expect(screen.getByText(/^Sequential:/)).toBeDefined();
+  });
+
+  it('claims neither mode for a value that is not a batch count', () => {
+    mount({ ...FOREACH, batchCount: 3 });
+    expect(screen.getByText(/^Parallel: up to 3 items/)).toBeDefined();
+    // A fraction the schema refuses, and number literals `Number()` reads but
+    // Apply's own parser refuses — each would otherwise claim a mode.
+    for (const value of ['2.5', '0x3', '+3', '99']) {
+      fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value } });
+      expect(screen.queryByText(/^(Sequential|Parallel):/), value).toBeNull();
+    }
+  });
+
+  it('is a foreach line only', () => {
+    mount(LOOP);
+    expect(screen.queryByText(/^(Sequential|Parallel):/)).toBeNull();
+  });
+});

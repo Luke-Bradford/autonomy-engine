@@ -27,6 +27,7 @@ import {
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  FILTER_RESULT_OUTPUT,
   AGENT_TASK_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
@@ -51,7 +52,7 @@ import {
 } from '../catalog/llm-config.js';
 import { copyMappingShapeIssues } from '../catalog/copy-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
-import type { ContainerKind } from '../schemas/pipeline.js';
+import type { ContainerKind, Output } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
   FUNCTIONS,
@@ -1896,6 +1897,14 @@ export function availableRefs(
   const subject = doc.nodes.find((n) => n.id === nodeId);
   if (subject === undefined) return [];
   const graph = computeGraph(doc);
+  // The array `${item}` is an element OF at this site: the nearest iteration
+  // binds it, so a filter's predicate rebinds it to the filter's own items, and
+  // anywhere else in a foreach body it is the box's `items` (#1420).
+  const ownerId = containerMembership(containers).owner.get(nodeId);
+  const owner = containers.find((c) => c.id === ownerId && c.kind === 'foreach');
+  const bindsOwnItem =
+    subject.type === FILTER_ACTIVITY_TYPE && field !== undefined && filterFieldBindsItem(field);
+  const itemSource = bindsOwnItem ? subject.config.items : owner?.items;
   return refsInScope(
     doc,
     {
@@ -1915,13 +1924,53 @@ export function availableRefs(
       // child of a foreach body — plus the one FIELD that binds it on its own,
       // exactly as `scanFilterRefs` scopes it.
       itemInScope:
-        containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) ||
-        (subject.type === FILTER_ACTIVITY_TYPE &&
-          field !== undefined &&
-          filterFieldBindsItem(field)),
+        containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId)) || bindsOwnItem,
+      itemFields: elementFieldsOf(doc.nodes, itemSource),
       offerRescued: true,
     },
   );
+}
+
+/**
+ * #1420 — the KNOWN fields of each element of the array `source` evaluates to,
+ * or none. Known only where `source` is exactly one whole-value
+ * `${nodes.<id>.output.<name>}` whose producer's catalog entry declares that
+ * output's `outputElements` — or a `filter`'s result, which keeps its input's
+ * elements, so the answer is its own `items`'. Anything else (a param, a
+ * function call, a deep path) has no declared element shape and yields none.
+ *
+ * Under-answering costs an offer, never a save: `${item.<field>}` is legal
+ * wherever `${item}` is. Inherited limit: a `map`/`count` lambda inside the
+ * field rebinds `item`, which a per-site offer cannot see (nor can `${item}`'s).
+ */
+function elementFieldsOf(nodes: readonly Node[], source: unknown): readonly Output[] {
+  const seen = new Set<string>();
+  let next = source;
+  while (typeof next === 'string') {
+    const mode = interpolationMode(next.trim());
+    if (mode.mode !== 'whole') return [];
+    let expr: Expr;
+    try {
+      expr = parseExpr(mode.body);
+    } catch {
+      return [];
+    }
+    if (expr.kind !== 'ref') return [];
+    const root = refRoot(leadingFields(expr.segments));
+    if (root?.kind !== 'nodeOutput' || expr.segments.length !== root.arity) return [];
+    // A filter whose items read its own result is refused at save; this only
+    // stops such a doc from spinning the picker while it is being authored.
+    if (seen.has(root.id)) return [];
+    seen.add(root.id);
+    const producer = nodes.find((n) => n.id === root.id);
+    if (producer === undefined) return [];
+    if (producer.type === FILTER_ACTIVITY_TYPE && root.name === FILTER_RESULT_OUTPUT) {
+      next = producer.config.items;
+      continue;
+    }
+    return getActivity(producer.type)?.outputElements?.[root.name] ?? [];
+  }
+  return [];
 }
 
 /**
@@ -1932,7 +1981,13 @@ export function availableRefs(
 function refsInScope(
   doc: Pick<PipelineVersion, 'params' | 'nodes' | 'containers'>,
   scope: ScanScope,
-  site: { selfId: string; itemInScope: boolean; offerRescued: boolean },
+  site: {
+    selfId: string;
+    itemInScope: boolean;
+    /** #1420 — the element's known fields, offered as `${item.<field>}`. */
+    itemFields?: readonly Output[];
+    offerRescued: boolean;
+  },
 ): RefSuggestion[] {
   const containers = doc.containers ?? [];
   const { guaranteed, settled, reachable, soft, outputsById } = scope;
@@ -1948,6 +2003,18 @@ function refsInScope(
       declaredType: 'any',
       availability: 'available',
     });
+    // Skipped when unaddressable, for the reason a param name is (below).
+    for (const f of site.itemFields ?? []) {
+      if (!isAddressableOutputName(f.name)) continue;
+      out.push({
+        ref: `item.${f.name}`,
+        insert: `\${item.${f.name}}`,
+        kind: 'item',
+        name: f.name,
+        declaredType: f.type,
+        availability: 'available',
+      });
+    }
   }
 
   // A secret-typed param is REFUSED by `checkRefRoot`, not merely discouraged:

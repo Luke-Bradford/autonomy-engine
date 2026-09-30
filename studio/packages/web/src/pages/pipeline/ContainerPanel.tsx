@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
   formatZodIssues,
+  isParallelForeach,
   type Container,
   type ContainerConfigField,
   type Edge,
@@ -19,6 +20,7 @@ import {
   assembleConfig,
   deriveConfigFields,
   emptyControlValue,
+  parseFieldInput,
   sameControlValue,
   seedFieldInputs,
   unrepresentableFields,
@@ -355,13 +357,21 @@ export function ContainerPanel({
       ) : (
         <div className="contract-section">
           {fields.map((field) => (
-            <ConfigFieldControl
-              key={field.name}
-              field={field}
-              value={inputs[field.name] ?? emptyControlValue(field)}
-              onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
-              picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
-            />
+            <Fragment key={field.name}>
+              <ConfigFieldControl
+                field={field}
+                value={inputs[field.name] ?? emptyControlValue(field)}
+                onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+                picker={illegal.includes(field.name) ? undefined : pickers[field.name]}
+              />
+              {container.kind === 'foreach' && field.name === 'batchCount' && (
+                <ForeachModeHint
+                  container={container}
+                  field={field}
+                  input={inputs.batchCount ?? emptyControlValue(field)}
+                />
+              )}
+            </Fragment>
           ))}
           {illegal.length > 0 && (
             <p className="contract-advisory">
@@ -422,4 +432,35 @@ function recovery(before: Record<string, unknown>, after: Container): string {
       : `setting ${name} back to ${JSON.stringify(was)}`;
   });
   return `You can undo it by ${parts.join(' and ')}.`;
+}
+
+/**
+ * #1420 OR26 — what the typed `batchCount` MEANS. The field is a number, but the
+ * choice an author is making is sequential vs parallel, and absent vs `1` vs `2`
+ * read alike in a text box. The text is read by the SAME parser Apply uses, then
+ * judged by the schema's bounds and the engine's `isParallelForeach`, so the line
+ * cannot claim a mode for a value Apply would store differently. A value Apply
+ * refuses claims neither mode: Apply says why.
+ */
+function ForeachModeHint({
+  container,
+  field,
+  input,
+}: {
+  container: Container;
+  field: ConfigField;
+  input: FieldInput;
+}) {
+  const typed = parseFieldInput(field, input);
+  if (!typed.ok) return null;
+  const parsed = ContainerSchema.shape.batchCount.safeParse(typed.omit ? undefined : typed.value);
+  if (!parsed.success) return null;
+  const n = parsed.data;
+  return (
+    <p className="page-hint">
+      {isParallelForeach({ ...container, batchCount: n })
+        ? `Parallel: up to ${n} items run at once. Each item still runs its activities in order.`
+        : 'Sequential: items run one at a time, in order. Set batchCount above 1 to run items in parallel.'}
+    </p>
+  );
 }

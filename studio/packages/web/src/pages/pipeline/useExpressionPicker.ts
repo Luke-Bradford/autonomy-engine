@@ -131,7 +131,12 @@ export function useExpressionPicker(
       describe: (s: RefSuggestion) => {
         if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
         if (s.kind === 'nodeStatus') return `${producerName(s.producerId ?? '')} → status`;
-        if (s.kind === 'item') return 'item — the element this round is processing';
+        if (s.kind === 'item') {
+          // #1420 — a known field of the element, named like an output is.
+          return s.name === undefined
+            ? 'item — the element this round is processing'
+            : `item → ${s.name}`;
+        }
         return s.name ?? s.ref;
       },
       // Run only when a flyout OPENS, never per render: this validates the whole

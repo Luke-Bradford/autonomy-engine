@@ -16,6 +16,7 @@ import {
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  FILTER_RESULT_OUTPUT,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
@@ -264,7 +265,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     category: 'control',
     idempotent: false,
     connectionKinds: [],
-    outputs: [out('result', 'json')],
+    outputs: [out(FILTER_RESULT_OUTPUT, 'json')],
     configSchema: z.object({ items: z.string().min(1), predicate: z.string().min(1) }),
   },
   {
@@ -471,6 +472,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: true,
     connectionKinds: ['fs'],
     outputs: [out('entries', 'json'), out('path', 'string')],
+    outputElements: { entries: [out('name', 'string'), out('type', 'string')] },
     configSchema: fileListConfigSchema,
   },
   {
