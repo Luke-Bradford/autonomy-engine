@@ -26,7 +26,7 @@ import { fluentRootReady } from './support/theme';
  * `begin immediate` across its batch yields, so sibling iterations fail
  * `database is locked` (transient, deliberately fast — `SQLITE_BUSY_TIMEOUT_MS`)
  * and wait out the 30s retry floor. Measured while writing this spec; filed
- * as #FOLLOWUP rather than hidden behind a retry policy here.
+ * as #1423 rather than hidden behind a retry policy here.
  *
  * `realpathSync` on the root: macOS `/var` is a symlink and `file_list`
  * reports the CANONICAL dir, which the copy then has to find inside the root.
@@ -161,12 +161,17 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
       .sort();
     expect(sources).toEqual(Object.keys(FILES).map((f) => join(inDir, f)));
 
-    /* …and the run page shows the iteration, not just a green pipeline. */
+    /* …and the run page shows the iteration, not just a green pipeline. The box
+       counts ITEMS; it used to read `round 2` for three files — the 0-based
+       index of the last item, which reads as two passes. */
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
-    const box = page.getByRole('group', { name: /^foreach 1 container, 1 activity, / });
+    const box = page.getByRole('group', {
+      name: 'foreach 1 container, 1 activity, success, 3 of 3 items',
+    });
     await expect(box).toBeVisible();
-    console.log('BOX', await box.getAttribute('aria-label'), '|', await box.textContent());
+    await expect(box).toContainText('foreach 1 · success · 3 of 3 items');
+    await expect(box).not.toContainText('round');
 
     await expectQuiet(page, problems);
   } finally {
