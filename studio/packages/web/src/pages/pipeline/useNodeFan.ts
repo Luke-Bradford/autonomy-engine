@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import { useConnection } from '@xyflow/react';
 import { useHoverIntent } from '../../hooks/useHoverIntent';
 
@@ -22,6 +22,13 @@ import { useHoverIntent } from '../../hooks/useHoverIntent';
 export interface NodeFan {
   /** Whether the ports are fanned out right now. */
   expanded: boolean;
+  /**
+   * #1394 — whether EVERY port should show its word, which is only while the
+   * node holds KEYBOARD focus. A pointer names one port at a time (the hovered
+   * one, in CSS); a keyboard user has no per-port focus to do that with, since
+   * React Flow gives a handle no tab stop, so the whole column is named instead.
+   */
+  named: boolean;
   /** Spread onto the node's box element. */
   handlers: {
     onPointerEnter: () => void;
@@ -56,27 +63,51 @@ export function useNodeFan(boxRef: RefObject<HTMLElement | null>): NodeFan {
      and is wrong in a way that matters: it would fan the DOTS while the state
      this hook holds stayed closed, so the caller would never re-state or
      re-measure its handles and every edge would stay attached at the middle.
+     (#1394 does use keyboard focus to decide which WORDS show, and it records
+     that here too rather than in CSS; see `keyboard` below.)
 
      It is also the ONLY arm that answers a keyboard user on a container, which
      is not focusable itself — its ⚙ and ✕ are, and `focusin` bubbles from them
      to the wrapper this listens on. */
   const { onFocus, onBlur } = handlers;
+  /* #1394 — HOW focus arrived, read once at arrival rather than left to a CSS
+     `:focus-visible` arm. A mouse click selects a node and focuses its wrapper
+     too, and naming every port for that is the spill the operator reported: a
+     selected node's column of words sitting on its neighbours. `:focus-visible`
+     tells the two apart at the moment of focus, but Chromium turns it on for an
+     element that already has focus as soon as a key is pressed, so a CSS arm
+     keyed on it would bring the spill back the first time a clicked node was
+     nudged with an arrow key. Captured here, the answer holds until focus
+     leaves. */
+  const [keyboard, setKeyboard] = useState(false);
   useEffect(() => {
     const wrapper = boxRef.current?.parentElement;
     if (!wrapper) return;
+    const focusIn = (event: FocusEvent) => {
+      setKeyboard(event.target instanceof Element && event.target.matches(':focus-visible'));
+      onFocus();
+    };
+    const focusOut = () => {
+      setKeyboard(false);
+      onBlur();
+    };
     // `focusin`/`focusout` rather than `focus`/`blur`: the ports themselves are
     // focusable, and only the bubbling pair keeps the fan open while Tab moves
     // between them.
-    wrapper.addEventListener('focusin', onFocus);
-    wrapper.addEventListener('focusout', onBlur);
+    wrapper.addEventListener('focusin', focusIn);
+    wrapper.addEventListener('focusout', focusOut);
     return () => {
-      wrapper.removeEventListener('focusin', onFocus);
-      wrapper.removeEventListener('focusout', onBlur);
+      wrapper.removeEventListener('focusin', focusIn);
+      wrapper.removeEventListener('focusout', focusOut);
     };
   }, [boxRef, onFocus, onBlur]);
 
+  const expanded = open || connecting;
   return {
-    expanded: open || connecting,
+    expanded,
+    /* Never words without dots: a label sits at its port's FANNED position, so
+       one shown while the column is collapsed would point at nothing. */
+    named: expanded && keyboard,
     handlers: { onPointerEnter: handlers.onPointerEnter, onPointerLeave: handlers.onPointerLeave },
   };
 }

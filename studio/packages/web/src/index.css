@@ -2060,7 +2060,8 @@ td button + button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow-node .flow-port.react-flow__handle {
+  .flow-node .flow-port.react-flow__handle,
+  .flow-port-label {
     transition: none;
   }
 }
@@ -2224,7 +2225,16 @@ td button + button {
 /* Inert, and a SIBLING of the handle rather than a child: React Flow reads a
    handle's attach point from its own bounding rect, so text inside the dot would
    widen it to the width of the word and move every edge's endpoint off the port
-   it is drawn at. */
+   it is drawn at.
+
+   #1394 — a CHIP, not bare text. The word sits past the node's right edge, in
+   the gap where the next node may be, and bare muted text drawn over a
+   neighbour's card read as part of that card. An opaque ground and a border
+   make it one small object on top of whatever it crosses; the node it belongs
+   to is lifted above its neighbours while it shows (below), because each React
+   Flow node is its own stacking context and a later sibling would otherwise
+   paint over the chip. There is no collision-avoiding placement: the chip is
+   drawn ABOVE a neighbour, not moved around it. */
 .flow-port-label {
   position: absolute;
   left: calc(100% + 0.6rem);
@@ -2235,36 +2245,54 @@ td button + button {
   transform: translateY(-50%);
   opacity: 0;
   transition: opacity 80ms ease-in;
-  color: var(--muted);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
   font-size: 0.62rem;
-  line-height: 1;
+  line-height: 1.2;
   letter-spacing: 0.01em;
-  max-width: 4rem;
+  max-width: 6rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
 }
 
-/* Hover OR keyboard focus, and the two arms are deliberately symmetrical across
-   both node kinds: a container shipped with `:hover` alone, so tabbing onto its
-   outcome ports revealed nothing while doing the same on an activity revealed
-   the labels. A reveal that only answers a pointer is a control a keyboard user
-   cannot see at all. */
-/* #997 moved the ACTIVITY arms from `:hover` to the fan state, so the words and
-   the dots arrive together — a label revealed by raw hover while the port it
-   names was still collapsed at the middle would point at nothing. #1066 brought
-   the CONTAINER onto the same state, which finally makes the symmetry above a
-   fact rather than an intention: ONE arm, the same for both kinds, and the
-   keyboard is answered inside `useNodeFan` (which listens for `focusin` on the
-   wrapper React Flow owns) rather than by a second selector here.
+/* #1394 — WHICH words show. The operator's report was a selected node's whole
+   column of words spilling over its neighbours: every label used to follow the
+   fan, and clicking a node focuses it, which holds the fan open. So:
 
-   The `:hover`/`:focus-within`/`:focus-visible` arms this replaces are gone
-   deliberately. Each of them could reveal a WORD while the port it names was
-   still collapsed at the middle — a label pointing at nothing — because none of
-   them is the state the dots are drawn from. */
-[data-ports-expanded='true'] .flow-port-label {
+   - a POINTER names one port, the one under it. The `::after` hit target is
+     part of the handle, so hovering anywhere in a port's share of the column
+     counts;
+   - a KEYBOARD names them all. React Flow gives a handle no tab stop, so there
+     is no single port a keyboard user can be "on"; `useNodeFan` sets
+     `data-ports-named` only when focus ARRIVED by keyboard, so a click never
+     does. It is decided there, not by a `:focus-visible` selector here, because
+     Chromium switches `:focus-visible` on for a clicked node the moment a key
+     is pressed, and the spill would come back on the first arrow-key nudge.
+
+   Both arms stay behind `data-ports-expanded`, the state the dots are drawn
+   from, so a word never shows while the port it names is still collapsed at
+   the middle (#997). The accessible name carries every label at all times, so
+   a screen reader never depended on any of this. Touch has neither hover nor
+   keyboard focus and gets the words from the accessible name and the panel's
+   outcome picker only; that is the same "hidden visually is fine" line #997
+   drew. */
+[data-ports-expanded='true'] .flow-port.react-flow__handle:hover + .flow-port-label,
+[data-ports-expanded='true'][data-ports-named='true'] .flow-port-label {
   opacity: 1;
+}
+
+/* The lift the chip needs, for an ACTIVITY only. React Flow writes each node's
+   `z-index` inline, which is why this needs `!important`, and it is held only
+   while a word is showing. A container is NOT lifted: raising its box would
+   paint it over its own children. */
+.react-flow__node:has(> .flow-node[data-ports-expanded='true'] .flow-port:hover),
+.react-flow__node:has(> .flow-node[data-ports-expanded='true'][data-ports-named='true']) {
+  z-index: 10000 !important;
 }
 
 /* U21 — React Flow draws a rect over the bounding box of a multi-selection
