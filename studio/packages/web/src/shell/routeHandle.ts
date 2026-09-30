@@ -97,20 +97,56 @@ function crumbLabel(handle: ShellRouteHandle, params: RouteParams): string | und
 }
 
 /**
+ * Labels pages have published for their own matched pathname (#1392), keyed by
+ * `normalizePath`. See `shellLabel.ts`.
+ */
+export type PublishedLabels = Readonly<Record<string, string>>;
+
+/** One key per page however react-router spells it: no trailing `/` except root. */
+export function normalizePath(pathname: string): string {
+  return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+}
+
+/**
  * The breadcrumb trail for a match list, outermost first.
  *
  * Matches with no usable handle contribute nothing, and so does a dynamic crumb
  * whose label comes back empty: an empty `<li>` in a breadcrumb is a clickable
  * target with no accessible name, which is worse than an absent crumb and
  * invisible in a screenshot.
+ *
+ * #1392 — a label a page PUBLISHED for a match's pathname (the resource's name,
+ * once the page has loaded it) wins over the route's own crumb, which for a
+ * detail route is only an id-derived fallback. It replaces a crumb; it never
+ * adds one to a match whose route declares none.
  */
-export function crumbsFrom(matches: readonly ShellMatch[]): Crumb[] {
+export function crumbsFrom(
+  matches: readonly ShellMatch[],
+  published: PublishedLabels = {},
+): Crumb[] {
   const crumbs: Crumb[] = [];
   for (const match of matches) {
     const handle = readShellHandle(match.handle);
     if (!handle) continue;
-    const label = crumbLabel(handle, match.params);
+    const label = published[normalizePath(match.pathname)] ?? crumbLabel(handle, match.params);
     if (label) crumbs.push({ label, to: match.pathname });
   }
   return crumbs;
+}
+
+/** The product name as a browser tab shows it. */
+export const APP_TITLE = 'autonomy studio';
+
+/**
+ * #1392 — the browser tab's title for a breadcrumb trail: the page, then its
+ * hub, then the app (`Test Pipe — Author — autonomy studio`). The middle crumbs
+ * are left out — a tab title is truncated from the right, so only the words
+ * that tell two tabs apart earn a place — and a page that IS its hub (Home) is
+ * named once.
+ */
+export function documentTitle(crumbs: readonly Crumb[]): string {
+  const page = crumbs.at(-1)?.label;
+  const hub = crumbs[0]?.label;
+  const parts = [page, hub !== page ? hub : undefined, APP_TITLE];
+  return parts.filter((p): p is string => p !== undefined).join(' — ');
 }

@@ -35,6 +35,10 @@ import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 import { isSecureMarker } from './secureMarker';
+import { pipelinePath } from '../author/pipelinePath';
+import { CopyableId } from '../../lib/CopyableId';
+import { shortId } from '../../lib/ids';
+import { useShellLabel } from '../../shell/shellLabel';
 
 /* The local `message(err)` this file used to declare was one of the twenty-odd
    inline copies `messageOf` was named to replace; `api/client.ts` asks each to
@@ -75,6 +79,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
+  // #1392 — the names R1 resolves alongside the doc. `null` on the fallback path
+  // (the doc would not resolve), where the page shows ids as before.
+  const [names, setNames] = useState<{ pipeline: string; trigger: string | null } | null>(
+    null,
+  );
+  useShellLabel(names ? `${names.pipeline} · run ${shortId(runId)}` : undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -152,6 +162,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       .then((d) => {
         setRun(d.run);
         setDoc(d.pipelineVersion);
+        setNames({ pipeline: d.pipelineName, trigger: d.triggerName });
       })
       .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
@@ -449,8 +460,20 @@ export function RunDetailPage({ runId }: { runId: string }) {
   return (
     <section aria-labelledby="run-heading">
       <div className="page-header">
+        {/* #1392 — the heading names the pipeline and the version this run is
+            bound to; the run's own id moves to the metadata, short and
+            copyable. Until the names load (or on the doc-less fallback) the
+            heading is the run's short id, as the breadcrumb is. */}
         <h2 id="run-heading">
-          Run <code>{runId}</code>
+          {names && doc ? (
+            <>
+              {names.pipeline} <span className="run-heading__version">v{doc.version}</span>
+            </>
+          ) : (
+            <>
+              Run <code>{shortId(runId)}</code>
+            </>
+          )}
         </h2>
         {/* #1239 — an anchor, not `navigate()` on a button: going somewhere is
             what an anchor is for, and this one is now hoverable, copyable,
@@ -531,12 +554,34 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
       {run && (
         <dl className="run-meta">
-          <dt>Pipeline version</dt>
+          <dt>Run id</dt>
           <dd>
-            <code>{run.pipelineVersionId}</code>
+            <CopyableId id={run.id} noun="run" />
+          </dd>
+          <dt>Pipeline</dt>
+          <dd>
+            {names && doc ? (
+              <Link to={pipelinePath(doc.pipelineId)}>
+                {names.pipeline} v{doc.version}
+              </Link>
+            ) : (
+              <code>{run.pipelineVersionId}</code>
+            )}
           </dd>
           <dt>Trigger</dt>
-          <dd>{run.triggerId ? <code>{run.triggerId}</code> : '—'}</dd>
+          <dd>
+            {/* No per-trigger route exists, so the name links to the list it
+                is on. A trigger deleted since the run leaves `triggerId` null. */}
+            {run.triggerId ? (
+              names?.trigger ? (
+                <Link to="/manage/triggers">{names.trigger}</Link>
+              ) : (
+                <code>{run.triggerId}</code>
+              )
+            ) : (
+              '—'
+            )}
+          </dd>
           {/* RS6 lineage — shown only when there IS a source run. `rerunOf` is
               the durable row projection of `run.started.rerunOf`, written in the
               same transaction as the reseed pair, so it cannot disagree with the

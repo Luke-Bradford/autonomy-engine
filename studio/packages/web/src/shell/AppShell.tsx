@@ -1,4 +1,12 @@
-import { Suspense, useCallback, useRef, type CSSProperties } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { Outlet, useMatches } from 'react-router';
 import { useStore } from 'zustand';
 import { HubRail } from './HubRail';
@@ -6,7 +14,8 @@ import { CommandBar } from './CommandBar';
 import { PaneSplitter } from './PaneSplitter';
 import { PANE_ELEMENT_ID, SecondaryPane } from './SecondaryPane';
 import { hubById } from './hubs';
-import { activeHubId, crumbsFrom } from './routeHandle';
+import { activeHubId, crumbsFrom, documentTitle, type PublishedLabels } from './routeHandle';
+import { ShellLabelContext, withLabel, type ShellLabelApi } from './shellLabel';
 import { uiStore } from '../stores/uiStore';
 import { UpdateBanner } from './UpdateBanner';
 
@@ -42,7 +51,21 @@ const PANE_WIDTH_VAR = '--pane-width';
 export function AppShell() {
   const matches = useMatches();
   const hub = hubById(activeHubId(matches));
-  const crumbs = crumbsFrom(matches);
+
+  /* #1392 — the names pages publish for their own paths (`shellLabel.ts`). The
+     api object is created once, so a page's publishing effect does not re-run
+     every time the shell re-renders. */
+  const [published, setPublished] = useState<PublishedLabels>({});
+  const labelApi = useMemo<ShellLabelApi>(
+    () => ({ publish: (path, label) => setPublished((prev) => withLabel(prev, path, label)) }),
+    [],
+  );
+  const crumbs = crumbsFrom(matches, published);
+
+  const title = documentTitle(crumbs);
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
 
   /* The singleton, with no injectable seam. `HubRail`/`ThemeToggle` take one
      because their own unit tests render them in isolation; the shell is only
@@ -71,6 +94,7 @@ export function AppShell() {
   const paneStyle = { [PANE_WIDTH_VAR]: `${paneWidth}px` } as CSSProperties;
 
   return (
+    <ShellLabelContext.Provider value={labelApi}>
     <div className="app-shell" ref={shellRef} style={paneStyle}>
       {/* The rail runs on the `uiStore` singleton too — which is what
           `App.test.tsx` asserts the theme provider shares. */}
@@ -115,5 +139,6 @@ export function AppShell() {
         </main>
       </div>
     </div>
+    </ShellLabelContext.Provider>
   );
 }

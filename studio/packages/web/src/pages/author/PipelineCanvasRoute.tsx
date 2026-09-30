@@ -6,6 +6,7 @@ import { ApiError } from '../../api/client';
 import { getPipeline } from '../../api/pipelines';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { PipelineCanvas } from '../pipeline/PipelineCanvas';
+import { useShellLabel } from '../../shell/shellLabel';
 
 /** Where "back" goes, and where a missing pipeline sends you. */
 const PIPELINES_PATH = '/author/pipelines';
@@ -57,6 +58,10 @@ function CanvasFor({ pipelineId, store }: { pipelineId: string; store: Pipelines
   // fetch stays the authority for "does this pipeline exist, and is it yours" —
   // a 404 is a real answer, "not in the list yet" is not.
   const liveName = useStore(store, (s) => s.pipelines.find((p) => p.id === pipelineId)?.name);
+
+  // #1392 — the breadcrumb and tab title read this pipeline's name, and follow
+  // the #720 live overlay so a rename reaches them too.
+  useShellLabel(pipeline ? (liveName ?? pipeline.name) : undefined);
 
   // Promise-callback form, keeping setState off the synchronous effect body
   // (React's `set-state-in-effect` guidance) — as the canvas's own load does.
