@@ -2127,7 +2127,7 @@ export function FlowCanvas({
       const { owner } = containerMembership(state.containers);
       const ids = dragged.map((n) => n.id).filter((id) => state.nodes.some((n) => n.id === id));
       const owners = new Set(ids.map((id) => owner.get(id) ?? null));
-      const shared = owners.size === 1 ? [...owners][0]! : null;
+      const shared = owners.size === 1 ? ([...owners][0] ?? null) : null;
       const target = containerAtPoint(containerBoxes, end, shared);
       if (target === null) return;
       const box = containerBoxes.get(target)!;
