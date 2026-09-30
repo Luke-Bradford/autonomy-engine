@@ -5535,6 +5535,16 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
     }
     reachable.set(id, acc);
   }
+  // #1420 — a container activates only once its own incoming edges are met, and a
+  // child dispatches only inside an active container, so whatever precedes the
+  // CONTAINER precedes every child. Without this a body root has no predecessors
+  // and a child could read nothing from outside its box. The container itself is
+  // NOT added: its output does not exist until every child is done.
+  for (const [child, owner] of childToContainer) {
+    const into = reachable.get(child);
+    if (into === undefined) continue;
+    for (const r of reachable.get(owner) ?? []) into.add(r);
+  }
 
   // guaranteed[R] + settled[R] via ONE topological pass (Kahn). The forward
   // graph is a DAG (back-edges removed); any endpoint stranded in a residual cycle
@@ -5542,6 +5552,14 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   const guaranteed = new Map<string, Set<string>>();
   const settled = new Map<string, Set<string>>();
   const indegWork = new Map(indeg);
+  // #1420 — hold each child until its container is processed, so the inheritance
+  // below reads the container's FINAL sets.
+  const childrenOf = new Map<string, string[]>();
+  for (const [child, owner] of childToContainer) {
+    if (!endpointIds.has(child) || !endpointIds.has(owner)) continue;
+    indegWork.set(child, (indegWork.get(child) ?? 0) + 1);
+    childrenOf.set(owner, [...(childrenOf.get(owner) ?? []), child]);
+  }
   const queue = [...endpointIds].filter((id) => (indegWork.get(id) ?? 0) === 0);
   for (const id of endpointIds) {
     guaranteed.set(id, new Set());
@@ -5604,6 +5622,14 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
       guaranteed.set(id, acc ?? new Set());
       settled.set(id, sacc ?? new Set());
     }
+    // #1420 — a child also holds everything its container was guaranteed on entry
+    // (see the `reachable` note above). A union, not an intersection: those facts
+    // hold on EVERY path into the body, whatever internal edge led here.
+    const owner = childToContainer.get(id);
+    if (owner !== undefined && endpointIds.has(owner)) {
+      for (const g of guaranteed.get(owner) ?? []) guaranteed.get(id)!.add(g);
+      for (const t of settled.get(owner) ?? []) settled.get(id)!.add(t);
+    }
     // Applied HERE, inside the topological pass rather than as a post-pass, so a
     // descendant reading this node's set can only ever read the zeroed one.
     if (untrackedAnyJoin.has(id)) {
@@ -5615,6 +5641,11 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
       const d = (indegWork.get(e.to) ?? 0) - 1;
       indegWork.set(e.to, d);
       if (d === 0) queue.push(e.to);
+    }
+    for (const child of childrenOf.get(id) ?? []) {
+      const d = (indegWork.get(child) ?? 0) - 1;
+      indegWork.set(child, d);
+      if (d === 0) queue.push(child);
     }
   }
 
