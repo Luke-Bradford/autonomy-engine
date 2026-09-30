@@ -315,7 +315,11 @@ test.describe('pipeline version history', () => {
     await seedThreeVersions(page, 'history-refusal');
 
     await addActivity(page, 'HTTP Request');
-    await expect(page.getByText(/Unsaved changes/)).toBeVisible();
+    // #1393 — dirty is the mark on Save (its description), not a paragraph.
+    await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
+    await expect(page.getByRole('button', { name: 'Save version' })).toHaveAccessibleDescription(
+      'Unsaved changes',
+    );
 
     await historyButton(page).click();
     await rows(page).nth(2).click();
