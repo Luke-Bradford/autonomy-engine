@@ -201,7 +201,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      opens on exactly the same terms; `useNodeFan` is where those terms live so
      the two kinds cannot drift apart. */
   const boxRef = useRef<HTMLDivElement>(null);
-  const { expanded, handlers } = useNodeFan(boxRef);
+  const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('node', id);
 
   /* React Flow caches each handle's position in `internals.handleBounds`,
@@ -237,6 +237,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
          An ATTRIBUTE rather than a class so the e2e spec can assert the state
          directly, and so the collapsed case stays the plain default. */
       data-ports-expanded={expanded ? 'true' : 'false'}
+      data-ports-named={named ? 'true' : 'false'}
       style={{ minHeight: nodeBoxHeight(d.ports.length) }}
       {...handlers}
     >
@@ -314,7 +315,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
      in — a port, the ✕, the ⚙ — which bubble to here. That is the same set of
      places a hover could ever have meant "I am working on this box". */
   const boxRef = useRef<HTMLDivElement>(null);
-  const { expanded, handlers } = useNodeFan(boxRef);
+  const { expanded, named, handlers } = useNodeFan(boxRef);
   const issues = useSubjectIssues('container', id);
 
   /* Reported UP rather than acted on here, because the bounds this state moves
@@ -351,6 +352,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
       ref={boxRef}
       className={`flow-container${d.selected ? ' flow-container--selected' : ''}${issues.length > 0 ? ' flow-container--invalid' : ''}`}
       data-ports-expanded={expanded ? 'true' : 'false'}
+      data-ports-named={named ? 'true' : 'false'}
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />

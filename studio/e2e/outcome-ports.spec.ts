@@ -214,24 +214,108 @@ test.describe('U19 outcome ports', () => {
    * Both halves are load-bearing. A permanent label gutter widened every node by
    * ~30%, and `addNode` staggers a new node only 40px diagonally, so each added
    * activity landed on the previous one's ports; the mid-gesture handle state in
-   * `connect-validation.spec.ts` is what caught it. So the words appear on hover
-   * and the accessible name carries them the rest of the time.
+   * `connect-validation.spec.ts` is what caught it. So a word appears when its
+   * port is pointed at, and the accessible name carries it the rest of the time.
+   *
+   * #1394 narrowed "asked for" from the NODE to the PORT. Every word used to
+   * follow the fan, so pointing at a node put its whole column of words over the
+   * next node; now the fan opens the dots and only the port under the pointer
+   * names itself. The node is lifted while it does, or the next node along (a
+   * later sibling, and its own stacking context) would paint over the chip.
    */
-  test('a port names itself on hover, and always to a screen reader', async ({ page }) => {
+  test('a port names itself when pointed at, and always to a screen reader', async ({ page }) => {
     await openSeededCanvas(page, 'u19 labels', TWO_NODES);
 
-    const label = page
-      .locator('.react-flow__node[data-id="a"] .flow-port-label')
-      .filter({ hasText: 'failure' });
-    await expect(label).toHaveCSS('opacity', '0');
+    const node = page.locator('.react-flow__node[data-id="a"]');
+    const label = (word: string) => node.locator('.flow-port-label').filter({ hasText: word });
+    await expect(label('failure')).toHaveCSS('opacity', '0');
     await expect(port(page, 'a', outcomePort('failure'))).toHaveAttribute('aria-label', 'failure');
 
-    await page.locator('.react-flow__node[data-id="a"] .flow-node').hover();
-    await expect(label).toHaveCSS('opacity', '1');
+    // Pointing at the NODE fans the dots and names nothing.
+    await node.locator('.flow-node').hover();
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
+    await expect(label('failure')).toHaveCSS('opacity', '0');
+    await expect(label('success')).toHaveCSS('opacity', '0');
+
+    // Pointing at ONE port names that port alone.
+    const at = await port(page, 'a', outcomePort('failure')).boundingBox();
+    if (at === null) throw new Error('the failure port has no box');
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+    await expect(label('failure')).toHaveCSS('opacity', '1');
+    await expect(label('success')).toHaveCSS('opacity', '0');
+    await expect(node).toHaveCSS('z-index', '10000');
   });
 
   /**
-   * The same reveal, for a keyboard.
+   * #1394 — the operator's report, as a regression: a SELECTED node's words
+   * "spill over neighbouring nodes". Clicking a node focuses it, focus held the
+   * fan open, and every word followed the fan.
+   *
+   * The arrow key is why `useNodeFan` records how focus ARRIVED rather than
+   * leaving it to `:focus-visible`: measured while writing this spec, the
+   * clicked node matches `:focus-visible` once the key has been pressed, so that
+   * selector cannot tell it from a node reached by Tab. The recorded arrival
+   * stays "pointer".
+   */
+  test('a clicked node does not name its ports, even after a key is pressed', async ({ page }) => {
+    await openSeededCanvas(page, 'u19 labels selected', TWO_NODES);
+
+    const node = page.locator('.react-flow__node[data-id="a"]');
+    // The pointer STAYS on the node: that is the fan open and the node selected,
+    // which is the state the operator saw.
+    await node.locator('.flow-node').click();
+    await expect(node).toHaveClass(/selected/);
+    await page.keyboard.press('ArrowRight');
+
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'false');
+    for (const word of ['success', 'failure', 'completion']) {
+      await expect(node.locator('.flow-port-label').filter({ hasText: word })).toHaveCSS(
+        'opacity',
+        '0',
+      );
+    }
+  });
+
+  /**
+   * The keyboard half. A handle has no tab stop of its own (React Flow gives it
+   * none), so there is no single port a keyboard user can be on; focusing the
+   * node by keyboard names the whole column instead.
+   */
+  test('a node reached by keyboard names every port', async ({ page }) => {
+    await openSeededCanvas(page, 'u19 labels keyboard', TWO_NODES);
+
+    const node = page.locator('.react-flow__node[data-id="a"]');
+    const label = (word: string) => node.locator('.flow-port-label').filter({ hasText: word });
+    // A keypress first, so the focus below counts as keyboard focus: Chromium
+    // matches `:focus-visible` for a scripted focus that follows keyboard input.
+    await page.keyboard.press('Shift');
+    await node.focus();
+
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'true');
+    await expect(label('failure')).toHaveCSS('opacity', '1');
+    await expect(label('success')).toHaveCSS('opacity', '1');
+
+    // Then CLICKING it makes it a pointer user's node. Focus does not move, so
+    // no `focusin` re-decides this; the press does.
+    await node.locator('.flow-node').click();
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
+    await expect(node.locator('.flow-node')).toHaveAttribute('data-ports-named', 'false');
+    await expect(label('failure')).toHaveCSS('opacity', '0');
+  });
+
+  /** #997's reduced-motion clause, for the words as well as the dots. */
+  test('a port label does not fade under reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await openSeededCanvas(page, 'u19 labels reduced motion', TWO_NODES);
+    await expect(page.locator('.react-flow__node[data-id="a"] .flow-port-label').first()).toHaveCSS(
+      'transition-duration',
+      '0s',
+    );
+  });
+
+  /**
+   * The same two arms, on a container.
    *
    * A CONTAINER is a legal edge source and draws the same outcome ports, but its
    * reveal shipped with `:hover` alone while an activity node had `:focus-within`
@@ -242,39 +326,44 @@ test.describe('U19 outcome ports', () => {
    * The two gestures are aimed at what is actually hit-testable. `.flow-container`
    * is `pointer-events: none` (the box must not eat pane clicks aimed between its
    * children), with the handles and the two chrome buttons opting back in — so
-   * the hover arm hovers a PORT and the focus arm tabs to the Configure button,
-   * which is a real control a real keyboard reaches. Neither is simulated.
+   * the pointer arm points at a PORT and the focus arm focuses the Configure
+   * button, which is a real control a real keyboard reaches.
    *
-   * #1066 collapsed a container's ports to one point at rest, which changes how
-   * the hover arm has to be DRIVEN without changing what it proves. A RAW
-   * pointer move, because Playwright's `hover()` runs actionability checks and
-   * refuses a stacked port ("`op:skipped` … intercepts pointer events") — four
-   * ports on one point is the collapse working, not an obstruction. The pointer
-   * therefore lands on whichever port paints topmost, and the label asserted on
-   * belongs to a DIFFERENT one, so what is still proved is the box-level reveal
-   * rather than a port revealing its own name.
+   * #1066 collapsed a container's ports to one point at rest, so the pointer
+   * first lands on the stack to open the fan (a RAW move, because Playwright's
+   * `hover()` refuses a stacked port as "intercepted"), and only then on the
+   * fanned `failure` port, which since #1394 is the one word that shows.
    */
-  test('a container port names itself on hover AND on keyboard focus', async ({ page }) => {
+  test('a container port names itself when pointed at, AND all of them on keyboard focus', async ({
+    page,
+  }) => {
     await openSeededCanvas(page, 'u19 container labels', {
       nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
       containers: [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
     });
 
     const box = page.locator('.react-flow__node[data-id="stage_1"] .flow-container');
-    const label = box.locator('.flow-port-label').filter({ hasText: 'failure' });
-    await expect(label).toHaveCSS('opacity', '0');
+    const label = (word: string) => box.locator('.flow-port-label').filter({ hasText: word });
+    await expect(label('failure')).toHaveCSS('opacity', '0');
 
     const stack = await port(page, 'stage_1', outcomePort('success')).boundingBox();
     if (stack === null) throw new Error('the container has no port to hover');
     await page.mouse.move(stack.x + stack.width / 2, stack.y + stack.height / 2);
-    await expect(label).toHaveCSS('opacity', '1');
+    await expect(box).toHaveAttribute('data-ports-expanded', 'true');
+    const fanned = await port(page, 'stage_1', outcomePort('failure')).boundingBox();
+    if (fanned === null) throw new Error('the fanned failure port has no box');
+    await page.mouse.move(fanned.x + fanned.width / 2, fanned.y + fanned.height / 2);
+    await expect(label('failure')).toHaveCSS('opacity', '1');
+    await expect(label('success')).toHaveCSS('opacity', '0');
 
-    // Away from the box entirely, or the hover arm would mask the focus one.
+    // Away from the box entirely, or the pointer arm would mask the focus one.
     await page.mouse.move(0, 0);
-    await expect(label).toHaveCSS('opacity', '0');
+    await expect(label('failure')).toHaveCSS('opacity', '0');
 
+    await page.keyboard.press('Shift');
     await box.getByRole('button', { name: 'Configure stage 1' }).focus();
-    await expect(label).toHaveCSS('opacity', '1');
+    await expect(label('failure')).toHaveCSS('opacity', '1');
+    await expect(label('success')).toHaveCSS('opacity', '1');
   });
 
   /**

@@ -1894,7 +1894,8 @@ td button + button {
  * node by ~30%, and `addNode` staggers a new node only 40px diagonally — so each
  * freshly-added activity landed on top of the previous one's ports, and thirteen
  * e2e specs began failing on intercepted pointer events. They are revealed on
- * hover or keyboard focus rather than drawn permanently, for the same reason:
+ * request rather than drawn permanently (since #1394: the one port under the
+ * pointer, or every port on a node reached by keyboard), for the same reason:
  * four to eleven words stacked beside every node, on top of the edges leaving
  * it, is not legible at canvas zoom. The colour and the accessible name are
  * always there; the words are what needs asking for.
@@ -2224,7 +2225,16 @@ td button + button {
 /* Inert, and a SIBLING of the handle rather than a child: React Flow reads a
    handle's attach point from its own bounding rect, so text inside the dot would
    widen it to the width of the word and move every edge's endpoint off the port
-   it is drawn at. */
+   it is drawn at.
+
+   #1394 — a CHIP, not bare text. The word sits past the node's right edge, in
+   the gap where the next node may be, and bare muted text drawn over a
+   neighbour's card read as part of that card. An opaque ground and a border
+   make it one small object on top of whatever it crosses; the node it belongs
+   to is lifted above its neighbours while it shows (below), because each React
+   Flow node is its own stacking context and a later sibling would otherwise
+   paint over the chip. There is no collision-avoiding placement: the chip is
+   drawn ABOVE a neighbour, not moved around it. */
 .flow-port-label {
   position: absolute;
   left: calc(100% + 0.6rem);
@@ -2235,36 +2245,67 @@ td button + button {
   transform: translateY(-50%);
   opacity: 0;
   transition: opacity 80ms ease-in;
-  color: var(--muted);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
   font-size: 0.62rem;
-  line-height: 1;
+  line-height: 1.2;
   letter-spacing: 0.01em;
-  max-width: 4rem;
+  /* Wider than the bare word's old 4rem by the chip's padding and border, so
+     `completion` and a short switch case still fit whole. */
+  max-width: 6rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
 }
 
-/* Hover OR keyboard focus, and the two arms are deliberately symmetrical across
-   both node kinds: a container shipped with `:hover` alone, so tabbing onto its
-   outcome ports revealed nothing while doing the same on an activity revealed
-   the labels. A reveal that only answers a pointer is a control a keyboard user
-   cannot see at all. */
-/* #997 moved the ACTIVITY arms from `:hover` to the fan state, so the words and
-   the dots arrive together — a label revealed by raw hover while the port it
-   names was still collapsed at the middle would point at nothing. #1066 brought
-   the CONTAINER onto the same state, which finally makes the symmetry above a
-   fact rather than an intention: ONE arm, the same for both kinds, and the
-   keyboard is answered inside `useNodeFan` (which listens for `focusin` on the
-   wrapper React Flow owns) rather than by a second selector here.
+/* AFTER the rule above, not in the handle's reduced-motion block further up: the
+   two selectors have equal specificity, so an earlier override loses to the
+   later `transition` and the chip would still fade. */
+@media (prefers-reduced-motion: reduce) {
+  .flow-port-label {
+    transition: none;
+  }
+}
 
-   The `:hover`/`:focus-within`/`:focus-visible` arms this replaces are gone
-   deliberately. Each of them could reveal a WORD while the port it names was
-   still collapsed at the middle — a label pointing at nothing — because none of
-   them is the state the dots are drawn from. */
-[data-ports-expanded='true'] .flow-port-label {
+/* #1394 — WHICH words show. The operator's report was a selected node's whole
+   column of words spilling over its neighbours: every label used to follow the
+   fan, and clicking a node focuses it, which holds the fan open. So:
+
+   - a POINTER names one port, the one under it. The `::after` hit target is
+     part of the handle, so hovering anywhere in a port's share of the column
+     counts;
+   - a KEYBOARD names them all. React Flow gives a handle no tab stop, so there
+     is no single port a keyboard user can be "on"; `useNodeFan` sets
+     `data-ports-named` only when focus ARRIVED by keyboard, so a click never
+     does. It is decided there, not by a `:focus-visible` selector here, because
+     a clicked node matches `:focus-visible` once a key is pressed, so the
+     selector cannot tell a nudged node from a tabbed one.
+
+   Both arms stay behind `data-ports-expanded`, the state the dots are drawn
+   from, so a word never shows while the port it names is still collapsed at
+   the middle (#997). The accessible name carries every label at all times, so
+   a screen reader never depended on any of this. TOUCH loses the words: a tap
+   used to show the column because it focused the node, and it no longer does,
+   since a tap is a pointer arrival. The panel's outcome picker names every
+   outcome, and the canvas words were never the only place they are said. */
+[data-ports-expanded='true'] .flow-port.react-flow__handle:hover + .flow-port-label,
+[data-ports-expanded='true'][data-ports-named='true'] .flow-port-label {
   opacity: 1;
+}
+
+/* The lift the chip needs, for an ACTIVITY only. React Flow writes each node's
+   `z-index` inline, which is why this needs `!important`, and it is held only
+   while a word is showing. The number only has to clear React Flow's own
+   selected-node elevation (+1000), so the node being read sits above a selected
+   neighbour too. A container is NOT lifted: raising its box would
+   paint it over its own children. */
+.react-flow__node:has(> .flow-node[data-ports-expanded='true'] .flow-port:hover),
+.react-flow__node:has(> .flow-node[data-ports-expanded='true'][data-ports-named='true']) {
+  z-index: 10000 !important;
 }
 
 /* U21 — React Flow draws a rect over the bounding box of a multi-selection
