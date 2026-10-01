@@ -101,7 +101,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       url: presented(singleLine(z.string()).min(1), {
         title: 'URL',
-        description: 'The address to call, joined to the connection\'s base URL when it is relative.',
+        description:
+          "The address to call, joined to the connection's base URL when it is relative.",
       }),
       method: presented(singleLine(z.string()).optional(), {
         title: 'HTTP method',
@@ -318,7 +319,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       }),
       predicate: presented(z.string().min(1), {
         title: 'Keep when',
-        description: 'A whole ${} expression over item. The items it is true for are kept, in order.',
+        description:
+          'A whole ${} expression over item. The items it is true for are kept, in order.',
       }),
     }),
   },

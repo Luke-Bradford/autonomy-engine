@@ -124,10 +124,15 @@ test.describe('U7 — per-activity node config form', () => {
     await canvasNodes(page).first().click();
     const url = properties(page).getByRole('textbox', { name: 'URL', exact: true });
     await expect(url).toHaveAccessibleDescription(/\burl\b/);
-    await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(0);
+    await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(
+      0,
+    );
 
     await canvasNodes(page).nth(1).click();
-    const seconds = properties(page).getByRole('textbox', { name: 'Wait time (seconds)', exact: true });
+    const seconds = properties(page).getByRole('textbox', {
+      name: 'Wait time (seconds)',
+      exact: true,
+    });
     await expect(seconds).toHaveValue('${30}');
     await expect(seconds).toHaveAccessibleDescription(/e\.g\. \$\{30\}.*\bseconds\b/);
     await expectQuiet(page, problems);

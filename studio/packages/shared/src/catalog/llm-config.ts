@@ -692,7 +692,7 @@ export const llmCallConfigSchema = z
     /** Overrides the connection's default model for this node. */
     model: presented(singleLine(z.string()).optional(), {
       title: 'Model',
-      description: 'Overrides the connection\'s default model for this step.',
+      description: "Overrides the connection's default model for this step.",
     }),
     maxTokens: presented(z.number().int().positive().optional(), {
       title: 'Max output tokens',
@@ -788,7 +788,8 @@ export const llmCallConfigSchema = z
     // reference flyout, and does not check that text against this array type.
     history: presented(authoredAsExpression(z.array(llmMessageSchema)).optional(), {
       title: 'History',
-      description: 'A whole ${} expression giving earlier turns, e.g. another step\'s messages output.',
+      description:
+        "A whole ${} expression giving earlier turns, e.g. another step's messages output.",
     }),
     // L12 transcript opt-in — lowers an extra `{messages, json}` output row at
     // save (`catalog/lower.ts::lowerLlmEmitMessages`); the executor then augments
@@ -818,7 +819,8 @@ export const llmCallConfigSchema = z
     // tools once per tool-loop round (#605).
     capture: presented(llmCaptureModeSchema.optional(), {
       title: 'Capture level',
-      description: 'metadata keeps lengths and hashes; full also keeps the text. Defaults to metadata.',
+      description:
+        'metadata keeps lengths and hashes; full also keeps the text. Defaults to metadata.',
     }),
     // #605 — record the model's REASONING summary on each `activity.captured`
     // (its `reasoning` field). OFF unless set, and only with `capture: 'full'`
@@ -835,7 +837,7 @@ export const llmCallConfigSchema = z
     // text) and an `agent_cli`-bound node. Ollama records `message.thinking`.
     captureReasoning: presented(z.boolean().optional(), {
       title: 'Capture reasoning trace',
-      description: 'Also records the model\'s reasoning summary. Needs Capture level full.',
+      description: "Also records the model's reasoning summary. Needs Capture level full.",
     }),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {

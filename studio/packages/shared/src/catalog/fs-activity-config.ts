@@ -5,7 +5,7 @@ import { presented, singleLine } from '../schemas/field-presentation.js';
 // returns a fresh instance), so no two activities share a tagged schema.
 const filePath = (title: string, description: string) =>
   presented(singleLine(z.string()).min(1), { title, description });
-const IN_ROOTS = 'Must sit inside one of the connection\'s allowed folders.';
+const IN_ROOTS = "Must sit inside one of the connection's allowed folders.";
 
 /**
  * #4 A11/A12 — the `fs` connector activities' input/config schemas. This is the
@@ -27,7 +27,10 @@ export const fileReadConfigSchema = z.object({ path: filePath('File path', IN_RO
 /** `file_write`: a `path` plus the UTF-8 text `content` to write. */
 export const fileWriteConfigSchema = z.object({
   path: filePath('File path', IN_ROOTS),
-  content: presented(z.string(), { title: 'Content', description: 'The text written to the file.' }),
+  content: presented(z.string(), {
+    title: 'Content',
+    description: 'The text written to the file.',
+  }),
 });
 
 /** `file_copy`: a `source` and a `dest`, both non-empty. */

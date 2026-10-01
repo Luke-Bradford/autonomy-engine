@@ -31,13 +31,13 @@ export const agentTaskConfigSchema = z.object({
   }),
   cwd: presented(singleLine(z.string()).optional(), {
     title: 'Working directory',
-    description: 'Where the agent runs. Overrides the connection\'s working directory.',
+    description: "Where the agent runs. Overrides the connection's working directory.",
   }),
   // Titled on the `.optional()` wrapper, never on `llmOutputSchemaSchema`
   // itself: the form matches that instance by identity, and `llm_call` shares it.
   outputSchema: presented(llmOutputSchemaSchema.optional(), {
     title: 'Output schema',
-    description: 'The shape the agent\'s answer must take, as named typed fields.',
+    description: "The shape the agent's answer must take, as named typed fields.",
   }),
 });
 

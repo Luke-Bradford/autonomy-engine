@@ -750,7 +750,7 @@ export const ContainerSchema = z.object({
   /** `${}` boolean over child outputs; evaluated only when a round is terminal. Loop only. */
   exitWhen: presented(z.string().optional(), {
     title: 'Exit when',
-    description: 'A whole ${} expression over the body\'s outputs, checked after each round.',
+    description: "A whole ${} expression over the body's outputs, checked after each round.",
   }),
   /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
   maxRounds: presented(z.number().int().positive().optional(), {
@@ -784,7 +784,8 @@ export const ContainerSchema = z.object({
    */
   items: presented(z.string().optional(), {
     title: 'Items',
-    description: 'A whole ${} expression giving the array to go through. Inside the box, item is the current element.',
+    description:
+      'A whole ${} expression giving the array to go through. Inside the box, item is the current element.',
   }),
   /**
    * #4 A4b (#566 slice 2) — foreach-only PARALLEL item cap: how many items may be

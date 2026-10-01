@@ -98,7 +98,10 @@ export function ParamOverridesEditor({
               <select id={id} value={picked} onChange={(e) => setChoice(e.target.value)}>
                 {addable.map((key) => (
                   <option key={key} value={key}>
-                    {overrideLabel(resource?.fields.find((f) => f.name === key), key)}
+                    {overrideLabel(
+                      resource?.fields.find((f) => f.name === key),
+                      key,
+                    )}
                   </option>
                 ))}
               </select>

@@ -266,7 +266,8 @@ const copyInputShape = <T extends z.ZodType>(mapping: T) =>
     mapping,
     mode: presented(z.enum(['append', 'overwrite']).default('append'), {
       title: 'Write mode',
-      description: 'append adds the rows; overwrite replaces what the sink holds. Defaults to append.',
+      description:
+        'append adds the rows; overwrite replaces what the sink holds. Defaults to append.',
     }),
   });
 
