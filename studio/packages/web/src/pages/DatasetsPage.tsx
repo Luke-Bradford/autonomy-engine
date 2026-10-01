@@ -52,9 +52,8 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
-import { useDrawerForm } from '../lib/form/useDrawerForm';
-import { type UnsavedChangesGuard } from '../lib/form/useUnsavedChangesGuard';
-import { OverridableKeysField } from './OverridableKeysField';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = DATASET_KINDS;
@@ -310,9 +309,9 @@ export function DatasetsPage() {
     setForm,
     openForm,
     seq: formSeq,
-    isLatest,
     guard,
     openerRef,
+    ...drawer
   } = useDrawerForm(savePayloadSignature);
   const guardedLoad = useGuardedLoad();
 
@@ -396,13 +395,7 @@ export function DatasetsPage() {
         <h2 id="datasets-heading">Datasets</h2>
         <button
           type="button"
-          onClick={(e) => {
-            const opener = e.currentTarget;
-            guard.request(() => {
-              openerRef.current = opener;
-              openForm(blankForm(connections));
-            });
-          }}
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm(connections)))}
         >
           New dataset
         </button>
@@ -461,13 +454,9 @@ export function DatasetsPage() {
                     <td>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          const opener = e.currentTarget;
-                          guard.request(() => {
-                            openerRef.current = opener;
-                            openForm(formForEdit(dataset));
-                          });
-                        }}
+                        onClick={(e) =>
+                          drawer.openFrom(e.currentTarget, () => openForm(formForEdit(dataset)))
+                        }
                         aria-label={`Edit ${dataset.name}`}
                       >
                         Edit
@@ -506,9 +495,9 @@ export function DatasetsPage() {
             onChange={setForm}
             guard={guard}
             returnFocusTo={openerRef}
-            onClose={() => guard.request(() => setForm(null))}
+            onClose={drawer.requestClose}
             onSaved={async () => {
-              if (isLatest(formSeq)) setForm(null);
+              drawer.closeIfLatest(formSeq);
               await refresh();
             }}
           />
@@ -906,9 +895,8 @@ function DatasetForm({
               one form under one word. */}
           {form.kind === 'query' && (
             <p className="page-hint">
-              Bind values (<code>parameters</code>) are the values for the statement’s{' '}
-              <code>:param</code>s. Whether a step may override them per run is the “Overridable per
-              node” setting under Advanced.
+              Whether a step may override the Bind values per run is the “Overridable per node”
+              setting under Advanced.
             </p>
           )}
         </ConfigEditor>
@@ -942,19 +930,12 @@ function DatasetForm({
         </p>
       </FormSection>
 
-      <FormSection
-        title="Advanced"
-        collapsible
-        // Open when the row already uses it, so its state is never hidden.
-        defaultOpen={form.parametersSeed.length > 0}
-      >
-        <OverridableKeysField
-          subject={datasetAllowlistSubject(form.kind)}
-          seed={form.parametersSeed}
-          value={form.parameters}
-          onChange={(parameters) => onChange({ ...form, parameters })}
-        />
-      </FormSection>
+      <OverridableKeysSection
+        subject={datasetAllowlistSubject(form.kind)}
+        seed={form.parametersSeed}
+        value={form.parameters}
+        onChange={(parameters) => onChange({ ...form, parameters })}
+      />
     </FormDrawer>
   );
 }

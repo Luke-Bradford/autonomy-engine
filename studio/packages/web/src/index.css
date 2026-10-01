@@ -10,6 +10,11 @@
  * mode.
  */
 :root {
+  /* #1396 — the page's reading width, and the form drawer that opens beside a
+     list. Shared so the widened page below stays the sum of the two. */
+  --content-max-width: 900px;
+  --drawer-width: 460px;
+  --drawer-gap: 1.25rem;
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e222b;
@@ -829,7 +834,7 @@ body {
 
 .content {
   padding: 1.5rem 2rem;
-  max-width: 900px;
+  max-width: var(--content-max-width);
   /* The shell is viewport-height, so this is the element that scrolls. No
      explicit minimums: a grid item's automatic minimum only applies while its
      overflow is `visible`, and setting `overflow-y` computes `overflow-x` to
@@ -1151,8 +1156,8 @@ td button + button {
    COLUMN, not an overlay, so the list's row actions stay reachable. */
 .drawer-layout-open {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
-  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, var(--drawer-width));
+  gap: var(--drawer-gap);
   align-items: start;
 }
 
@@ -1161,13 +1166,17 @@ td button + button {
    list (Datasets) otherwise ran under the drawer, which then covered its Edit
    buttons. `.content` is left-aligned, so the list does not move. */
 .content:has(.drawer-layout-open) {
-  max-width: calc(900px + 460px + 1.25rem);
+  max-width: calc(var(--content-max-width) + var(--drawer-width) + var(--drawer-gap));
 }
 
 /* Where even that is too narrow, the list scrolls inside its own column rather
-   than running under the drawer. */
+   than running under the drawer. A scroll container clips at its padding
+   edge, so a few pixels of padding (cancelled by the margin) keep the focus
+   ring of a button at the list's edge in view. */
 .drawer-layout-open > :first-child {
   overflow-x: auto;
+  padding: 4px;
+  margin: -4px;
 }
 
 /* Narrow screens stack the drawer under the list. */

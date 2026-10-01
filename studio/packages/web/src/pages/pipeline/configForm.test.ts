@@ -23,8 +23,10 @@ import {
   formatFieldValue,
   parseConfigText,
   parseFieldInput,
+  payloadSignature,
   placeRowCandidate,
   readConfigDraft,
+  saveableConfigOf,
   schemaPrecheckCandidate,
   seedFieldInputs,
   unrepresentableFields,
@@ -1598,5 +1600,39 @@ describe('deriveConfigFields — human labels (#1396)', () => {
       { title: 'Outer', unit: 'ms' },
       undefined,
     ]);
+  });
+});
+
+describe('saveableConfigOf / payloadSignature (#1396)', () => {
+  const schema = z.object({ path: z.string().optional() });
+  const fieldsFor = () => ({ fields: deriveConfigFields(schema) ?? [], carried: [] });
+  const draft = (over: Partial<ConfigDraft<'k'>> = {}): ConfigDraft<'k'> => ({
+    kind: 'k',
+    config: { path: 'a' },
+    inputs: { path: 'b' },
+    jsonText: '{"path":"c"}',
+    jsonMode: false,
+    ...over,
+  });
+
+  it('reads the fields draft when the fields are showing', () => {
+    expect(saveableConfigOf(draft(), fieldsFor)).toEqual({ path: 'b' });
+  });
+
+  it('reads the JSON draft when the page forces JSON for the kind', () => {
+    // The operator never asked for JSON, but this kind only shows as JSON, so
+    // an edit there is what Save would write.
+    expect(saveableConfigOf(draft(), fieldsFor, () => true)).toEqual({ path: 'c' });
+  });
+
+  it('keeps an unreadable draft as its raw text, so it never compares clean', () => {
+    expect(saveableConfigOf(draft({ jsonMode: true, jsonText: '{"path":' }), fieldsFor)).toEqual({
+      unreadable: '{"path":',
+    });
+  });
+
+  it('is key-order blind, and still a string for a non-finite number', () => {
+    expect(payloadSignature({ a: 1, b: 2 })).toBe(payloadSignature({ b: 2, a: 1 }));
+    expect(payloadSignature([Number.NaN])).toBe('[null]');
   });
 });

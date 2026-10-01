@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { fieldLabelOf } from '../schemas/field-presentation.js';
+import { isValidDateFormat } from '../datamove/coerce.js';
 import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DATASET_KIND_LABELS, DatasetKindSchema } from '../schemas/dataset.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
@@ -574,6 +575,15 @@ describe('dataset form labels (#1396)', () => {
 
   it.each(DATASET_KINDS)('%s has a display name', (kind) => {
     expect(DATASET_KIND_LABELS[kind]).toMatch(/\S/);
+  });
+
+  // The hint's example is what an operator copies, so it must be a format the
+  // coercion matrix accepts.
+  it.each(['delimited', 'excel'] as const)('the %s date format example is valid', (kind) => {
+    const field = datasetConfigSchema(kind).shape['dateFormat'];
+    const example = /e\.g\. (\S+?)\./.exec(fieldLabelOf(field)?.description ?? '')?.[1];
+    expect(example).toBeDefined();
+    expect(isValidDateFormat(example!)).toBe(true);
   });
 
   it('never tags the shared encoding enum itself', () => {

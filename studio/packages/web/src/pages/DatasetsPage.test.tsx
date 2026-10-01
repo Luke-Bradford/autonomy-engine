@@ -916,7 +916,7 @@ describe('the dataset form drawer (#1396)', () => {
   const prompt = () => screen.queryByRole('alertdialog', { name: 'Unsaved changes' });
   const drawer = () => screen.queryByRole('dialog', { name: /dataset$/ });
 
-  it('opens beside the list, in sections, with the primary action last', async () => {
+  it('opens in sections, with the list still shown and the primary action last', async () => {
     listMock.mockResolvedValue([dataset()]);
     const user = userEvent.setup();
     renderWithDataRouter(<DatasetsPage />);
@@ -1002,6 +1002,39 @@ describe('the dataset form drawer (#1396)', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(prompt()).not.toBeInTheDocument();
     expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it('holds Edit on another row while the open form is dirty', async () => {
+    listMock.mockResolvedValue([dataset(), dataset({ id: 'ds_2', name: 'Returns' })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
+    await user.type(within(form()).getByLabelText('Name'), ' renamed');
+
+    await user.click(screen.getByRole('button', { name: 'Edit Returns' }));
+    expect(prompt()).toBeInTheDocument();
+    expect(within(form()).getByLabelText('Name')).toHaveValue('Orders renamed');
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(within(form()).getByLabelText('Name')).toHaveValue('Returns');
+    expect(prompt()).not.toBeInTheDocument();
+  });
+
+  it('counts a JSON edit on a kind the form only shows as JSON', async () => {
+    unreadableKind = 'excel';
+    listMock.mockResolvedValue([
+      dataset({
+        kind: 'excel',
+        config: { path: '/data/book.xlsx', sheet: 'People', header: true },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    const json = within(form()).getByLabelText('Config (JSON)');
+    await user.clear(json);
+    await pasteInto(user, json, '{"path":"/data/other.xlsx","sheet":"People","header":true}');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
   });
 
   it('holds a route change while dirty, and lets it through on Discard', async () => {

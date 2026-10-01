@@ -52,7 +52,19 @@ export interface DrawerForm<F> {
    * so a held "Edit" that the operator then abandons does not steal it.
    */
   readonly openerRef: RefObject<HTMLElement | null>;
+  /**
+   * Run `open` (which calls `openForm`) from the button the operator pressed,
+   * through the guard: a dirty form asks first, and the opener is recorded only
+   * if the open goes ahead.
+   */
+  readonly openFrom: (opener: HTMLElement, open: () => void) => void;
+  /** Close the form through the guard (Cancel, Close, Escape). */
+  readonly requestClose: () => void;
+  /** After a save: close the form only if it is still the one that saved. */
+  readonly closeIfLatest: (seq: number) => void;
 }
+
+export type { UnsavedChangesGuard };
 
 export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F> {
   const [form, setForm] = useState<F | null>(null);
@@ -78,6 +90,30 @@ export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F
   );
   const guard = useUnsavedChangesGuard(dirty);
   const isLatest = useCallback((s: number) => latestSeq.current === s, []);
+  const { request } = guard;
+  const openFrom = useCallback(
+    (opener: HTMLElement, open: () => void) =>
+      request(() => {
+        openerRef.current = opener;
+        open();
+      }),
+    [request],
+  );
+  const requestClose = useCallback(() => request(() => setForm(null)), [request]);
+  const closeIfLatest = useCallback((s: number) => {
+    if (latestSeq.current === s) setForm(null);
+  }, []);
 
-  return { form, setForm, openForm, seq, isLatest, guard, openerRef };
+  return {
+    form,
+    setForm,
+    openForm,
+    seq,
+    isLatest,
+    guard,
+    openerRef,
+    openFrom,
+    requestClose,
+    closeIfLatest,
+  };
 }

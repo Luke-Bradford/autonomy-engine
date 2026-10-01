@@ -64,9 +64,8 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
-import { useDrawerForm } from '../lib/form/useDrawerForm';
-import { type UnsavedChangesGuard } from '../lib/form/useUnsavedChangesGuard';
-import { OverridableKeysField } from './OverridableKeysField';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = CONNECTION_KINDS;
@@ -175,9 +174,9 @@ export function ConnectionsPage() {
     setForm,
     openForm,
     seq: formSeq,
-    isLatest,
     guard,
     openerRef,
+    ...drawer
   } = useDrawerForm(savePayloadSignature);
   /**
    * #1174 — the datasets bound to the connection being edited, and whether that
@@ -470,13 +469,7 @@ export function ConnectionsPage() {
         <h2 id="connections-heading">Connections</h2>
         <button
           type="button"
-          onClick={(e) => {
-            const opener = e.currentTarget;
-            guard.request(() => {
-              openerRef.current = opener;
-              openForm(blankForm());
-            });
-          }}
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >
           New connection
         </button>
@@ -521,13 +514,7 @@ export function ConnectionsPage() {
                     <td>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          const opener = e.currentTarget;
-                          guard.request(() => {
-                            openerRef.current = opener;
-                            openEditForm(conn);
-                          });
-                        }}
+                        onClick={(e) => drawer.openFrom(e.currentTarget, () => openEditForm(conn))}
                         aria-label={`Edit ${conn.name}`}
                       >
                         Edit
@@ -595,9 +582,9 @@ export function ConnectionsPage() {
             onChange={setForm}
             guard={guard}
             returnFocusTo={openerRef}
-            onClose={() => guard.request(() => setForm(null))}
+            onClose={drawer.requestClose}
             onSaved={async () => {
-              if (isLatest(formSeq)) setForm(null);
+              drawer.closeIfLatest(formSeq);
               await refresh();
             }}
           />
@@ -1032,19 +1019,12 @@ function ConnectionForm({
         </p>
       </FormSection>
 
-      <FormSection
-        title="Advanced"
-        collapsible
-        // Open when the row already uses it, so its state is never hidden.
-        defaultOpen={form.parametersSeed.length > 0}
-      >
-        <OverridableKeysField
-          subject={connectionAllowlistSubject(form.kind)}
-          seed={form.parametersSeed}
-          value={form.parameters}
-          onChange={(parameters) => onChange({ ...form, parameters })}
-        />
-      </FormSection>
+      <OverridableKeysSection
+        subject={connectionAllowlistSubject(form.kind)}
+        seed={form.parametersSeed}
+        value={form.parameters}
+        onChange={(parameters) => onChange({ ...form, parameters })}
+      />
     </FormDrawer>
   );
 }
