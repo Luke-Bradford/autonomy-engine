@@ -402,16 +402,17 @@ export function fnSignature(name: string): string {
 export function formatSignature(name: string, labels?: readonly string[]): string {
   const spec = FUNCTIONS[name];
   if (spec === undefined) throw new Error(`fnSignature: '${name}' is not in the catalog`);
-  const arg = (i: number) => {
+  // The `?` goes on the label when there is one (`length?: number`), else on
+  // the type (`number?`).
+  const arg = (i: number, optional = false) => {
     const t = spec.args[i] as SigType;
-    return labels === undefined ? t : `${labels[i]}: ${t}`;
+    const mark = optional ? '?' : '';
+    return labels === undefined ? `${t}${mark}` : `${labels[i]}${mark}: ${t}`;
   };
   const last = spec.args.length - 1;
   const fixed = spec.variadic ? last : spec.args.length;
   const parts: string[] = [];
-  for (let i = 0; i < fixed; i += 1) {
-    parts.push(i < spec.minArgs ? arg(i) : arg(i).replace(/^(\w+)/, '$1?'));
-  }
+  for (let i = 0; i < fixed; i += 1) parts.push(arg(i, i >= spec.minArgs));
   if (spec.variadic) {
     for (let i = fixed; i < spec.minArgs; i += 1) parts.push(arg(last));
     parts.push(`...${arg(last)}`);

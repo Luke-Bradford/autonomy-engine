@@ -1,5 +1,4 @@
 import { FUNCTIONS, formatSignature } from './functions.js';
-import type { SigType } from './functions.js';
 
 /**
  * #1413 OR22 — what each expression function does, in words an author can act
@@ -113,7 +112,7 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: "split('a,b,c', ',')", result: ['a', 'b', 'c'] }],
   },
   trim: {
-    description: 'Removes spaces, tabs and line breaks from both ends of a string.',
+    description: 'Removes whitespace from both ends of a string.',
     params: ['text'],
     examples: [{ expr: "trim('  hello  ')", result: 'hello' }],
   },
@@ -157,7 +156,7 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   },
   slug: {
     description:
-      'Turns a value into lower-case letters, digits and dashes, safe for file names and ids.',
+      'Turns a value into lower-case ASCII letters, digits and dashes for file names and ids; empty text becomes x.',
     params: ['value'],
     examples: [{ expr: "slug('Q3 Sales Report!')", result: 'q3-sales-report' }],
   },
@@ -212,7 +211,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: "join(createArray('a', 'b', 'c'), ', ')", result: 'a, b, c' }],
   },
   intersection: {
-    description: 'Returns the items that appear in every array given, each once.',
+    description:
+      'Returns the items of the first array that also appear in every other array, in their original order.',
     params: ['array'],
     examples: [
       { expr: 'intersection(createArray(1, 2, 3), createArray(2, 3, 4))', result: [2, 3] },
@@ -230,7 +230,7 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   },
   range: {
     description:
-      'Builds an array of consecutive whole numbers from a start value, with the given count.',
+      'Builds an array of numbers counting up by one from a start value, with the given count.',
     params: ['start', 'count'],
     examples: [{ expr: 'range(1, 3)', result: [1, 2, 3] }],
   },
@@ -377,33 +377,34 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   addDays: {
-    description: 'Adds a number of days to a timestamp; a negative number goes back.',
+    description: 'Adds a whole number of days to a timestamp; a negative number goes back.',
     params: ['timestamp', 'days'],
     examples: [{ expr: "addDays('2026-03-05T00:00:00Z', 1)", result: '2026-03-06T00:00:00.000Z' }],
   },
   addHours: {
-    description: 'Adds a number of hours to a timestamp; a negative number goes back.',
+    description: 'Adds a whole number of hours to a timestamp; a negative number goes back.',
     params: ['timestamp', 'hours'],
     examples: [
       { expr: "addHours('2026-03-05T00:00:00Z', -2)", result: '2026-03-04T22:00:00.000Z' },
     ],
   },
   addMinutes: {
-    description: 'Adds a number of minutes to a timestamp; a negative number goes back.',
+    description: 'Adds a whole number of minutes to a timestamp; a negative number goes back.',
     params: ['timestamp', 'minutes'],
     examples: [
       { expr: "addMinutes('2026-03-05T00:00:00Z', 90)", result: '2026-03-05T01:30:00.000Z' },
     ],
   },
   addSeconds: {
-    description: 'Adds a number of seconds to a timestamp; a negative number goes back.',
+    description: 'Adds a whole number of seconds to a timestamp; a negative number goes back.',
     params: ['timestamp', 'seconds'],
     examples: [
       { expr: "addSeconds('2026-03-05T00:00:00Z', 30)", result: '2026-03-05T00:00:30.000Z' },
     ],
   },
   addToTime: {
-    description: 'Adds an amount of Second, Minute, Hour, Day, Week, Month or Year to a timestamp.',
+    description:
+      'Adds a whole number of Second, Minute, Hour, Day, Week, Month or Year (case-sensitive) to a timestamp.',
     params: ['timestamp', 'interval', 'unit'],
     examples: [
       { expr: "addToTime('2026-01-31T00:00:00Z', 1, 'Month')", result: '2026-02-28T00:00:00.000Z' },
@@ -411,7 +412,7 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   },
   subtractFromTime: {
     description:
-      'Subtracts an amount of Second, Minute, Hour, Day, Week, Month or Year from a timestamp.',
+      'Subtracts a whole number of Second, Minute, Hour, Day, Week, Month or Year from a timestamp.',
     params: ['timestamp', 'interval', 'unit'],
     examples: [
       {
@@ -452,24 +453,24 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
 /** One catalog function as the help text shows it (#1413). */
 export type FunctionDoc = {
   description: string;
-  /** `substring(text: string, start: number, length?: number) → string`. */
+  /**
+   * `substring(text: string, start: number, length?: number) → string` — the
+   * return type is its `→` tail.
+   */
   signature: string;
-  returns: SigType;
-  /** The first example as `call → result`, the result printed as JSON. */
-  example: string;
+  /** Each example as `call → result`, the result printed as JSON. */
+  examples: string[];
 };
 
 export function functionDoc(name: string): FunctionDoc {
-  const doc = FUNCTION_DOCS[name];
-  const spec = FUNCTIONS[name];
-  if (doc === undefined || spec === undefined) {
+  // Own keys only: a plain lookup would find `constructor` on both records.
+  if (!Object.hasOwn(FUNCTION_DOCS, name) || !Object.hasOwn(FUNCTIONS, name)) {
     throw new Error(`functionDoc: '${name}' is not in the catalog`);
   }
-  const first = doc.examples[0]!;
+  const doc = FUNCTION_DOCS[name] as FnDocEntry;
   return {
     description: doc.description,
     signature: formatSignature(name, doc.params),
-    returns: spec.ret,
-    example: `${first.expr} → ${JSON.stringify(first.result)}`,
+    examples: doc.examples.map(({ expr, result }) => `${expr} → ${JSON.stringify(result)}`),
   };
 }

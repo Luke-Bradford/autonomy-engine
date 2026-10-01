@@ -13,12 +13,12 @@ export type FieldOptions = { mode: InsertMode; suggestions: RefSuggestion[] };
 
 /**
  * One catalog function as the flyout lists it (#864), with its help text
- * (#1413): the signature names each parameter, and the description and one
- * example say what it does.
+ * (#1413): the signature names each parameter and ends in the return type, and
+ * the description and examples say what it does.
  */
 export type FunctionOption = { name: string } & Pick<
   FunctionDoc,
-  'signature' | 'description' | 'example'
+  'signature' | 'description' | 'examples'
 >;
 
 /**
@@ -184,19 +184,21 @@ export function ExpressionPicker({
                 Wraps the expression at the cursor in {fieldName} — or the part of it you selected.
               </p>
               <ul>
-                {functions.functions.map(({ name, signature, description, example }) => (
+                {functions.functions.map(({ name, signature, description, examples }) => (
                   <li key={name}>
                     <button
                       type="button"
                       // The signature already begins with the name, so it is
                       // the whole accessible name — the two spans read back to
                       // back would say the name twice. It is the NAMED
-                      // signature the row shows, so the visible label stays
-                      // inside the accessible name.
+                      // signature, the same text as the row's signature line.
                       aria-label={signature}
-                      // What it does and an example are the description, read
-                      // after the name rather than folded into it.
-                      aria-describedby={`${fnListId}-${name}-desc ${fnListId}-${name}-ex`}
+                      // What it does and its examples are the description,
+                      // read after the name rather than folded into it.
+                      aria-describedby={[
+                        `${fnListId}-${name}-desc`,
+                        ...examples.map((_, i) => `${fnListId}-${name}-ex${i}`),
+                      ].join(' ')}
                       onClick={() => {
                         functions.apply(name);
                         close();
@@ -205,9 +207,15 @@ export function ExpressionPicker({
                       <span className="expression-picker-name">{name}</span>
                       <span className="expression-picker-type">{signature}</span>
                       <span id={`${fnListId}-${name}-desc`}>{description}</span>
-                      <span id={`${fnListId}-${name}-ex`} className="expression-picker-type">
-                        Example: {example}
-                      </span>
+                      {examples.map((example, i) => (
+                        <span
+                          key={example}
+                          id={`${fnListId}-${name}-ex${i}`}
+                          className="expression-picker-type"
+                        >
+                          Example: {example}
+                        </span>
+                      ))}
                     </button>
                   </li>
                 ))}

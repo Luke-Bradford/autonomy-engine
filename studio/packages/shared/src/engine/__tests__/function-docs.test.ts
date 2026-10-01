@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectOneSentence } from '../../__tests__/helpers/description.js';
 import type { SubstitutionContext } from '../types.js';
 import { FUNCTIONS, fnSignature, listFunctions } from '../functions.js';
 import { FUNCTION_DOCS, functionDoc } from '../functionDocs.js';
@@ -29,11 +30,7 @@ describe('function docs (#1413)', () => {
   });
 
   it.each(names)('%s has a one-sentence description', (name) => {
-    const { description } = FUNCTION_DOCS[name]!;
-    // ONE sentence: ends in a full stop and has no sentence break before it —
-    // so it is not blank and not a paragraph.
-    expect(description).toMatch(/^[^.!?]+\.$/);
-    expect(description.length).toBeLessThanOrEqual(120);
+    expectOneSentence(FUNCTION_DOCS[name]!.description);
   });
 
   it('no two functions share a description', () => {
@@ -84,12 +81,17 @@ describe('function docs (#1413)', () => {
     }
   });
 
-  it('formats an example as call → JSON result', () => {
-    expect(functionDoc('toUpper').example).toBe('toUpper(\'hello\') → "HELLO"');
-    expect(functionDoc('toUpper').returns).toBe('string');
+  it('formats each example as call → JSON result', () => {
+    expect(functionDoc('toUpper').examples).toEqual(['toUpper(\'hello\') → "HELLO"']);
+    expect(functionDoc('equals').examples).toEqual([
+      "equals('a', 'a') → true",
+      "equals(1, '1') → false",
+    ]);
   });
 
   it('refuses a name outside the catalog', () => {
     expect(() => functionDoc('nope')).toThrow(/not in the catalog/);
+    // An inherited key is not a catalog entry either.
+    expect(() => functionDoc('constructor')).toThrow(/not in the catalog/);
   });
 });
