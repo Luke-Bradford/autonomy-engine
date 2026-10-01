@@ -1736,3 +1736,95 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
     expect(panel.storedConfig()).toMatchObject({ url: 'https://api.test/?n=${params.limit}&x=1' });
   });
 });
+
+describe('NodePanel — sections on the Settings tab (#1396)', () => {
+  const section = (name: string) => screen.getByRole('group', { name });
+  const httpConn = {
+    id: 'c_http',
+    name: 'Service',
+    kind: 'http',
+    config: {},
+    parameters: [],
+    secretStatus: 'not_required',
+    ownerId: null,
+    resourceId: 'r_c_http',
+    secretRef: null,
+    createdAt: 0,
+    updatedAt: 0,
+  } as unknown as Parameters<typeof NodePanel>[0]['connections'][number];
+
+  it('groups bindings, container and the activity settings, in that order', () => {
+    mountOver({ ...httpNode({ url: 'https://example.test' }), connectionId: 'c_http' }, [httpConn]);
+    const bindings = section('Bindings');
+    const container = section('Container');
+    const settings = section('Activity settings');
+    expect(within(bindings).getByRole('combobox', { name: 'Connection' })).toBeTruthy();
+    expect(within(bindings).getByRole('group', { name: 'Connection overrides' })).toBeTruthy();
+    expect(within(container).getByRole('combobox', { name: 'Container membership' })).toBeTruthy();
+    expect(within(settings).getByRole('group', { name: 'Config' })).toBeTruthy();
+    expect(within(settings).getByRole('textbox', { name: /Request URL/ })).toBeTruthy();
+    // Document order: what the step reads from, where it sits, what it does.
+    expect(bindings.compareDocumentPosition(container) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
+      document.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(container.compareDocumentPosition(settings) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
+      document.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // The actions act on the whole node, so they sit after every section.
+    for (const name of ['Apply config', 'Duplicate node', 'Delete node']) {
+      const button = screen.getByRole('button', { name });
+      expect(settings.compareDocumentPosition(button) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
+        document.DOCUMENT_POSITION_FOLLOWING,
+      );
+      for (const s of [bindings, container, settings]) expect(s.contains(button)).toBe(false);
+    }
+  });
+
+  it('puts a paired activity’s four pickers in Bindings', () => {
+    mountOver(node('n_copy', 'copy', {}));
+    const bindings = section('Bindings');
+    for (const label of [
+      'Source connection',
+      'Sink connection',
+      'Source dataset',
+      'Sink dataset',
+    ]) {
+      expect(within(bindings).getByRole('combobox', { name: label })).toBeTruthy();
+    }
+  });
+
+  it('puts a dataset picker in Bindings for an unpaired activity', () => {
+    mountOver(node('n_look', 'lookup', {}));
+    expect(
+      within(section('Bindings')).getByRole('combobox', { name: 'Source dataset' }),
+    ).toBeTruthy();
+  });
+
+  it('has no Bindings section for an activity that binds nothing', () => {
+    mountOver(node('n_wait', 'wait', {}));
+    expect(screen.queryByRole('group', { name: 'Bindings' })).toBeNull();
+    expect(section('Container')).toBeTruthy();
+    expect(section('Activity settings')).toBeTruthy();
+  });
+
+  it('gives a call node’s panel a Container section', () => {
+    render(
+      <NodePanel
+        store={createCanvasStore()}
+        connections={[]}
+        datasets={[]}
+        nodeId="n_ep"
+        nodeType="execute_pipeline"
+        config={{}}
+        connectionId={undefined}
+        call={undefined}
+      />,
+    );
+    // `CallPanel` heads its own parts, so it gets no section around it.
+    expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Activity settings' })).toBeNull();
+    expect(
+      within(section('Container')).getByRole('combobox', { name: 'Container membership' }),
+    ).toBeTruthy();
+  });
+});

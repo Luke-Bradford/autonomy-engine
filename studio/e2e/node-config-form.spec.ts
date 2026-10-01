@@ -140,6 +140,87 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
+  // #1396 — the Settings tab is grouped: what the step binds, the container it
+  // sits in, and what it does. A section after the first is ruled off from it.
+  test('the Settings tab groups bindings, container and the activity settings', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'or5 panel sections', {
+      nodes: [
+        { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+        { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${30}' } },
+      ],
+    });
+    await canvasNodes(page).first().click();
+    const section = (name: string) => properties(page).getByRole('group', { name, exact: true });
+    await expect(section('Bindings').getByRole('combobox', { name: 'Connection' })).toBeVisible();
+    await expect(section('Container').getByLabel('Container membership')).toBeVisible();
+    await expect(
+      section('Activity settings').getByRole('textbox', { name: 'Request URL', exact: true }),
+    ).toBeVisible();
+
+    // One read of every computed value. The rule is on each later section's
+    // HEADING; the section body keeps the panel's own gap; the activity's fields
+    // start right under their heading.
+    const layout = await properties(page).evaluate((panel) => {
+      const sections = [...panel.querySelectorAll<HTMLElement>('fieldset.form-section')];
+      return {
+        panelGap: getComputedStyle(panel).rowGap,
+        sections: sections.map((el) => {
+          const legend = el.querySelector<HTMLElement>(':scope > legend')!;
+          return {
+            title: legend.textContent,
+            fieldsetBorder: getComputedStyle(el).borderTopWidth,
+            ruled: getComputedStyle(legend).borderTopWidth,
+            // Asked only of a ruled heading: an unruled one may be its text's width.
+            ruleSpansSection:
+              getComputedStyle(legend).borderTopWidth === '0px'
+                ? null
+                : Math.abs(
+                    legend.getBoundingClientRect().width - el.getBoundingClientRect().width,
+                  ) < 1,
+            gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
+          };
+        }),
+        configMarginTop: getComputedStyle(
+          panel.querySelector('[role="group"][aria-label="Config"]')!,
+        ).marginTop,
+      };
+    });
+    const { panelGap } = layout;
+    expect(layout.sections).toEqual([
+      {
+        title: 'Bindings',
+        fieldsetBorder: '0px',
+        ruled: '0px',
+        ruleSpansSection: null,
+        gap: panelGap,
+      },
+      {
+        title: 'Container',
+        fieldsetBorder: '0px',
+        ruled: '1px',
+        ruleSpansSection: true,
+        gap: panelGap,
+      },
+      {
+        title: 'Activity settings',
+        fieldsetBorder: '0px',
+        ruled: '1px',
+        ruleSpansSection: true,
+        gap: panelGap,
+      },
+    ]);
+    expect(layout.configMarginTop).toBe('0px');
+
+    // A wait binds nothing, so it has no Bindings section at all.
+    await canvasNodes(page).nth(1).click();
+    await expect(section('Activity settings')).toBeVisible();
+    await expect(section('Bindings')).toHaveCount(0);
+    await expectQuiet(page, problems);
+  });
+
   // #852 item 4 — a field whose SCHEMA is tagged `singleLine` is a one-line
   // input, everything else keeps the textarea, and a stored value holding a
   // line break keeps the textarea too (an input would strip the break).
