@@ -4,7 +4,6 @@ import {
   ConcurrencyPolicySchema,
   TRIGGER_MODE_LABELS,
   TriggerModeSchema,
-  formatZodIssues,
   type ConcurrencyPolicy,
   type EventConfig,
   type Recurrence,
@@ -14,7 +13,7 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { Link } from 'react-router';
-import { ApiError, messageOf } from '../api/client';
+import { messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportTrigger } from '../api/portability';
 import { ImportPanel } from './ImportPanel';
@@ -79,6 +78,17 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
+import { FieldError } from '../lib/form/FieldError';
+import { FormErrors } from '../lib/form/FormErrors';
+import {
+  badInputMessage,
+  fieldAttrs,
+  firstBadInput,
+  nameCheck,
+  useFieldValidation,
+  type FieldErrors,
+} from '../lib/form/fieldValidation';
+import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
 
@@ -744,6 +754,61 @@ export function TriggersPage() {
   );
 }
 
+/** `params` must be a JSON object (`params` is a record); blank means `{}`. */
+export function parseParamsText(
+  text: string,
+): { ok: true; params: Record<string, unknown> } | { ok: false; message: string } {
+  try {
+    const raw: unknown = JSON.parse(text.trim() === '' ? '{}' : text);
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, message: 'Params must be a JSON object, e.g. {"day": "2026-10-01"}.' };
+    }
+    return { ok: true, params: raw as Record<string, unknown> };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Invalid params JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** #1396 — the binding control's field key: the version select, or bind-to-active's pipeline. */
+function bindingKey(form: FormState): string {
+  return form.binding.kind === 'active' ? 'bindToActive.pipelineId' : 'pipelineVersionId';
+}
+
+/**
+ * #1396 — what is wrong with the trigger form's OWN fields now, in the form's
+ * order. The mode editors (recurrence, window, event, run windows) are not
+ * fields of this check: their conversions still refuse with the form's one
+ * message on Save.
+ *
+ * - Name: the write schema's `min(1)`.
+ * - The binding: an enabled trigger must be bound (the server's
+ *   `assertBindableIfEnabled`, mirrored for a message that sits beside the
+ *   select). Bind-to-active counts as bound.
+ * - Max parallel runs: read as Save reads it (`Number`), so `1e2` passes as it
+ *   always has; `0`, `-1`, `1.5` and an empty box are what the input's `min=1`
+ *   and step used to refuse before the form took over its own checks.
+ * - Params: a JSON object.
+ */
+export function triggerChecks(form: FormState): FieldErrors {
+  const out: Record<string, string> = { ...nameCheck(form.name) };
+  if (form.enabled && !bindingIsBound(form.binding)) {
+    out[bindingKey(form)] =
+      'An enabled trigger must be bound to a pipeline version (or disable it).';
+  }
+  if (form.concurrencyPolicy === 'parallel') {
+    const max = Number(form.concurrencyMax);
+    if (form.concurrencyMax.trim() === '' || !Number.isInteger(max) || max < 1) {
+      out['concurrency.max'] = 'Enter a whole number, 1 or more.';
+    }
+  }
+  const params = parseParamsText(form.paramsText);
+  if (!params.ok) out.params = params.message;
+  return out;
+}
+
 function TriggerForm({
   form,
   bindings,
@@ -767,6 +832,35 @@ function TriggerForm({
   const [saving, setSaving] = useState(false);
   const bindingKindId = useId();
   const editing = form.id !== null;
+
+  const checks = useMemo(() => triggerChecks(form), [form]);
+  const labelOf = useCallback(
+    (key: string): string | undefined => {
+      switch (key) {
+        case 'name':
+          return 'Name';
+        case 'pipelineVersionId':
+          return form.binding.kind === 'active' ? undefined : 'Pipeline version';
+        case 'bindToActive.pipelineId':
+          return form.binding.kind === 'active' ? 'Pipeline' : undefined;
+        case 'concurrency.max':
+          return form.concurrencyPolicy === 'parallel' ? 'Max parallel runs' : undefined;
+        case 'params':
+          return 'Params (JSON)';
+        default:
+          return undefined;
+      }
+    },
+    [form.binding.kind, form.concurrencyPolicy],
+  );
+  const validation = useFieldValidation(checks, labelOf);
+  const nameErrorId = useId();
+  const bindingErrorId = useId();
+  const maxErrorId = useId();
+  const paramsErrorId = useId();
+  /** The attributes a control carries for the form's validation. */
+  const checkedBy = (key: string, errorId: string) =>
+    fieldAttrs({ key, error: validation.errorFor(key), errorId });
   /* The version last chosen on the concrete side, so switching to bind-to-active
      and back does not silently discard it. Local to the form: it is undo state
      for a control, not part of what gets written. */
@@ -842,18 +936,26 @@ function TriggerForm({
     event.preventDefault();
     setError(null);
 
-    // params must be a JSON object (`params` is a record).
-    let params: Record<string, unknown>;
-    try {
-      const raw: unknown = JSON.parse(form.paramsText.trim() === '' ? '{}' : form.paramsText);
-      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new Error('params must be a JSON object');
-      }
-      params = raw as Record<string, unknown>;
-    } catch (err) {
-      setError(`Invalid params JSON: ${err instanceof Error ? err.message : String(err)}`);
+    // #1396 — the form checks its own fields (`noValidate`), so the browser no
+    // longer refuses a half-typed date or number. Such a control reads as
+    // blank, and the converters below would quietly drop that bound or cap:
+    // refuse it here, as the browser did.
+    const bad =
+      event.currentTarget instanceof HTMLFormElement ? firstBadInput(event.currentTarget) : null;
+    if (bad !== null) {
+      setError(badInputMessage(bad));
+      bad.focus();
       return;
     }
+    // Every own field that is wrong now is shown beside itself first.
+    if (!validation.attempt()) return;
+
+    const parsedParams = parseParamsText(form.paramsText);
+    if (!parsedParams.ok) {
+      validation.showRefusedFields({ params: parsedParams.message });
+      return;
+    }
+    const params = parsedParams.params;
 
     // #1090 U14c — run windows convert UNCONDITIONALLY, unlike the three
     // mode-owned configs below: a window is not owned by a mode, so a mode
@@ -913,13 +1015,8 @@ function TriggerForm({
       windowConfig = converted.window;
     }
 
-    // Mirror the server's `assertBindableIfEnabled` for a friendlier message
-    // (the server still enforces it). Bind-to-active counts as bound: the route
-    // resolves it to a concrete id BEFORE running that assertion.
-    if (form.enabled && !bindingIsBound(form.binding)) {
-      setError('An enabled trigger must be bound to a pipeline version (or disable it).');
-      return;
-    }
+    // The server's `assertBindableIfEnabled` is mirrored by `triggerChecks`,
+    // beside the binding select, and so is already refused above.
 
     // #981 — the publish precondition, stated where it can still be acted on.
     // Only ever set when the reading SUCCEEDED and said there is nothing to bind
@@ -991,7 +1088,7 @@ function TriggerForm({
       };
       const parsed = TriggerWriteSchema.safeParse(patchBody);
       if (!parsed.success) {
-        setError(formatZodIssues(parsed.error.issues));
+        setError(schemaRefusal(parsed.error.issues, validation));
         return;
       }
       setSaving(true);
@@ -1013,7 +1110,7 @@ function TriggerForm({
         }
         await onSaved();
       } catch (err) {
-        setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+        setError(saveRefusal(err, validation));
         setSaving(false);
       }
       return;
@@ -1022,7 +1119,7 @@ function TriggerForm({
     const createBody: TriggerCreateWrite = { ...common, ...bindingCreateFields(form.binding) };
     const parsedCreate = TriggerCreateSchema.safeParse(createBody);
     if (!parsedCreate.success) {
-      setError(formatZodIssues(parsedCreate.error.issues));
+      setError(schemaRefusal(parsedCreate.error.issues, validation));
       return;
     }
     setSaving(true);
@@ -1030,7 +1127,7 @@ function TriggerForm({
       await createTrigger(parsedCreate.data);
       await onSaved();
     } catch (err) {
-      setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+      setError(saveRefusal(err, validation));
       setSaving(false);
     }
   }
@@ -1045,13 +1142,8 @@ function TriggerForm({
       onSubmit={(e) => void onSubmit(e)}
       busy={saving}
       returnFocusTo={returnFocusTo}
-      status={
-        error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )
-      }
+      validation={validation}
+      status={<FormErrors validation={validation} message={error} />}
       actions={
         <>
           <button type="button" onClick={onClose} disabled={saving}>
@@ -1074,8 +1166,10 @@ function TriggerForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
+            {...checkedBy('name', nameErrorId)}
           />
         </label>
+        <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
         <label className="checkbox">
           <input
@@ -1149,6 +1243,7 @@ function TriggerForm({
                 onChange={(e) =>
                   onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
                 }
+                {...checkedBy('bindToActive.pipelineId', bindingErrorId)}
               >
                 {pipelines.map((p) => (
                   <option key={p.pipelineId} value={p.pipelineId}>
@@ -1174,6 +1269,7 @@ function TriggerForm({
                         : { kind: 'concrete', pipelineVersionId: e.target.value },
                   });
                 }}
+                {...checkedBy('pipelineVersionId', bindingErrorId)}
               >
                 <option value="">— unbound —</option>
                 {bindings.map((b) => (
@@ -1185,6 +1281,7 @@ function TriggerForm({
             )}
           </LabelledControl>
         )}
+        <FieldError id={bindingErrorId} message={validation.errorFor(bindingKey(form))} />
 
         {advice && activePipeline && (
           <p className="page-hint" role="status">
@@ -1365,8 +1462,12 @@ function TriggerForm({
               value={form.concurrencyMax}
               onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
               required
+              {...checkedBy('concurrency.max', maxErrorId)}
             />
           </label>
+        )}
+        {form.concurrencyPolicy === 'parallel' && (
+          <FieldError id={maxErrorId} message={validation.errorFor('concurrency.max')} />
         )}
       </FormSection>
 
@@ -1379,9 +1480,11 @@ function TriggerForm({
               onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
               rows={4}
               spellCheck={false}
+              {...checkedBy('params', paramsErrorId)}
             />
           )}
         </LabelledControl>
+        <FieldError id={paramsErrorId} message={validation.errorFor('params')} />
       </FormSection>
     </FormDrawer>
   );

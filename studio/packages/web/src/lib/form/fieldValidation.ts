@@ -115,6 +115,30 @@ export function nameCheck(name: string): FieldErrors {
   return name === '' ? { name: 'Enter a name.' } : {};
 }
 
+/**
+ * #1396 — the first control holding input the browser could not read: a
+ * half-typed `datetime-local`, or `1e` in a `type="number"`. Such a control's
+ * `value` is `''`, so a form that reads it sees a blank and quietly drops the
+ * setting. The browser's own check refused the submit; a form that takes over
+ * with `noValidate` must refuse it itself, and this is how it finds what to
+ * refuse (`validity` is still kept under `noValidate`).
+ */
+export function firstBadInput(form: HTMLFormElement): HTMLInputElement | null {
+  for (const el of Array.from(form.elements)) {
+    if (el instanceof HTMLInputElement && el.validity.badInput) return el;
+  }
+  return null;
+}
+
+/** What a refusal calls a bad-input control: its label's text, or its kind. */
+export function badInputMessage(control: HTMLInputElement): string {
+  const label = control.labels?.[0]?.textContent?.trim();
+  const what = label === undefined || label === '' ? 'A field' : `“${label}”`;
+  return `${what} holds something that is not a complete ${
+    control.type === 'number' ? 'number' : 'value'
+  }. Finish it or clear it.`;
+}
+
 /** The key of the field an event happened in, if it happened in one. */
 function keyOf(target: EventTarget | null): string | undefined {
   if (!(target instanceof Element)) return undefined;
