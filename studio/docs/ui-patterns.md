@@ -220,6 +220,16 @@ message.
 - What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
   list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
   message cite.
+- **The Settings tab is in three sections** (`FormSection`, not collapsible), in this order:
+  - *Bindings*: the connection or the source and sink pickers, their datasets and their overrides.
+    An activity that binds nothing has no Bindings section.
+  - *Container*: which container the activity is in, and the New container form. Its select reads
+    "Member of", so the heading does not repeat as the label.
+  - *Activity settings*: the activity's own fields, Fields or JSON.
+
+  Apply config, Duplicate node and Delete node act on the whole node and sit after every section.
+  A call node's settings stay as `CallPanel` heads them ("Call target", "Parameters"), followed by
+  the Container section.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.
@@ -227,6 +237,5 @@ message.
 ## Still to come under #1396
 
 - A JSON code editor, kind icons, and a two-column grid on wide screens.
-- Sections on the node panel's Settings tab (bindings, the activity's settings, container).
 - Display names for enum cells inside row lists (message role, output property type).
 - Axe gates on every form (shared with OR24, #1415).
