@@ -372,7 +372,10 @@ describe('DatasetsPage', () => {
     // `table` belongs to the `table` kind, not to `query` — but the stored
     // config holds it, so it is rendered as an optional field and can be blanked away.
     expect(within(form()).getByLabelText('Table')).toHaveValue('orders');
-    expect(within(form()).getByText(/Carried from another kind \(table\)/)).toBeInTheDocument();
+    // #1436 — the kind by its display name, not `query`.
+    expect(within(form()).getByText(/Carried from another kind \(table\)/)).toHaveTextContent(
+      '— SQL query does not use these',
+    );
   });
 
   it('warns when the kind’s own schema refuses the draft, without refusing the save', async () => {
@@ -385,7 +388,9 @@ describe('DatasetsPage', () => {
     // rule (§8) — the operator learns that here, not when a run fails.
     await user.type(within(form()).getByLabelText('Table'), 'order lines');
     expect(
-      await within(form()).findByText(/This table config is incomplete: .*bare SQL identifier/),
+      await within(form()).findByText(
+        /This Database table config is incomplete: .*bare SQL identifier/,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -405,7 +410,7 @@ describe('DatasetsPage', () => {
     expect(within(form()).getByLabelText('Config (JSON)')).toBeInTheDocument();
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
 
-    // The "no reader exists for a …" SENTENCE is deliberately not asserted
+    // The "no reader exists for …" SENTENCE is deliberately not asserted
     // here. It comes from `datasetConfigAdvisory`, which consults
     // `datasetKindIsImplemented` through an intra-module call the seam above
     // cannot reach — and faking that function too would mean asserting the
@@ -602,9 +607,7 @@ describe('DatasetsPage', () => {
     expect(within(form()).getByRole('button', { name: 'Edit as JSON' })).toBeInTheDocument();
     // And no stale advisory: the no-reader note was the reason the form was
     // locked, so it must go with the lock.
-    expect(
-      within(form()).queryByText(/no reader exists for a delimited dataset yet/),
-    ).not.toBeInTheDocument();
+    expect(within(form()).queryByText(/no reader exists/)).not.toBeInTheDocument();
   });
 
   it('opens a NEW dataset on a kind that lives in the store it opens on (#1167)', async () => {
@@ -644,7 +647,7 @@ describe('DatasetsPage', () => {
         // 'sqlite' or 'postgres' since #1190 opened `table` to postgres — the
         // advisory ENUMERATES the map rather than naming one store, so it stays
         // true as the map grows.
-        /dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'http'/,
+        /dataset kind “Database table” lives in a store of kind “SQLite” or “PostgreSQL”, but this one names a connection of kind “HTTP”/,
       ),
     ).toBeInTheDocument();
   });
@@ -701,7 +704,7 @@ describe('DatasetsPage', () => {
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
 
     expect(within(form()).getByText(/Kind and store disagree/)).toHaveTextContent(
-      /dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'anthropic_api'/,
+      'dataset kind “Database table” lives in a store of kind “SQLite” or “PostgreSQL”, but this one names a connection of kind “Anthropic API”',
     );
     // ADVISORY, never a gate: the server accepts this row, so the form must not
     // refuse it. This is the assertion that keeps it from being hardened into a
@@ -920,7 +923,9 @@ describe('DatasetsPage', () => {
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       expect(within(allowlist()).getByLabelText(/^Overridable: table/)).toBeChecked();
       expect(allowlist()).toHaveTextContent('never overridable, so a run refuses it');
-      expect(allowlist()).toHaveTextContent('A table dataset has no settings a node can override.');
+      expect(allowlist()).toHaveTextContent(
+        'Database table datasets have no settings a node can override.',
+      );
     });
 
     it('says a table dataset has nothing overridable instead of drawing an empty list', async () => {
@@ -930,7 +935,9 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(allowlist()).toHaveTextContent('A table dataset has no settings a node can override.');
+      expect(allowlist()).toHaveTextContent(
+        'Database table datasets have no settings a node can override.',
+      );
       expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
     });
   });

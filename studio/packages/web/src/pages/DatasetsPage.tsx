@@ -909,6 +909,7 @@ function DatasetForm({
             can only refuse is furniture. */}
         <ConfigEditor
           editor={editor}
+          kindLabel={DATASET_KIND_LABELS[editor.kind]}
           className="dataset-config"
           rows={6}
           advisory={advisory}

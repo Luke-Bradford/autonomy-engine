@@ -65,7 +65,8 @@ describe('nodeKindAdvisory (#1252)', () => {
       false,
     );
     expect(text).toContain('1 pipeline node (nightly etl › summarise)');
-    expect(text).toContain('fs');
+    // #1436 — the kind as the Kind picker names it.
+    expect(text).toContain('not accept File system connections');
     // The point of #1252: nothing is disabled, so the schedule keeps firing.
     expect(text).toMatch(/stay enabled/);
   });

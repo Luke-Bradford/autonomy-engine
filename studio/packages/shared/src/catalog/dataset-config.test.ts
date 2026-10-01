@@ -511,9 +511,10 @@ describe('datasetConnectionKindAdvisory (#1145)', () => {
     // `routes/datasets.ts` stores today because it checks existence and
     // ownership and nothing else.
     const note = datasetConnectionKindAdvisory('table', 'anthropic_api');
-    expect(note).toContain('table');
-    expect(note).toContain('sqlite');
-    expect(note).toContain('anthropic_api');
+    // #1436 — by the names the form's pickers show, never the stored ids.
+    expect(note).toBe(
+      'dataset kind “Database table” lives in a store of kind “SQLite” or “PostgreSQL”, but this one names a connection of kind “Anthropic API”',
+    );
   });
 
   it('says nothing when no connection is resolved', () => {

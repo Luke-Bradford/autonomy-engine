@@ -1,4 +1,5 @@
 import {
+  CONNECTION_KIND_LABELS,
   DATASET_CONNECTION_KINDS,
   type ConnectionKind,
   type Dataset,
@@ -109,7 +110,7 @@ export function kindChangeAdvisory(check: StrandCheck, nextKind: ConnectionKind)
       // each one careless template away.
       const subject = count === 1 ? '1 dataset that reads it' : `${count} datasets that read it`;
       const tail = count === 1 ? 'it keeps' : 'each keeps';
-      return `Saving this as a ${nextKind} connection strands ${subject} (${formatNameList(check.names)}) — ${tail} pointing here and fails at dispatch until its kind or its store changes.`;
+      return `Saving this connection as kind “${CONNECTION_KIND_LABELS[nextKind]}” strands ${subject} (${formatNameList(check.names)}) — ${tail} pointing here and fails at dispatch until its kind or its store changes.`;
     }
   }
 }

@@ -38,6 +38,14 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
 
     await csv.click();
     await expect(guide).toHaveCount(0);
+    /* #1452 — the clicked button unmounted with the guide. Focus lands on the
+       first inserted activity rather than <body>, and the insert is announced. */
+    const focused = page.locator('.react-flow__node:focus');
+    await expect(focused).toHaveCount(1);
+    await expect(focused).toContainText('List Directory');
+    await expect(
+      page.getByRole('status').filter({ hasText: 'Added Load every CSV in a folder into a table' }),
+    ).toHaveText('Added Load every CSV in a folder into a table: 3 activities and 1 container.');
     // Three activities and the ForEach box around the Copy — all fitted in view.
     await expect(canvasNodes(page)).toHaveCount(4);
     for (const node of await canvasNodes(page).all()) await expect(node).toBeInViewport();

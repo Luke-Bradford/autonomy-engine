@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
-import { ConnectionKindSchema, type ConnectionKind } from '../schemas/connection.js';
+import {
+  CONNECTION_KIND_LABELS,
+  ConnectionKindSchema,
+  type ConnectionKind,
+} from '../schemas/connection.js';
 import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
 
 /**
@@ -735,7 +739,9 @@ export function connectionConfigAdvisory(
       (root): root is string => typeof root === 'string' && !looksAbsolutePath(root),
     );
     if (relative.length > 0) {
-      notes.push(`roots: every ${kind} root must be an absolute path (${relative.join(', ')})`);
+      notes.push(
+        `roots: every ${CONNECTION_KIND_LABELS[kind]} root must be an absolute path (${relative.join(', ')})`,
+      );
     }
   }
 

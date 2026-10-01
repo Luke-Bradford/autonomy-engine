@@ -15,6 +15,7 @@ import { fieldAttrs } from '../../lib/form/fieldValidation';
  */
 export function ConfigEditor<K extends string>({
   editor,
+  kindLabel,
   className,
   rows,
   advisory,
@@ -26,6 +27,11 @@ export function ConfigEditor<K extends string>({
   children,
 }: {
   editor: ConfigEditorState<K>;
+  /**
+   * #1436 — what the page CALLS `editor.kind` ("Database table", an activity's
+   * title), for the sentences below. The identifier is not display copy.
+   */
+  kindLabel: string;
   className: string;
   rows: number;
   advisory: string | null;
@@ -45,7 +51,7 @@ export function ConfigEditor<K extends string>({
   /** Rendered last inside the group, in both modes. */
   children?: ReactNode;
 }) {
-  const { kind, jsonMode, unrenderable, fields, carried } = editor;
+  const { jsonMode, unrenderable, fields, carried } = editor;
   const jsonErrorId = useId();
   const jsonError = errorFor?.('config');
   return (
@@ -110,7 +116,7 @@ export function ConfigEditor<K extends string>({
           {fieldModeExtra}
           {carried.length > 0 && (
             <p className="contract-advisory">
-              {`Carried from another kind (${carried.join(', ')}) — ${kind} ignores these; blank a control to drop the key.`}
+              {`Carried from another kind (${carried.join(', ')}) — ${kindLabel} does not use these; blank a control to drop the key.`}
             </p>
           )}
         </>
@@ -120,7 +126,7 @@ export function ConfigEditor<K extends string>({
           BOTH modes, and the JSON draft is exactly where a kind change can
           leave a config shaped for the previous one. */}
       {advisory !== null && (
-        <p className="contract-advisory">{`This ${kind} config is incomplete: ${advisory}`}</p>
+        <p className="contract-advisory">{`This ${kindLabel} config is incomplete: ${advisory}`}</p>
       )}
 
       {children}

@@ -125,7 +125,9 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
 
     await openEdit(page, '/#/manage/datasets', 'Datasets', tbl);
     await form.locator('summary', { hasText: 'Advanced' }).click();
-    await expect(allowlist).toContainText('A table dataset has no settings a node can override.');
+    await expect(allowlist).toContainText(
+      'Database table datasets have no settings a node can override.',
+    );
     await expect(allowlist.getByRole('checkbox')).toHaveCount(0);
 
     await expectQuiet(page, problems);

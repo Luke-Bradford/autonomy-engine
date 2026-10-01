@@ -11,6 +11,7 @@ import {
   type ParamOverrideViolation,
   type ParamType,
 } from '@autonomy-studio/shared';
+import { kindPlural } from '../../lib/resourceOptionLabel';
 import { deriveConfigFields, type ConfigField, type ConfigFieldKind } from './configForm';
 import { isExpressionText } from './callRules';
 import { coerceDefaultInput } from './paramRules';
@@ -107,7 +108,7 @@ function usableKeys(r: OverrideResource): string[] {
 
 /** The note for a KIND with no overridable settings at all — which no allowlist edit can change. */
 export function noOverridableSettingsNote(kind: string, noun: OverrideResource['noun']): string {
-  return `A ${kind} ${noun} has no settings a node can override.`;
+  return `${kindPlural(kind, noun)} have no settings a node can override.`;
 }
 
 /**
@@ -149,7 +150,7 @@ export function overrideNote(
     return `${r.name} declares no overridable settings, so there is nothing to override here.`;
   }
   if (r.allowlist.some((k) => usable.includes(k))) return null;
-  return `${r.name}'s declared parameters name no setting a ${r.kind} ${r.noun} can override.`;
+  return `${r.name}'s declared parameters name no setting a node can override on ${kindPlural(r.kind, r.noun)}.`;
 }
 
 /**
@@ -204,7 +205,7 @@ export function coerceOverride(field: ConfigField | undefined, text: string): un
 function violationMessage(r: OverrideResource, v: ParamOverrideViolation): string {
   switch (v.reason) {
     case 'non_overridable':
-      return `A ${r.kind} ${r.noun}'s \`${v.key}\` can never be overridden. Remove this row.`;
+      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this row.`;
     case 'undeclared':
       return `${r.name} does not declare \`${v.key}\` as overridable, so a run will refuse it.`;
     case 'secret_marker':
@@ -251,7 +252,7 @@ export function overrideRowProblem(
   const field = r.fields.find((f) => f.name === key);
   if (field === undefined) {
     // Both dispatch gates refuse a key the kind lacks (#1306).
-    return `A ${r.kind} ${r.noun} has no \`${key}\` setting, so a run will refuse it.`;
+    return `${kindPlural(r.kind, r.noun)} have no \`${key}\` setting, so a run will refuse it.`;
   }
   const typed = typeProblem(field, value);
   if (typed !== null) return `\`${key}\` ${typed}.`;
