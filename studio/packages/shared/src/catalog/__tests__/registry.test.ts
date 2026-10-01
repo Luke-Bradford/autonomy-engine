@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectOneSentence } from '../../__tests__/helpers/description.js';
 import { DATASET_CONNECTION_KINDS } from '../dataset-config.js';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
@@ -419,10 +420,7 @@ describe('activity descriptions (#1413)', () => {
     (_type, entry) => {
       const { description } = entry;
       expect(description).not.toBe(entry.title);
-      // ONE sentence: ends in a full stop (so it is not blank, and not the bare
-      // type id) and has no sentence break before it.
-      expect(description).toMatch(/^[^.!?]+\.$/);
-      expect(description.length).toBeLessThanOrEqual(120);
+      expectOneSentence(description);
     },
   );
 

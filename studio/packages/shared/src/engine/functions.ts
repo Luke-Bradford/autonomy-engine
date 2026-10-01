@@ -390,14 +390,32 @@ export function arity(spec: FnSpec): { min: number; max: number | null } {
  * cannot disagree with the arity and type checks that decide what is offered.
  */
 export function fnSignature(name: string): string {
+  return formatSignature(name);
+}
+
+/**
+ * The one printer behind {@link fnSignature} and the named form the help text
+ * shows (#1413, `substring(text: string, start: number, length?: number)`), so
+ * the two cannot disagree about arity or which arguments are optional. `labels`
+ * names each `args` entry; a variadic's last label repeats with its type.
+ */
+export function formatSignature(name: string, labels?: readonly string[]): string {
   const spec = FUNCTIONS[name];
   if (spec === undefined) throw new Error(`fnSignature: '${name}' is not in the catalog`);
-  const fixed = spec.variadic ? spec.args.slice(0, -1) : spec.args;
-  const parts = fixed.map((t, i) => (i < spec.minArgs ? t : `${t}?`));
+  // The `?` goes on the label when there is one (`length?: number`), else on
+  // the type (`number?`).
+  const arg = (i: number, optional = false) => {
+    const t = spec.args[i] as SigType;
+    const mark = optional ? '?' : '';
+    return labels === undefined ? `${t}${mark}` : `${labels[i]}${mark}: ${t}`;
+  };
+  const last = spec.args.length - 1;
+  const fixed = spec.variadic ? last : spec.args.length;
+  const parts: string[] = [];
+  for (let i = 0; i < fixed; i += 1) parts.push(arg(i, i >= spec.minArgs));
   if (spec.variadic) {
-    const repeated = spec.args[spec.args.length - 1] as SigType;
-    for (let i = fixed.length; i < spec.minArgs; i += 1) parts.push(repeated);
-    parts.push(`...${repeated}`);
+    for (let i = fixed; i < spec.minArgs; i += 1) parts.push(arg(last));
+    parts.push(`...${arg(last)}`);
   }
   return `${name}(${parts.join(', ')}) → ${spec.ret}`;
 }
@@ -631,7 +649,7 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
       return ev.eval(args[cond ? 1 : 2] as Expr);
     },
   },
-  not: { call: 'eager', args: ['boolean'], minArgs: 1, ret: 'boolean', impl: (a) => !a },
+  not: { call: 'eager', args: ['boolean'], minArgs: 1, ret: 'boolean', impl: (a) => !a[0] },
   equals: {
     call: 'eager',
     args: ['any', 'any'],

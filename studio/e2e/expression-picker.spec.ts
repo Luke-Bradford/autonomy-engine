@@ -85,6 +85,15 @@ test.describe('U8a — expression insert flyout', () => {
     await wrap.click();
     // Offered by what the save gate accepts: a two-argument function is not.
     await expect(properties(page).getByRole('button', { name: /^substring\(/ })).toHaveCount(0);
+    // #1413 — a row names its parameters, says what the function does and shows
+    // an example, the last two as the button's accessible description.
+    const toUpperRow = properties(page).getByRole('button', {
+      name: 'toUpper(text: string) → string',
+    });
+    await expect(toUpperRow).toHaveAccessibleDescription(
+      'Converts a string to upper case. Example: toUpper(\'hello\') → "HELLO"',
+    );
+    await expect(toUpperRow).toContainText('Converts a string to upper case.');
     await properties(page)
       .getByRole('button', { name: /^toUpper\(/ })
       .click();
