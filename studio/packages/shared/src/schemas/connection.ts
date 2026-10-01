@@ -39,6 +39,22 @@ export const ConnectionKindSchema = z.enum([
 export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
 
 /**
+ * #1396 — what a form or a list CALLS each kind. The enum value stays the
+ * identifier everywhere it is stored or sent; this is display only, and a
+ * `Record` so a new kind cannot ship without a name.
+ */
+export const CONNECTION_KIND_LABELS: Record<ConnectionKind, string> = {
+  anthropic_api: 'Anthropic API',
+  openai_api: 'OpenAI API',
+  ollama: 'Ollama',
+  agent_cli: 'Agent CLI (subscription)',
+  http: 'HTTP',
+  fs: 'File system',
+  sqlite: 'SQLite',
+  postgres: 'PostgreSQL',
+};
+
+/**
  * The CLI/subscription connection kind (`claude -p` / `codex exec`). Named here
  * so the equality checks that gate subscription-only behaviour — the #2 L14c
  * quota admission gate (executor pre-flight) and its window writer (driver) —

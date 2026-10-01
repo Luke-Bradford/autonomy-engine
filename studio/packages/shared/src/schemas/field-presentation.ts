@@ -15,7 +15,12 @@ import { z } from 'zod';
  *
  * A dedicated registry rather than `.meta()`. `.meta()` writes into zod's
  * process-global registry, which is untyped and shared with every other reader
- * of metadata; this one is typed and holds this one fact.
+ * of metadata; this one is typed and holds only presentation facts.
+ *
+ * #1396 added the human half of a label: `title`, `description` and `unit`, so
+ * a form says "Base URL" where it used to say `baseUrl`. The KEY is still what
+ * the server's messages and advisories cite (`timeoutMs: …`), which is why a
+ * form shows it beside a titled field rather than replacing it.
  */
 export interface FieldPresentation {
   readonly singleLine?: true;
@@ -45,6 +50,23 @@ export interface FieldPresentation {
    * would be offered.
    */
   readonly literal?: true;
+  /** #1396: the field's human name ("Base URL"), shown instead of its key. */
+  readonly title?: string;
+  /** #1396: one sentence saying what the field does, shown under the control. */
+  readonly description?: string;
+  /**
+   * #1396: the unit the STORED value is in ("ms", "bytes"), shown after the
+   * title. Presentation only: it never converts, so it must name what the key
+   * actually holds.
+   */
+  readonly unit?: string;
+}
+
+/** The human-facing half of a field's presentation (#1396). */
+export interface FieldLabel {
+  readonly title: string;
+  readonly description?: string;
+  readonly unit?: string;
 }
 
 export const fieldPresentation = z.registry<FieldPresentation>();
@@ -75,6 +97,26 @@ export function authoredAsExpression<T extends z.ZodType>(schema: T): T {
 /** Tag a string schema as literal (never substituted), returning the SAME instance. */
 export function literalText<T extends z.ZodType>(schema: T): T {
   return tag(schema, { literal: true });
+}
+
+/**
+ * Give a field a human title (and optionally a description and unit),
+ * returning the SAME instance. Tag either the field or its `.optional()`
+ * wrapper: a form reads every layer.
+ */
+export function presented<T extends z.ZodType>(schema: T, label: FieldLabel): T {
+  return tag(schema, label);
+}
+
+/** `schema`'s own human label (not a wrapper's), if it has one. */
+export function fieldLabelOf(schema: unknown): FieldLabel | undefined {
+  const entry = presentationOf(schema);
+  if (entry?.title === undefined) return undefined;
+  return {
+    title: entry.title,
+    ...(entry.description !== undefined && { description: entry.description }),
+    ...(entry.unit !== undefined && { unit: entry.unit }),
+  };
 }
 
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */

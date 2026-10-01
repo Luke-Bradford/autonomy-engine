@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ConnectionKindSchema } from '../schemas/connection.js';
+import type { z } from 'zod';
+import { CONNECTION_KIND_LABELS, ConnectionKindSchema } from '../schemas/connection.js';
+import { fieldLabelOf } from '../schemas/field-presentation.js';
 import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
@@ -302,5 +304,25 @@ describe('#1119 M4 — config keys no per-dispatch override may set', () => {
     expect(isNonOverridableConnectionConfigKey('anthropic_api', 'model')).toBe(false);
     expect(isNonOverridableConnectionConfigKey('http', 'baseUrl')).toBe(false);
     expect(isNonOverridableConnectionConfigKey('fs', 'maxBytes')).toBe(false);
+  });
+});
+
+describe('connection form labels (#1396)', () => {
+  // Every top-level key a connection form renders has a human title, so a new
+  // field cannot ship showing only its camelCase key. The title may sit on the
+  // field or on its `.optional()` wrapper, the two layers a form reads.
+  it.each(CONNECTION_KINDS)('every %s config field has a title', (kind) => {
+    const shape = connectionConfigSchema(kind).shape as Record<string, z.ZodType>;
+    const untitled = Object.entries(shape)
+      .filter(([, field]) => {
+        const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
+        return fieldLabelOf(field) === undefined && fieldLabelOf(inner) === undefined;
+      })
+      .map(([name]) => name);
+    expect(untitled).toEqual([]);
+  });
+
+  it.each(CONNECTION_KINDS)('%s has a display name', (kind) => {
+    expect(CONNECTION_KIND_LABELS[kind]).toMatch(/\S/);
   });
 });
