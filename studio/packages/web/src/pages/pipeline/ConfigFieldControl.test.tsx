@@ -256,3 +256,51 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     );
   });
 });
+
+describe('ConfigFieldControl — a resource form validation slot (#1396)', () => {
+  const fields: ConfigField[] = [
+    { name: 'timeoutMs', kind: 'number', optional: true },
+    { name: 'path', kind: 'text', optional: false },
+    { name: 'mode', kind: 'enum', optional: false, enumOptions: ['a', 'b'] },
+    {
+      name: 'headers',
+      kind: 'keyValue',
+      optional: true,
+      elementFields: [
+        { name: 'key', kind: 'text', optional: false },
+        { name: 'value', kind: 'text', optional: false },
+      ],
+    },
+  ];
+
+  it.each(fields)('$kind: keyed, marked invalid and described by its error', (field) => {
+    const { container } = render(
+      <ConfigFieldControl
+        field={field}
+        value={field.kind === 'keyValue' ? [] : ''}
+        onChange={noop}
+        validation={{ key: `config.${field.name}`, error: 'must be a number' }}
+      />,
+    );
+    const control = container.querySelector<HTMLElement>(`[data-field="config.${field.name}"]`)!;
+    expect(control).not.toBeNull();
+    expect(control).toHaveAttribute('data-invalid', 'true');
+    // ARIA does not allow `aria-invalid` on a row list's `group`.
+    if (field.kind === 'keyValue') expect(control).not.toHaveAttribute('aria-invalid');
+    else expect(control).toHaveAttribute('aria-invalid', 'true');
+    expect(control).toHaveAccessibleDescription(/^Must be a number/);
+  });
+
+  it.each(fields)('$kind: on the canvas (no validation) nothing is added', (field) => {
+    const { container } = render(
+      <ConfigFieldControl
+        field={field}
+        value={field.kind === 'keyValue' ? [] : ''}
+        onChange={noop}
+      />,
+    );
+    expect(container.querySelector('[data-field]')).toBeNull();
+    expect(container.querySelector('[aria-invalid]')).toBeNull();
+    expect(container.querySelector('.field-error-slot')).toBeNull();
+  });
+});

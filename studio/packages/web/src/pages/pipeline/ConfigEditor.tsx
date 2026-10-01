@@ -1,8 +1,10 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { ConfigFieldControl, type FieldChoices, type FieldPicker } from './ConfigFieldControl';
 import { emptyControlValue } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { FieldError } from '../../lib/form/FieldError';
+import { fieldAttrs } from '../../lib/form/fieldValidation';
 
 /**
  * The Config group a resource form or a canvas node embeds (#1146, #1088) — the
@@ -20,6 +22,7 @@ export function ConfigEditor<K extends string>({
   picker,
   emptyHint = 'This kind has no settings.',
   fieldModeExtra,
+  errorFor,
   children,
 }: {
   editor: ConfigEditorState<K>;
@@ -33,10 +36,18 @@ export function ConfigEditor<K extends string>({
   emptyHint?: string;
   /** Rendered only with the controls, before the carried advisory. */
   fieldModeExtra?: ReactNode;
+  /**
+   * #1396 — a resource form's inline validation: each control is keyed
+   * `config.<name>` and the JSON textarea `config`, and shows its error. The
+   * canvas passes none.
+   */
+  errorFor?: (key: string) => string | undefined;
   /** Rendered last inside the group, in both modes. */
   children?: ReactNode;
 }) {
   const { kind, jsonMode, unrenderable, fields, carried } = editor;
+  const jsonErrorId = useId();
+  const jsonError = errorFor?.('config');
   return (
     <div className={className} role="group" aria-label="Config">
       <div>
@@ -57,13 +68,19 @@ export function ConfigEditor<K extends string>({
       {jsonMode ? (
         <LabelledControl label="Config (JSON)">
           {(id) => (
-            <textarea
-              id={id}
-              value={editor.jsonText}
-              onChange={(e) => editor.setJsonText(e.target.value)}
-              rows={rows}
-              spellCheck={false}
-            />
+            <>
+              <textarea
+                id={id}
+                value={editor.jsonText}
+                onChange={(e) => editor.setJsonText(e.target.value)}
+                rows={rows}
+                spellCheck={false}
+                {...(errorFor === undefined
+                  ? {}
+                  : fieldAttrs({ key: 'config', error: jsonError, errorId: jsonErrorId }))}
+              />
+              {errorFor !== undefined && <FieldError id={jsonErrorId} message={jsonError} />}
+            </>
           )}
         </LabelledControl>
       ) : (
@@ -79,6 +96,14 @@ export function ConfigEditor<K extends string>({
                 onChange={(next) => editor.setInput(field.name, next)}
                 {...(choices === undefined ? {} : { choices })}
                 {...(picker === undefined ? {} : { picker })}
+                {...(errorFor === undefined
+                  ? {}
+                  : {
+                      validation: {
+                        key: `config.${field.name}`,
+                        error: errorFor(`config.${field.name}`),
+                      },
+                    })}
               />
             );
           })}

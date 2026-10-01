@@ -9,6 +9,7 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
+import { ApiError } from '../api/client';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
@@ -1480,5 +1481,100 @@ describe('the connection form drawer (#1396)', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit Other' })).toHaveFocus();
+  });
+});
+
+/* #1396 OR5 slice 5 — inline validation: a field is checked when it is left
+   after an edit, a refused Save lists every problem in the footer's one alert
+   and takes focus to the first, and a server's per-field issues land beside
+   their fields. */
+describe('ConnectionsPage — inline validation (#1396)', () => {
+  const timeoutLabel = 'Timeout (ms) — number';
+
+  async function openNew() {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/i);
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    return user;
+  }
+
+  it('checks a field when it is left after an edit, never one only tabbed past', async () => {
+    const user = await openNew();
+    const name = screen.getByLabelText('Name');
+    expect(name).toHaveFocus();
+    await user.tab();
+    expect(name).toHaveAttribute('aria-invalid', 'false');
+
+    await user.type(screen.getByLabelText(timeoutLabel), 'soon');
+    await user.tab();
+    expect(screen.getByLabelText(timeoutLabel)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(timeoutLabel)).toHaveAccessibleDescription(/^Must be a number/);
+    // Before a Save, the footer's alert is not used for it.
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a refused Save lists every invalid field and focuses the first', async () => {
+    const user = await openNew();
+    await user.type(screen.getByLabelText(timeoutLabel), 'soon');
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Fix these 2 fields:');
+    expect(within(alert).getByRole('button', { name: 'Name: Enter a name.' })).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    expect(screen.getByLabelText('Name')).toHaveAccessibleDescription('Enter a name.');
+
+    await user.click(within(alert).getByRole('button', { name: 'Timeout (ms): must be a number' }));
+    expect(screen.getByLabelText(timeoutLabel)).toHaveFocus();
+  });
+
+  it('a JSON draft that will not parse marks the JSON field', async () => {
+    const user = await openNew();
+    await user.type(screen.getByLabelText('Name'), 'Broken');
+    await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
+    const config = screen.getByLabelText('Config (JSON)');
+    await user.clear(config);
+    await user.type(config, 'not json');
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Config \(JSON\): Invalid config JSON/);
+    await waitFor(() => expect(config).toHaveFocus());
+    expect(config).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it("puts a server's per-field issues beside their fields, and words the rest", async () => {
+    createMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [
+          { path: 'config.timeoutMs', message: 'too large' },
+          { path: 'parameters', message: 'unknown key' },
+        ],
+      }),
+    );
+    const user = await openNew();
+    await user.type(screen.getByLabelText('Name'), 'Prod');
+    await user.type(screen.getByLabelText(timeoutLabel), '99');
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('parameters: unknown key');
+    expect(within(alert).getByRole('button', { name: 'Timeout (ms): too large' })).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText(timeoutLabel)).toHaveFocus());
+    expect(screen.getByLabelText(timeoutLabel)).toHaveAccessibleDescription(/^Too large/);
+  });
+
+  it('Test connection checks the config only: a missing name is not its business', async () => {
+    const user = await openNew();
+    await user.type(screen.getByLabelText(timeoutLabel), 'soon');
+    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+    expect(testDraftMock).not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Timeout (ms): must be a number');
+    expect(alert).not.toHaveTextContent('Name');
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false');
   });
 });

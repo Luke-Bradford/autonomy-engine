@@ -1,12 +1,20 @@
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
-import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
+import {
+  configFieldTitle,
+  emptyControlValue,
+  isRowKind,
+  isRowList,
+  placeRowCandidate,
+} from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
 import { ExpressionPicker, type FieldOptions, type FunctionOption } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { RequiredMark } from '../../lib/form/RequiredMark';
+import { FieldError } from '../../lib/form/FieldError';
+import { fieldAttrs } from '../../lib/form/fieldValidation';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
@@ -173,6 +181,7 @@ export function ConfigFieldControl({
   choices,
   name,
   target,
+  validation,
 }: {
   field: ConfigField;
   value: FieldInput;
@@ -189,12 +198,18 @@ export function ConfigFieldControl({
   name?: string;
   /** Where this control sits in the config, when it is not a top-level field (#1178). */
   target?: PickerTarget;
+  /**
+   * #1396 — on a resource form: the field's key for the form's validation
+   * (`data-field`) and its current error, shown in a reserved slot under the
+   * hint and marked with `aria-invalid`. The canvas passes none, and renders
+   * exactly as before.
+   */
+  validation?: { key: string; error: string | undefined };
 }) {
   const shown = name ?? field.name;
   // A cell's `name` already says where it sits; only a top-level field is titled.
   const titled = name === undefined ? field.label : undefined;
-  const base = titled?.title ?? shown;
-  const label = titled?.unit === undefined ? base : `${base} (${titled.unit})`;
+  const label = name === undefined ? configFieldTitle(field) : name;
   const required = !field.optional;
   const hintId = useId();
   const hint =
@@ -204,7 +219,18 @@ export function ConfigFieldControl({
         <code>{field.name}</code>
       </p>
     );
-  const describedBy = hint === null ? undefined : hintId;
+  const errorId = useId();
+  const error = validation?.error;
+  const shownHintId = hint === null ? undefined : hintId;
+  // #1396 — with `validation`, the field's key, invalid mark and a description
+  // that leads with the error; without it (the canvas), the hint alone.
+  const checkedAs = (group: boolean): Partial<ReturnType<typeof fieldAttrs>> =>
+    validation === undefined
+      ? {}
+      : fieldAttrs({ key: validation.key, error, errorId, hintId: shownHintId, group });
+  const checked = checkedAs(false);
+  const describedBy = checked['aria-describedby'] ?? shownHintId;
+  const errorSlot = validation === undefined ? null : <FieldError id={errorId} message={error} />;
   // ONE caret hook for whichever element renders, so its caret and `touched`
   // state survive the latch below; the casts at the JSX sites only narrow the
   // union to the element each site mounts.
@@ -230,11 +256,13 @@ export function ConfigFieldControl({
           label={label}
           required={required}
           describedBy={describedBy}
+          checked={checkedAs(true)}
           rows={isRowList(value) ? value : []}
           onChange={onChange}
           picker={picker}
         />
         {hint}
+        {errorSlot}
       </>
     );
   }
@@ -276,6 +304,7 @@ export function ConfigFieldControl({
               value={typeof value === 'string' ? value : ''}
               aria-required={required || undefined}
               aria-describedby={describedBy}
+              {...checked}
               onChange={(e) => onChange(e.target.value)}
             >
               <option value="">— none —</option>
@@ -286,6 +315,7 @@ export function ConfigFieldControl({
               ))}
             </select>
             {hint}
+            {errorSlot}
           </>
         )}
       </LabelledControl>
@@ -309,10 +339,12 @@ export function ConfigFieldControl({
             placeholder={field.defaultText}
             aria-required={required || undefined}
             aria-describedby={describedBy}
+            {...checked}
             onChange={(e) => onChange(e.target.value)}
           />
         </label>
         {hint}
+        {errorSlot}
       </>
     );
   }
@@ -347,6 +379,7 @@ export function ConfigFieldControl({
               placeholder={field.defaultText}
               aria-required={required || undefined}
               aria-describedby={describedBy}
+              {...checked}
               onChange={(e) => onChange(e.target.value)}
             />
           ) : (
@@ -360,10 +393,12 @@ export function ConfigFieldControl({
               placeholder={field.defaultText}
               aria-required={required || undefined}
               aria-describedby={describedBy}
+              {...checked}
               onChange={(e) => onChange(e.target.value)}
             />
           )}
           {hint}
+          {errorSlot}
           {/* A SIBLING of the label, not a child, because a button INSIDE the label
           contaminates the text box's accessible name — which is exactly why
           `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
@@ -525,6 +560,7 @@ export function ObjectListControl({
   label,
   required = false,
   describedBy,
+  checked,
   rows,
   onChange,
   picker,
@@ -535,6 +571,8 @@ export function ObjectListControl({
   required?: boolean;
   /** The id of the hint under the list, when the field is titled. */
   describedBy?: string;
+  /** #1396 — the form's `data-field` key and invalid mark, on the group (`fieldAttrs`). */
+  checked?: Partial<ReturnType<typeof fieldAttrs>>;
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker?: FieldPicker;
@@ -593,6 +631,7 @@ export function ObjectListControl({
       role="group"
       aria-label={label}
       aria-describedby={describedBy}
+      {...checked}
       ref={groupRef}
     >
       <span className="object-list-label">

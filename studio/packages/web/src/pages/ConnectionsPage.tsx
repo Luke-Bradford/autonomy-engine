@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_KIND_LABELS,
@@ -6,14 +6,13 @@ import {
   connectionConfigAdvisory,
   connectionConfigSchema,
   connectionKindRequiresSecret,
-  formatZodIssues,
   type ConnectionKind,
   type ConnectionProbeResult,
   type ConnectionDependentsResponse,
   type ConnectionPublic,
   type Dataset,
 } from '@autonomy-studio/shared';
-import { ApiError, messageOf } from '../api/client';
+import { messageOf } from '../api/client';
 import {
   ConnectionWriteSchema,
   createConnection,
@@ -50,6 +49,8 @@ import {
 } from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
 import {
+  configDraftErrors,
+  configKeyLabel,
   deriveFieldsWithCarried,
   payloadSignature,
   readConfigDraft,
@@ -65,6 +66,10 @@ import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { SecretInput } from '../lib/form/SecretInput';
 import { RequiredMark } from '../lib/form/RequiredMark';
+import { FieldError } from '../lib/form/FieldError';
+import { FormErrors } from '../lib/form/FormErrors';
+import { fieldAttrs, nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
+import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
@@ -653,6 +658,29 @@ function ConnectionForm({
   const { fields, jsonMode } = editor;
 
   /**
+   * #1396 — what is wrong with the draft now, by field, in the form's order.
+   * The Name rule is the write schema's own (`min(1)`, so no trim: the form
+   * must not refuse what the server accepts), and the config's are the parse
+   * failures `readConfigDraft` would refuse — never the kind's schema rules,
+   * which stay the advisory below.
+   */
+  const checks = useMemo(
+    () => ({
+      ...nameCheck(form.name),
+      ...configDraftErrors(jsonMode, { jsonText: form.jsonText, inputs: form.inputs }, fields),
+    }),
+    // What the checks read, not `form` whole: a SECRET keystroke re-checks nothing.
+    [form.name, form.jsonText, form.inputs, jsonMode, fields],
+  );
+  /** What to call a field key in the summary; `undefined` for a key this form does not show. */
+  const labelOf = useCallback(
+    (key: string) => (key === 'name' ? 'Name' : configKeyLabel(key, jsonMode, fields)),
+    [jsonMode, fields],
+  );
+  const validation = useFieldValidation(checks, labelOf);
+  const nameErrorId = useId();
+
+  /**
    * Everything a probe's verdict depends on. The same inputs the advisory memo
    * below reads, plus whether a secret was TYPED — because a blank secret box
    * on an edit means "use the stored one", which is a materially different
@@ -791,6 +819,8 @@ function ConnectionForm({
     setError(null);
     setProbe(null);
 
+    // Only the config: a test needs no name.
+    if (!validation.attempt((key) => key === 'config' || key.startsWith('config.'))) return;
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) {
       setError(draft.message);
@@ -820,6 +850,10 @@ function ConnectionForm({
     // why each mode toggle commits to `config` before switching. An ordinary
     // kind change does not (`changeConfigKind`): it rewrites neither draft, so an
     // operator's JSON is never edited under them. The advisory covers that seam.
+    // #1396 — a field that will not read back is shown beside itself first.
+    if (!validation.attempt()) return;
+    // Past the checks this read cannot fail; it stays for the parsed config and,
+    // should a check and its reader ever drift apart, a refusal anyway.
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) {
       setError(draft.message);
@@ -841,7 +875,7 @@ function ConnectionForm({
 
     const parsed = ConnectionWriteSchema.safeParse(body);
     if (!parsed.success) {
-      setError(formatZodIssues(parsed.error.issues));
+      setError(schemaRefusal(parsed.error.issues, validation));
       return;
     }
 
@@ -854,8 +888,7 @@ function ConnectionForm({
       }
       await onSaved();
     } catch (err) {
-      const msg = err instanceof ApiError || err instanceof Error ? err.message : String(err);
-      setError(msg);
+      setError(saveRefusal(err, validation));
       setSaving(false);
     }
   }
@@ -871,16 +904,13 @@ function ConnectionForm({
       onSubmit={(e) => void onSubmit(e)}
       busy={saving || probing}
       returnFocusTo={returnFocusTo}
+      validation={validation}
       /* In the footer, beside the buttons that produce them: on a long form the
          body's end is off screen, and a Save that failed must not look like a
          Save that did nothing. */
       status={
         <>
-          {error && (
-            <p role="alert" className="error">
-              {error}
-            </p>
-          )}
+          <FormErrors validation={validation} message={error} />
 
           {/* #1191 — the probe verdict. `role="status"` (not `alert`): a passing
               test is informational, and the page's `alert` is already spoken for by
@@ -928,8 +958,14 @@ function ConnectionForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
+            {...fieldAttrs({
+              key: 'name',
+              error: validation.errorFor('name'),
+              errorId: nameErrorId,
+            })}
           />
         </label>
+        <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
         <LabelledControl
           label={
@@ -985,7 +1021,13 @@ function ConnectionForm({
       </FormSection>
 
       <FormSection title="Connection">
-        <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
+        <ConfigEditor
+          editor={editor}
+          className="connection-config"
+          rows={8}
+          advisory={advisory}
+          errorFor={validation.errorFor}
+        />
       </FormSection>
 
       <FormSection title="Authentication">

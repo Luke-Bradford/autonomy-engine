@@ -1211,6 +1211,51 @@ export function deriveFieldsWithCarried<K extends string>(
 }
 
 /**
+ * #1396 — what `readConfigDraft` would refuse, for EVERY control at once and
+ * keyed by field (`config.<name>`), where it stops at the first. In the JSON
+ * view the textarea is the one field, keyed `config`. Parse failures only: a
+ * kind's own schema rules stay advisory, because the form must never refuse
+ * what the server accepts.
+ */
+export function configDraftErrors(
+  jsonMode: boolean,
+  draft: { jsonText: string; inputs: Readonly<Record<string, FieldInput | undefined>> },
+  fields: readonly ConfigField[],
+): Record<string, string> {
+  if (jsonMode) {
+    const parsed = parseConfigText(draft.jsonText);
+    return parsed.ok ? {} : { config: parsed.message };
+  }
+  const errors: Record<string, string> = {};
+  for (const field of fields) {
+    const parsed = parseFieldInput(field, draft.inputs[field.name] ?? emptyControlValue(field));
+    if (!parsed.ok) errors[`config.${field.name}`] = parsed.message;
+  }
+  return errors;
+}
+
+/**
+ * #1396 — what to call a config key the form's validation uses (`config` for
+ * the JSON view, `config.<name>` for a control), or `undefined` when the key
+ * is not one of THIS form's: a refusal naming it then reads as a plain line.
+ */
+export function configKeyLabel(
+  key: string,
+  jsonMode: boolean,
+  fields: readonly ConfigField[],
+): string | undefined {
+  if (jsonMode) return key === 'config' ? 'Config (JSON)' : undefined;
+  const field = fields.find((candidate) => key === `config.${candidate.name}`);
+  return field === undefined ? undefined : configFieldTitle(field);
+}
+
+/** A top-level field's human title, with its unit: "Timeout (ms)". The key when it has none. */
+export function configFieldTitle(field: ConfigField): string {
+  const base = field.label?.title ?? field.name;
+  return field.label?.unit === undefined ? base : `${base} (${field.label.unit})`;
+}
+
+/**
  * The config a two-mode editor would SAVE right now — read from whichever draft
  * is on screen, never the other one.
  *

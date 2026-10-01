@@ -15,6 +15,8 @@ import {
 import {
   assembleConfig,
   changeConfigKind,
+  configDraftErrors,
+  configKeyLabel,
   configEditorView,
   configToFields,
   configToJson,
@@ -1634,5 +1636,42 @@ describe('saveableConfigOf / payloadSignature (#1396)', () => {
   it('is key-order blind, and still a string for a non-finite number', () => {
     expect(payloadSignature({ a: 1, b: 2 })).toBe(payloadSignature({ b: 2, a: 1 }));
     expect(payloadSignature([Number.NaN])).toBe('[null]');
+  });
+});
+
+describe('configDraftErrors / configKeyLabel (#1396)', () => {
+  const fields: ConfigField[] = [
+    { name: 'timeoutMs', kind: 'number', optional: true, label: { title: 'Timeout', unit: 'ms' } },
+    { name: 'body', kind: 'json', optional: true },
+    { name: 'path', kind: 'text', optional: false },
+  ];
+
+  it('reports EVERY control that will not read back, keyed by field', () => {
+    expect(
+      configDraftErrors(
+        false,
+        { jsonText: '', inputs: { timeoutMs: 'soon', body: '{', path: '' } },
+        fields,
+      ),
+    ).toEqual({
+      'config.timeoutMs': expect.any(String),
+      'config.body': expect.any(String),
+    });
+  });
+
+  it('in the JSON view, the textarea is the one field', () => {
+    expect(configDraftErrors(true, { jsonText: 'nope', inputs: {} }, fields)).toEqual({
+      config: expect.any(String),
+    });
+    expect(configDraftErrors(true, { jsonText: '{}', inputs: {} }, fields)).toEqual({});
+  });
+
+  it("names a key only when it is one of THIS view's fields", () => {
+    expect(configKeyLabel('config.timeoutMs', false, fields)).toBe('Timeout (ms)');
+    expect(configKeyLabel('config.path', false, fields)).toBe('path');
+    expect(configKeyLabel('config.gone', false, fields)).toBeUndefined();
+    expect(configKeyLabel('config', false, fields)).toBeUndefined();
+    expect(configKeyLabel('config', true, fields)).toBe('Config (JSON)');
+    expect(configKeyLabel('config.timeoutMs', true, fields)).toBeUndefined();
   });
 });

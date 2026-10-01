@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
   CONNECTION_KIND_LABELS,
@@ -18,7 +18,7 @@ import {
   type DatasetSheetsResult,
 } from '@autonomy-studio/shared';
 import { z } from 'zod';
-import { ApiError, messageOf } from '../api/client';
+import { messageOf } from '../api/client';
 import { listConnections } from '../api/connections';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportDataset } from '../api/portability';
@@ -37,6 +37,8 @@ import { ImportPanel } from './ImportPanel';
 import { StoreCell } from './datasets/StoreCell';
 import { datasetDetailPath } from './datasets/datasetPath';
 import {
+  configDraftErrors,
+  configKeyLabel,
   deriveFieldsWithCarried,
   payloadSignature,
   readConfigDraft,
@@ -52,6 +54,10 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
+import { FieldError } from '../lib/form/FieldError';
+import { FormErrors } from '../lib/form/FormErrors';
+import { fieldAttrs, nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
+import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
@@ -156,6 +162,13 @@ function datasetFields(
 function kindHasNoReader(kind: DatasetKind): boolean {
   return !datasetKindIsImplemented(kind);
 }
+
+/** #1396 — the summary's names for the form's own fields; the config's come from its schema. */
+const OWN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ['name', 'Name'],
+  ['connectionId', 'Store'],
+  ['columns', 'Columns (JSON)'],
+]);
 
 /** Read the columns draft back out, refusing an absent one. */
 function parseColumnsText(
@@ -558,6 +571,43 @@ function DatasetForm({
   const { fields, jsonMode } = editor;
 
   /**
+   * #1396 — what is wrong with the draft now, by field, in the form's order:
+   * the write schema's `min(1)` on Name and Store (no trim, so the form never
+   * refuses what the server accepts), the config's parse failures, and the
+   * Columns text `parseColumnsText` refuses.
+   */
+  const checks = useMemo(() => {
+    const columns = parseColumnsText(form.columnsText);
+    return {
+      ...nameCheck(form.name),
+      ...(form.connectionId === '' ? { connectionId: 'Choose a store.' } : {}),
+      ...configDraftErrors(jsonMode, { jsonText: form.jsonText, inputs: form.inputs }, fields),
+      ...(columns.ok ? {} : { columns: columns.message }),
+    };
+    // What the checks read, not `form` whole.
+  }, [
+    form.name,
+    form.connectionId,
+    form.jsonText,
+    form.inputs,
+    form.columnsText,
+    jsonMode,
+    fields,
+  ]);
+  /** What to call a field key in the summary; `undefined` for a key this form does not show. */
+  const labelOf = useCallback(
+    (key: string) => OWN_FIELD_LABELS.get(key) ?? configKeyLabel(key, jsonMode, fields),
+    [jsonMode, fields],
+  );
+  const validation = useFieldValidation(checks, labelOf);
+  const nameErrorId = useId();
+  const storeErrorId = useId();
+  const columnsErrorId = useId();
+  /** The attributes a hand-written control carries for the form's validation. */
+  const checkedBy = (key: string, errorId: string) =>
+    fieldAttrs({ key, error: validation.errorFor(key), errorId });
+
+  /**
    * Everything a sheet listing depends on: which store, and which file in it.
    * Not `form` whole — a rename would then discard a perfectly good listing.
    */
@@ -660,6 +710,10 @@ function DatasetForm({
     // why each mode toggle commits to `config` before switching. An ordinary
     // kind change does not (`changeConfigKind`): it rewrites neither draft, so an
     // operator's JSON is never edited under them. The advisory covers that seam.
+    // #1396 — every field that will not read back is shown beside itself first.
+    if (!validation.attempt()) return;
+    // Past the checks these reads cannot fail; they stay for the parsed values
+    // and, should a check and its reader ever drift apart, a refusal anyway.
     const draft = readConfigDraft(jsonMode, form, fields);
     if (!draft.ok) {
       setError(draft.message);
@@ -685,7 +739,7 @@ function DatasetForm({
 
     const parsed = DatasetWriteSchema.safeParse(body);
     if (!parsed.success) {
-      setError(formatZodIssues(parsed.error.issues));
+      setError(schemaRefusal(parsed.error.issues, validation));
       return;
     }
 
@@ -698,8 +752,7 @@ function DatasetForm({
       }
       await onSaved();
     } catch (err) {
-      const msg = err instanceof ApiError || err instanceof Error ? err.message : String(err);
-      setError(msg);
+      setError(saveRefusal(err, validation));
       setSaving(false);
     }
   }
@@ -750,16 +803,11 @@ function DatasetForm({
       onSubmit={(e) => void onSubmit(e)}
       busy={saving || listing}
       returnFocusTo={returnFocusTo}
+      validation={validation}
       /* In the footer, beside Save, so a refused Save is in view where it was
          pressed. Errors only: the sheet listing's `role="status"` answers stay
          in the body beside the button that asked. */
-      status={
-        error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )
-      }
+      status={<FormErrors validation={validation} message={error} />}
       actions={
         <>
           <button type="button" onClick={onClose} disabled={saving || listing}>
@@ -782,8 +830,10 @@ function DatasetForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
+            {...checkedBy('name', nameErrorId)}
           />
         </label>
+        <FieldError id={nameErrorId} message={validation.errorFor('name')} />
 
         <LabelledControl
           label={
@@ -799,6 +849,7 @@ function DatasetForm({
               value={form.connectionId}
               onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
               required
+              {...checkedBy('connectionId', storeErrorId)}
             >
               {connections.length === 0 && <option value="">— no connections —</option>}
               {boundIsUnresolved && (
@@ -812,6 +863,7 @@ function DatasetForm({
             </select>
           )}
         </LabelledControl>
+        <FieldError id={storeErrorId} message={validation.errorFor('connectionId')} />
         {connections.length === 0 && (
           <p className="page-hint">
             A dataset lives in a store, so it needs a connection first — add one under Manage →
@@ -864,6 +916,7 @@ function DatasetForm({
           rows={6}
           advisory={advisory}
           choicesFor={choicesFor}
+          errorFor={validation.errorFor}
           fieldModeExtra={
             /* #1218 — only `excel` names a sheet, and only the field form can
               offer one (the JSON editor has no control to attach it to). */
@@ -922,6 +975,7 @@ function DatasetForm({
               spellCheck={false}
               aria-required
               placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
+              {...checkedBy('columns', columnsErrorId)}
             />
           )}
         </LabelledControl>
@@ -930,6 +984,7 @@ function DatasetForm({
           run input. A copy is gated against the store’s actual columns, not this list. Write{' '}
           <code>[]</code> to state that there are none.
         </p>
+        <FieldError id={columnsErrorId} message={validation.errorFor('columns')} />
       </FormSection>
 
       <OverridableKeysSection
