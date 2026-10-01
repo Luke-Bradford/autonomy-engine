@@ -165,8 +165,10 @@ merge_gate_bot_comment() {
     doc_block="$(gh pr view "$pr" --json comments -q \
       "[.comments[] | select(.author.login==\"$author_login\" and (.body|contains(\"$marker\")))]
        | sort_by(.createdAt) | last | .body // \"\"")"
-    if [ "$(printf '%s' "$doc_block" | review_verdict)" = "block" ]; then
-      echo "safe_merge: REFUSE -- doc-only PR #$pr but latest bot comment blocks" >&2
+    local doc_verdict; doc_verdict="$(printf '%s' "$doc_block" | review_verdict)" || doc_verdict=""
+    # Empty = the classifier itself failed (no python3, crash): refuse, never read as a pass.
+    if [ "$doc_verdict" = "block" ] || [ -z "$doc_verdict" ]; then
+      echo "safe_merge: REFUSE -- doc-only PR #$pr but latest bot comment blocks (or the verdict could not be classified)" >&2
       return 1
     fi
     echo "safe_merge: doc-only PR #$pr (every changed file matches the doc-only definition), CI green, no blocking comment -- merging."
