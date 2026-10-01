@@ -1000,9 +1000,11 @@ function TriggerForm({
     event.preventDefault();
     setError(null);
 
-    // #1396 — every own field that is wrong now is shown beside itself first.
-    // (A half-typed date or number, which reads as blank, never reaches here:
-    // `FormDrawer` refuses it, so the converters below cannot drop it.)
+    // #1396 — every field that is wrong now, the mode editors' included
+    // (`modeChecks`), is shown beside itself first. The conversions below still
+    // refuse in the footer, for what no control owns. (A half-typed date or
+    // number, which reads as blank, never reaches here: `FormDrawer` refuses it,
+    // so the converters below cannot drop it.)
     if (!validation.attempt()) return;
 
     const parsedParams = parseParamsText(form.paramsText);
@@ -1083,7 +1085,8 @@ function TriggerForm({
     }
 
     // Mirror `assertEventConsistent` / `assertWindowConsistent` for a friendlier
-    // message. Both are ENABLED-conditional on the server, and so are these: a
+    // message. `modeChecks` raises both beside their field first; these stay as
+    // the backstop. Both are ENABLED-conditional on the server, and so are these: a
     // disabled trigger may legally store NO subscription and NO window at all.
     // That is narrower than "anything goes while disabled" — a form left partly
     // filled is still refused above, by the conversion, in either state, because
