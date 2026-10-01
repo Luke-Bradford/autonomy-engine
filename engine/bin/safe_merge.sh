@@ -110,6 +110,47 @@ review_postdates_head() {
   [ "$review_epoch" -ge "$head_epoch" ]
 }
 
+# Classify a bot review by its STRUCTURE, never by stray words (eBull PR #3554, 2026-10-01).
+# The old gate grepped the whole body for `REQUEST CHANGES|\[BLOCKING\]` and for `APPROVE`.
+# A review that QUOTES those words, e.g. a "Prior findings" line explaining the gate, or
+# "not APPROVE", was misread both ways: #3554's round-2 APPROVE was refused because its
+# RESOLVED note quoted the grep pattern. Echoes exactly one of:
+#   block    -- a `[BLOCKING]` section header, or the Verdict token is REQUEST CHANGES
+#   approve  -- the Verdict section's first bold token is APPROVE, with no blocking header
+#   none     -- anything else (no Verdict section, NEEDS DISCUSSION, unparseable): not mergeable
+# The doc-only skip notice classifies as `none`, which that path treats as non-blocking.
+review_verdict() {
+  python3 -c '
+import re, sys
+body = sys.stdin.read()
+lines = body.splitlines()
+if any(re.match(r"^\s*#{1,6}\s*\[BLOCKING\]", l, re.I) for l in lines):
+    print("block"); sys.exit()
+# The Verdict is a header (`### Verdict`) or an inline line (`Verdict: **APPROVE**`);
+# both forms occur in real reviews (inline on eBull #3333/#3342/#3438).
+# A marker is a heading (`### Verdict`) or an inline label WITH a colon (`Verdict:` /
+# `**Verdict:**`). Prose that merely starts with the word ("Verdict only -- ...", seen on
+# #3345/#3487) is not a marker. The LAST marker wins: the verdict closes the review.
+MARKER = r"^\s*(#{1,6}\s*\**\s*Verdict\b\**\s*:?|\**\s*Verdict\s*\**\s*:\s*\**)"
+marks = [i for i, l in enumerate(lines) if re.match(MARKER, l, re.I)]
+start = marks[-1] if marks else None
+if start is None:
+    print("none"); sys.exit()
+section = [re.sub(MARKER, "", lines[start], flags=re.I)]
+for l in lines[start + 1:]:
+    if re.match(r"^\s*#{1,6}\s", l):
+        break
+    section.append(l)
+text = "\n".join(section)
+m = re.search(r"\*\*\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\s*\*\*", text, re.I)
+token = m.group(1).upper() if m else None
+if token is None:
+    words = re.findall(r"\b(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\b", text, re.I)
+    token = words[0].upper() if words else None
+print({"APPROVE": "approve", "REQUEST CHANGES": "block"}.get(token, "none"))
+'
+}
+
 merge_gate_bot_comment() {
   local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4" doc_only_paths="${5:-}" doc_only_excludes="${6:-}"
   local head_time; head_time="$(gh pr view "$pr" --json commits -q '.commits[-1].committedDate')"
@@ -124,7 +165,7 @@ merge_gate_bot_comment() {
     doc_block="$(gh pr view "$pr" --json comments -q \
       "[.comments[] | select(.author.login==\"$author_login\" and (.body|contains(\"$marker\")))]
        | sort_by(.createdAt) | last | .body // \"\"")"
-    if printf '%s' "$doc_block" | grep -qiE 'REQUEST CHANGES|\[BLOCKING\]|must fix before merge'; then
+    if [ "$(printf '%s' "$doc_block" | review_verdict)" = "block" ]; then
       echo "safe_merge: REFUSE -- doc-only PR #$pr but latest bot comment blocks" >&2
       return 1
     fi
@@ -149,12 +190,13 @@ merge_gate_bot_comment() {
     2) echo "safe_merge: REFUSE -- cannot parse review/head timestamps ('$review_time' vs '$head_time') -- refusing rather than guessing chronology" >&2
        return 1 ;;
   esac
-  if printf '%s' "$review_body" | grep -qiE 'REQUEST CHANGES|\[BLOCKING\]|must fix before merge'; then
-    echo "safe_merge: REFUSE -- latest review requests changes / has blocking findings" >&2
+  local verdict; verdict="$(printf '%s' "$review_body" | review_verdict)"
+  if [ "$verdict" = "block" ]; then
+    echo "safe_merge: REFUSE -- latest review requests changes / has a [BLOCKING] section" >&2
     return 1
   fi
-  if ! printf '%s' "$review_body" | grep -qiE 'APPROVE'; then
-    echo "safe_merge: REFUSE -- latest review is not an APPROVE" >&2
+  if [ "$verdict" != "approve" ]; then
+    echo "safe_merge: REFUSE -- latest review's Verdict is not APPROVE" >&2
     return 1
   fi
   echo "safe_merge: gates pass on #$pr (review $review_time >= head $head_time) -- merging."
