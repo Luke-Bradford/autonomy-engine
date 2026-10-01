@@ -140,6 +140,47 @@ test.describe('U7 — per-activity node config form', () => {
     await expectQuiet(page, problems);
   });
 
+  // #1396 — the Settings tab is grouped: what the step binds, the container it
+  // sits in, and what it does. A section after the first is ruled off from it.
+  test('the Settings tab groups bindings, container and the activity settings', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'or5 panel sections', {
+      nodes: [
+        { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+        { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${30}' } },
+      ],
+    });
+    await canvasNodes(page).first().click();
+    const section = (name: string) => properties(page).getByRole('group', { name, exact: true });
+    await expect(section('Bindings').getByRole('combobox', { name: 'Connection' })).toBeVisible();
+    await expect(section('Container').getByLabel('Container membership')).toBeVisible();
+    await expect(
+      section('Activity settings').getByRole('textbox', { name: 'Request URL', exact: true }),
+    ).toBeVisible();
+
+    const rules = await properties(page).evaluate((panel) => {
+      const sections = [...panel.querySelectorAll<HTMLElement>('fieldset.form-section')];
+      return sections.map((el) => ({
+        title: el.querySelector('legend')?.textContent,
+        borderTop: getComputedStyle(el).borderTopWidth,
+        gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
+      }));
+    });
+    expect(rules).toEqual([
+      { title: 'Bindings', borderTop: '0px', gap: '9.6px' },
+      { title: 'Container', borderTop: '1px', gap: '9.6px' },
+      { title: 'Activity settings', borderTop: '1px', gap: '9.6px' },
+    ]);
+
+    // A wait binds nothing, so it has no Bindings section at all.
+    await canvasNodes(page).nth(1).click();
+    await expect(section('Activity settings')).toBeVisible();
+    await expect(section('Bindings')).toHaveCount(0);
+    await expectQuiet(page, problems);
+  });
+
   // #852 item 4 — a field whose SCHEMA is tagged `singleLine` is a one-line
   // input, everything else keeps the textarea, and a stored value holding a
   // line break keeps the textarea too (an input would strip the break).
