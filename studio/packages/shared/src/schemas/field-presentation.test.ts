@@ -77,6 +77,16 @@ describe('unnamedEnumValues (#1396)', () => {
     ).toEqual(['field.a', 'field.b', 'blank.x']);
   });
 
+  it('reads names from the outermost labelled layer, however deep it sits', () => {
+    // Named on `.optional()`, then wrapped twice more: the form reads through
+    // every layer, so the gate must too.
+    const named = presented(mode.optional(), {
+      title: 'Mode',
+      options: optionTitles(mode, { a: 'Alpha', b: 'Beta' }),
+    });
+    expect(unnamedEnumValues({ deep: named.default('a').nullable() })).toEqual([]);
+  });
+
   it('passes a field whose every value is named', () => {
     const named = presented(mode.optional(), {
       title: 'Mode',

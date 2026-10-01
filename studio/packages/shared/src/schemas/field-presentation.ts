@@ -176,16 +176,31 @@ export function fieldLabelThrough(schema: unknown): FieldLabel | undefined {
   return fieldLabelOf(schema) ?? fieldLabelOf(inner);
 }
 
+/** The first label on `schema` or a wrapper inside it, outermost first. */
+function outermostLabel(schema: unknown): FieldLabel | undefined {
+  let current: unknown = schema;
+  for (let depth = 0; depth < 8 && current !== undefined; depth += 1) {
+    const label = fieldLabelOf(current);
+    if (label !== undefined) return label;
+    current =
+      typeof current === 'object' && current !== null && '_zod' in current
+        ? (current as { _zod: { def: { innerType?: unknown } } })._zod.def.innerType
+        : undefined;
+  }
+  return undefined;
+}
+
 /**
  * `field.value` for every enum value in `shape` that has no display name — the
  * "every enum value is named" gates on each catalog share this read. Names are
- * read the way `fieldLabelThrough` reads a title: on the field or its one
- * outermost wrapper. A name shared by two values counts as missing on both.
+ * read the way the form reads them (`configForm.ts`'s `unwrap`): from the
+ * outermost layer that carries a label. A name shared by two values counts as
+ * missing on both.
  */
 export function unnamedEnumValues(shape: Readonly<Record<string, unknown>>): string[] {
   return Object.entries(shape).flatMap(([name, field]) => {
     const values = enumValuesOf(field) ?? [];
-    const names = fieldLabelThrough(field)?.options ?? {};
+    const names = outermostLabel(field)?.options ?? {};
     return values
       .filter((v) => {
         const title = names[v];
