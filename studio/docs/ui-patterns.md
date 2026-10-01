@@ -14,7 +14,11 @@ Global parameters and the node property panel move onto it in the slices that fo
 - **Footer actions are right-aligned, with the primary action last**: `Cancel` · secondary actions
   such as `Test connection` · `Save` (class `primary`).
 - When the drawer opens, the first field gets focus. When it closes, focus goes back to the button
-  that opened it.
+  that opened it (the page passes it as `returnFocusTo`, because an open that went through the
+  unsaved-changes prompt leaves focus on the prompt).
+- The form's error and result messages sit in the footer above the actions, so a refused Save is
+  in view where Save was pressed.
+- While a save or test is in flight, Close and Escape wait for it, as Cancel does (`busy`).
 
 ## Sections
 
@@ -38,11 +42,13 @@ Global parameters and the node property panel move onto it in the slices that fo
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`). The stored value
   stays the identifier.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
-  Optional fields are unmarked; there is no "(optional)" suffix. The asterisk is `RequiredMark`.
+  Optional fields are unmarked: schema-derived fields no longer carry an "(optional)" suffix (a few
+  hand-written labels outside `ConfigFieldControl`, in the canvas and trigger editors, still do
+  until their forms move onto this pattern). The asterisk is `RequiredMark`.
   CSS draws it, and it is `aria-hidden`, so it never becomes part of a field's name. A row list is a
   `group` and cannot take `aria-required`, so it gets the asterisk alone.
-- A secret input has a **Show/Hide** toggle (`aria-pressed`). The toggle sits beside the label, not
-  inside it.
+- A secret input has a **Show/Hide** toggle, named "Show secret" or "Hide secret" to match what it
+  does next. The toggle sits beside the label, not inside it.
 
 ## Leaving a form with unsaved changes
 

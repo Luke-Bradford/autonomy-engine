@@ -1380,6 +1380,20 @@ describe('the connection form drawer (#1396)', () => {
     expect(basics.querySelectorAll('.required-mark')).toHaveLength(2);
   });
 
+  it('counts an edit in a JSON view the editor FORCED as an edit', async () => {
+    // A stored value the fields cannot show puts the editor in JSON without
+    // anyone asking — the form's own `jsonMode` flag stays false.
+    listMock.mockResolvedValue([conn({ config: { timeoutMs: 'soon' } })]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    const json = screen.getByLabelText('Config (JSON)');
+    await user.clear(json);
+    await user.type(json, '{{}');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
+  });
+
   it('Escape at the prompt keeps editing', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
