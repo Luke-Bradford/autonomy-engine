@@ -96,10 +96,10 @@ dialogs.
 
 ## Validation
 
-Connections and Datasets check their own fields (`useFieldValidation`,
-`lib/form/fieldValidation.ts`). Secrets, Global parameters and Triggers move onto it next, and still
-use the browser's own `required` check until then. Passing `validation` to `FormDrawer` turns that
-check off (`noValidate`), so the browser's bubble no longer pre-empts the inline message.
+Connections, Datasets, Secrets, Global parameters and Triggers check their own fields
+(`useFieldValidation`, `lib/form/fieldValidation.ts`). Passing `validation` to `FormDrawer` turns
+the browser's own check off (`noValidate`), so the browser's bubble no longer pre-empts the inline
+message.
 
 - **The page computes `checks`**, a memo over what they read: what is wrong with the draft now, by
   field key, in the form's order (`name`, `connectionId`, `config.<field>`, `columns`). A required
@@ -144,6 +144,20 @@ check off (`noValidate`), so the browser's bubble no longer pre-empts the inline
   and blur handlers find the key, so a field needs no wiring of its own. Moving between the cells of
   one row list is not leaving it. `ConfigFieldControl` takes a `validation` prop and `ConfigEditor`
   an `errorFor`; the canvas passes neither and renders as before.
+- **A field that is read-only on an edit is not a field to fix.** `labelOf` stops naming it (a
+  replaced secret's or a stored global's Name), so nothing is checked or filed there.
+- **A conflict on the name is the Name's error.** A 409 from a create, where the name is the only
+  thing that can collide, goes beside the Name (`showRefusedFields`), not into the footer's message.
+- **Under `noValidate` the form must refuse bad input itself.** A native `type="number"` holding `1e`,
+  or a half-typed `datetime-local`, reports `value === ''` and sets `validity.badInput`. The browser
+  refused such a submit, but with its check off a form reading the value sees a blank, and quietly
+  drops the bound or cap. A form with native number or date controls calls `firstBadInput` at the
+  top of its submit and refuses with `badInputMessage`, focusing the control. Today that is the
+  trigger form, whose mode editors use them.
+- **The trigger form checks its own fields only**: Name, the binding (an enabled trigger must be
+  bound), Max parallel runs and Params. Its mode editors (recurrence, tumbling window, event, run
+  windows) still refuse with the footer's one message on Save, from their converters. Moving them
+  onto field keys is a later slice.
 - The canvas's `DraftNumberField` uses the same `FieldError` with `role="alert"`, because there is no
   summary on the canvas to announce it.
 
