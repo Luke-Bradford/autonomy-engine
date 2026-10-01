@@ -84,6 +84,10 @@ describe('JsonEditor (#1396)', () => {
     // The next edit clears it.
     await userEvent.type(box, ' ');
     expect(screen.queryByText(/Not JSON/)).toBeNull();
+    // …and does not come back when the edit is undone by hand.
+    await userEvent.type(box, '{Backspace}');
+    expect(box).toHaveValue(text);
+    expect(screen.queryByText(/Not JSON/)).toBeNull();
   });
 
   it('drops a problem once the value changes from outside, as a reset or another node would', () => {

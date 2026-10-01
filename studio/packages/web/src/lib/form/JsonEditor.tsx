@@ -124,7 +124,12 @@ export function JsonEditor({
         dir="ltr"
         wrap="off"
         value={value}
-        onChange={(e) => onValueChange(e.target.value)}
+        onChange={(e) => {
+          // Typing ends the problem too, even when the edit comes back to the
+          // very text it was found in.
+          setProblem(null);
+          onValueChange(e.target.value);
+        }}
       />
       <div className="json-editor-tools">
         <button
