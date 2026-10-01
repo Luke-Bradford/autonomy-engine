@@ -1083,7 +1083,7 @@ function TriggerForm({
             checked={form.enabled}
             onChange={(e) => onChange({ ...form, enabled: e.target.checked })}
           />
-          Enabled (fires automatically)
+          Enabled (fires on its schedule, event, window or webhook)
         </label>
       </FormSection>
 

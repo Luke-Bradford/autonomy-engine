@@ -1657,6 +1657,29 @@ describe('#1396 the trigger form drawer', () => {
     listTriggersMock.mockResolvedValue([]);
     await user.click(screen.getByRole('button', { name: 'Delete Nightly' }));
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull());
+    expect(deleteMock).toHaveBeenCalledWith('trg_1');
+    expect(prompt()).toBeNull();
+  });
+
+  it('does not count a cron typed and then left for the recurrence builder', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Weekly',
+        mode: 'schedule',
+        schedule: '0 9 * * 1',
+        recurrence: { frequency: 'week', interval: 1, schedule: { weekDays: [1], hours: [9] } },
+      }),
+    ]);
+    renderWithDataRouter(<TriggersPage />);
+    const row = within(await screen.findByRole('row', { name: /Weekly/ }));
+    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    const form = within(formEl());
+    await user.selectOptions(form.getByLabelText(/Schedule authored as/), 'cron');
+    await user.type(form.getByLabelText(/Schedule \(cron\)/), '0 2 * * *');
+    // Save sends only the recurrence while the builder is selected.
+    await user.selectOptions(form.getByLabelText(/Schedule authored as/), 'recurrence');
+    await user.click(form.getByRole('button', { name: 'Cancel' }));
     expect(prompt()).toBeNull();
   });
 });

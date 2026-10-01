@@ -53,7 +53,8 @@ Triggers follow it. The node property panel moves onto it in a slice that follow
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
 - `unit` names what the stored value is in. It never converts the value.
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
-  `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`, `CONCURRENCY_POLICY_LABELS`). The stored value stays the identifier.
+  `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`,
+  `CONCURRENCY_POLICY_LABELS`). The stored value stays the identifier.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).

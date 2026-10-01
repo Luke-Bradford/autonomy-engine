@@ -12,6 +12,7 @@ import { formToWindow, type WindowFormState } from './windowForm';
 import { boundEcho } from './formFields';
 import { BoundShiftNotices } from './BoundShiftNotices';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 
 const FREQUENCIES = WindowFrequencySchema.options;
 
@@ -91,10 +92,17 @@ export function WindowEditor({
       {/* `step={1}` admits seconds, so a stored bound that has them can be both
           shown and re-entered rather than silently rounded to the minute. */}
       <label>
-        Start time (required — the window epoch)
+        <span>
+          Start time (the window epoch)
+          <RequiredMark />
+        </span>
         <input
           type="datetime-local"
           step={1}
+          // `aria-required`, not native `required`: a DISABLED tumbling trigger
+          // may be saved with no window at all, which the form's own refusal
+          // path decides, so the browser must not block that submit.
+          aria-required="true"
           value={value.startTime}
           onChange={(e) => set({ startTime: e.target.value })}
         />

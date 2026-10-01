@@ -136,6 +136,7 @@ export function RecurrenceEditor({
           <input
             type="text"
             value={value.monthDays}
+            aria-required={required === 'monthDays'}
             onChange={(e) => set({ monthDays: e.target.value })}
             placeholder="1, 15"
             spellCheck={false}
