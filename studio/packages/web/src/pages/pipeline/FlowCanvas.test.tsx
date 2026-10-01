@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { PipelineVersionSchema } from '@autonomy-studio/shared';
+import { HTTP_REQUEST_ACTIVITY_TYPE, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
@@ -206,8 +206,12 @@ describe('FlowCanvas empty-canvas guide (#1413 OR22)', () => {
   it('a drop on the guide still authors a node — it is not canvas chrome', () => {
     const { store, container } = mountCanvas();
     const button = within(guide(container) as HTMLElement).getAllByRole('button')[1]!;
-    fireEvent.drop(button, { dataTransfer: activityDrag('http_request'), clientX: 0, clientY: 0 });
-    expect(store.getState().nodes.map((n) => n.type)).toEqual(['http_request']);
+    fireEvent.drop(button, {
+      dataTransfer: activityDrag(HTTP_REQUEST_ACTIVITY_TYPE),
+      clientX: 0,
+      clientY: 0,
+    });
+    expect(store.getState().nodes.map((n) => n.type)).toEqual([HTTP_REQUEST_ACTIVITY_TYPE]);
     expect(guide(container)).toBeNull();
   });
 
