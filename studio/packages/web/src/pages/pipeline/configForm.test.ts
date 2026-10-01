@@ -9,6 +9,7 @@ import {
   llmMessageSchema,
   llmOutputSchemaSchema,
   literalText,
+  presented,
   singleLine,
 } from '@autonomy-studio/shared';
 import {
@@ -1579,6 +1580,23 @@ describe('literalText presentation hint (#844 V6)', () => {
     expect((fields ?? []).map((f) => [f.name, f.literal])).toEqual([
       ['wrapped', true],
       ['refined', true],
+    ]);
+  });
+});
+
+describe('deriveConfigFields — human labels (#1396)', () => {
+  it('reads a title from the field or from its optional wrapper', () => {
+    const fields = deriveConfigFields(
+      z.object({
+        inner: presented(z.string(), { title: 'Inner' }).optional(),
+        outer: presented(z.number().optional(), { title: 'Outer', unit: 'ms' }),
+        bare: z.string(),
+      }),
+    )!;
+    expect(fields.map((field) => field.label)).toEqual([
+      { title: 'Inner' },
+      { title: 'Outer', unit: 'ms' },
+      undefined,
     ]);
   });
 });

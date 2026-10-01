@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
+  CONNECTION_KIND_LABELS,
   DATASET_CONNECTION_KINDS,
   DATASET_KINDS,
   DatasetColumnSchema,
@@ -710,7 +711,7 @@ function DatasetForm({
             )}
             {connections.map((conn) => (
               <option key={conn.id} value={conn.id}>
-                {conn.name} ({conn.kind})
+                {conn.name} ({CONNECTION_KIND_LABELS[conn.kind]})
               </option>
             ))}
           </select>

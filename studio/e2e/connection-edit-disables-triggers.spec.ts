@@ -100,9 +100,9 @@ test('names the enabled trigger a kind change would switch off, and then switche
 
   // Supplying the secret in the SAME edit keeps the connection ready, so
   // nothing would be disabled and the note must withdraw.
-  await form(page).getByLabel('Secret').fill('sk-e2e');
+  await form(page).getByLabel('Secret', { exact: true }).fill('sk-e2e');
   await expect(form(page).getByText(/switches off/)).toHaveCount(0);
-  await form(page).getByLabel('Secret').fill('');
+  await form(page).getByLabel('Secret', { exact: true }).fill('');
   await expect(form(page).getByText(/switches off 1 enabled trigger/)).toBeVisible();
 
   // Now save, and read the trigger back from the SERVER: the note was TRUE.

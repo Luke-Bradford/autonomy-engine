@@ -131,7 +131,7 @@ test.describe('#1227 — a label names its control and nothing else', () => {
     await page.getByRole('button', { name: 'New connection' }).click();
     const form = page.getByRole('form', { name: 'Connection form' });
     await form.getByLabel('Kind', { exact: true }).selectOption('fs');
-    const roots = form.getByLabel(/^roots/);
+    const roots = form.getByLabel(/^Allowed folders/);
     await expect(roots).toBeVisible();
     expect(await configFieldStyle(roots)).toEqual(CONFIG_FIELD_RHYTHM);
     await expectQuiet(page, problems);

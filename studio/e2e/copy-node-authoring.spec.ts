@@ -203,7 +203,7 @@ test.describe('#1139 — copy-node authoring', () => {
     ] as const) {
       await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
       await properties(page)
-        .getByRole('textbox', { name: `mapping row ${row} source (optional)` })
+        .getByRole('textbox', { name: `mapping row ${row} source` })
         .fill(source);
       await properties(page)
         .getByRole('textbox', { name: `mapping row ${row} sink` })
@@ -216,7 +216,7 @@ test.describe('#1139 — copy-node authoring', () => {
     // in — the same rule every optional control in this form follows, and the
     // difference between "the author chose 'fail'" and "the author said
     // nothing", which is a distinction §6.2 can still act on later.
-    await properties(page).getByLabel('mapping row 2 onError (optional)').selectOption('null');
+    await properties(page).getByLabel('mapping row 2 onError').selectOption('null');
 
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -415,7 +415,7 @@ test.describe('#1178 — the expression picker on a mapping cell', () => {
       .getByRole('button', { name: /^batch/ })
       .click();
     await expect(
-      properties(page).getByRole('textbox', { name: 'mapping row 1 expression (optional)' }),
+      properties(page).getByRole('textbox', { name: 'mapping row 1 expression' }),
     ).toHaveValue('${params.batch}');
 
     await properties(page).getByRole('button', { name: 'Apply config' }).click();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { emptyControlValue, isRowKind, isRowList, placeRowCandidate } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -6,6 +6,7 @@ import { ExpressionPicker, type FieldOptions, type FunctionOption } from './Expr
 import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
@@ -141,10 +142,17 @@ export type FieldChoices = {
  * it on the next keystroke. The choice is LATCHED for the mount, so deleting
  * that last line break does not swap the element out from under the caret.
  *
- * The label carries the field NAME, not a prettified one: the name is what the
- * author writes in a `${nodes.x.config…}` reference and what the server's
- * validation errors cite, so renaming it for display would break the one thread
- * connecting the form, the doc and the error message.
+ * The label carries the field NAME unless the schema gives it a human title
+ * (`presented`, #1396). The name is what the author writes in a
+ * `${nodes.x.config…}` reference and what the server's validation errors cite,
+ * so a TITLED field still shows its key, in the hint under the control: the
+ * title is for reading the form, the key is the thread connecting the form,
+ * the doc and the error message.
+ *
+ * #1396 — a REQUIRED field (one whose key may not be absent) carries a visual
+ * asterisk, hidden from the accessible name, and `aria-required` on the
+ * control. An optional field is unmarked. A row list is a `group`, which may not
+ * carry `aria-required`, so it gets the asterisk alone.
  *
  * A `<textarea>` or `<select>` is paired with its label by `htmlFor`/`id` through
  * `LabelledControl`, never WRAPPED by it (#1227). A wrapping label's text
@@ -183,7 +191,20 @@ export function ConfigFieldControl({
   target?: PickerTarget;
 }) {
   const shown = name ?? field.name;
-  const label = field.optional ? `${shown} (optional)` : shown;
+  // A cell's `name` already says where it sits; only a top-level field is titled.
+  const titled = name === undefined ? field.label : undefined;
+  const base = titled?.title ?? shown;
+  const label = titled?.unit === undefined ? base : `${base} (${titled.unit})`;
+  const required = !field.optional;
+  const hintId = useId();
+  const hint =
+    titled === undefined ? null : (
+      <p id={hintId} className="field-hint">
+        {titled.description !== undefined && <>{titled.description} </>}
+        <code>{field.name}</code>
+      </p>
+    );
+  const describedBy = hint === null ? undefined : hintId;
   // ONE caret hook for whichever element renders, so its caret and `touched`
   // state survive the latch below; the casts at the JSX sites only narrow the
   // union to the element each site mounts.
@@ -203,45 +224,69 @@ export function ConfigFieldControl({
 
   if (isRowKind(field.kind)) {
     return (
-      <ObjectListControl
-        field={field}
-        label={label}
-        rows={isRowList(value) ? value : []}
-        onChange={onChange}
-        picker={picker}
-      />
+      <>
+        <ObjectListControl
+          field={field}
+          label={label}
+          required={required}
+          describedBy={describedBy}
+          rows={isRowList(value) ? value : []}
+          onChange={onChange}
+          picker={picker}
+        />
+        {hint}
+      </>
     );
   }
 
   if (field.kind === 'boolean') {
     return (
-      <label className="contract-check">
-        <input
-          type="checkbox"
-          checked={value === true}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        {label}
-      </label>
+      // The hint is a SIBLING of the label: inside it, it would join the
+      // checkbox's name.
+      <>
+        <label className="contract-check">
+          <input
+            type="checkbox"
+            checked={value === true}
+            aria-describedby={describedBy}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          {label}
+        </label>
+        {hint}
+      </>
     );
   }
 
   if (field.kind === 'enum') {
     return (
-      <LabelledControl className="config-field" label={label}>
+      <LabelledControl
+        className="config-field"
+        label={
+          <>
+            {label}
+            {required && <RequiredMark />}
+          </>
+        }
+      >
         {(id) => (
-          <select
-            id={id}
-            value={typeof value === 'string' ? value : ''}
-            onChange={(e) => onChange(e.target.value)}
-          >
-            <option value="">— none —</option>
-            {(field.enumOptions ?? []).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+          <>
+            <select
+              id={id}
+              value={typeof value === 'string' ? value : ''}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
+              onChange={(e) => onChange(e.target.value)}
+            >
+              <option value="">— none —</option>
+              {(field.enumOptions ?? []).map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            {hint}
+          </>
         )}
       </LabelledControl>
     );
@@ -252,24 +297,39 @@ export function ConfigFieldControl({
     // entry as the empty string, which this form reads as "not set" — so a typo
     // would silently DELETE the setting instead of reporting "must be a number".
     return (
-      <label>
-        {`${label} — number`}
-        <input
-          type="text"
-          inputMode="decimal"
-          value={typeof value === 'string' ? value : ''}
-          spellCheck={false}
-          placeholder={field.defaultText}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
+      <>
+        <label>
+          {`${label} — number`}
+          {required && <RequiredMark />}
+          <input
+            type="text"
+            inputMode="decimal"
+            value={typeof value === 'string' ? value : ''}
+            spellCheck={false}
+            placeholder={field.defaultText}
+            aria-required={required || undefined}
+            aria-describedby={describedBy}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        </label>
+        {hint}
+      </>
     );
   }
 
-  const hint = field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
+  const format =
+    field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
 
   return (
-    <LabelledControl className="config-field" label={hint === null ? label : `${label} — ${hint}`}>
+    <LabelledControl
+      className="config-field"
+      label={
+        <>
+          {format === null ? label : `${label} — ${format}`}
+          {required && <RequiredMark />}
+        </>
+      }
+    >
       {(id) => (
         <>
           {oneLine ? (
@@ -285,6 +345,8 @@ export function ConfigFieldControl({
               // own login, and a textarea never offered autofill for it.
               autoComplete="off"
               placeholder={field.defaultText}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
               onChange={(e) => onChange(e.target.value)}
             />
           ) : (
@@ -296,9 +358,12 @@ export function ConfigFieldControl({
               rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
               spellCheck={false}
               placeholder={field.defaultText}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
               onChange={(e) => onChange(e.target.value)}
             />
           )}
+          {hint}
           {/* A SIBLING of the label, not a child, because a button INSIDE the label
           contaminates the text box's accessible name — which is exactly why
           `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
@@ -458,12 +523,18 @@ export function ConfigFieldControl({
 export function ObjectListControl({
   field,
   label,
+  required = false,
+  describedBy,
   rows,
   onChange,
   picker,
 }: {
   field: ConfigField;
   label: string;
+  /** #1396 — draws the asterisk; a `group` may not carry `aria-required`. */
+  required?: boolean;
+  /** The id of the hint under the list, when the field is titled. */
+  describedBy?: string;
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker?: FieldPicker;
@@ -517,8 +588,17 @@ export function ObjectListControl({
   });
 
   return (
-    <div className="config-field object-list" role="group" aria-label={label} ref={groupRef}>
-      <span className="object-list-label">{label}</span>
+    <div
+      className="config-field object-list"
+      role="group"
+      aria-label={label}
+      aria-describedby={describedBy}
+      ref={groupRef}
+    >
+      <span className="object-list-label">
+        {label}
+        {required && <RequiredMark />}
+      </span>
       {rows.length === 0 ? <p className="page-hint">No rows.</p> : null}
       {field.recordValue === 'secret' ? (
         <p className="page-hint">

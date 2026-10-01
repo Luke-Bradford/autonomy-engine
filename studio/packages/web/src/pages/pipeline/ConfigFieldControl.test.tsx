@@ -53,7 +53,7 @@ describe('ConfigFieldControl — a label names its control and nothing else (#12
         choices={{ label: 'Sheet in this workbook', values: ['Sheet1', 'Sheet2'], onChoose: noop }}
       />,
     );
-    expect(labelTextOf(container.querySelector('textarea')!)).toEqual(['sheet (optional)']);
+    expect(labelTextOf(container.querySelector('textarea')!)).toEqual(['sheet']);
     expect(labelTextOf(container.querySelector('select')!)).toEqual(['Sheet in this workbook']);
   });
 });
@@ -177,5 +177,82 @@ describe('ConfigFieldControl — the expression flyout is withheld on a JSON fie
     );
     expect(getByRole('button', { name: 'Insert reference into url' })).toBeTruthy();
     expect(queryByRole('button', { name: 'Insert reference into quota' })).toBeNull();
+  });
+});
+
+describe('ConfigFieldControl — human labels and required fields (#1396)', () => {
+  it('a titled field reads as its title and unit, and keeps its key in the hint', () => {
+    const field: ConfigField = {
+      name: 'timeoutMs',
+      kind: 'number',
+      optional: true,
+      label: { title: 'Timeout', unit: 'ms', description: 'How long one request may take.' },
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value="" onChange={noop} />,
+    );
+    const input = getByRole('textbox', { name: 'Timeout (ms) — number' });
+    const hint = container.querySelector(`#${CSS.escape(input.getAttribute('aria-describedby')!)}`);
+    expect(hint?.textContent).toBe('How long one request may take. timeoutMs');
+  });
+
+  it('an untitled field keeps its key as the label and has no hint', () => {
+    const field: ConfigField = { name: 'path', kind: 'text', optional: true, singleLine: true };
+    const { getByRole } = render(<ConfigFieldControl field={field} value="" onChange={noop} />);
+    expect(getByRole('textbox', { name: 'path' }).hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('marks a required field, and only a required one', () => {
+    const required: ConfigField = { name: 'host', kind: 'text', optional: false, singleLine: true };
+    const optional: ConfigField = { name: 'port', kind: 'text', optional: true, singleLine: true };
+    const a = render(<ConfigFieldControl field={required} value="" onChange={noop} />);
+    expect(a.getByRole('textbox', { name: 'host' }).getAttribute('aria-required')).toBe('true');
+    expect(a.container.querySelector('.required-mark')).not.toBeNull();
+    a.unmount();
+    const b = render(<ConfigFieldControl field={optional} value="" onChange={noop} />);
+    expect(b.getByRole('textbox', { name: 'port' }).hasAttribute('aria-required')).toBe(false);
+    expect(b.container.querySelector('.required-mark')).toBeNull();
+  });
+
+  it('a required row list gets the asterisk but no aria-required on its group', () => {
+    const field: ConfigField = {
+      name: 'mapping',
+      kind: 'objectList',
+      optional: false,
+      elementFields: [{ name: 'source', kind: 'text', optional: true }],
+    };
+    const { getByRole, container } = render(
+      <ConfigFieldControl field={field} value={[]} onChange={noop} />,
+    );
+    expect(getByRole('group', { name: 'mapping' }).hasAttribute('aria-required')).toBe(false);
+    expect(container.querySelector('.required-mark')).not.toBeNull();
+  });
+
+  it('a titled checkbox keeps its hint out of its name', () => {
+    const field: ConfigField = {
+      name: 'writable',
+      kind: 'boolean',
+      optional: true,
+      label: { title: 'Allow writes', description: 'Lets a copy write here.' },
+    };
+    const { getByRole } = render(
+      <ConfigFieldControl field={field} value={false} onChange={noop} />,
+    );
+    const box = getByRole('checkbox', { name: 'Allow writes' });
+    expect(box).toHaveAccessibleDescription('Lets a copy write here. writable');
+  });
+
+  it('a titled row list is described by its hint', () => {
+    const field: ConfigField = {
+      name: 'headers',
+      kind: 'objectList',
+      optional: true,
+      label: { title: 'Headers', description: 'Sent with every request.' },
+      elementFields: [{ name: 'source', kind: 'text', optional: true }],
+    };
+    const { getByRole } = render(<ConfigFieldControl field={field} value={[]} onChange={noop} />);
+    expect(getByRole('group', { name: 'Headers' })).toHaveAccessibleDescription(
+      'Sent with every request. headers',
+    );
   });
 });

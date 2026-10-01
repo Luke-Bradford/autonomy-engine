@@ -133,7 +133,7 @@ test.describe('#959 portability', () => {
     await form.getByLabel('Name').fill(name);
     // A secret IS typed, so `secretRef !== null` server-side — which is the
     // precondition for the attention item this test exists to prove.
-    await form.getByLabel('Secret').fill('sk-not-exported');
+    await form.getByLabel('Secret', { exact: true }).fill('sk-not-exported');
     await form.getByRole('button', { name: 'Create connection' }).click();
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
 
@@ -212,7 +212,7 @@ test.describe('#959 portability', () => {
     const rows = page.getByRole('row').filter({ hasText: name });
 
     // 1. Into a CHOSEN store — the cross-workspace path.
-    await page.getByLabel('Store it in').selectOption({ label: `${destStore} (fs)` });
+    await page.getByLabel('Store it in').selectOption({ label: `${destStore} (File system)` });
     await page.getByLabel('Export file').setInputFiles(file as string);
     await expect(page.getByRole('status')).toContainText(`Imported dataset “${name}”`);
     await expect(rows).toHaveCount(2);

@@ -59,15 +59,13 @@ test.describe('U7 — per-activity node config form', () => {
     // `method` are not strings this spec invented — they are the keys of
     // `http_request`'s own `configSchema`, so a control per key is the assertion.
     await expect(properties(page).getByRole('textbox', { name: 'url' })).toBeVisible();
-    await expect(
-      properties(page).getByRole('textbox', { name: 'method (optional)' }),
-    ).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'method' })).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     await properties(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/hook');
-    await properties(page).getByRole('textbox', { name: 'method (optional)' }).fill('POST');
+    await properties(page).getByRole('textbox', { name: 'method' }).fill('POST');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -82,9 +80,7 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
       'https://example.test/hook',
     );
-    await expect(properties(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue(
-      'POST',
-    );
+    await expect(properties(page).getByRole('textbox', { name: 'method' })).toHaveValue('POST');
     expect(await persistedConfig(page, id)).toMatchObject({
       url: 'https://example.test/hook',
       method: 'POST',
@@ -137,16 +133,14 @@ test.describe('U7 — per-activity node config form', () => {
           root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
         ).find((el) => Array.from(el.labels ?? []).some((l) => l.textContent === name));
       const url = byLabel('url');
-      const textareaFont = byLabel('body (optional)')
-        ? getComputedStyle(byLabel('body (optional)')!).fontFamily
-        : null;
+      const textareaFont = byLabel('body') ? getComputedStyle(byLabel('body')!).fontFamily : null;
       return {
         url: url?.tagName,
         urlFont: url ? getComputedStyle(url).fontFamily : null,
         textareaFont,
-        method: byLabel('method (optional)')?.tagName,
-        methodValue: byLabel('method (optional)')?.value,
-        body: byLabel('body (optional)')?.tagName,
+        method: byLabel('method')?.tagName,
+        methodValue: byLabel('method')?.value,
+        body: byLabel('body')?.tagName,
       };
     });
     expect(facts).toEqual({
@@ -311,10 +305,8 @@ test.describe('U7 — per-activity node config form', () => {
     await canvasNodes(page).first().click();
     const p = properties(page);
     // No JSON blob for either record: a row group per field.
-    await expect(p.getByRole('group', { name: 'headers (optional)', exact: true })).toBeVisible();
-    await expect(
-      p.getByRole('group', { name: 'secretHeaders (optional)', exact: true }),
-    ).toBeVisible();
+    await expect(p.getByRole('group', { name: 'headers', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'secretHeaders', exact: true })).toBeVisible();
     await expect(p.getByRole('textbox', { name: 'headers row 1 key', exact: true })).toHaveValue(
       'X-Keep',
     );
@@ -385,7 +377,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await canvasNodes(page).first().click();
     const p = properties(page);
-    await expect(p.getByRole('group', { name: 'messages (optional)', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'messages', exact: true })).toBeVisible();
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
       'user',
     );
@@ -460,7 +452,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await nodeById(page, 'a').click();
     const p = properties(page);
-    const history = p.getByRole('textbox', { name: 'history (optional)', exact: true });
+    const history = p.getByRole('textbox', { name: 'history', exact: true });
     await expect(history).toHaveValue('');
     // The prompt, a template, IS offered the producer's string `text`...
     const promptPicker = p.getByRole('button', {
@@ -574,9 +566,7 @@ test.describe('U7 — per-activity node config form', () => {
     const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
       p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
-    await expect(
-      p.getByRole('group', { name: 'outputSchema (optional)', exact: true }),
-    ).toBeVisible();
+    await expect(p.getByRole('group', { name: 'outputSchema', exact: true })).toBeVisible();
     await expect(cell('textbox', 1, 'name')).toHaveValue('category');
     await expect(cell('combobox', 1, 'type')).toHaveValue('string');
     await expect(cell('checkbox', 1, 'required')).toBeChecked();

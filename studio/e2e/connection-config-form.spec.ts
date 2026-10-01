@@ -43,9 +43,9 @@ test.describe('U13b per-kind connection config', () => {
     // #1087 the whole config was one textarea and an operator had to know the
     // key names by heart.
     await form(page)
-      .getByLabel(/^roots/)
+      .getByLabel(/^Allowed folders/)
       .fill('/tmp/e2e-u13b');
-    await form(page).getByLabel('maxBytes (optional)').fill('2048');
+    await form(page).getByLabel('Largest file read (bytes) — number', { exact: true }).fill('2048');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
@@ -104,7 +104,7 @@ test.describe('U13b per-kind connection config', () => {
     // `SECRET_REQUIRING_CONNECTION_KINDS`.
     await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
 
-    const sslmode = form(page).getByLabel('sslmode');
+    const sslmode = form(page).getByLabel('TLS mode', { exact: true });
     await expect(sslmode).toHaveRole('combobox');
     await expect(sslmode.locator('option')).toHaveText([
       // The empty choice is the form's own placeholder, and it MATTERS here:
@@ -117,11 +117,11 @@ test.describe('U13b per-kind connection config', () => {
       'verify-full',
     ]);
 
-    await form(page).getByLabel('host').fill('db.example.test');
-    await form(page).getByLabel('database').fill('app');
-    await form(page).getByLabel('user').fill('app_ro');
+    await form(page).getByLabel('Host', { exact: true }).fill('db.example.test');
+    await form(page).getByLabel('Database', { exact: true }).fill('app');
+    await form(page).getByLabel('User', { exact: true }).fill('app_ro');
     await sslmode.selectOption('verify-full');
-    await form(page).getByLabel('port (optional)').fill('6543');
+    await form(page).getByLabel('Port — number', { exact: true }).fill('6543');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
@@ -174,18 +174,18 @@ test.describe('U13b per-kind connection config', () => {
     await page.getByRole('button', { name: 'New connection' }).click();
     // anthropic_api is the first kind: its own header field is present, and the
     // secret note says it cannot dispatch without one.
-    await expect(form(page).getByLabel('anthropicVersion (optional)')).toBeVisible();
+    await expect(form(page).getByLabel('API version', { exact: true })).toBeVisible();
     await expect(form(page).getByText(/cannot dispatch without a secret/)).toBeVisible();
 
     await form(page).getByLabel('Kind').selectOption('agent_cli');
-    await expect(form(page).getByLabel('command', { exact: true })).toBeVisible();
-    await expect(form(page).getByLabel('anthropicVersion (optional)')).toBeHidden();
+    await expect(form(page).getByLabel('Command', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('API version', { exact: true })).toBeHidden();
     // An agent_cli DOES use a secret without requiring one — "optional" alone
     // would not say where it goes.
     await expect(form(page).getByText(/environment variable named by/)).toBeVisible();
 
     // The JSON escape hatch is still reachable, and opens on the same config.
-    await form(page).getByLabel('command', { exact: true }).fill('claude');
+    await form(page).getByLabel('Command', { exact: true }).fill('claude');
     await form(page).getByRole('button', { name: 'Edit as JSON' }).click();
     await expect(form(page).getByLabel('Config (JSON)')).toHaveValue(
       JSON.stringify({ command: 'claude' }, null, 2),
@@ -216,7 +216,7 @@ test.describe('#1191 test connection', () => {
     // A root that DOES exist on any machine this suite runs on. The adapter
     // stats it for real — this is a liveness answer, not a schema check.
     await form(page)
-      .getByLabel(/^roots/)
+      .getByLabel(/^Allowed folders/)
       .fill('/tmp');
     await form(page).getByRole('button', { name: 'Test connection' }).click();
     await expect(form(page).getByRole('status')).toHaveText('Connected.');
@@ -224,7 +224,7 @@ test.describe('#1191 test connection', () => {
     // Now a root that does not. Same button, same adapter, and the sentence is
     // the one `fs.testConnection` authors — nothing in the browser invented it.
     await form(page)
-      .getByLabel(/^roots/)
+      .getByLabel(/^Allowed folders/)
       .fill('/tmp/e2e-1191-definitely-not-here');
     // The previous verdict must be GONE the moment the draft changes under it:
     // a green result about a path since edited is a lie with a timestamp.
@@ -266,7 +266,7 @@ test.describe('#1191 test connection', () => {
     await form(page).getByLabel('Name').fill(`e2e 1191 agent ${Date.now()}`);
     await form(page).getByLabel('Kind').selectOption('agent_cli');
     await form(page)
-      .getByLabel(/^command/)
+      .getByLabel(/^Command/)
       .fill('definitely-not-a-real-binary');
 
     await form(page).getByRole('button', { name: 'Test connection' }).click();
