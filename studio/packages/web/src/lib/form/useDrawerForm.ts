@@ -1,0 +1,83 @@
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from 'react';
+import { useUnsavedChangesGuard, type UnsavedChangesGuard } from './useUnsavedChangesGuard';
+
+/**
+ * #1396 — the page-side state of a resource form that opens in a `FormDrawer`:
+ * which form is open, whether it has unsaved changes, and the guard that holds
+ * every way out of it. One hook so each page that adopts the pattern does not
+ * re-derive the open counter and the dirty check.
+ *
+ * `signatureOf` turns a form into what Save would write, as one comparable
+ * string (see `payloadSignature`). "Dirty" is that against the value taken when
+ * the form opened.
+ */
+export interface DrawerForm<F> {
+  /** The open form, or `null` when the drawer is closed. */
+  readonly form: F | null;
+  /** Edit the open form, or close it with `null` (bypassing the guard). */
+  readonly setForm: Dispatch<SetStateAction<F | null>>;
+  /** Open `next` now. Pages call it inside `guard.request`. */
+  readonly openForm: (next: F) => void;
+  /**
+   * How many times a form has been OPENED; mount the form with this as its
+   * `key`.
+   *
+   * Keying on the record's id is not enough. "New" is not gated behind the
+   * form being closed, so pressing it with a new form already open leaves the
+   * id at `null` (no remount) while the blank form is byte-identical, and any
+   * state the form holds about the previous draft (a probe verdict, a sheet
+   * listing) would render against a form that never produced it. A counter
+   * cannot collide with itself, so every way of opening a form starts it clean.
+   */
+  readonly seq: number;
+  /**
+   * Whether `seq` is still the latest open. A save keeps running after its
+   * form is gone (Edit on another row, then Discard, while it is in flight),
+   * and its `onSaved` must close only the form it belongs to, never the one
+   * opened since.
+   */
+  readonly isLatest: (seq: number) => boolean;
+  readonly guard: UnsavedChangesGuard;
+  /**
+   * The button that opened the form on screen, so closing it returns focus
+   * there. Set it when the open actually HAPPENS (inside the guarded action),
+   * so a held "Edit" that the operator then abandons does not steal it.
+   */
+  readonly openerRef: RefObject<HTMLElement | null>;
+}
+
+export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F> {
+  const [form, setForm] = useState<F | null>(null);
+  const [seq, setSeq] = useState(0);
+  const latestSeq = useRef(0);
+  const [openedAs, setOpenedAs] = useState<string | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  const openForm = useCallback(
+    (next: F) => {
+      setForm(next);
+      setOpenedAs(signatureOf(next));
+      latestSeq.current += 1;
+      setSeq(latestSeq.current);
+      // A page passes a module-level function, so this is stable in practice.
+    },
+    [signatureOf],
+  );
+
+  const dirty = useMemo(
+    () => form !== null && signatureOf(form) !== openedAs,
+    [form, openedAs, signatureOf],
+  );
+  const guard = useUnsavedChangesGuard(dirty);
+  const isLatest = useCallback((s: number) => latestSeq.current === s, []);
+
+  return { form, setForm, openForm, seq, isLatest, guard, openerRef };
+}
