@@ -108,7 +108,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
       within(first)
         .getAllByRole('cell')
         .map((c) => c.textContent),
-    ).toEqual(['apiUrl', 'string', 'https://example.test', 'the base URL', 'EditExportDelete']);
+    ).toEqual(['apiUrl', 'String', 'https://example.test', 'the base URL', 'EditExportDelete']);
     const cfg = screen.getByText('cfg').closest('tr')!;
     expect(within(cfg).getByText('{"a":1}')).toHaveAttribute('title', '{"a":1}');
     // No form until one is asked for.
@@ -125,7 +125,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     expect(field('Name')).toHaveAttribute('readonly');
     expect(field('Name')).toHaveValue('apiUrl');
     expect(field('Type')).toHaveAttribute('readonly');
-    expect(field('Type')).toHaveValue('json');
+    expect(field('Type')).toHaveValue('JSON');
     expect(field('Value')).toHaveValue('{"a":1}');
     expect(field('Description')).toHaveValue('the base URL');
     // The first field the operator can change, not the read-only Name.
@@ -142,6 +142,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     expect(field('Name')).not.toHaveAttribute('readonly');
     expect(field('Name')).toHaveFocus();
     await user.type(field('Name'), 'retries');
+    expect(within(field('Type')).getByRole('option', { name: 'Number' })).toHaveValue('number');
     await user.selectOptions(field('Type'), 'number');
     await user.type(field('Value'), '3');
     await user.click(create());

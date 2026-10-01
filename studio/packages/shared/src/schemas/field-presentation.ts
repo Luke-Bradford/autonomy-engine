@@ -69,6 +69,32 @@ export interface FieldPresentation {
   readonly options?: Readonly<Record<string, string>>;
 }
 
+/**
+ * #1396 — the display name of every VALUE TYPE a picker offers: a parameter,
+ * variable or output type, a structured-output property type, a copy mapping's
+ * target type. One table, so "number" reads the same in every picker.
+ *
+ * Capitalised rather than reworded ("String", not "Text"): validation messages
+ * and advisories cite the STORED value (`expected number, got string`), and a
+ * picker that said "Text" would leave the reader translating between the two.
+ * A number field's RANGE hint ("Whole number from 1 to 65535") is a sentence
+ * about a constraint, not a type name, and says it in plain words on purpose.
+ */
+export const VALUE_TYPE_TITLES = {
+  string: 'String',
+  number: 'Number',
+  integer: 'Integer',
+  boolean: 'Boolean',
+  json: 'JSON',
+  secret: 'Secret',
+  array: 'Array',
+  object: 'Object',
+  date: 'Date',
+  timestamp: 'Timestamp',
+  binary: 'Binary',
+} as const;
+export type ValueTypeName = keyof typeof VALUE_TYPE_TITLES;
+
 /** The human-facing half of a field's presentation (#1396). */
 export interface FieldLabel {
   readonly title: string;
@@ -130,12 +156,14 @@ export function fieldLabelOf(schema: unknown): FieldLabel | undefined {
 
 /**
  * #1396 — a display name for every value of `schema`, checked at compile time:
- * leaving a value out, or naming one the enum does not have, is a type error.
+ * leaving a value out is a type error, and so is naming one the enum does not
+ * have in an inline object. A shared table naming MORE values (such as
+ * `VALUE_TYPE_TITLES`) is accepted, so several enums can draw on one table.
  * The schema argument only carries the type.
  */
 export function optionTitles<const V extends string>(
   _schema: z.ZodEnum<{ [K in V]: K }>,
-  titles: { readonly [K in V]: string },
+  titles: { readonly [K in NoInfer<V>]: string },
 ): Readonly<Record<V, string>> {
   return titles;
 }
@@ -196,10 +224,22 @@ function outermostLabel(schema: unknown): FieldLabel | undefined {
  * read the way the form reads them (`configForm.ts`'s `unwrap`): from the
  * outermost layer that carries a label. A name shared by two values counts as
  * missing on both.
+ *
+ * It walks INTO a field too: a row list's element (`messages[].role`), a
+ * record's values (`outputSchema.properties.*.type`) and each union member,
+ * because a row list renders every enum cell as a select of its own.
  */
 export function unnamedEnumValues(shape: Readonly<Record<string, unknown>>): string[] {
-  return Object.entries(shape).flatMap(([name, field]) => {
-    const values = enumValuesOf(field) ?? [];
+  return Object.entries(shape).flatMap(([name, field]) => unnamedIn(field, name, 0));
+}
+
+function unnamedIn(field: unknown, path: string, depth: number): string[] {
+  // Bounded by the depth cap: a getter-recursive object would otherwise walk
+  // forever. `lazy`, `pipe`, `intersection` and `tuple` are not walked; no
+  // catalog config uses one today, so a value hidden inside one is not checked.
+  if (depth > 8) return [];
+  const values = enumValuesOf(field);
+  if (values !== undefined) {
     const names = outermostLabel(field)?.options ?? {};
     return values
       .filter((v) => {
@@ -210,8 +250,46 @@ export function unnamedEnumValues(shape: Readonly<Record<string, unknown>>): str
           values.some((other) => other !== v && names[other] === title)
         );
       })
-      .map((v) => `${name}.${v}`);
-  });
+      .map((v) => `${path}.${v}`);
+  }
+  const def = coreDef(field);
+  switch (def?.type) {
+    case 'object':
+      return Object.entries((def.shape ?? {}) as Record<string, unknown>).flatMap(([key, cell]) =>
+        unnamedIn(cell, `${path}.${key}`, depth + 1),
+      );
+    case 'array':
+      return unnamedIn(def.element, `${path}[]`, depth + 1);
+    case 'record':
+      return unnamedIn(def.valueType, `${path}.*`, depth + 1);
+    case 'union':
+      return ((def.options ?? []) as unknown[]).flatMap((member) =>
+        unnamedIn(member, path, depth + 1),
+      );
+    default:
+      return [];
+  }
+}
+
+interface CoreDef {
+  type?: string;
+  innerType?: unknown;
+  shape?: unknown;
+  element?: unknown;
+  valueType?: unknown;
+  options?: unknown;
+}
+
+/** The def under every `.optional()`/`.default()`/`.nullable()` wrapper. */
+function coreDef(schema: unknown): CoreDef | undefined {
+  let current: unknown = schema;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
+    const def = (current as { _zod: { def: CoreDef } })._zod.def;
+    if (def.innerType === undefined) return def;
+    current = def.innerType;
+  }
+  return undefined;
 }
 
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */

@@ -286,6 +286,9 @@ function isCompilableRegex(pattern: string): boolean {
   }
 }
 
+/** The activity types an agent-CLI quota classifier may be scoped to (#799). */
+export const quotaActivityTypeSchema = z.enum([LLM_CALL_ACTIVITY_TYPE, AGENT_TASK_ACTIVITY_TYPE]);
+
 /**
  * The `agent_cli` (subscription CLI) connection config.
  *
@@ -431,7 +434,17 @@ export const agentConnectionConfigSchema = z.object({
          * beats a guard that quietly does nothing, but it is late, not a save gate.
          */
         classifyActivityTypes: z
-          .array(z.enum([LLM_CALL_ACTIVITY_TYPE, AGENT_TASK_ACTIVITY_TYPE]))
+          .array(
+            presented(quotaActivityTypeSchema, {
+              title: 'Activity type',
+              // The catalog's own activity titles; `registry.ts` imports this
+              // module, so a test pins the two equal instead of an import.
+              options: optionTitles(quotaActivityTypeSchema, {
+                [LLM_CALL_ACTIVITY_TYPE]: 'LLM Call',
+                [AGENT_TASK_ACTIVITY_TYPE]: 'Agent Task',
+              }),
+            }),
+          )
           .min(1, {
             message:
               'classifyActivityTypes must name at least one activity type (omit it to mean both)',

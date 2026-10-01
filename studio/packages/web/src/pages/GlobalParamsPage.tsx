@@ -16,6 +16,7 @@ import {
   type GlobalParam,
   type GlobalParamPatchBody,
   type GlobalParamType,
+  VALUE_TYPE_TITLES,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
@@ -229,7 +230,7 @@ export function GlobalParamsPage() {
                       <td>
                         <code>{global.name}</code>
                       </td>
-                      <td>{global.type}</td>
+                      <td>{VALUE_TYPE_TITLES[global.type]}</td>
                       <td>
                         {/* Cleartext by design (GL-D5), so shown; a long json
                             value (or description) is cut to one line, whole in
@@ -490,7 +491,13 @@ function GlobalParamForm({
         >
           {(id) =>
             editing ? (
-              <input id={id} type="text" value={form.type} readOnly {...checkedBy('type')} />
+              <input
+                id={id}
+                type="text"
+                value={VALUE_TYPE_TITLES[form.type]}
+                readOnly
+                {...checkedBy('type')}
+              />
             ) : (
               <select
                 id={id}
@@ -504,7 +511,7 @@ function GlobalParamForm({
               >
                 {GlobalParamTypeSchema.options.map((type) => (
                   <option key={type} value={type}>
-                    {type}
+                    {VALUE_TYPE_TITLES[type]}
                   </option>
                 ))}
               </select>

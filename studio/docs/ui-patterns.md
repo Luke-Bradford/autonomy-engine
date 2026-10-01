@@ -68,6 +68,12 @@ required marks and display names; its layout is its own, below.
   unnamed is a type error, and each catalog's "every enum value has a display name" test catches an
   enum field with no names at all. Descriptions use the names ("Append adds the rows"), not the
   values.
+- **The gate walks into rows.** A row list's enum cell (a message's Role, a mapping's Type and On
+  error) is a select of its own, so tag the element's enum the same way. The gate reports it as
+  `messages[].role.user`, `outputSchema.properties.*.type.integer`.
+- **Value types use one table, `VALUE_TYPE_TITLES`** ("String", "Integer", "JSON"), in pickers and
+  read-only text alike: `optionTitles(typeEnum, VALUE_TYPE_TITLES)`. They are capitalised rather than
+  reworded, because messages cite the stored value (`expected number`).
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
   `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`,
   `CONCURRENCY_POLICY_LABELS`, `CONTAINER_KIND_LABELS`). The stored value stays the identifier.
@@ -246,5 +252,4 @@ message.
 ## Still to come under #1396
 
 - A JSON code editor, kind icons, and a two-column grid on wide screens.
-- Display names for enum cells inside row lists (message role, output property type).
 - Axe gates on every form (shared with OR24, #1415).

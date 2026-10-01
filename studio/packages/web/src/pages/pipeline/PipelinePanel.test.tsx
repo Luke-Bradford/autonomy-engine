@@ -365,6 +365,15 @@ describe('PipelinePanel (U16) — outputs', () => {
     expect(options).toContain('string');
   });
 
+  it('names each type, and stores the value (#1396)', () => {
+    mount(version({ outputs: [{ name: 'result', type: 'json' }] }));
+    const select = screen.getByLabelText('output 1 type') as HTMLSelectElement;
+    const named = Array.from(select.options).map((o) => [o.value, o.textContent]);
+    expect(named).toContainEqual(['json', 'JSON']);
+    expect(named).toContainEqual(['boolean', 'Boolean']);
+    expect(select).toHaveValue('json');
+  });
+
   it('unchecking Optional REMOVES the key, since absent is what the schema reads as required', () => {
     const store = mount(version({ outputs: [{ name: 'r', type: 'string', optional: true }] }));
     fireEvent.click(screen.getByLabelText('output 1 optional'));

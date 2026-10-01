@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 
+/** §6.2's per-column opt-out, named once so its display names can be checked against it. */
+const copyOnErrorSchema = z.enum(['fail', 'null']);
+
 /**
  * #996 M5 slice 1 (#1122) — the `copy` activity's MAPPING declaration
  * (data-movement spec §6.1).
@@ -60,7 +63,10 @@ const copyMappingEntryShape = {
    * (#1130) along with dataset resolution itself. It is named here so the
    * split is legible rather than lost between tickets.
    */
-  onError: z.enum(['fail', 'null']).default('fail'),
+  onError: presented(copyOnErrorSchema.default('fail'), {
+    title: 'On error',
+    options: optionTitles(copyOnErrorSchema, { fail: 'Fail the row', null: 'Write null' }),
+  }),
 };
 
 /**

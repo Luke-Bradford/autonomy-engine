@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { optionTitles, presented, VALUE_TYPE_TITLES } from './field-presentation.js';
 
 /**
  * #9 M2 (data-movement spec §2) — a DATASET: "a thing in a store, in a shape".
@@ -22,6 +23,16 @@ import { z } from 'zod';
  * trigger binding, no audit event) are settled in §2.4.
  */
 
+const dataTypeEnum = z.enum([
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'date',
+  'timestamp',
+  'binary',
+]);
+
 /**
  * The CLOSED type set every column and every mapping target is drawn from
  * (§6.2). Closed on purpose: the coercion matrix defines an outcome for every
@@ -34,15 +45,10 @@ import { z } from 'zod';
  * every other source fails, a string included (base64? hex? UTF-8? nothing
  * declared which), and bytes into any other type already fail.
  */
-export const DataTypeSchema = z.enum([
-  'string',
-  'integer',
-  'number',
-  'boolean',
-  'date',
-  'timestamp',
-  'binary',
-]);
+export const DataTypeSchema = presented(dataTypeEnum, {
+  title: 'Type',
+  options: optionTitles(dataTypeEnum, VALUE_TYPE_TITLES),
+});
 export type DataType = z.infer<typeof DataTypeSchema>;
 
 /**

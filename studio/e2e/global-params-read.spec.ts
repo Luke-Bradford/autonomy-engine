@@ -95,7 +95,7 @@ test('#844 GL3/GL5 — a run reads a global, logs the value, and shows it after 
 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
-  expect(await variableRows(page)).toEqual([['label', 'string', '"prod"']]);
+  expect(await variableRows(page)).toEqual([['label', 'String', '"prod"']]);
 
   /* #844 GL5 — the run page's Global parameters section shows the SNAPSHOT,
      not the live store: the global now holds "dev". */

@@ -33,8 +33,8 @@ describe('RunVariables (#844 V7)', () => {
       />,
     );
     expect(rowsOf()).toEqual([
-      ['rows', 'array', '["x","y"]'],
-      ['count', 'number', '5'],
+      ['rows', 'Array', '["x","y"]'],
+      ['count', 'Number', '5'],
     ]);
     expect(within(region()).getByText('Final values.')).toBeTruthy();
   });
@@ -74,7 +74,7 @@ describe('RunVariables (#844 V7)', () => {
         settled
       />,
     );
-    expect(rowsOf()[0]).toEqual(['rows', 'array', 'no value']);
+    expect(rowsOf()[0]).toEqual(['rows', 'Array', 'no value']);
   });
 
   it('quotes a string, so an empty one is not a blank cell', () => {
@@ -85,7 +85,7 @@ describe('RunVariables (#844 V7)', () => {
         settled
       />,
     );
-    expect(rowsOf()[0]).toEqual(['label', 'string', '""']);
+    expect(rowsOf()[0]).toEqual(['label', 'String', '""']);
   });
 
   it('shows a long value whole in a bounded block, and a very long one behind a disclosure', async () => {

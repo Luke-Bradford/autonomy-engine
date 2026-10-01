@@ -229,9 +229,16 @@ export function placeRowCandidate(
  * reads verbatim, and a description is documentation for the model, so the
  * expression flyout is offered on neither.
  */
+const OUTPUT_TYPE_LABEL = fieldLabelOf(llmOutputPropertyTypeSchema);
 const OUTPUT_SCHEMA_CELLS: readonly ConfigField[] = [
   { name: 'name', kind: 'text', optional: false, literal: true, singleLine: true },
-  { name: 'type', kind: 'enum', optional: false, enumOptions: llmOutputPropertyTypeSchema.options },
+  {
+    name: 'type',
+    kind: 'enum',
+    optional: false,
+    enumOptions: llmOutputPropertyTypeSchema.options,
+    ...(OUTPUT_TYPE_LABEL !== undefined && { label: OUTPUT_TYPE_LABEL }),
+  },
   { name: 'required', kind: 'boolean', optional: true },
   { name: 'description', kind: 'text', optional: true, literal: true },
   { name: 'constraints', kind: 'json', optional: true },
@@ -613,7 +620,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
 
   const cells: ConfigField[] = [];
   for (const [name, cellSchema] of Object.entries(shape as Record<string, unknown>)) {
-    const { inner, optional, defaultText, singleLine } = unwrap(cellSchema);
+    const { inner, optional, defaultText, singleLine, label } = unwrap(cellSchema);
     // Classified WITHOUT recursion: a cell that is itself a row list or a
     // one-per-line list degrades the whole field to JSON rather than nesting.
     // Neither has a designed shape inside a row card, and `stringList`'s
@@ -638,6 +645,8 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
       ...(numberRule && { numberRule }),
       ...(defaultText !== undefined && { defaultText }),
       ...(singleLine && kind === 'text' && { singleLine: true as const }),
+      // #1396: an enum cell's select names each value ("User", not `user`).
+      ...(label !== undefined && kind === 'enum' && { label }),
     });
   }
   // An element declaring no columns has no control to render.

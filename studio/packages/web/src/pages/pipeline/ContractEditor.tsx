@@ -11,6 +11,8 @@ import {
   type Param,
   type ParamType,
   type VariableDef,
+  VALUE_TYPE_TITLES,
+  type ValueTypeName,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
@@ -104,7 +106,7 @@ export function ContractRow<R extends Declared>({
   kind: Kind;
   index: number;
   row: R;
-  types: readonly string[];
+  types: readonly ValueTypeName[];
   onChange: (next: R) => void;
   onType: (raw: string) => void;
   onRemove: () => void;
@@ -131,7 +133,7 @@ export function ContractRow<R extends Declared>({
           >
             {types.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {VALUE_TYPE_TITLES[t]}
               </option>
             ))}
           </select>

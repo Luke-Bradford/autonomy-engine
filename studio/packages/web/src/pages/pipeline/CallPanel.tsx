@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 // to pick — restating it as a literal here is exactly the drift this whole
 // docblock is about. Same pattern as `edgeCondition.ts` deferring to
 // `MaxBouncesSchema` rather than repeating its constraint.
-import { MAX_CALL_DEPTH, type CallConfig } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type CallConfig, VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import {
   buildParams,
   loadCallTargets,
@@ -427,7 +427,7 @@ function CallEditor({
                     {name}
                     {decl ? (
                       <span className="page-hint">
-                        {decl.type}
+                        {VALUE_TYPE_TITLES[decl.type]}
                         {decl.required ? ' · required' : ''}
                       </span>
                     ) : (

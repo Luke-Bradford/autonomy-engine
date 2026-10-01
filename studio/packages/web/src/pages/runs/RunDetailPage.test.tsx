@@ -3191,7 +3191,7 @@ describe('RunDetailPage — the run’s variables (#844 V7)', () => {
     expect(
       within(section()).getByText('Current values, updated as the run writes them.'),
     ).toBeInTheDocument();
-    expect(within(section()).getByRole('row', { name: /count number 5/ })).toBeInTheDocument();
+    expect(within(section()).getByRole('row', { name: /count Number 5/ })).toBeInTheDocument();
   });
 
   it('says the values are final once the run has settled', async () => {

@@ -498,6 +498,12 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
       'user',
     );
+    // #1396: a row's enum cell shows the value's name; the value is what saves.
+    await expect(
+      p
+        .getByRole('combobox', { name: 'messages row 1 role', exact: true })
+        .locator('option:checked'),
+    ).toHaveText('User');
     await expect(
       p.getByRole('textbox', { name: 'messages row 1 content', exact: true }),
     ).toHaveValue('Summarise this.');
@@ -505,7 +511,7 @@ test.describe('U7 — per-activity node config form', () => {
     await p.getByRole('button', { name: 'Add messages row', exact: true }).click();
     await p
       .getByRole('combobox', { name: 'messages row 2 role', exact: true })
-      .selectOption('assistant');
+      .selectOption({ label: 'Assistant' });
     await p
       .getByRole('textbox', { name: 'messages row 2 content', exact: true })
       .fill('Earlier answer for ${run.runId}:\nnone.');
