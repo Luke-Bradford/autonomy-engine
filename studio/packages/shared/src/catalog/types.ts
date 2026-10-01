@@ -66,6 +66,13 @@ export const ACTIVITY_CATEGORY_LABELS: Record<ActivityCategory, string> = {
 export const LLM_CALL_ACTIVITY_TYPE = 'llm_call';
 
 /**
+ * The `http_request` activity type. Named once for the same reason as the
+ * constants around it: the registry declares it and the starter templates
+ * (#1413, `web/…/starterTemplates.ts`) author it.
+ */
+export const HTTP_REQUEST_ACTIVITY_TYPE = 'http_request';
+
+/**
  * The `Node.type` of the `agent_task` execution activity (the agent-CLI
  * subprocess). A named constant, not a magic string, because it now has more than
  * one reader that must agree: this catalog entry AND the `agent_cli` connector

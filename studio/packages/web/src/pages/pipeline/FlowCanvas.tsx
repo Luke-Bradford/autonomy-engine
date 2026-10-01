@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -92,6 +93,7 @@ import {
   type Rect,
 } from './containerLayout';
 import type { MeasuredSizes } from './autoLayout';
+import { STARTER_TEMPLATES, type StarterTemplate } from './starterTemplates';
 import {
   conditionFromConnection,
   CONNECTION_RADIUS,
@@ -1506,11 +1508,25 @@ export function FlowCanvas({
    * the operator's viewport under them for a reason they did not ask about.
    */
   const lastFittedSignal = useRef(0);
+  /* #1413 — a starter template is the other gesture that asks for a fit, and it
+     starts inside this component, so it counts its own requests. Summed with
+     the parent's: both only ever increase, so the sum changes exactly once per
+     request from either side and the "last honoured" guard still holds. */
+  const [templateFits, setTemplateFits] = useState(0);
+  const fitRequests = fitSignal + templateFits;
   useEffect(() => {
-    if (fitSignal <= 0 || fitSignal === lastFittedSignal.current) return;
-    lastFittedSignal.current = fitSignal;
+    if (fitRequests <= 0 || fitRequests === lastFittedSignal.current) return;
+    lastFittedSignal.current = fitRequests;
     void fitView(FIT_VIEW_OPTIONS);
-  }, [fitSignal, fitView]);
+  }, [fitRequests, fitView]);
+
+  const insertTemplate = useCallback(
+    (template: StarterTemplate) => {
+      store.getState().insertTemplate(template);
+      setTemplateFits((n) => n + 1);
+    },
+    [store],
+  );
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(
@@ -2392,6 +2408,9 @@ export function FlowCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Background />
+        {nodes.length === 0 && containers.length === 0 && (
+          <EmptyCanvasGuide onInsert={insertTemplate} />
+        )}
         {/* U6c — containers are in `nodeLookup` now, and the MiniMap draws EVERY
             node in it with one fill. Left alone, a `stage`/`loop` paints a large
             solid blob in the same colour as the activities it encloses, on top of
@@ -2558,5 +2577,52 @@ export function FlowCanvas({
         )}
       </ReactFlow>
     </>
+  );
+}
+
+/**
+ * #1413 OR22 / #1420 part 4 — what an EMPTY canvas says: where to start, and
+ * the starter templates.
+ *
+ * A plain child of `<ReactFlow>`, deliberately NOT a `<Panel>`: the palette's
+ * drop guard (`isOverCanvasSurface`) refuses any drop inside
+ * `.react-flow__panel`, so a guide saying "drag an activity here" must not be
+ * one. The overlay and its text are `pointer-events: none`, so a drop, a pane
+ * click or a marquee anywhere but a button lands on the pane exactly as on a
+ * bare canvas; a drop ON a button still bubbles to the wrapper's `onDrop` and
+ * is placed under the cursor. The buttons carry `nokey nopan`, so Space on a
+ * focused one is a button press, not React Flow's pan key.
+ *
+ * Absolutely positioned over the pane, so it never shifts the layout (#1393)
+ * and it unmounts the moment the canvas holds anything, an empty box included.
+ */
+function EmptyCanvasGuide({ onInsert }: { onInsert: (template: StarterTemplate) => void }) {
+  const idPrefix = useId();
+  return (
+    <div className="canvas-empty" role="region" aria-label="Start this pipeline">
+      <div className="canvas-empty__card">
+        <p className="canvas-empty__lead">
+          <strong>This pipeline has no activities yet.</strong> Drag one here from the Activities
+          palette, or start from a template:
+        </p>
+        <ul className="canvas-empty__templates">
+          {STARTER_TEMPLATES.map((t) => (
+            <li key={t.id}>
+              <button
+                type="button"
+                className="canvas-empty__template nokey nopan"
+                aria-describedby={`${idPrefix}-${t.id}`}
+                onClick={() => onInsert(t)}
+              >
+                <span className="canvas-empty__title">{t.title}</span>
+                <span className="canvas-empty__description" id={`${idPrefix}-${t.id}`}>
+                  {t.description}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
