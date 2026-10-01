@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { NO_FIELD_SLOTS } from '../../testing/noFieldSlots';
 import { WindowEditor } from './WindowEditor';
 import { blankWindowForm, windowToForm } from './windowForm';
 
@@ -22,6 +23,7 @@ describe('#855 WindowEditor names a bound the DST gap will move', () => {
     const noop = () => {};
     const { rerender } = render(
       <WindowEditor
+        validation={NO_FIELD_SLOTS}
         value={{ ...blankWindowForm(), startTime: '2026-03-29T01:30' }}
         onChange={noop}
       />,
@@ -32,6 +34,7 @@ describe('#855 WindowEditor names a bound the DST gap will move', () => {
 
     rerender(
       <WindowEditor
+        validation={NO_FIELD_SLOTS}
         value={{ ...blankWindowForm(), startTime: '2026-03-29T03:30' }}
         onChange={noop}
       />,
@@ -55,7 +58,7 @@ describe('#861 WindowEditor retry + self-dependency', () => {
     });
 
   it('shows the loaded values in their controls and states what they do', () => {
-    render(<WindowEditor value={loaded()} onChange={() => {}} />);
+    render(<WindowEditor validation={NO_FIELD_SLOTS} value={loaded()} onChange={() => {}} />);
     expect(screen.getByLabelText(/Retry a failed window/)).toHaveValue(3);
     expect(screen.getByLabelText(/Seconds between retries/)).toHaveValue(60);
     expect(screen.getByLabelText(/offset in seconds/)).toHaveValue(-7200);
@@ -72,7 +75,9 @@ describe('#861 WindowEditor retry + self-dependency', () => {
 
   it('reports each typed field through onChange as text', () => {
     const onChange = vi.fn();
-    render(<WindowEditor value={blankWindowForm()} onChange={onChange} />);
+    render(
+      <WindowEditor validation={NO_FIELD_SLOTS} value={blankWindowForm()} onChange={onChange} />,
+    );
     fireEvent.change(screen.getByLabelText(/offset in seconds/), { target: { value: '-60' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ dependencyOffsetSeconds: '-60' }),
@@ -87,6 +92,7 @@ describe('#861 WindowEditor retry + self-dependency', () => {
     // past the window's own start — a deadlock the write schema refuses.
     render(
       <WindowEditor
+        validation={NO_FIELD_SLOTS}
         value={{ ...loaded(), interval: '3', dependencyOffsetSeconds: '-3600' }}
         onChange={() => {}}
       />,

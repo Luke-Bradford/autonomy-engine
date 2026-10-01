@@ -166,8 +166,8 @@ export interface FieldValidation {
   attrsFor: (key: string, errorId: string) => ReturnType<typeof fieldAttrs>;
   /**
    * A refusal of input the browser could not read, in a control that is not
-   * one of the form's fields (a mode editor's date). Shown in the footer's
-   * alert until the next submit.
+   * one of the form's fields (one carrying no `data-field`, or one `labelOf`
+   * does not name). Shown in the footer's alert until the next submit.
    */
   readonly notice: string | null;
   /**

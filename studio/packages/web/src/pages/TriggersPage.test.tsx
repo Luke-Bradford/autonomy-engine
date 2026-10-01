@@ -1685,9 +1685,10 @@ describe('#1396 the trigger form drawer', () => {
   });
 });
 
-/* #1396 OR5 slice 6 — inline validation on the trigger form's own fields. The
-   mode editors keep their one-line refusal; a half-typed number or date, which
-   the browser no longer refuses under `noValidate`, is refused by the form. */
+/* #1396 OR5 slice 6 — inline validation on the trigger form's own fields; a
+   half-typed number or date, which the browser no longer refuses under
+   `noValidate`, is refused by the form. Slice 13 keys the mode editors' controls
+   as fields too, by the payload path each authors. */
 describe('TriggersPage — inline validation (#1396)', () => {
   async function openNew() {
     const user = userEvent.setup();
@@ -1753,6 +1754,94 @@ describe('TriggersPage — inline validation (#1396)', () => {
     expect(createMock).not.toHaveBeenCalled();
     expect(form.getByRole('alert')).toHaveTextContent(/is not a complete number\. Finish it/);
     expect(interval).toHaveFocus();
+  });
+
+  it('a mode editor refusal sits beside its control, and Save focuses it', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Weekly');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'week');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const days = form.getByRole('group', { name: /Days of week/ });
+    expect(days).toHaveAttribute('data-invalid');
+    expect(days).toHaveAccessibleDescription(/requires `weekDays`/);
+    expect(form.getByRole('alert')).toHaveTextContent('Days of week:');
+    await waitFor(() => expect(form.getByRole('checkbox', { name: 'Sun' })).toHaveFocus());
+
+    // Ticking a day is the fix: the line goes at once.
+    await user.click(form.getByRole('checkbox', { name: 'Mon' }));
+    expect(days).not.toHaveAttribute('data-invalid');
+  });
+
+  it('a bad Hours entry is shown beside Hours once the field is left', async () => {
+    const { user, form } = await openNew();
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'day');
+    const hours = form.getByLabelText(/^Hours/);
+    await user.type(hours, '9, x');
+    // Typing never raises a check; leaving the field does.
+    expect(hours).toHaveAttribute('aria-invalid', 'false');
+    await user.tab();
+    expect(hours).toHaveAttribute('aria-invalid', 'true');
+    expect(hours).toHaveAccessibleDescription(/'x' is not a whole number/);
+  });
+
+  it('a disabled tumbling trigger with a half-filled window is still refused, on the field', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windows');
+    await user.selectOptions(form.getByLabelText('Mode'), 'tumbling');
+    await user.type(form.getByLabelText(/Retry a failed window/), '2');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const start = form.getByLabelText(/Start time/);
+    expect(start).toHaveAttribute('aria-invalid', 'true');
+    expect(start).toHaveAccessibleDescription(/needs a start time/);
+  });
+
+  it('an enabled event trigger with no name is refused beside the Event field', async () => {
+    const { user, form } = await openNew();
+    await user.click(form.getByLabelText(/Enabled/i));
+    await user.selectOptions(form.getByLabelText('Mode'), 'event');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(form.getByLabelText('Event')).toHaveAccessibleDescription(/must carry an event name/);
+  });
+
+  it('a run window the scheduler cannot read marks the run windows list', async () => {
+    const { user, form } = await openNew();
+    await user.click(form.getByRole('button', { name: 'Add window' }));
+    await user.type(form.getByLabelText('Window 1 start'), '25:00');
+    await user.type(form.getByLabelText('Window 1 end'), '26:00');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const list = form.getByRole('group', { name: 'Run windows (UTC)' });
+    expect(list).toHaveAttribute('data-invalid');
+    expect(list).toHaveAccessibleDescription(/window 1/);
+    expect(form.getByRole('alert')).toHaveTextContent('Run windows:');
+  });
+
+  it('a server 400 issue on a mode editor path lands beside its control', async () => {
+    createMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'recurrence.schedule.hours', message: 'not a supported hour' }],
+      }),
+    );
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Daily');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'day');
+    await user.type(form.getByLabelText(/^Hours/), '9');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    const hours = form.getByLabelText(/^Hours/);
+    await waitFor(() => expect(hours).toHaveFocus());
+    expect(hours).toHaveAccessibleDescription('Not a supported hour');
   });
 
   it('on an edit, a server 400 issue on the name lands beside it', async () => {

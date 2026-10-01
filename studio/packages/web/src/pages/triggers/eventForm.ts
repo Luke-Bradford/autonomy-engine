@@ -1,4 +1,5 @@
-import { EventConfigSchema, formatZodIssues, type EventConfig } from '@autonomy-studio/shared';
+import { EventConfigSchema, type EventConfig } from '@autonomy-studio/shared';
+import { refuseAt, refuseSchema, type Refusal } from './formFields';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the event-subscription editor.
@@ -33,8 +34,7 @@ export function eventToForm(event: EventConfig): EventFormState {
   return { name, extras };
 }
 
-export type EventConversion =
-  { ok: true; event: EventConfig | null } | { ok: false; reason: string };
+export type EventConversion = { ok: true; event: EventConfig | null } | Refusal<'name'>;
 
 /**
  * Build an `EventConfig` from the form, or report why it cannot be.
@@ -55,21 +55,14 @@ export function formToEvent(form: EventFormState): EventConversion {
   const name = form.name.trim();
   if (name === '') {
     if (Object.keys(form.extras).length > 0) {
-      return {
-        ok: false,
-        reason:
-          'this subscription carries configuration authored outside this form, which clearing the name would discard — switch the trigger to another mode to remove the subscription deliberately',
-      };
+      const reason =
+        'this subscription carries configuration authored outside this form, which clearing the name would discard — switch the trigger to another mode to remove the subscription deliberately';
+      return refuseAt('name', reason, reason);
     }
     return { ok: true, event: null };
   }
   // `name` last so the edited value always wins over a stale catchall copy.
   const parsed = EventConfigSchema.safeParse({ ...form.extras, name });
-  if (!parsed.success) {
-    return {
-      ok: false,
-      reason: formatZodIssues(parsed.error.issues),
-    };
-  }
+  if (!parsed.success) return refuseSchema(parsed.error.issues, ['name']);
   return { ok: true, event: parsed.data };
 }

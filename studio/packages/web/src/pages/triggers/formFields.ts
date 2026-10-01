@@ -9,6 +9,10 @@
  * fields once already — one rule, one home, imported by both.
  */
 
+import { formatZodIssues } from '@autonomy-studio/shared';
+import type { z } from 'zod';
+import { splitIssues } from '../../lib/form/fieldValidation';
+
 /**
  * The only accepted shape for a whole number typed into a trigger form.
  *
@@ -164,11 +168,11 @@ export function boundShiftWarnings(form: BoundFields): string[] {
 export function resolveBoundsInto(
   form: BoundFields,
   candidate: Record<string, unknown>,
-): string | null {
+): Refusal<'startTime' | 'endTime'> | null {
   for (const bound of ['startTime', 'endTime'] as const) {
     if (form[bound].trim() === '') continue;
     const iso = resolveBound(form[bound], form[`${bound}Iso`]);
-    if (iso === null) return `${bound}: '${form[bound]}' is not a valid date and time`;
+    if (iso === null) return refuseAt(bound, `'${form[bound]}' is not a valid date and time`);
     candidate[bound] = iso;
   }
   return null;
@@ -181,4 +185,47 @@ export function resolveBoundsInto(
  */
 export function boundEcho(local: string, originalIso: string): string | null {
   return local.trim() === '' ? null : resolveBound(local, originalIso);
+}
+
+/**
+ * #1396 — a builder's refusal: the one-line `reason` it has always given, and
+ * which of its controls each part is about, so the trigger form can show it
+ * beside that control rather than only in its footer. `fields` is keyed by the
+ * WRITE SCHEMA's path of the value the control authors (`schedule.hours`,
+ * `retry.count`), the same path a server refusal carries, so the form keys a
+ * control once for both. It is empty when no control owns the refusal.
+ */
+export interface Refusal<F extends string> {
+  readonly ok: false;
+  readonly reason: string;
+  readonly fields: Readonly<Partial<Record<F, string>>>;
+}
+
+/** A refusal about one control. `reason` defaults to `<field>: <message>`, the builders' old wording. */
+export function refuseAt<F extends string>(
+  field: F,
+  message: string,
+  reason = `${field}: ${message}`,
+): Refusal<F> {
+  return { ok: false, reason, fields: { [field]: message } as Partial<Record<F, string>> };
+}
+
+/**
+ * A write schema's refusal, each issue sorted onto the control that authors its
+ * path. `fields` names the paths a control authors (`schedule.hours`,
+ * `retry.count`); an issue is matched on the longest of them that prefixes its
+ * path, and the rest of the path is kept in front of its message
+ * (`splitIssues`), so an entry of a list still says which entry. An issue no
+ * control owns is left out of `fields` and stays in `reason`.
+ */
+export function refuseSchema<F extends string>(
+  issues: ReadonlyArray<z.core.$ZodIssue>,
+  fields: ReadonlyArray<F>,
+): Refusal<F> {
+  const split = splitIssues(issues, (key) => (fields as ReadonlyArray<string>).includes(key));
+  return {
+    ok: false,
+    reason: formatZodIssues(issues),
+    fields: split.fields as Partial<Record<F, string>>,
+  };
 }

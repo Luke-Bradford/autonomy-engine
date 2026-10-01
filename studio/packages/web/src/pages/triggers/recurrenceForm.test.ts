@@ -528,3 +528,41 @@ describe('WEEK_DAY_NAMES', () => {
     expect(WEEK_DAY_NAMES[0]).toBe('Sun');
   });
 });
+
+describe('#1396 — a refusal names the control it is about, by schema path', () => {
+  const fieldsOf = (f: RecurrenceFormState) => {
+    const result = formToRecurrence(f);
+    if (result.ok) throw new Error('expected a refusal');
+    return result.fields;
+  };
+
+  it('a hand-written refusal: the list field that holds the bad entry', () => {
+    expect(fieldsOf(form({ frequency: 'day', hours: '9, x' }))).toEqual({
+      'schedule.hours': "'x' is not a whole number",
+    });
+  });
+
+  it('a bad interval sits on the interval, and keeps the old reason', () => {
+    const result = formToRecurrence(form({ interval: '1.5' }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "interval: '1.5' is not a whole number",
+      fields: { interval: "'1.5' is not a whole number" },
+    });
+  });
+
+  it('a schema refusal: a weekly with no day ticked sits on the days', () => {
+    expect(Object.keys(fieldsOf(form({ frequency: 'week', hours: '9' })))).toEqual([
+      'schedule.weekDays',
+    ]);
+  });
+
+  it('a list entry out of range keeps which entry in front of the message', () => {
+    const fields = fieldsOf(form({ frequency: 'day', hours: '9, 25' }));
+    expect(fields['schedule.hours']).toMatch(/^1: /);
+  });
+
+  it('an unresolvable time zone sits on the time zone', () => {
+    expect(Object.keys(fieldsOf(form({ timeZone: 'Not/AZone' })))).toEqual(['timeZone']);
+  });
+});

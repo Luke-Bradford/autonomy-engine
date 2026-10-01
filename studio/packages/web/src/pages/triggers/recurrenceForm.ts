@@ -1,7 +1,6 @@
 import {
   HONOURED_FIELDS,
   RecurrenceWriteSchema,
-  formatZodIssues,
   recurrenceToCron,
   type Recurrence,
   type RecurrenceFrequency,
@@ -10,7 +9,10 @@ import {
 import {
   pad,
   parseWholeNumber,
+  refuseAt,
+  refuseSchema,
   resolveBoundsInto,
+  type Refusal,
   utcIsoToLocalInput,
   WHOLE_NUMBER,
 } from './formFields';
@@ -150,8 +152,43 @@ export function pruneForFrequency(
   };
 }
 
-export type RecurrenceConversion =
-  { ok: true; recurrence: Recurrence } | { ok: false; reason: string };
+/** The schema paths the recurrence controls author: what a refusal can be about. */
+export const RECURRENCE_FIELDS = [
+  'interval',
+  'schedule.weekDays',
+  'schedule.monthDays',
+  'schedule.hours',
+  'schedule.minutes',
+  'timeZone',
+  'startTime',
+  'endTime',
+] as const;
+export type RecurrenceField = (typeof RECURRENCE_FIELDS)[number];
+
+/** What the form's error summary calls each control. */
+export const RECURRENCE_FIELD_LABELS: Readonly<Record<RecurrenceField, string>> = {
+  interval: 'Repeat every N',
+  'schedule.weekDays': 'Days of week',
+  'schedule.monthDays': 'Days of month',
+  'schedule.hours': 'Hours',
+  'schedule.minutes': 'Minutes',
+  timeZone: 'Time zone',
+  startTime: 'Start time',
+  endTime: 'End time',
+};
+
+/** Whether a recurrence control is on screen for a frequency (`HONOURED_FIELDS`). */
+export function recurrenceFieldShown(
+  field: RecurrenceField,
+  frequency: RecurrenceFrequency,
+): boolean {
+  return (
+    !field.startsWith('schedule.') ||
+    (HONOURED_FIELDS[frequency] as readonly string[]).includes(field.slice('schedule.'.length))
+  );
+}
+
+export type RecurrenceConversion = { ok: true; recurrence: Recurrence } | Refusal<RecurrenceField>;
 
 /** The text-list fields, paired with the label an error message should use. */
 const LIST_FIELDS: ReadonlyArray<{
@@ -172,7 +209,7 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   const honoured = HONOURED_FIELDS[form.frequency];
 
   const parsedInterval = parseWholeNumber(form.interval);
-  if (!parsedInterval.ok) return { ok: false, reason: `interval: ${parsedInterval.reason}` };
+  if (!parsedInterval.ok) return refuseAt('interval', parsedInterval.reason);
   // A blank interval is the schema's own default of 1, not an absent field.
   const interval = parsedInterval.value ?? 1;
 
@@ -180,7 +217,7 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   for (const { key, label } of LIST_FIELDS) {
     if (!honoured.includes(key)) continue;
     const parsed = parseNumberList(form[key]);
-    if (!parsed.ok) return { ok: false, reason: `${label}: ${parsed.reason}` };
+    if (!parsed.ok) return refuseAt(`schedule.${key}`, parsed.reason, `${label}: ${parsed.reason}`);
     // Rule 1: an empty selection is an ABSENT field, not `[]`.
     if (parsed.values.length > 0) schedule[key] = parsed.values;
   }
@@ -193,15 +230,10 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   if (form.timeZone.trim() !== '') candidate.timeZone = form.timeZone.trim();
 
   const boundProblem = resolveBoundsInto(form, candidate);
-  if (boundProblem !== null) return { ok: false, reason: boundProblem };
+  if (boundProblem !== null) return boundProblem;
 
   const parsed = RecurrenceWriteSchema.safeParse(candidate);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      reason: formatZodIssues(parsed.error.issues),
-    };
-  }
+  if (!parsed.success) return refuseSchema(parsed.error.issues, RECURRENCE_FIELDS);
   return { ok: true, recurrence: parsed.data };
 }
 

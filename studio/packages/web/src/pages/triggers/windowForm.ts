@@ -1,10 +1,16 @@
 import {
   WindowConfigWriteSchema,
-  formatZodIssues,
   type WindowConfig,
   type WindowFrequency,
 } from '@autonomy-studio/shared';
-import { parseWholeNumber, resolveBoundsInto, utcIsoToLocalInput } from './formFields';
+import {
+  parseWholeNumber,
+  refuseAt,
+  refuseSchema,
+  resolveBoundsInto,
+  utcIsoToLocalInput,
+  type Refusal,
+} from './formFields';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the tumbling-window builder:
@@ -91,8 +97,34 @@ function isUntouched(form: WindowFormState): boolean {
   return TEXT_FIELDS.every((key) => form[key].trim() === '');
 }
 
-export type WindowConversion =
-  { ok: true; window: WindowConfig | null } | { ok: false; reason: string };
+/** The schema paths the window controls author: what a refusal can be about. */
+export const WINDOW_FIELDS = [
+  'interval',
+  'startTime',
+  'endTime',
+  'maxBackfillWindows',
+  'maxConcurrentWindows',
+  'retry.count',
+  'retry.intervalInSeconds',
+  'selfDependency.offsetInSeconds',
+  'selfDependency.sizeInSeconds',
+] as const;
+export type WindowField = (typeof WINDOW_FIELDS)[number];
+
+/** What the form's error summary calls each control. */
+export const WINDOW_FIELD_LABELS: Readonly<Record<WindowField, string>> = {
+  interval: 'Each window covers N',
+  startTime: 'Start time',
+  endTime: 'End time',
+  maxBackfillWindows: 'Max backfill windows',
+  maxConcurrentWindows: 'Max concurrent windows',
+  'retry.count': 'Retry a failed window N times',
+  'retry.intervalInSeconds': 'Seconds between retries',
+  'selfDependency.offsetInSeconds': 'Depend on earlier windows: offset in seconds',
+  'selfDependency.sizeInSeconds': 'Dependency span in seconds',
+};
+
+export type WindowConversion = { ok: true; window: WindowConfig | null } | Refusal<WindowField>;
 
 /** The optional whole-number caps. Both are read the same way, so they are a
  * plain list rather than a table of one-field rows. */
@@ -105,6 +137,14 @@ const SUB_OBJECT_FIELDS = [
   'dependencyOffsetSeconds',
   'dependencySizeSeconds',
 ] as const;
+
+/** The schema path each sub-object control authors. */
+const SUB_OBJECT_PATHS: Readonly<Record<(typeof SUB_OBJECT_FIELDS)[number], WindowField>> = {
+  retryCount: 'retry.count',
+  retryIntervalSeconds: 'retry.intervalInSeconds',
+  dependencyOffsetSeconds: 'selfDependency.offsetInSeconds',
+  dependencySizeSeconds: 'selfDependency.sizeInSeconds',
+};
 
 /** Every free-text control — what "untouched" is judged over. */
 const TEXT_FIELDS = [
@@ -122,7 +162,7 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   if (isUntouched(form)) return { ok: true, window: null };
 
   const parsedInterval = parseWholeNumber(form.interval);
-  if (!parsedInterval.ok) return { ok: false, reason: `interval: ${parsedInterval.reason}` };
+  if (!parsedInterval.ok) return refuseAt('interval', parsedInterval.reason);
   // `WindowConfigSchema.interval` is REQUIRED and has NO default (unlike
   // `RecurrenceSchema.interval`), so a blank control is the CLIENT supplying the
   // plainest window there is — one period — not a schema default being honoured.
@@ -134,7 +174,7 @@ export function formToWindow(form: WindowFormState): WindowConversion {
 
   for (const key of CAP_FIELDS) {
     const parsed = parseWholeNumber(form[key]);
-    if (!parsed.ok) return { ok: false, reason: `${key}: ${parsed.reason}` };
+    if (!parsed.ok) return refuseAt(key, parsed.reason);
     // Rule 1: blank means the cap is absent, not that it is zero.
     if (parsed.value !== undefined) candidate[key] = parsed.value;
   }
@@ -142,15 +182,16 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   // `startTime` is REQUIRED — the window epoch. Reported as a refusal rather
   // than left to the schema so the message names the control, not the shape.
   if (form.startTime.trim() === '') {
-    return { ok: false, reason: 'startTime: a tumbling window needs a start time' };
+    return refuseAt('startTime', 'a tumbling window needs a start time');
   }
   const boundProblem = resolveBoundsInto(form, candidate);
-  if (boundProblem !== null) return { ok: false, reason: boundProblem };
+  if (boundProblem !== null) return boundProblem;
 
   const sub: Partial<Record<(typeof SUB_OBJECT_FIELDS)[number], number>> = {};
   for (const key of SUB_OBJECT_FIELDS) {
     const parsed = parseWholeNumber(form[key]);
-    if (!parsed.ok) return { ok: false, reason: `${key}: ${parsed.reason}` };
+    if (!parsed.ok)
+      return refuseAt(SUB_OBJECT_PATHS[key], parsed.reason, `${key}: ${parsed.reason}`);
     if (parsed.value !== undefined) sub[key] = parsed.value;
   }
 
@@ -159,9 +200,11 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   if (retryCount !== undefined && retryIntervalSeconds !== undefined) {
     candidate.retry = { count: retryCount, intervalInSeconds: retryIntervalSeconds };
   } else if (retryCount !== undefined) {
-    return { ok: false, reason: 'retry: a retry policy needs an interval as well as a count' };
+    const message = 'a retry policy needs an interval as well as a count';
+    return refuseAt('retry.intervalInSeconds', message, `retry: ${message}`);
   } else if (retryIntervalSeconds !== undefined) {
-    return { ok: false, reason: 'retry: a retry policy needs a count as well as an interval' };
+    const message = 'a retry policy needs a count as well as an interval';
+    return refuseAt('retry.count', message, `retry: ${message}`);
   }
   if (dependencyOffsetSeconds !== undefined) {
     candidate.selfDependency = {
@@ -169,19 +212,12 @@ export function formToWindow(form: WindowFormState): WindowConversion {
       ...(dependencySizeSeconds !== undefined ? { sizeInSeconds: dependencySizeSeconds } : {}),
     };
   } else if (dependencySizeSeconds !== undefined) {
-    return {
-      ok: false,
-      reason: 'selfDependency: a dependency size needs an offset to measure it from',
-    };
+    const message = 'a dependency size needs an offset to measure it from';
+    return refuseAt('selfDependency.offsetInSeconds', message, `selfDependency: ${message}`);
   }
 
   const parsed = WindowConfigWriteSchema.safeParse(candidate);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      reason: formatZodIssues(parsed.error.issues),
-    };
-  }
+  if (!parsed.success) return refuseSchema(parsed.error.issues, WINDOW_FIELDS);
   return { ok: true, window: parsed.data };
 }
 
