@@ -201,6 +201,14 @@ export interface FieldValidation {
    * write schema's), and take focus to the first. Keys must pass `isKey`.
    */
   showRefusedFields: (errors: FieldErrors) => void;
+  /**
+   * Move what is held for keys (raised, edited, the server's verdict) to new
+   * keys, or drop it (`null`). For fields keyed by a row's INDEX
+   * (`runWindows.1.end`, the write path): removing a row moves the rows after it
+   * up a place, and their state must move with them rather than stay at an
+   * index another row now holds.
+   */
+  rekey: (to: (key: string) => string | null) => void;
   /** Bumped when focus should go to the first invalid field; `FormDrawer` watches it. */
   readonly focusRequest: number;
   /** Put on the `<form>` (FormDrawer does): they see every field's edits and blurs. */
@@ -305,6 +313,20 @@ export function useFieldValidation(
     if (Object.keys(errors).length > 0) setFocusRequest((n) => n + 1);
   }, []);
 
+  const rekey = useCallback((to: (key: string) => string | null) => {
+    // Each held entry under its new key, or left out when `to` drops it.
+    const move = <V>(entries: Iterable<readonly [string, V]>): Array<[string, V]> =>
+      [...entries].flatMap(([key, value]) => {
+        const next = to(key);
+        return next === null ? [] : [[next, value] as [string, V]];
+      });
+    const keys = (from: Iterable<string>) =>
+      move([...from].map((key) => [key, true] as const)).map(([key]) => key);
+    edited.current = new Set(keys(edited.current));
+    setRaised((prev) => new Set(keys(prev)));
+    setServer((prev) => Object.fromEntries(move(Object.entries(prev))));
+  }, []);
+
   const attrsFor = useCallback(
     (key: string, errorId: string) => fieldAttrs({ key, error: errorFor(key), errorId }),
     [errorFor],
@@ -364,6 +386,7 @@ export function useFieldValidation(
     attempted,
     attempt,
     showRefusedFields,
+    rekey,
     focusRequest,
     formHandlers,
   };

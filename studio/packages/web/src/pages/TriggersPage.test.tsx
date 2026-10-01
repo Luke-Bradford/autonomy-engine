@@ -1513,7 +1513,7 @@ describe('TriggersPage run windows (#1090)', () => {
     await user.type(win.getByLabelText(/Window 1 end/i), '17:00');
 
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
-    expect(await form.findByRole('alert')).toHaveTextContent(/window 1\.start/i);
+    expect(await form.findByRole('alert')).toHaveTextContent(/Window 1 start:/);
     expect(createMock).not.toHaveBeenCalled();
   });
 
@@ -1822,18 +1822,109 @@ describe('TriggersPage — inline validation (#1396)', () => {
     expect(form.getByLabelText('Event')).toHaveAccessibleDescription(/must carry an event name/);
   });
 
-  it('a run window the scheduler cannot read marks the run windows list', async () => {
-    const { user, form } = await openNew();
+  /** Add window `n` and type its bounds. */
+  const addWindow = async (
+    user: ReturnType<typeof userEvent.setup>,
+    form: ReturnType<typeof within>,
+    n: number,
+    start: string,
+    end: string,
+  ) => {
     await user.click(form.getByRole('button', { name: 'Add window' }));
-    await user.type(form.getByLabelText('Window 1 start'), '25:00');
-    await user.type(form.getByLabelText('Window 1 end'), '26:00');
+    await user.type(form.getByLabelText(`Window ${n} start`), start);
+    await user.type(form.getByLabelText(`Window ${n} end`), end);
+  };
+
+  it('a run window the scheduler cannot read is refused on the faulty ROW, and Save focuses it', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    await addWindow(user, form, 1, '09:00', '17:00');
+    await addWindow(user, form, 2, '25:00', '26:00');
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
     expect(createMock).not.toHaveBeenCalled();
-    const list = form.getByRole('group', { name: 'Run windows (UTC)' });
-    expect(list).toHaveAttribute('data-invalid');
-    expect(list).toHaveAccessibleDescription(/window 1/);
-    expect(form.getByRole('alert')).toHaveTextContent('Run windows:');
+    const start2 = form.getByLabelText('Window 2 start');
+    // Window 2's own control, not the list's first one (Window 1 start).
+    await waitFor(() => expect(start2).toHaveFocus());
+    expect(start2).toHaveAttribute('aria-invalid', 'true');
+    expect(start2).toHaveAccessibleDescription(/24-hour UTC time/);
+    expect(form.getByLabelText('Window 2 end')).toHaveAttribute('aria-invalid', 'true');
+    expect(form.getByLabelText('Window 1 start')).toHaveAttribute('aria-invalid', 'false');
+    expect(form.getByRole('group', { name: 'Run windows (UTC)' })).not.toHaveAttribute(
+      'data-invalid',
+    );
+    expect(form.getByRole('alert')).toHaveTextContent('Window 2 start:');
+  });
+
+  it('a window restricted to no day is refused on its Days group', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    await addWindow(user, form, 1, '09:00', '17:00');
+    await user.click(form.getByRole('checkbox', { name: 'Only on selected days' }));
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const days = form.getByRole('group', { name: 'Window 1 days (UTC)' });
+    expect(days).toHaveAttribute('data-invalid');
+    expect(days).toHaveAccessibleDescription(/select at least one day/);
+    await waitFor(() => expect(within(days).getByRole('checkbox', { name: 'Sun' })).toHaveFocus());
+  });
+
+  it('a server 400 issue on a run window row lands beside that row', async () => {
+    createMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'runWindows.1.end', message: 'not a supported end' }],
+      }),
+    );
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    for (const n of [1, 2]) await addWindow(user, form, n, '09:00', '17:00');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    const end2 = form.getByLabelText('Window 2 end');
+    await waitFor(() => expect(end2).toHaveFocus());
+    expect(end2).toHaveAccessibleDescription(/^Not a supported end/);
+    expect(form.getByLabelText('Window 1 end')).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('removing a window moves a held server refusal up with its row', async () => {
+    createMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'runWindows.1.end', message: 'not a supported end' }],
+      }),
+    );
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    for (const n of [1, 2, 3]) await addWindow(user, form, n, '09:00', '17:00');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() =>
+      expect(form.getByLabelText('Window 2 end')).toHaveAttribute('aria-invalid', 'true'),
+    );
+
+    // Window 2 is now Window 1, and its refusal goes with it; the row that moved
+    // into the second place (window 3) was never refused.
+    await user.click(form.getByRole('button', { name: 'Remove window 1' }));
+    expect(form.getByLabelText('Window 1 end')).toHaveAccessibleDescription(/^Not a supported end/);
+    expect(form.getByLabelText('Window 2 end')).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('removing a window moves a shown check up with its row, and drops the removed one', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Windowed');
+    await addWindow(user, form, 1, '25:00', '17:00');
+    await addWindow(user, form, 2, '09:00', '17:00');
+    await addWindow(user, form, 3, '12:00', '12:00');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() =>
+      expect(form.getByLabelText('Window 3 end')).toHaveAttribute('aria-invalid', 'true'),
+    );
+
+    await user.click(form.getByRole('button', { name: 'Remove window 2' }));
+    // Window 3 is now Window 2 and still wrong: its error stays on screen.
+    expect(form.getByLabelText('Window 2 end')).toHaveAccessibleDescription(/are equal/);
+    expect(form.getByLabelText('Window 1 start')).toHaveAttribute('aria-invalid', 'true');
   });
 
   it('a server 400 issue on a mode editor path lands beside its control', async () => {

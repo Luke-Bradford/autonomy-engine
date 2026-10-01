@@ -3,6 +3,9 @@ import { fieldAttrs, type FieldValidation } from '../../lib/form/fieldValidation
 /** What a trigger mode editor needs of the form's validation to key its controls. */
 export type FieldSlots = Pick<FieldValidation, 'errorFor' | 'attrsFor'>;
 
+/** A mode editor whose fields are keyed by row index, and so must move with a removed row. */
+export type RowFieldSlots = FieldSlots & Pick<FieldValidation, 'rekey'>;
+
 /**
  * #1396 — a mode editor's controls as fields of the trigger form. A control is
  * keyed by the payload path of what it authors (`recurrence.schedule.hours`),

@@ -92,6 +92,32 @@ test.describe('U14c run-window editor', () => {
     await expectQuiet(page, problems);
   });
 
+  test('#1396 — a refused window is marked on ITS row, and Save takes focus there', async ({
+    page,
+  }) => {
+    const problems = await openTriggers(page);
+    await page.getByRole('button', { name: /New trigger/i }).click();
+    const form = triggerForm(page);
+    await form.getByLabel('Name').fill('Two windows');
+    await form.getByLabel(/^Mode/).selectOption('schedule');
+    await form.getByRole('button', { name: 'Add window' }).click();
+    await form.getByLabel('Window 1 start').fill('09:00');
+    await form.getByLabel('Window 1 end').fill('17:00');
+    await form.getByRole('button', { name: 'Add window' }).click();
+    await form.getByLabel('Window 2 start').fill('12:00');
+    await form.getByLabel('Window 2 end').fill('12:00');
+
+    await form.getByRole('button', { name: /Create trigger/i }).click();
+    // Equal bounds are refused on `end`: window 2's End, not the list's first control.
+    const end2 = form.getByLabel('Window 2 end');
+    await expect(end2).toBeFocused();
+    await expect(end2).toHaveAttribute('aria-invalid', 'true');
+    await expect(end2).toHaveAccessibleDescription(/are equal/);
+    await expect(form.getByLabel('Window 1 end')).toHaveAttribute('aria-invalid', 'false');
+    await expect(form.getByRole('alert')).toContainText('Window 2 end:');
+    await expectQuiet(page, problems);
+  });
+
   test('the SERVER refuses a window it could never open, not just the form', async ({ page }) => {
     // The client and the server share one schema, so a form-only assertion
     // proves nothing about the boundary. Posted directly, past the UI.

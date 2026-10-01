@@ -89,6 +89,31 @@ describe('formToRunWindows', () => {
     expect(result.reason).toContain('window 2.start');
     expect(result.reason).not.toContain('1.start');
   });
+
+  it('#1396 — sorts each refusal onto the ROW control that authors it', () => {
+    const result = formToRunWindows(
+      restricted(
+        row({ start: '09:00', end: '17:00' }),
+        row({ start: '9am', end: '17:00' }),
+        row({ start: '08:00', end: '08:00', daysRestricted: true, days: [] }),
+      ),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Keyed by the write path below `runWindows` (`1.start`), the path a server
+    // refusal carries too; window 1 is valid, so it owns nothing.
+    expect(Object.keys(result.fields).sort()).toEqual(['1.start', '2.days', '2.end']);
+    expect(result.fields['1.start']).toMatch(/24-hour UTC time/);
+    expect(result.fields['2.end']).toMatch(/are equal/);
+    expect(result.fields['2.days']).toMatch(/select at least one day/);
+  });
+
+  it('#1396 — an unrestricted form refuses nothing, whatever its rows hold', () => {
+    expect(formToRunWindows({ restricted: false, rows: [row({ start: '9am' })] })).toEqual({
+      ok: true,
+      runWindows: null,
+    });
+  });
 });
 
 describe('runWindowsToForm', () => {

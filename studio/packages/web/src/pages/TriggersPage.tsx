@@ -37,6 +37,7 @@ import {
 import {
   blankRunWindowsForm,
   formToRunWindows,
+  runWindowFields,
   runWindowsToForm,
   type RunWindowsFormState,
 } from './triggers/runWindowsForm';
@@ -803,7 +804,11 @@ function modeFields(form: FormState): Readonly<Record<string, string>> {
     for (const field of WINDOW_FIELDS) out[`window.${field}`] = WINDOW_FIELD_LABELS[field];
   }
   // Run windows are not owned by a mode: shown, and converted, in every one.
+  // The list is a field (an issue no row owns), and so is each row's control.
   out.runWindows = 'Run windows';
+  for (const { field, label } of runWindowFields(form.runWindows)) {
+    out[`runWindows.${field}`] = label;
+  }
   return out;
 }
 
@@ -843,7 +848,12 @@ function modeChecks(form: FormState): FieldErrors {
     }
   }
   const windows = formToRunWindows(form.runWindows);
-  if (!windows.ok) out.runWindows = windows.reason;
+  if (!windows.ok) {
+    // On the rows' controls; an issue no row owns (none the schema raises
+    // today) marks the list, once the rows' own refusals are fixed.
+    if (Object.keys(windows.fields).length > 0) put('runWindows', windows.fields);
+    else out.runWindows = windows.reason;
+  }
 
   const shown = modeFields(form);
   return Object.fromEntries(Object.entries(out).filter(([key]) => Object.hasOwn(shown, key)));

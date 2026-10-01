@@ -188,6 +188,15 @@ message.
   and blur handlers find the key, so a field needs no wiring of its own. Moving between the cells of
   one row list is not leaving it. `ConfigFieldControl` takes a `validation` prop and `ConfigEditor`
   an `errorFor`; the canvas passes neither and renders as before.
+- **A list whose rows are each a group of controls keys every control, not the list.** The trigger
+  form's run windows do this: each row's Start, End and Days are fields keyed by their write path
+  (`runWindows.1.end`, labelled "Window 2 end"). A refusal then sits beside the faulty row's control,
+  and Save focuses that control, not the list's first one. The list keeps its own key
+  (`runWindows`) for an issue no row control owns. Keys go by row INDEX because they must match the
+  payload path that a server refusal carries. So when a row is removed, the editor calls
+  `validation.rekey`. That drops the removed row's state and moves each later row's state up a
+  place with its row. Otherwise a refusal held for window 3 would stay at index 2, beside whichever
+  row now holds it.
 - **A field that is read-only on an edit is not a field to fix.** `labelOf` stops naming it (a
   replaced secret's or a stored global's Name), so nothing is checked or filed there.
 - **A conflict on the name is the Name's error.** A 409 from a create, where the name is the only
@@ -291,7 +300,20 @@ pipeline parameter's default. Their refusals still say where the mistake is (bel
   validation and the e2e suite rely on. There is no line-number gutter: a textarea cannot align one
   reliably under zoom or with a horizontal scrollbar. Format selecting the mistake does that job.
 
-## Still to come under #1396
+## Width, and why there is no two-column grid
 
-- A two-column grid on wide screens.
-- Axe gates on every form (shared with OR24, #1415).
+#1396 first asked for a two-column grid on wide screens, single column on narrow ones, with a maximum
+field width. Since then the drawer has settled the layout, and a grid would have nothing to fill.
+
+- **The form is a column at every width.** Beside the list, the drawer is 340–460px wide
+  (`--drawer-width`). Two columns there would make controls about 200px wide, which is too narrow for
+  a URL, a JSON box or a time zone. The node property panel is a narrow side column too.
+- **The maximum field width holds when stacked too.** Under 960px the drawer stacks below the list
+  and takes the content column's width. With the nav beside it, Playwright measured 543px in a
+  900px window, so it is about 600px at most at the breakpoint. No form runs full-bleed, and no cap
+  is needed. (A 40rem cap was tried and dropped, because it could never apply.)
+
+A form wider than the drawer, such as a full-page editor, should revisit this rather than inherit
+it.
+
+Axe gates on every form (0 violations) belong to OR24 (#1415), which brings axe into the e2e suite.
