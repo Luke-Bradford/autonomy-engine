@@ -48,5 +48,22 @@ check "'not APPROVE' prose outside Verdict, Verdict REQUEST CHANGES -> block" "b
 check "APPROVE mentioned only outside the Verdict section -> none" "none" \
   "$(v 'Would APPROVE once fixed.\n### Verdict\nPending author reply.')"
 
+# --- the doc-only branch of merge_gate_bot_comment, gh mocked -------------------------
+gh() {
+  case "$*" in
+    "pr view 7 --json commits"*) echo "2026-10-01T10:00:00Z" ;;
+    "api --paginate repos/{owner}/{repo}/pulls/7/files"*) echo "docs/a.md" ;;
+    "pr view 7 --json changedFiles"*) echo "1" ;;
+    "pr view 7 --json comments"*) echo "## Claude Code Review Doc-only diff -- engineering review skipped." ;;
+    *) echo "unmocked gh: $*" >&2; return 1 ;;
+  esac
+}
+review_verdict() { :; }   # simulate a classifier failure: empty output
+check "doc-only path: an EMPTY verdict (classifier failure) refuses" "1" \
+  "$(merge_gate_bot_comment 7 github-actions 'Claude Code Review' .md docs/ '' >/dev/null 2>&1; echo $?)"
+review_verdict() { echo none; }   # control: a doc-only skip notice classifies as none
+check "doc-only path: verdict 'none' (skip notice) passes" "0" \
+  "$(merge_gate_bot_comment 7 github-actions 'Claude Code Review' .md docs/ '' >/dev/null 2>&1; echo $?)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails FAILED"; exit 1; fi

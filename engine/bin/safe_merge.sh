@@ -110,13 +110,12 @@ review_postdates_head() {
   [ "$review_epoch" -ge "$head_epoch" ]
 }
 
-# Classify a bot review by its STRUCTURE, never by stray words (eBull PR #3554, 2026-10-01).
-# The old gate grepped the whole body for `REQUEST CHANGES|\[BLOCKING\]` and for `APPROVE`.
-# A review that QUOTES those words, e.g. a "Prior findings" line explaining the gate, or
-# "not APPROVE", was misread both ways: #3554's round-2 APPROVE was refused because its
-# RESOLVED note quoted the grep pattern. Echoes exactly one of:
+# Classify a bot review by its STRUCTURE, never by stray words. Grepping the whole body for
+# `REQUEST CHANGES|\[BLOCKING\]` and `APPROVE` misread any review that QUOTED those words
+# (a resolved-findings note explaining the gate was refused; "not APPROVE" would have passed).
+# Echoes exactly one of:
 #   block    -- a `[BLOCKING]` section header, or the Verdict token is REQUEST CHANGES
-#   approve  -- the Verdict section's first bold token is APPROVE, with no blocking header
+#   approve  -- the Verdict text LEADS with APPROVE (bold or not), with no blocking header
 #   none     -- anything else (no Verdict section, NEEDS DISCUSSION, unparseable): not mergeable
 # The doc-only skip notice classifies as `none`, which that path treats as non-blocking.
 review_verdict() {
@@ -127,10 +126,10 @@ lines = body.splitlines()
 if any(re.match(r"^\s*#{1,6}\s*\[BLOCKING\]", l, re.I) for l in lines):
     print("block"); sys.exit()
 # The Verdict is a header (`### Verdict`) or an inline line (`Verdict: **APPROVE**`);
-# both forms occur in real reviews (inline on eBull #3333/#3342/#3438).
+# both forms occur in real reviews.
 # A marker is a heading (`### Verdict`) or an inline label WITH a colon (`Verdict:` /
-# `**Verdict:**`). Prose that merely starts with the word ("Verdict only -- ...", seen on
-# #3345/#3487) is not a marker. The LAST marker wins: the verdict closes the review.
+# `**Verdict:**`). Prose that merely starts with the word ("Verdict only -- ...") is not a
+# marker. The LAST marker wins: the verdict closes the review.
 MARKER = r"^\s*(#{1,6}\s*\**\s*Verdict\b\**\s*:?|\**\s*Verdict\s*\**\s*:\s*\**)"
 marks = [i for i, l in enumerate(lines) if re.match(MARKER, l, re.I)]
 start = marks[-1] if marks else None
