@@ -98,7 +98,9 @@ test.describe('#1396 the connection form drawer', () => {
           .querySelectorAll('td')[1]!;
         const rowIcon = cell.querySelector('.kind-icon')!;
         const svg = rowIcon.querySelector('svg')!.getBoundingClientRect();
-        const select = document.querySelector<HTMLSelectElement>('.form-drawer .kind-select select')!;
+        const select = document.querySelector<HTMLSelectElement>(
+          '.form-drawer .kind-select select',
+        )!;
         const nameInput = [...document.querySelectorAll('.form-drawer label')]
           .find((label) => label.textContent?.startsWith('Name'))!
           .parentElement!.querySelector('input')!;
@@ -107,7 +109,8 @@ test.describe('#1396 the connection form drawer', () => {
           rowKind: rowIcon.getAttribute('data-kind'),
           rowHidden: rowIcon.getAttribute('aria-hidden'),
           // Unsized: no taller than the line of text beside it.
-          iconFitsLine: svg.height > 0 && svg.height <= parseFloat(getComputedStyle(cell).lineHeight) + 1,
+          iconFitsLine:
+            svg.height > 0 && svg.height <= parseFloat(getComputedStyle(cell).lineHeight) + 1,
           pickerKind: document
             .querySelector('.form-drawer .kind-select .kind-icon')
             ?.getAttribute('data-kind'),

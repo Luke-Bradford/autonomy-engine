@@ -94,14 +94,22 @@ function KindName({ glyph, kind, label }: { glyph: FluentIcon; kind: string; lab
 
 export function ConnectionKindName({ kind }: { kind: ConnectionKind }) {
   return (
-    <KindName glyph={CONNECTION_KIND_ICONS[kind]} kind={kind} label={CONNECTION_KIND_LABELS[kind]} />
+    <KindName
+      glyph={CONNECTION_KIND_ICONS[kind]}
+      kind={kind}
+      label={CONNECTION_KIND_LABELS[kind]}
+    />
   );
 }
 
 export function DatasetKindName({ kind }: { kind: DatasetKind }) {
-  return <KindName glyph={DATASET_KIND_ICONS[kind]} kind={kind} label={DATASET_KIND_LABELS[kind]} />;
+  return (
+    <KindName glyph={DATASET_KIND_ICONS[kind]} kind={kind} label={DATASET_KIND_LABELS[kind]} />
+  );
 }
 
 export function TriggerModeName({ mode }: { mode: TriggerMode }) {
-  return <KindName glyph={TRIGGER_MODE_ICONS[mode]} kind={mode} label={TRIGGER_MODE_LABELS[mode]} />;
+  return (
+    <KindName glyph={TRIGGER_MODE_ICONS[mode]} kind={mode} label={TRIGGER_MODE_LABELS[mode]} />
+  );
 }

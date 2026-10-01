@@ -245,7 +245,10 @@ describe('ConnectionsPage', () => {
     expect(screen.queryByLabelText(/^Allowed folders/)).not.toBeInTheDocument();
     // #1396 — the picker shows the chosen kind's icon beside it, and swaps it.
     const kindIcon = () =>
-      screen.getByLabelText('Kind').parentElement?.querySelector('.kind-icon')?.getAttribute('data-kind');
+      screen
+        .getByLabelText('Kind')
+        .parentElement?.querySelector('.kind-icon')
+        ?.getAttribute('data-kind');
     expect(kindIcon()).toBe('anthropic_api');
 
     await user.selectOptions(screen.getByLabelText('Kind'), 'fs');

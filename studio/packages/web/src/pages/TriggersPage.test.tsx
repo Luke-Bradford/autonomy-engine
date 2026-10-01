@@ -291,7 +291,10 @@ describe('TriggersPage', () => {
     await user.type(form.getByLabelText('Name'), 'Nightly');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
     const modeIcon = () =>
-      form.getByLabelText('Mode').parentElement?.querySelector('.kind-icon')?.getAttribute('data-kind');
+      form
+        .getByLabelText('Mode')
+        .parentElement?.querySelector('.kind-icon')
+        ?.getAttribute('data-kind');
     expect(modeIcon()).toBe('manual');
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     // #1396 — the Mode picker's icon follows the chosen mode.
