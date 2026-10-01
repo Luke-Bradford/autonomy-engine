@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
 import { firstBadInput, focusFirstInvalid, type FieldValidation } from './fieldValidation';
+import { UnsavedChangesPrompt } from './UnsavedChangesPrompt';
 
 /** The first field a person can type into: read-only ones are skipped. */
 const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
@@ -149,22 +150,7 @@ export function FormDrawer({
         </div>
         <div className="form-drawer-footer">
           {guard.confirming ? (
-            <div
-              className="unsaved-confirm"
-              role="alertdialog"
-              aria-label="Unsaved changes"
-              aria-describedby={`${titleId}-unsaved`}
-            >
-              <p id={`${titleId}-unsaved`}>You have unsaved changes. Discard them?</p>
-              <div className="form-actions">
-                <button type="button" ref={keepRef} onClick={guard.keep}>
-                  Keep editing
-                </button>
-                <button type="button" className="danger" onClick={guard.discard}>
-                  Discard changes
-                </button>
-              </div>
-            </div>
+            <UnsavedChangesPrompt guard={guard} keepRef={keepRef} />
           ) : (
             <>
               {status}
