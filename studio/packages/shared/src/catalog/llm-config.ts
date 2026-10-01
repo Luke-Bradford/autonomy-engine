@@ -691,8 +691,8 @@ export const llmCallConfigSchema = z
     }),
     /** Overrides the connection's default model for this node. */
     model: presented(singleLine(z.string()).optional(), {
-      title: 'Model',
-      description: "Overrides the connection's default model for this step.",
+      title: 'Model for this step',
+      description: "Overrides the connection's default model.",
     }),
     maxTokens: presented(z.number().int().positive().optional(), {
       title: 'Max output tokens',
@@ -759,7 +759,7 @@ export const llmCallConfigSchema = z
     // here so a tools+structured config fails at DISPATCH the same way it fails
     // at save.
     tools: presented(llmToolsArraySchema.optional(), {
-      title: 'Tools',
+      title: 'Tool definitions',
       description: 'Tools the model may call while answering.',
     }),
     toolChoice: presented(llmToolChoiceSchema.optional(), {
@@ -799,7 +799,8 @@ export const llmCallConfigSchema = z
     // gate and the dispatch-time emission gate can never disagree about opt-in.
     emitMessages: presented(z.boolean().optional(), {
       title: 'Emit transcript',
-      description: 'Adds a messages output holding the whole conversation.',
+      description:
+        'Adds a messages output holding the whole conversation. Not with structured output.',
     }),
     // #605 L9b — what the debugging capture (`activity.captured`) keeps of this
     // node's prompt/completion. Absent = `metadata`, the L9a default: lengths and

@@ -120,9 +120,11 @@ export function fieldLabelOf(schema: unknown): FieldLabel | undefined {
 }
 
 /**
- * #1396 — a top-level field's human label, from the field or the one wrapper
- * (`.optional()`, `.default()`) a form reads through. The "every field is
- * titled" gates on each catalog share this read.
+ * #1396 — a top-level field's human label, from the field or the ONE wrapper
+ * (`.optional()`, `.default()`) around it. The "every field is titled" gates on
+ * each catalog share this read. The form itself (`configForm.ts`'s `unwrap`)
+ * reads through every layer, so a title tagged two wrappers deep renders but
+ * fails these gates: tag the field or its outermost wrapper.
  */
 export function fieldLabelThrough(schema: unknown): FieldLabel | undefined {
   const inner =

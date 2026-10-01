@@ -176,14 +176,20 @@ message.
 - **No title may contain another label on the panel, or sit inside one.** The panel adds its own
   labels around the activity's fields (Connection, Source/Sink dataset, Declared variable, container
   membership, the General tab's policy), so the check runs on the RENDERED panel:
-  `NodePanelLabels.test.tsx`. This is why `prompt` is "User prompt" beside "System prompt", and
-  `variable` is "Variable name" beside "Declared variable".
-- A `${}` field's hint says so and gives an example that the save gate accepts ("A whole ${}
-  expression giving a number, e.g. ${30}."), because a bare value is refused.
+  `NodePanelLabels.test.tsx`, with one row in every row list and an override row for every setting of
+  the bound connection. This is why `prompt` is "User prompt" beside "System prompt", `variable` is
+  "Variable name" beside "Declared variable", `url` is "Request URL" beside a "Base URL" override,
+  `model` is "Model for this step" beside "Default model", `tools` is "Tool definitions" beside its
+  `tools row 1 …` cells, and the connection's own `headers` is "Default headers". Buttons are not
+  checked: the ones named by key (below) would always match a title that spells the key.
+- A field that must be a whole `${}` expression says so in its hint. The duration fields (`wait`,
+  `webhook`) also give an example the save gate accepts ("e.g. ${30}"), pinned by a test, because a
+  bare number there is refused.
 - Connection and dataset pickers read `Name (Display kind)`, from `lib/resourceOptionLabel.ts`; an
   override row and its "Add … override" option use the setting's title, falling back to its key.
-- What still names the KEY: the expression picker's buttons ("Insert reference into url") and a row
-  list's buttons. The key is what a `${}` reference and a server message cite.
+- What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
+  list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
+  message cite.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.

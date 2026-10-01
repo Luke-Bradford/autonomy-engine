@@ -58,13 +58,15 @@ test.describe('U7 — per-activity node config form', () => {
     // The hole this ticket closes: the settings are NAMED on screen. `url` and
     // `method` are not strings this spec invented — they are the keys of
     // `http_request`'s own `configSchema`, so a control per key is the assertion.
-    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'Request URL' })).toBeVisible();
     await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
-    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://example.test/hook');
+    await properties(page)
+      .getByRole('textbox', { name: 'Request URL' })
+      .fill('https://example.test/hook');
     await properties(page).getByRole('textbox', { name: 'HTTP method' }).fill('POST');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
@@ -77,7 +79,7 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
 
-    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'Request URL' })).toHaveValue(
       'https://example.test/hook',
     );
     await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toHaveValue(
@@ -103,7 +105,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
 
-    const url = properties(page).getByLabel('URL', { exact: true });
+    const url = properties(page).getByLabel('Request URL', { exact: true });
     await expect(url).toHaveValue('');
     await url.fill('https://example.test/label');
     await expect(url).toHaveValue('https://example.test/label', { timeout: 3_000 });
@@ -122,7 +124,7 @@ test.describe('U7 — per-activity node config form', () => {
       ],
     });
     await canvasNodes(page).first().click();
-    const url = properties(page).getByRole('textbox', { name: 'URL', exact: true });
+    const url = properties(page).getByRole('textbox', { name: 'Request URL', exact: true });
     await expect(url).toHaveAccessibleDescription(/\burl\b/);
     await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(
       0,
@@ -162,8 +164,10 @@ test.describe('U7 — per-activity node config form', () => {
         Array.from(
           root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
         ).find((el) => Array.from(el.labels ?? []).some((l) => l.textContent === name));
-      const url = byLabel('URL');
-      const textareaFont = byLabel('Request body') ? getComputedStyle(byLabel('Request body')!).fontFamily : null;
+      const url = byLabel('Request URL');
+      const textareaFont = byLabel('Request body')
+        ? getComputedStyle(byLabel('Request body')!).fontFamily
+        : null;
       return {
         url: url?.tagName,
         urlFont: url ? getComputedStyle(url).fontFamily : null,
@@ -185,7 +189,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     // The input still round-trips through a save.
     await properties(page)
-      .getByRole('textbox', { name: 'URL' })
+      .getByRole('textbox', { name: 'Request URL' })
       .fill('https://example.test/one-line');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -228,7 +232,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://after');
+    await properties(page).getByRole('textbox', { name: 'Request URL' }).fill('https://after');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -263,7 +267,9 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://typed-in-a-field');
+    await properties(page)
+      .getByRole('textbox', { name: 'Request URL' })
+      .fill('https://typed-in-a-field');
     await properties(page).getByRole('button', { name: 'Edit as JSON' }).click();
 
     const json = properties(page).getByLabel('Config (JSON)');
@@ -307,9 +313,9 @@ test.describe('U7 — per-activity node config form', () => {
     // content includes the JSON being edited — which here literally contains the
     // word "url". A substring match would resolve to the escape hatch itself and
     // pass for the wrong reason.
-    await expect(properties(page).getByRole('textbox', { name: 'URL', exact: true })).toHaveCount(
-      0,
-    );
+    await expect(
+      properties(page).getByRole('textbox', { name: 'Request URL', exact: true }),
+    ).toHaveCount(0);
     await expect(
       properties(page).getByText(/Saved settings this form cannot show \(url\)/),
     ).toBeVisible();

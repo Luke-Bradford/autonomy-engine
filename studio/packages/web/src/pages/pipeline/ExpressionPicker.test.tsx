@@ -148,7 +148,7 @@ describe('ExpressionPicker in NodePanel', () => {
 
   it('splices at the caret, leaving the text the author already typed', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
-    const url = ui.field('URL');
+    const url = ui.field('Request URL');
     fireEvent.change(url, { target: { value: 'https://x.test/?q=&page=2' } });
     url.selectionStart = 'https://x.test/?q='.length;
     url.selectionEnd = url.selectionStart;
@@ -202,7 +202,7 @@ describe('ExpressionPicker in NodePanel', () => {
     ui.open('url');
     expect(screen.getByText('Pipeline variables')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^attempts/ }));
-    expect(ui.field('URL').value).toContain('${vars.attempts}');
+    expect(ui.field('Request URL').value).toContain('${vars.attempts}');
   });
 
   // #844 GL4 — a workspace global is offered under its own heading, and the
@@ -214,7 +214,7 @@ describe('ExpressionPicker in NodePanel', () => {
     ui.open('url');
     expect(screen.getByText('Global parameters')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^env/ }));
-    expect(ui.field('URL').value).toContain('${global.env}');
+    expect(ui.field('Request URL').value).toContain('${global.env}');
   });
 
   it('closes on Escape without touching the field', () => {
@@ -373,7 +373,7 @@ describe('ExpressionPicker in NodePanel', () => {
     fireEvent.change(ui.field('headers row 1 key'), { target: { value: 'X-Body' } });
     fireEvent.change(ui.field('secretHeaders row 1 key'), { target: { value: 'Authorization' } });
     fireEvent.change(ui.field('secretHeaders row 1 secret name'), { target: { value: 'tok' } });
-    fireEvent.change(ui.field('URL'), { target: { value: 'https://b.test' } });
+    fireEvent.change(ui.field('Request URL'), { target: { value: 'https://b.test' } });
     ui.apply();
     expect(ui.storedConfig()).toMatchObject({
       headers: { 'X-Body': '${nodes.fetch.output.body}' },
@@ -478,7 +478,7 @@ describe('ExpressionPicker — wrap in a function', () => {
 
   it('wraps only the SELECTED part of an expression, in place', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
-    const url = ui.field('URL');
+    const url = ui.field('Request URL');
     const text = '${concat(nodes.fetch.output.body, "x")}';
     fireEvent.change(url, { target: { value: text } });
     url.selectionStart = text.indexOf('nodes');
@@ -493,7 +493,7 @@ describe('ExpressionPicker — wrap in a function', () => {
 
   it('says what to do when the caret is in no expression, rather than offering a bare call', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
-    fireEvent.change(ui.field('URL'), { target: { value: 'https://a.test' } });
+    fireEvent.change(ui.field('Request URL'), { target: { value: 'https://a.test' } });
     ui.openFunctions('url');
     expect(screen.getByText(/Put the cursor inside a \$\{…\} expression/)).toBeTruthy();
     expect(ui.offered()).toEqual([]);
@@ -501,7 +501,7 @@ describe('ExpressionPicker — wrap in a function', () => {
 
   it('offers nothing around an expression the save already refuses — a wrap cannot repair it', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
-    fireEvent.change(ui.field('URL'), { target: { value: '${nodes.nope.output.x}' } });
+    fireEvent.change(ui.field('Request URL'), { target: { value: '${nodes.nope.output.x}' } });
     ui.openFunctions('url');
     expect(ui.offered()).toEqual([]);
     expect(screen.getByText(/No function takes this expression/)).toBeTruthy();
@@ -512,17 +512,17 @@ describe('ExpressionPicker — wrap in a function', () => {
     ui.openFunctions('url');
     expect(ui.offered()).toContain('toUpper');
     const edited = '${nodes.fetch.output.body} and more';
-    fireEvent.change(ui.field('URL'), { target: { value: edited } });
+    fireEvent.change(ui.field('Request URL'), { target: { value: edited } });
     expect(ui.offered()).toEqual([]);
     expect(
       screen
         .getByRole('button', { name: 'Wrap an expression in url in a function' })
         .getAttribute('aria-expanded'),
     ).toBe('false');
-    expect(ui.field('URL').value).toBe(edited);
+    expect(ui.field('Request URL').value).toBe(edited);
 
     // Editing BACK to the text it opened on (an undo) must not revive it.
-    fireEvent.change(ui.field('URL'), { target: { value: READS.config['url'] } });
+    fireEvent.change(ui.field('Request URL'), { target: { value: READS.config['url'] } });
     expect(ui.offered()).toEqual([]);
   });
 

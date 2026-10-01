@@ -41,7 +41,7 @@ test.describe('duplicate a node (U21)', () => {
 
     await page.getByTestId('rf__node-b').click();
     const panel = properties(page);
-    await expect(panel.getByRole('textbox', { name: 'URL' })).toHaveValue(
+    await expect(panel.getByRole('textbox', { name: 'Request URL' })).toHaveValue(
       'https://example.test/${nodes.a.output.body}',
     );
 
@@ -54,7 +54,7 @@ test.describe('duplicate a node (U21)', () => {
 
     // The panel followed the selection onto the copy — you duplicate in order to
     // edit the copy — and the copy is holding the config it was copied from.
-    await expect(panel.getByRole('textbox', { name: 'URL' })).toHaveValue(
+    await expect(panel.getByRole('textbox', { name: 'Request URL' })).toHaveValue(
       'https://example.test/${nodes.a.output.body}',
     );
 

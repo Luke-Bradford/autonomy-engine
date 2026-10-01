@@ -122,7 +122,7 @@ test.describe('#1227 — a label names its control and nothing else', () => {
       nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
     });
     await canvasNodes(page).first().click();
-    const url = properties(page).getByLabel('URL', { exact: true });
+    const url = properties(page).getByLabel('Request URL', { exact: true });
     await expect(url).toBeVisible();
     expect(await configFieldStyle(url)).toEqual(CONFIG_FIELD_RHYTHM);
 

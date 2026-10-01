@@ -4,6 +4,8 @@ import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   ContainerKindSchema,
+  ContainerSchema,
+  fieldLabelThrough,
   autoMapMapping,
   checkSinkCoverage,
   checkSourceDrift,
@@ -2422,7 +2424,7 @@ function ContainerSection({
         {kind === 'loop' && (
           <>
             <label>
-              Exit when
+              {containerSettingTitle('exitWhen')}
               <input
                 value={exitWhen}
                 spellCheck={false}
@@ -2431,7 +2433,7 @@ function ContainerSection({
               />
             </label>
             <label>
-              Max rounds
+              {containerSettingTitle('maxRounds')}
               <input
                 value={maxRounds}
                 inputMode="numeric"
@@ -2442,7 +2444,7 @@ function ContainerSection({
         )}
         {kind === 'foreach' && (
           <label>
-            Items
+            {containerSettingTitle('items')}
             <input
               value={items}
               spellCheck={false}
@@ -2565,6 +2567,14 @@ function DatasetOverrides({
  * The connection dropdown is filtered to the kinds this activity accepts.
  * Container membership (U6d) is `ContainerSection` above.
  */
+/**
+ * #1396 — a container setting's title, from `ContainerSchema`, so the New
+ * container fieldset and the container panel cannot name one setting twice.
+ */
+function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string {
+  return fieldLabelThrough(ContainerSchema.shape[key])?.title ?? key;
+}
+
 export function NodePanel({
   store,
   connections,

@@ -100,7 +100,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     secretSinkFields: [HTTP_SECRET_HEADERS_FIELD],
     configSchema: z.object({
       url: presented(singleLine(z.string()).min(1), {
-        title: 'URL',
+        title: 'Request URL',
         description:
           "The address to call, joined to the connection's base URL when it is relative.",
       }),
@@ -240,7 +240,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: z.object({
       message: presented(z.string().min(1), {
         title: 'Error message',
-        description: 'Why the run fails here. May use ${}.',
+        description: 'This step fails with this message. May use ${}.',
       }),
     }),
   },

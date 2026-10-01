@@ -72,7 +72,7 @@ export const httpConnectionConfigSchema = z.object({
     description: 'Requests from a step resolve against this address.',
   }),
   headers: presented(z.record(z.string(), z.string()).optional(), {
-    title: 'Headers',
+    title: 'Default headers',
     description: 'Sent with every request through this connection.',
   }),
   /** Per-request timeout in ms (whole exchange). Defaults to 30s. */

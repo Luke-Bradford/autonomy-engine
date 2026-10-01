@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import {
+  CONNECTION_KIND_LABELS,
   catalog,
+  connectionConfigSchema,
   isStructuralCallActivity,
   type Connection,
   type ConnectionKind,
@@ -46,6 +48,10 @@ const connectionOf = (kind: ConnectionKind): Connection =>
 /**
  * The name of every labelled form control, as its `<label>` or `aria-label`
  * gives it, and of every labelled group (a row list is one).
+ *
+ * Buttons are left out on purpose: the expression picker's ("Insert reference
+ * into url") and a row list's ("Add tools row") are named by the KEY, which a
+ * title often spells too. `docs/ui-patterns.md` records why they keep it.
  */
 function controlNames(root: HTMLElement): string[] {
   const names: string[] = [];
@@ -66,13 +72,26 @@ describe('node panel labels (#1396)', () => {
     'no %s field title clashes with another label on its panel',
     (type, entry) => {
       const store = createCanvasStore();
-      const kind = entry.connectionKinds[0];
+      // A paired activity (copy) binds source and sink stores, not one
+      // connection, so it has no connection picker or connection overrides.
+      const kind = entry.sinkConnectionKinds === undefined ? entry.connectionKinds[0] : undefined;
+      const fields = deriveConfigFields(entry.configSchema) ?? [];
+      // One row in every row list, and an override row for every setting of the
+      // bound connection: both carry labels of their own, which sit beside the
+      // activity's titles.
+      const config = Object.fromEntries(
+        fields.filter((f) => f.kind === 'objectList').map((f) => [f.name, [{}]]),
+      );
+      const overrides =
+        kind === undefined
+          ? {}
+          : Object.fromEntries(Object.keys(connectionConfigSchema(kind).shape).map((k) => [k, '']));
       const node = {
         id: 'n',
         type,
-        config: {},
+        config,
         position: { x: 0, y: 0 },
-        ...(kind !== undefined && { connectionId: `c_${kind}` }),
+        ...(kind !== undefined && { connectionId: `c_${kind}`, connectionParams: overrides }),
       };
       store.setState({ nodes: [node] });
       const { container } = render(
@@ -82,15 +101,13 @@ describe('node panel labels (#1396)', () => {
           datasets={[]}
           nodeId="n"
           nodeType={type}
-          config={{}}
+          config={config}
           connectionId={node.connectionId}
           call={undefined}
         />,
       );
 
-      const titles = (deriveConfigFields(entry.configSchema) ?? []).map((f) =>
-        configFieldTitle(f).toLowerCase(),
-      );
+      const titles = fields.map((f) => configFieldTitle(f).toLowerCase());
       const names = controlNames(container).map((n) => n.toLowerCase());
       // Each title must be on the panel exactly once, and no other name may
       // contain it or be contained by it. A list field's label adds its format
@@ -104,6 +121,44 @@ describe('node panel labels (#1396)', () => {
         return own === 1 && others.length === 0 ? [] : [`${title}: ${own}× ${others.join(' | ')}`];
       });
       expect(clashes).toEqual([]);
+      // The seeding above is what puts those labels on the panel; prove it did.
+      const rowList = fields.find((f) => f.kind === 'objectList');
+      if (rowList !== undefined)
+        expect(names.some((n) => n.startsWith(`${rowList.name} row 1 `))).toBe(true);
+      if (kind !== undefined) {
+        const overrideTitles = (deriveConfigFields(connectionConfigSchema(kind)) ?? []).map((f) =>
+          configFieldTitle(f).toLowerCase(),
+        );
+        expect(overrideTitles.filter((t) => !names.includes(t))).toEqual([]);
+      }
     },
   );
+
+  it("names a bound connection by its kind's display name", () => {
+    const store = createCanvasStore();
+    store.setState({
+      nodes: [
+        {
+          id: 'n',
+          type: 'http_request',
+          config: {},
+          position: { x: 0, y: 0 },
+          connectionId: 'c_http',
+        },
+      ],
+    });
+    const { getByRole } = render(
+      <NodePanel
+        store={store}
+        connections={[connectionOf('http')]}
+        datasets={[]}
+        nodeId="n"
+        nodeType="http_request"
+        config={{}}
+        connectionId="c_http"
+        call={undefined}
+      />,
+    );
+    expect(getByRole('option', { name: `Bound (${CONNECTION_KIND_LABELS.http})` })).toBeTruthy();
+  });
 });

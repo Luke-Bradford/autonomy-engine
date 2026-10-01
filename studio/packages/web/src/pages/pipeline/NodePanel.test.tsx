@@ -240,7 +240,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     // The whole point of the ticket: the activity's settings are NAMED on screen,
     // so authoring one no longer means knowing its JSON shape by heart.
-    expect(screen.getByLabelText('URL')).toBeTruthy();
+    expect(screen.getByLabelText('Request URL')).toBeTruthy();
     expect(screen.getByLabelText('HTTP method')).toBeTruthy();
     expect(screen.getByLabelText('Request body')).toBeTruthy();
     // A record of headers authors as ROWS (#852), under its own name.
@@ -252,7 +252,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('writes an edited field into the doc', () => {
     const panel = mountOver(httpNode({ url: 'https://old' }));
 
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://new' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://new' } });
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({ url: 'https://new' });
@@ -272,7 +272,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
       }),
     );
 
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://y' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://y' } });
     panel.apply();
 
     expect(panel.storedConfig()).toEqual({
@@ -355,7 +355,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     // `url` is `z.string().min(1)`, so clearing it is a schema violation, not a
     // parse failure — a different path to the same "nothing was written".
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: '' } });
     panel.apply();
 
     expect(screen.getByRole('alert')).toBeTruthy();
@@ -369,7 +369,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(httpNode({ url: { was: 'authored elsewhere' } }));
 
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
-    expect(screen.queryByLabelText('URL')).toBeNull();
+    expect(screen.queryByLabelText('Request URL')).toBeNull();
     expect(screen.getByText(/Saved settings this form cannot show \(url\)/)).toBeTruthy();
     // And the fallback is not a dead end: the JSON editor still applies.
     fireEvent.change(screen.getByLabelText('Config (JSON)'), {
@@ -385,7 +385,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
     fireEvent.click(toJson());
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
-    expect(screen.queryByLabelText('URL')).toBeNull();
+    expect(screen.queryByLabelText('Request URL')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Config (JSON)'), {
       target: { value: '{"url":"https://hatch"}' },
@@ -411,7 +411,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // Back to the form: it must now show what JSON just wrote, and applying
     // unchanged must be a no-op rather than a revert.
     fireEvent.click(toFields());
-    expect((screen.getByLabelText('URL') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://from-json');
     expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('POST');
 
     panel.apply();
@@ -431,7 +431,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     expect(screen.queryByText(/Saved settings this form cannot show/)).toBeNull();
     expect(toJson()).toBeTruthy();
-    expect((screen.getByLabelText('URL') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://repaired');
   });
 
   it('lets a forced JSON editor hand back the form once the draft is repaired, and not before', () => {
@@ -449,7 +449,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
     expect(screen.queryByRole('alert')).toBeNull();
-    expect((screen.getByLabelText('URL') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://repaired');
   });
 
   // #1088 — the mode toggle is the shared one (`useConfigEditor`), so it COMMITS
@@ -459,7 +459,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('carries an unapplied field edit into the JSON it opens', () => {
     const panel = mountOver(httpNode({ url: 'https://x' }));
 
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://typed' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://typed' } });
     fireEvent.click(toJson());
     expect(
       JSON.parse((screen.getByLabelText('Config (JSON)') as HTMLTextAreaElement).value),
@@ -478,7 +478,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
 
-    expect((screen.getByLabelText('URL') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://from-json');
     expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('PUT');
     panel.apply();
     expect(panel.storedConfig()).toEqual({ url: 'https://from-json', method: 'PUT' });
@@ -644,7 +644,7 @@ describe('NodePanel — duplicate (U21)', () => {
 
   it('copies what Apply last wrote, not what the form is holding unapplied', () => {
     const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
-    fireEvent.change(screen.getByLabelText('URL'), {
+    fireEvent.change(screen.getByLabelText('Request URL'), {
       target: { value: 'https://example.test/edited' },
     });
     // No apply — the edit is still only in the form's draft state.
@@ -1717,7 +1717,7 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
     const params: Param[] = [{ name: 'limit', type: 'number', required: true }];
     const panel = mountOver(httpNode({ url: 'https://api.test/?n=&x=1' }), [], [], params);
 
-    const url = screen.getByLabelText('URL') as HTMLInputElement;
+    const url = screen.getByLabelText('Request URL') as HTMLInputElement;
     expect(url.tagName).toBe('INPUT');
     url.setSelectionRange(20, 20);
     fireEvent.select(url);

@@ -755,7 +755,7 @@ export const ContainerSchema = z.object({
   /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
   maxRounds: presented(z.number().int().positive().optional(), {
     title: 'Max rounds',
-    description: 'The loop stops after this many rounds.',
+    description: 'The loop fails if it reaches this many rounds before Exit when is true.',
   }),
   /**
    * #4 A17 — whole-loop WALL-CLOCK bound in seconds, a durable-alarm safety net
@@ -800,6 +800,7 @@ export const ContainerSchema = z.object({
    */
   batchCount: presented(z.number().int().min(1).max(50).optional(), {
     title: 'Batch count',
+    description: 'How many items run at once, from 1 to 50. Absent or 1 runs them one at a time.',
   }),
   /**
    * #844 V5 (spec V-D6) — foreach-only OPT-IN to nondeterministic variable
