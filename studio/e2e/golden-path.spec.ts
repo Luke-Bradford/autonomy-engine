@@ -71,13 +71,13 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   await canvasNodes(page).nth(0).click();
   const panel = properties(page);
   await panel.getByLabel('Connection', { exact: true }).selectOption({
-    label: `${CONNECTION} (agent_cli)`,
+    label: `${CONNECTION} (Agent CLI (subscription))`,
   });
-  await panel.getByLabel('task', { exact: true }).fill(TASK);
+  await panel.getByLabel('Task', { exact: true }).fill(TASK);
   await panel.getByRole('button', { name: 'Apply config', exact: true }).click();
 
   await canvasNodes(page).nth(1).click();
-  await panel.getByLabel('seconds', { exact: true }).fill('${0}');
+  await panel.getByLabel('Wait time (seconds)', { exact: true }).fill('${0}');
   await panel.getByRole('button', { name: 'Apply config', exact: true }).click();
 
   await page.getByRole('button', { name: 'Save version', exact: true }).click();

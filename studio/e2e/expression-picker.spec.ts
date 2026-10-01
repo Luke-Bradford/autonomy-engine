@@ -66,7 +66,7 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
-    const url = properties(page).getByRole('textbox', { name: 'url' });
+    const url = properties(page).getByRole('textbox', { name: 'URL' });
     const text = '${concat(nodes.fetch.output.body, "x")}';
     await url.fill(text);
     const [from, to] = [text.indexOf('nodes'), text.indexOf(',')];
@@ -134,7 +134,7 @@ test.describe('U8a — expression insert flyout', () => {
     await expect(option).toBeVisible();
     await option.click();
 
-    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toHaveValue(
       '${nodes.fetch.output.body}',
     );
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
@@ -169,7 +169,7 @@ test.describe('U8a — expression insert flyout', () => {
     await properties(page)
       .getByRole('button', { name: /^baseUrl/ })
       .click();
-    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toHaveValue(
       '${vars.baseUrl}',
     );
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
@@ -218,7 +218,7 @@ test.describe('U8a — expression insert flyout', () => {
     await properties(page)
       .getByRole('button', { name: new RegExp(`^${name}`) })
       .click();
-    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toHaveValue(
       `\${global.${name}}`,
     );
     await properties(page).getByRole('button', { name: 'Apply config' }).click();

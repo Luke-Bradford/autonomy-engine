@@ -832,6 +832,11 @@ describe('llm_call messages as rows (#852 item 3)', () => {
       optional: true,
       singleLine: true,
       authoredAsExpression: true,
+      label: {
+        title: 'History',
+        description:
+          "A whole ${} expression giving earlier turns, e.g. another step's messages output.",
+      },
     });
   });
 

@@ -58,14 +58,14 @@ test.describe('U7 — per-activity node config form', () => {
     // The hole this ticket closes: the settings are NAMED on screen. `url` and
     // `method` are not strings this spec invented — they are the keys of
     // `http_request`'s own `configSchema`, so a control per key is the assertion.
-    await expect(properties(page).getByRole('textbox', { name: 'url' })).toBeVisible();
-    await expect(properties(page).getByRole('textbox', { name: 'method' })).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toBeVisible();
+    await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
-    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/hook');
-    await properties(page).getByRole('textbox', { name: 'method' }).fill('POST');
+    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://example.test/hook');
+    await properties(page).getByRole('textbox', { name: 'HTTP method' }).fill('POST');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -77,10 +77,12 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
 
-    await expect(properties(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+    await expect(properties(page).getByRole('textbox', { name: 'URL' })).toHaveValue(
       'https://example.test/hook',
     );
-    await expect(properties(page).getByRole('textbox', { name: 'method' })).toHaveValue('POST');
+    await expect(properties(page).getByRole('textbox', { name: 'HTTP method' })).toHaveValue(
+      'POST',
+    );
     expect(await persistedConfig(page, id)).toMatchObject({
       url: 'https://example.test/hook',
       method: 'POST',
@@ -101,10 +103,33 @@ test.describe('U7 — per-activity node config form', () => {
     });
     await canvasNodes(page).first().click();
 
-    const url = properties(page).getByLabel('url', { exact: true });
+    const url = properties(page).getByLabel('URL', { exact: true });
     await expect(url).toHaveValue('');
     await url.fill('https://example.test/label');
     await expect(url).toHaveValue('https://example.test/label', { timeout: 3_000 });
+    await expectQuiet(page, problems);
+  });
+
+  // #1396 slice 7 — the panel names a field by its human title, keeps the key
+  // in the hint (it is what a `${}` reference and a server message cite), and
+  // puts the stored value's unit beside the title.
+  test('a field reads by its title, with its key and unit beside it', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'or5 titled fields', {
+      nodes: [
+        { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+        { id: 'w', type: 'wait', position: { x: 300, y: 0 }, config: { seconds: '${30}' } },
+      ],
+    });
+    await canvasNodes(page).first().click();
+    const url = properties(page).getByRole('textbox', { name: 'URL', exact: true });
+    await expect(url).toHaveAccessibleDescription(/\burl\b/);
+    await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(0);
+
+    await canvasNodes(page).nth(1).click();
+    const seconds = properties(page).getByRole('textbox', { name: 'Wait time (seconds)', exact: true });
+    await expect(seconds).toHaveValue('${30}');
+    await expect(seconds).toHaveAccessibleDescription(/e\.g\. \$\{30\}.*\bseconds\b/);
     await expectQuiet(page, problems);
   });
 
@@ -155,7 +180,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     // The input still round-trips through a save.
     await properties(page)
-      .getByRole('textbox', { name: 'url' })
+      .getByRole('textbox', { name: 'URL' })
       .fill('https://example.test/one-line');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -198,7 +223,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://after');
+    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://after');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -233,7 +258,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await properties(page).getByRole('textbox', { name: 'url' }).fill('https://typed-in-a-field');
+    await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://typed-in-a-field');
     await properties(page).getByRole('button', { name: 'Edit as JSON' }).click();
 
     const json = properties(page).getByLabel('Config (JSON)');
@@ -277,7 +302,7 @@ test.describe('U7 — per-activity node config form', () => {
     // content includes the JSON being edited — which here literally contains the
     // word "url". A substring match would resolve to the escape hatch itself and
     // pass for the wrong reason.
-    await expect(properties(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(
+    await expect(properties(page).getByRole('textbox', { name: 'URL', exact: true })).toHaveCount(
       0,
     );
     await expect(
@@ -305,8 +330,8 @@ test.describe('U7 — per-activity node config form', () => {
     await canvasNodes(page).first().click();
     const p = properties(page);
     // No JSON blob for either record: a row group per field.
-    await expect(p.getByRole('group', { name: 'headers', exact: true })).toBeVisible();
-    await expect(p.getByRole('group', { name: 'secretHeaders', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'Request headers', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'Secret headers', exact: true })).toBeVisible();
     await expect(p.getByRole('textbox', { name: 'headers row 1 key', exact: true })).toHaveValue(
       'X-Keep',
     );
@@ -452,7 +477,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await nodeById(page, 'a').click();
     const p = properties(page);
-    const history = p.getByRole('textbox', { name: 'history', exact: true });
+    const history = p.getByRole('textbox', { name: 'History', exact: true });
     await expect(history).toHaveValue('');
     // The prompt, a template, IS offered the producer's string `text`...
     const promptPicker = p.getByRole('button', {

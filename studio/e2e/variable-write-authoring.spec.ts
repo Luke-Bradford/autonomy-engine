@@ -54,7 +54,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
     const id = await openSeededCanvas(page, 'v6 set chooser', SEED);
 
     await nodeById(page, 's').click();
-    const variable = properties(page).getByRole('textbox', { name: 'variable', exact: true });
+    const variable = properties(page).getByRole('textbox', { name: 'Variable name', exact: true });
     await expect(variable).toHaveValue('count');
     // Every declared variable, typed, in declaration order.
     expect(await chooserOptions(page)).toEqual([
@@ -76,7 +76,7 @@ test.describe('#844 V6 — set/append variable config form', () => {
 
     await properties(page).getByLabel('Declared variable', { exact: true }).selectOption('label');
     await expect(variable).toHaveValue('label');
-    await properties(page).getByRole('textbox', { name: 'value', exact: true }).fill('hello');
+    await properties(page).getByRole('textbox', { name: 'Value', exact: true }).fill('hello');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();

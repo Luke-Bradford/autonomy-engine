@@ -60,35 +60,35 @@ function apply() {
 describe('ContainerPanel — which fields it offers', () => {
   it('offers a loop its own fields and none of the foreach-only ones', () => {
     mount(LOOP);
-    for (const name of [/^exitWhen/, /^maxRounds/, /^timeout/, /^join/]) {
+    for (const name of ['Exit when', /^Max rounds/, /^Timeout \(seconds\)/, 'Join']) {
       expect(screen.getByLabelText(name)).toBeDefined();
     }
-    expect(screen.queryByLabelText(/^items/)).toBeNull();
-    expect(screen.queryByLabelText(/^batchCount/)).toBeNull();
-    expect(screen.queryByLabelText(/^allowNondeterministicVars/)).toBeNull();
+    expect(screen.queryByLabelText('Items')).toBeNull();
+    expect(screen.queryByLabelText(/^Batch count/)).toBeNull();
+    expect(screen.queryByLabelText('Allow unordered variable writes')).toBeNull();
   });
 
   it('offers a foreach its own fields and none of the loop-only ones', () => {
     mount({ id: 'fe_1', kind: 'foreach', children: ['n_a'], items: '${createArray(1)}' });
-    expect(screen.getByLabelText(/^items/)).toBeDefined();
-    expect(screen.getByLabelText(/^batchCount/)).toBeDefined();
+    expect(screen.getByLabelText('Items')).toBeDefined();
+    expect(screen.getByLabelText(/^Batch count/)).toBeDefined();
     // #844 V5 — the variable-guard opt-in is a foreach field.
-    expect(screen.getByLabelText(/^allowNondeterministicVars/)).toBeDefined();
-    expect(screen.queryByLabelText(/^exitWhen/)).toBeNull();
-    expect(screen.queryByLabelText(/^maxRounds/)).toBeNull();
-    expect(screen.queryByLabelText(/^timeout/)).toBeNull();
+    expect(screen.getByLabelText('Allow unordered variable writes')).toBeDefined();
+    expect(screen.queryByLabelText('Exit when')).toBeNull();
+    expect(screen.queryByLabelText(/^Max rounds/)).toBeNull();
+    expect(screen.queryByLabelText(/^Timeout \(seconds\)/)).toBeNull();
   });
 
   it('offers a stage only join', () => {
     mount({ id: 'st_1', kind: 'stage', children: ['n_a'] });
-    expect(screen.getByLabelText(/^join/)).toBeDefined();
+    expect(screen.getByLabelText('Join')).toBeDefined();
     for (const name of [
-      /^exitWhen/,
-      /^maxRounds/,
-      /^timeout/,
-      /^items/,
-      /^batchCount/,
-      /^allowNondeterministicVars/,
+      'Exit when',
+      /^Max rounds/,
+      /^Timeout \(seconds\)/,
+      'Items',
+      /^Batch count/,
+      'Allow unordered variable writes',
     ]) {
       expect(screen.queryByLabelText(name)).toBeNull();
     }
@@ -112,7 +112,7 @@ describe('ContainerPanel — applying', () => {
   it('hands back the edited value, preserving every field it does not own', () => {
     const carried = { ...LOOP, futureField: 'keep me' } as Container;
     const onApply = mount(carried);
-    fireEvent.change(screen.getByLabelText(/^exitWhen/), {
+    fireEvent.change(screen.getByLabelText('Exit when'), {
       target: { value: '${equals(2, 2)}' },
     });
     apply();
@@ -133,7 +133,7 @@ describe('ContainerPanel — applying', () => {
       items: '${createArray(1)}',
     };
     const onApply = mount(fe);
-    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value: '2' } });
     apply();
     expect(applied(onApply)).toEqual({ ...fe, batchCount: 2 });
   });
@@ -150,8 +150,8 @@ describe('ContainerPanel — applying', () => {
    */
   it('clearing an optional field removes the key rather than writing a falsy value', () => {
     const onApply = mount({ ...LOOP, maxRounds: 7, join: 'any' });
-    fireEvent.change(screen.getByLabelText(/^maxRounds/), { target: { value: '' } });
-    fireEvent.change(screen.getByLabelText(/^join/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/^Max rounds/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Join'), { target: { value: '' } });
     apply();
     const next = applied(onApply);
     expect(next).toEqual(LOOP);
@@ -160,10 +160,10 @@ describe('ContainerPanel — applying', () => {
   });
 
   it.each([
-    ['a fractional round cap', /^maxRounds/, '1.5'],
-    ['a zero round cap', /^maxRounds/, '0'],
-    ['a negative timeout', /^timeout/, '-1'],
-    ['text where a number goes', /^timeout/, 'soon'],
+    ['a fractional round cap', /^Max rounds/, '1.5'],
+    ['a zero round cap', /^Max rounds/, '0'],
+    ['a negative timeout', /^Timeout \(seconds\)/, '-1'],
+    ['text where a number goes', /^Timeout \(seconds\)/, 'soon'],
   ])('refuses %s, keeping the typed text and saying why', (_label, field, text) => {
     const onApply = mount(LOOP);
     fireEvent.change(screen.getByLabelText(field), { target: { value: text } });
@@ -198,7 +198,7 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
 
   it('renders the carried field, and says it is not valid here', () => {
     mount(STAGE_WITH_ROUNDS);
-    expect((screen.getByLabelText(/^maxRounds/) as HTMLInputElement).value).toBe('3');
+    expect((screen.getByLabelText(/^Max rounds/) as HTMLInputElement).value).toBe('3');
     expect(screen.getByText(/not valid on a stage/)).toBeDefined();
   });
 
@@ -230,7 +230,7 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
    */
   it('refuses a new VALUE for a dead field, rather than only offering to clear it', () => {
     const onApply = mount(STAGE_WITH_ROUNDS);
-    fireEvent.change(screen.getByLabelText(/^maxRounds/), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/^Max rounds/), { target: { value: '10' } });
     apply();
     expect(onApply).not.toHaveBeenCalled();
     expect(screen.getByRole('alert').textContent).toContain('maxRounds');
@@ -239,14 +239,14 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
   /** Leaving the dead field untouched must not block an unrelated edit either. */
   it('still refuses an unrelated edit while the dead field holds a value', () => {
     const onApply = mount(STAGE_WITH_ROUNDS);
-    fireEvent.change(screen.getByLabelText(/^join/), { target: { value: 'any' } });
+    fireEvent.change(screen.getByLabelText('Join'), { target: { value: 'any' } });
     apply();
     expect(onApply).not.toHaveBeenCalled();
   });
 
   it('clearing it removes the key', () => {
     const onApply = mount(STAGE_WITH_ROUNDS);
-    fireEvent.change(screen.getByLabelText(/^maxRounds/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/^Max rounds/), { target: { value: '' } });
     apply();
     expect(applied(onApply)).toEqual({ id: 'st_1', kind: 'stage', children: ['n_a'] });
   });
@@ -271,7 +271,7 @@ describe('ContainerPanel — a value no control can represent', () => {
   it('disables editing rather than offering a form that would overwrite it', () => {
     mount(CORRUPT);
     expect(screen.queryByRole('button', { name: 'Apply container settings' })).toBeNull();
-    expect(screen.queryByLabelText(/^exitWhen/)).toBeNull();
+    expect(screen.queryByLabelText('Exit when')).toBeNull();
   });
 
   it('names the field that cannot be shown', () => {
@@ -326,16 +326,16 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
 
   it('a CONFIG change re-seeds the form — the shape an undo arrives in', () => {
     const rerender = rerenderable(LOOP);
-    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${equals(1, 1)}');
+    expect(screen.getByLabelText('Exit when')).toHaveValue('${equals(1, 1)}');
 
     // What an undo hands back: the SAME container id, a different config.
     rerender({ ...LOOP, exitWhen: '${false}' });
-    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${false}');
+    expect(screen.getByLabelText('Exit when')).toHaveValue('${false}');
   });
 
   it('a MEMBERSHIP rewrite does NOT clobber a half-typed field', () => {
     const rerender = rerenderable(LOOP);
-    const field = screen.getByLabelText(/^exitWhen/);
+    const field = screen.getByLabelText('Exit when');
     fireEvent.change(field, { target: { value: '${half-typed' } });
     expect(field).toHaveValue('${half-typed');
 
@@ -343,7 +343,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
     // identity-keyed re-seed would discard the draft here — which is exactly
     // why this panel keys on `sameContainerConfig` instead.
     rerender({ ...LOOP, children: ['n_a', 'n_b'] });
-    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${half-typed');
+    expect(screen.getByLabelText('Exit when')).toHaveValue('${half-typed');
   });
 });
 
@@ -492,10 +492,10 @@ describe('ContainerPanel — a foreach says whether it runs in parallel', () => 
   it('reads as sequential with no batchCount, and as parallel once one is typed', () => {
     mount(FOREACH);
     expect(screen.getByText(/^Sequential: items run one at a time, in order\./)).toBeDefined();
-    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value: '4' } });
     expect(screen.getByText(/^Parallel: up to 4 items run at once\./)).toBeDefined();
     expect(screen.queryByText(/^Sequential:/)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value: '1' } });
     expect(screen.getByText(/^Sequential:/)).toBeDefined();
   });
 
@@ -505,7 +505,7 @@ describe('ContainerPanel — a foreach says whether it runs in parallel', () => 
     // A fraction the schema refuses, and number literals `Number()` reads but
     // Apply's own parser refuses — each would otherwise claim a mode.
     for (const value of ['2.5', '0x3', '+3', '99']) {
-      fireEvent.change(screen.getByLabelText(/^batchCount/), { target: { value } });
+      fireEvent.change(screen.getByLabelText(/^Batch count/), { target: { value } });
       expect(screen.queryByText(/^(Sequential|Parallel):/), value).toBeNull();
     }
   });

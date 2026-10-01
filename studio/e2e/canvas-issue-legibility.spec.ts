@@ -102,7 +102,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     // `readableIssue`'s original quoted-token pass could not see at all, so this
     // message reached the badge list as a raw uuid until #884.
     await canvasNodes(page).nth(1).click();
-    await properties(page).getByRole('textbox', { name: 'url' }).fill('${nodes.ghost.output.body}');
+    await properties(page).getByRole('textbox', { name: 'URL' }).fill('${nodes.ghost.output.body}');
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
     const issues = await validationIssues(page);
@@ -163,7 +163,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     const second = await mintedId(page, 1);
     await canvasNodes(page).nth(0).click();
     await properties(page)
-      .getByRole('textbox', { name: 'url' })
+      .getByRole('textbox', { name: 'URL' })
       .fill(`\${nodes.${second}.output.body}`);
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
@@ -210,7 +210,7 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       const [first, second] = [canvasNodes(page).nth(0), canvasNodes(page).nth(1)];
       await second.click();
       await properties(page)
-        .getByRole('textbox', { name: 'url' })
+        .getByRole('textbox', { name: 'URL' })
         .fill('${nodes.ghost.output.body}');
       await properties(page).getByRole('button', { name: 'Apply config' }).click();
 
@@ -247,7 +247,7 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
 
       // Fixing the config clears the badge — it tracks the doc, not a snapshot.
       await second.click();
-      await properties(page).getByRole('textbox', { name: 'url' }).fill('https://example.test');
+      await properties(page).getByRole('textbox', { name: 'URL' }).fill('https://example.test');
       await properties(page).getByRole('button', { name: 'Apply config' }).click();
       await expect(second.locator('.flow-issue-badge')).toHaveCount(0);
       await expect(properties(page).locator('.subject-issues')).toHaveCount(0);
