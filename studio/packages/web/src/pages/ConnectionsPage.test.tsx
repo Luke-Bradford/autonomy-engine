@@ -1367,9 +1367,74 @@ describe('the connection form drawer (#1396)', () => {
     expect(secret).toHaveAttribute('type', 'password');
     await user.click(screen.getByRole('button', { name: 'Show secret' }));
     expect(secret).toHaveAttribute('type', 'text');
-    expect(screen.getByRole('button', { name: 'Show secret' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    await user.click(screen.getByRole('button', { name: 'Hide secret' }));
+    expect(secret).toHaveAttribute('type', 'password');
+  });
+
+  it('marks the required basics', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    const basics = screen.getByRole('group', { name: 'Basics' });
+    expect(within(basics).getByLabelText('Kind')).toHaveAttribute('aria-required', 'true');
+    expect(basics.querySelectorAll('.required-mark')).toHaveLength(2);
+  });
+
+  it('Escape at the prompt keeps editing', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Draft');
+    await user.keyboard('{Escape}');
+    expect(prompt()).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(prompt()).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+    expect(screen.getByLabelText('Name')).toHaveFocus();
+  });
+
+  it('Keep editing at a held route change stays on the page', async () => {
+    const user = userEvent.setup();
+    const { router } = renderWithRouter(<ConnectionsPage />, '/manage/connections');
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Draft');
+    await act(() => router.navigate('/author'));
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(router.state.location.pathname).toBe('/manage/connections');
+    expect(prompt()).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+  });
+
+  it('a prompt raised during a save that then succeeds does not greet the next form', async () => {
+    const save = deferred<ConnectionPublic>();
+    createMock.mockReturnValue(save.promise);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    const newButton = await screen.findByRole('button', { name: 'New connection' });
+    await user.click(newButton);
+    await user.type(screen.getByLabelText('Name'), 'Saved');
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+    await user.click(newButton);
+    expect(prompt()).toBeInTheDocument();
+
+    await act(async () => save.resolve(conn({ name: 'Saved' })));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(prompt()).not.toBeInTheDocument();
+    await user.click(newButton);
+    expect(screen.getByRole('dialog', { name: 'New connection' })).toBeInTheDocument();
+    expect(prompt()).not.toBeInTheDocument();
+  });
+
+  it('returns focus to the row that opened the form, even through the prompt', async () => {
+    listMock.mockResolvedValue([conn(), conn({ id: 'conn_2', name: 'Other' })]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    await user.type(screen.getByLabelText('Name'), ' renamed');
+    await user.click(screen.getByRole('button', { name: 'Edit Other' }));
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Other' })).toHaveFocus();
   });
 });

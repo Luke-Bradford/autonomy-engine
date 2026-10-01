@@ -229,6 +229,7 @@ export function ConfigFieldControl({
           field={field}
           label={label}
           required={required}
+          describedBy={describedBy}
           rows={isRowList(value) ? value : []}
           onChange={onChange}
           picker={picker}
@@ -240,16 +241,20 @@ export function ConfigFieldControl({
 
   if (field.kind === 'boolean') {
     return (
-      <label className="contract-check">
-        <input
-          type="checkbox"
-          checked={value === true}
-          aria-describedby={describedBy}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        {label}
+      // The hint is a SIBLING of the label: inside it, it would join the
+      // checkbox's name.
+      <>
+        <label className="contract-check">
+          <input
+            type="checkbox"
+            checked={value === true}
+            aria-describedby={describedBy}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          {label}
+        </label>
         {hint}
-      </label>
+      </>
     );
   }
 
@@ -519,6 +524,7 @@ export function ObjectListControl({
   field,
   label,
   required = false,
+  describedBy,
   rows,
   onChange,
   picker,
@@ -527,6 +533,8 @@ export function ObjectListControl({
   label: string;
   /** #1396 — draws the asterisk; a `group` may not carry `aria-required`. */
   required?: boolean;
+  /** The id of the hint under the list, when the field is titled. */
+  describedBy?: string;
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker?: FieldPicker;
@@ -580,7 +588,13 @@ export function ObjectListControl({
   });
 
   return (
-    <div className="config-field object-list" role="group" aria-label={label} ref={groupRef}>
+    <div
+      className="config-field object-list"
+      role="group"
+      aria-label={label}
+      aria-describedby={describedBy}
+      ref={groupRef}
+    >
       <span className="object-list-label">
         {label}
         {required && <RequiredMark />}

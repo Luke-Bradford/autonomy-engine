@@ -110,7 +110,12 @@ export function ExpressionPicker({
     <div
       className="expression-picker"
       onKeyDown={(e) => {
-        if (e.key === 'Escape' && (options !== null || functionsOpen)) close();
+        // `preventDefault` marks the Escape as handled, so a form drawer around
+        // the picker does not also read it as "close the whole form" (#1396).
+        if (e.key === 'Escape' && (options !== null || functionsOpen)) {
+          e.preventDefault();
+          close();
+        }
       }}
     >
       <button

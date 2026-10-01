@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
 
 /**
@@ -7,7 +7,8 @@ import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
  * A side COLUMN of the page, not an overlay: the list beside it stays readable
  * and clickable, so "Edit" on another row works while a form is open (through
  * the page's guard), and nothing covers the row actions. Hence
- * `aria-modal="false"` and no focus trap.
+ * `aria-modal="false"` and no focus trap. A `div`, because `aside` may not
+ * carry the `dialog` role.
  *
  * The drawer owns the `<form>`, so the footer's submit button is inside it, and
  * the layout: a header with the title and Close, a body that scrolls, and a
@@ -24,6 +25,9 @@ export function FormDrawer({
   guard,
   onRequestClose,
   onSubmit,
+  busy = false,
+  returnFocusTo,
+  status,
   actions,
   children,
 }: {
@@ -35,6 +39,17 @@ export function FormDrawer({
   guard: UnsavedChangesGuard;
   onRequestClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  /** A save or test in flight: Close and Escape wait for it, as Cancel does. */
+  busy?: boolean;
+  /**
+   * Where focus goes when the drawer closes. Defaults to whatever had focus
+   * when it opened, which is wrong when the open came through the guard's
+   * prompt (focus was on "Discard changes" by then), so a page passes the
+   * button that really opened it.
+   */
+  returnFocusTo?: RefObject<HTMLElement | null>;
+  /** The form's error and result messages, shown in the footer above the actions. */
+  status?: ReactNode;
   /** Footer buttons, secondary first and the primary (submit) LAST. */
   actions: ReactNode;
   children: ReactNode;
@@ -46,11 +61,13 @@ export function FormDrawer({
   // Focus the first field on open, and hand focus back to whatever opened the
   // drawer (the "New"/"Edit" button) when it closes.
   useEffect(() => {
-    const opener = document.activeElement;
+    const opener = returnFocusTo?.current ?? document.activeElement;
     bodyRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
     return () => {
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
+    // Mount-only: the opener is whatever it was when this drawer opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // The prompt takes focus while it asks, and gives it back to the form when it
@@ -66,7 +83,7 @@ export function FormDrawer({
   }, [guard.confirming]);
 
   return (
-    <aside
+    <div
       className="form-drawer"
       role="dialog"
       aria-modal="false"
@@ -79,17 +96,12 @@ export function FormDrawer({
         }
         event.preventDefault();
         if (guard.confirming) guard.keep();
-        else onRequestClose();
+        else if (!busy) onRequestClose();
       }}
     >
       <div className="form-drawer-header">
         <h3 id={titleId}>{title}</h3>
-        <button
-          type="button"
-          className="form-drawer-close"
-          aria-label={`Close ${title.toLowerCase()}`}
-          onClick={onRequestClose}
-        >
+        <button type="button" aria-label="Close" onClick={onRequestClose} disabled={busy}>
           ✕
         </button>
       </div>
@@ -116,10 +128,13 @@ export function FormDrawer({
               </div>
             </div>
           ) : (
-            <div className="form-actions">{actions}</div>
+            <>
+              {status}
+              <div className="form-actions">{actions}</div>
+            </>
           )}
         </div>
       </form>
-    </aside>
+    </div>
   );
 }

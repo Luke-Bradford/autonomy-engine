@@ -30,7 +30,7 @@ export function FormSection({
     );
   }
   return (
-    <details className="form-section form-section-collapsible" open={defaultOpen}>
+    <details className="form-section" open={defaultOpen}>
       <summary className="form-section-title" id={headingId}>
         {title}
       </summary>

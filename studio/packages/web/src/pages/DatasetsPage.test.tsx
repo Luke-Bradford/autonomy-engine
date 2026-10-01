@@ -289,7 +289,7 @@ describe('DatasetsPage', () => {
     const picker = await screen.findByLabelText('Store it in');
     await waitFor(() =>
       expect(
-        within(picker).getByRole('option', { name: 'Warehouse (sqlite)' }),
+        within(picker).getByRole('option', { name: 'Warehouse (SQLite)' }),
       ).toBeInTheDocument(),
     );
   });

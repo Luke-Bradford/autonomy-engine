@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_KIND_LABELS,
-  canonicalStringify,
   CONNECTION_SECRET_USE,
   connectionConfigAdvisory,
   connectionConfigSchema,
@@ -13,6 +12,7 @@ import {
   type ConnectionDependentsResponse,
   type ConnectionPublic,
   type Dataset,
+  canonicalStringify,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -51,6 +51,7 @@ import {
 } from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
 import {
+  configEditorView,
   deriveFieldsWithCarried,
   readConfigDraft,
   seedFieldInputs,
@@ -149,24 +150,31 @@ function formForEdit(conn: ConnectionPublic): FormState {
  * #1396 — what Save would write, as one comparable string: the guard's
  * "is this form dirty?" is this against the value taken when the form opened.
  *
- * The ASSEMBLED config, not the drafts: switching to JSON and back rewrites
- * `jsonText` and `inputs` without changing a thing Save would send, and must
- * not count as an edit. A draft that does not read back (half-typed JSON) is
- * compared as its raw text, which differs from any readable one — so it counts
- * as dirty, which is the safe side. A typed secret always counts.
+ * The ASSEMBLED config, read from the draft the editor is SHOWING — which is
+ * the JSON one whenever the editor forces it (a stored value the fields cannot
+ * show), not only when the operator asked — so an edit there counts. Switching
+ * views rewrites `jsonText` and `inputs` without changing a thing Save would
+ * send, and is not an edit. A draft that does not read back (half-typed JSON)
+ * is compared as its raw text, which differs from any readable one, so it
+ * counts as dirty: the safe side. A typed secret always counts. The allowlist
+ * is compared as a set, because Save sends it as one (`allowlistChanged`).
  */
-function draftSignature(form: FormState): string {
-  const { fields } = connectionFields(form.kind, form.config);
-  const draft = readConfigDraft(form.jsonMode, form, fields);
+function savePayloadSignature(form: FormState): string {
+  const view = configEditorView(
+    { kind: form.kind, config: form.config, jsonMode: form.jsonMode, inputs: {}, jsonText: '' },
+    connectionFields,
+  );
+  const draft = readConfigDraft(view.jsonMode, form, view.fields);
   const config = draft.ok
     ? draft.config
-    : { unreadable: form.jsonMode ? form.jsonText : form.inputs };
+    : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+  const payload = [form.name, form.kind, config, form.secret, [...form.parameters].sort()];
   try {
-    return canonicalStringify([form.name, form.kind, config, form.secret, form.parameters]);
+    return canonicalStringify(payload);
   } catch {
-    // Not JSON-representable (a non-finite number from a half-typed field):
-    // still a string, still compared, never a crash in render.
-    return JSON.stringify([form.name, form.kind, String(config), form.secret, form.parameters]);
+    // Not canonical JSON (a non-finite number from a half-typed field): still
+    // a string that moves with the edit, and never a crash in render.
+    return JSON.stringify(payload);
   }
 }
 
@@ -220,11 +228,20 @@ export function ConnectionsPage() {
   const [openedAs, setOpenedAs] = useState<string | null>(null);
   const openForm = useCallback((next: FormState) => {
     setForm(next);
-    setOpenedAs(draftSignature(next));
+    setOpenedAs(savePayloadSignature(next));
     setFormSeq((seq) => seq + 1);
   }, []);
-  const dirty = useMemo(() => form !== null && draftSignature(form) !== openedAs, [form, openedAs]);
+  const dirty = useMemo(
+    () => form !== null && savePayloadSignature(form) !== openedAs,
+    [form, openedAs],
+  );
   const guard = useUnsavedChangesGuard(dirty);
+  /**
+   * The button that opened the form on screen, so closing it returns focus
+   * there. Set when the open actually HAPPENS (inside the guarded action), so a
+   * held "Edit" that the operator then abandons does not steal it.
+   */
+  const openerRef = useRef<HTMLElement | null>(null);
   const guardedLoad = useGuardedLoad();
   /**
    * A SECOND instance, deliberately — `useGuardedLoad`'s "one instance per state
@@ -491,7 +508,16 @@ export function ConnectionsPage() {
     <section aria-labelledby="connections-heading">
       <div className="page-header">
         <h2 id="connections-heading">Connections</h2>
-        <button type="button" onClick={() => guard.request(() => openForm(blankForm()))}>
+        <button
+          type="button"
+          onClick={(e) => {
+            const opener = e.currentTarget;
+            guard.request(() => {
+              openerRef.current = opener;
+              openForm(blankForm());
+            });
+          }}
+        >
           New connection
         </button>
       </div>
@@ -510,8 +536,8 @@ export function ConnectionsPage() {
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
-      <div className={form ? 'drawer-layout drawer-layout-open' : 'drawer-layout'}>
-        <div className="drawer-layout-main">
+      <div className={form ? 'drawer-layout-open' : undefined}>
+        <div>
           {connections === null && !loadError && <p>Loading connections…</p>}
 
           {connections !== null && connections.length === 0 && (
@@ -535,7 +561,13 @@ export function ConnectionsPage() {
                     <td>
                       <button
                         type="button"
-                        onClick={() => guard.request(() => openEditForm(conn))}
+                        onClick={(e) => {
+                          const opener = e.currentTarget;
+                          guard.request(() => {
+                            openerRef.current = opener;
+                            openEditForm(conn);
+                          });
+                        }}
                         aria-label={`Edit ${conn.name}`}
                       >
                         Edit
@@ -602,6 +634,7 @@ export function ConnectionsPage() {
             dependentsUnavailable={dependentsUnavailable}
             onChange={setForm}
             guard={guard}
+            returnFocusTo={openerRef}
             onClose={() => guard.request(() => setForm(null))}
             onSaved={async () => {
               setForm(null);
@@ -630,6 +663,7 @@ function ConnectionForm({
   dependentsUnavailable,
   onChange,
   guard,
+  returnFocusTo,
   onClose,
   onSaved,
 }: {
@@ -641,6 +675,7 @@ function ConnectionForm({
   dependentsUnavailable: string | null;
   onChange: (next: FormState) => void;
   guard: UnsavedChangesGuard;
+  returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -885,6 +920,39 @@ function ConnectionForm({
       guard={guard}
       onRequestClose={onClose}
       onSubmit={(e) => void onSubmit(e)}
+      busy={saving || probing}
+      returnFocusTo={returnFocusTo}
+      /* In the footer, beside the buttons that produce them: on a long form the
+         body's end is off screen, and a Save that failed must not look like a
+         Save that did nothing. */
+      status={
+        <>
+          {error && (
+            <p role="alert" className="error">
+              {error}
+            </p>
+          )}
+
+          {/* #1191 — the probe verdict. `role="status"` (not `alert`): a passing
+              test is informational, and the page's `alert` is already spoken for by
+              errors. A REFUSAL still lands here rather than in the error slot,
+              because it is the adapter's answer to a question that was asked and
+              answered — not a failure of the form. */}
+          {probe !== null && probe.signature === draftSignature && (
+            <p role="status" className={probe.result.ok ? 'probe-ok' : 'probe-failed'}>
+              {probe.result.ok
+                ? probe.result.probed === 'liveness'
+                  ? 'Connected.'
+                  : // The honest half of the contract: two kinds cannot reach
+                    // anything (`agent_cli` will not spawn a command just to look;
+                    // `http` has nowhere to go without a baseUrl), so their `ok`
+                    // means the settings parse and nothing more.
+                    'These settings are valid — this kind is not contacted until it runs.'
+                : probe.result.error}
+            </p>
+          )}
+        </>
+      }
       actions={
         <>
           <button type="button" onClick={onClose} disabled={saving || probing}>
@@ -937,6 +1005,34 @@ function ConnectionForm({
             </select>
           )}
         </LabelledControl>
+
+        {/* #1174 — outside the Config group, because it is a fact about OTHER
+            resources rather than about this config, and outside the mode branch
+            for the same reason the config advisory above is: the Kind select is
+            reachable in both modes.
+
+            A bare `.contract-advisory` paragraph with NO `role`. Every sibling
+            advisory on this page is one, and the two live-region roles are both
+            already claimed here in the singular — `role="status"` by the probe
+            verdict (which this form's own e2e asserts the COUNT of) and
+            `role="alert"` by the load error. A second of either turns those
+            queries into strict-mode violations, and a strand note is not an
+            interruption: it appears next to the control that caused it, in
+            response to the operator's own gesture. */}
+        {strandAdvisory !== null && <p className="contract-advisory">{strandAdvisory}</p>}
+
+        {/* #1211 — a second bare `.contract-advisory`, for the same reasons the
+            comment above gives: no `role`, because both live-region roles on this
+            form are already claimed in the singular and a strand/disable note is
+            not an interruption. Separate from the strand note rather than merged
+            into it: one is about OTHER resources breaking later, this one is
+            about a write the server performs on save, and the two are drawn on
+            different conditions. */}
+        {triggerAdvisory !== null && <p className="contract-advisory">{triggerAdvisory}</p>}
+        {/* #1252 — its own note: the trigger one describes a write on save, this
+            one runs that fail after it, and they are drawn on different
+            conditions. */}
+        {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
       </FormSection>
 
       <FormSection title="Connection">
@@ -959,8 +1055,7 @@ function ConnectionForm({
           {/* A sibling of the label, so it never joins the input's name. */}
           <button
             type="button"
-            aria-pressed={showSecret}
-            aria-label="Show secret"
+            aria-label={showSecret ? 'Hide secret' : 'Show secret'}
             onClick={() => setShowSecret((shown) => !shown)}
           >
             {showSecret ? 'Hide' : 'Show'}
@@ -990,59 +1085,6 @@ function ConnectionForm({
           onChange={(parameters) => onChange({ ...form, parameters })}
         />
       </FormSection>
-
-      {/* #1174 — outside the Config group, because it is a fact about OTHER
-          resources rather than about this config, and outside the mode branch
-          for the same reason the config advisory above is: the Kind select is
-          reachable in both modes.
-
-          A bare `.contract-advisory` paragraph with NO `role`. Every sibling
-          advisory on this page is one, and the two live-region roles are both
-          already claimed here in the singular — `role="status"` by the probe
-          verdict (which this form's own e2e asserts the COUNT of) and
-          `role="alert"` by the load error. A second of either turns those
-          queries into strict-mode violations, and a strand note is not an
-          interruption: it appears next to the control that caused it, in
-          response to the operator's own gesture. */}
-      {strandAdvisory !== null && <p className="contract-advisory">{strandAdvisory}</p>}
-
-      {/* #1211 — a second bare `.contract-advisory`, for the same reasons the
-          comment above gives: no `role`, because both live-region roles on this
-          form are already claimed in the singular and a strand/disable note is
-          not an interruption. Separate from the strand note rather than merged
-          into it: one is about OTHER resources breaking later, this one is
-          about a write the server performs on save, and the two are drawn on
-          different conditions. */}
-      {triggerAdvisory !== null && <p className="contract-advisory">{triggerAdvisory}</p>}
-      {/* #1252 — its own note: the trigger one describes a write on save, this
-          one runs that fail after it, and they are drawn on different
-          conditions. */}
-      {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      {/* #1191 — the probe verdict. `role="status"` (not `alert`): a passing
-          test is informational, and the page's `alert` is already spoken for by
-          errors. A REFUSAL still lands here rather than in the error slot,
-          because it is the adapter's answer to a question that was asked and
-          answered — not a failure of the form. */}
-      {probe !== null && probe.signature === draftSignature && (
-        <p role="status" className={probe.result.ok ? 'probe-ok' : 'probe-failed'}>
-          {probe.result.ok
-            ? probe.result.probed === 'liveness'
-              ? 'Connected.'
-              : // The honest half of the contract: two kinds cannot reach
-                // anything (`agent_cli` will not spawn a command just to look;
-                // `http` has nowhere to go without a baseUrl), so their `ok`
-                // means the settings parse and nothing more.
-                'These settings are valid — this kind is not contacted until it runs.'
-            : probe.result.error}
-        </p>
-      )}
     </FormDrawer>
   );
 }

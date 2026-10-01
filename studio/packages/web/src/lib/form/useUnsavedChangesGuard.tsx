@@ -50,6 +50,16 @@ export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
+  // A form that goes clean (saved, or closed some other way) has nothing left
+  // to ask about: a prompt held over from it must not greet the next form, and
+  // a route hold that has unmounted has already dropped its navigation.
+  // Reset during render (React's derived-state pattern) rather than in an
+  // effect, so the stale prompt is never painted even once.
+  if (!dirty && (held !== null || blocked !== null)) {
+    setHeld(null);
+    setBlocked(null);
+  }
+
   const request = useCallback(
     (action: () => void) => {
       if (dirty) setHeld({ action });
@@ -59,7 +69,7 @@ export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
   );
 
   const discard = useCallback(() => {
-    blocked?.proceed?.();
+    if (blocked?.state === 'blocked') blocked.proceed();
     setBlocked(null);
     const pending = held;
     setHeld(null);
@@ -67,7 +77,7 @@ export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
   }, [blocked, held]);
 
   const keep = useCallback(() => {
-    blocked?.reset?.();
+    if (blocked?.state === 'blocked') blocked.reset();
     setBlocked(null);
     setHeld(null);
   }, [blocked]);

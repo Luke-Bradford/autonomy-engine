@@ -227,4 +227,32 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     expect(getByRole('group', { name: 'mapping' }).hasAttribute('aria-required')).toBe(false);
     expect(container.querySelector('.required-mark')).not.toBeNull();
   });
+
+  it('a titled checkbox keeps its hint out of its name', () => {
+    const field: ConfigField = {
+      name: 'writable',
+      kind: 'boolean',
+      optional: true,
+      label: { title: 'Allow writes', description: 'Lets a copy write here.' },
+    };
+    const { getByRole } = render(
+      <ConfigFieldControl field={field} value={false} onChange={noop} />,
+    );
+    const box = getByRole('checkbox', { name: 'Allow writes' });
+    expect(box).toHaveAccessibleDescription('Lets a copy write here. writable');
+  });
+
+  it('a titled row list is described by its hint', () => {
+    const field: ConfigField = {
+      name: 'headers',
+      kind: 'objectList',
+      optional: true,
+      label: { title: 'Headers', description: 'Sent with every request.' },
+      elementFields: [{ name: 'source', kind: 'text', optional: true }],
+    };
+    const { getByRole } = render(<ConfigFieldControl field={field} value={[]} onChange={noop} />);
+    expect(getByRole('group', { name: 'Headers' })).toHaveAccessibleDescription(
+      'Sent with every request. headers',
+    );
+  });
 });
