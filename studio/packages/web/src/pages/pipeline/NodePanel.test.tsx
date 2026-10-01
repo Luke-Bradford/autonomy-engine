@@ -411,7 +411,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // Back to the form: it must now show what JSON just wrote, and applying
     // unchanged must be a no-op rather than a revert.
     fireEvent.click(toFields());
-    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://from-json',
+    );
     expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('POST');
 
     panel.apply();
@@ -431,7 +433,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     expect(screen.queryByText(/Saved settings this form cannot show/)).toBeNull();
     expect(toJson()).toBeTruthy();
-    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://repaired',
+    );
   });
 
   it('lets a forced JSON editor hand back the form once the draft is repaired, and not before', () => {
@@ -449,7 +453,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
     expect(screen.queryByRole('alert')).toBeNull();
-    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://repaired',
+    );
   });
 
   // #1088 — the mode toggle is the shared one (`useConfigEditor`), so it COMMITS
@@ -478,7 +484,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
 
-    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://from-json',
+    );
     expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('PUT');
     panel.apply();
     expect(panel.storedConfig()).toEqual({ url: 'https://from-json', method: 'PUT' });
