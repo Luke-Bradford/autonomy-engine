@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { CONNECTION_KIND_LABELS, ConnectionKindSchema } from '../schemas/connection.js';
-import { fieldLabelOf, fieldLabelThrough } from '../schemas/field-presentation.js';
+import { fieldLabelThrough } from '../schemas/field-presentation.js';
 import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
