@@ -2544,6 +2544,14 @@ function DatasetOverrides({
 }
 
 /**
+ * #1396 — a container setting's title, from `ContainerSchema`, so the New
+ * container fieldset and the container panel cannot name one setting twice.
+ */
+function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string {
+  return fieldLabelThrough(ContainerSchema.shape[key])?.title ?? key;
+}
+
+/**
  * Editor for one activity node.
  *
  * Settings are authored through a FORM derived from the activity's own
@@ -2567,14 +2575,6 @@ function DatasetOverrides({
  * The connection dropdown is filtered to the kinds this activity accepts.
  * Container membership (U6d) is `ContainerSection` above.
  */
-/**
- * #1396 — a container setting's title, from `ContainerSchema`, so the New
- * container fieldset and the container panel cannot name one setting twice.
- */
-function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string {
-  return fieldLabelThrough(ContainerSchema.shape[key])?.title ?? key;
-}
-
 export function NodePanel({
   store,
   connections,
