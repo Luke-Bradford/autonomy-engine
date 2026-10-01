@@ -113,15 +113,15 @@ export type WindowField = (typeof WINDOW_FIELDS)[number];
 
 /** What the form's error summary calls each control. */
 export const WINDOW_FIELD_LABELS: Readonly<Record<WindowField, string>> = {
-  interval: 'Each window covers',
+  interval: 'Each window covers N',
   startTime: 'Start time',
   endTime: 'End time',
   maxBackfillWindows: 'Max backfill windows',
   maxConcurrentWindows: 'Max concurrent windows',
-  'retry.count': 'Retries',
+  'retry.count': 'Retry a failed window N times',
   'retry.intervalInSeconds': 'Seconds between retries',
-  'selfDependency.offsetInSeconds': 'Dependency offset',
-  'selfDependency.sizeInSeconds': 'Dependency span',
+  'selfDependency.offsetInSeconds': 'Depend on earlier windows: offset in seconds',
+  'selfDependency.sizeInSeconds': 'Dependency span in seconds',
 };
 
 export type WindowConversion = { ok: true; window: WindowConfig | null } | Refusal<WindowField>;

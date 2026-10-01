@@ -167,7 +167,7 @@ export type RecurrenceField = (typeof RECURRENCE_FIELDS)[number];
 
 /** What the form's error summary calls each control. */
 export const RECURRENCE_FIELD_LABELS: Readonly<Record<RecurrenceField, string>> = {
-  interval: 'Repeat every',
+  interval: 'Repeat every N',
   'schedule.weekDays': 'Days of week',
   'schedule.monthDays': 'Days of month',
   'schedule.hours': 'Hours',

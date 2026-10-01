@@ -840,7 +840,7 @@ function modeChecks(form: FormState): FieldErrors {
   if (!windows.ok) out.runWindows = windows.reason;
 
   const shown = modeFields(form);
-  return Object.fromEntries(Object.entries(out).filter(([key]) => shown[key] !== undefined));
+  return Object.fromEntries(Object.entries(out).filter(([key]) => Object.hasOwn(shown, key)));
 }
 
 /**
@@ -913,8 +913,10 @@ function TriggerForm({
           return form.concurrencyPolicy === 'parallel' ? 'Max parallel runs' : undefined;
         case 'params':
           return 'Params (JSON)';
-        default:
-          return modeFields(form)[key];
+        default: {
+          const fields = modeFields(form);
+          return Object.hasOwn(fields, key) ? fields[key] : undefined;
+        }
       }
     },
     [form],

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useRef } from 'react';
 import { FieldError } from '../../lib/form/FieldError';
-import { fieldAttrs } from '../../lib/form/fieldValidation';
-import type { FieldSlots } from './editorFields';
+import { editorFields, type FieldSlots } from './editorFields';
 import type { TriggerMode } from '@autonomy-studio/shared';
 import { useRowKeys } from '../../hooks/useRowKeys';
 import { WEEK_DAY_NAMES } from './recurrenceForm';
@@ -66,7 +65,7 @@ export function RunWindowsEditor({
   /** #1396 — the trigger form's validation: the whole list is its `runWindows` field. */
   validation: FieldSlots;
 }) {
-  const errorId = useId();
+  const f = editorFields(validation, useId());
   const { keys, removeAt, insertAt } = useRowKeys(value.rows.length);
 
   /**
@@ -154,15 +153,7 @@ export function RunWindowsEditor({
   const isGated = WINDOW_GATED_MODES.includes(mode);
 
   return (
-    <fieldset
-      className="run-windows"
-      {...fieldAttrs({
-        key: 'runWindows',
-        error: validation.errorFor('runWindows'),
-        errorId,
-        group: true,
-      })}
-    >
+    <fieldset className="run-windows" {...f.groupAttrs('runWindows')}>
       <legend>Run windows (UTC)</legend>
 
       <label className="checkbox">
@@ -298,7 +289,7 @@ export function RunWindowsEditor({
       <button type="button" ref={addButton} onClick={addRow}>
         Add window
       </button>
-      <FieldError id={errorId} message={validation.errorFor('runWindows')} />
+      <FieldError {...f.errorProps('runWindows')} />
     </fieldset>
   );
 }

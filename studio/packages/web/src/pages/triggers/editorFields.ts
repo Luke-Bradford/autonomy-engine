@@ -7,10 +7,11 @@ export type FieldSlots = Pick<FieldValidation, 'errorFor' | 'attrsFor'>;
  * #1396 — a mode editor's controls as fields of the trigger form. A control is
  * keyed by the payload path of what it authors (`recurrence.schedule.hours`),
  * the key a client check and a server refusal share. `base` is the editor's
- * `useId`, for the error lines' ids.
+ * `useId`, for the error lines' ids. With no `prefix` the path is the key
+ * (`runWindows`).
  */
-export function editorFields(validation: FieldSlots, prefix: string, base: string) {
-  const key = (path: string) => `${prefix}.${path}`;
+export function editorFields(validation: FieldSlots, base: string, prefix?: string) {
+  const key = (path: string) => (prefix === undefined ? path : `${prefix}.${path}`);
   const errorId = (path: string) => `${base}-${path}`;
   return {
     /** Spread on the control. */

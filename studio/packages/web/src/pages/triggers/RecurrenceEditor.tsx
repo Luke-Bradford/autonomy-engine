@@ -53,7 +53,7 @@ export function RecurrenceEditor({
   /** #1396 — the trigger form's validation: each control is a `recurrence.<path>` field of it. */
   validation: FieldSlots;
 }) {
-  const f = editorFields(validation, 'recurrence', useId());
+  const f = editorFields(validation, useId(), 'recurrence');
   const honoured = HONOURED_FIELDS[value.frequency];
   const required = REQUIRED_FIELDS[value.frequency];
   const set = (patch: Partial<RecurrenceFormState>) => onChange({ ...value, ...patch });

@@ -50,7 +50,7 @@ export function WindowEditor({
   /** #1396 — the trigger form's validation: each control is a `window.<path>` field of it. */
   validation: FieldSlots;
 }) {
-  const f = editorFields(validation, 'window', useId());
+  const f = editorFields(validation, useId(), 'window');
   const set = (patch: Partial<WindowFormState>) => onChange({ ...value, ...patch });
 
   const conversion = formToWindow(value);
