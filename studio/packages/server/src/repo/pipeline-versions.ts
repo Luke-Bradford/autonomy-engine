@@ -1,4 +1,4 @@
-import { asc, desc, eq, max } from 'drizzle-orm';
+import { and, asc, desc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   GlobalReadSchema,
@@ -72,10 +72,19 @@ export class InvalidPipelineDocError extends Error {
  * UNIQUE index is the real backstop against any cross-connection race, not
  * this transaction.
  */
+export interface CreatePipelineVersionOptions extends CreateResourceOptions {
+  /**
+   * #1395 OR4 — mint a DEBUG version (the editor's unsaved draft). It numbers in
+   * its own sequence, never appears in a listing or as the head, and is deletable
+   * by the retention sweep. Only `POST /api/pipelines/:id/debug-runs` sets it.
+   */
+  debug?: boolean;
+}
+
 export function createPipelineVersion(
   db: Db,
   input: NewPipelineVersion,
-  opts?: CreateResourceOptions,
+  opts?: CreatePipelineVersionOptions,
 ): PipelineVersion {
   const parsed = NewPipelineVersionSchema.parse(input);
 
@@ -161,6 +170,32 @@ export function createPipelineVersion(
     return ownerId;
   };
   const callerOwnerId = ownerIdOf(lowered.pipelineId);
+  // #1395 — a `call_pipeline` node may not pin a DEBUG version: it is the
+  // editor's throwaway draft, deleted after `DEBUG_RETENTION_DAYS`, so the pin
+  // would break silently a week later. Only a LITERAL target can be checked
+  // here; a `${}` target is resolved at run time, where a swept callee meets the
+  // existing missing-version path.
+  // OWNER-SCOPED like `resolvePipeline` below: another owner's version is never
+  // classified, so the refusal can never confirm that someone else's id exists.
+  const debugCallees = lowered.nodes
+    .map((n) => n.call?.pipelineVersionId)
+    .filter((id): id is string => id !== undefined && !id.includes('${'))
+    .filter((id) => {
+      const calleePipelineId = getPipelineIdForVersion(db, id);
+      return (
+        calleePipelineId !== null &&
+        ownerIdOf(calleePipelineId) === callerOwnerId &&
+        isDebugVersion(db, id) === true
+      );
+    });
+  if (debugCallees.length > 0) {
+    throw new InvalidPipelineDocError(
+      debugCallees.map(
+        (id) =>
+          `a call_pipeline node cannot call debug version '${id}': debug versions are deleted after a while — call a saved version`,
+      ),
+    );
+  }
   const resolvePipeline: PipelineResolver = (calleeVersionId) => {
     const callee = getPipelineVersion(db, calleeVersionId);
     if (callee === null) return undefined; // gone/never-existed — not analyzable
@@ -212,11 +247,16 @@ export function createPipelineVersion(
     return { name, type };
   });
 
+  const debug = opts?.debug ?? false;
   return db.transaction((tx) => {
+    // Numbered within its own kind (#1395): a Debug never takes, or leaves a gap
+    // in, the saved sequence.
     const maxRow = tx
       .select({ maxVersion: max(pipelineVersions.version) })
       .from(pipelineVersions)
-      .where(eq(pipelineVersions.pipelineId, lowered.pipelineId))
+      .where(
+        and(eq(pipelineVersions.pipelineId, lowered.pipelineId), eq(pipelineVersions.debug, debug)),
+      )
       .get();
     const nextVersion = (maxRow?.maxVersion ?? 0) + 1;
 
@@ -245,7 +285,7 @@ export function createPipelineVersion(
       sourceBlobSha: opts?.sourceBlobSha ?? null,
     };
     tx.insert(pipelineVersions)
-      .values({ ...row, globalReads: JSON.stringify(globalReads) })
+      .values({ ...row, globalReads: JSON.stringify(globalReads), debug })
       .run();
     return PipelineVersionSchema.parse(row);
   });
@@ -304,12 +344,31 @@ export function getPipelineIdForVersion(db: Db, id: string): string | null {
   return row?.pipelineId ?? null;
 }
 
-/** All versions of one pipeline, oldest first. */
+/**
+ * #1395 OR4 — whether `id` is a DEBUG version (the editor's unsaved draft), or
+ * `null` when no such version exists. A one-column read, like
+ * `getPipelineIdForVersion`.
+ */
+export function isDebugVersion(db: Db, id: string): boolean | null {
+  const row = db
+    .select({ debug: pipelineVersions.debug })
+    .from(pipelineVersions)
+    .where(eq(pipelineVersions.id, id))
+    .get();
+  return row?.debug ?? null;
+}
+
+/**
+ * All SAVED versions of one pipeline, oldest first. Debug versions (#1395) are
+ * excluded here, and so from every caller built on this: the versions list, the
+ * latest version a trigger binds, the workspace-git working copy and drift,
+ * export and import. A debug version is reachable only by its id.
+ */
 export function listPipelineVersions(db: Db, pipelineId: string): PipelineVersion[] {
   const rows = db
     .select()
     .from(pipelineVersions)
-    .where(eq(pipelineVersions.pipelineId, pipelineId))
+    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.debug, false)))
     .orderBy(asc(pipelineVersions.version))
     .all();
   return rows.map((row) => PipelineVersionSchema.parse(row));
@@ -364,15 +423,19 @@ export function getHeadVersionRef(
   const row = db
     .select({ id: pipelineVersions.id, version: pipelineVersions.version })
     .from(pipelineVersions)
-    .where(eq(pipelineVersions.pipelineId, pipelineId))
+    // A Debug is never the head (#1395): the save CAS and the editor's basis are
+    // about saved versions only.
+    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.debug, false)))
     .orderBy(desc(pipelineVersions.version))
     .limit(1)
     .get();
   return row ?? null;
 }
 
-// No delete either: pipeline_versions rows are referenced by triggers
-// (CASCADE) and runs (RESTRICT) — an ad hoc single-version delete would
+// No delete for SAVED versions: pipeline_versions rows are referenced by
+// triggers (CASCADE) and runs (RESTRICT) — an ad hoc single-version delete would
 // either silently take triggers with it or be blocked by historical runs.
 // Cleanup, if ever needed, goes through deleting the parent `pipelines` row
-// (which cascades) rather than a standalone version-delete API.
+// (which cascades) rather than a standalone version-delete API. DEBUG versions
+// (#1395) are the one exception, in `repo/debug-versions.ts`; the DB trigger
+// (0045) refuses the delete for any other row.

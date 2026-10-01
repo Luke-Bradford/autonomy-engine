@@ -270,4 +270,34 @@ describe('pipelines publish route (#3 G6c-1 — CAS Publish + active pointer)', 
     const res = await publish(pipeline.id, { toVersionId: v.id });
     expect(res.statusCode).toBe(400);
   });
+
+  it('#1395 — refuses a DEBUG version by name, even one carrying git provenance', async () => {
+    connectRepo();
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const debugVersion = createPipelineVersion(
+      app.db,
+      {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      {
+        debug: true,
+        sourceCommit: 'c1',
+        sourceBranch: 'main',
+        sourceFilePath: 'pipelines/p.json',
+        sourceBlobSha: 'b1',
+      },
+    );
+    const res = await publish(pipeline.id, {
+      toVersionId: debugVersion.id,
+      expectedActiveVersionId: null,
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().message).toContain('is a debug version and cannot be published');
+    expect((await active(pipeline.id)).json()).toMatchObject({ active: null });
+  });
 });

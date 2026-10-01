@@ -7,6 +7,7 @@ import { runStatusLabel } from './runs/runStatus';
 import { NO_RUNS_YET } from './runs/runOrigin';
 import { runDetailPath } from './runs/runPath';
 import { formatWhen } from './runs/format';
+import { versionLabel } from '../lib/versionLabel';
 
 /**
  * How many recent runs Home shows.
@@ -92,7 +93,7 @@ export function HomePage() {
                     {runStatusLabel(r.status)}
                   </span>
                   <span className="recent-runs-pipeline">
-                    {r.pipelineName} v{r.pipelineVersion}
+                    {r.pipelineName} {versionLabel(r.pipelineVersion, r.debug)}
                   </span>
                   {/* Absolute, exactly as the run list renders it. NOT a
                       relative "3m ago": a queued run's `startedAt` is an

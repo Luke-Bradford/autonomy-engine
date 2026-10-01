@@ -15,8 +15,12 @@ import {
   type PipelineVersion,
   type PublishPipelineBody,
   type PublishPipelineResult,
+  DebugRunRequestSchema,
+  DebugRunResultSchema,
   FireResultSchema,
   ManualRunRequestSchema,
+  type DebugRunRequest,
+  type DebugRunResult,
   type FireResult,
   type ManualRunRequest,
 } from '@autonomy-studio/shared';
@@ -487,6 +491,25 @@ export function runPipelineVersion(
     method: 'POST',
     body: ManualRunRequestSchema.parse(body),
     schema: FireResultSchema,
+  });
+}
+
+/**
+ * #1395 OR4 — run the editor's UNSAVED draft now (`POST
+ * /api/pipelines/:id/debug-runs`, the editor's Debug). The server mints it as a
+ * hidden debug version — no version list, head or trigger ever sees it — and
+ * returns that version with the run, so the canvas can overlay the run on it. A
+ * draft the save gate refuses, or a param it cannot take, is a 400 raised as an
+ * `ApiError` before any version or run exists.
+ */
+export function debugPipelineDraft(
+  pipelineId: string,
+  body: DebugRunRequest,
+): Promise<DebugRunResult> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/debug-runs`, {
+    method: 'POST',
+    body: DebugRunRequestSchema.parse(body),
+    schema: DebugRunResultSchema,
   });
 }
 

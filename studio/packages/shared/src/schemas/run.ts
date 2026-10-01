@@ -199,6 +199,13 @@ export const RunSummarySchema = RunSchema.extend({
   /** The version NUMBER (`pipeline_versions.version`), not its id — what an
    * operator reads as "v3". */
   pipelineVersion: z.number().int(),
+  /**
+   * #1395 — the run bound a DEBUG version (the editor's unsaved draft), so
+   * `pipelineVersion` numbers the debug sequence ("debug 3"), not the saved one.
+   * No default: the column is `NOT NULL`, so a summary without it is a broken
+   * read, and `false` would pass a debug run off as a saved one (#473).
+   */
+  debug: z.boolean(),
   /** `null` for a rerun, or for a run whose trigger has been deleted. */
   triggerName: z.string().nullable(),
   /**

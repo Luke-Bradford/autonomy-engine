@@ -176,3 +176,75 @@ test('#1395 — the run started in the editor plays out on the authoring canvas,
 
   await expectQuiet(page, problems);
 });
+
+test('#1395 — Debug runs the UNSAVED draft on the canvas, as a hidden debug version the versions never list', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  const triggerCalls: string[] = [];
+  page.on('request', (req) => {
+    if (req.method() !== 'GET' && req.url().includes('/api/triggers')) triggerCalls.push(req.url());
+  });
+
+  const id = await openSeededCanvas(page, 'or4 debug draft', {
+    nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+  });
+  const editorUrl = page.url();
+
+  // An edit that is NOT saved: the run below must carry it.
+  await page.getByRole('tab', { name: 'General' }).click();
+  await page.getByLabel('pipeline description').fill('only in the draft');
+
+  const debug = page.getByRole('button', { name: 'Debug', exact: true });
+  await expect(debug).toHaveAttribute(
+    'title',
+    'Run what is on the canvas now, without saving it as a version.',
+  );
+  const canvas = page.locator('.react-flow');
+  const before = await canvas.boundingBox();
+  await debug.click();
+  const form = page.getByRole('dialog', { name: 'Debug the draft' });
+  await expect(form).toBeVisible();
+  expect(await canvas.boundingBox()).toEqual(before);
+  await form.getByRole('button', { name: 'Start run' }).click();
+  await expect(form).toBeHidden();
+
+  const strip = page.getByTestId('editor-status-strip');
+  await expect(strip).toContainText('Debug run started from the unsaved draft');
+  await expect(strip).toContainText('kept for 7 days');
+  await expect(nodeById(page, 'hold').getByTestId('node-run-status')).toContainText('success', {
+    timeout: 20_000,
+  });
+
+  const href = await strip.getByRole('link', { name: 'Open run' }).getAttribute('href');
+  const runId = decodeURIComponent((href ?? '').split('/').pop() ?? '');
+  const detail = (await (
+    await page.request.get(`/api/runs/${encodeURIComponent(runId)}/detail`)
+  ).json()) as {
+    debug: boolean;
+    run: { triggerId: string | null };
+    pipelineVersion: { description: string; version: number };
+  };
+  expect(detail).toMatchObject({
+    debug: true,
+    run: { triggerId: null },
+    pipelineVersion: { description: 'only in the draft', version: 1 },
+  });
+
+  // The versions are exactly as they were: v1, and nothing a trigger could bind.
+  const versions = (await (
+    await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`)
+  ).json()) as { version: number; description: string }[];
+  expect(versions.map((v) => [v.version, v.description])).toEqual([[1, '']]);
+
+  expect(page.url()).toBe(editorUrl);
+  expect(triggerCalls).toEqual([]);
+
+  // The runs list says it was a debug run, not v1.
+  await page.goto('/#/monitor/runs');
+  await expect(
+    page.getByRole('row').filter({ hasText: 'or4 debug draft' }).locator('.run-version'),
+  ).toHaveText('debug 1');
+
+  await expectQuiet(page, problems);
+});

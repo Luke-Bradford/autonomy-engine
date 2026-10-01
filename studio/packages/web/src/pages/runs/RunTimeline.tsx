@@ -7,6 +7,7 @@ import { formatClock, formatElapsed } from './format';
 import { groupRuns, type RunBar, type RunGroupBy } from './runBars';
 import { runStatusLabel, runStatusTone } from './runStatus';
 import { runDetailPath } from './runPath';
+import { versionLabel } from '../../lib/versionLabel';
 
 /**
  * U29 (#1015) — the runs list on ONE shared time axis, grouped by pipeline or,
@@ -159,8 +160,9 @@ export function RunTimeline({
                       <Link to={runDetailPath(bar.run.id)} title={bar.run.id}>
                         {/* A pipeline lane names the pipeline in its heading; any
                             other lane mixes pipelines, so the row must say which. */}
-                        {group.lane.kind === 'pipeline' ? '' : `${bar.run.pipelineName} `}v
-                        {bar.run.pipelineVersion} · {formatClock(bar.startedAtMs)}
+                        {group.lane.kind === 'pipeline' ? '' : `${bar.run.pipelineName} `}
+                        {versionLabel(bar.run.pipelineVersion, bar.run.debug)} ·{' '}
+                        {formatClock(bar.startedAtMs)}
                       </Link>
                     </span>
                     <span className="timeline-track">
@@ -207,7 +209,7 @@ function UnplottableList({
         {rows.map(({ run, reason }) => (
           <li key={run.id}>
             <Link to={runDetailPath(run.id)} title={run.id}>
-              {run.pipelineName} v{run.pipelineVersion}
+              {run.pipelineName} {versionLabel(run.pipelineVersion, run.debug)}
             </Link>{' '}
             — {reason}
           </li>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NewPipelineVersionSchema, PipelineVersionSchema } from './pipeline.js';
 import { addParamsReplaySafetyIssues } from './replay-safety.js';
 
 /**
@@ -87,3 +88,34 @@ export const ManualRunRequestSchema = z
     addParamsReplaySafetyIssues(body.params, ctx);
   });
 export type ManualRunRequest = z.infer<typeof ManualRunRequestSchema>;
+
+/**
+ * #1395 OR4 — `POST /api/pipelines/:id/debug-runs`: run the editor's UNSAVED
+ * draft. `version` is the same doc body a save sends (minus the save's CAS
+ * basis: a Debug overwrites nothing, so it has nothing to be stale against).
+ * The server mints it as a hidden debug version and starts a run of it.
+ */
+export const DebugRunRequestSchema = z
+  .object({
+    version: NewPipelineVersionSchema.omit({ pipelineId: true }),
+    params: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((body, ctx) => {
+    // The same write-boundary refusal as `FireRequestSchema`, for the same reason.
+    if (body.params === undefined) return;
+    addParamsReplaySafetyIssues(body.params, ctx);
+  });
+export type DebugRunRequest = z.input<typeof DebugRunRequestSchema>;
+
+/**
+ * The debug route's answer: the fire result, plus the debug version it minted
+ * (the editor overlays the run on that doc) and how long it is kept.
+ * `pipelineVersion` is present iff a run started — a refused start deletes the
+ * version it minted. `retentionDays` is `null` when debug runs are kept forever
+ * (`DEBUG_RETENTION_DAYS=0`).
+ */
+export const DebugRunResultSchema = FireResultSchema.extend({
+  pipelineVersion: PipelineVersionSchema.optional(),
+  retentionDays: z.number().nonnegative().nullable(),
+});
+export type DebugRunResult = z.infer<typeof DebugRunResultSchema>;

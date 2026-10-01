@@ -23,6 +23,7 @@ import {
   getLatestPipelineVersion,
   getPipeline,
   getPipelineVersion,
+  isDebugVersion,
   getSecretByRef,
   getTrigger,
   getWorkspaceGit,
@@ -129,6 +130,15 @@ function requireOwnedPipelineVersion(
     'pipelineVersion',
     pipelineVersionId,
   );
+  // #1395 — a DEBUG version is the editor's throwaway draft, deleted after
+  // `DEBUG_RETENTION_DAYS`: a trigger bound to it would fire a draft nobody
+  // saved, then lose its binding. Only after the owner check, so the refusal
+  // tells nothing about another owner's versions.
+  if (isDebugVersion(db, pipelineVersionId) === true) {
+    throw new BadRequestError(
+      'a debug version cannot be bound to a trigger: save the pipeline and bind a saved version',
+    );
+  }
 }
 
 /**

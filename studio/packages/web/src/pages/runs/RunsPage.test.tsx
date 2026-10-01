@@ -154,6 +154,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     // R2 — the joined names the list renders.
     pipelineName: 'Nightly report',
     pipelineVersion: 3,
+    debug: false,
     annotations: [],
     triggerName: 'Every morning',
     ...overrides,

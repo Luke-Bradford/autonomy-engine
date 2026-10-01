@@ -251,6 +251,13 @@ export const pipelineVersions = sqliteTable(
     // `PipelineVersionSchema` field, so it never reaches the content form, git or
     // an export. NULL = a pre-GL3 row, which reads none.
     globalReads: text('global_reads'),
+    // #1395 OR4 — a DEBUG version: the editor's unsaved draft, minted so a run can
+    // bind it (0045). Server-only for the same reason as `global_reads`: not a
+    // `PipelineVersionSchema` field, so it never reaches the content form, git or
+    // an export. Every listing/head read in `repo/pipeline-versions.ts` excludes
+    // it; only `getPipelineVersion(id)` (a run's own binding) still resolves it.
+    // The default is the TRUE value for every non-Debug insert.
+    debug: integer('debug', { mode: 'boolean' }).notNull().default(false),
     catalogVersion: integer('catalog_version').notNull(),
     createdAt: integer('created_at').notNull(),
     // #3 G6b — git provenance: WHERE this immutable version was imported from
@@ -265,7 +272,13 @@ export const pipelineVersions = sqliteTable(
     sourceBlobSha: text('source_blob_sha'),
   },
   (table) => [
-    uniqueIndex('pipeline_versions_pipeline_id_version_idx').on(table.pipelineId, table.version),
+    // #1395 — `debug` is in the key so saved versions and debug versions number
+    // independently (v1, v2 … and debug 1, debug 2 …).
+    uniqueIndex('pipeline_versions_pipeline_id_version_idx').on(
+      table.pipelineId,
+      table.debug,
+      table.version,
+    ),
     index('pipeline_versions_pipeline_id_idx').on(table.pipelineId),
     // Versions scope uniqueness by PIPELINE (owner rides the pipeline FK).
     uniqueIndex('pipeline_versions_pipeline_resource_id_idx').on(

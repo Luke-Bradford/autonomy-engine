@@ -286,6 +286,7 @@ export function listRunSummariesPage(
         pipelineId: pipelines.id,
         pipelineName: pipelines.name,
         pipelineVersion: pipelineVersions.version,
+        debug: pipelineVersions.debug,
         annotations: pipelineVersions.annotations,
         triggerName: triggers.name,
       })
@@ -326,6 +327,7 @@ export function listRunSummariesPage(
           pipelineId: row.pipelineId,
           pipelineName: row.pipelineName,
           pipelineVersion: row.pipelineVersion,
+          debug: row.debug,
           annotations: row.annotations,
           triggerName: row.triggerName,
           /* A run with no metered events has no aggregate GROUP, and its cost is a

@@ -18,7 +18,7 @@ import { openDb } from '../db/client.js';
 import { webhookDeliveries } from '../db/schema.js';
 import { armWakeup, getWakeup, settleWakeup } from '../repo/scheduled-wakeups.js';
 import { createPipeline } from '../repo/pipelines.js';
-import { createPipelineVersion } from '../repo/pipeline-versions.js';
+import { createPipelineVersion, getPipelineVersion } from '../repo/pipeline-versions.js';
 import { createTrigger } from '../repo/triggers.js';
 import { claimWebhookDelivery, getWebhookDelivery } from '../repo/webhook-deliveries.js';
 
@@ -164,6 +164,72 @@ describe('#464 — retention boot sweep', () => {
     expect(getWakeup(check.db, freshId)?.id).toBe(freshId);
     check.sqlite.close();
     await app.close();
+  });
+
+  describe('#1395 — the debug-version sweep is wired into boot', () => {
+    async function seedDebugVersion(path: string): Promise<{ debugId: string; savedId: string }> {
+      const seed = openDb(path);
+      const pipeline = createPipeline(seed.db, { ownerId: 'local', name: 'P' });
+      const body = {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      };
+      const saved = createPipelineVersion(seed.db, body);
+      const debugVersion = createPipelineVersion(seed.db, body, { debug: true });
+      seed.sqlite.close();
+      // Older than the 1 ms window below by the time the app boots.
+      await new Promise((r) => setTimeout(r, 20));
+      return { debugId: debugVersion.id, savedId: saved.id };
+    }
+
+    it('prunes an expired debug version on boot, and never the saved one', async () => {
+      const path = join(tmpDir, 'debug-retention-on.sqlite');
+      const { debugId, savedId } = await seedDebugVersion(path);
+      const app = await buildApp({
+        dbPath: path,
+        masterKeyFile: join(tmpDir, 'debug-retention-on.key'),
+        debugRetentionMs: 1,
+      });
+      await app.ready();
+      const check = openDb(path);
+      expect(getPipelineVersion(check.db, debugId)).toBeNull();
+      expect(getPipelineVersion(check.db, savedId)?.id).toBe(savedId);
+      check.sqlite.close();
+      await app.close();
+    });
+
+    it('keeps debug versions forever with debugRetentionMs: 0', async () => {
+      const path = join(tmpDir, 'debug-retention-off.sqlite');
+      const { debugId } = await seedDebugVersion(path);
+      const app = await buildApp({
+        dbPath: path,
+        masterKeyFile: join(tmpDir, 'debug-retention-off.key'),
+        debugRetentionMs: 0,
+      });
+      await app.ready();
+      const check = openDb(path);
+      expect(getPipelineVersion(check.db, debugId)?.id).toBe(debugId);
+      check.sqlite.close();
+      await app.close();
+    });
+
+    it('rejects a degenerate retentionSweepMs when only the debug sweep is on', async () => {
+      await expect(
+        buildApp({
+          dbPath: join(tmpDir, 'debug-retention-badsweep.sqlite'),
+          masterKeyFile: join(tmpDir, 'debug-retention-badsweep.key'),
+          wakeupRetentionMs: 0,
+          webhookRetentionMs: 0,
+          externalActivityRetentionMs: 0,
+          debugRetentionMs: 1_000,
+          retentionSweepMs: 0,
+        }),
+      ).rejects.toThrow(/retentionSweepMs/);
+    });
   });
 
   it('rejects a degenerate retentionSweepMs (would make setInterval fire continuously)', async () => {

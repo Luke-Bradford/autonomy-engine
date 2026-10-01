@@ -33,6 +33,7 @@ function run(over: Partial<RunSummary> & Pick<RunSummary, 'id'>): RunSummary {
     pipelineId: 'pipe_a',
     pipelineName: 'Alpha',
     pipelineVersion: 1,
+    debug: false,
     annotations: [],
     triggerName: null,
     cost: noSpend,

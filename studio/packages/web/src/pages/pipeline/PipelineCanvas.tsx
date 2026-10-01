@@ -138,11 +138,17 @@ import {
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
-import { RunNowPanel } from './RunNowPanel';
+import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
 import { EditorRunContext, type EditorRun } from './editorRunContext';
 import { runDetailPath } from '../runs/runPath';
-import { runDisabledReason, runTitle } from './runNowRules';
+import {
+  DEBUG_TITLE,
+  debugDisabledReason,
+  debugStartedText,
+  runDisabledReason,
+  runTitle,
+} from './runNowRules';
 import { useShellUnsaved } from '../../shell/shellLabel';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -232,6 +238,9 @@ export function PipelineCanvas({
   // notice links to the run page, and stays until the next press of Run — the
   // save line's rule — so the link is there for as long as it is wanted.
   const [runOpen, setRunOpen] = useState(false);
+  // #1395 slice 3 — the Debug form's. Opening one form closes the other: both
+  // hang from the same anchor over the canvas.
+  const [debugOpen, setDebugOpen] = useState(false);
   const [runStarted, setRunStarted] = useState<{ text: string; runId: string } | null>(null);
   /* #1395 OR4 — the run drawn over the canvas. Held apart from `runStarted`,
      which pressing Run clears to open the form: the overlay stays until the
@@ -716,6 +725,13 @@ export function PipelineCanvas({
   // form rather than hiding it, so it does not spring back open with reset
   // values when the refusal lifts. Render-phase, like `EditorStatusStrip`'s.
   if (runOpen && runReason !== null) setRunOpen(false);
+  const debugReason = debugDisabledReason({
+    ready,
+    archived,
+    previewing: previewing !== null,
+    issueCount: issues.length,
+  });
+  if (debugOpen && debugReason !== null) setDebugOpen(false);
 
   /**
    * Save the working graph as a new version, based on `basedOnVersionId`.
@@ -1188,10 +1204,26 @@ export function PipelineCanvas({
                 // Like every save opening with `setSaveMsg(null)`: the next Run
                 // owns the notice, so it always describes the latest run.
                 setRunStarted(null);
+                setDebugOpen(false);
                 setRunOpen((o) => !o);
               }}
             >
               <span aria-hidden="true">▶ </span>Run
+            </button>
+            {/* #1395 slice 3 — Debug: run the working graph as it stands, saved
+                or not, as a hidden debug version. */}
+            <button
+              type="button"
+              aria-expanded={debugOpen}
+              disabled={debugReason !== null}
+              title={debugReason ?? DEBUG_TITLE}
+              onClick={() => {
+                setRunStarted(null);
+                setRunOpen(false);
+                setDebugOpen((o) => !o);
+              }}
+            >
+              Debug
             </button>
             {runOpen && runReason === null && head !== null && (
               <RunNowPanel
@@ -1204,6 +1236,41 @@ export function PipelineCanvas({
                   setRunOpen(false);
                   setRunStarted({ text: `Run started from v${String(head.version)}.`, runId });
                   setEditorRun({ runId, version: head });
+                }}
+              />
+            )}
+            {debugOpen && debugReason === null && (
+              <DebugRunPanel
+                // Re-seeded when the draft's params change under an open form,
+                // so its rows never describe params the draft no longer has.
+                key={JSON.stringify(params)}
+                pipelineId={pipelineId}
+                params={params}
+                draft={() => {
+                  // The SAME body a save sends. Its `basedOnVersionId` is a
+                  // save's CAS basis and means nothing to a Debug, which
+                  // overwrites nothing: `DebugRunRequestSchema` strips it.
+                  const s = store.getState();
+                  return toVersionBody(
+                    s.nodes,
+                    s.edges,
+                    s.containers,
+                    s.params,
+                    s.outputs,
+                    s.variables,
+                    s.description,
+                    s.annotations,
+                    null,
+                  );
+                }}
+                onClose={() => setDebugOpen(false)}
+                onStarted={(result) => {
+                  setDebugOpen(false);
+                  setRunStarted({
+                    text: debugStartedText(result.retentionDays),
+                    runId: result.runId,
+                  });
+                  setEditorRun({ runId: result.runId, version: result.pipelineVersion });
                 }}
               />
             )}

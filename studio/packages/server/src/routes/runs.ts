@@ -18,6 +18,7 @@ import {
 import {
   getPipeline,
   getRun,
+  isDebugVersion,
   getTrigger,
   listRunAnnotations,
   listRunDiagnostics,
@@ -220,7 +221,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       row && row.ownerId === run.ownerId ? row.name : null;
     const pipelineName = nameFor(getPipeline(db, pipelineVersion.pipelineId));
     const triggerName = run.triggerId ? nameFor(getTrigger(db, run.triggerId)) : null;
-    return { run, pipelineVersion, pipelineName, triggerName } satisfies RunDetail;
+    const debug = isDebugVersion(db, run.pipelineVersionId) === true;
+    return { run, pipelineVersion, debug, pipelineName, triggerName } satisfies RunDetail;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {
