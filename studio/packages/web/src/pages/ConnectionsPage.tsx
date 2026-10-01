@@ -73,6 +73,7 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
+import { CONNECTION_KIND_ICONS, ConnectionKindName, KindGlyph } from '../lib/kindIcon';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -518,7 +519,9 @@ export function ConnectionsPage() {
                 {connections.map((conn) => (
                   <tr key={conn.id}>
                     <td>{conn.name}</td>
-                    <td>{CONNECTION_KIND_LABELS[conn.kind]}</td>
+                    <td>
+                      <ConnectionKindName kind={conn.kind} />
+                    </td>
                     <td>
                       <button
                         type="button"
@@ -972,18 +975,21 @@ function ConnectionForm({
           }
         >
           {(id) => (
-            <select
-              id={id}
-              value={form.kind}
-              aria-required
-              onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
-            >
-              {KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {CONNECTION_KIND_LABELS[kind]}
-                </option>
-              ))}
-            </select>
+            <span className="kind-select">
+              <KindGlyph glyph={CONNECTION_KIND_ICONS[form.kind]} kind={form.kind} />
+              <select
+                id={id}
+                value={form.kind}
+                aria-required
+                onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+              >
+                {KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {CONNECTION_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </span>
           )}
         </LabelledControl>
 

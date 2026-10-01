@@ -7,13 +7,13 @@ import type {
   DatasetReferencesResponse,
   MappingAgreementNote,
 } from '@autonomy-studio/shared';
-import { DATASET_KIND_LABELS } from '@autonomy-studio/shared';
 import type { ConnectionPublic } from '@autonomy-studio/shared';
 import { listConnections } from '../../api/connections';
 import { getDataset, getDatasetReferences } from '../../api/datasets';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { pipelinePath } from '../author/pipelinePath';
 import { StoreCell } from './StoreCell';
+import { DatasetKindName } from '../../lib/kindIcon';
 import { useShellLabel } from '../../shell/shellLabel';
 
 /**
@@ -119,7 +119,9 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
         <>
           <dl className="run-meta">
             <dt>Kind</dt>
-            <dd>{DATASET_KIND_LABELS[dataset.kind]}</dd>
+            <dd>
+              <DatasetKindName kind={dataset.kind} />
+            </dd>
             <dt>Store</dt>
             <dd>
               {/* The SAME cell the list renders, so the detail page cannot say

@@ -158,6 +158,10 @@ describe('DatasetsPage', () => {
     renderWithDataRouter(<DatasetsPage />);
     const row = within(await screen.findByRole('row', { name: /Orders/ }));
     expect(row.getByText('Database table')).toBeInTheDocument();
+    // #1396 — with its kind's icon.
+    expect(row.getByText('Database table').querySelector('.kind-icon')?.getAttribute('data-kind')).toBe(
+      'table',
+    );
     // The store resolves to a name, not the raw `conn_1`.
     expect(row.getByText('Warehouse')).toBeInTheDocument();
     expect(row.getByText('1')).toBeInTheDocument();

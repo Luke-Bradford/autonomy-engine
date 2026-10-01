@@ -126,6 +126,10 @@ describe('ConnectionsPage', () => {
     renderWithRouter(<ConnectionsPage />);
     expect(await screen.findByText('My Claude')).toBeInTheDocument();
     expect(screen.getByText('Anthropic API')).toBeInTheDocument();
+    // #1396 — with its kind's icon, hidden from the accessibility tree.
+    const glyph = screen.getByText('Anthropic API').querySelector('.kind-icon');
+    expect(glyph?.getAttribute('data-kind')).toBe('anthropic_api');
+    expect(glyph?.getAttribute('aria-hidden')).toBe('true');
   });
 
   /* #1253 — Edit names its row, as Export and Delete already did, so a
@@ -239,8 +243,13 @@ describe('ConnectionsPage', () => {
     // version header; `fs` declares none of them and requires `roots`.
     expect(screen.getByLabelText('API version')).toBeInTheDocument();
     expect(screen.queryByLabelText(/^Allowed folders/)).not.toBeInTheDocument();
+    // #1396 — the picker shows the chosen kind's icon beside it, and swaps it.
+    const kindIcon = () =>
+      screen.getByLabelText('Kind').parentElement?.querySelector('.kind-icon')?.getAttribute('data-kind');
+    expect(kindIcon()).toBe('anthropic_api');
 
     await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
+    expect(kindIcon()).toBe('fs');
     // The one-per-line control labels itself `roots — one per line`.
     expect(screen.getByLabelText(/^Allowed folders/)).toBeInTheDocument();
     expect(screen.queryByLabelText('API version')).not.toBeInTheDocument();

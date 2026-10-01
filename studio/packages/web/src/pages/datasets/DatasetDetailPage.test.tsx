@@ -77,6 +77,9 @@ describe('DatasetDetailPage (#996 M9)', () => {
     expect(await screen.findByRole('heading', { name: 'Customers' })).toBeInTheDocument();
     // The kind by its display name, as the list shows it (#1396).
     expect(screen.getByText('Database table')).toBeInTheDocument();
+    expect(
+      screen.getByText('Database table').querySelector('.kind-icon')?.getAttribute('data-kind'),
+    ).toBe('table');
     expect(screen.getByText('id').closest('li')?.textContent).toBe('id String · not null');
   });
 
