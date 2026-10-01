@@ -15,6 +15,7 @@ import {
 import { boundEcho } from './formFields';
 import { BoundShiftNotices } from './BoundShiftNotices';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { RequiredMark } from '../../lib/form/RequiredMark';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
@@ -109,7 +110,10 @@ export function RecurrenceEditor({
 
       {honoured.includes('weekDays') && (
         <fieldset className="recurrence-days">
-          <legend>{`Days of week${required === 'weekDays' ? ' (required)' : ''}`}</legend>
+          <legend>
+            Days of week
+            {required === 'weekDays' && <RequiredMark />}
+          </legend>
           {WEEK_DAY_NAMES.map((name, day) => (
             <label key={name} className="checkbox">
               <input
@@ -125,7 +129,10 @@ export function RecurrenceEditor({
 
       {honoured.includes('monthDays') && (
         <label>
-          {`Days of month (1-31, comma-separated)${required === 'monthDays' ? ' (required)' : ''}`}
+          <span>
+            Days of month (1-31, comma-separated)
+            {required === 'monthDays' && <RequiredMark />}
+          </span>
           <input
             type="text"
             value={value.monthDays}
@@ -176,7 +183,7 @@ export function RecurrenceEditor({
       {/* `step={1}` admits seconds, so a stored bound that has them can be both
           shown and re-entered rather than silently rounded to the minute. */}
       <label>
-        Start time (optional)
+        Start time
         <input
           type="datetime-local"
           step={1}
@@ -186,7 +193,7 @@ export function RecurrenceEditor({
       </label>
 
       <label>
-        End time (optional)
+        End time
         <input
           type="datetime-local"
           step={1}

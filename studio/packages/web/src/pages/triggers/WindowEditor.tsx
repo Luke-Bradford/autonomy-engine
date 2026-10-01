@@ -101,7 +101,7 @@ export function WindowEditor({
       </label>
 
       <label>
-        End time (optional)
+        End time
         <input
           type="datetime-local"
           step={1}
@@ -111,7 +111,7 @@ export function WindowEditor({
       </label>
 
       <label>
-        Max backfill windows (optional — blank means none)
+        Max backfill windows (blank means none)
         <input
           type="number"
           min={1}
@@ -123,7 +123,7 @@ export function WindowEditor({
       </label>
 
       <label>
-        Max concurrent windows (optional — blank means one)
+        Max concurrent windows (blank means one)
         <input
           type="number"
           min={1}
@@ -137,7 +137,7 @@ export function WindowEditor({
       {/* #861 — the two opt-in sub-objects. Blank means absent (no retry, no
           dependency); every range is the write schema's, reported below. */}
       <label>
-        Retry a failed window N times (optional — blank means no retry)
+        Retry a failed window N times (blank means no retry)
         <input
           type="number"
           min={1}
@@ -162,8 +162,7 @@ export function WindowEditor({
       {/* Deliberately NO `min`: a valid offset is negative, and the form runs
           native constraint validation before its own `role="alert"` path. */}
       <label>
-        Depend on earlier windows: offset in seconds (optional — negative, before each window&apos;s
-        start)
+        Depend on earlier windows: offset in seconds (negative, before each window&apos;s start)
         <input
           type="number"
           max={-1}
@@ -174,7 +173,7 @@ export function WindowEditor({
       </label>
 
       <label>
-        Dependency span in seconds (optional — blank means one window)
+        Dependency span in seconds (blank means one window)
         <input
           type="number"
           min={1}

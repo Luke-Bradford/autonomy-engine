@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../testing/accessibleName';
-import { renderWithRouter } from '../testing/renderWithRouter';
+import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
 import userEvent from '@testing-library/user-event';
 import type {
@@ -196,13 +196,13 @@ afterEach(() => {
 
 describe('TriggersPage', () => {
   it('shows the empty state after loading', async () => {
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     expect(await screen.findByText(/No triggers yet/i)).toBeInTheDocument();
   });
 
   it('renders a trigger row with its binding label resolved from pipelines', async () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     expect(await screen.findByText('Nightly')).toBeInTheDocument();
     // Binding label is `${pipeline.name} v${version}`, not the opaque id.
     expect(await screen.findByText('My pipeline v3')).toBeInTheDocument();
@@ -212,14 +212,14 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ pipelineVersionId: null, enabled: false, mode: 'manual', schedule: null }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     expect(await screen.findByText('unbound')).toBeInTheDocument();
   });
 
   it('fires a trigger and reports the started run id', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire now: Nightly/i }));
     await waitFor(() => expect(fireMock).toHaveBeenCalledWith('trg_1'));
     expect(await screen.findByText(/started \(run run_9\)/i)).toBeInTheDocument();
@@ -229,7 +229,7 @@ describe('TriggersPage', () => {
     const user = userEvent.setup();
     fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'a run is already active' });
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire now: Nightly/i }));
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
   });
@@ -251,7 +251,7 @@ describe('TriggersPage', () => {
     const mountTriggers = deferred<TriggerPublic[]>();
     listTriggersMock.mockReturnValueOnce(mountTriggers.promise);
     createMock.mockResolvedValue(trigger({ name: 'Nightly' }));
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     // The mount load is held open; the form is reachable regardless. A blank
     // form is unbound, disabled and manual, so a name is all it needs — which
@@ -279,7 +279,7 @@ describe('TriggersPage', () => {
 
   it('creates a schedule trigger from a raw cron, via the escape-hatch mode', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const formEl = screen.getByRole('form', { name: /Trigger form/i });
@@ -308,7 +308,7 @@ describe('TriggersPage', () => {
 
   it('creates a schedule trigger from the structured recurrence builder', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const formEl = screen.getByRole('form', { name: /Trigger form/i });
@@ -340,7 +340,7 @@ describe('TriggersPage', () => {
 
   it('offers only the schedule sub-fields the chosen frequency honours', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -363,7 +363,7 @@ describe('TriggersPage', () => {
 
   it('forgets a selection the new frequency does not honour, and never submits it', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -396,7 +396,7 @@ describe('TriggersPage', () => {
 
   it('reports an invalid recurrence instead of sending it', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -422,7 +422,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Inert', mode: 'schedule', schedule: null, recurrence: null }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -450,7 +450,7 @@ describe('TriggersPage', () => {
         recurrence: { frequency: 'week', interval: 1, schedule: { weekDays: [1], hours: [9] } },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -475,7 +475,7 @@ describe('TriggersPage', () => {
 
   it('blocks saving an enabled but unbound trigger with a friendly message', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Oops');
@@ -496,7 +496,7 @@ describe('TriggersPage', () => {
     // `ConcurrencyWriteSchema` (parallel⇒max, single-slot⇒no-max) is honoured
     // by construction. This asserts that construction is correct.
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Fan out');
@@ -511,7 +511,7 @@ describe('TriggersPage', () => {
 
   it('emits a single-slot concurrency object with no `max`', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'One at a time');
@@ -536,7 +536,7 @@ describe('TriggersPage', () => {
         webhook: { idempotencyWindowSeconds: 300 },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(
       await screen.findByRole('button', { name: /Provision webhook secret for Hook/i }),
     );
@@ -550,7 +550,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -566,7 +566,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // Switch away from webhook — the stored secret must be actively cleared.
@@ -588,7 +588,7 @@ describe('TriggersPage', () => {
       }),
     );
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     const fireBtn = await screen.findByRole('button', { name: /Fire now: Nightly/i });
     await user.click(fireBtn);
     // Button reflects the in-flight state and is disabled.
@@ -626,7 +626,7 @@ describe('TriggersPage', () => {
       trigger({ id: 'trg_a', name: 'Alpha' }),
       trigger({ id: 'trg_b', name: 'Beta' }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     const alpha = await screen.findByRole('button', { name: /Fire now: Alpha/i });
     const beta = await screen.findByRole('button', { name: /Fire now: Beta/i });
@@ -660,7 +660,7 @@ describe('TriggersPage', () => {
       trigger({ id: 'trg_a', name: 'Alpha' }),
       trigger({ id: 'trg_b', name: 'Beta' }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
     await screen.findByRole('link', { name: 'Watch live → run run_a' });
@@ -693,7 +693,7 @@ describe('TriggersPage', () => {
       trigger({ id: 'trg_a', name: 'Alpha' }),
       trigger({ id: 'trg_b', name: 'Beta' }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
     await screen.findByRole('link', { name: 'Watch live → run run_a1' });
@@ -728,7 +728,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([alpha, beta]);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.mocked(triggersApi.deleteTrigger).mockResolvedValue(undefined as never);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
     await screen.findByRole('link', { name: 'Watch live → run run_a' });
@@ -755,7 +755,7 @@ describe('TriggersPage', () => {
     const user = userEvent.setup();
     fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'already running' });
     listTriggersMock.mockResolvedValue([trigger({ id: 'trg_a', name: 'Alpha' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
 
@@ -775,7 +775,7 @@ describe('TriggersPage', () => {
       trigger({ id: 'trg_a', name: 'Alpha' }),
       trigger({ id: 'trg_b', name: 'Beta' }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: /Fire now: Alpha/i }));
     await screen.findByRole('link', { name: 'Watch live → run run_a' });
@@ -831,13 +831,13 @@ describe('TriggersPage', () => {
 describe('#854 — the trigger modes that had no config UI', () => {
   it('authors an event subscription and enables the trigger', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'On order');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
     await user.selectOptions(form.getByLabelText('Mode'), 'event');
-    await user.type(form.getByLabelText('Event name'), 'order.placed');
+    await user.type(form.getByLabelText('Event', { exact: true }), 'order.placed');
     await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
@@ -851,7 +851,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
     // Mirrors `assertEventConsistent`, which refuses exactly this — the form
     // says so before the round trip rather than surfacing a raw 400.
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Nameless');
@@ -866,7 +866,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
 
   it('authors a tumbling window, and settles concurrency on the only legal policy', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Hourly windows');
@@ -899,7 +899,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
 
   it('refuses to enable a tumbling trigger that has no window', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Windowless');
@@ -927,7 +927,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
         window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
@@ -948,7 +948,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
         event: { name: 'order.placed' },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'manual');
@@ -977,7 +977,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
         window,
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByLabelText(/Retry a failed window/)).toHaveValue(3);
@@ -994,7 +994,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
     // hand. The control keeps offering the mode (the API and the DB CHECK both
     // accept it) but stops implying it will do something.
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'continuous');
@@ -1022,7 +1022,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     return (async () => {
-      renderWithRouter(<TriggersPage />);
+      renderWithDataRouter(<TriggersPage />);
       await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
@@ -1054,7 +1054,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     return (async () => {
-      renderWithRouter(<TriggersPage />);
+      renderWithDataRouter(<TriggersPage />);
       await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
       expect(form.getByTestId('window-bounds-utc')).toHaveTextContent('2026-08-01T08:00:30.500Z');
@@ -1072,7 +1072,7 @@ describe('#854 review follow-ups', () => {
         event: { name: 'order.placed', filter: { region: 'eu' }, source: 'checkout' },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByTestId('event-preserved')).toHaveTextContent('filter, source');
@@ -1089,10 +1089,10 @@ describe('#854 review follow-ups', () => {
         event: { name: 'order.placed', filter: { region: 'eu' } },
       }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
-    await user.clear(form.getByLabelText('Event name'));
+    await user.clear(form.getByLabelText('Event', { exact: true }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
 
     expect(await form.findByRole('alert')).toHaveTextContent(/would discard/i);
@@ -1115,7 +1115,7 @@ describe('#959 portability — export and import on the triggers list', () => {
       trigger({ id: 'trg_9', name: 'Nightly' }),
       trigger({ id: 'trg_10', name: 'Weekly' }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     const target = await screen.findByRole('button', { name: 'Export Nightly' });
     const other = await screen.findByRole('button', { name: 'Export Weekly' });
@@ -1136,7 +1136,7 @@ describe('#959 portability — export and import on the triggers list', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ id: 'trg_9', name: 'Nightly' })]);
     exportMock.mockResolvedValue('{"kind":"trigger","canonical":true}');
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
 
@@ -1153,7 +1153,7 @@ describe('#959 portability — export and import on the triggers list', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     exportMock.mockRejectedValue(new Error('trigger not found'));
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
 
@@ -1166,7 +1166,7 @@ describe('#959 portability — export and import on the triggers list', () => {
   it('offers the import surface, and says an imported trigger is unbound AND disabled', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
 
     const picker = await screen.findByLabelText('Export file');
     listTriggersMock.mockResolvedValue([
@@ -1231,7 +1231,7 @@ describe('TriggersPage — binding to the active published version', () => {
 
   /** Open the create form and switch the binding control to bind-to-active. */
   async function chooseActive(user: ReturnType<typeof userEvent.setup>) {
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Nightly');
@@ -1249,7 +1249,7 @@ describe('TriggersPage — binding to the active published version', () => {
      discard the choice already made. */
   it('restores the version already picked when switching back off bind-to-active', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
@@ -1263,7 +1263,7 @@ describe('TriggersPage — binding to the active published version', () => {
   /* #1253 — Edit names its row, as Export and Delete already did. */
   it('names the row on every row action, Edit included', async () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await screen.findByRole('row', { name: /Nightly/ });
     for (const act of ['Edit', 'Export', 'Delete']) {
       expect(screen.getByRole('button', { name: `${act} Nightly` })).toBeInTheDocument();
@@ -1276,7 +1276,7 @@ describe('TriggersPage — binding to the active published version', () => {
   it('does NOT offer bind-to-active when editing an existing trigger', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     const row = within(await screen.findByRole('row', { name: /Nightly/ }));
     await user.click(row.getByRole('button', { name: ROW_EDIT }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -1456,7 +1456,7 @@ describe('TriggersPage — binding to the active published version', () => {
  */
 describe('TriggersPage run windows (#1090)', () => {
   const openNewForm = async (user: ReturnType<typeof userEvent.setup>) => {
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Windowed');
@@ -1513,7 +1513,7 @@ describe('TriggersPage run windows (#1090)', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Broken', runWindows: [{ start: '9am', end: '17:00' }] }),
     ]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
@@ -1528,7 +1528,7 @@ describe('TriggersPage run windows (#1090)', () => {
     // `null` would silently convert that into "no restriction at all".
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Closed', runWindows: [] })]);
-    renderWithRouter(<TriggersPage />);
+    renderWithDataRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
@@ -1568,5 +1568,95 @@ describe('TriggersPage run windows (#1090)', () => {
     expect(
       within(form.getByRole('group', { name: 'Window 1' })).getByLabelText(/Window 1 start/i),
     ).toHaveValue('09:00');
+  });
+});
+
+/**
+ * #1396 OR5 — the trigger form on the shared form pattern: a drawer with
+ * sections, display names for the mode and the concurrency policy, and the
+ * unsaved-changes guard on every way out.
+ */
+describe('#1396 the trigger form drawer', () => {
+  const formEl = () => screen.getByRole('form', { name: 'Trigger form' });
+  const prompt = () => screen.queryByRole('alertdialog', { name: 'Unsaved changes' });
+
+  it('groups the form into titled sections, with display names for mode and policy', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly', mode: 'tumbling' })]);
+    renderWithDataRouter(<TriggersPage />);
+    // The list names the mode too, not its identifier.
+    expect(
+      within(await screen.findByRole('row', { name: /Nightly/ })).getByText('Tumbling window'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'New trigger' }));
+    const form = within(formEl());
+    for (const section of ['Basics', 'Pipeline', 'Firing', 'Concurrency', 'Parameters']) {
+      expect(form.getByRole('group', { name: section })).toBeInTheDocument();
+    }
+    expect(form.getByRole('option', { name: 'Tumbling window' })).toHaveValue('tumbling');
+    expect(form.getByRole('option', { name: 'Skip if running' })).toHaveValue('skip_if_running');
+    expect(form.getByLabelText('Name')).toBeRequired();
+    // Footer: Cancel, then the primary action last.
+    const buttons = [...formEl().querySelectorAll('.form-drawer-footer button')].map(
+      (b) => b.textContent,
+    );
+    expect(buttons).toEqual(['Cancel', 'Create trigger']);
+  });
+
+  it('asks before discarding a typed name, and keeps it on "Keep editing"', async () => {
+    const user = userEvent.setup();
+    renderWithDataRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: 'New trigger' }));
+    await user.type(within(formEl()).getByLabelText('Name'), 'half-typed');
+    await user.click(within(formEl()).getByRole('button', { name: 'Cancel' }));
+    await user.click(within(prompt()!).getByRole('button', { name: 'Keep editing' }));
+    expect(within(formEl()).getByLabelText('Name')).toHaveValue('half-typed');
+    await user.click(within(formEl()).getByRole('button', { name: 'Cancel' }));
+    await user.click(within(prompt()!).getByRole('button', { name: 'Discard changes' }));
+    expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('does not count config of a mode the trigger has left as an unsaved change', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly', mode: 'manual' })]);
+    renderWithDataRouter(<TriggersPage />);
+    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
+    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    const form = within(formEl());
+    // Save sends an inactive mode's config as null, so this edit writes nothing.
+    await user.selectOptions(form.getByLabelText('Mode'), 'event');
+    await user.type(form.getByLabelText('Event', { exact: true }), 'order.placed');
+    await user.selectOptions(form.getByLabelText('Mode'), 'manual');
+    await user.click(form.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeNull();
+    expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull();
+  });
+
+  it('counts the active mode’s config as an unsaved change', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly', mode: 'manual' })]);
+    renderWithDataRouter(<TriggersPage />);
+    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
+    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    const form = within(formEl());
+    await user.selectOptions(form.getByLabelText('Mode'), 'event');
+    await user.type(form.getByLabelText('Event', { exact: true }), 'order.placed');
+    await user.click(form.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).not.toBeNull();
+  });
+
+  it('closes the drawer when the trigger it is editing is deleted', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderWithDataRouter(<TriggersPage />);
+    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
+    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await user.type(within(formEl()).getByLabelText('Name'), ' renamed');
+    listTriggersMock.mockResolvedValue([]);
+    await user.click(screen.getByRole('button', { name: 'Delete Nightly' }));
+    await waitFor(() => expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull());
+    expect(prompt()).toBeNull();
   });
 });

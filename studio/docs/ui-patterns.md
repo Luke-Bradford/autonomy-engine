@@ -1,8 +1,8 @@
 # UI patterns — resource forms
 
 How every create/edit form in studio looks and behaves (#1396, OR5). Written once here; the shared
-pieces live in `packages/web/src/lib/form/`. Connections, Datasets, Secrets and Global parameters
-follow it. Triggers and the node property panel move onto it in the slices that follow #1396.
+pieces live in `packages/web/src/lib/form/`. Connections, Datasets, Secrets, Global parameters and
+Triggers follow it. The node property panel moves onto it in a slice that follows #1396.
 
 ## The drawer
 
@@ -32,7 +32,12 @@ follow it. Triggers and the node property panel move onto it in the slices that 
   - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
     declared schema) and *Advanced*;
   - for a secret: *Basics* (name) and *Value*;
-  - for a global parameter: *Basics* (name, type) and *Value* (value, description).
+  - for a global parameter: *Basics* (name, type) and *Value* (value, description);
+  - for a trigger: *Basics* (name, enabled), *Pipeline* (the binding), *Firing* (the mode, its
+    schedule, event or window, and the run windows), *Concurrency* and *Parameters*.
+- Triggers use the drawer too, not a full page: the form is long but narrow, and the drawer's body
+  scrolls with the page while its footer stays in view. It has no Advanced section, because every
+  section holds settings an ordinary trigger uses.
 - **Advanced is collapsed by default**, and opens by default when the record already uses it, so
   stored state is never hidden. The override allowlist lives there (`OverridableKeysSection`).
 
@@ -48,13 +53,13 @@ follow it. Triggers and the node property panel move onto it in the slices that 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
 - `unit` names what the stored value is in. It never converts the value.
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
-  `DATASET_KIND_LABELS`). The stored value stays the identifier.
+  `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`, `CONCURRENCY_POLICY_LABELS`). The stored value stays the identifier.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
   Optional fields are unmarked: schema-derived fields no longer carry an "(optional)" suffix (a few
-  hand-written labels outside `ConfigFieldControl`, in the canvas and trigger editors, still do
-  until their forms move onto this pattern). The asterisk is `RequiredMark`.
+  hand-written labels outside `ConfigFieldControl`, in the canvas, still do until the node panel
+  moves onto this pattern). The asterisk is `RequiredMark`.
   CSS draws it, and it is `aria-hidden`, so it never becomes part of a field's name. A row list is a
   `group` and cannot take `aria-required`, so it gets the asterisk alone.
 - A field that cannot change on an edit (a secret's name, a global's name and type) is

@@ -21,8 +21,29 @@ export const TriggerModeSchema = z.enum([
 ]);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
 
+/**
+ * #1396 — what a form or a list CALLS each mode. The enum value stays the
+ * identifier everywhere it is stored or sent; this is display only, and a
+ * `Record` so a new mode cannot ship without a name.
+ */
+export const TRIGGER_MODE_LABELS: Record<TriggerMode, string> = {
+  manual: 'Manual',
+  schedule: 'Schedule',
+  webhook: 'Webhook',
+  event: 'Event',
+  continuous: 'Continuous',
+  tumbling: 'Tumbling window',
+};
+
 export const ConcurrencyPolicySchema = z.enum(['queue', 'skip_if_running', 'parallel']);
 export type ConcurrencyPolicy = z.infer<typeof ConcurrencyPolicySchema>;
+
+/** #1396 — display names for the concurrency policies, as for the modes above. */
+export const CONCURRENCY_POLICY_LABELS: Record<ConcurrencyPolicy, string> = {
+  queue: 'Queue',
+  skip_if_running: 'Skip if running',
+  parallel: 'Parallel',
+};
 
 /**
  * STORED/READ shape — deliberately LENIENT (no cross-field refinement) so it
