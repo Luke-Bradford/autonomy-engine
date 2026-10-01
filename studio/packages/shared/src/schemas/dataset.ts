@@ -102,7 +102,7 @@ export const DATASET_KIND_LABELS: Record<DatasetKind, string> = {
 export const DATASET_KIND_DESCRIPTIONS: Record<DatasetKind, string> = {
   delimited: 'Rows of a CSV or other delimited text file on a file system connection.',
   excel: 'Rows of one sheet in an Excel workbook on a file system connection.',
-  table: 'One table in a database, read in full or written to by a copy.',
+  table: 'One table in a database, read in full, or on SQLite also written to by a copy.',
   query: 'The rows a SQL query returns from a database.',
 };
 

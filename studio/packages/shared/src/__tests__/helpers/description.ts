@@ -10,3 +10,12 @@ export function expectOneSentence(description: string): void {
   expect(description).toMatch(/^[^.!?]+\.$/);
   expect(description.length).toBeLessThanOrEqual(120);
 }
+
+/**
+ * A description lower-cased and without its full stop, to compare with the
+ * name it must not restate: every description ends in "." and no name does,
+ * so comparing them as written could never fail.
+ */
+export function withoutStop(description: string): string {
+  return description.replace(/\.$/, '').toLowerCase();
+}

@@ -191,7 +191,7 @@ describe('DatasetsPage', () => {
     ).toBe('table');
     // #1413 — and its description.
     expect(within(form()).getByLabelText('Kind')).toHaveAccessibleDescription(
-      'One table in a database, read in full or written to by a copy.',
+      'One table in a database, read in full, or on SQLite also written to by a copy.',
     );
     // `table` is a control derived from the kind's own schema, not a JSON blob.
     await user.type(within(form()).getByLabelText('Table'), 'orders');

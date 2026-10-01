@@ -61,7 +61,7 @@ export const CONNECTION_KIND_LABELS: Record<ConnectionKind, string> = {
  */
 export const CONNECTION_KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
   anthropic_api: "Calls Anthropic's Claude models over the API, authenticated with an API key.",
-  openai_api: 'Calls OpenAI models over the API, authenticated with an API key.',
+  openai_api: 'Calls OpenAI models, or an OpenAI-compatible server, authenticated with an API key.',
   ollama: 'Calls models served by a local or self-hosted Ollama server.',
   agent_cli: 'Runs an agent CLI, such as claude or codex, as a process on this machine.',
   http: 'Sends HTTP requests, optionally against a base URL with default headers.',

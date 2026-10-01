@@ -37,15 +37,15 @@ export const TRIGGER_MODE_LABELS: Record<TriggerMode, string> = {
 
 /**
  * #1413 OR22 — what each mode DOES, as `CONNECTION_KIND_DESCRIPTIONS` says for
- * connections. `continuous` describes the mode, not its build status: the form
- * says it is not dispatched yet in its own note under the picker.
+ * connections. `continuous` is not dispatched yet, so its line says "Planned"
+ * rather than claim a behaviour; the form's own note under the picker says why.
  */
 export const TRIGGER_MODE_DESCRIPTIONS: Record<TriggerMode, string> = {
-  manual: 'Runs only when someone presses Fire now.',
+  manual: 'Runs only when someone fires it by hand, with Fire now on its row.',
   schedule: 'Runs on a recurring schedule, such as every hour or each weekday at 09:00.',
   webhook: 'Runs when another system posts a signed request to its webhook URL.',
   event: 'Runs when an event with its name is posted to the studio events endpoint.',
-  continuous: 'Starts the next run as soon as the last one ends.',
+  continuous: 'Planned: starts the next run as soon as the last one ends.',
   tumbling: 'Runs once for each fixed-size time window, when that window closes.',
 };
 

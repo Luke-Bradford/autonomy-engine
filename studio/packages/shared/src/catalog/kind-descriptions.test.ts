@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expectOneSentence } from '../__tests__/helpers/description.js';
+import { expectOneSentence, withoutStop } from '../__tests__/helpers/description.js';
 import { CONNECTION_KIND_DESCRIPTIONS, CONNECTION_KIND_LABELS } from '../schemas/connection.js';
 import { DATASET_KIND_DESCRIPTIONS, DATASET_KIND_LABELS } from '../schemas/dataset.js';
 import { TRIGGER_MODE_DESCRIPTIONS, TRIGGER_MODE_LABELS } from '../schemas/trigger.js';
@@ -18,7 +18,7 @@ describe.each(maps)('%s descriptions (#1413)', (_name, descriptions, labels) => 
   const entries = Object.entries(descriptions);
 
   it.each(entries)('%s has a one-sentence description', (kind, description) => {
-    expect(description.toLowerCase()).not.toBe(labels[kind]?.toLowerCase());
+    expect(withoutStop(description)).not.toBe(labels[kind]?.toLowerCase());
     expectOneSentence(description);
   });
 

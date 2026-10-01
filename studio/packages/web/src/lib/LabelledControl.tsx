@@ -29,7 +29,7 @@ export function LabelledControl({
    * Kind picker's description). Its id is the render-prop's second argument,
    * for the control's `aria-describedby`; `undefined` when there is no hint.
    */
-  hint?: ReactNode;
+  hint?: string;
   className?: string;
   children: (id: string, hintId: string | undefined) => ReactNode;
 }) {

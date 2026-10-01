@@ -298,7 +298,7 @@ describe('TriggersPage', () => {
     expect(modeIcon()).toBe('manual');
     // #1413 — the picker says what the chosen mode does.
     expect(form.getByLabelText('Mode')).toHaveAccessibleDescription(
-      'Runs only when someone presses Fire now.',
+      'Runs only when someone fires it by hand, with Fire now on its row.',
     );
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     // #1396 — the Mode picker's icon follows the chosen mode.
