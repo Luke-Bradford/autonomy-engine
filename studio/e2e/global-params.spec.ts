@@ -139,9 +139,11 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await field(page, 'Name').fill(upper);
     await field(page, 'Value').fill('x');
     await form(page).getByRole('button', { name: 'Create global parameter' }).click();
-    await expect(form(page).getByRole('alert')).toHaveText(
-      `A global parameter named “${upper}” already exists. Names ignore case.`,
-    );
+    // #1396 — the NAME's problem, so it is shown beside the Name, and listed.
+    const message = `A global parameter named “${upper}” already exists. Names ignore case.`;
+    await expect(field(page, 'Name')).toHaveAccessibleDescription(message);
+    await expect(form(page).getByRole('alert')).toHaveText(`Fix this field:Name: ${message}`);
+    await expect(field(page, 'Name')).toBeFocused();
     // This test PROVOKES the 409, so the browser's own network line for it is
     // expected — anchored on the browser's text, not the app's (see expectQuiet).
     await expectQuiet(page, problems, [/Failed to load resource.*409/]);
