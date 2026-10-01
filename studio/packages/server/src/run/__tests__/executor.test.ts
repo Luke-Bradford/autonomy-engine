@@ -1437,6 +1437,7 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
   function catalogOf(over: Partial<ActivityCatalogEntry> & { type: string }): ActivityCatalog {
     const entry: ActivityCatalogEntry = {
       title: 'Test Activity',
+      description: 'A test activity.',
       kind: 'execution',
       category: 'general',
       idempotent: false,
@@ -3449,6 +3450,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const entry: ActivityCatalogEntry = {
       type: 'secret_sink_test',
       title: 'Sink Test',
+      description: 'A test sink.',
       kind: 'execution',
       category: 'general',
       idempotent: false,

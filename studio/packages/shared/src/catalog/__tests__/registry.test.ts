@@ -406,3 +406,28 @@ describe('ACTIVITY_CATEGORY_LABELS (U5 toolbox group headings)', () => {
 // holds for today's catalog but is NOT a law: `executor.ts` reserves execution +
 // no connection as the future built-in-runner slot (and tests it fails cleanly
 // as `no_executor`), so asserting it would trip the first ticket to use it.
+
+// #1413 OR22 — every activity says what it does, in one sentence, so the
+// palette's hover and the property panel's header can explain it. The required
+// field makes a MISSING description a compile error; this pins the runtime
+// risks: blank, a restated title, a copy-pasted twin, or a paragraph.
+describe('activity descriptions (#1413)', () => {
+  const entries = [...catalog.values()];
+
+  it.each(entries.map((e) => [e.type, e] as const))(
+    '%s has a one-sentence description',
+    (_type, entry) => {
+      const { description } = entry;
+      expect(description).not.toBe(entry.title);
+      // ONE sentence: ends in a full stop (so it is not blank, and not the bare
+      // type id) and has no sentence break before it.
+      expect(description).toMatch(/^[^.!?]+\.$/);
+      expect(description.length).toBeLessThanOrEqual(120);
+    },
+  );
+
+  it('no two activities share a description', () => {
+    const descriptions = entries.map((e) => e.description);
+    expect(new Set(descriptions).size).toBe(entries.length);
+  });
+});

@@ -16,6 +16,7 @@ import {
 } from '@autonomy-studio/shared';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { activityLabels } from './activityLabel';
+import { CONTAINER_PALETTE } from './activityGroups';
 import { useExpressionPicker } from './useExpressionPicker';
 import {
   assembleConfig,
@@ -344,6 +345,12 @@ export function ContainerPanel({
        landmark four other specs address the panel by would vanish. */
     <aside className="property-panel" aria-label="Properties">
       <h3>{label}</h3>
+      {/* #1413 — the palette's hover sentence, kept once the box is placed, as
+          the node panel does for an activity. */}
+      <p className="page-hint property-panel__about">
+        {CONTAINER_PALETTE.find((e) => e.kind === container.kind)?.description}{' '}
+        <code>{container.kind}</code>
+      </p>
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
         inside. Which activity belongs to which container is edited on the activity itself.

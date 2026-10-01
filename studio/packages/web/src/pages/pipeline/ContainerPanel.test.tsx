@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { Container, Node, Param } from '@autonomy-studio/shared';
 import { ContainerPanel } from './ContainerPanel';
+import { CONTAINER_PALETTE } from './activityGroups';
 
 /**
  * U23 — the container config form, at the tier most of it belongs to.
@@ -56,6 +57,20 @@ function applied(onApply: ReturnType<typeof vi.fn>): Container {
 function apply() {
   fireEvent.click(screen.getByRole('button', { name: 'Apply container settings' }));
 }
+
+describe('ContainerPanel says what the container does (#1413)', () => {
+  it.each(CONTAINER_PALETTE.map((e) => [e.kind, e.description] as const))(
+    'a %s box repeats its palette description and names its kind',
+    (kind, description) => {
+      mount({ ...LOOP, kind } as Container);
+      const about = screen.getAllByRole('heading', { level: 3 })[0]!.nextElementSibling;
+      expect(about?.classList.contains('property-panel__about')).toBe(true);
+      expect(about?.textContent).toBe(`${description} ${kind}`);
+      // One sentence, like an activity's (registry.test.ts holds those).
+      expect(description).toMatch(/^[^.!?]+\.$/);
+    },
+  );
+});
 
 describe('ContainerPanel — which fields it offers', () => {
   it('offers a loop its own fields and none of the foreach-only ones', () => {

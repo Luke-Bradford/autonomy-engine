@@ -109,6 +109,30 @@ test.describe('U5 activities toolbox', () => {
     await expectQuiet(page, problems);
   });
 
+  // #1413 OR22 — an operator meeting an activity is told what it does: on the
+  // palette's hover, and under the node's name once it is on the canvas, where
+  // the type id now shows too.
+  test('says what an activity does, in the palette and in its panel', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'e2e or22 describe');
+    const does =
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them.';
+
+    const item = toolbox(page).getByRole('button', { name: 'Copy Data', exact: true });
+    await expect(item).toHaveAttribute('title', does);
+    // The description is the item's accessible DESCRIPTION; its name is unchanged.
+    await expect(item).toHaveAccessibleDescription(does);
+
+    await item.click();
+    await canvasNodes(page).first().click();
+    const about = page
+      .getByRole('complementary', { name: 'Properties' })
+      .locator('.property-panel__about');
+    await expect(about).toHaveText(`${does} copy`);
+    await expect(about.locator('code')).toHaveText('copy');
+    await expectQuiet(page, problems);
+  });
+
   test('a keyboard-focused activity has a visible focus ring', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e u5 focus');

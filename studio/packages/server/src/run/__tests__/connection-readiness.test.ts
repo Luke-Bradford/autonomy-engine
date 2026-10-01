@@ -86,6 +86,7 @@ function needsSecretConnection(db: Db, ownerId = 'local'): string {
 function pairedCatalog(): CatalogOverride {
   const entry: ActivityCatalogEntry = {
     title: 'Test Copy',
+    description: 'A test copy.',
     kind: 'execution',
     category: 'general',
     idempotent: false,

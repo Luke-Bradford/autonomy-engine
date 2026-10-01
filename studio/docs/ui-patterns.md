@@ -199,6 +199,13 @@ message.
 
 ## The node property panel
 
+- **Under the node's name, one line says what the activity does and names its type**
+  (`Copy rows from a source dataset … \`copy\``, #1413). The sentence is the catalog entry's
+  required `description`, which also titles the item in the Activities palette, so the hover and the
+  panel cannot disagree. `registry.test.ts` holds every description to one sentence: not blank, not
+  the title, ending in a full stop, at most 120 characters, and no two the same. A type the catalog
+  does not know gets no line. A container's panel does the same with its palette description and
+  its kind (`foreach`, `loop`, `stage`).
 - **Activity config fields are titled like any other form's** (#1396 slice 7). Every field of every
   activity the generic form renders, and every container setting, carries `presented(...)`, pinned
   by `catalog/__tests__/activity-labels.test.ts`. A structural call (`execute_pipeline`) is authored

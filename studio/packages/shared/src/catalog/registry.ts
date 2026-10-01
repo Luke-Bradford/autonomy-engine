@@ -88,6 +88,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: 'http_request',
     title: 'HTTP Request',
+    description: 'Send a request to a URL over an HTTP connection and capture the response.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -127,6 +128,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: LLM_CALL_ACTIVITY_TYPE,
     title: 'LLM Call',
+    description: 'Send a prompt to a language model and use its reply in later activities.',
     kind: 'execution',
     category: 'ai',
     idempotent: false,
@@ -147,6 +149,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: AGENT_TASK_ACTIVITY_TYPE,
     title: 'Agent Task',
+    description:
+      'Hand a task to a coding agent such as Claude Code or Codex and capture its result.',
     kind: 'execution',
     // Spec #4 files `agent_task` under "Execution — AI (Spec #2)" next to
     // `llm_call`: an external CLI agent is an AI activity, not its own class.
@@ -176,6 +180,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // route rather than silently stranding its branch edges.
     type: IF_ACTIVITY_TYPE,
     title: 'If Condition',
+    description: 'Run one branch when a condition is true and another when it is false.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -201,6 +206,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // cannot route rather than silently stranding its branch edges.
     type: SWITCH_ACTIVITY_TYPE,
     title: 'Switch',
+    description:
+      'Pick the branch whose case matches a value, or the default branch when none does.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -232,6 +239,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // route rather than silently treating the fail node as inert.
     type: FAIL_ACTIVITY_TYPE,
     title: 'Fail',
+    description: 'Fail this step with an error message you write.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -258,6 +266,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // result, read back as `${vars.<name>}`.
     type: SET_VARIABLE_ACTIVITY_TYPE,
     title: 'Set variable',
+    description: 'Set a pipeline variable to a value.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -278,6 +287,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // whole-value `${}` appends its native value.
     type: APPEND_VARIABLE_ACTIVITY_TYPE,
     title: 'Append variable',
+    description: 'Add a value to the end of an array variable.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -307,6 +317,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // Cataloguing the TYPE bumped `CATALOG_VERSION` 5→6.
     type: FILTER_ACTIVITY_TYPE,
     title: 'Filter',
+    description: 'Keep only the items of an array that match a condition.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -343,6 +354,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // older build refuses a wait-doc it cannot route rather than treating it inert.
     type: WAIT_ACTIVITY_TYPE,
     title: 'Wait',
+    description: 'Pause this branch of the pipeline for a set number of seconds.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -387,6 +399,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // structural-call and is generically authorable (no palette exclusion).
     type: WEBHOOK_ACTIVITY_TYPE,
     title: 'Webhook (external wait)',
+    description:
+      'Pause until another system calls back over HTTP, or fail when the timeout passes.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -430,6 +444,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `schemas/version.ts` + `catalog/types.ts`).
     type: EXECUTE_PIPELINE_ACTIVITY_TYPE,
     title: 'Execute Pipeline',
+    description: 'Run another pipeline as a step of this one.',
     kind: 'control',
     category: 'control',
     idempotent: false,
@@ -451,6 +466,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // substituted `path`). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_READ_ACTIVITY_TYPE,
     title: 'Read File',
+    description: 'Read the contents of a file on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: true,
@@ -469,6 +485,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // validates the live request. No `secretSinkFields` — `fs` is credential-less.
     type: FILE_WRITE_ACTIVITY_TYPE,
     title: 'Write File',
+    description: 'Write text to a file on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -486,6 +503,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // metadata; the adapter validates the live `${}`-substituted request.
     type: FILE_COPY_ACTIVITY_TYPE,
     title: 'Copy File',
+    description: 'Copy a file to another path on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -502,6 +520,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // that); documented same-filesystem-only. Outputs the canonical source/dest.
     type: FILE_MOVE_ACTIVITY_TYPE,
     title: 'Move File',
+    description: 'Move or rename a file on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -517,6 +536,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // not followed. Outputs the canonical `path` deleted.
     type: FILE_DELETE_ACTIVITY_TYPE,
     title: 'Delete File',
+    description: 'Delete a file on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -535,6 +555,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // canonical `path` listed.
     type: FILE_LIST_ACTIVITY_TYPE,
     title: 'List Directory',
+    description: 'List the files and folders in a directory on a file system connection.',
     kind: 'execution',
     category: 'general',
     idempotent: true,
@@ -600,6 +621,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
      */
     type: COPY_ACTIVITY_TYPE,
     title: 'Copy Data',
+    description:
+      'Copy rows from a source dataset into a sink dataset, mapping columns between them.',
     kind: 'execution',
     category: 'general',
     idempotent: false,
@@ -716,6 +739,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
      */
     type: LOOKUP_ACTIVITY_TYPE,
     title: 'Lookup Rows',
+    description: 'Read a bounded set of rows from a dataset so later activities can use them.',
     kind: 'execution',
     category: 'general',
     idempotent: true,

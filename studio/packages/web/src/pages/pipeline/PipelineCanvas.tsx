@@ -2720,6 +2720,15 @@ export function NodePanel({
    * type, for a node the doc no longer holds.
    */
   const nodeName = nodeNames.get(nodeId) ?? entry?.title ?? nodeType;
+  // #1413 OR22 — under the name, what the activity DOES and which type it is.
+  // The panel is the one place the type id still shows: the palette's hover now
+  // carries the description instead. An uncatalogued type has no description,
+  // so it gets no line rather than an empty one.
+  const about = entry ? (
+    <p className="page-hint property-panel__about">
+      {entry.description} <code>{nodeType}</code>
+    </p>
+  ) : null;
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -3035,6 +3044,7 @@ export function NodePanel({
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
+        {about}
         <PanelTabs
           label="Activity properties"
           selected={tab}
@@ -3079,6 +3089,7 @@ export function NodePanel({
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{nodeName}</h3>
+      {about}
       {/* #852 — ADF's split: what the activity DOES under Settings, how it RUNS
           (retry, timeout, secure input/output) under General. Policy was already
           outside the config form's Apply draft (#1312), so the tab boundary

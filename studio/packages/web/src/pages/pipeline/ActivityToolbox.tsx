@@ -171,7 +171,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
                 type="button"
                 className="activity-toolbox__item"
                 draggable
-                title={entry.type}
+                title={entry.description}
                 onDragStart={(e) => {
                   // A synthetic event can carry a null dataTransfer; a real
                   // dragstart never does.

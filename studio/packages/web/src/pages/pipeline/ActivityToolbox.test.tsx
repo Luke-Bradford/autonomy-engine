@@ -51,6 +51,16 @@ describe('ActivityToolbox', () => {
     expect(within(general).queryByRole('button', { name: 'LLM Call' })).toBeNull();
   });
 
+  it('the hover on every activity says what it does (#1413)', () => {
+    renderToolbox();
+    for (const entry of authorable) {
+      // The visible name stays the accessible NAME; the description rides the
+      // title, which is the accessible DESCRIPTION.
+      const button = screen.getByRole('button', { name: entry.title });
+      expect(button.getAttribute('title')).toBe(entry.description);
+    }
+  });
+
   it('OFFERS execute_pipeline, and clicking it authors a call node — #425', () => {
     // The structural-call exclusion retired with #425: `CallPanel` authors the
     // `node.call` blob the generic config form could not, so the palette offers
