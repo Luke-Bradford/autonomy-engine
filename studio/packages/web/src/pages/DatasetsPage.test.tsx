@@ -364,8 +364,8 @@ describe('DatasetsPage', () => {
 
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     // `table` belongs to the `table` kind, not to `query` — but the stored
-    // config holds it, so it is rendered (optional) and can be blanked away.
-    expect(within(form()).getByLabelText('table (optional)')).toHaveValue('orders');
+    // config holds it, so it is rendered as an optional field and can be blanked away.
+    expect(within(form()).getByLabelText('table')).toHaveValue('orders');
     expect(within(form()).getByText(/Carried from another kind \(table\)/)).toBeInTheDocument();
   });
 
@@ -523,7 +523,7 @@ describe('DatasetsPage', () => {
 
     // `parameters` is a record, so it derives a JSON control; typing something
     // unparseable into it makes the field draft unreadable.
-    await pasteInto(user, within(form()).getByLabelText(/^parameters \(optional\)/), '{oops');
+    await pasteInto(user, within(form()).getByLabelText(/^parameters/), '{oops');
     // `excel` — the kind-change branch this exercises only fires for a kind with
     // NO reader, and #1167 gave `delimited` one.
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
@@ -721,7 +721,7 @@ describe('DatasetsPage', () => {
       // The free-text box is the ONLY surface before a listing, and it must
       // remain reachable: a workbook whose path is not readable yet has no list
       // to offer, and a form that demanded one would be unauthorable.
-      expect(within(form()).getByLabelText('sheet (optional)')).toBeInTheDocument();
+      expect(within(form()).getByLabelText('sheet')).toBeInTheDocument();
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
       expect(sheetsMock).not.toHaveBeenCalled();
     });
@@ -761,7 +761,7 @@ describe('DatasetsPage', () => {
       // A `sheetIndex` typed first is the trap: the schema refuses a config
       // naming both, so a chooser that only wrote `sheet` would make itself the
       // cause of the refusal on Save.
-      await pasteInto(user, within(form()).getByLabelText('sheetIndex (optional) — number'), '2');
+      await pasteInto(user, within(form()).getByLabelText('sheetIndex — number'), '2');
 
       await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
       await user.selectOptions(
@@ -769,8 +769,8 @@ describe('DatasetsPage', () => {
         'Costs',
       );
 
-      expect(within(form()).getByLabelText('sheet (optional)')).toHaveValue('Costs');
-      expect(within(form()).getByLabelText('sheetIndex (optional) — number')).toHaveValue('');
+      expect(within(form()).getByLabelText('sheet')).toHaveValue('Costs');
+      expect(within(form()).getByLabelText('sheetIndex — number')).toHaveValue('');
     });
 
     it('stops offering a listing once the path moves out from under it', async () => {
@@ -800,7 +800,7 @@ describe('DatasetsPage', () => {
       expect(said).toHaveAttribute('role', 'status');
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
       // The box survives the refusal — the operator can still type the name.
-      expect(within(form()).getByLabelText('sheet (optional)')).toBeInTheDocument();
+      expect(within(form()).getByLabelText('sheet')).toBeInTheDocument();
     });
 
     it('declines to offer an unnamed sheet, and says how to reach it', async () => {

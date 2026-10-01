@@ -53,8 +53,16 @@ export function FormDrawer({
     };
   }, []);
 
+  // The prompt takes focus while it asks, and gives it back to the form when it
+  // goes: its buttons unmount, and focus left on <body> would put the drawer
+  // out of reach of the keyboard, Escape included.
+  const wasConfirming = useRef(false);
   useEffect(() => {
     if (guard.confirming) keepRef.current?.focus();
+    else if (wasConfirming.current) {
+      bodyRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+    }
+    wasConfirming.current = guard.confirming;
   }, [guard.confirming]);
 
   return (

@@ -241,10 +241,10 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // The whole point of the ticket: the activity's settings are NAMED on screen,
     // so authoring one no longer means knowing its JSON shape by heart.
     expect(screen.getByLabelText('url')).toBeTruthy();
-    expect(screen.getByLabelText('method (optional)')).toBeTruthy();
-    expect(screen.getByLabelText('body (optional)')).toBeTruthy();
+    expect(screen.getByLabelText('method')).toBeTruthy();
+    expect(screen.getByLabelText('body')).toBeTruthy();
     // A record of headers authors as ROWS (#852), under its own name.
-    expect(screen.getByRole('group', { name: 'headers (optional)' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'headers' })).toBeTruthy();
     // The blob editor is gone by default.
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
@@ -285,7 +285,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('drops a key the author clears, rather than writing an empty value', () => {
     const panel = mountOver(httpNode({ url: 'https://x', method: 'POST' }));
 
-    fireEvent.change(screen.getByLabelText('method (optional)'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('method'), { target: { value: '' } });
     panel.apply();
 
     expect(panel.storedConfig()).toEqual({ url: 'https://x' });
@@ -347,7 +347,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     mountOver(httpNode({ url: 'https://x', secretHeaders: { A: { $secret: 'x', extra: 1 } } }));
 
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
-    expect(screen.queryByRole('group', { name: 'secretHeaders (optional)' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'secretHeaders' })).toBeNull();
   });
 
   it('surfaces the activity schema its own refusal, without saving', () => {
@@ -412,7 +412,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // unchanged must be a no-op rather than a revert.
     fireEvent.click(toFields());
     expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
-    expect((screen.getByLabelText('method (optional)') as HTMLTextAreaElement).value).toBe('POST');
+    expect((screen.getByLabelText('method') as HTMLTextAreaElement).value).toBe('POST');
 
     panel.apply();
     expect(panel.storedConfig()).toMatchObject({ url: 'https://from-json', method: 'POST' });
@@ -479,7 +479,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     fireEvent.click(toFields());
 
     expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
-    expect((screen.getByLabelText('method (optional)') as HTMLTextAreaElement).value).toBe('PUT');
+    expect((screen.getByLabelText('method') as HTMLTextAreaElement).value).toBe('PUT');
     panel.apply();
     expect(panel.storedConfig()).toEqual({ url: 'https://from-json', method: 'PUT' });
   });
@@ -570,7 +570,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const permitted = derived?.find((f) => f.name === 'reasoningEffort')?.enumOptions;
     expect(permitted?.length, 'reasoningEffort is still an enum').toBeGreaterThan(0);
 
-    const select = screen.getByLabelText('reasoningEffort (optional)') as HTMLSelectElement;
+    const select = screen.getByLabelText('reasoningEffort') as HTMLSelectElement;
     // The blank leads: an optional enum must offer "not set" as a reachable state.
     expect([...select.options].map((o) => o.value)).toEqual(['', ...permitted!]);
   });
@@ -584,7 +584,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     panel.apply();
     expect('emitMessages' in panel.storedConfig()).toBe(false);
 
-    fireEvent.click(screen.getByLabelText('emitMessages (optional)'));
+    fireEvent.click(screen.getByLabelText('emitMessages'));
     panel.apply();
     expect(panel.storedConfig()).toMatchObject({ emitMessages: true });
   });
@@ -595,7 +595,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // makes that reachable from a form.
     const panel = mountOver(node('n_llm', 'llm_call', { prompt: 'hi' }));
 
-    fireEvent.change(screen.getByLabelText('prompt (optional)'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('prompt'), { target: { value: '' } });
     panel.apply();
 
     expect(screen.getByRole('alert')).toBeTruthy();
@@ -833,7 +833,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
   it('names every cell of every row, instead of one JSON blob for the whole mapping', () => {
     mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
 
-    expect(screen.getByLabelText('mapping row 1 source (optional)')).toBeTruthy();
+    expect(screen.getByLabelText('mapping row 1 source')).toBeTruthy();
     expect(screen.getByLabelText('mapping row 1 sink')).toBeTruthy();
     expect(screen.getByLabelText('mapping row 1 type')).toBeTruthy();
     // The JSON textarea it replaces — for the FIELD, and for the whole config.
@@ -866,7 +866,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
-    fireEvent.change(screen.getByLabelText('mapping row 2 source (optional)'), {
+    fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
       target: { value: 'age' },
     });
     fireEvent.change(screen.getByLabelText('mapping row 2 sink'), { target: { value: 'years' } });
@@ -1012,7 +1012,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
     const panel = mountOver(copyNode({ mapping: oneRow, mode: 'append' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Add mapping row' }));
-    fireEvent.change(screen.getByLabelText('mapping row 2 source (optional)'), {
+    fireEvent.change(screen.getByLabelText('mapping row 2 source'), {
       target: { value: 'other' },
     });
     fireEvent.change(screen.getByLabelText('mapping row 2 sink'), {
@@ -1037,7 +1037,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
     });
 
-    expect(screen.getByLabelText('prompt (optional)')).toBeTruthy();
+    expect(screen.getByLabelText('prompt')).toBeTruthy();
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
 
@@ -1050,7 +1050,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       position: { x: 0, y: 0 },
       config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
     });
-    fireEvent.change(screen.getByLabelText('prompt (optional)'), { target: { value: 'bye' } });
+    fireEvent.change(screen.getByLabelText('prompt'), { target: { value: 'bye' } });
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({
@@ -1305,7 +1305,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
   it("writes a chosen reference into THAT row's expression, and no other row", () => {
     const panel = mountOver(copyNode({ mapping: rows, mode: 'append' }), [], [], params);
 
-    fireEvent.change(screen.getByLabelText('mapping row 2 expression (optional)'), {
+    fireEvent.change(screen.getByLabelText('mapping row 2 expression'), {
       target: { value: '' },
     });
     open('mapping row 2 expression');
@@ -1330,7 +1330,7 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
 
     expect(
-      (screen.getByLabelText('mapping row 4 expression (optional)') as HTMLTextAreaElement).value,
+      (screen.getByLabelText('mapping row 4 expression') as HTMLTextAreaElement).value,
     ).toBe('${params.limit}');
   });
 

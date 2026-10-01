@@ -333,14 +333,14 @@ describe('ExpressionPicker in NodePanel', () => {
       position: at,
     };
     const ui = mount([src, llm], [{ id: 'e1', from: 'src', to: 'llm', on: 'success' }], [], 'llm');
-    fireEvent.change(ui.field('history (optional)'), { target: { value: 'stale' } });
+    fireEvent.change(ui.field('history'), { target: { value: 'stale' } });
 
     ui.open('history');
     expect(screen.queryByRole('button', { name: /HTTP Request 1 → label/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^runId/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → turns/ }));
     // REPLACE, not a splice: `stale${…}` would be an interpolation the gate refuses.
-    expect(ui.field('history (optional)').value).toBe('${nodes.src.output.turns}');
+    expect(ui.field('history').value).toBe('${nodes.src.output.turns}');
 
     ui.apply();
     expect(screen.queryByRole('alert')).toBeNull();

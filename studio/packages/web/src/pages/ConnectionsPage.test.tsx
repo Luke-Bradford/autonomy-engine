@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
 import { ConnectionsPage } from './ConnectionsPage';
@@ -7,7 +7,7 @@ import * as api from '../api/connections';
 import * as datasetsApi from '../api/datasets';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
-import { renderWithRouter } from '../testing/renderWithRouter';
+import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
@@ -124,7 +124,7 @@ describe('ConnectionsPage', () => {
     listMock.mockResolvedValue([conn({ name: 'My Claude', kind: 'anthropic_api' })]);
     renderWithRouter(<ConnectionsPage />);
     expect(await screen.findByText('My Claude')).toBeInTheDocument();
-    expect(screen.getByText('anthropic_api')).toBeInTheDocument();
+    expect(screen.getByText('Anthropic API')).toBeInTheDocument();
   });
 
   /* #1253 — Edit names its row, as Export and Delete already did, so a
@@ -160,7 +160,7 @@ describe('ConnectionsPage', () => {
     await user.type(screen.getByLabelText('Name'), 'Prod key');
     await user.selectOptions(screen.getByLabelText('Kind'), 'openai_api');
     // #1087 — the kind's OWN field, not a JSON blob the author had to know.
-    await user.type(screen.getByLabelText('model (optional)'), 'gpt-4o');
+    await user.type(screen.getByLabelText('Default model'), 'gpt-4o');
     await user.type(screen.getByLabelText('Secret'), 'sk-secret');
 
     // After a successful create, the list refetches and includes the new row.
@@ -236,13 +236,13 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New connection' }));
     // `anthropic_api` (the first kind) declares the LLM trio plus its own
     // version header; `fs` declares none of them and requires `roots`.
-    expect(screen.getByLabelText('anthropicVersion (optional)')).toBeInTheDocument();
-    expect(screen.queryByLabelText(/^roots/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('API version')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Allowed folders/)).not.toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
     // The one-per-line control labels itself `roots — one per line`.
-    expect(screen.getByLabelText(/^roots/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('anthropicVersion (optional)')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Allowed folders/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('API version')).not.toBeInTheDocument();
   });
 
   it('keeps what was typed when the kind changes', async () => {
@@ -253,10 +253,10 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New connection' }));
     // `model` is declared by anthropic_api AND ollama, so it survives the switch
     // as the same field — a re-seed would blank it.
-    await user.type(screen.getByLabelText('model (optional)'), 'claude-opus-5');
+    await user.type(screen.getByLabelText('Default model'), 'claude-opus-5');
     await user.selectOptions(screen.getByLabelText('Kind'), 'ollama');
 
-    expect(screen.getByLabelText('model (optional)')).toHaveValue('claude-opus-5');
+    expect(screen.getByLabelText('Default model')).toHaveValue('claude-opus-5');
   });
 
   it('carries a field the fields draft holds across the JSON toggle', async () => {
@@ -265,7 +265,7 @@ describe('ConnectionsPage', () => {
     await screen.findByText(/No connections yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New connection' }));
-    await user.type(screen.getByLabelText('model (optional)'), 'claude-opus-5');
+    await user.type(screen.getByLabelText('Default model'), 'claude-opus-5');
     // The JSON editor must open on what SAVE would write, not on the config the
     // form mounted with — otherwise the toggle silently discards the edit.
     await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
@@ -290,7 +290,7 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     // A row group, not a JSON blob — derived from the same schema the server reads.
-    expect(within(form).getByRole('group', { name: 'headers (optional)' })).toBeInTheDocument();
+    expect(within(form).getByRole('group', { name: 'Headers' })).toBeInTheDocument();
     expect(within(form).getByLabelText('headers row 1 key')).toHaveValue('X-A');
     await user.click(within(form).getByRole('button', { name: 'Add headers row' }));
     await user.type(within(form).getByLabelText('headers row 2 key'), 'X-B');
@@ -312,8 +312,8 @@ describe('ConnectionsPage', () => {
 
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
-    await user.clear(within(form).getByLabelText('model (optional)'));
-    await user.type(within(form).getByLabelText('model (optional)'), 'claude-opus-5');
+    await user.clear(within(form).getByLabelText('Default model'));
+    await user.type(within(form).getByLabelText('Default model'), 'claude-opus-5');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -335,7 +335,7 @@ describe('ConnectionsPage', () => {
     expect(within(form).getByText(/Carried from another kind \(model\)/)).toBeInTheDocument();
 
     // Blanking the carried control is the repair — it OMITS the key.
-    await user.clear(within(form).getByLabelText('model (optional)'));
+    await user.clear(within(form).getByLabelText('Default model'));
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -352,7 +352,7 @@ describe('ConnectionsPage', () => {
     const form = screen.getByRole('form', { name: 'Connection form' });
     expect(within(form).getByText(/Saved settings this form cannot show \(model\)/)).toBeVisible();
     expect(within(form).getByLabelText('Config (JSON)')).toBeInTheDocument();
-    expect(within(form).queryByLabelText('model (optional)')).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText('Default model')).not.toBeInTheDocument();
   });
 
   it('says what a kind does with a secret, and never demands one', async () => {
@@ -633,7 +633,7 @@ describe('ConnectionsPage', () => {
       await user.click(screen.getByRole('button', { name: 'New connection' }));
       await user.type(screen.getByLabelText('Name'), 'New fs');
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
-      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+      await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
       testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -711,7 +711,7 @@ describe('ConnectionsPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'New connection' }));
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
-      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+      await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
       testDraftMock.mockResolvedValue({ ok: false, error: 'root not accessible: /srv/data' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -728,13 +728,13 @@ describe('ConnectionsPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'New connection' }));
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
-      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+      await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
       testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
       expect(await screen.findByRole('status')).toHaveTextContent('Connected.');
 
-      await user.type(screen.getByLabelText(/^roots/), '-elsewhere');
+      await user.type(screen.getByLabelText(/^Allowed folders/), '-elsewhere');
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     });
 
@@ -798,7 +798,7 @@ describe('ConnectionsPage', () => {
       await user.click(screen.getByRole('button', { name: 'New connection' }));
       await user.type(screen.getByLabelText('Name'), 'Prod');
       await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
-      await user.type(screen.getByLabelText(/^roots/), '/srv/data');
+      await user.type(screen.getByLabelText(/^Allowed folders/), '/srv/data');
 
       testDraftMock.mockResolvedValue({ ok: true, probed: 'liveness' });
       await user.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -1230,5 +1230,146 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       );
       expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
     });
+  });
+});
+
+describe('the connection form drawer (#1396)', () => {
+  const drawerNamed = (name: string) => screen.getByRole('dialog', { name });
+  const prompt = () => screen.queryByRole('alertdialog', { name: 'Unsaved changes' });
+
+  it('opens beside the list, in sections, with the primary action last', async () => {
+    listMock.mockResolvedValue([conn()]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+
+    const drawer = drawerNamed('New connection');
+    // The list is still on screen beside it.
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    for (const section of ['Basics', 'Connection', 'Authentication']) {
+      expect(within(drawer).getByRole('group', { name: section })).toBeInTheDocument();
+    }
+    // Advanced holds rarely-touched settings, so a new form opens it closed.
+    expect(drawer.querySelector('details.form-section')).not.toHaveAttribute('open');
+    // Kinds are named for people, while the value stays the stored id.
+    const kind = within(drawer).getByLabelText('Kind');
+    expect(within(kind).getByRole('option', { name: 'Anthropic API' })).toHaveValue(
+      'anthropic_api',
+    );
+    // A required field is marked; the Name input is focused on open.
+    expect(within(drawer).getByLabelText('Name')).toHaveFocus();
+    expect(within(drawer).getByLabelText('Name')).toBeRequired();
+    const footer = drawer.querySelector('.form-drawer-footer')!;
+    expect(
+      within(footer as HTMLElement)
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['Cancel', 'Test connection', 'Create connection']);
+  });
+
+  it('closes a clean form on Escape without asking', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('holds a dirty form at a prompt: Keep editing keeps it, Discard closes it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Draft');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(prompt()).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+
+    await user.keyboard('{Escape}');
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('holds Edit on another row while the open form is dirty', async () => {
+    listMock.mockResolvedValue([conn(), conn({ id: 'conn_2', name: 'Other' })]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    await user.type(screen.getByLabelText('Name'), ' renamed');
+
+    await user.click(screen.getByRole('button', { name: 'Edit Other' }));
+    expect(prompt()).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Claude renamed');
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Other');
+    expect(prompt()).not.toBeInTheDocument();
+  });
+
+  it('does not count a trip to JSON and back as an edit', async () => {
+    listMock.mockResolvedValue([conn()]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
+    await user.click(screen.getByRole('button', { name: 'Edit as fields' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('holds a route change while dirty, and lets it through on Discard', async () => {
+    const user = userEvent.setup();
+    const { router } = renderWithRouter(<ConnectionsPage />, '/manage/connections');
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Draft');
+
+    await act(() => router.navigate('/author'));
+    expect(router.state.location.pathname).toBe('/manage/connections');
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/author'));
+  });
+
+  it('arms the browser’s leave-page prompt only while the form is dirty', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    const clean = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    await user.type(screen.getByLabelText('Name'), 'Draft');
+    const dirty = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+  });
+
+  it('opens Advanced when the connection already uses it', async () => {
+    listMock.mockResolvedValue([conn({ parameters: ['model'] })]);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    expect(drawerNamed('Edit connection').querySelector('details.form-section')).toHaveAttribute(
+      'open',
+    );
+  });
+
+  it('shows a typed secret on request', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New connection' }));
+    const secret = screen.getByLabelText('Secret');
+    expect(secret).toHaveAttribute('type', 'password');
+    await user.click(screen.getByRole('button', { name: 'Show secret' }));
+    expect(secret).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: 'Show secret' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 });

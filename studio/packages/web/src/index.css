@@ -1260,7 +1260,8 @@ details.form-section > summary.form-section-title {
   max-width: 100%;
 }
 
-.required-mark {
+.required-mark::after {
+  content: '*';
   color: var(--error);
   margin-left: 0.2rem;
 }
