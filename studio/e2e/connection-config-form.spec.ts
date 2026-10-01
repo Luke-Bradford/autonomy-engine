@@ -45,7 +45,7 @@ test.describe('U13b per-kind connection config', () => {
     await form(page)
       .getByLabel(/^Allowed folders/)
       .fill('/tmp/e2e-u13b');
-    await form(page).getByLabel('Largest file read (bytes) — number', { exact: true }).fill('2048');
+    await form(page).getByLabel('Largest file read (bytes)', { exact: true }).fill('2048');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
@@ -123,7 +123,11 @@ test.describe('U13b per-kind connection config', () => {
     await form(page).getByLabel('Database', { exact: true }).fill('app');
     await form(page).getByLabel('User', { exact: true }).fill('app_ro');
     await sslmode.selectOption('verify-full');
-    await form(page).getByLabel('Port — number', { exact: true }).fill('6543');
+    // #1396 — a number field says what it admits, from the kind's schema.
+    const port = form(page).getByLabel('Port', { exact: true });
+    await expect(port).toHaveAccessibleDescription(/^Whole number from 1 to 65535\. /);
+    await expect(port).toHaveAttribute('inputmode', 'numeric');
+    await port.fill('6543');
     await form(page).getByRole('button', { name: 'Create connection' }).click();
 
     await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();

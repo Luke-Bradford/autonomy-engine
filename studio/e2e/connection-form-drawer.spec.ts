@@ -53,7 +53,7 @@ test.describe('#1396 the connection form drawer', () => {
     await expect(form(page).getByLabel('Kind').locator('option:checked')).toHaveText(
       'Anthropic API',
     );
-    const timeout = form(page).getByLabel('Timeout (ms) — number', { exact: true });
+    const timeout = form(page).getByLabel('Timeout (ms)', { exact: true });
     await expect(timeout).toBeVisible();
     await expect(timeout).toHaveAccessibleDescription(/How long one request may take\..*timeoutMs/);
     await expect(form(page).getByLabel('Base URL', { exact: true })).toBeVisible();

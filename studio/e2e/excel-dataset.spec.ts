@@ -133,21 +133,20 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
       'true',
     );
     await expect(form(page).getByLabel('Has a header row', { exact: true })).toBeVisible();
-    // The five optional ones, each by its FULL accessible name. `sheetIndex`
-    // and `headerRow` carry the ` — number` suffix `ConfigFieldControl` appends
-    // to a numeric control, which is itself worth pinning: those two derived as
-    // NUMBER controls rather than degrading to a JSON box, which is what §13's
-    // trap would have produced from a `z.union` spelling of one sheet key.
-    for (const field of [
-      'Sheet',
-      'Sheet number — number',
-      'Header row — number',
-      'Null marker',
-      'Date format',
-    ]) {
+    // The five optional ones, each by its FULL accessible name.
+    for (const field of ['Sheet', 'Sheet number', 'Header row', 'Null marker', 'Date format']) {
       await expect(form(page).getByLabel(field, { exact: true })).not.toHaveAttribute(
         'aria-required',
       );
+    }
+    // `sheetIndex` and `headerRow` derived as NUMBER controls rather than
+    // degrading to a JSON box, which is what §13's trap would have produced from
+    // a `z.union` spelling of one sheet key. A number field's hint leads with
+    // the rule its schema states (#1396), and its keypad follows it.
+    for (const field of ['Sheet number', 'Header row']) {
+      const box = form(page).getByLabel(field, { exact: true });
+      await expect(box).toHaveAccessibleDescription(/^Whole number, at least 1\. /);
+      await expect(box).toHaveAttribute('inputmode', 'numeric');
     }
     // …and no reader complaint, because M11 gave the last kind a reader.
     await expect(form(page).getByText(/no reader exists/)).toBeHidden();
@@ -156,7 +155,7 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     await form(page).getByLabel('Workbook path', { exact: true }).fill(bookPath);
     await form(page).getByLabel('Sheet', { exact: true }).fill('People');
     await form(page).getByLabel('Has a header row', { exact: true }).check();
-    await form(page).getByLabel('Header row — number', { exact: true }).fill('3');
+    await form(page).getByLabel('Header row', { exact: true }).fill('3');
     // REQUIRED by the form, and deliberately so: `[]` is a claim about the
     // store and never a stand-in for "not described yet".
     await form(page)
@@ -310,7 +309,7 @@ test('#1218 — the excel sheet chooser offers what the workbook actually holds'
     // A `sheetIndex` typed FIRST, because that is the trap: the schema refuses a
     // config naming both `sheet` and `sheetIndex`, so a chooser that wrote only
     // `sheet` would make itself the cause of the refusal on Save.
-    await box(page, 'Sheet number — number').fill('2');
+    await box(page, 'Sheet number').fill('2');
     await form(page).getByRole('button', { name: 'List sheets' }).click();
 
     const chooser = form(page).getByRole('combobox', {
@@ -325,7 +324,7 @@ test('#1218 — the excel sheet chooser offers what the workbook actually holds'
     // ── 4. CHOOSING WRITES ONE FIELD AND CLEARS THE OTHER ───────────────────
     await chooser.selectOption('Costs');
     await expect(box(page, 'Sheet')).toHaveValue('Costs');
-    await expect(box(page, 'Sheet number — number')).toHaveValue('');
+    await expect(box(page, 'Sheet number')).toHaveValue('');
 
     // ── 5. A LISTING STOPS BEING OFFERED WHEN ITS DRAFT MOVES ───────────────
     // The names belong to the workbook that WAS named. Offering them against a

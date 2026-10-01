@@ -2,9 +2,11 @@ import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import {
   configFieldTitle,
+  describeNumberRule,
   emptyControlValue,
   isRowKind,
   isRowList,
+  numberKeypad,
   placeRowCandidate,
 } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
@@ -212,11 +214,22 @@ export function ConfigFieldControl({
   const label = name === undefined ? configFieldTitle(field) : name;
   const required = !field.optional;
   const hintId = useId();
+  // #1396 — a top-level number field leads its hint with what it admits
+  // ("Whole number from 1 to 65535."), which is why its label needs no
+  // " — number". A cell has no hint slot, and keeps the suffix.
+  const numberField = name === undefined && field.kind === 'number';
+  const rule = numberField ? describeNumberRule(field.numberRule ?? { integer: false }) : null;
   const hint =
-    titled === undefined ? null : (
+    titled === undefined && rule === null ? null : (
       <p id={hintId} className="field-hint">
-        {titled.description !== undefined && <>{titled.description} </>}
-        <code>{field.name}</code>
+        {rule !== null && (
+          <>
+            {rule}.{titled === undefined ? '' : ' '}
+          </>
+        )}
+        {titled?.description !== undefined && <>{titled.description} </>}
+        {/* An untitled field's label is already its key. */}
+        {titled !== undefined && <code>{field.name}</code>}
       </p>
     );
   const errorId = useId();
@@ -329,11 +342,11 @@ export function ConfigFieldControl({
     return (
       <>
         <label>
-          {`${label} — number`}
+          {numberField ? label : `${label} — number`}
           {required && <RequiredMark />}
           <input
             type="text"
-            inputMode="decimal"
+            inputMode={numberKeypad(field.numberRule)}
             value={typeof value === 'string' ? value : ''}
             spellCheck={false}
             placeholder={field.defaultText}

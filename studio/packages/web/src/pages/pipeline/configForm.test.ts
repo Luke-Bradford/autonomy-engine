@@ -22,7 +22,9 @@ import {
   configToJson,
   deriveConfigFields,
   deriveFieldsWithCarried,
+  describeNumberRule,
   formatFieldValue,
+  numberKeypad,
   parseConfigText,
   parseFieldInput,
   payloadSignature,
@@ -1678,5 +1680,152 @@ describe('configDraftErrors / configKeyLabel (#1396)', () => {
     expect(configKeyLabel('config', false, fields)).toBeUndefined();
     expect(configKeyLabel('config', true, fields)).toBe('Config (JSON)');
     expect(configKeyLabel('config.timeoutMs', true, fields)).toBeUndefined();
+  });
+});
+
+describe('number fields carry the rule their schema states (#1396)', () => {
+  const ruleOf = (schema: z.ZodType) =>
+    deriveConfigFields(z.object({ n: schema }))?.[0]?.numberRule;
+
+  it('reads integer-ness and bounds, normalising an exclusive bound on a whole number', () => {
+    expect(ruleOf(z.number().int().positive().max(5))).toEqual({
+      integer: true,
+      min: { value: 1, inclusive: true },
+      max: { value: 5, inclusive: true },
+    });
+    expect(ruleOf(z.number().int().negative())).toEqual({
+      integer: true,
+      max: { value: -1, inclusive: true },
+    });
+    expect(ruleOf(z.number().int().min(30))).toEqual({
+      integer: true,
+      min: { value: 30, inclusive: true },
+    });
+    expect(ruleOf(z.number().int().min(0.5).lt(4.5))).toEqual({
+      integer: true,
+      min: { value: 1, inclusive: true },
+      max: { value: 4, inclusive: true },
+    });
+  });
+
+  it('keeps an exclusive bound exclusive on a decimal, and drops the safe-integer sentinels', () => {
+    expect(ruleOf(z.number().positive())).toEqual({
+      integer: false,
+      min: { value: 0, inclusive: false },
+    });
+    expect(ruleOf(z.number().min(0).max(1))).toEqual({
+      integer: false,
+      min: { value: 0, inclusive: true },
+      max: { value: 1, inclusive: true },
+    });
+    expect(ruleOf(z.int())).toEqual({ integer: true });
+    // Only an integer format brings the sentinels; a decimal's bound is the author's.
+    expect(ruleOf(z.number().max(Number.MAX_SAFE_INTEGER))).toEqual({
+      integer: false,
+      max: { value: Number.MAX_SAFE_INTEGER, inclusive: true },
+    });
+    expect(ruleOf(z.number())).toEqual({ integer: false });
+  });
+
+  it('takes the tighter of two lower bounds', () => {
+    expect(ruleOf(z.number().int().min(3).positive())).toEqual({
+      integer: true,
+      min: { value: 3, inclusive: true },
+    });
+    expect(ruleOf(z.number().int().min(-5).positive())).toEqual({
+      integer: true,
+      min: { value: 1, inclusive: true },
+    });
+    expect(ruleOf(z.number().min(0).positive().max(9).lt(9))).toEqual({
+      integer: false,
+      min: { value: 0, inclusive: false },
+      max: { value: 9, inclusive: false },
+    });
+    expect(ruleOf(z.number().nonnegative().min(2))).toEqual({
+      integer: false,
+      min: { value: 2, inclusive: true },
+    });
+  });
+
+  it('sees through optional, default and nullable wrappers', () => {
+    const expected = { integer: true, min: { value: 1, inclusive: true } };
+    expect(ruleOf(z.number().int().positive().optional())).toEqual(expected);
+    expect(ruleOf(z.number().int().positive().default(1))).toEqual(expected);
+    expect(ruleOf(z.number().int().positive().nullable())).toEqual(expected);
+  });
+
+  it('reaches a row cell, and a real kind: Postgres port', () => {
+    const rows = deriveConfigFields(
+      z.object({
+        list: z.array(z.object({ k: z.string(), n: z.number().int().nonnegative() }).strict()),
+      }),
+    );
+    expect(rows?.[0]?.elementFields?.find((c) => c.name === 'n')?.numberRule).toEqual({
+      integer: true,
+      min: { value: 0, inclusive: true },
+    });
+    const port = deriveConfigFields(connectionConfigSchema('postgres'))?.find(
+      (f) => f.name === 'port',
+    );
+    expect(port?.numberRule).toEqual({
+      integer: true,
+      min: { value: 1, inclusive: true },
+      max: { value: 65535, inclusive: true },
+    });
+  });
+
+  it('only a number field carries one', () => {
+    expect(deriveConfigFields(z.object({ s: z.string() }))?.[0]?.numberRule).toBeUndefined();
+  });
+
+  it('picks a keypad the rule can be typed on', () => {
+    const at = (value: number, inclusive = true) => ({ value, inclusive });
+    expect(numberKeypad({ integer: true, min: at(1) })).toBe('numeric');
+    expect(numberKeypad({ integer: false, min: at(0, false) })).toBe('decimal');
+    expect(numberKeypad({ integer: true, min: at(-1) })).toBe('text');
+    expect(numberKeypad({ integer: true, max: at(5) })).toBe('text');
+    expect(numberKeypad(undefined)).toBe('text');
+  });
+
+  it("a field carried from another kind does not state that kind's rule", () => {
+    const { fields } = deriveFieldsWithCarried(
+      ['a', 'b'] as const,
+      (kind) =>
+        kind === 'a' ? z.object({ x: z.string() }) : z.object({ n: z.number().int().positive() }),
+      'a',
+      { n: 0 },
+    );
+    expect(fields.find((f) => f.name === 'n')).toEqual({
+      name: 'n',
+      kind: 'number',
+      optional: true,
+    });
+  });
+
+  it('a real activity: llm_call Max tokens is a whole number of at least 1', () => {
+    const schema = getActivity('llm_call')!.configSchema;
+    const maxTokens = deriveConfigFields(schema)?.find((f) => f.name === 'maxTokens');
+    expect(maxTokens?.numberRule).toEqual({ integer: true, min: { value: 1, inclusive: true } });
+  });
+
+  it('describes the rule in words', () => {
+    const min = (value: number, inclusive = true) => ({ value, inclusive });
+    expect(describeNumberRule({ integer: true, min: min(1), max: min(65535) })).toBe(
+      'Whole number from 1 to 65535',
+    );
+    expect(describeNumberRule({ integer: true, min: min(1) })).toBe('Whole number, at least 1');
+    expect(describeNumberRule({ integer: true, max: min(-1) })).toBe('Whole number, at most -1');
+    expect(describeNumberRule({ integer: true })).toBe('Whole number');
+    expect(describeNumberRule({ integer: false, min: min(0), max: min(1) })).toBe(
+      'Number from 0 to 1',
+    );
+    expect(describeNumberRule({ integer: false, min: min(0, false) })).toBe(
+      'Number greater than 0',
+    );
+    expect(describeNumberRule({ integer: false, max: min(2, false) })).toBe('Number less than 2');
+    expect(describeNumberRule({ integer: false, min: min(0, false), max: min(1) })).toBe(
+      'Number greater than 0, at most 1',
+    );
+    expect(describeNumberRule({ integer: false })).toBe('Number');
   });
 });
