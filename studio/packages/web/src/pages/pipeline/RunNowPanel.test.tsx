@@ -47,6 +47,8 @@ describe('RunNowPanel (#1395 OR4)', () => {
     expect(screen.getByRole('dialog', { name: 'Run v4' })).toBeInTheDocument();
     expect(screen.getByLabelText('city')).toHaveValue('Leeds');
     expect(screen.getByLabelText('count')).toHaveValue('');
+    // #1396: the hint names the type as every type picker does.
+    expect(screen.getByText(/^Number · required/)).toBeInTheDocument();
   });
 
   it('sends typed values for exactly that version, then hands up the new run', async () => {

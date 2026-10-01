@@ -97,7 +97,7 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await page.getByRole('button', { name: `Edit ${STR}`, exact: true }).click();
     await expect(field(page, 'Name')).toHaveValue(STR);
     await expect(field(page, 'Name')).toHaveAttribute('readonly', '');
-    await expect(field(page, 'Type')).toHaveValue('string');
+    await expect(field(page, 'Type')).toHaveValue('String');
     await expect(field(page, 'Type')).toHaveAttribute('readonly', '');
     await expect(field(page, 'Value')).toBeFocused();
 

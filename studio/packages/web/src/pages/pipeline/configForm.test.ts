@@ -5,6 +5,7 @@ import {
   connectionConfigSchema,
   datasetConfigSchema,
   LLM_RECIPES,
+  catalog,
   getActivity,
   llmMessageSchema,
   llmOutputSchemaSchema,
@@ -1568,6 +1569,36 @@ describe('schemaPrecheckCandidate (#864 item 4)', () => {
     const config = { ...base, history: '${nodes.a.outputs.messages}' };
     expect(schema.safeParse(config).success).toBe(false);
     expect(schema.safeParse(schemaPrecheckCandidate(config, llm)).success).toBe(true);
+  });
+});
+
+describe('row-list enum cells name each value (#1396)', () => {
+  it('every enum cell of every catalogued row list has a display name per value', () => {
+    const unnamed: string[] = [];
+    for (const [type, entry] of catalog) {
+      for (const f of deriveConfigFields(entry.configSchema) ?? []) {
+        for (const cell of f.elementFields ?? []) {
+          if (cell.kind !== 'enum') continue;
+          for (const value of cell.enumOptions ?? []) {
+            if (cell.label?.options?.[value] === undefined)
+              unnamed.push(`${type}.${f.name}.${cell.name}.${value}`);
+          }
+        }
+      }
+    }
+    expect(unnamed).toEqual([]);
+  });
+
+  it('names the message role, the output property type and the copy mapping cells', () => {
+    const cell = (type: string, name: string, cellName: string) =>
+      field(fieldsOf(type), name).elementFields?.find((c) => c.name === cellName)?.label?.options;
+    expect(cell('llm_call', 'messages', 'role')).toMatchObject({ user: 'User', system: 'System' });
+    expect(cell('llm_call', 'outputSchema', 'type')).toMatchObject({ integer: 'Integer' });
+    expect(cell('copy', 'mapping', 'type')).toMatchObject({ timestamp: 'Timestamp' });
+    expect(cell('copy', 'mapping', 'onError')).toEqual({
+      fail: 'Fail the row',
+      null: 'Write null',
+    });
   });
 });
 

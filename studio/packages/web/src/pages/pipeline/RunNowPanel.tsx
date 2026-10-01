@@ -1,3 +1,4 @@
+import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import { useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import type {
@@ -175,7 +176,7 @@ function RunParamsForm<R extends FireResult>({
                     autoFocus={i === 0}
                   />
                   <span id={`${id}-hint`} className="page-hint">
-                    {p.type}
+                    {VALUE_TYPE_TITLES[p.type]}
                     {p.required ? ' · required' : ''}
                     {p.description !== undefined && p.description !== ''
                       ? ` — ${p.description}`

@@ -1,3 +1,4 @@
+import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import type { RunState, VariableDef } from '@autonomy-studio/shared';
 import { InlineJsonValue } from './CappedValue';
 
@@ -59,7 +60,7 @@ export function RunVariables({
                     <th scope="row">
                       <code>{v.name}</code>
                     </th>
-                    <td>{v.type}</td>
+                    <td>{VALUE_TYPE_TITLES[v.type]}</td>
                     <td>
                       {value === undefined ? (
                         <span className="page-hint">no value</span>

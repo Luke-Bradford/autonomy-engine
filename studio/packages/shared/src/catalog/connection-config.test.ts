@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { CONNECTION_KIND_LABELS, ConnectionKindSchema } from '../schemas/connection.js';
-import { fieldLabelThrough, unnamedEnumValues } from '../schemas/field-presentation.js';
+import {
+  fieldLabelOf,
+  fieldLabelThrough,
+  unnamedEnumValues,
+} from '../schemas/field-presentation.js';
+import { getActivity } from './registry.js';
 import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
@@ -16,6 +21,7 @@ import {
   ROOT_CONFINED_CONNECTION_KINDS,
   sqliteConnectionConfigSchema,
   postgresConnectionConfigSchema,
+  quotaActivityTypeSchema,
 } from './connection-config.js';
 
 describe('connection config catalog', () => {
@@ -321,6 +327,14 @@ describe('connection form labels (#1396)', () => {
 
   it.each(CONNECTION_KINDS)('every %s enum value has a display name (#1396)', (kind) => {
     expect(unnamedEnumValues(connectionConfigSchema(kind).shape)).toEqual([]);
+  });
+
+  it('names the quota activity types with the catalog titles (#1396)', () => {
+    // Written out because `registry.ts` imports this module; pinned here instead.
+    const options = fieldLabelOf(quotaActivityTypeSchema)?.options ?? {};
+    for (const type of quotaActivityTypeSchema.options) {
+      expect(options[type]).toBe(getActivity(type)?.title);
+    }
   });
 
   it.each(CONNECTION_KINDS)('%s has a display name', (kind) => {

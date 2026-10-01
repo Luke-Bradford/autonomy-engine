@@ -1,3 +1,4 @@
+import { VALUE_TYPE_TITLES } from '@autonomy-studio/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import type {
@@ -139,7 +140,7 @@ export function DatasetDetailPage({ datasetId }: { datasetId: string }) {
                 <ul className="plain-list">
                   {dataset.columns.map((column) => (
                     <li key={column.name}>
-                      <code>{column.name}</code> {column.type}
+                      <code>{column.name}</code> {VALUE_TYPE_TITLES[column.type]}
                       {!column.nullable && ' · not null'}
                     </li>
                   ))}

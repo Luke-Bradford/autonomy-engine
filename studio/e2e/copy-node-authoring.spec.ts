@@ -216,7 +216,9 @@ test.describe('#1139 — copy-node authoring', () => {
     // in — the same rule every optional control in this form follows, and the
     // difference between "the author chose 'fail'" and "the author said
     // nothing", which is a distinction §6.2 can still act on later.
-    await properties(page).getByLabel('mapping row 2 onError').selectOption('null');
+    await properties(page)
+      .getByLabel('mapping row 2 onError')
+      .selectOption({ label: 'Write null' });
 
     await properties(page).getByRole('button', { name: 'Apply config' }).click();
     await page.getByRole('button', { name: 'Save version' }).click();

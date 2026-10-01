@@ -4,6 +4,7 @@ import {
   optionTitles,
   presented,
   singleLine,
+  VALUE_TYPE_TITLES,
 } from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
@@ -24,9 +25,18 @@ import { isAddressableOutputName, type Output, type OutputType } from '../schema
  * the same `validateRefs` tree walk.
  */
 
+const llmMessageRoleSchema = z.enum(['system', 'user', 'assistant']);
+
 /** A role-tagged message. `content` carries the inert `${}` pass (resolved upstream). */
 export const llmMessageSchema = z.object({
-  role: z.enum(['system', 'user', 'assistant']),
+  role: presented(llmMessageRoleSchema, {
+    title: 'Role',
+    options: optionTitles(llmMessageRoleSchema, {
+      system: 'System',
+      user: 'User',
+      assistant: 'Assistant',
+    }),
+  }),
   content: z.string().min(1),
 });
 
@@ -60,12 +70,7 @@ export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 export const outputModeSchema = z.enum(['text', 'structured']);
 export type OutputMode = z.infer<typeof outputModeSchema>;
 
-/**
- * #2 L4a — the TYPES a structured-output property may declare. Exported so the
- * node panel's `outputSchema` rows (#852 item 3) offer exactly this set rather
- * than a copy of it.
- */
-export const llmOutputPropertyTypeSchema = z.enum([
+const llmOutputPropertyTypes = z.enum([
   'string',
   'number',
   'integer',
@@ -73,6 +78,16 @@ export const llmOutputPropertyTypeSchema = z.enum([
   'object',
   'array',
 ]);
+
+/**
+ * #2 L4a — the TYPES a structured-output property may declare. Exported so the
+ * node panel's `outputSchema` rows (#852 item 3) offer exactly this set rather
+ * than a copy of it.
+ */
+export const llmOutputPropertyTypeSchema = presented(llmOutputPropertyTypes, {
+  title: 'Type',
+  options: optionTitles(llmOutputPropertyTypes, VALUE_TYPE_TITLES),
+});
 
 /**
  * #2 L4a — one restricted property in a structured `outputSchema`. Only the

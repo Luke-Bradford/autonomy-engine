@@ -83,9 +83,9 @@ test('#844 V7 — a run shows its variables, and a writer’s drill-in shows its
       trs.map((tr) => [...tr.querySelectorAll('th, td')].map((c) => c.textContent ?? '')),
     );
   expect(rows).toEqual([
-    ['count', 'number', '5'],
-    ['rows', 'array', '["x","y"]'],
-    ['label', 'string', '""'],
+    ['count', 'Number', '5'],
+    ['rows', 'Array', '["x","y"]'],
+    ['label', 'String', '""'],
   ]);
 
   await page.getByRole('button', { name: 'Append variable 1', exact: true }).click();
