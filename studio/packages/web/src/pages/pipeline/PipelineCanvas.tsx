@@ -153,6 +153,9 @@ import {
   runTitle,
 } from './runNowRules';
 import { useShellUnsaved } from '../../shell/shellLabel';
+import { useUnsavedChangesGuard } from '../../lib/form/useUnsavedChangesGuard';
+import { leavesPath } from '../../lib/form/leavesPath';
+import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
 
@@ -408,6 +411,37 @@ export function PipelineCanvas({
     );
   }, [showCanvasMsg, store]);
 
+  const dirty = useStore(store, (s) => s.dirty);
+  // #1393 — and the tab title carries it, for the operator who tabs away.
+  useShellUnsaved(dirty);
+  // #1396 — the draft lives in this mount's store, so leaving the editor's path
+  // (Back, another pipeline in the tree, Open run) throws it away. Hold that at
+  // the shared prompt. A same-path change keeps this instance, and the draft.
+  const leaveGuard = useUnsavedChangesGuard(dirty, { holdRoute: leavesPath });
+  // The prompt takes focus while it asks and, on Keep, hands it back to wherever
+  // the operator was: a field, a node, the tree link they clicked. Not on
+  // Discard: the editor is on its way out, and focusing into it would only
+  // fire handlers on a page being torn down.
+  const leaveKeepRef = useRef<HTMLButtonElement>(null);
+  const leaveReturnFocus = useRef<Element | null>(null);
+  const leavePrompt = {
+    ...leaveGuard,
+    discard: () => {
+      leaveReturnFocus.current = null;
+      leaveGuard.discard();
+    },
+  };
+  useEffect(() => {
+    if (leaveGuard.confirming) {
+      leaveReturnFocus.current = document.activeElement;
+      leaveKeepRef.current?.focus();
+      return;
+    }
+    const back = leaveReturnFocus.current;
+    leaveReturnFocus.current = null;
+    if (back instanceof HTMLElement && back.isConnected) back.focus();
+  }, [leaveGuard.confirming]);
+
   /**
    * ⌘Z / ⇧⌘Z on the document, gated by the same two reasons the buttons are.
    *
@@ -423,6 +457,10 @@ export function PipelineCanvas({
    */
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      /* #1396 — while the leave prompt asks, no shortcut edits the graph it is
+         asking about. Checked here rather than by stopping keys at the prompt,
+         because the prompt is not modal: focus can be anywhere on the page. */
+      if (leaveGuard.confirming) return;
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
          listener and behind the same text-entry guard as the history keys. */
@@ -500,7 +538,16 @@ export function PipelineCanvas({
     return () => document.removeEventListener('keydown', onKeyDown);
     // `showCanvasMsg` is stable (the notice window is a module constant), so
     // listing it does not re-bind the keydown listener on every render.
-  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked, showCanvasMsg]);
+  }, [
+    store,
+    undoReason,
+    redoReason,
+    pipelineId,
+    previewing,
+    previewLocked,
+    showCanvasMsg,
+    leaveGuard.confirming,
+  ]);
 
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
@@ -608,9 +655,6 @@ export function PipelineCanvas({
   const outputs = useStore(store, (s) => s.outputs);
   const description = useStore(store, (s) => s.description);
   const annotations = useStore(store, (s) => s.annotations);
-  const dirty = useStore(store, (s) => s.dirty);
-  // #1393 — and the tab title carries it, for the operator who tabs away.
-  useShellUnsaved(dirty);
   // #852 — read by the folded dock's toggle, so a selection made while the
   // properties are folded away still gets a visible answer.
   const selectedCount = useStore(store, (s) => s.selected.length);
@@ -1077,6 +1121,21 @@ export function PipelineCanvas({
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
+      {leaveGuard.routeHold}
+      {/* #1396 — over the editor, not in its flow: asking must not move the
+          canvas (#1393). Escape keeps editing, as it does in a drawer. */}
+      {leaveGuard.confirming && (
+        <div
+          className="editor-leave-prompt"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            leaveGuard.keep();
+          }}
+        >
+          <UnsavedChangesPrompt guard={leavePrompt} keepRef={leaveKeepRef} />
+        </div>
+      )}
       <div className="page-header">
         <h2 id="canvas-heading">{pipelineName}</h2>
         <div className="form-actions">

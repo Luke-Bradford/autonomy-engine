@@ -94,6 +94,21 @@ the fields view and the JSON view is not an edit.
 The prompt is an inline `alertdialog`, not `window.confirm`. OR6 (#1397) owns the app's confirm
 dialogs.
 
+The prompt itself is `UnsavedChangesPrompt` (`lib/form/UnsavedChangesPrompt.tsx`), so the wording
+and the buttons are one copy wherever it appears.
+
+**The pipeline editor** holds its unsaved draft with the same guard, called as
+`useUnsavedChangesGuard(dirty, { holdRoute: leavesPath })`:
+
+- The draft lives in the editor's own store, so leaving the editor's path throws it away. That
+  covers Back to pipelines, another pipeline in the Factory Resources tree, and Open run.
+  `leavesPath` holds only those navigations. A same-path change keeps the editor mounted, and the
+  draft with it.
+- The prompt shows over the canvas (`.editor-leave-prompt`, fixed), so asking does not move the
+  editor (#1393). It takes focus, and Keep or Escape gives focus back to where it was.
+- While it asks, the editor's keyboard shortcuts (Delete, undo, copy and paste) do nothing. The
+  prompt is not modal, so this is checked in the shortcut handler rather than at the prompt.
+
 ## Validation
 
 Connections, Datasets, Secrets, Global parameters and Triggers check their own fields
@@ -200,8 +215,6 @@ message.
   `ConfigFieldControl`: a native number input reports a typo as empty, which would silently delete
   the setting.
 - A JSON code editor, kind icons, and a two-column grid on wide screens.
-- A leave guard on the pipeline editor. Leaving it with an unsaved draft is not yet held the way a
-  resource drawer's route change is.
 - Sections on the node panel's Settings tab (bindings, the activity's settings, container).
 - Display names for enum values (reasoning effort, capture level, write mode, container kind).
 - Axe gates on every form (shared with OR24, #1415).

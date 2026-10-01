@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { useBlocker, type Blocker } from 'react-router';
+import { useBlocker, type Blocker, type BlockerFunction } from 'react-router';
 
 /**
  * #1396 — the one unsaved-changes guard every resource form uses.
@@ -34,7 +34,18 @@ export interface UnsavedChangesGuard {
   readonly routeHold: ReactNode;
 }
 
-export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
+export interface UnsavedChangesGuardOptions {
+  /**
+   * Which route changes to hold while dirty. Every one by default: a resource
+   * form closes on any navigation.
+   */
+  readonly holdRoute?: boolean | BlockerFunction;
+}
+
+export function useUnsavedChangesGuard(
+  dirty: boolean,
+  { holdRoute = true }: UnsavedChangesGuardOptions = {},
+): UnsavedChangesGuard {
   // A function in state must be wrapped, or React calls it as an updater.
   const [held, setHeld] = useState<{ action: () => void } | null>(null);
   const [blocked, setBlocked] = useState<Blocker | null>(null);
@@ -87,13 +98,19 @@ export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
     request,
     discard,
     keep,
-    routeHold: dirty ? <RouteHold onBlocked={setBlocked} /> : null,
+    routeHold: dirty ? <RouteHold when={holdRoute} onBlocked={setBlocked} /> : null,
   };
 }
 
-/** Holds every route change while mounted, and hands the held one up. */
-function RouteHold({ onBlocked }: { onBlocked: (blocker: Blocker) => void }) {
-  const blocker = useBlocker(true);
+/** Holds the route changes `when` names while mounted, and hands the held one up. */
+function RouteHold({
+  when,
+  onBlocked,
+}: {
+  when: boolean | BlockerFunction;
+  onBlocked: (blocker: Blocker) => void;
+}) {
+  const blocker = useBlocker(when);
   useEffect(() => {
     if (blocker.state === 'blocked') onBlocked(blocker);
   }, [blocker, onBlocked]);

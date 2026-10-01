@@ -240,8 +240,15 @@ test('#1395 — Debug runs the UNSAVED draft on the canvas, as a hidden debug ve
   expect(page.url()).toBe(editorUrl);
   expect(triggerCalls).toEqual([]);
 
-  // The runs list says it was a debug run, not v1.
-  await page.goto('/#/monitor/runs');
+  // The runs list says it was a debug run, not v1. Debug saved nothing, so the
+  // draft is still unsaved and leaving asks first (#1396). Through the app's own
+  // link: a typed URL is a navigation the router cannot hold.
+  await page
+    .getByRole('navigation', { name: 'Primary' })
+    .getByRole('link', { name: 'Monitor' })
+    .click();
+  await page.getByRole('button', { name: 'Discard changes' }).click();
+  await page.waitForURL(/#\/monitor\/runs$/);
   await expect(
     page.getByRole('row').filter({ hasText: 'or4 debug draft' }).locator('.run-version'),
   ).toHaveText('debug 1');
