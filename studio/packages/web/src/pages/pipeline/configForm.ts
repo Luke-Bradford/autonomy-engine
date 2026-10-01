@@ -666,7 +666,9 @@ function numberRuleOf(schema: unknown): NumberRule {
   };
   const integer = typeof bag.format === 'string' && /int/.test(bag.format);
   const finite = (v: unknown): v is number =>
-    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) !== Number.MAX_SAFE_INTEGER;
+    typeof v === 'number' &&
+    Number.isFinite(v) &&
+    (!integer || Math.abs(v) !== Number.MAX_SAFE_INTEGER);
   const bound = (value: unknown, inclusive: boolean, step: 1 | -1): NumberBound | undefined => {
     if (!finite(value)) return undefined;
     if (!integer) return { value, inclusive };

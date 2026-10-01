@@ -1719,6 +1719,11 @@ describe('number fields carry the rule their schema states (#1396)', () => {
       max: { value: 1, inclusive: true },
     });
     expect(ruleOf(z.int())).toEqual({ integer: true });
+    // Only an integer format brings the sentinels; a decimal's bound is the author's.
+    expect(ruleOf(z.number().max(Number.MAX_SAFE_INTEGER))).toEqual({
+      integer: false,
+      max: { value: Number.MAX_SAFE_INTEGER, inclusive: true },
+    });
     expect(ruleOf(z.number())).toEqual({ integer: false });
   });
 
