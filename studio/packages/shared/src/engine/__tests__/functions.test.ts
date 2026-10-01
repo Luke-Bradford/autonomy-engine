@@ -60,6 +60,14 @@ describe('and/or/if — short-circuit', () => {
     expect(substitute('${or(true, nodes.missing.output.x)}', ctx())).toBe(true);
   });
 
+  // #1413 — `not` read `!args` (the args ARRAY, always truthy) rather than its
+  // argument, so it returned false for EVERY input. The typed checks never saw
+  // it: they type the call, they do not run it.
+  it('not() negates its argument', () => {
+    expect(substitute('${not(true)}', ctx())).toBe(false);
+    expect(substitute('${not(false)}', ctx())).toBe(true);
+  });
+
   it('and()/or() still evaluate later args when not short-circuited', () => {
     expect(substitute('${and(true, false)}', ctx())).toBe(false);
     expect(substitute('${or(false, true)}', ctx())).toBe(true);

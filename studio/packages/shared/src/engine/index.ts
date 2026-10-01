@@ -27,6 +27,11 @@ export {
   listFunctions,
 } from './functions.js';
 export type { SigType } from './functions.js';
+// #1413 — each function's description, named signature and example, for the
+// flyout's help text. Named, like the catalog surface above: the raw
+// `FUNCTION_DOCS` record stays module-private.
+export { functionDoc } from './functionDocs.js';
+export type { FunctionDoc } from './functionDocs.js';
 // #4 A16 — the inbound-callback output BOUNDARY validator. A NAMED re-export (not
 // `export *`): the reducer imports `outputContract`/`validateOutputs`/`storeOutputs`
 // from the module directly, but the server's webhook-callback completer needs ONE
