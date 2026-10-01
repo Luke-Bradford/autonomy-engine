@@ -1489,7 +1489,7 @@ describe('the connection form drawer (#1396)', () => {
    and takes focus to the first, and a server's per-field issues land beside
    their fields. */
 describe('ConnectionsPage — inline validation (#1396)', () => {
-  const timeoutLabel = 'Timeout (ms) — number';
+  const timeoutLabel = 'Timeout (ms)';
 
   async function openNew() {
     const user = userEvent.setup();

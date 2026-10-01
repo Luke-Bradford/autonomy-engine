@@ -191,9 +191,9 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     const { getByRole, container } = render(
       <ConfigFieldControl field={field} value="" onChange={noop} />,
     );
-    const input = getByRole('textbox', { name: 'Timeout (ms) — number' });
+    const input = getByRole('textbox', { name: 'Timeout (ms)' });
     const hint = container.querySelector(`#${CSS.escape(input.getAttribute('aria-describedby')!)}`);
-    expect(hint?.textContent).toBe('How long one request may take. timeoutMs');
+    expect(hint?.textContent).toBe('Number. How long one request may take. timeoutMs');
   });
 
   it('an untitled field keeps its key as the label and has no hint', () => {
@@ -253,6 +253,58 @@ describe('ConfigFieldControl — human labels and required fields (#1396)', () =
     const { getByRole } = render(<ConfigFieldControl field={field} value={[]} onChange={noop} />);
     expect(getByRole('group', { name: 'Headers' })).toHaveAccessibleDescription(
       'Sent with every request. headers',
+    );
+  });
+});
+
+describe('ConfigFieldControl — a number field says what it admits (#1396)', () => {
+  const port: ConfigField = {
+    name: 'port',
+    kind: 'number',
+    optional: true,
+    label: { title: 'Port' },
+    numberRule: {
+      integer: true,
+      min: { value: 1, inclusive: true },
+      max: { value: 65535, inclusive: true },
+    },
+  };
+
+  it('leads the hint with the rule, and the label is the title alone', () => {
+    const { getByRole } = render(<ConfigFieldControl field={port} value="" onChange={noop} />);
+    expect(getByRole('textbox', { name: 'Port' })).toHaveAccessibleDescription(
+      'Whole number from 1 to 65535. port',
+    );
+  });
+
+  it('an untitled number field gets the rule too, without repeating its key', () => {
+    const untitled: ConfigField = { ...port, label: undefined };
+    const { getByRole } = render(<ConfigFieldControl field={untitled} value="" onChange={noop} />);
+    expect(getByRole('textbox', { name: 'port' })).toHaveAccessibleDescription(
+      'Whole number from 1 to 65535.',
+    );
+  });
+
+  it.each([
+    [{ integer: true, min: { value: 1, inclusive: true } }, 'numeric'],
+    [{ integer: false, min: { value: 0, inclusive: false } }, 'decimal'],
+    [{ integer: true, max: { value: -1, inclusive: true } }, 'text'],
+    [{ integer: false, min: { value: -5, inclusive: true } }, 'text'],
+    [{ integer: false }, 'text'],
+  ] as const)('%o gets the %s keypad', (numberRule, keypad) => {
+    const { getByRole } = render(
+      <ConfigFieldControl field={{ ...port, numberRule }} value="" onChange={noop} />,
+    );
+    expect(getByRole('textbox', { name: 'Port' })).toHaveAttribute('inputmode', keypad);
+  });
+
+  it('a row cell has no hint, so it keeps the " — number" suffix', () => {
+    const cell: ConfigField = { name: 'n', kind: 'number', optional: true };
+    const { getByRole } = render(
+      <ConfigFieldControl field={cell} name="rows row 1 n" value="" onChange={noop} />,
+    );
+    expect(getByRole('textbox', { name: 'rows row 1 n — number' })).not.toHaveAttribute(
+      'aria-describedby',
     );
   });
 });

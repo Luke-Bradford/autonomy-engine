@@ -35,7 +35,7 @@ test.describe('#1396 inline validation', () => {
     await openNew(page, 'connections');
     const form = connectionForm(page);
     const name = form.getByLabel('Name', { exact: true });
-    const timeout = form.getByLabel('Timeout (ms) — number', { exact: true });
+    const timeout = form.getByLabel('Timeout (ms)', { exact: true });
     const secret = form.getByLabel('Secret', { exact: true });
 
     // Tabbing past the untouched Name raises nothing.

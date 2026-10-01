@@ -785,7 +785,7 @@ describe('DatasetsPage', () => {
       // A `sheetIndex` typed first is the trap: the schema refuses a config
       // naming both, so a chooser that only wrote `sheet` would make itself the
       // cause of the refusal on Save.
-      await pasteInto(user, within(form()).getByLabelText('Sheet number — number'), '2');
+      await pasteInto(user, within(form()).getByLabelText('Sheet number'), '2');
 
       await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
       await user.selectOptions(
@@ -794,7 +794,7 @@ describe('DatasetsPage', () => {
       );
 
       expect(within(form()).getByLabelText('Sheet')).toHaveValue('Costs');
-      expect(within(form()).getByLabelText('Sheet number — number')).toHaveValue('');
+      expect(within(form()).getByLabelText('Sheet number')).toHaveValue('');
     });
 
     it('stops offering a listing once the path moves out from under it', async () => {

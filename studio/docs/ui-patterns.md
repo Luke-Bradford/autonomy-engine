@@ -53,6 +53,16 @@ required marks and display names; its layout is its own, below.
 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
 - `unit` names what the stored value is in. It never converts the value.
+- **A number field says what it admits.** Its hint leads with the rule the schema states, read by
+  `configForm.ts` (`numberRule`, `describeNumberRule`): "Whole number from 1 to 65535.",
+  "Number greater than 0.". So the label is the title alone, with no " — number". A row cell has no
+  hint, and keeps the suffix.
+  - The control stays a TEXT input, for the reason in `ConfigFieldControl`: a native number input
+    reports a typo as empty, which would silently delete the setting. Its keypad follows the rule:
+    numeric for a whole number, decimal otherwise, the full keyboard if it admits a negative.
+  - The rule describes and never refuses. The save does not parse a kind's config schema (dispatch
+    and Test connection do), so in a drawer a value out of range stays the kind's advisory. On the
+    canvas, Apply already refuses it through the activity's schema.
 - **An enum's values are named too.** Add `options: optionTitles(enumSchema, { value: 'Name' })`
   to the same `presented(...)` call. The select shows the name and stores the value; a value left
   unnamed is a type error, and each catalog's "every enum value has a display name" test catches an
@@ -216,10 +226,7 @@ message.
 
 ## Still to come under #1396
 
-- Typed number controls (min/max). Number fields stay text inputs today, for the reason given in
-  `ConfigFieldControl`: a native number input reports a typo as empty, which would silently delete
-  the setting.
 - A JSON code editor, kind icons, and a two-column grid on wide screens.
 - Sections on the node panel's Settings tab (bindings, the activity's settings, container).
-- Display names for enum values (reasoning effort, capture level, write mode, container kind).
+- Display names for enum cells inside row lists (message role, output property type).
 - Axe gates on every form (shared with OR24, #1415).

@@ -63,6 +63,19 @@ export type ConfigFieldKind =
   | 'keyValue'
   | 'outputSchema';
 
+/** One bound of a number field; an exclusive one only ever on a decimal. */
+export interface NumberBound {
+  readonly value: number;
+  readonly inclusive: boolean;
+}
+
+/** What a number field's schema admits (`ConfigField.numberRule`). */
+export interface NumberRule {
+  readonly integer: boolean;
+  readonly min?: NumberBound;
+  readonly max?: NumberBound;
+}
+
 /**
  * One row of an `objectList` control: the same cell-input map the top-level
  * form already holds, keyed by COLUMN name instead of by field name.
@@ -407,6 +420,12 @@ export interface ConfigField {
    */
   readonly authoredAsExpression?: true;
   /**
+   * #1396 — what a `number` field's schema admits: whole or not, and its bounds,
+   * shown beside the control. It describes and never refuses: the save does not
+   * parse a kind's config schema (dispatch does), so a bound stays advisory.
+   */
+  readonly numberRule?: NumberRule;
+  /**
    * #1396 — the schema's human label (`presented`), when it has one: a title
    * shown in place of the key, and an optional description and unit. An
    * untitled field is labelled by its key, as before.
@@ -471,7 +490,9 @@ export type AssembleResult =
  * internals is funnelled through one cast in one file. `z.ZodType` erases the
  * concrete subclass, so there is no public API that answers "what construct is
  * this" for an arbitrary schema — but the discriminants below are stable v4
- * surface (`.def.type`, `.shape`, `.options`, `.element`).
+ * surface (`.def.type`, `.shape`, `.options`, `.element`). The one other
+ * surface read is a number's `_zod.bag`, in `numberRuleOf`; a test on the real
+ * Postgres port schema fails if a zod upgrade moves it.
  */
 interface ZodDefLike {
   readonly type?: string;
@@ -607,13 +628,14 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
     // conclusion, wrong reason, and the wrong reason is the dangerous half:
     // acting on it, someone could teach `unwrap` to follow `getter` believing
     // recursion was already handled elsewhere.)
-    const { kind, enumOptions } = classify(inner, false);
+    const { kind, enumOptions, numberRule } = classify(inner, false);
     if (isRowKind(kind) || kind === 'stringList') return null;
     cells.push({
       name,
       kind,
       optional,
       ...(enumOptions && { enumOptions }),
+      ...(numberRule && { numberRule }),
       ...(defaultText !== undefined && { defaultText }),
       ...(singleLine && kind === 'text' && { singleLine: true as const }),
     });
@@ -622,11 +644,87 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
   return cells.length > 0 ? cells : null;
 }
 
+/**
+ * A number schema's rule, read from the bag zod 4 collects its checks into
+ * (`format`, `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum`; zod
+ * 4.4.3). NOT `minValue`/`maxValue`: they ignore exclusivity, so `.positive()`
+ * would read as "at least 0" and admit the one value it refuses.
+ *
+ * An integer format brings its own ±MAX_SAFE_INTEGER range, which is the
+ * representation's limit and not a bound anyone chose, so it is dropped. On a
+ * whole number a bound is restated as the nearest whole number inside it (`> 0`
+ * is "at least 1"); a decimal keeps an exclusive bound exclusive. Two lower
+ * bounds give the tighter one. `multipleOf` is not read: no catalog field uses it.
+ */
+function numberRuleOf(schema: unknown): NumberRule {
+  const bag = ((schema as { _zod?: { bag?: Record<string, unknown> } })._zod?.bag ?? {}) as {
+    format?: unknown;
+    minimum?: unknown;
+    maximum?: unknown;
+    exclusiveMinimum?: unknown;
+    exclusiveMaximum?: unknown;
+  };
+  const integer = typeof bag.format === 'string' && /int/.test(bag.format);
+  const finite = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) !== Number.MAX_SAFE_INTEGER;
+  const bound = (value: unknown, inclusive: boolean, step: 1 | -1): NumberBound | undefined => {
+    if (!finite(value)) return undefined;
+    if (!integer) return { value, inclusive };
+    // The nearest whole number inside the bound: `> 0` is 1, `>= 0.5` is 1.
+    const inside = step === 1 ? Math.ceil(value) : Math.floor(value);
+    return { value: inclusive || inside !== value ? inside : inside + step, inclusive: true };
+  };
+  const tighter = (
+    a: NumberBound | undefined,
+    b: NumberBound | undefined,
+    lower: boolean,
+  ): NumberBound | undefined => {
+    if (a === undefined || b === undefined) return a ?? b;
+    if (a.value !== b.value) return a.value > b.value === lower ? a : b;
+    return a.inclusive ? b : a;
+  };
+  const min = tighter(bound(bag.minimum, true, 1), bound(bag.exclusiveMinimum, false, 1), true);
+  const max = tighter(bound(bag.maximum, true, -1), bound(bag.exclusiveMaximum, false, -1), false);
+  return { integer, ...(min && { min }), ...(max && { max }) };
+}
+
+/** A number field's rule in words: "Whole number from 1 to 65535", "Number greater than 0". */
+export function describeNumberRule(rule: NumberRule): string {
+  const noun = rule.integer ? 'Whole number' : 'Number';
+  const { min, max } = rule;
+  if (min?.inclusive && max?.inclusive) return `${noun} from ${min.value} to ${max.value}`;
+  const lower =
+    min === undefined
+      ? null
+      : min.inclusive
+        ? `at least ${min.value}`
+        : `greater than ${min.value}`;
+  const upper =
+    max === undefined ? null : max.inclusive ? `at most ${max.value}` : `less than ${max.value}`;
+  if (lower === null && upper === null) return noun;
+  // An exclusive bound reads as a phrase of its own ("greater than 0"); the
+  // inclusive ones as a qualifier after a comma ("Whole number, at least 1").
+  const first = lower ?? upper!;
+  const joined = lower !== null && upper !== null ? `${first}, ${upper}` : first;
+  return first.startsWith('at ') ? `${noun}, ${joined}` : `${noun} ${joined}`;
+}
+
+/**
+ * The on-screen keypad for a number field. A phone's numeric and decimal
+ * keypads have no minus sign, so a field that admits a negative value, or
+ * states no lower bound, gets the full keyboard. (Nor have they an `e`: `1e3`
+ * is still accepted, typed on a full keyboard.)
+ */
+export function numberKeypad(rule: NumberRule | undefined): 'numeric' | 'decimal' | 'text' {
+  if (rule?.min === undefined || rule.min.value < 0) return 'text';
+  return rule.integer ? 'numeric' : 'decimal';
+}
+
 /** Which control an unwrapped field schema gets. Unknown constructs author as JSON. */
 function classify(
   schema: unknown,
   nestable: boolean,
-): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields' | 'recordValue'> {
+): Pick<ConfigField, 'kind' | 'enumOptions' | 'elementFields' | 'recordValue' | 'numberRule'> {
   // IDENTITY, as with `llmMessagesSchema` below: a structured-output schema is an
   // object with rules of its own (#852 item 3), not a record or a list. A tool's
   // `parameters` is built from the same factory but is its own instance, and sits
@@ -657,7 +755,7 @@ function classify(
       return { kind: 'text' };
     case 'number':
     case 'int':
-      return { kind: 'number' };
+      return { kind: 'number', numberRule: numberRuleOf(schema) };
     case 'boolean':
       return { kind: 'boolean' };
     case 'enum': {
@@ -713,12 +811,13 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
         ...(label !== undefined && { label }),
       };
     }
-    const { kind, enumOptions, elementFields, recordValue } = classify(inner, true);
+    const { kind, enumOptions, elementFields, recordValue, numberRule } = classify(inner, true);
     return {
       name,
       kind,
       optional,
       ...(enumOptions && { enumOptions }),
+      ...(numberRule && { numberRule }),
       ...(defaultText !== undefined && { defaultText }),
       ...(elementFields && { elementFields }),
       ...(recordValue && { recordValue }),
@@ -1203,7 +1302,9 @@ export function deriveFieldsWithCarried<K extends string>(
     for (const field of deriveConfigFields(schemaFor(other)) ?? []) {
       if (seen.has(field.name) || !(field.name in config)) continue;
       seen.add(field.name);
-      carried.push({ ...field, optional: true });
+      // Its rule is the other kind's, on a key this kind ignores: not stated.
+      const { numberRule, ...rest } = field;
+      carried.push({ ...(numberRule === undefined ? field : rest), optional: true });
     }
   }
   return { fields: [...own, ...carried], carried: carried.map((f) => f.name) };
