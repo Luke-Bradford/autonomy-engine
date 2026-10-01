@@ -263,8 +263,6 @@ export function secretChecks(form: FormState): FieldErrors {
     const empty = nameCheck(form.name);
     const parsed = SecretWriteSchema.shape.name.safeParse(form.name);
     if (empty.name !== undefined) out.name = empty.name;
-    // The schema's refine says the same in its own words; these read beside a field.
-    else if (form.name.trim() !== form.name) out.name = 'Remove the spaces at the start or end.';
     else if (!parsed.success) out.name = parsed.error.issues[0]?.message ?? 'Invalid name';
   }
   if (form.secret === '') out.secret = 'Enter a value.';

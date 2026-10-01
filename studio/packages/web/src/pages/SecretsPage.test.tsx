@@ -451,3 +451,80 @@ describe('SecretsPage', () => {
     expect(screen.getByText('stripe-key')).toBeInTheDocument();
   });
 });
+
+/* #1396 OR5 slice 6 — inline validation: a field is checked when it is left
+   after an edit, a refused Save lists every problem in the footer's one alert
+   and focuses the first, and a 409 lands beside the Name it is about. */
+describe('SecretsPage — inline validation (#1396)', () => {
+  async function openNew() {
+    const user = userEvent.setup();
+    renderWithDataRouter(<SecretsPage />);
+    await screen.findByText(/No secrets yet/);
+    await user.click(screen.getByRole('button', { name: 'New secret' }));
+    return user;
+  }
+
+  it('checks a field when it is left after an edit, never one only tabbed past', async () => {
+    const user = await openNew();
+    const name = screen.getByLabelText('Name');
+    expect(name).toHaveFocus();
+    await user.tab();
+    expect(name).toHaveAttribute('aria-invalid', 'false');
+
+    await user.type(name, 'x');
+    await user.clear(name);
+    // Leaving the field for the Value counts; the Show toggle is not part of it.
+    await user.click(screen.getByLabelText('Value'));
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(name).toHaveAccessibleDescription('Enter a name.');
+    // Before a Save, the footer's alert is not used for it.
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await user.type(name, 'stripe-key');
+    expect(name).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('a refused Save lists every invalid field and focuses the first', async () => {
+    const user = await openNew();
+    await user.click(screen.getByRole('button', { name: 'Create secret' }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Fix these 2 fields:');
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    await user.click(within(alert).getByRole('button', { name: 'Value: Enter a value.' }));
+    expect(screen.getByLabelText('Value')).toHaveFocus();
+    expect(screen.getByLabelText('Value')).toHaveAccessibleDescription('Enter a value.');
+  });
+
+  it('a 409 on create is shown beside the Name', async () => {
+    createMock.mockRejectedValue(new ApiError(409, 'conflict', undefined));
+    const user = await openNew();
+    await user.type(screen.getByLabelText('Name'), 'Stripe-Key');
+    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.click(screen.getByRole('button', { name: 'Create secret' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Name')).toHaveAccessibleDescription(
+      /already exists\. Secret names ignore case/,
+    );
+    // Editing the Name clears the server's verdict on it.
+    await user.type(screen.getByLabelText('Name'), '2');
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('Replace checks only the value: the read-only name is not a field to fix', async () => {
+    listMock.mockResolvedValue([secret()]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<SecretsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
+    await user.click(screen.getByRole('button', { name: 'Replace value' }));
+
+    expect(rotateMock).not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Fix this field:');
+    expect(within(alert).getByRole('button', { name: 'Value: Enter a value.' })).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText('Value')).toHaveFocus());
+  });
+});
