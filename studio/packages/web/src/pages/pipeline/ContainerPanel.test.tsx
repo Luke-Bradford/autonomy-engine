@@ -104,7 +104,7 @@ describe('ContainerPanel — which fields it offers', () => {
 
   it('names the container by its within-kind ordinal', () => {
     mount({ ...LOOP, id: 'loop_2' }, [{ ...LOOP, id: 'loop_0' }]);
-    expect(screen.getByRole('heading', { name: 'loop 2' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Until 2' })).toBeDefined();
   });
 });
 
@@ -199,7 +199,7 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
   it('renders the carried field, and says it is not valid here', () => {
     mount(STAGE_WITH_ROUNDS);
     expect((screen.getByLabelText(/^Max rounds/) as HTMLInputElement).value).toBe('3');
-    expect(screen.getByText(/not valid on a stage/)).toBeDefined();
+    expect(screen.getByText(/not valid on Stage 1/)).toBeDefined();
   });
 
   /**
@@ -218,7 +218,7 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
    */
   it('claims a blocked save exactly when the validator blocks it', () => {
     mount(STAGE_WITH_ROUNDS);
-    const advisory = screen.getByText(/not valid on a stage/).textContent ?? '';
+    const advisory = screen.getByText(/not valid on Stage 1/).textContent ?? '';
     expect(advisory).toContain('Saving is blocked');
   });
 
@@ -253,7 +253,7 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
 
   it('says nothing when every carried field is legal here', () => {
     mount(LOOP);
-    expect(screen.queryByText(/not valid on a/)).toBeNull();
+    expect(screen.queryByText(/not valid on /)).toBeNull();
   });
 });
 

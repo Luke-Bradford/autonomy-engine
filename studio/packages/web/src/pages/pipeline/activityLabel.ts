@@ -66,10 +66,10 @@ export function activityLabel(node: Node): string {
  * name and the other by a bare kind is only half readable.
  *
  * The ordinal is UNCONDITIONAL — a lone activity is "HTTP Request 1", exactly as
- * a lone container is "stage 1". Numbering only on collision was considered and
+ * a lone container is "Stage 1". Numbering only on collision was considered and
  * rejected: it renames an UNTOUCHED box the moment a second of its kind is added,
  * and the #788 advisory's partitioned arm lists activities and containers in one
- * sentence, where "HTTP Request, stage 1" reads as two different kinds of thing.
+ * sentence, where "HTTP Request, Stage 1" reads as two different kinds of thing.
  *
  * TWO HONEST COSTS, both shared with `containerLabels`:
  *   - the ordinal is positional, so deleting or reordering an activity renumbers

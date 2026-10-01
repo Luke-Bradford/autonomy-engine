@@ -93,6 +93,7 @@ import {
   readableIssue,
   sameAttribution,
 } from './containerRules';
+import { CONTAINER_KIND_TITLE } from './containerKindTitle';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
@@ -2474,7 +2475,7 @@ function ContainerSection({
             >
               {ContainerKindSchema.options.map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {CONTAINER_KIND_TITLE[k]}
                 </option>
               ))}
             </select>

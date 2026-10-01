@@ -207,9 +207,9 @@ describe('containerLabels', () => {
       { id: 'c_2', kind: 'loop', children: [], exitWhen: '${true}' },
       { id: 'c_3', kind: 'stage', children: [] },
     ]);
-    expect(labels.get('c_1')).toBe('stage 1');
-    expect(labels.get('c_2')).toBe('loop 1');
-    expect(labels.get('c_3')).toBe('stage 2');
+    expect(labels.get('c_1')).toBe('Stage 1');
+    expect(labels.get('c_2')).toBe('Until 1');
+    expect(labels.get('c_3')).toBe('Stage 2');
   });
 });
 
@@ -223,7 +223,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toBe(`container 'stage 1': child 'HTTP Request 1' is not a node in this pipeline`);
+    expect(out).toBe(`container 'Stage 1': child 'HTTP Request 1' is not a node in this pipeline`);
   });
 
   it('names an edge by its ENDS, since an edge has no name of its own', () => {
@@ -265,7 +265,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "container 'stage 1' exitWhen: ${nodes.x.status} does not name an upstream node",
+      "container 'Stage 1' exitWhen: ${nodes.x.status} does not name an upstream node",
     );
   });
 
@@ -320,7 +320,7 @@ describe('readableIssue', () => {
     // The span survives byte-identical — the property the anchor exists for.
     // #887's gloss is APPENDED after it and changes none of it.
     expect(out).toBe(
-      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} (“HTTP Request 1”) " +
+      "container 'Stage 1' exitWhen: ${nodes.n_a.output.done} (“HTTP Request 1”) " +
         'does not name an upstream node',
     );
   });
@@ -373,7 +373,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      'forward cycle detected involving {“HTTP Request 1”, “HTTP Request 2”, “stage 1”} — ' +
+      'forward cycle detected involving {“HTTP Request 1”, “HTTP Request 2”, “Stage 1”} — ' +
         'the forward graph must be a DAG',
     );
   });
@@ -607,7 +607,7 @@ describe('readableIssue', () => {
    * A CONTAINER id after `nodes.` names nothing. The gloss resolves through
    * `nodeLabels` rather than the container-inclusive `label` used by passes 1-4,
    * because `${nodes.…}` is a node root and never a container — so a container id
-   * appearing there is a broken reference, and inventing 'stage 1' for it would
+   * appearing there is a broken reference, and inventing 'Stage 1' for it would
    * assert a relationship the language does not have.
    */
   it('does not name a CONTAINER that appears after nodes.', () => {
@@ -825,7 +825,7 @@ describe('issuesBySubject (#863)', () => {
     const dangling: Edge = { id: 'e_x', from: 'n_a', to: 'n_ghost', on: 'success' };
     const { map } = attributed(doc({ nodes: [A, B], edges: [dangling], containers: [loop] }));
     expect(map.get(subjectKey('container', 'loop_1'))?.[0]?.text).toMatch(
-      /^container 'loop 1': a loop needs an exitWhen/,
+      /^container 'Until 1': a loop needs an exitWhen/,
     );
     expect(map.get(subjectKey('edge', 'e_x'))?.[0]?.raw).toMatch(/^edge 'e_x': to 'n_ghost'/);
   });

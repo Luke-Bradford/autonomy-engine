@@ -167,10 +167,10 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
     await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
     await fluentRootReady(page);
     const box = page.getByRole('group', {
-      name: 'foreach 1 container, 1 activity, success, 3 of 3 items',
+      name: 'ForEach 1 container, 1 activity, success, 3 of 3 items',
     });
     await expect(box).toBeVisible();
-    await expect(box).toContainText('foreach 1 · success · 3 of 3 items');
+    await expect(box).toContainText('ForEach 1 · success · 3 of 3 items');
     await expect(box).not.toContainText('round');
 
     await expectQuiet(page, problems);

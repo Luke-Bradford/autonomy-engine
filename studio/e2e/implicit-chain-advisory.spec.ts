@@ -124,7 +124,7 @@ test.describe('implicit-chain advisory (#788)', () => {
     // between them is unambiguously the join and not part of a name; the
     // sentence states a COUNT, so an ambiguous join makes the count and the
     // list disagree.
-    await expect(advisory).toContainText('“HTTP Request 1”, “stage 1”');
+    await expect(advisory).toContainText('“HTTP Request 1”, “Stage 1”');
     await expect(advisory).not.toContainText('run in one sequence');
     await expect(advisory).toContainText('Saving mints');
 

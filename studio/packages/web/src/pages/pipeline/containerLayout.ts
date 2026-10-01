@@ -61,7 +61,7 @@ export interface Rect {
  * make the announcement disagree with the picture the moment the two sets differ
  * — a phantom child (deleted node, id still listed) or a child an earlier
  * container already claimed both count in the raw array and are both absent from
- * the box. That reads as "loop 1 container, 2 activities" over an empty fallback
+ * the box. That reads as "Until 1 container, 2 activities" over an empty fallback
  * box: not a rounding error, a straight lie about what is on screen.
  */
 export interface ContainerBox extends Rect {
@@ -609,7 +609,7 @@ export function containerHandles(
  *
  * `name` is whatever its CALLER draws on the box, not the kind — that is the
  * whole contract, and it widened in #883. Both callers now pass the
- * `containerLabels` ordinal ('loop 2') because both boxes draw it: the author
+ * `containerLabels` ordinal ('Until 2') because both boxes draw it: the author
  * canvas since #883, the run graph since #886. There is no longer a caller
  * announcing something its box does not show.
  *
@@ -617,8 +617,8 @@ export function containerHandles(
  * cost a compiler check — nothing stops a caller passing a kind where its box
  * shows a name. Both existing call sites are pinned by an e2e that asserts the
  * exact announced string, so the check is not simply lost: the author canvas by
- * `container-rendering.spec.ts` ('loop 1 container, 2 activities') and the run
- * graph by `run-status-vocabulary.spec.ts` ('stage 1 container, 1 activity,
+ * `container-rendering.spec.ts` ('Until 1 container, 2 activities') and the run
+ * graph by `run-status-vocabulary.spec.ts` ('Stage 1 container, 1 activity,
  * running'). A THIRD caller would have neither, and should extend that list
  * rather than guess.
  */

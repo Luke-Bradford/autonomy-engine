@@ -24,8 +24,8 @@ describe('activityLabels', () => {
     // The ordinal is UNCONDITIONAL. Suppressing it for a lone activity would
     // rename an untouched box the moment a second one of its type is added, and
     // would print two numbering schemes in one sentence — the #788 advisory's
-    // partitioned arm lists nodes and containers together ("stage 1" is always
-    // numbered), so "HTTP Request, stage 1" would read as two different kinds of
+    // partitioned arm lists nodes and containers together ("Stage 1" is always
+    // numbered), so "HTTP Request, Stage 1" would read as two different kinds of
     // thing.
     expect([...activityLabels([node('n_a', 'http_request')])]).toEqual([['n_a', 'HTTP Request 1']]);
   });

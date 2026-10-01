@@ -166,19 +166,19 @@ test.describe('U6c container rendering', () => {
     // WITHIN-KIND ORDINAL, the same text `connectRules` refuses a boundary
     // crossing by and the same text the membership picker offers. Before #883 the
     // box drew the bare kind while every surface that OFFERED a container drew
-    // 'loop 2', so the name identified an option and not a rectangle.
-    await expect(box.locator('.flow-container-label')).toHaveText('loop 1');
+    // 'Until 2', so the name identified an option and not a rectangle.
+    await expect(box.locator('.flow-container-label')).toHaveText('Until 1');
     /* The accessible name/role are on the NODE element React Flow renders (via the
        node's `ariaRole`/`ariaLabel`), not on the inner box — which is
        `pointer-events: none` inside a wrapper that, being non-focusable, would
        carry no role of its own. Asserted through the a11y tree rather than by
        selector, so it fails if the name stops being reachable. */
-    await expect(page.getByRole('group', { name: 'loop 1 container, 2 activities' })).toHaveCount(
+    await expect(page.getByRole('group', { name: 'Until 1 container, 2 activities' })).toHaveCount(
       1,
     );
     await expect(page.locator('.react-flow__node[data-id="loop_1"]')).toHaveAttribute(
       'aria-label',
-      'loop 1 container, 2 activities',
+      'Until 1 container, 2 activities',
     );
 
     const boxRect = await rectOf(page, '.flow-container');
@@ -336,7 +336,7 @@ test.describe('U6c container rendering', () => {
     await expect(refusal).toContainText('already');
     // Named the way the box is (#883) — the ordinal, not the bare kind and not
     // the raw id.
-    await expect(refusal).toContainText('loop 1 container');
+    await expect(refusal).toContainText('Until 1 container');
     await expect(refusal).not.toContainText('loop_1');
     await expect(edgeGroup(page)).toHaveCount(2); // nothing authored
 
@@ -439,10 +439,10 @@ test.describe('U6c container rendering', () => {
         'cross a container boundary',
       );
       await expect(refusal, `${direction}: the enclosed end is named wrong`).toContainText(
-        "'HTTP Request 2' is inside the loop 1 container",
+        "'HTTP Request 2' is inside the Until 1 container",
       );
       // The minted id, not the name — `loop_1` (underscore) is the seeded id,
-      // `loop 1` (space) is what #883 draws on the box. Near-identical here only
+      // `Until 1` (space) is what #883 draws on the box. Near-identical here only
       // because the seed chose a readable id; on a canvas-authored doc the id is
       // a uuid, which is the case `canvas-issue-legibility.spec.ts` covers.
       await expect(refusal).not.toContainText('loop_1');

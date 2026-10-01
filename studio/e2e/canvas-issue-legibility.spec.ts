@@ -9,7 +9,7 @@ import { properties } from './support/panels';
  * #884 — the validation badge list names what it is asking the operator to fix.
  *
  * `readableIssue` has existed since #840, rewriting a validator message so node
- * ids become the activity's name and container ids become 'stage 1'. It had one
+ * ids become the activity's name and container ids become 'Stage 1'. It had one
  * caller: the pre-edit confirm dialog. The STANDING badge list — the surface that
  * tells an operator their pipeline will not save, and the only one they can act
  * on — rendered `validateCanvas`'s strings verbatim.

@@ -30,6 +30,7 @@ import {
 import { validateCanvas } from './canvasDoc';
 import { containersWithUpdated } from './canvasStore';
 import { confirmContainerEdit, containerLabels } from './containerRules';
+import { CONTAINER_KIND_TITLE } from './containerKindTitle';
 import { useSubjectIssues } from './issueContext';
 import { SubjectIssues } from './SubjectIssues';
 
@@ -127,7 +128,8 @@ export function ContainerPanel({
 }) {
   /* #863 — what the validator says is wrong with this container. */
   const ownIssues = useSubjectIssues('container', container.id);
-  const label = containerLabels(containers).get(container.id) ?? container.kind;
+  const label =
+    containerLabels(containers).get(container.id) ?? CONTAINER_KIND_TITLE[container.kind];
   const stored = container as unknown as Record<string, unknown>;
 
   // #864 — one picker per expression field, since each is its own site. Both
@@ -299,8 +301,8 @@ export function ContainerPanel({
     );
     if (written.length > 0) {
       setError(
-        `${written.join(', ')} ${written.length === 1 ? 'is' : 'are'} not valid on a ` +
-          `${container.kind} — clear ${written.length === 1 ? 'it' : 'them'} rather than ` +
+        `${written.join(', ')} ${written.length === 1 ? 'is' : 'are'} not valid on ` +
+          `${label} — clear ${written.length === 1 ? 'it' : 'them'} rather than ` +
           'giving a value.',
       );
       return;
@@ -375,8 +377,8 @@ export function ContainerPanel({
           ))}
           {illegal.length > 0 && (
             <p className="contract-advisory">
-              {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on a{' '}
-              {container.kind} and {illegal.length === 1 ? 'does' : 'do'} nothing.{' '}
+              {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on{' '}
+              {label} and {illegal.length === 1 ? 'does' : 'do'} nothing.{' '}
               {illegal.some((name) => blocked.has(name))
                 ? 'Saving is blocked until cleared.'
                 : 'Clearing is the only edit allowed here.'}
