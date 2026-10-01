@@ -1,8 +1,8 @@
 # UI patterns — resource forms
 
 How every create/edit form in studio looks and behaves (#1396, OR5). Written once here; the shared
-pieces live in `packages/web/src/lib/form/`. Connections and Datasets follow it. Triggers, Secrets,
-Global parameters and the node property panel move onto it in the slices that follow #1396.
+pieces live in `packages/web/src/lib/form/`. Connections, Datasets, Secrets and Global parameters
+follow it. Triggers and the node property panel move onto it in the slices that follow #1396.
 
 ## The drawer
 
@@ -16,7 +16,8 @@ Global parameters and the node property panel move onto it in the slices that fo
   bottom of the window**. However long the form is, Save stays in view.
 - **Footer actions are right-aligned, with the primary action last**: `Cancel` · secondary actions
   such as `Test connection` · `Save` (class `primary`).
-- When the drawer opens, the first field gets focus. When it closes, focus goes back to the button
+- When the drawer opens, the first field that can be changed gets focus (read-only fields are
+  skipped). When it closes, focus goes back to the button
   that opened it (the page passes it as `returnFocusTo`, because an open that went through the
   unsaved-changes prompt leaves focus on the prompt).
 - The form's error and result messages sit in the footer above the actions, so a refused Save is
@@ -29,7 +30,9 @@ Global parameters and the node property panel move onto it in the slices that fo
   - for a connection: *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
     (the secret) and *Advanced*;
   - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
-    declared schema) and *Advanced*.
+    declared schema) and *Advanced*;
+  - for a secret: *Basics* (name) and *Value*;
+  - for a global parameter: *Basics* (name, type) and *Value* (value, description).
 - **Advanced is collapsed by default**, and opens by default when the record already uses it, so
   stored state is never hidden. The override allowlist lives there (`OverridableKeysSection`).
 
@@ -54,6 +57,10 @@ Global parameters and the node property panel move onto it in the slices that fo
   until their forms move onto this pattern). The asterisk is `RequiredMark`.
   CSS draws it, and it is `aria-hidden`, so it never becomes part of a field's name. A row list is a
   `group` and cannot take `aria-required`, so it gets the asterisk alone.
+- A field that cannot change on an edit (a secret's name, a global's name and type) is
+  **read-only, not disabled**, so it stays reachable by keyboard and screen reader, and it carries
+  no asterisk: it asks nothing of the operator. When the drawer opens, focus skips read-only
+  fields and lands on the first one that can be changed.
 - A secret input has a **Show/Hide** toggle, named "Show secret" or "Hide secret" to match what it
   does next. The toggle sits beside the label, not inside it.
 

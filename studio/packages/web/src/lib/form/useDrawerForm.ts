@@ -62,6 +62,12 @@ export interface DrawerForm<F> {
   readonly requestClose: () => void;
   /** After a save: close the form only if it is still the one that saved. */
   readonly closeIfLatest: (seq: number) => void;
+  /**
+   * Close the open form if `match` says so, bypassing the guard. For a delete:
+   * a form open on the record just deleted would save to a row that no longer
+   * exists, and there is nothing left for its edits to be saved to.
+   */
+  readonly closeWhere: (match: (open: F) => boolean) => void;
 }
 
 export type { UnsavedChangesGuard };
@@ -104,6 +110,12 @@ export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F
     if (latestSeq.current === s) setForm(null);
   }, []);
 
+  const closeWhere = useCallback(
+    (match: (open: F) => boolean) =>
+      setForm((open) => (open !== null && match(open) ? null : open)),
+    [],
+  );
+
   return {
     form,
     setForm,
@@ -115,5 +127,6 @@ export function useDrawerForm<F>(signatureOf: (form: F) => string): DrawerForm<F
     openFrom,
     requestClose,
     closeIfLatest,
+    closeWhere,
   };
 }

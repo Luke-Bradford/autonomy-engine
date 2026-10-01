@@ -311,6 +311,7 @@ export function DatasetsPage() {
     seq: formSeq,
     guard,
     openerRef,
+    closeWhere,
     ...drawer
   } = useDrawerForm(savePayloadSignature);
   const guardedLoad = useGuardedLoad();
@@ -381,12 +382,13 @@ export function DatasetsPage() {
       }
       try {
         await deleteDataset(dataset.id);
+        closeWhere((open) => open.id === dataset.id);
         await refresh();
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refresh],
+    [refresh, closeWhere],
   );
 
   return (

@@ -213,6 +213,9 @@ every other root is cleartext.
   `hubs.ts`. Rows reuse the `ContractEditor` row shell that params, variables and outputs share; a
   fourth row editor would break the third-copy rule. `ContractRow` gains a `'global'` kind and a way to
   lock the name and type cells on a saved row. The cleartext notice sits beside the value field.
+  *Built-note (#1396 OR5, 2026-10-01):* superseded. The page is now a list plus the shared Manage
+  form drawer (`studio/docs/ui-patterns.md`), with name and type read-only on an edit, and
+  `ContractRow` lost its `'global'` kind and the lock again.
 - **Canvas.** `validateCanvas` takes `globals`, fetched when the canvas mounts and again on window focus
   and after a save the server refused. Without it, the canvas would badge every `${global.x}` unknown
   and block the save, since any canvas issue blocks Save. The expression picker offers a "Global

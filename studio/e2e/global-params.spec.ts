@@ -13,12 +13,12 @@ import {
  *
  * `GlobalParamsPage.test.tsx` mocks every api call, so nothing in vitest shows
  * that a global this page creates is the one the SERVER then lists, that an
- * edit survives a reload, or that the `ContractRow` shell — written for the
- * property panel — lays out legibly on a hub page. That seam is this spec.
+ * edit survives a reload, or that the form drawer (#1396 OR5) lays out
+ * legibly beside the list and holds unsaved edits. That seam is this spec.
  *
  * The suite runs single-worker over ONE shared SQLite file reset once per RUN,
  * so every name is unique to its test, and rows are found by the global they
- * ARE (a named group), never by position.
+ * ARE (the row holding its name), never by position.
  */
 const STR = 'e2e_844_gl2_str';
 const JSON_NAME = 'e2e_844_gl2_json';
@@ -42,7 +42,13 @@ test.beforeEach(async ({ request }) => {
   }
 });
 
-const saved = (page: Page, name: string) => page.getByRole('group', { name: `global ${name}` });
+/** The list row of a stored global, found by its name cell. */
+const saved = (page: Page, name: string) =>
+  page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
+const drawer = (page: Page) => page.getByRole('dialog', { name: /global parameter$/ });
+const form = (page: Page) => page.getByRole('form', { name: 'Global parameter form' });
+const prompt = (page: Page) => page.getByRole('alertdialog', { name: 'Unsaved changes' });
+const field = (page: Page, label: string) => form(page).getByLabel(label, { exact: true });
 
 async function open(page: Page) {
   await page.goto('/#/manage/global-params');
@@ -51,14 +57,18 @@ async function open(page: Page) {
 }
 
 async function create(page: Page, name: string, type: string, value: string) {
-  await page.getByRole('button', { name: 'Add global parameter' }).click();
-  const draft = page.getByRole('group', { name: /^new global/ });
-  await draft.getByRole('textbox', { name: /name$/ }).fill(name);
-  await draft.getByRole('combobox', { name: /type$/ }).selectOption(type);
-  await draft.getByRole('textbox', { name: /value$/ }).fill(value);
-  await draft.getByRole('button', { name: /^create global/ }).click();
+  await page.getByRole('button', { name: 'New global parameter' }).click();
+  await field(page, 'Name').fill(name);
+  await field(page, 'Type').selectOption(type);
+  await field(page, 'Value').fill(value);
+  await form(page).getByRole('button', { name: 'Create global parameter' }).click();
   await expect(saved(page, name)).toBeVisible();
-  await expect(draft).toHaveCount(0);
+  await expect(drawer(page)).toHaveCount(0);
+}
+
+async function reload(page: Page) {
+  await page.reload();
+  await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
 }
 
 test.describe('#844 GL2 the global-params store has a front end', () => {
@@ -77,31 +87,31 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await create(page, STR, 'string', 'https://example.test');
     await create(page, JSON_NAME, 'json', '{"retries": 3}');
 
-    await page.reload();
-    await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
-    const str = saved(page, STR);
-    await expect(str.getByRole('textbox', { name: /value$/ })).toHaveValue('https://example.test');
-    await expect(saved(page, JSON_NAME).getByRole('textbox', { name: /value$/ })).toHaveValue(
-      '{"retries":3}',
-    );
+    await reload(page);
+    await expect(
+      saved(page, STR).getByRole('cell', { name: 'https://example.test' }),
+    ).toBeVisible();
+    await expect(saved(page, JSON_NAME).getByRole('cell', { name: '{"retries":3}' })).toBeVisible();
+
     // Name and type are immutable once stored (GL-D1): read-only, still reachable.
-    await expect(str.getByRole('textbox', { name: /name$/ })).toHaveAttribute('readonly', '');
-    await expect(str.getByRole('textbox', { name: /type$/ })).toHaveValue('string');
-    await expect(str.getByRole('textbox', { name: /type$/ })).toHaveAttribute('readonly', '');
+    await page.getByRole('button', { name: `Edit ${STR}`, exact: true }).click();
+    await expect(field(page, 'Name')).toHaveValue(STR);
+    await expect(field(page, 'Name')).toHaveAttribute('readonly', '');
+    await expect(field(page, 'Type')).toHaveValue('string');
+    await expect(field(page, 'Type')).toHaveAttribute('readonly', '');
+    await expect(field(page, 'Value')).toBeFocused();
 
     // Edit the value; the SERVER holds it, so a reload shows it.
-    await str.getByRole('textbox', { name: /value$/ }).fill('https://changed.test');
-    await str.getByRole('textbox', { name: /description$/ }).fill('the base URL');
-    await str.getByRole('button', { name: /^save global/ }).click();
-    await expect(str.getByRole('button', { name: /^save global/ })).toBeDisabled();
-    await page.reload();
-    await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
-    await expect(saved(page, STR).getByRole('textbox', { name: /value$/ })).toHaveValue(
-      'https://changed.test',
-    );
-    await expect(saved(page, STR).getByRole('textbox', { name: /description$/ })).toHaveValue(
-      'the base URL',
-    );
+    await field(page, 'Value').fill('https://changed.test');
+    await field(page, 'Description').fill('the base URL');
+    await form(page).getByRole('button', { name: 'Save changes' }).click();
+    await expect(drawer(page)).toHaveCount(0);
+    await reload(page);
+    await page.getByRole('button', { name: `Edit ${STR}`, exact: true }).click();
+    await expect(field(page, 'Value')).toHaveValue('https://changed.test');
+    await expect(field(page, 'Description')).toHaveValue('the base URL');
+    await page.keyboard.press('Escape');
+    await expect(drawer(page)).toHaveCount(0);
 
     // Delete, through the real confirmation.
     let confirmText = '';
@@ -109,13 +119,10 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
       confirmText = dialog.message();
       void dialog.accept();
     });
-    await saved(page, STR)
-      .getByRole('button', { name: /^delete global/ })
-      .click();
+    await page.getByRole('button', { name: `Delete ${STR}`, exact: true }).click();
     await expect(saved(page, STR)).toHaveCount(0);
     expect(confirmText).toContain(`"${STR}"`);
-    await page.reload();
-    await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
+    await reload(page);
     await expect(saved(page, JSON_NAME)).toBeVisible();
     await expect(saved(page, STR)).toHaveCount(0);
 
@@ -128,12 +135,11 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await create(page, DUP, 'number', '1');
 
     const upper = DUP.toUpperCase();
-    await page.getByRole('button', { name: 'Add global parameter' }).click();
-    const draft = page.getByRole('group', { name: /^new global/ });
-    await draft.getByRole('textbox', { name: /name$/ }).fill(upper);
-    await draft.getByRole('textbox', { name: /value$/ }).fill('x');
-    await draft.getByRole('button', { name: /^create global/ }).click();
-    await expect(draft.getByRole('alert')).toHaveText(
+    await page.getByRole('button', { name: 'New global parameter' }).click();
+    await field(page, 'Name').fill(upper);
+    await field(page, 'Value').fill('x');
+    await form(page).getByRole('button', { name: 'Create global parameter' }).click();
+    await expect(form(page).getByRole('alert')).toHaveText(
       `A global parameter named “${upper}” already exists. Names ignore case.`,
     );
     // This test PROVOKES the 409, so the browser's own network line for it is
@@ -141,19 +147,38 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
     await expectQuiet(page, problems, [/Failed to load resource.*409/]);
   });
 
-  test('the row shell stacks and stays legible on a hub page, dark mode included', async ({
-    page,
-  }) => {
+  test('the form opens in a drawer beside the list, legible in both themes', async ({ page }) => {
+    const problems = collectPageProblems(page);
     await open(page);
     await create(page, LOOK, 'string', 'visible');
+    await page.getByRole('button', { name: `Edit ${LOOK}`, exact: true }).click();
+    await expect(drawer(page)).toBeVisible();
+
+    // A column to the right of the list, with the row actions still reachable.
+    const geometry = await page.evaluate((name) => {
+      const table = document.querySelector('table')!.getBoundingClientRect();
+      const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
+      const del = document.querySelector(`[aria-label="Delete ${name}"]`)!;
+      const box = del.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return {
+        drawerRightOfTable: aside.left >= table.right,
+        deleteReachable: hit === del,
+        sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
+      };
+    }, LOOK);
+    expect(geometry).toEqual({
+      drawerRightOfTable: true,
+      deleteReachable: true,
+      sections: ['Basics', 'Value'],
+    });
 
     for (const theme of ['light', 'dark'] as const) {
       await setTheme(page, theme);
-      const valueLabel = `[aria-label="global ${LOOK}"] label:has(input[aria-label$="value"])`;
-      // Stacked label-over-control, as on the other Manage forms — the
-      // property panel's rule does not reach a hub page, this page's must.
+      // Stacked label-over-control, as on the other Manage forms.
+      const valueLabel = '.form-drawer label:has(> input[placeholder="empty text is a value"])';
       expect(await computedStyleOf(page, valueLabel, 'flex-direction')).toBe('column');
-      const input = `[aria-label="global ${LOOK}"] input[aria-label$="value"]`;
+      const input = '.form-drawer input[placeholder="empty text is a value"]';
       const text = await computedStyleOf(page, input, 'color');
       const surface = await surfaceBehind(page, input);
       expect(
@@ -161,5 +186,31 @@ test.describe('#844 GL2 the global-params store has a front end', () => {
         `${theme}: value text on ${surface.from}`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+    await expectQuiet(page, problems);
+  });
+
+  test('a dirty form is held on Escape and on a route change', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await open(page);
+    await page.getByRole('button', { name: 'New global parameter' }).click();
+    await page.keyboard.press('Escape');
+    await expect(drawer(page)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'New global parameter' }).click();
+    await field(page, 'Name').fill('half_typed');
+    await page.keyboard.press('Escape');
+    await expect(prompt(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(field(page, 'Name')).toHaveValue('half_typed');
+
+    await page
+      .getByRole('navigation', { name: 'Manage sections' })
+      .getByRole('link', { name: 'Secrets' })
+      .click();
+    await expect(prompt(page)).toBeVisible();
+    expect(page.url()).toContain('#/manage/global-params');
+    await page.getByRole('button', { name: 'Discard changes' }).click();
+    await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+    await expectQuiet(page, problems);
   });
 });

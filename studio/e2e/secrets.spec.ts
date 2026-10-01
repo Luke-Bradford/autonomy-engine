@@ -25,6 +25,7 @@ import { fluentRootReady } from './support/theme';
 const NAME = 'e2e-1060-vault-key';
 const DUP_NAME = 'e2e-1060-duplicate-key';
 const ROTATE_NAME = 'e2e-1061-rotate-key';
+const DRAWER_NAME = 'e2e-1396-secret-drawer';
 
 test.describe('#1060 the secrets vault has a front end', () => {
   test('creates a secret, lists it, and deletes it', async ({ page }) => {
@@ -40,7 +41,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(NAME);
-    await page.getByLabel('Value').fill('e2e-plaintext-never-returned');
+    await page.getByLabel('Value', { exact: true }).fill('e2e-plaintext-never-returned');
     await page.getByRole('button', { name: 'Create secret' }).click();
 
     // Listed by name — and this row came back from the SERVER, since the form
@@ -78,7 +79,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(ROTATE_NAME);
-    await page.getByLabel('Value').fill('first-value');
+    await page.getByLabel('Value', { exact: true }).fill('first-value');
     await page.getByRole('button', { name: 'Create secret' }).click();
     await expect(page.getByRole('cell', { name: ROTATE_NAME, exact: true })).toBeVisible();
 
@@ -91,7 +92,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
       await expect(nameField).toHaveValue(ROTATE_NAME);
       await expect(nameField).toHaveAttribute('readonly', '');
 
-      await page.getByLabel('Value').fill('second-value');
+      await page.getByLabel('Value', { exact: true }).fill('second-value');
 
       // The ONLY browser-observable proof that the rotation reached the
       // server. Everything else on this page — one row, same name, no error —
@@ -142,7 +143,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
 
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(DUP_NAME);
-    await page.getByLabel('Value').fill('first');
+    await page.getByLabel('Value', { exact: true }).fill('first');
     await page.getByRole('button', { name: 'Create secret' }).click();
     await expect(page.getByRole('cell', { name: DUP_NAME, exact: true })).toBeVisible();
 
@@ -151,7 +152,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
     // real 409 from the real NOCASE unique index, not a stubbed rejection.
     await page.getByRole('button', { name: 'New secret' }).click();
     await page.getByLabel('Name').fill(DUP_NAME.toUpperCase());
-    await page.getByLabel('Value').fill('second');
+    await page.getByLabel('Value', { exact: true }).fill('second');
     await page.getByRole('button', { name: 'Create secret' }).click();
 
     try {
@@ -166,7 +167,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
       // 409 on its FIRST create — which reads as "create is broken" rather
       // than as leftover state. Exactly the trap the note at the top of this
       // file describes, which a trailing cleanup does not actually avoid.
+      // The form still holds what was typed, so Cancel asks first (#1396).
       await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.getByRole('button', { name: 'Discard changes' }).click();
       page.once('dialog', (dialog) => void dialog.accept());
       await page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }).click();
       await expect(
@@ -180,5 +183,61 @@ test.describe('#1060 the secrets vault has a front end', () => {
     // fails an allow pattern that matches nothing, so this cannot go stale
     // into a regression-hider (same shape as `archived-pipeline.spec.ts`).
     await expectQuiet(page, problems, [/Failed to load resource.*409/]);
+  });
+
+  test('#1396 replace opens in a drawer beside the list, focus on the value', async ({
+    page,
+    request,
+  }) => {
+    const problems = collectPageProblems(page);
+    const created = await request.post('/api/secrets', {
+      data: { name: DRAWER_NAME, secret: 'first' },
+    });
+    expect(created.ok()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    try {
+      await page.goto('/#/manage/secrets');
+      await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+      await page.getByRole('button', { name: `Replace ${DRAWER_NAME}`, exact: true }).click();
+      const drawer = page.getByRole('dialog', { name: `Replace value for ${DRAWER_NAME}` });
+      await expect(drawer).toBeVisible();
+
+      const geometry = await page.evaluate((name) => {
+        const table = document.querySelector('table')!.getBoundingClientRect();
+        const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
+        const del = document.querySelector(`[aria-label="Delete ${name}"]`)!;
+        const box = del.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return {
+          drawerRightOfTable: aside.left >= table.right,
+          deleteReachable: hit === del,
+          sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
+          actions: [...document.querySelectorAll('.form-drawer-footer button')].map(
+            (b) => b.textContent,
+          ),
+        };
+      }, DRAWER_NAME);
+      expect(geometry).toEqual({
+        drawerRightOfTable: true,
+        deleteReachable: true,
+        sections: ['Basics', 'Value'],
+        actions: ['Cancel', 'Replace value'],
+      });
+
+      const value = page.getByLabel('Value', { exact: true });
+      await expect(value).toBeFocused();
+      await page.getByRole('button', { name: 'Show secret' }).click();
+      await expect(value).toHaveAttribute('type', 'text');
+
+      // Typed, so leaving asks first; a clean Escape after Discard would not.
+      await value.fill('half-typed');
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('alertdialog', { name: 'Unsaved changes' })).toBeVisible();
+      await page.getByRole('button', { name: 'Discard changes' }).click();
+      await expect(drawer).toHaveCount(0);
+    } finally {
+      expect((await request.delete(`/api/secrets/${id}`)).ok()).toBe(true);
+    }
+    await expectQuiet(page, problems);
   });
 });

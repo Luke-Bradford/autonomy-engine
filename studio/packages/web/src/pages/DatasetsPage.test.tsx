@@ -549,6 +549,17 @@ describe('DatasetsPage', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('ds_1'));
   });
 
+  it('closes the drawer when the dataset it is editing is deleted', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dataset()]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
+    expect(form()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await waitFor(() => expect(screen.queryByRole('form', { name: 'Dataset form' })).toBeNull());
+  });
+
   it('says a store is needed at all when there are no connections', async () => {
     const user = userEvent.setup();
     listConnectionsMock.mockResolvedValue([]);
