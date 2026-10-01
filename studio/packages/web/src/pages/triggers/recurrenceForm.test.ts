@@ -551,7 +551,7 @@ describe('#1396 — a refusal names the control it is about, by schema path', ()
     });
   });
 
-  it("a schema refusal: a weekly with no day ticked sits on the days", () => {
+  it('a schema refusal: a weekly with no day ticked sits on the days', () => {
     expect(Object.keys(fieldsOf(form({ frequency: 'week', hours: '9' })))).toEqual([
       'schedule.weekDays',
     ]);

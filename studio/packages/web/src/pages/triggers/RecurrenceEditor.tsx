@@ -1,3 +1,6 @@
+import { useId } from 'react';
+import { FieldError } from '../../lib/form/FieldError';
+import { editorFields, type FieldSlots } from './editorFields';
 import {
   HONOURED_FIELDS,
   MAX_RECURRENCE_INTERVAL,
@@ -43,10 +46,14 @@ const PERIOD_NOUN: Record<RecurrenceFrequency, string> = {
 export function RecurrenceEditor({
   value,
   onChange,
+  validation,
 }: {
   value: RecurrenceFormState;
   onChange: (next: RecurrenceFormState) => void;
+  /** #1396 — the trigger form's validation: each control is a `recurrence.<path>` field of it. */
+  validation: FieldSlots;
 }) {
+  const f = editorFields(validation, 'recurrence', useId());
   const honoured = HONOURED_FIELDS[value.frequency];
   const required = REQUIRED_FIELDS[value.frequency];
   const set = (patch: Partial<RecurrenceFormState>) => onChange({ ...value, ...patch });
@@ -104,12 +111,14 @@ export function RecurrenceEditor({
           min={1}
           max={MAX_RECURRENCE_INTERVAL}
           value={value.interval}
+          {...f.attrs('interval')}
           onChange={(e) => set({ interval: e.target.value })}
         />
       </label>
+      <FieldError {...f.errorProps('interval')} />
 
       {honoured.includes('weekDays') && (
-        <fieldset className="recurrence-days">
+        <fieldset className="recurrence-days" {...f.groupAttrs('schedule.weekDays')}>
           <legend>
             Days of week
             {required === 'weekDays' && <RequiredMark />}
@@ -126,48 +135,61 @@ export function RecurrenceEditor({
           ))}
         </fieldset>
       )}
+      {honoured.includes('weekDays') && <FieldError {...f.errorProps('schedule.weekDays')} />}
 
       {honoured.includes('monthDays') && (
-        <label>
-          <span>
-            Days of month (1-31, comma-separated)
-            {required === 'monthDays' && <RequiredMark />}
-          </span>
-          <input
-            type="text"
-            value={value.monthDays}
-            aria-required={required === 'monthDays'}
-            onChange={(e) => set({ monthDays: e.target.value })}
-            placeholder="1, 15"
-            spellCheck={false}
-          />
-        </label>
+        <>
+          <label>
+            <span>
+              Days of month (1-31, comma-separated)
+              {required === 'monthDays' && <RequiredMark />}
+            </span>
+            <input
+              type="text"
+              value={value.monthDays}
+              aria-required={required === 'monthDays'}
+              {...f.attrs('schedule.monthDays')}
+              onChange={(e) => set({ monthDays: e.target.value })}
+              placeholder="1, 15"
+              spellCheck={false}
+            />
+          </label>
+          <FieldError {...f.errorProps('schedule.monthDays')} />
+        </>
       )}
 
       {honoured.includes('hours') && (
-        <label>
-          Hours (0-23, comma-separated)
-          <input
-            type="text"
-            value={value.hours}
-            onChange={(e) => set({ hours: e.target.value })}
-            placeholder="9"
-            spellCheck={false}
-          />
-        </label>
+        <>
+          <label>
+            Hours (0-23, comma-separated)
+            <input
+              type="text"
+              value={value.hours}
+              {...f.attrs('schedule.hours')}
+              onChange={(e) => set({ hours: e.target.value })}
+              placeholder="9"
+              spellCheck={false}
+            />
+          </label>
+          <FieldError {...f.errorProps('schedule.hours')} />
+        </>
       )}
 
       {honoured.includes('minutes') && (
-        <label>
-          Minutes (0-59, comma-separated)
-          <input
-            type="text"
-            value={value.minutes}
-            onChange={(e) => set({ minutes: e.target.value })}
-            placeholder="0"
-            spellCheck={false}
-          />
-        </label>
+        <>
+          <label>
+            Minutes (0-59, comma-separated)
+            <input
+              type="text"
+              value={value.minutes}
+              {...f.attrs('schedule.minutes')}
+              onChange={(e) => set({ minutes: e.target.value })}
+              placeholder="0"
+              spellCheck={false}
+            />
+          </label>
+          <FieldError {...f.errorProps('schedule.minutes')} />
+        </>
       )}
 
       <label>
@@ -175,11 +197,13 @@ export function RecurrenceEditor({
         <input
           type="text"
           value={value.timeZone}
+          {...f.attrs('timeZone')}
           onChange={(e) => set({ timeZone: e.target.value })}
           placeholder="Europe/London"
           spellCheck={false}
         />
       </label>
+      <FieldError {...f.errorProps('timeZone')} />
 
       {/* `step={1}` admits seconds, so a stored bound that has them can be both
           shown and re-entered rather than silently rounded to the minute. */}
@@ -189,9 +213,11 @@ export function RecurrenceEditor({
           type="datetime-local"
           step={1}
           value={value.startTime}
+          {...f.attrs('startTime')}
           onChange={(e) => set({ startTime: e.target.value })}
         />
       </label>
+      <FieldError {...f.errorProps('startTime')} />
 
       <label>
         End time
@@ -199,9 +225,11 @@ export function RecurrenceEditor({
           type="datetime-local"
           step={1}
           value={value.endTime}
+          {...f.attrs('endTime')}
           onChange={(e) => set({ endTime: e.target.value })}
         />
       </label>
+      <FieldError {...f.errorProps('endTime')} />
 
       {/* The bounds are absolute instants that the time zone above does NOT
           shift, so the control is anchored in the browser's zone. Echo the

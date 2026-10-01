@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { NO_FIELD_SLOTS } from '../../testing/noFieldSlots';
 import { RunWindowsEditor } from './RunWindowsEditor';
 import { blankRunWindowRow, type RunWindowsFormState } from './runWindowsForm';
 
@@ -36,7 +37,14 @@ function Host({ initialRows }: { initialRows: number }) {
       end: `0${i + 2}:00`,
     })),
   }));
-  return <RunWindowsEditor value={value} onChange={setValue} mode="schedule" />;
+  return (
+    <RunWindowsEditor
+      value={value}
+      onChange={setValue}
+      mode="schedule"
+      validation={NO_FIELD_SLOTS}
+    />
+  );
 }
 
 const startInput = (n: number) => screen.getByLabelText(`Window ${n} start`);

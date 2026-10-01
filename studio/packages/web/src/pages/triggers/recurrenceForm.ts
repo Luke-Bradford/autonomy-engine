@@ -165,8 +165,30 @@ export const RECURRENCE_FIELDS = [
 ] as const;
 export type RecurrenceField = (typeof RECURRENCE_FIELDS)[number];
 
-export type RecurrenceConversion =
-  { ok: true; recurrence: Recurrence } | Refusal<RecurrenceField>;
+/** What the form's error summary calls each control. */
+export const RECURRENCE_FIELD_LABELS: Readonly<Record<RecurrenceField, string>> = {
+  interval: 'Repeat every',
+  'schedule.weekDays': 'Days of week',
+  'schedule.monthDays': 'Days of month',
+  'schedule.hours': 'Hours',
+  'schedule.minutes': 'Minutes',
+  timeZone: 'Time zone',
+  startTime: 'Start time',
+  endTime: 'End time',
+};
+
+/** Whether a recurrence control is on screen for a frequency (`HONOURED_FIELDS`). */
+export function recurrenceFieldShown(
+  field: RecurrenceField,
+  frequency: RecurrenceFrequency,
+): boolean {
+  return (
+    !field.startsWith('schedule.') ||
+    (HONOURED_FIELDS[frequency] as readonly string[]).includes(field.slice('schedule.'.length))
+  );
+}
+
+export type RecurrenceConversion = { ok: true; recurrence: Recurrence } | Refusal<RecurrenceField>;
 
 /** The text-list fields, paired with the label an error message should use. */
 const LIST_FIELDS: ReadonlyArray<{

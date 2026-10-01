@@ -99,7 +99,6 @@ function isUntouched(form: WindowFormState): boolean {
 
 /** The schema paths the window controls author: what a refusal can be about. */
 export const WINDOW_FIELDS = [
-  'frequency',
   'interval',
   'startTime',
   'endTime',
@@ -111,6 +110,19 @@ export const WINDOW_FIELDS = [
   'selfDependency.sizeInSeconds',
 ] as const;
 export type WindowField = (typeof WINDOW_FIELDS)[number];
+
+/** What the form's error summary calls each control. */
+export const WINDOW_FIELD_LABELS: Readonly<Record<WindowField, string>> = {
+  interval: 'Each window covers',
+  startTime: 'Start time',
+  endTime: 'End time',
+  maxBackfillWindows: 'Max backfill windows',
+  maxConcurrentWindows: 'Max concurrent windows',
+  'retry.count': 'Retries',
+  'retry.intervalInSeconds': 'Seconds between retries',
+  'selfDependency.offsetInSeconds': 'Dependency offset',
+  'selfDependency.sizeInSeconds': 'Dependency span',
+};
 
 export type WindowConversion = { ok: true; window: WindowConfig | null } | Refusal<WindowField>;
 
@@ -178,7 +190,8 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   const sub: Partial<Record<(typeof SUB_OBJECT_FIELDS)[number], number>> = {};
   for (const key of SUB_OBJECT_FIELDS) {
     const parsed = parseWholeNumber(form[key]);
-    if (!parsed.ok) return refuseAt(SUB_OBJECT_PATHS[key], parsed.reason, `${key}: ${parsed.reason}`);
+    if (!parsed.ok)
+      return refuseAt(SUB_OBJECT_PATHS[key], parsed.reason, `${key}: ${parsed.reason}`);
     if (parsed.value !== undefined) sub[key] = parsed.value;
   }
 

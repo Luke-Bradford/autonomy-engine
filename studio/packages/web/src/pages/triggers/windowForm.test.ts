@@ -281,8 +281,8 @@ describe('#1396 — a refusal names the control it is about, by schema path', ()
   });
 
   it('a retry count over the cap sits on the count', () => {
-    expect(Object.keys(fieldsOf(form({ ...START, retryCount: '9999', retryIntervalSeconds: '60' })))).toEqual([
-      'retry.count',
-    ]);
+    expect(
+      Object.keys(fieldsOf(form({ ...START, retryCount: '9999', retryIntervalSeconds: '60' }))),
+    ).toEqual(['retry.count']);
   });
 });

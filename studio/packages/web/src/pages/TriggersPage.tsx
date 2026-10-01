@@ -30,6 +30,8 @@ import {
   blankWindowForm,
   formToWindow,
   windowToForm,
+  WINDOW_FIELD_LABELS,
+  WINDOW_FIELDS,
   type WindowFormState,
 } from './triggers/windowForm';
 import {
@@ -41,6 +43,9 @@ import {
 import {
   blankRecurrenceForm,
   formToRecurrence,
+  RECURRENCE_FIELD_LABELS,
+  RECURRENCE_FIELDS,
+  recurrenceFieldShown,
   recurrenceToForm,
   type RecurrenceFormState,
   type ScheduleKind,
@@ -771,10 +776,77 @@ function bindingKey(form: FormState): string {
 }
 
 /**
- * #1396 — what is wrong with the trigger form's OWN fields now, in the form's
- * order. The mode editors (recurrence, window, event, run windows) are not
- * fields of this check: their conversions still refuse with the form's one
- * message on Save.
+ * #1396 — the mode editors' fields on screen now, each with what the error
+ * summary calls it. Keyed by the payload path a control authors
+ * (`recurrence.schedule.hours`), so a server refusal on that path lands beside
+ * it too. ONE table for `modeChecks` and `labelOf`: a check is only ever raised
+ * on a key this names, because a check with no control on screen would refuse
+ * Save with nothing to show or focus.
+ */
+function modeFields(form: FormState): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (form.mode === 'schedule' && form.scheduleKind === 'recurrence') {
+    for (const field of RECURRENCE_FIELDS) {
+      if (recurrenceFieldShown(field, form.recurrence.frequency)) {
+        out[`recurrence.${field}`] = RECURRENCE_FIELD_LABELS[field];
+      }
+    }
+  } else if (form.mode === 'event') {
+    out['event.name'] = 'Event';
+  } else if (form.mode === 'tumbling') {
+    for (const field of WINDOW_FIELDS) out[`window.${field}`] = WINDOW_FIELD_LABELS[field];
+  }
+  // Run windows are not owned by a mode: shown, and converted, in every one.
+  out.runWindows = 'Run windows';
+  return out;
+}
+
+/**
+ * #1396 — what is wrong with the mode editors now, beside the control it is
+ * about. Only the ACTIVE mode's builder is consulted, as Save does; run windows
+ * always are. A refusal no control owns (`fields` empty, or a path this form
+ * has no control for) is left to Save's footer message.
+ *
+ * The builders refuse in either enabled state (a half-filled window is refused
+ * on a disabled trigger too, rather than discarded). Only the "must carry one"
+ * rules are enabled-conditional, as `assertEventConsistent` /
+ * `assertWindowConsistent` are, and they never displace a builder's own message.
+ */
+function modeChecks(form: FormState): FieldErrors {
+  const out: Record<string, string> = {};
+  const put = (prefix: string, fields: Readonly<Partial<Record<string, string>>>) => {
+    for (const [path, message] of Object.entries(fields)) {
+      if (message !== undefined) out[`${prefix}.${path}`] = message;
+    }
+  };
+  if (form.mode === 'schedule' && form.scheduleKind === 'recurrence') {
+    const converted = formToRecurrence(form.recurrence);
+    if (!converted.ok) put('recurrence', converted.fields);
+  } else if (form.mode === 'event') {
+    const converted = formToEvent(form.event);
+    if (!converted.ok) put('event', converted.fields);
+    else if (form.enabled && converted.event === null) {
+      out['event.name'] = 'An enabled event trigger must carry an event name (or disable it).';
+    }
+  } else if (form.mode === 'tumbling') {
+    const converted = formToWindow(form.window);
+    if (!converted.ok) put('window', converted.fields);
+    else if (form.enabled && converted.window === null) {
+      out['window.startTime'] =
+        'An enabled tumbling trigger must carry a window — give it a start time (or disable it).';
+    }
+  }
+  const windows = formToRunWindows(form.runWindows);
+  if (!windows.ok) out.runWindows = windows.reason;
+
+  const shown = modeFields(form);
+  return Object.fromEntries(Object.entries(out).filter(([key]) => shown[key] !== undefined));
+}
+
+/**
+ * #1396 — what is wrong with the trigger form now, in the form's order: its
+ * own fields, then the mode editors' (`modeChecks`), then concurrency and
+ * params.
  *
  * - Name: the write schema's `min(1)`.
  * - The binding: an enabled trigger must be bound (the server's
@@ -791,6 +863,7 @@ function triggerChecks(form: FormState): FieldErrors {
     out[bindingKey(form)] =
       'An enabled trigger must be bound to a pipeline version (or disable it).';
   }
+  Object.assign(out, modeChecks(form));
   if (form.concurrencyPolicy === 'parallel') {
     const max = Number(form.concurrencyMax);
     if (form.concurrencyMax.trim() === '' || !Number.isInteger(max) || max < 1) {
@@ -841,16 +914,17 @@ function TriggerForm({
         case 'params':
           return 'Params (JSON)';
         default:
-          return undefined;
+          return modeFields(form)[key];
       }
     },
-    [form.binding.kind, form.concurrencyPolicy],
+    [form],
   );
   const validation = useFieldValidation(checks, labelOf);
   const nameErrorId = useId();
   const bindingErrorId = useId();
   const maxErrorId = useId();
   const paramsErrorId = useId();
+  const eventErrorId = useId();
   /* The version last chosen on the concrete side, so switching to bind-to-active
      and back does not silently discard it. Local to the form: it is undo state
      for a control, not part of what gets written. */
@@ -1329,6 +1403,7 @@ function TriggerForm({
               <RecurrenceEditor
                 value={form.recurrence}
                 onChange={(recurrence) => onChange({ ...form, recurrence })}
+                validation={validation}
               />
             ) : (
               <label>
@@ -1352,6 +1427,7 @@ function TriggerForm({
               <input
                 type="text"
                 value={form.event.name}
+                {...validation.attrsFor('event.name', eventErrorId)}
                 onChange={(e) =>
                   onChange({ ...form, event: { ...form.event, name: e.target.value } })
                 }
@@ -1359,6 +1435,7 @@ function TriggerForm({
                 spellCheck={false}
               />
             </label>
+            <FieldError id={eventErrorId} message={validation.errorFor('event.name')} />
             <p className="page-hint">
               Fires when <code>POST /api/events</code> is called with this exact name. An enabled
               event trigger must carry one.
@@ -1379,7 +1456,11 @@ function TriggerForm({
         )}
 
         {form.mode === 'tumbling' && (
-          <WindowEditor value={form.window} onChange={(window) => onChange({ ...form, window })} />
+          <WindowEditor
+            value={form.window}
+            onChange={(window) => onChange({ ...form, window })}
+            validation={validation}
+          />
         )}
 
         {form.mode === 'continuous' && (
@@ -1399,6 +1480,7 @@ function TriggerForm({
           value={form.runWindows}
           onChange={(runWindows) => onChange({ ...form, runWindows })}
           mode={form.mode}
+          validation={validation}
         />
       </FormSection>
 
