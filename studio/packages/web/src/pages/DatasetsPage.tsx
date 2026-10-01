@@ -56,7 +56,7 @@ import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
-import { fieldAttrs, nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
+import { nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
@@ -603,9 +603,6 @@ function DatasetForm({
   const nameErrorId = useId();
   const storeErrorId = useId();
   const columnsErrorId = useId();
-  /** The attributes a hand-written control carries for the form's validation. */
-  const checkedBy = (key: string, errorId: string) =>
-    fieldAttrs({ key, error: validation.errorFor(key), errorId });
 
   /**
    * Everything a sheet listing depends on: which store, and which file in it.
@@ -830,7 +827,7 @@ function DatasetForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
-            {...checkedBy('name', nameErrorId)}
+            {...validation.attrsFor('name', nameErrorId)}
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
@@ -849,7 +846,7 @@ function DatasetForm({
               value={form.connectionId}
               onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
               required
-              {...checkedBy('connectionId', storeErrorId)}
+              {...validation.attrsFor('connectionId', storeErrorId)}
             >
               {connections.length === 0 && <option value="">— no connections —</option>}
               {boundIsUnresolved && (
@@ -975,7 +972,7 @@ function DatasetForm({
               spellCheck={false}
               aria-required
               placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
-              {...checkedBy('columns', columnsErrorId)}
+              {...validation.attrsFor('columns', columnsErrorId)}
             />
           )}
         </LabelledControl>

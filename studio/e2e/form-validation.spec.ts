@@ -8,6 +8,10 @@ import { fluentRootReady } from './support/theme';
  * when it is left after an edit, in a reserved slot that moves nothing; a
  * refused Save lists every invalid field in the footer's one alert and takes
  * focus to the first; a summary line takes focus to its field.
+ *
+ * Slice 6 put Secrets, Global parameters and the trigger form's own fields on
+ * the same pattern. Under `noValidate` the browser no longer refuses a
+ * half-typed number, so the trigger form refuses it itself.
  */
 
 async function openNew(page: Page, hub: 'connections' | 'datasets'): Promise<void> {
@@ -105,6 +109,72 @@ test.describe('#1396 inline validation', () => {
     await columns.fill('[]');
     await expect(columns).toHaveAttribute('aria-invalid', 'false');
     await expect(form.getByRole('alert')).toHaveCount(0);
+    await expectQuiet(page, problems);
+  });
+
+  test('secret: the summary lists Name and Value, and a fix clears its line', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    const problems = collectPageProblems(page);
+    await page.goto('/#/manage/secrets');
+    await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New secret' }).click();
+    const form = page.getByRole('form', { name: 'Secret form' });
+    const name = form.getByLabel('Name', { exact: true });
+    const value = form.getByLabel('Value', { exact: true });
+
+    await form.getByRole('button', { name: 'Create secret' }).click();
+    const alert = form.getByRole('alert');
+    await expect(alert).toContainText('Fix these 2 fields:');
+    await expect(name).toBeFocused();
+    await alert.getByRole('button', { name: 'Value: Enter a value.' }).click();
+    await expect(value).toBeFocused();
+    await expect(value).toHaveAccessibleDescription('Enter a value.');
+
+    await value.fill('sk_e2e_1396');
+    await expect(value).toHaveAttribute('aria-invalid', 'false');
+    await expect(alert).toContainText('Fix this field:');
+    await name.fill('bad name ');
+    await name.press('Tab');
+    await expect(name).toHaveAccessibleDescription(/leading\/trailing whitespace/);
+    await expectQuiet(page, problems);
+  });
+
+  test('trigger: own fields are marked, and a half-typed number is refused, not read as blank', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.goto('/#/manage/triggers');
+    await page.getByRole('heading', { name: 'Triggers' }).waitFor();
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New trigger' }).click();
+    const form = page.getByRole('form', { name: 'Trigger form' });
+    const name = form.getByLabel('Name', { exact: true });
+
+    await form.getByLabel('Concurrency', { exact: true }).selectOption('parallel');
+    await form.getByLabel('Params (JSON)', { exact: true }).fill('[1]');
+    await form.getByRole('button', { name: 'Create trigger' }).click();
+    const alert = form.getByRole('alert');
+    await expect(alert).toContainText('Fix these 3 fields:');
+    await expect(name).toBeFocused();
+    await expect(form.getByLabel('Max parallel runs')).toHaveAttribute('aria-invalid', 'true');
+
+    await name.fill(`e2e-1396-trigger-${Date.now()}`);
+    await form.getByLabel('Max parallel runs').fill('2');
+    await form.getByLabel('Params (JSON)', { exact: true }).fill('{}');
+    await expect(form.getByRole('alert')).toHaveCount(0);
+
+    // A real bad input: Chromium keeps `1e` in a number box but reports ''.
+    await form.getByLabel('Mode', { exact: true }).selectOption('schedule');
+    const interval = form.getByLabel(/Repeat every/);
+    await interval.fill('');
+    await interval.pressSequentially('1e');
+    expect(await interval.evaluate((el) => (el as HTMLInputElement).validity.badInput)).toBe(true);
+    await form.getByRole('button', { name: 'Create trigger' }).click();
+    await expect(form.getByRole('alert')).toContainText('is not a complete number');
+    await expect(interval).toBeFocused();
+    // Nothing was created: the list still has no row by that name.
+    await expect(page.getByRole('row', { name: /e2e-1396-trigger-/ })).toHaveCount(0);
     await expectQuiet(page, problems);
   });
 });

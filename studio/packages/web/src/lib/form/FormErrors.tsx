@@ -22,7 +22,8 @@ export function FormErrors({
   message: string | null;
 }) {
   const items = validation.attempted ? validation.shown : [];
-  if (message === null && items.length === 0) return null;
+  const { notice } = validation;
+  if (message === null && notice === null && items.length === 0) return null;
   const go = (key: string) => (event: MouseEvent<HTMLButtonElement>) => {
     const form = event.currentTarget.closest('form');
     if (form !== null) focusField(form, key);
@@ -30,6 +31,7 @@ export function FormErrors({
   return (
     <div role="alert" className="error form-errors">
       {message !== null && <p>{message}</p>}
+      {notice !== null && <p>{notice}</p>}
       {items.length > 0 && (
         <>
           <p>{items.length === 1 ? 'Fix this field:' : `Fix these ${items.length} fields:`}</p>

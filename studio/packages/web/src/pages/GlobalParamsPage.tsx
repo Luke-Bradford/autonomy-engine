@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState, type FormEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react';
 import { Link } from 'react-router';
 import {
   GlobalParamCreateBodySchema,
   GlobalParamTypeSchema,
   GlobalParamValueSchema,
-  formatZodIssues,
   globalParamNameDefect,
   type GlobalParam,
   type GlobalParamPatchBody,
@@ -26,6 +33,10 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
+import { FieldError } from '../lib/form/FieldError';
+import { FormErrors } from '../lib/form/FormErrors';
+import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
+import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { deleteConfirmText } from './globalParamDeleteText';
 import { ImportPanel } from './ImportPanel';
@@ -288,6 +299,37 @@ export function GlobalParamsPage() {
   );
 }
 
+/** #1396 — the summary's names for the form's fields; Name and Type only while creating. */
+const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ['name', 'Name'],
+  ['type', 'Type'],
+  ['value', 'Value'],
+  ['description', 'Description'],
+]);
+
+/**
+ * #1396 — what is wrong with a global draft now, by field, in the form's order.
+ * Name: the create schema's own rule (`globalParamNameDefect`), with plain words
+ * for an empty one; it is read-only, so unchecked, on an edit. Value: checked as
+ * Save reads it, and on an edit only once it has changed, because an untouched
+ * value is not written.
+ */
+function globalParamChecks(form: FormState): FieldErrors {
+  const out: Record<string, string> = {};
+  const { stored } = form;
+  if (stored === null) {
+    const name = nameCheck(form.name).name ?? globalParamNameDefect(form.name);
+    if (name !== null) out.name = name;
+  }
+  const changed =
+    stored === null || form.valueText !== formatDefaultInput(stored.value, stored.type);
+  if (changed) {
+    const value = coerceGlobalValue(stored?.type ?? form.type, form.valueText);
+    if (!value.ok) out.value = value.error;
+  }
+  return out;
+}
+
 function GlobalParamForm({
   form,
   onChange,
@@ -308,18 +350,37 @@ function GlobalParamForm({
   const { stored } = form;
   const editing = stored !== null;
 
+  const checks = useMemo(() => globalParamChecks(form), [form]);
+  const labelOf = useCallback(
+    (key: string) =>
+      editing && (key === 'name' || key === 'type') ? undefined : FIELD_LABELS.get(key),
+    [editing],
+  );
+  const validation = useFieldValidation(checks, labelOf);
+  const errorIds = {
+    name: useId(),
+    type: useId(),
+    value: useId(),
+    description: useId(),
+  };
+  const checkedBy = (key: keyof typeof errorIds) => validation.attrsFor(key, errorIds[key]);
+  const errorLine = (key: keyof typeof errorIds) => (
+    <FieldError id={errorIds[key]} message={validation.errorFor(key)} />
+  );
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    // #1396 — every field that is wrong now is shown beside itself first. Past
+    // this the reads below cannot fail on the name or value; they stay for the
+    // parsed value and, should a check and its reader drift apart, a refusal.
+    if (!validation.attempt()) return;
     const parsedValue = coerceGlobalValue(form.type, form.valueText);
 
     let write: () => Promise<unknown>;
     if (stored === null) {
-      // A bad value short-circuits the schema below, which is where the name
-      // rule lives — so name both, or fixing the value only reveals the next error.
       if (!parsedValue.ok) {
-        const name = globalParamNameDefect(form.name);
-        return setError(name ? `${name}; ${parsedValue.error}` : parsedValue.error);
+        return validation.showRefusedFields({ value: parsedValue.error });
       }
       const body = GlobalParamCreateBodySchema.safeParse({
         name: form.name,
@@ -327,20 +388,20 @@ function GlobalParamForm({
         value: parsedValue.value,
         description: form.description,
       });
-      if (!body.success) return setError(formatZodIssues(body.error.issues));
+      if (!body.success) return setError(schemaRefusal(body.error.issues, validation));
       write = () => createGlobalParam(body.data);
     } else {
       // Only what changed since the form opened: a PATCH of an untouched
       // value would rewrite it, and bump `updatedAt`, for nothing.
       const patch: GlobalParamPatchBody = {};
       if (form.valueText !== formatDefaultInput(stored.value, stored.type)) {
-        if (!parsedValue.ok) return setError(parsedValue.error);
+        if (!parsedValue.ok) return validation.showRefusedFields({ value: parsedValue.error });
         // The STORED type, as the route checks it.
         const checked = GlobalParamValueSchema.safeParse({
           type: stored.type,
           value: parsedValue.value,
         });
-        if (!checked.success) return setError(formatZodIssues(checked.error.issues));
+        if (!checked.success) return setError(schemaRefusal(checked.error.issues, validation));
         patch.value = parsedValue.value;
       }
       if (form.description !== stored.description) patch.description = form.description;
@@ -358,11 +419,14 @@ function GlobalParamForm({
       // which cannot tell the operator the collision was the NAME, compared
       // without case (`COLLATE NOCASE`). This is the likeliest failure on
       // create, so name it (the SecretsPage precedent).
-      setError(
-        !editing && err instanceof ApiError && err.status === 409
-          ? `A global parameter named “${form.name}” already exists. Names ignore case.`
-          : messageOf(err),
-      );
+      // The NAME's problem, so it is shown beside the Name (#1396).
+      if (!editing && err instanceof ApiError && err.status === 409) {
+        validation.showRefusedFields({
+          name: `A global parameter named “${form.name}” already exists. Names ignore case.`,
+        });
+      } else {
+        setError(saveRefusal(err, validation));
+      }
     } finally {
       // After a success this form has usually unmounted (the drawer closed),
       // so this is a no-op then, which React 19 permits silently. It matters
@@ -381,13 +445,8 @@ function GlobalParamForm({
       onSubmit={(e) => void onSubmit(e)}
       busy={saving}
       returnFocusTo={returnFocusTo}
-      status={
-        error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )
-      }
+      validation={validation}
+      status={<FormErrors validation={validation} message={error} />}
       actions={
         <>
           <button type="button" onClick={onClose} disabled={saving}>
@@ -416,8 +475,11 @@ function GlobalParamForm({
             placeholder="read as ${global.<name>}"
             readOnly={editing}
             required
+            {...checkedBy('name')}
           />
         </label>
+        {/* No error line under a read-only field: it has nothing to fix. */}
+        {!editing && errorLine('name')}
         <LabelledControl
           label={
             <>
@@ -428,7 +490,7 @@ function GlobalParamForm({
         >
           {(id) =>
             editing ? (
-              <input id={id} type="text" value={form.type} readOnly />
+              <input id={id} type="text" value={form.type} readOnly {...checkedBy('type')} />
             ) : (
               <select
                 id={id}
@@ -438,6 +500,7 @@ function GlobalParamForm({
                   if (parsed.success) onChange({ ...form, type: parsed.data });
                 }}
                 required
+                {...checkedBy('type')}
               >
                 {GlobalParamTypeSchema.options.map((type) => (
                   <option key={type} value={type}>
@@ -448,6 +511,7 @@ function GlobalParamForm({
             )
           }
         </LabelledControl>
+        {!editing && errorLine('type')}
         {editing && (
           <p className="page-hint">
             A name and type are fixed once created. To change either, delete this global and create
@@ -466,8 +530,10 @@ function GlobalParamForm({
             onChange={(e) => onChange({ ...form, valueText: e.target.value })}
             placeholder={VALUE_PLACEHOLDER[form.type]}
             spellCheck={false}
+            {...checkedBy('value')}
           />
         </label>
+        {errorLine('value')}
         <p className="page-hint">Cleartext — never a credential.</p>
         <label>
           Description
@@ -475,8 +541,10 @@ function GlobalParamForm({
             type="text"
             value={form.description}
             onChange={(e) => onChange({ ...form, description: e.target.value })}
+            {...checkedBy('description')}
           />
         </label>
+        {errorLine('description')}
       </FormSection>
     </FormDrawer>
   );

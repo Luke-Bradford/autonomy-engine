@@ -454,3 +454,58 @@ describe('GlobalParamsPage export and import (#844 GL6)', () => {
     expect(screen.getByLabelText(/import/i)).toBeInTheDocument();
   });
 });
+
+/* #1396 OR5 slice 6 — inline validation on the global parameter form. */
+describe('GlobalParamsPage — inline validation (#1396)', () => {
+  it('a refused Save marks the name and the value, each beside itself, and focuses the first', async () => {
+    const user = userEvent.setup();
+    renderWithDataRouter(<GlobalParamsPage />);
+    await screen.findByText(/No global parameters yet/i);
+    await openNew(user);
+    await user.type(field('Name'), 'my-param');
+    await user.selectOptions(field('Type'), 'number');
+    await user.type(field('Value'), 'abc');
+    await user.click(create());
+
+    expect(createMock).not.toHaveBeenCalled();
+    const alert = within(form()).getByRole('alert');
+    expect(alert).toHaveTextContent('Fix these 2 fields:');
+    await waitFor(() => expect(field('Name')).toHaveFocus());
+    expect(field('Name')).toHaveAccessibleDescription(/cannot be referenced/);
+    expect(field('Value')).toHaveAttribute('aria-invalid', 'true');
+
+    await user.clear(field('Value'));
+    await user.type(field('Value'), '3');
+    expect(field('Value')).toHaveAttribute('aria-invalid', 'false');
+    expect(alert).toHaveTextContent('Fix this field:');
+  });
+
+  it('a 409 on create is shown beside the Name', async () => {
+    createMock.mockRejectedValue(new ApiError(409, 'conflict', undefined));
+    const user = userEvent.setup();
+    renderWithDataRouter(<GlobalParamsPage />);
+    await screen.findByText(/No global parameters yet/i);
+    await openNew(user);
+    await user.type(field('Name'), 'apiUrl');
+    await user.click(create());
+
+    await waitFor(() => expect(field('Name')).toHaveFocus());
+    expect(field('Name')).toHaveAccessibleDescription(/already exists\. Names ignore case/);
+  });
+
+  it('on an edit, a changed value is checked when it is left, and blocks the PATCH', async () => {
+    listMock.mockResolvedValue([global({ type: 'number', value: 3 })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<GlobalParamsPage />);
+    await openEdit(user, 'apiUrl');
+
+    await user.clear(field('Value'));
+    await user.type(field('Value'), 'many');
+    expect(field('Value')).toHaveAttribute('aria-invalid', 'false');
+    await user.tab();
+    expect(field('Value')).toHaveAttribute('aria-invalid', 'true');
+    await user.click(save());
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(within(form()).getByRole('alert')).toHaveTextContent('Fix this field:');
+  });
+});

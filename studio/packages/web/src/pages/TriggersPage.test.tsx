@@ -19,6 +19,7 @@ import * as runsApi from '../api/runs';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { ROUTES } from '../routes';
+import { ApiError } from '../api/client';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
@@ -1681,5 +1682,95 @@ describe('#1396 the trigger form drawer', () => {
     await user.selectOptions(form.getByLabelText(/Schedule authored as/), 'recurrence');
     await user.click(form.getByRole('button', { name: 'Cancel' }));
     expect(prompt()).toBeNull();
+  });
+});
+
+/* #1396 OR5 slice 6 — inline validation on the trigger form's own fields. The
+   mode editors keep their one-line refusal; a half-typed number or date, which
+   the browser no longer refuses under `noValidate`, is refused by the form. */
+describe('TriggersPage — inline validation (#1396)', () => {
+  async function openNew() {
+    const user = userEvent.setup();
+    renderWithDataRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    return { user, form: within(screen.getByRole('form', { name: /Trigger form/i })) };
+  }
+
+  it('a refused Save lists name, binding, max and params, focusing the first', async () => {
+    const { user, form } = await openNew();
+    await user.click(form.getByLabelText(/Enabled/i));
+    await user.selectOptions(form.getByLabelText('Concurrency'), 'parallel');
+    await user.type(form.getByLabelText(/Max parallel runs/i), '1.5');
+    await user.type(form.getByLabelText('Params (JSON)'), '[[1]');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    const alert = form.getByRole('alert');
+    expect(alert).toHaveTextContent('Fix these 4 fields:');
+    await waitFor(() => expect(form.getByLabelText('Name')).toHaveFocus());
+    expect(form.getByLabelText('Pipeline version')).toHaveAccessibleDescription(
+      /must be bound to a pipeline version/,
+    );
+    await user.click(
+      within(alert).getByRole('button', {
+        name: 'Max parallel runs: Enter a whole number, 1 or more.',
+      }),
+    );
+    expect(form.getByLabelText(/Max parallel runs/i)).toHaveFocus();
+    expect(form.getByLabelText('Params (JSON)')).toHaveAttribute('aria-invalid', 'true');
+
+    // Turning Enabled off is a fix for the binding: its line goes at once.
+    await user.click(form.getByLabelText(/Enabled/i));
+    expect(form.getByLabelText('Pipeline version')).toHaveAttribute('aria-invalid', 'false');
+    expect(alert).toHaveTextContent('Fix these 3 fields:');
+  });
+
+  it('a server 400 issue on a field lands beside it', async () => {
+    createMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'params', message: 'unknown param' }],
+      }),
+    );
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Nightly');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    await waitFor(() => expect(form.getByLabelText('Params (JSON)')).toHaveFocus());
+    expect(form.getByLabelText('Params (JSON)')).toHaveAccessibleDescription(/^Unknown param/);
+  });
+
+  it('refuses a control the browser could not read, rather than reading it as blank', async () => {
+    const { user, form } = await openNew();
+    await user.type(form.getByLabelText('Name'), 'Hourly');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    const interval = form.getByLabelText<HTMLInputElement>(/Repeat every/);
+    // jsdom has no bad input: give the control the validity Chromium gives `1e`
+    // (only `badInput` is read).
+    Object.defineProperty(interval, 'validity', { configurable: true, value: { badInput: true } });
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(form.getByRole('alert')).toHaveTextContent(/is not a complete number\. Finish it/);
+    expect(interval).toHaveFocus();
+  });
+
+  it('on an edit, a server 400 issue on the name lands beside it', async () => {
+    updateMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'name', message: 'too long' }],
+      }),
+    );
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(form.getByLabelText('Name')).toHaveFocus());
+    expect(form.getByLabelText('Name')).toHaveAccessibleDescription('Too long');
+    expect(form.getByRole('alert')).toHaveTextContent('Fix this field:Name: too long');
   });
 });

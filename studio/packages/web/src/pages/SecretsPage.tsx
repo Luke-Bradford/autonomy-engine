@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useState, type FormEvent, type RefObject } from 'react';
-import { formatZodIssues } from '@autonomy-studio/shared';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react';
 import { ApiError, messageOf } from '../api/client';
 import {
   SecretRotateSchema,
@@ -14,6 +21,10 @@ import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
+import { FieldError } from '../lib/form/FieldError';
+import { FormErrors } from '../lib/form/FormErrors';
+import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
+import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { SecretInput } from '../lib/form/SecretInput';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
@@ -235,6 +246,24 @@ export function SecretsPage() {
   );
 }
 
+/**
+ * #1396 — what is wrong with a secret draft now, by field, in the form's order.
+ * The name is checked only on a create (a replaced secret's name is read-only),
+ * by the write schema's own rule, so the form never refuses what the server
+ * accepts; an empty one gets the plain words every form uses.
+ */
+function secretChecks(form: FormState): FieldErrors {
+  const out: Record<string, string> = {};
+  if (form.id === null) {
+    const empty = nameCheck(form.name);
+    const parsed = SecretWriteSchema.shape.name.safeParse(form.name);
+    if (empty.name !== undefined) out.name = empty.name;
+    else if (!parsed.success) out.name = parsed.error.issues[0]?.message ?? 'Invalid name';
+  }
+  if (form.secret === '') out.secret = 'Enter a value.';
+  return out;
+}
+
 function SecretForm({
   form,
   onChange,
@@ -254,9 +283,27 @@ function SecretForm({
   const [saving, setSaving] = useState(false);
   const replacing = form.id !== null;
 
+  const checks = useMemo(
+    () => secretChecks({ id: form.id, name: form.name, secret: form.secret }),
+    [form.id, form.name, form.secret],
+  );
+  /** The summary's names for the form's fields; a replaced secret's name is not one. */
+  const labelOf = useCallback(
+    (key: string) => {
+      if (key === 'name') return replacing ? undefined : 'Name';
+      return key === 'secret' ? 'Value' : undefined;
+    },
+    [replacing],
+  );
+  const validation = useFieldValidation(checks, labelOf);
+  const nameErrorId = useId();
+  const valueErrorId = useId();
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    // #1396 — every field that is wrong now is shown beside itself first.
+    if (!validation.attempt()) return;
 
     // Two different bodies, and the SHARED schema for each — the rotate body
     // carries the value alone, because the route refuses a name (#1061: the
@@ -271,7 +318,7 @@ function SecretForm({
         ? SecretWriteSchema.safeParse({ name: form.name, secret: form.secret })
         : SecretRotateSchema.safeParse({ secret: form.secret });
     if (!parsed.success) {
-      setError(formatZodIssues(parsed.error.issues));
+      setError(schemaRefusal(parsed.error.issues, validation));
       return;
     }
 
@@ -313,14 +360,18 @@ function SecretForm({
         form.name === lowered
           ? `Secret names ignore case.`
           : `Secret names ignore case, so “${form.name}” and “${lowered}” are the same name.`;
-      setError(
-        // A rotation cannot conflict — its name is not moving — so this
-        // explanation belongs to the create path only.
-        !replacing && err instanceof ApiError && err.status === 409
-          ? `A secret named “${form.name}” already exists. ${caseRule} ` +
-              `Use Replace to change its value.`
-          : messageOf(err),
-      );
+      // A rotation cannot conflict — its name is not moving — so this
+      // explanation belongs to the create path only. It is the NAME's problem,
+      // so it is shown beside the Name (#1396).
+      if (!replacing && err instanceof ApiError && err.status === 409) {
+        validation.showRefusedFields({
+          name:
+            `A secret named “${form.name}” already exists. ${caseRule} ` +
+            `Use Replace to change its value.`,
+        });
+      } else {
+        setError(saveRefusal(err, validation));
+      }
       setSaving(false);
     }
   }
@@ -335,13 +386,8 @@ function SecretForm({
       onSubmit={(e) => void onSubmit(e)}
       busy={saving}
       returnFocusTo={returnFocusTo}
-      status={
-        error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )
-      }
+      validation={validation}
+      status={<FormErrors validation={validation} message={error} />}
       actions={
         <>
           <button type="button" onClick={onClose} disabled={saving}>
@@ -373,8 +419,10 @@ function SecretForm({
             // this one is information worth reaching.
             readOnly={replacing}
             required
+            {...validation.attrsFor('name', nameErrorId)}
           />
         </label>
+        <FieldError id={nameErrorId} message={validation.errorFor('name')} />
       </FormSection>
 
       <FormSection title="Value">
@@ -388,7 +436,9 @@ function SecretForm({
           value={form.secret}
           onChange={(secret) => onChange({ ...form, secret })}
           required
+          field={validation.attrsFor('secret', valueErrorId)}
         />
+        <FieldError id={valueErrorId} message={validation.errorFor('secret')} />
         <p className="page-hint">
           Write-only: once saved, the value can be replaced but never read back.
         </p>

@@ -96,10 +96,10 @@ dialogs.
 
 ## Validation
 
-Connections and Datasets check their own fields (`useFieldValidation`,
-`lib/form/fieldValidation.ts`). Secrets, Global parameters and Triggers move onto it next, and still
-use the browser's own `required` check until then. Passing `validation` to `FormDrawer` turns that
-check off (`noValidate`), so the browser's bubble no longer pre-empts the inline message.
+Connections, Datasets, Secrets, Global parameters and Triggers check their own fields
+(`useFieldValidation`, `lib/form/fieldValidation.ts`). Passing `validation` to `FormDrawer` turns
+the browser's own check off (`noValidate`), so the browser's bubble no longer pre-empts the inline
+message.
 
 - **The page computes `checks`**, a memo over what they read: what is wrong with the draft now, by
   field key, in the form's order (`name`, `connectionId`, `config.<field>`, `columns`). A required
@@ -144,6 +144,26 @@ check off (`noValidate`), so the browser's bubble no longer pre-empts the inline
   and blur handlers find the key, so a field needs no wiring of its own. Moving between the cells of
   one row list is not leaving it. `ConfigFieldControl` takes a `validation` prop and `ConfigEditor`
   an `errorFor`; the canvas passes neither and renders as before.
+- **A field that is read-only on an edit is not a field to fix.** `labelOf` stops naming it (a
+  replaced secret's or a stored global's Name), so nothing is checked or filed there.
+- **A conflict on the name is the Name's error.** A 409 from a create, where the name is the only
+  thing that can collide, goes beside the Name (`showRefusedFields`), not into the footer's message.
+- **Under `noValidate`, `FormDrawer` refuses bad input itself.** A native `type="number"` holding
+  `1e`, or a half-typed `datetime-local`, reports `value === ''` and sets `validity.badInput`. The
+  browser refused such a submit; with its check off, a page reading the value would see a blank and
+  quietly drop the bound or cap. So when `validation` is passed, `FormDrawer` looks for such a
+  control (`firstBadInput`) before calling the page's submit, and refuses in its place
+  (`refuseBadInput`). Every failing check is raised, as on a Save. On a field of the form the
+  message goes beside it; on any other control (a trigger mode editor's date) it is the alert's
+  `notice`. Focus goes to the first invalid field, or to the control when nothing else is invalid.
+  No page needs to remember to do this.
+- **Hand-written controls join with `validation.attrsFor(key, errorId)`** and a `FieldError` under
+  them with that id. `fieldAttrs` stays for a control that must say more (a hint, a row list).
+- **The trigger form checks its own fields only**: Name, the binding (an enabled trigger must be
+  bound), Max parallel runs and Params. Max is read as Save reads it (`Number`), so `1e2` passes;
+  empty, `0`, `-1` and `1.5` do not. Its mode editors (recurrence, tumbling window, event, run
+  windows) still refuse with the footer's one message on Save, from their converters. Moving them
+  onto field keys is a later slice.
 - The canvas's `DraftNumberField` uses the same `FieldError` with `role="alert"`, because there is no
   summary on the canvas to announce it.
 
