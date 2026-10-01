@@ -3,10 +3,10 @@ import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import {
   configFieldTitle,
   describeNumberRule,
-  numberKeypad,
   emptyControlValue,
   isRowKind,
   isRowList,
+  numberKeypad,
   placeRowCandidate,
 } from './configForm';
 import type { ConfigField, FieldInput, ObjectListRow } from './configForm';
