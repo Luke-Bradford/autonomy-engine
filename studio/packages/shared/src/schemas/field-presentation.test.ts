@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  unnamedEnumValues,
+  optionTitles,
   authoredAsExpression,
   fieldLabelOf,
   isAuthoredAsExpression,
@@ -48,5 +50,38 @@ describe('human field labels (#1396)', () => {
   it('says nothing for an untitled schema', () => {
     expect(fieldLabelOf(singleLine(z.string()))).toBeUndefined();
     expect(fieldLabelOf(z.string())).toBeUndefined();
+  });
+});
+
+describe('unnamedEnumValues (#1396)', () => {
+  const mode = z.enum(['a', 'b']);
+
+  it('reports each value with no name, through the wrappers', () => {
+    expect(
+      unnamedEnumValues({
+        bare: mode,
+        defaulted: mode.default('a'),
+        titled: presented(mode.optional(), { title: 'Mode' }),
+        text: z.string(),
+      }),
+    ).toEqual(['bare.a', 'bare.b', 'defaulted.a', 'defaulted.b', 'titled.a', 'titled.b']);
+  });
+
+  it('reports a blank name, and a name two values share', () => {
+    const field = presented(mode.optional(), { title: 'Mode', options: { a: 'Same', b: 'Same' } });
+    expect(
+      unnamedEnumValues({
+        field,
+        blank: presented(z.enum(['x']), { title: 'X', options: { x: ' ' } }),
+      }),
+    ).toEqual(['field.a', 'field.b', 'blank.x']);
+  });
+
+  it('passes a field whose every value is named', () => {
+    const named = presented(mode.optional(), {
+      title: 'Mode',
+      options: optionTitles(mode, { a: 'Alpha', b: 'Beta' }),
+    });
+    expect(unnamedEnumValues({ named })).toEqual([]);
   });
 });

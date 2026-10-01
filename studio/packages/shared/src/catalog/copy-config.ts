@@ -237,6 +237,9 @@ export const CopyMappingSchema = mappingArray(z.string().optional());
  */
 export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 
+/** How a `copy` writes into its sink: add rows, or replace what it holds. */
+const copyWriteModeSchema = z.enum(['append', 'overwrite']);
+
 /**
  * The whole `copy` config, minus the one field the two variants disagree about
  * (#1134, §6.1+§4). Both variants below are built from this, for the reason the
@@ -261,9 +264,6 @@ export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
  * authoring-surface decision that belongs with the mapping panel (M8), not with
  * the first adapter that runs one.
  */
-/** How a `copy` writes into its sink: add rows, or replace what it holds. */
-const copyWriteModeSchema = z.enum(['append', 'overwrite']);
-
 const copyInputShape = <T extends z.ZodType>(mapping: T) =>
   z.object({
     mapping,

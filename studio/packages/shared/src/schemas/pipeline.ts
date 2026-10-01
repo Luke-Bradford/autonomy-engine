@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { presented } from './field-presentation.js';
+import { optionTitles, presented } from './field-presentation.js';
 import { CATALOG_VERSION } from './version.js';
 
 /**
@@ -749,6 +749,9 @@ export type ContainerKind = z.infer<typeof ContainerKindSchema>;
  * validator's messages cite. Every surface naming a box reads this, so the box
  * an operator drops as "Until" is not then called "loop 1".
  */
+/** When a container may start: every incoming outer edge resolved, or the first. */
+const containerJoinSchema = z.enum(['all', 'any']);
+
 export const CONTAINER_KIND_LABELS: Record<ContainerKind, string> = {
   loop: 'Until',
   stage: 'Stage',
@@ -828,9 +831,10 @@ export const ContainerSchema = z.object({
     description: 'Lets parallel items set or append variables, in whatever order they finish.',
   }),
   /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
-  join: presented(z.enum(['all', 'any']).optional(), {
+  join: presented(containerJoinSchema.optional(), {
     title: 'Join',
-    description: 'all waits for every incoming edge; any starts on the first. Defaults to all.',
+    description: 'All waits for every incoming edge; Any starts on the first. Defaults to All.',
+    options: optionTitles(containerJoinSchema, { all: 'All', any: 'Any' }),
   }),
 });
 export type Container = z.infer<typeof ContainerSchema>;

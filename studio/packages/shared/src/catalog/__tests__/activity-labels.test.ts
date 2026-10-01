@@ -53,6 +53,12 @@ describe('activity config labels (#1396)', () => {
     },
   );
 
+  it('every container setting enum value has a display name', () => {
+    const shape = shapeOf(ContainerSchema);
+    const settings = Object.fromEntries(CONTAINER_CONFIG_FIELD_NAMES.map((n) => [n, shape[n]]));
+    expect(unnamedEnumValues(settings)).toEqual([]);
+  });
+
   it('every container setting has a title', () => {
     const shape = shapeOf(ContainerSchema);
     expect(CONTAINER_CONFIG_FIELD_NAMES.filter((n) => !fieldLabelThrough(shape[n]))).toEqual([]);

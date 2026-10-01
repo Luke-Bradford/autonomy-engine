@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import {
+  enumValuesOf,
   SecretRefSchema,
   canonicalStringify,
   isAddressableOutputName,
@@ -660,11 +661,9 @@ function classify(
     case 'boolean':
       return { kind: 'boolean' };
     case 'enum': {
-      const options = (schema as { options?: unknown }).options;
       // A non-string enum has no `<select>` this form can build honestly.
-      return Array.isArray(options) && options.every((o) => typeof o === 'string')
-        ? { kind: 'enum', enumOptions: options as string[] }
-        : { kind: 'json' };
+      const options = enumValuesOf(schema);
+      return options ? { kind: 'enum', enumOptions: options } : { kind: 'json' };
     }
     case 'array': {
       const element = unwrap((schema as { element?: unknown }).element).inner;

@@ -36,6 +36,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+  CONTAINER_KIND_LABELS,
   containerMembership,
   implicitRouting,
   type ContainerKind,
@@ -58,7 +59,6 @@ import {
   routingSentence,
 } from './containerRules';
 import { hasCanvasDragType, readActivityDragType, readContainerDragKind } from './activityDnd';
-import { CONTAINER_PALETTE } from './activityGroups';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { useNodeFan } from './useNodeFan';
@@ -1058,7 +1058,7 @@ export function FlowCanvas({
       // on `[store]` alone, so closing over the memo would name the container
       // from the render that created the callback, not from the doc as it stands
       // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
-      const name = containerLabels(state.containers).get(id) ?? kind;
+      const name = containerLabels(state.containers).get(id) ?? CONTAINER_KIND_LABELS[kind];
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
           // U17 — this used to end "and this cannot be undone", which was true
@@ -1248,7 +1248,7 @@ export function FlowCanvas({
         data: {
           kind: c.kind,
           ports: portsOf(c.id),
-          label: labels.get(c.id) ?? c.kind,
+          label: labels.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind],
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
           selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
@@ -1267,7 +1267,7 @@ export function FlowCanvas({
         // announced: its badge is `aria-hidden` (see `IssueBadge`). An activity
         // has no label override and reads its badge directly.
         ariaLabel: withIssueCount(
-          containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
+          containerAriaLabel(labels.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind], rect.childCount),
           bySubject.get(subjectKey('container', c.id))?.length ?? 0,
         ),
         /* Still NOT selectable, and that is now a decision rather than a default
@@ -2214,7 +2214,7 @@ export function FlowCanvas({
    */
   function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
     const state = store.getState();
-    const title = CONTAINER_PALETTE.find((e) => e.kind === kind)?.title ?? kind;
+    const title = CONTAINER_KIND_LABELS[kind];
     if (!confirmNewContainer(state, kind, title)) return;
     state.addContainer(kind, position);
   }

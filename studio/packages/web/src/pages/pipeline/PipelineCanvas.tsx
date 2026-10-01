@@ -1770,13 +1770,15 @@ function PropertyPanel({
         onApply={(next) => store.getState().updateContainer(container.id, next)}
         onCopy={() => {
           if (store.getState().copyContainer(container.id, pipelineId)) {
-            onNotice(`Copied ${containerLabels(containers).get(container.id) ?? container.kind}.`);
+            onNotice(
+              `Copied ${containerLabels(containers).get(container.id) ?? CONTAINER_KIND_LABELS[container.kind]}.`,
+            );
           }
         }}
         onDuplicate={() => {
           if (store.getState().duplicateContainer(container.id) !== null) {
             onNotice(
-              `Duplicated ${containerLabels(containers).get(container.id) ?? container.kind}.`,
+              `Duplicated ${containerLabels(containers).get(container.id) ?? CONTAINER_KIND_LABELS[container.kind]}.`,
             );
           }
         }}

@@ -356,7 +356,7 @@ const NODE_LOCATION = String.raw`nodes?\.([^.\s:]+)(\.?)`;
 /**
  * The CONTAINER labels need no quoting treatment of their own, for a reason worth
  * writing down rather than leaving to be re-derived: `containerLabels` mints
- * `` `${c.kind} ${n}` `` from `kind`, which is a closed union rather than free
+ * `` `${CONTAINER_KIND_LABELS[c.kind]} ${n}` `` from a fixed map rather than free
  * text, so it cannot carry a separator at all. They go through `namedList` anyway
  * because both kinds of label flow through the same `label()` lookup.
  */
