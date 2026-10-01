@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useBlocker } from 'react-router';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useBlocker, type Blocker } from 'react-router';
 
 /**
  * #1396 — the one unsaved-changes guard every resource form uses.
@@ -7,12 +7,12 @@ import { useBlocker } from 'react-router';
  * Three ways out of a dirty form, all held at the same prompt:
  *   - an in-page action (Cancel, Close, Escape, opening another row's form),
  *     which the page routes through `request`;
- *   - a route change, which `useBlocker` holds (the app is a data router);
+ *   - a route change, which `routeHold` holds (the app is a data router);
  *   - closing or reloading the tab, which only the browser's own
  *     `beforeunload` prompt can hold — a page cannot draw its own there.
  *
  * A clean form is never prompted: `request` runs the action at once, and the
- * blocker and the `beforeunload` listener are only armed while `dirty`.
+ * route hold and the `beforeunload` listener exist only while `dirty`.
  */
 export interface UnsavedChangesGuard {
   /** Whether the "discard unsaved changes?" prompt is showing. */
@@ -23,12 +23,21 @@ export interface UnsavedChangesGuard {
   discard: () => void;
   /** Stay on the form; the held action is dropped. */
   keep: () => void;
+  /**
+   * Render this anywhere in the page. It is `null` while the form is clean,
+   * and that is the point of it being an element rather than a `useBlocker`
+   * call in this hook: React Router warns about EVERY registered blocker on a
+   * navigation it did not create (a typed URL, `page.goto`), even one that
+   * would not block. So the blocker is mounted only while there is something
+   * to hold.
+   */
+  readonly routeHold: ReactNode;
 }
 
 export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
   // A function in state must be wrapped, or React calls it as an updater.
   const [held, setHeld] = useState<{ action: () => void } | null>(null);
-  const blocker = useBlocker(dirty);
+  const [blocked, setBlocked] = useState<Blocker | null>(null);
 
   useEffect(() => {
     if (!dirty) return;
@@ -50,16 +59,33 @@ export function useUnsavedChangesGuard(dirty: boolean): UnsavedChangesGuard {
   );
 
   const discard = useCallback(() => {
-    if (blocker.state === 'blocked') blocker.proceed();
+    blocked?.proceed?.();
+    setBlocked(null);
     const pending = held;
     setHeld(null);
     pending?.action();
-  }, [blocker, held]);
+  }, [blocked, held]);
 
   const keep = useCallback(() => {
-    if (blocker.state === 'blocked') blocker.reset();
+    blocked?.reset?.();
+    setBlocked(null);
     setHeld(null);
-  }, [blocker]);
+  }, [blocked]);
 
-  return { confirming: held !== null || blocker.state === 'blocked', request, discard, keep };
+  return {
+    confirming: held !== null || blocked !== null,
+    request,
+    discard,
+    keep,
+    routeHold: dirty ? <RouteHold onBlocked={setBlocked} /> : null,
+  };
+}
+
+/** Holds every route change while mounted, and hands the held one up. */
+function RouteHold({ onBlocked }: { onBlocked: (blocker: Blocker) => void }) {
+  const blocker = useBlocker(true);
+  useEffect(() => {
+    if (blocker.state === 'blocked') onBlocked(blocker);
+  }, [blocker, onBlocked]);
+  return null;
 }

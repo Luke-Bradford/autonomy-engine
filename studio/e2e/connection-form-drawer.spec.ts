@@ -87,12 +87,11 @@ test.describe('#1396 the connection form drawer', () => {
     await page.getByRole('button', { name: 'New connection' }).click();
     await form(page).getByLabel('Kind').selectOption('agent_cli');
 
-    const overflow = await page.evaluate(() => {
-      const body = document.querySelector('.form-drawer-body')!;
-      return body.scrollHeight > body.clientHeight;
-    });
-    expect(overflow).toBe(true);
+    // The form runs past the bottom of the window…
+    const drawerBottom = await drawer(page).evaluate((el) => el.getBoundingClientRect().bottom);
+    expect(drawerBottom).toBeGreaterThan(560);
     const create = form(page).getByRole('button', { name: 'Create connection' });
+    // …and Save is still on screen, at the bottom edge of it.
     await expect(create).toBeInViewport();
     // Primary last, right-aligned.
     const order = await page.evaluate(() => {

@@ -509,6 +509,7 @@ export function ConnectionsPage() {
 
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
+      {guard.routeHold}
       <div className={form ? 'drawer-layout drawer-layout-open' : 'drawer-layout'}>
         <div className="drawer-layout-main">
           {connections === null && !loadError && <p>Loading connections…</p>}
