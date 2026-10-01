@@ -314,21 +314,17 @@ export function useFieldValidation(
   }, []);
 
   const rekey = useCallback((to: (key: string) => string | null) => {
-    const keys = (from: Iterable<string>) =>
-      [...from].flatMap((key) => {
+    // Each held entry under its new key, or left out when `to` drops it.
+    const move = <V>(entries: Iterable<readonly [string, V]>): Array<[string, V]> =>
+      [...entries].flatMap(([key, value]) => {
         const next = to(key);
-        return next === null ? [] : [next];
+        return next === null ? [] : [[next, value] as [string, V]];
       });
+    const keys = (from: Iterable<string>) =>
+      move([...from].map((key) => [key, true] as const)).map(([key]) => key);
     edited.current = new Set(keys(edited.current));
     setRaised((prev) => new Set(keys(prev)));
-    setServer((prev) =>
-      Object.fromEntries(
-        Object.entries(prev).flatMap(([key, message]) => {
-          const next = to(key);
-          return next === null ? [] : [[next, message]];
-        }),
-      ),
-    );
+    setServer((prev) => Object.fromEntries(move(Object.entries(prev))));
   }, []);
 
   const attrsFor = useCallback(
