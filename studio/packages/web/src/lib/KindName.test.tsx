@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ConnectionKindName, DatasetKindName, KindGlyph, TriggerModeName } from './KindName';
-import { CONNECTION_KIND_ICONS } from './kindIcons';
+import { ConnectionKindName, DatasetKindName, KindSelect, TriggerModeName } from './KindName';
+import { CONNECTION_KIND_ICONS, TRIGGER_MODE_ICONS } from './kindIcons';
+import { activityIcon } from '../pages/pipeline/activityIcon';
 
 /**
  * #1396 — a kind is shown as its display name WITH an icon. The icon is
@@ -32,16 +33,32 @@ describe('kind names with an icon', () => {
     expect(names.map((n) => n.querySelector('.kind-icon svg') !== null)).toEqual([true, true]);
   });
 
-  it('draws a kind of the same family with the glyph the canvas uses for that act', () => {
-    // An HTTP connection and an LLM connection read as the activities that
-    // use them do: one icon language across the app, not two.
-    expect(CONNECTION_KIND_ICONS.http).not.toBe(CONNECTION_KIND_ICONS.anthropic_api);
-    expect(CONNECTION_KIND_ICONS.anthropic_api).toBe(CONNECTION_KIND_ICONS.openai_api);
-    expect(CONNECTION_KIND_ICONS.sqlite).toBe(CONNECTION_KIND_ICONS.postgres);
+  it('the picker shows the chosen kind beside it, hidden, and keeps its control', () => {
+    const { container } = render(
+      <KindSelect icons={CONNECTION_KIND_ICONS} kind="fs">
+        <select aria-label="Kind" />
+      </KindSelect>,
+    );
+    const glyph = container.querySelector('.kind-select > .kind-icon')!;
+    expect(glyph.getAttribute('data-kind')).toBe('fs');
+    expect(glyph.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByLabelText('Kind').parentElement).toBe(container.firstElementChild);
   });
 
-  it('a bare glyph is hidden from the accessibility tree', () => {
-    const { container } = render(<KindGlyph glyph={CONNECTION_KIND_ICONS.fs} kind="fs" />);
-    expect(container.firstElementChild!.getAttribute('aria-hidden')).toBe('true');
+  it('a kind with an activity draws the shape the canvas draws for that act', () => {
+    // One icon language: the canvas's glyphs are the 20px variants, these the
+    // unsized ones, so compare the icon's name with the size taken out.
+    const shape = (glyph: { displayName?: string }) => glyph.displayName?.replace(/\d+/, '');
+    const pairs: [{ displayName?: string }, string][] = [
+      [CONNECTION_KIND_ICONS.anthropic_api, 'llm_call'],
+      [CONNECTION_KIND_ICONS.agent_cli, 'agent_task'],
+      [CONNECTION_KIND_ICONS.http, 'http_request'],
+      [CONNECTION_KIND_ICONS.fs, 'file_list'],
+      [TRIGGER_MODE_ICONS.webhook, 'webhook'],
+    ];
+    for (const [glyph, activity] of pairs) {
+      expect(shape(glyph), activity).toBe(shape(activityIcon(activity)));
+      expect(shape(glyph), activity).toMatch(/Regular$/);
+    }
   });
 });

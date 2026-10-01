@@ -89,7 +89,7 @@ import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fie
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
-import { KindGlyph, TriggerModeName } from '../lib/KindName';
+import { KindSelect, TriggerModeName } from '../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
 
 const MODES = TriggerModeSchema.options;
@@ -1375,8 +1375,7 @@ function TriggerForm({
       <FormSection title="Firing">
         <LabelledControl label="Mode">
           {(id) => (
-            <span className="kind-select">
-              <KindGlyph glyph={TRIGGER_MODE_ICONS[form.mode]} kind={form.mode} />
+            <KindSelect icons={TRIGGER_MODE_ICONS} kind={form.mode}>
               <select
                 id={id}
                 value={form.mode}
@@ -1388,7 +1387,7 @@ function TriggerForm({
                   </option>
                 ))}
               </select>
-            </span>
+            </KindSelect>
           )}
         </LabelledControl>
 

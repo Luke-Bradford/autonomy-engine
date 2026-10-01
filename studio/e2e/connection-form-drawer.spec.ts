@@ -109,8 +109,13 @@ test.describe('#1396 the connection form drawer', () => {
           rowKind: rowIcon.getAttribute('data-kind'),
           rowHidden: rowIcon.getAttribute('aria-hidden'),
           // Unsized: no taller than the line of text beside it.
+          // A computed `line-height: normal` has no pixel value; 1.5em stands in.
           iconFitsLine:
-            svg.height > 0 && svg.height <= parseFloat(getComputedStyle(cell).lineHeight) + 1,
+            svg.height > 0 &&
+            svg.height <=
+              (parseFloat(getComputedStyle(cell).lineHeight) ||
+                parseFloat(getComputedStyle(cell).fontSize) * 1.5) +
+                1,
           pickerKind: document
             .querySelector('.form-drawer .kind-select .kind-icon')
             ?.getAttribute('data-kind'),
@@ -131,9 +136,16 @@ test.describe('#1396 the connection form drawer', () => {
       pickerKind: 'anthropic_api',
     });
     expect(before.pickerRightEdge).toBe(before.nameRightEdge);
-    // Legible in dark mode: the muted glyph against the surface behind the row.
-    const surface = await surfaceBehind(page, 'tbody tr .kind-icon');
-    expect(contrastRatio(before.iconColor, surface.color)).toBeGreaterThanOrEqual(3);
+    // Legible in both themes: the muted glyph against the surface behind its row.
+    const rowIcon = 'tbody tr .kind-icon[data-kind="ollama"]';
+    expect(
+      contrastRatio(before.iconColor, (await surfaceBehind(page, rowIcon)).color),
+    ).toBeGreaterThanOrEqual(3);
+    await setTheme(page, 'light');
+    const light = await read();
+    expect(
+      contrastRatio(light.iconColor, (await surfaceBehind(page, rowIcon)).color),
+    ).toBeGreaterThanOrEqual(3);
 
     await form(page).getByLabel('Kind').selectOption('postgres');
     expect((await read()).pickerKind).toBe('postgres');

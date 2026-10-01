@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { FluentIcon } from '@fluentui/react-icons';
 import {
   CONNECTION_KIND_LABELS,
@@ -11,10 +12,12 @@ import { CONNECTION_KIND_ICONS, DATASET_KIND_ICONS, TRIGGER_MODE_ICONS } from '.
 
 /**
  * The glyph alone, hidden from assistive technology: the name beside it (or
- * the control it sits next to) already says the kind. `data-kind` names what
- * it draws, because the rendered SVG carries nothing that does.
+ * the picker it sits next to) already says the kind. `data-kind` names what it
+ * draws, because the rendered SVG carries nothing that does. Taking the map
+ * and the key, not a glyph, ties the two together by type.
  */
-export function KindGlyph({ glyph: Glyph, kind }: { glyph: FluentIcon; kind: string }) {
+function KindGlyph<K extends string>({ icons, kind }: { icons: Record<K, FluentIcon>; kind: K }) {
+  const Glyph: FluentIcon = icons[kind];
   return (
     <span className="kind-icon" data-kind={kind} aria-hidden="true">
       <Glyph />
@@ -22,33 +25,54 @@ export function KindGlyph({ glyph: Glyph, kind }: { glyph: FluentIcon; kind: str
   );
 }
 
-function KindName({ glyph, kind, label }: { glyph: FluentIcon; kind: string; label: string }) {
+function KindName<K extends string>({
+  icons,
+  labels,
+  kind,
+}: {
+  icons: Record<K, FluentIcon>;
+  labels: Record<K, string>;
+  kind: K;
+}) {
   return (
     <span className="kind-name">
-      <KindGlyph glyph={glyph} kind={kind} />
-      {label}
+      <KindGlyph icons={icons} kind={kind} />
+      {labels[kind]}
     </span>
   );
 }
 
 export function ConnectionKindName({ kind }: { kind: ConnectionKind }) {
-  return (
-    <KindName
-      glyph={CONNECTION_KIND_ICONS[kind]}
-      kind={kind}
-      label={CONNECTION_KIND_LABELS[kind]}
-    />
-  );
+  return <KindName icons={CONNECTION_KIND_ICONS} labels={CONNECTION_KIND_LABELS} kind={kind} />;
 }
 
 export function DatasetKindName({ kind }: { kind: DatasetKind }) {
-  return (
-    <KindName glyph={DATASET_KIND_ICONS[kind]} kind={kind} label={DATASET_KIND_LABELS[kind]} />
-  );
+  return <KindName icons={DATASET_KIND_ICONS} labels={DATASET_KIND_LABELS} kind={kind} />;
 }
 
 export function TriggerModeName({ mode }: { mode: TriggerMode }) {
+  return <KindName icons={TRIGGER_MODE_ICONS} labels={TRIGGER_MODE_LABELS} kind={mode} />;
+}
+
+/**
+ * A form's Kind or Mode picker with the chosen kind's icon on its left. A
+ * native `<option>` cannot hold an icon, so the picker shows the current one
+ * beside it. `children` is the `<select>` itself, which keeps its label, id and
+ * full width (`.kind-select > select` in index.css).
+ */
+export function KindSelect<K extends string>({
+  icons,
+  kind,
+  children,
+}: {
+  icons: Record<K, FluentIcon>;
+  kind: K;
+  children: ReactNode;
+}) {
   return (
-    <KindName glyph={TRIGGER_MODE_ICONS[mode]} kind={mode} label={TRIGGER_MODE_LABELS[mode]} />
+    <span className="kind-select">
+      <KindGlyph icons={icons} kind={kind} />
+      {children}
+    </span>
   );
 }

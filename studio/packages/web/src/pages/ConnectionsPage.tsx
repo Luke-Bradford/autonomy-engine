@@ -73,7 +73,7 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
-import { ConnectionKindName, KindGlyph } from '../lib/KindName';
+import { ConnectionKindName, KindSelect } from '../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 
 const KINDS = CONNECTION_KINDS;
@@ -976,8 +976,7 @@ function ConnectionForm({
           }
         >
           {(id) => (
-            <span className="kind-select">
-              <KindGlyph glyph={CONNECTION_KIND_ICONS[form.kind]} kind={form.kind} />
+            <KindSelect icons={CONNECTION_KIND_ICONS} kind={form.kind}>
               <select
                 id={id}
                 value={form.kind}
@@ -990,7 +989,7 @@ function ConnectionForm({
                   </option>
                 ))}
               </select>
-            </span>
+            </KindSelect>
           )}
         </LabelledControl>
 

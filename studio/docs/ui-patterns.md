@@ -81,8 +81,10 @@ required marks and display names; its layout is its own, below.
   `ConnectionKindName`, `DatasetKindName` and `TriggerModeName` in the lists and on the dataset
   page, and the chosen kind's `KindGlyph` beside the form's Kind or Mode picker, since a native
   option cannot hold one. Icons go by family, not vendor (every LLM kind is the sparkle), and
-  reuse the glyph `activityIcon.ts` draws for the same act. The icon is `aria-hidden`; the name is
-  what is read.
+  reuse the shape `activityIcon.ts` draws for the same act (a test pins the pairs). The glyphs are
+  the unsized variants, so they take the text's size, and muted, so the name stays what is read;
+  the icon is `aria-hidden`. A picker uses `KindSelect`. Kinds named in prose or in a native option
+  (a store picker's "Warehouse (PostgreSQL)") stay text.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).

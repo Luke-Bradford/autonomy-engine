@@ -182,6 +182,13 @@ describe('DatasetsPage', () => {
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
     await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_1');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
+    // #1396 — the picker's icon follows the chosen kind.
+    expect(
+      within(form())
+        .getByLabelText('Kind')
+        .parentElement?.querySelector('.kind-icon')
+        ?.getAttribute('data-kind'),
+    ).toBe('table');
     // `table` is a control derived from the kind's own schema, not a JSON blob.
     await user.type(within(form()).getByLabelText('Table'), 'orders');
     await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), COLUMNS_JSON);
