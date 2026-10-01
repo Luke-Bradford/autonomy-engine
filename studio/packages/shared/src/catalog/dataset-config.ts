@@ -4,11 +4,7 @@ import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { CONNECTION_KIND_LABELS, type ConnectionKind } from '../schemas/connection.js';
-import {
-  DATASET_KIND_LABELS,
-  DatasetKindSchema,
-  type DatasetKind,
-} from '../schemas/dataset.js';
+import { DATASET_KIND_LABELS, DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
 
 /**
  * #1119 M4 — the per-KIND shape of a `Dataset.config` (data-movement spec §2.6).

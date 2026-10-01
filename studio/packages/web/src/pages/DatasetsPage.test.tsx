@@ -388,7 +388,9 @@ describe('DatasetsPage', () => {
     // rule (§8) — the operator learns that here, not when a run fails.
     await user.type(within(form()).getByLabelText('Table'), 'order lines');
     expect(
-      await within(form()).findByText(/This Database table config is incomplete: .*bare SQL identifier/),
+      await within(form()).findByText(
+        /This Database table config is incomplete: .*bare SQL identifier/,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -923,7 +925,9 @@ describe('DatasetsPage', () => {
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       expect(within(allowlist()).getByLabelText(/^Overridable: table/)).toBeChecked();
       expect(allowlist()).toHaveTextContent('never overridable, so a run refuses it');
-      expect(allowlist()).toHaveTextContent('Database table datasets have no settings a node can override.');
+      expect(allowlist()).toHaveTextContent(
+        'Database table datasets have no settings a node can override.',
+      );
     });
 
     it('says a table dataset has nothing overridable instead of drawing an empty list', async () => {
@@ -933,7 +937,9 @@ describe('DatasetsPage', () => {
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
-      expect(allowlist()).toHaveTextContent('Database table datasets have no settings a node can override.');
+      expect(allowlist()).toHaveTextContent(
+        'Database table datasets have no settings a node can override.',
+      );
       expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
     });
   });

@@ -739,7 +739,9 @@ export function connectionConfigAdvisory(
       (root): root is string => typeof root === 'string' && !looksAbsolutePath(root),
     );
     if (relative.length > 0) {
-      notes.push(`roots: every ${CONNECTION_KIND_LABELS[kind]} root must be an absolute path (${relative.join(', ')})`);
+      notes.push(
+        `roots: every ${CONNECTION_KIND_LABELS[kind]} root must be an absolute path (${relative.join(', ')})`,
+      );
     }
   }
 

@@ -1542,8 +1542,7 @@ export function FlowCanvas({
     const attempt = () => {
       const active = document.activeElement;
       const target = Array.from(
-        reactFlowStore.getState().domNode?.querySelectorAll<HTMLElement>('.react-flow__node') ??
-          [],
+        reactFlowStore.getState().domNode?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
       ).find((el) => el.dataset.id === focusAfterInsert);
       if (target !== undefined && active === document.body) {
         // `preventScroll`: the pane is `overflow: hidden`, and a browser

@@ -43,7 +43,9 @@ describe('paramOverrides (#1304)', () => {
     const r = datasetOverrideResource(dataset('table', { table: 't' }, ['table', 'schema']));
     expect(addableKeys(r, {})).toEqual([]);
     // …and says the KIND has none, not that the allowlist is empty.
-    expect(overrideNote(r, {})).toBe('Database table datasets have no settings a node can override.');
+    expect(overrideNote(r, {})).toBe(
+      'Database table datasets have no settings a node can override.',
+    );
   });
 
   it('tells an empty allowlist apart from a kind with nothing overridable', () => {
