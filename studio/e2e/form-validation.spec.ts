@@ -12,6 +12,9 @@ import { fluentRootReady } from './support/theme';
  * Slice 6 put Secrets, Global parameters and the trigger form's own fields on
  * the same pattern. Under `noValidate` the browser no longer refuses a
  * half-typed number, so the trigger form refuses it itself.
+ *
+ * Slice 13 keyed the trigger mode editors' controls as fields too: a refusal
+ * sits beside the control it is about, not only in the footer.
  */
 
 async function openNew(page: Page, hub: 'connections' | 'datasets'): Promise<void> {
@@ -175,6 +178,45 @@ test.describe('#1396 inline validation', () => {
     await expect(interval).toBeFocused();
     // Nothing was created: the list still has no row by that name.
     await expect(page.getByRole('row', { name: /e2e-1396-trigger-/ })).toHaveCount(0);
+    await expectQuiet(page, problems);
+  });
+
+  test('trigger: a mode editor refusal sits beside its control, and nothing below moves', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.goto('/#/manage/triggers');
+    await page.getByRole('heading', { name: 'Triggers' }).waitFor();
+    await fluentRootReady(page);
+    await page.getByRole('button', { name: 'New trigger' }).click();
+    const form = page.getByRole('form', { name: 'Trigger form' });
+    await form.getByLabel('Name', { exact: true }).fill(`e2e-1396-mode-${Date.now()}`);
+    await form.getByLabel('Mode', { exact: true }).selectOption('schedule');
+
+    // A weekly with no day ticked: Save marks the days and takes focus there.
+    await form.getByLabel('Frequency', { exact: true }).selectOption('week');
+    await form.getByRole('button', { name: 'Create trigger' }).click();
+    const days = form.getByRole('group', { name: /Days of week/ });
+    await expect(days).toHaveAttribute('data-invalid', 'true');
+    await expect(form.getByRole('alert')).toContainText('Days of week:');
+    await expect(form.getByRole('checkbox', { name: 'Sun' })).toBeFocused();
+    await form.getByRole('checkbox', { name: 'Mon' }).check();
+    await expect(days).not.toHaveAttribute('data-invalid');
+
+    // A bad Hours entry shows on leaving the field, in a slot that moves nothing.
+    const hours = form.getByLabel(/^Hours/);
+    const below = form.getByLabel('End time', { exact: true });
+    const before = await below.boundingBox();
+    await hours.fill('9, x');
+    await expect(hours).toHaveAttribute('aria-invalid', 'false');
+    await hours.press('Tab');
+    await expect(hours).toHaveAttribute('aria-invalid', 'true');
+    await expect(hours).toHaveAccessibleDescription(/'x' is not a whole number/);
+    expect((await below.boundingBox())?.y).toBe(before?.y);
+
+    await hours.fill('9');
+    await hours.press('Tab');
+    await expect(hours).toHaveAttribute('aria-invalid', 'false');
     await expectQuiet(page, problems);
   });
 });
