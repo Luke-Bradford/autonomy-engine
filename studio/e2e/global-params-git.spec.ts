@@ -86,10 +86,10 @@ test('a global parameter commits to git, and exports and imports as a file', asy
 
   await deleteMine(request);
   await page.reload();
-  await expect(page.getByRole('group', { name: `global ${NAME}` })).toHaveCount(0);
+  await expect(page.getByRole('cell', { name: NAME, exact: true })).toHaveCount(0);
 
   await page.getByLabel('Export file').setInputFiles(file);
-  await expect(page.getByRole('group', { name: `global ${NAME}` })).toBeVisible();
+  await expect(page.getByRole('cell', { name: NAME, exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

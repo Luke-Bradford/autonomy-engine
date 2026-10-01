@@ -32,6 +32,17 @@ describe('useDrawerForm (#1396)', () => {
     expect(hook.current().form).toBeNull();
   });
 
+  it('closeWhere closes only a matching form, dirty or not, without the prompt', () => {
+    const hook = mountHook();
+    act(() => hook.current().openForm('kept'));
+    act(() => hook.current().setForm('kept, edited'));
+    act(() => hook.current().closeWhere((open) => open === 'other'));
+    expect(hook.current().form).toBe('kept, edited');
+    act(() => hook.current().closeWhere((open) => open.startsWith('kept')));
+    expect(hook.current().form).toBeNull();
+    expect(hook.current().guard.confirming).toBe(false);
+  });
+
   it('closes a clean form at once, and holds a dirty one at the prompt', () => {
     const hook = mountHook();
     act(() => hook.current().openForm('opened'));

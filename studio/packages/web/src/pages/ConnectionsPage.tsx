@@ -63,6 +63,7 @@ import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { SecretInput } from '../lib/form/SecretInput';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
@@ -176,6 +177,7 @@ export function ConnectionsPage() {
     seq: formSeq,
     guard,
     openerRef,
+    closeWhere,
     ...drawer
   } = useDrawerForm(savePayloadSignature);
   /**
@@ -455,12 +457,13 @@ export function ConnectionsPage() {
         if (!window.confirm(message)) return;
         try {
           await deleteConnection(conn.id);
+          closeWhere((open) => open.id === conn.id);
           await refresh();
         } catch (err) {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
       }),
-    [runDelete, refresh],
+    [runDelete, refresh, closeWhere],
   );
 
   return (
@@ -627,7 +630,6 @@ function ConnectionForm({
   onSaved: () => void | Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [showSecret, setShowSecret] = useState(false);
   const [saving, setSaving] = useState(false);
   /**
    * #1191 — the last probe's verdict, tagged with a SIGNATURE of the draft it
@@ -987,27 +989,12 @@ function ConnectionForm({
       </FormSection>
 
       <FormSection title="Authentication">
-        <div className="secret-field">
-          <label>
-            Secret
-            <input
-              type={showSecret ? 'text' : 'password'}
-              value={form.secret}
-              onChange={(e) => onChange({ ...form, secret: e.target.value })}
-              placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          {/* A sibling of the label, so it never joins the input's name. */}
-          <button
-            type="button"
-            aria-label={showSecret ? 'Hide secret' : 'Show secret'}
-            onClick={() => setShowSecret((shown) => !shown)}
-          >
-            {showSecret ? 'Hide' : 'Show'}
-          </button>
-        </div>
+        <SecretInput
+          label="Secret"
+          value={form.secret}
+          onChange={(secret) => onChange({ ...form, secret })}
+          placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
+        />
         {/* Never a `required` input: on edit blank means KEEP the stored secret,
             and on create the server accepts a secretless row (it derives
             `needs_secret` and stores it). This says what the kind DOES with one. */}

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SecretsPage } from './SecretsPage';
 import * as api from '../api/secrets';
 import { ApiError } from '../api/client';
-import { renderWithRouter } from '../testing/renderWithRouter';
+import { renderWithDataRouter } from '../testing/renderWithRouter';
 
 // Mock only the network calls; `SecretWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
@@ -56,14 +56,14 @@ afterEach(() => {
 describe('SecretsPage', () => {
   it('lists the owner’s secrets by name', async () => {
     listMock.mockResolvedValue([secret(), secret({ id: 'sec_2', name: 'openai-key' })]);
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
 
     expect(await screen.findByText('stripe-key')).toBeInTheDocument();
     expect(screen.getByText('openai-key')).toBeInTheDocument();
   });
 
   it('says how a node references a secret — the marker is the whole point of the page', async () => {
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     expect(await screen.findByText(/\{"\$secret": "<name>"\}/)).toBeInTheDocument();
   });
 
@@ -72,7 +72,7 @@ describe('SecretsPage', () => {
     // identical if a load error renders the empty state, and the second one
     // would invite an operator to re-create a credential they already have.
     listMock.mockRejectedValue(new Error('network down'));
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not load secrets: network down',
@@ -83,7 +83,7 @@ describe('SecretsPage', () => {
   it('creates a secret and refreshes the list', async () => {
     const user = userEvent.setup();
     createMock.mockResolvedValue(secret());
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText(/No secrets yet/);
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -109,7 +109,7 @@ describe('SecretsPage', () => {
     const mountLoad = deferred<api.NamedSecret[]>();
     listMock.mockReturnValueOnce(mountLoad.promise);
     createMock.mockResolvedValue(secret());
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
 
     // The mount load is held open; the form is reachable regardless.
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -135,7 +135,7 @@ describe('SecretsPage', () => {
     // rejects exactly what the server would have 400'd — proving the schema is
     // genuinely wired in rather than re-declared loosely on this side.
     const user = userEvent.setup();
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText(/No secrets yet/);
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -158,7 +158,7 @@ describe('SecretsPage', () => {
     createMock.mockRejectedValue(
       new ApiError(409, 'The request conflicts with existing data.', undefined),
     );
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText(/No secrets yet/);
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -182,7 +182,7 @@ describe('SecretsPage', () => {
     createMock.mockRejectedValue(
       new ApiError(409, 'The request conflicts with existing data.', undefined),
     );
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText(/No secrets yet/);
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -200,7 +200,7 @@ describe('SecretsPage', () => {
   it('surfaces a NON-conflict create failure as itself, not as a duplicate name', async () => {
     const user = userEvent.setup();
     createMock.mockRejectedValue(new ApiError(500, 'Internal Server Error', undefined));
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText(/No secrets yet/);
 
     await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -218,7 +218,7 @@ describe('SecretsPage', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockResolvedValue(undefined);
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     listMock.mockResolvedValue([]);
@@ -235,13 +235,64 @@ describe('SecretsPage', () => {
     const user = userEvent.setup();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     listMock.mockResolvedValue([secret()]);
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
 
     expect(confirmSpy.mock.calls[0]![0]).toContain('{"$secret":"stripe-key"}');
     expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  describe('the drawer (#1396)', () => {
+    it('puts focus on the value when replacing — the name is read-only', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([secret()]);
+      renderWithDataRouter(<SecretsPage />);
+      await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
+      expect(screen.getByRole('dialog', { name: 'Replace value for stripe-key' })).toBeVisible();
+      expect(screen.getByLabelText('Value')).toHaveFocus();
+    });
+
+    it('shows and hides the typed value without it joining the field name', async () => {
+      const user = userEvent.setup();
+      renderWithDataRouter(<SecretsPage />);
+      await screen.findByText(/No secrets yet/);
+      await user.click(screen.getByRole('button', { name: 'New secret' }));
+      const value = screen.getByLabelText('Value');
+      expect(value).toHaveAttribute('type', 'password');
+      await user.click(screen.getByRole('button', { name: 'Show secret' }));
+      expect(value).toHaveAttribute('type', 'text');
+      await user.click(screen.getByRole('button', { name: 'Hide secret' }));
+      expect(value).toHaveAttribute('type', 'password');
+    });
+
+    it('asks before discarding a typed value', async () => {
+      const user = userEvent.setup();
+      renderWithDataRouter(<SecretsPage />);
+      await screen.findByText(/No secrets yet/);
+      await user.click(screen.getByRole('button', { name: 'New secret' }));
+      await user.type(screen.getByLabelText('Value'), 'sk_test');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      const prompt = screen.getByRole('alertdialog', { name: 'Unsaved changes' });
+      await user.click(within(prompt).getByRole('button', { name: 'Discard changes' }));
+      expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull();
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it('closes the drawer when the secret it is replacing is deleted', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([secret()]);
+      deleteMock.mockResolvedValue(undefined);
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      renderWithDataRouter(<SecretsPage />);
+      await user.click(await screen.findByRole('button', { name: 'Replace stripe-key' }));
+      await user.type(screen.getByLabelText('Value'), 'half-typed');
+      listMock.mockResolvedValue([]);
+      await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+      await waitFor(() => expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull());
+      expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
+    });
   });
 
   /**
@@ -258,7 +309,7 @@ describe('SecretsPage', () => {
       const user = userEvent.setup();
       rotateMock.mockResolvedValue(secret());
       listMock.mockResolvedValue([secret()]);
-      renderWithRouter(<SecretsPage />);
+      renderWithDataRouter(<SecretsPage />);
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
@@ -281,7 +332,7 @@ describe('SecretsPage', () => {
     it('does not let the name be edited — it is the lookup key, not a field', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([secret()]);
-      renderWithRouter(<SecretsPage />);
+      renderWithDataRouter(<SecretsPage />);
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
@@ -301,7 +352,7 @@ describe('SecretsPage', () => {
       // form's duplicate-name explanation must not leak onto this path.
       rotateMock.mockRejectedValue(new ApiError(500, 'Internal Server Error', undefined));
       listMock.mockResolvedValue([secret()]);
-      renderWithRouter(<SecretsPage />);
+      renderWithDataRouter(<SecretsPage />);
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
@@ -319,7 +370,7 @@ describe('SecretsPage', () => {
       const user = userEvent.setup();
       createMock.mockResolvedValue(secret({ id: 'sec_2', name: 'openai-key' }));
       listMock.mockResolvedValue([secret()]);
-      renderWithRouter(<SecretsPage />);
+      renderWithDataRouter(<SecretsPage />);
       await screen.findByText('stripe-key');
 
       await user.click(screen.getByRole('button', { name: 'New secret' }));
@@ -342,7 +393,7 @@ describe('SecretsPage', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockResolvedValue(undefined);
-    const { unmount } = renderWithRouter(<SecretsPage />);
+    const { unmount } = renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     // Hold the post-delete refresh open, so it is genuinely in flight at unmount.
@@ -371,7 +422,7 @@ describe('SecretsPage', () => {
     listMock.mockResolvedValue([secret()]);
     const pendingDelete = deferred<void>();
     deleteMock.mockReturnValue(pendingDelete.promise);
-    const { unmount } = renderWithRouter(<SecretsPage />);
+    const { unmount } = renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
     expect(listMock).toHaveBeenCalledTimes(1);
 
@@ -391,7 +442,7 @@ describe('SecretsPage', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([secret()]);
     deleteMock.mockRejectedValue(new Error('nope'));
-    renderWithRouter(<SecretsPage />);
+    renderWithDataRouter(<SecretsPage />);
     await screen.findByText('stripe-key');
 
     await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));

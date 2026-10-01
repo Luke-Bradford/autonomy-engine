@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
 
+/** The first field a person can type into: read-only ones are skipped. */
+const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
+
 /**
  * #1396 — the create/edit drawer every resource form opens in.
  *
@@ -58,11 +61,12 @@ export function FormDrawer({
   const bodyRef = useRef<HTMLDivElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
 
-  // Focus the first field on open, and hand focus back to whatever opened the
-  // drawer (the "New"/"Edit" button) when it closes.
+  // On open, focus the first field the operator can change: a read-only Name
+  // on an edit form is information, not where typing goes. On close, hand
+  // focus back to whatever opened the drawer (the "New"/"Edit" button).
   useEffect(() => {
     const opener = returnFocusTo?.current ?? document.activeElement;
-    bodyRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+    bodyRef.current?.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
     return () => {
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
@@ -77,7 +81,7 @@ export function FormDrawer({
   useEffect(() => {
     if (guard.confirming) keepRef.current?.focus();
     else if (wasConfirming.current) {
-      bodyRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+      bodyRef.current?.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
     }
     wasConfirming.current = guard.confirming;
   }, [guard.confirming]);

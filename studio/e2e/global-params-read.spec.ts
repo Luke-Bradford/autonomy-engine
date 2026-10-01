@@ -151,15 +151,12 @@ test('#844 GL3 — deleting a global names the pipeline that reads it', async ({
     confirmText = dialog.message();
     void dialog.dismiss();
   });
-  await page
-    .getByRole('group', { name: `global ${USED}` })
-    .getByRole('button', { name: /^delete global/ })
-    .click();
+  await page.getByRole('button', { name: `Delete ${USED}`, exact: true }).click();
   await expect
     .poll(() => confirmText)
     .toContain(`Read by the latest version of:\n  • ${name} (v1)`);
   /* Dismissed: the global is still there. */
-  await expect(page.getByRole('group', { name: `global ${USED}` })).toBeVisible();
+  await expect(page.getByRole('cell', { name: USED, exact: true })).toBeVisible();
 
   await expectQuiet(page, problems);
 });

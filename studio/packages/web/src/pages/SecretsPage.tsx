@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type RefObject } from 'react';
 import { formatZodIssues } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -11,6 +11,12 @@ import {
   type NamedSecret,
 } from '../api/secrets';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
+import { FormDrawer } from '../lib/form/FormDrawer';
+import { FormSection } from '../lib/form/FormSection';
+import { RequiredMark } from '../lib/form/RequiredMark';
+import { SecretInput } from '../lib/form/SecretInput';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { payloadSignature } from './pipeline/configForm';
 import { formatWhen } from './runs/format';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
@@ -29,6 +35,11 @@ function blankForm(): FormState {
  *  blank a validation error rather than a silent no-op. */
 function formForReplace(secret: NamedSecret): FormState {
   return { id: secret.id, name: secret.name, secret: '' };
+}
+
+/** #1396 — what Save would write, for the unsaved-changes guard. */
+function savePayloadSignature(form: FormState): string {
+  return payloadSignature([form.name, form.secret]);
 }
 
 /**
@@ -62,7 +73,16 @@ function formForReplace(secret: NamedSecret): FormState {
 export function SecretsPage() {
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const {
+    form,
+    setForm,
+    openForm,
+    seq: formSeq,
+    guard,
+    openerRef,
+    closeWhere,
+    ...drawer
+  } = useDrawerForm(savePayloadSignature);
   const guardedLoad = useGuardedLoad();
 
   /** The ONE load path — the mount effect below and every post-mutation
@@ -103,19 +123,23 @@ export function SecretsPage() {
       }
       try {
         await deleteSecret(secret.id);
+        closeWhere((open) => open.id === secret.id);
         await refresh();
       } catch (err) {
         setLoadError(`Could not delete “${secret.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh],
+    [refresh, closeWhere],
   );
 
   return (
     <section aria-labelledby="secrets-heading">
       <div className="page-header">
         <h2 id="secrets-heading">Secrets</h2>
-        <button type="button" onClick={() => setForm(blankForm())}>
+        <button
+          type="button"
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
+        >
           New secret
         </button>
       </div>
@@ -133,66 +157,80 @@ export function SecretsPage() {
         </p>
       )}
 
-      {secrets === null && !loadError && <p>Loading secrets…</p>}
+      {/* #1396 — the list and the form side by side; the form is a column, not
+          an overlay, so the row actions stay reachable while it is open. */}
+      {guard.routeHold}
+      <div className={form ? 'drawer-layout-open' : undefined}>
+        <div>
+          {secrets === null && !loadError && <p>Loading secrets…</p>}
 
-      {secrets !== null && secrets.length === 0 && (
-        <p>No secrets yet. Add one to give a pipeline a credential to reference by name.</p>
-      )}
+          {secrets !== null && secrets.length === 0 && (
+            <p>No secrets yet. Add one to give a pipeline a credential to reference by name.</p>
+          )}
 
-      {secrets !== null && secrets.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Created</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {secrets.map((secret) => (
-              <tr key={secret.id}>
-                <td>
-                  <code>{secret.name}</code>
-                </td>
-                <td>{formatWhen(secret.createdAt)}</td>
-                <td>
-                  {/* No confirmation dialog on Replace, deliberately. The form
+          {secrets !== null && secrets.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {secrets.map((secret) => (
+                  <tr key={secret.id}>
+                    <td>
+                      <code>{secret.name}</code>
+                    </td>
+                    <td>{formatWhen(secret.createdAt)}</td>
+                    <td>
+                      {/* No confirmation dialog on Replace, deliberately. The form
                       IS the confirmation — it names its target in the heading,
                       shows the name read-only, and takes an explicit submit —
                       and a dialog over a form the operator has just filled in
                       is noise rather than a check. */}
-                  <button
-                    type="button"
-                    onClick={() => setForm(formForReplace(secret))}
-                    aria-label={`Replace ${secret.name}`}
-                  >
-                    Replace
-                  </button>{' '}
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(secret)}
-                    aria-label={`Delete ${secret.name}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+                      <button
+                        type="button"
+                        onClick={(e) =>
+                          drawer.openFrom(e.currentTarget, () => openForm(formForReplace(secret)))
+                        }
+                        aria-label={`Replace ${secret.name}`}
+                      >
+                        Replace
+                      </button>{' '}
+                      <button
+                        type="button"
+                        onClick={() => void onDelete(secret)}
+                        aria-label={`Delete ${secret.name}`}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-      {form && (
-        <SecretForm
-          form={form}
-          onChange={setForm}
-          onClose={() => setForm(null)}
-          onSaved={async () => {
-            setForm(null);
-            await refresh();
-          }}
-        />
-      )}
+        {form && (
+          <SecretForm
+            /* Keyed on the open counter, so an error from one draft never
+               renders against the next (see `useDrawerForm`). */
+            key={formSeq}
+            form={form}
+            onChange={setForm}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onSaved={async () => {
+              drawer.closeIfLatest(formSeq);
+              await refresh();
+            }}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -200,11 +238,15 @@ export function SecretsPage() {
 function SecretForm({
   form,
   onChange,
+  guard,
+  returnFocusTo,
   onClose,
   onSaved,
 }: {
   form: FormState;
   onChange: (next: FormState) => void;
+  guard: UnsavedChangesGuard;
+  returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -212,7 +254,7 @@ function SecretForm({
   const [saving, setSaving] = useState(false);
   const replacing = form.id !== null;
 
-  async function onSubmit(event: React.FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
 
@@ -238,11 +280,13 @@ function SecretForm({
       await (id === null
         ? createSecret({ name: form.name, secret: parsed.data.secret })
         : rotateSecret(id, { secret: parsed.data.secret }));
-      // Clear the typed value before handing back. Not a security control —
-      // the plaintext has already been in an input's value and in the request
-      // body — but a form left populated invites re-submitting the same
-      // credential under a second name by accident.
-      onChange(blankForm());
+      // `onSaved` closes this drawer, which drops the typed value with it. Not
+      // a security control — the plaintext has already been in an input's
+      // value and in the request body — but a form left populated invites
+      // re-submitting the same credential under a second name by accident.
+      // It does NOT reset the form through `onChange`: that writes the page's
+      // ONE form state, and if the operator opened another secret's form while
+      // this save was in flight, a reset here would blank THAT form (#1396).
       await onSaved();
     } catch (err) {
       // The server answers EVERY unique-constraint violation with one generic
@@ -282,52 +326,73 @@ function SecretForm({
   }
 
   return (
-    <form className="connection-form" onSubmit={(e) => void onSubmit(e)} aria-label="Secret form">
-      <h3>{replacing ? `Replace value for ${form.name}` : 'New secret'}</h3>
+    <FormDrawer
+      title={replacing ? `Replace value for ${form.name}` : 'New secret'}
+      formLabel="Secret form"
+      className="connection-form"
+      guard={guard}
+      onRequestClose={onClose}
+      onSubmit={(e) => void onSubmit(e)}
+      busy={saving}
+      returnFocusTo={returnFocusTo}
+      status={
+        error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )
+      }
+      actions={
+        <>
+          <button type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={saving}>
+            {saving ? 'Saving…' : replacing ? 'Replace value' : 'Create secret'}
+          </button>
+        </>
+      }
+    >
+      <FormSection title="Basics">
+        <label>
+          <span>
+            Name
+            {/* A name that cannot change asks nothing of the operator. */}
+            {!replacing && <RequiredMark />}
+          </span>
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
+            placeholder="the name a node references, e.g. stripe-key"
+            // Read-only rather than absent when replacing: the operator needs to
+            // see WHICH secret is about to change, and the name genuinely cannot
+            // move (the route 400s a rename), so an editable field would only
+            // offer an error. Read-only, not disabled — a disabled input is
+            // skipped by keyboard navigation and by some screen readers, and
+            // this one is information worth reaching.
+            readOnly={replacing}
+            required
+          />
+        </label>
+      </FormSection>
 
-      <label>
-        Name
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => onChange({ ...form, name: e.target.value })}
-          placeholder="the name a node references, e.g. stripe-key"
-          // Read-only rather than absent when replacing: the operator needs to
-          // see WHICH secret is about to change, and the name genuinely cannot
-          // move (the route 400s a rename), so an editable field would only
-          // offer an error. Read-only, not disabled — a disabled input is
-          // skipped by keyboard navigation and by some screen readers, and
-          // this one is information worth reaching.
-          readOnly={replacing}
-          required
-        />
-      </label>
-
-      <label>
-        Value
-        <input
-          type="password"
+      <FormSection title="Value">
+        <SecretInput
+          label={
+            <span>
+              Value
+              <RequiredMark />
+            </span>
+          }
           value={form.secret}
-          onChange={(e) => onChange({ ...form, secret: e.target.value })}
-          autoComplete="off"
+          onChange={(secret) => onChange({ ...form, secret })}
           required
         />
-      </label>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
+        <p className="page-hint">
+          Write-only: once saved, the value can be replaced but never read back.
         </p>
-      )}
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : replacing ? 'Replace value' : 'Create secret'}
-        </button>
-        <button type="button" onClick={onClose} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </form>
+      </FormSection>
+    </FormDrawer>
   );
 }

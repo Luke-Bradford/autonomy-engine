@@ -513,6 +513,17 @@ describe('ConnectionsPage', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_1'));
   });
 
+  it('closes the drawer when the connection it is editing is deleted', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Doomed' }));
+    expect(screen.getByRole('form', { name: 'Connection form' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await waitFor(() => expect(screen.queryByRole('form', { name: 'Connection form' })).toBeNull());
+  });
+
   it('does not delete when confirmation is cancelled', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Safe' })]);
