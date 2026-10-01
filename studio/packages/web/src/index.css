@@ -10,11 +10,6 @@
  * mode.
  */
 :root {
-  /* #1396 — the page's reading width, and the form drawer that opens beside a
-     list. Shared so the widened page below stays the sum of the two. */
-  --content-max-width: 900px;
-  --drawer-width: 460px;
-  --drawer-gap: 1.25rem;
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e222b;
@@ -833,6 +828,13 @@ body {
 }
 
 .content {
+  /* #1396 — the page's reading width, and the form drawer that opens beside a
+     list (`.drawer-layout-open`, inside this element). Shared so the widened
+     page stays the sum of the two. Here, not on `:root`, which holds only the
+     palette (`palette.test.ts`). */
+  --content-max-width: 900px;
+  --drawer-width: 460px;
+  --drawer-gap: 1.25rem;
   padding: 1.5rem 2rem;
   max-width: var(--content-max-width);
   /* The shell is viewport-height, so this is the element that scrolls. No

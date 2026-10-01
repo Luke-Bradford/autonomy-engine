@@ -197,7 +197,8 @@ export const delimitedDatasetConfigSchema = z
      * (§8) — this schema is shared with the browser and knows no filesystem. */
     path: presented(singleLine(z.string()).min(1), {
       title: 'File path',
-      description: 'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+      description:
+        'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
     }),
     delimiter: presented(delimitedChar('delimiter').default(','), {
       title: 'Delimiter',
@@ -239,7 +240,8 @@ export const delimitedDatasetConfigSchema = z
         .optional(),
       {
         title: 'Date format',
-        description: 'How dates are written, e.g. yyyy-MM-dd. Needed to read a date or timestamp column.',
+        description:
+          'How dates are written, e.g. yyyy-MM-dd. Needed to read a date or timestamp column.',
       },
     ),
   })
@@ -320,18 +322,21 @@ export const excelDatasetConfigSchema = z
      * (§8) — this schema is shared with the browser and knows no filesystem. */
     path: presented(singleLine(z.string()).min(1), {
       title: 'Workbook path',
-      description: 'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+      description:
+        'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
     }),
     /** The worksheet BY NAME. Mutually exclusive with `sheetIndex`. */
     sheet: presented(singleLine(z.string()).min(1).optional(), {
       title: 'Sheet',
-      description: 'The worksheet, as named in the workbook. Give exactly one of Sheet and Sheet number.',
+      description:
+        'The worksheet, as named in the workbook. Give exactly one of Sheet and Sheet number.',
     }),
     /** The worksheet by 1-BASED position, for a workbook whose sheet names are
      * unstable or unprintable. Mutually exclusive with `sheet`. */
     sheetIndex: presented(z.int().min(1).optional(), {
       title: 'Sheet number',
-      description: 'The worksheet by position, counting from 1. Give exactly one of Sheet and Sheet number.',
+      description:
+        'The worksheet by position, counting from 1. Give exactly one of Sheet and Sheet number.',
     }),
     header: presented(z.boolean(), {
       title: 'Has a header row',
@@ -340,7 +345,8 @@ export const excelDatasetConfigSchema = z
     /** 1-based; only meaningful with `header: true`. */
     headerRow: presented(z.int().min(1).default(1), {
       title: 'Header row',
-      description: 'Which row holds the headings, counting from 1. Defaults to 1; above 1 needs Has a header row.',
+      description:
+        'Which row holds the headings, counting from 1. Defaults to 1; above 1 needs Has a header row.',
     }),
     /** §6.4 — the NULL sentinel, for TEXT cells that spell null out. */
     nullValue: presented(singleLine(z.string()).optional(), {
@@ -358,7 +364,8 @@ export const excelDatasetConfigSchema = z
         .optional(),
       {
         title: 'Date format',
-        description: 'How a date written as text is read, e.g. yyyy-MM-dd. A date-typed cell needs none.',
+        description:
+          'How a date written as text is read, e.g. yyyy-MM-dd. A date-typed cell needs none.',
       },
     ),
   })
