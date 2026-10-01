@@ -416,6 +416,18 @@ describe('ExpressionPicker — wrap in a function', () => {
     expect(ui.storedConfig()['url']).toBe('${toUpper(nodes.fetch.output.body)}');
   });
 
+  // #1413 — each row says what the function does: its parameters by name, a
+  // one-sentence description and an example, the last two as the button's
+  // accessible DESCRIPTION so a screen reader hears them after the name.
+  it("names a function's parameters and describes it with an example", () => {
+    const ui = mount([FETCH, READS], CHAIN, [], 'call');
+    ui.openFunctions('url');
+    const row = screen.getByRole('button', { name: 'toUpper(text: string) → string' });
+    expect(row).toHaveAccessibleDescription(
+      'Converts a string to upper case. Example: toUpper(\'hello\') → "HELLO"',
+    );
+  });
+
   it('offers nothing the save gate would refuse — every row validates as clean as the field already does', () => {
     const ui = mount([FETCH, READS], CHAIN, [], 'call');
     ui.openFunctions('url');

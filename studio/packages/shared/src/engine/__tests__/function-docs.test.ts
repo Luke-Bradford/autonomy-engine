@@ -10,7 +10,15 @@ import { substitute } from '../params.js';
 // the only guard, and it is the one that has to stay.
 
 function ctx(): SubstitutionContext {
-  return { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {}, variables: {}, globals: {} };
+  return {
+    params: {},
+    nodeOutputs: {},
+    nodeStatuses: {},
+    run: {},
+    trigger: {},
+    variables: {},
+    globals: {},
+  };
 }
 
 const names = listFunctions();
@@ -50,7 +58,9 @@ describe('function docs (#1413)', () => {
     expect(examples.length).toBeLessThanOrEqual(2);
     for (const { expr, result } of examples) {
       expect(expr.startsWith(`${name}(`)).toBe(true);
-      expect(expr).not.toMatch(/\b(nodes|params|vars|variables|global|globals|run|pipeline|trigger)\./);
+      expect(expr).not.toMatch(
+        /\b(nodes|params|vars|variables|global|globals|run|pipeline|trigger)\./,
+      );
       expect(substitute(`\${${expr}}`, ctx())).toEqual(result);
     }
   });

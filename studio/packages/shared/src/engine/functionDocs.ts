@@ -55,7 +55,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   greater: {
-    description: 'True when the first value is greater than the second; compare two numbers or two strings.',
+    description:
+      'True when the first value is greater than the second; compare two numbers or two strings.',
     params: ['left', 'right'],
     examples: [{ expr: 'greater(10, 2)', result: true }],
   },
@@ -65,7 +66,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: 'greaterOrEquals(2, 2)', result: true }],
   },
   less: {
-    description: 'True when the first value is less than the second; compare two numbers or two strings.',
+    description:
+      'True when the first value is less than the second; compare two numbers or two strings.',
     params: ['left', 'right'],
     examples: [{ expr: "less('apple', 'banana')", result: true }],
   },
@@ -100,7 +102,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   replace: {
-    description: 'Replaces every occurrence of one piece of text with another, matching case exactly.',
+    description:
+      'Replaces every occurrence of one piece of text with another, matching case exactly.',
     params: ['text', 'find', 'replaceWith'],
     examples: [{ expr: "replace('a-b-c', '-', '/')", result: 'a/b/c' }],
   },
@@ -138,7 +141,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: "endsWith('report.csv', '.csv')", result: true }],
   },
   indexOf: {
-    description: 'Returns the zero-based position of the first match in a string, or -1 when there is none.',
+    description:
+      'Returns the zero-based position of the first match in a string, or -1 when there is none.',
     params: ['text', 'search'],
     examples: [
       { expr: "indexOf('banana', 'an')", result: 1 },
@@ -146,12 +150,14 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   lastIndexOf: {
-    description: 'Returns the zero-based position of the last match in a string, or -1 when there is none.',
+    description:
+      'Returns the zero-based position of the last match in a string, or -1 when there is none.',
     params: ['text', 'search'],
     examples: [{ expr: "lastIndexOf('banana', 'an')", result: 3 }],
   },
   slug: {
-    description: 'Turns a value into lower-case letters, digits and dashes, safe for file names and ids.',
+    description:
+      'Turns a value into lower-case letters, digits and dashes, safe for file names and ids.',
     params: ['value'],
     examples: [{ expr: "slug('Q3 Sales Report!')", result: 'q3-sales-report' }],
   },
@@ -179,12 +185,14 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   first: {
-    description: 'Returns the first item of an array or the first character of a string, or null when empty.',
+    description:
+      'Returns the first item of an array or the first character of a string, or null when empty.',
     params: ['collection'],
     examples: [{ expr: "first(createArray('a', 'b'))", result: 'a' }],
   },
   last: {
-    description: 'Returns the last item of an array or the last character of a string, or null when empty.',
+    description:
+      'Returns the last item of an array or the last character of a string, or null when empty.',
     params: ['collection'],
     examples: [{ expr: "last(createArray('a', 'b'))", result: 'b' }],
   },
@@ -206,7 +214,9 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   intersection: {
     description: 'Returns the items that appear in every array given, each once.',
     params: ['array'],
-    examples: [{ expr: 'intersection(createArray(1, 2, 3), createArray(2, 3, 4))', result: [2, 3] }],
+    examples: [
+      { expr: 'intersection(createArray(1, 2, 3), createArray(2, 3, 4))', result: [2, 3] },
+    ],
   },
   union: {
     description: 'Merges arrays into one, keeping each distinct item once.',
@@ -219,22 +229,26 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: "createArray('a', 'b')", result: ['a', 'b'] }],
   },
   range: {
-    description: 'Builds an array of consecutive whole numbers from a start value, with the given count.',
+    description:
+      'Builds an array of consecutive whole numbers from a start value, with the given count.',
     params: ['start', 'count'],
     examples: [{ expr: 'range(1, 3)', result: [1, 2, 3] }],
   },
   filter: {
-    description: 'Keeps the items of an array for which the condition is true; write item for each one.',
+    description:
+      'Keeps the items of an array for which the condition is true; write item for each one.',
     params: ['array', 'condition'],
     examples: [{ expr: 'filter(createArray(1, 5, 10), greater(item, 3))', result: [5, 10] }],
   },
   map: {
-    description: 'Builds a new array by working out an expression for each item; write item for each one.',
+    description:
+      'Builds a new array by working out an expression for each item; write item for each one.',
     params: ['array', 'expression'],
     examples: [{ expr: 'map(createArray(1, 2), mul(item, 10))', result: [10, 20] }],
   },
   count: {
-    description: 'Counts the items in an array, or only those for which an optional condition on item is true.',
+    description:
+      'Counts the items in an array, or only those for which an optional condition on item is true.',
     params: ['array', 'condition'],
     examples: [
       { expr: 'count(createArray(1, 2, 3))', result: 3 },
@@ -254,7 +268,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
 
   // -- conversion --------------------------------------------------------------
   string: {
-    description: 'Converts a value to text; arrays and objects become JSON and null becomes empty text.',
+    description:
+      'Converts a value to text; arrays and objects become JSON and null becomes empty text.',
     params: ['value'],
     examples: [
       { expr: 'string(42)', result: '42' },
@@ -262,7 +277,8 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   int: {
-    description: 'Converts a whole-number string, or a number, to an integer, dropping any fraction.',
+    description:
+      'Converts a whole-number string, or a number, to an integer, dropping any fraction.',
     params: ['value'],
     examples: [{ expr: "int('42')", result: 42 }],
   },
@@ -356,7 +372,9 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   formatDateTime: {
     description: 'Formats a timestamp in UTC with the tokens yyyy, MM, dd, HH, mm, ss and fff.',
     params: ['timestamp', 'format'],
-    examples: [{ expr: "formatDateTime('2026-03-05T14:30:00Z', 'yyyy-MM-dd')", result: '2026-03-05' }],
+    examples: [
+      { expr: "formatDateTime('2026-03-05T14:30:00Z', 'yyyy-MM-dd')", result: '2026-03-05' },
+    ],
   },
   addDays: {
     description: 'Adds a number of days to a timestamp; a negative number goes back.',
@@ -366,17 +384,23 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
   addHours: {
     description: 'Adds a number of hours to a timestamp; a negative number goes back.',
     params: ['timestamp', 'hours'],
-    examples: [{ expr: "addHours('2026-03-05T00:00:00Z', -2)", result: '2026-03-04T22:00:00.000Z' }],
+    examples: [
+      { expr: "addHours('2026-03-05T00:00:00Z', -2)", result: '2026-03-04T22:00:00.000Z' },
+    ],
   },
   addMinutes: {
     description: 'Adds a number of minutes to a timestamp; a negative number goes back.',
     params: ['timestamp', 'minutes'],
-    examples: [{ expr: "addMinutes('2026-03-05T00:00:00Z', 90)", result: '2026-03-05T01:30:00.000Z' }],
+    examples: [
+      { expr: "addMinutes('2026-03-05T00:00:00Z', 90)", result: '2026-03-05T01:30:00.000Z' },
+    ],
   },
   addSeconds: {
     description: 'Adds a number of seconds to a timestamp; a negative number goes back.',
     params: ['timestamp', 'seconds'],
-    examples: [{ expr: "addSeconds('2026-03-05T00:00:00Z', 30)", result: '2026-03-05T00:00:30.000Z' }],
+    examples: [
+      { expr: "addSeconds('2026-03-05T00:00:00Z', 30)", result: '2026-03-05T00:00:30.000Z' },
+    ],
   },
   addToTime: {
     description: 'Adds an amount of Second, Minute, Hour, Day, Week, Month or Year to a timestamp.',
@@ -386,10 +410,14 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     ],
   },
   subtractFromTime: {
-    description: 'Subtracts an amount of Second, Minute, Hour, Day, Week, Month or Year from a timestamp.',
+    description:
+      'Subtracts an amount of Second, Minute, Hour, Day, Week, Month or Year from a timestamp.',
     params: ['timestamp', 'interval', 'unit'],
     examples: [
-      { expr: "subtractFromTime('2026-03-05T00:00:00Z', 1, 'Week')", result: '2026-02-26T00:00:00.000Z' },
+      {
+        expr: "subtractFromTime('2026-03-05T00:00:00Z', 1, 'Week')",
+        result: '2026-02-26T00:00:00.000Z',
+      },
     ],
   },
   startOfDay: {
@@ -403,9 +431,11 @@ export const FUNCTION_DOCS: Readonly<Record<string, FnDocEntry>> = Object.freeze
     examples: [{ expr: "startOfHour('2026-03-05T14:30:00Z')", result: '2026-03-05T14:00:00.000Z' }],
   },
   startOfMonth: {
-    description: "Moves a timestamp back to midnight UTC on the first day of its month.",
+    description: 'Moves a timestamp back to midnight UTC on the first day of its month.',
     params: ['timestamp'],
-    examples: [{ expr: "startOfMonth('2026-03-05T14:30:00Z')", result: '2026-03-01T00:00:00.000Z' }],
+    examples: [
+      { expr: "startOfMonth('2026-03-05T14:30:00Z')", result: '2026-03-01T00:00:00.000Z' },
+    ],
   },
   dayOfWeek: {
     description: 'Returns the day of the week in UTC, from 0 for Sunday to 6 for Saturday.',

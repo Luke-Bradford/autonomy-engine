@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import {
   availableRefs,
-  fnSignature,
+  functionDoc,
   listFunctions,
   type Container,
   type Edge,
@@ -187,7 +187,7 @@ export function useExpressionPicker(
             const after = issuesWith(target, applyWrap(text, span, name).value);
             return !after.some((issue) => !baseline.includes(issue));
           })
-          .map((name) => ({ name, signature: fnSignature(name) }));
+          .map((name) => ({ name, ...functionDoc(name) }));
       },
     };
   }, [nodes, edges, containers, params, variables, globals, subjectId, field, nodeNames]);
