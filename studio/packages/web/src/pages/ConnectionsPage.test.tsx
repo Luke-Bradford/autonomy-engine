@@ -1310,13 +1310,13 @@ describe('the connection form drawer (#1396)', () => {
     expect(prompt()).not.toBeInTheDocument();
   });
 
-  it('does not count a trip to JSON and back as an edit', async () => {
+  it('does not count switching to JSON as an edit', async () => {
     listMock.mockResolvedValue([conn()]);
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    // The drafts change shape (mode, text), but what Save would write does not.
     await user.click(screen.getByRole('button', { name: 'Edit as JSON' }));
-    await user.click(screen.getByRole('button', { name: 'Edit as fields' }));
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(prompt()).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
