@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
-import { focusFirstInvalid, type FieldValidation } from './fieldValidation';
+import { firstBadInput, focusFirstInvalid, type FieldValidation } from './fieldValidation';
 
 /** The first field a person can type into: read-only ones are skipped. */
 const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
@@ -128,7 +128,19 @@ export function FormDrawer({
       <form
         className={className}
         aria-label={formLabel}
-        onSubmit={onSubmit}
+        onSubmit={(event) => {
+          // #1396 — `noValidate` also turns off the browser's refusal of input
+          // it could not read (`1e` in a number box reads as ''), which a page
+          // would take for a blank and quietly drop. Refused here, for every
+          // form that checks its own fields.
+          const bad = validation === undefined ? null : firstBadInput(event.currentTarget);
+          if (validation !== undefined && bad !== null) {
+            event.preventDefault();
+            validation.refuseBadInput(bad);
+            return;
+          }
+          onSubmit(event);
+        }}
         noValidate={validation !== undefined}
         {...validation?.formHandlers}
       >

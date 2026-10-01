@@ -35,12 +35,7 @@ import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
-import {
-  fieldAttrs,
-  nameCheck,
-  useFieldValidation,
-  type FieldErrors,
-} from '../lib/form/fieldValidation';
+import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { deleteConfirmText } from './globalParamDeleteText';
@@ -319,7 +314,7 @@ const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
  * Save reads it, and on an edit only once it has changed, because an untouched
  * value is not written.
  */
-export function globalParamChecks(form: FormState): FieldErrors {
+function globalParamChecks(form: FormState): FieldErrors {
   const out: Record<string, string> = {};
   const { stored } = form;
   if (stored === null) {
@@ -368,9 +363,7 @@ function GlobalParamForm({
     value: useId(),
     description: useId(),
   };
-  /** The attributes a control carries for the form's validation. */
-  const checkedBy = (key: keyof typeof errorIds) =>
-    fieldAttrs({ key, error: validation.errorFor(key), errorId: errorIds[key] });
+  const checkedBy = (key: keyof typeof errorIds) => validation.attrsFor(key, errorIds[key]);
   const errorLine = (key: keyof typeof errorIds) => (
     <FieldError id={errorIds[key]} message={validation.errorFor(key)} />
   );

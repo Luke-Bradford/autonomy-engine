@@ -59,7 +59,11 @@ function controlOf(container: ParentNode, key: string): HTMLElement | null {
  */
 export function focusField(container: ParentNode, key: string): void {
   const control = controlOf(container, key);
-  if (control === null) return;
+  if (control !== null) focusControl(control);
+}
+
+/** Focus a control, opening any collapsed section it sits in first. */
+function focusControl(control: HTMLElement): void {
   for (let el = control.parentElement; el !== null; el = el.parentElement) {
     if (el instanceof HTMLDetailsElement) el.open = true;
   }
@@ -120,8 +124,8 @@ export function nameCheck(name: string): FieldErrors {
  * half-typed `datetime-local`, or `1e` in a `type="number"`. Such a control's
  * `value` is `''`, so a form that reads it sees a blank and quietly drops the
  * setting. The browser's own check refused the submit; a form that takes over
- * with `noValidate` must refuse it itself, and this is how it finds what to
- * refuse (`validity` is still kept under `noValidate`).
+ * with `noValidate` must refuse it itself. `FormDrawer` does, for every form
+ * given `validation`, using this (`validity` is still kept under `noValidate`).
  */
 export function firstBadInput(form: HTMLFormElement): HTMLInputElement | null {
   for (const el of Array.from(form.elements)) {
@@ -130,12 +134,22 @@ export function firstBadInput(form: HTMLFormElement): HTMLInputElement | null {
   return null;
 }
 
-/** What a refusal calls a bad-input control: its label's text, or its kind. */
+/** What a native control's input is, in words: `datetime-local` is a date and time. */
+const INPUT_NOUN: Readonly<Record<string, string>> = {
+  number: 'number',
+  date: 'date',
+  time: 'time',
+  'datetime-local': 'date and time',
+  month: 'month',
+  week: 'week',
+};
+
+/** What a refusal says about a bad-input control: its label's text, and what it holds. */
 export function badInputMessage(control: HTMLInputElement): string {
   const label = control.labels?.[0]?.textContent?.trim();
   const what = label === undefined || label === '' ? 'A field' : `“${label}”`;
   return `${what} holds something that is not a complete ${
-    control.type === 'number' ? 'number' : 'value'
+    INPUT_NOUN[control.type] ?? 'value'
   }. Finish it or clear it.`;
 }
 
@@ -148,6 +162,22 @@ function keyOf(target: EventTarget | null): string | undefined {
 export interface FieldValidation {
   /** What to show beside a field now, or `undefined`. */
   errorFor: (key: string) => string | undefined;
+  /** `fieldAttrs` for a hand-written control: its key, its error now, and its error line's id. */
+  attrsFor: (key: string, errorId: string) => ReturnType<typeof fieldAttrs>;
+  /**
+   * A refusal of input the browser could not read, in a control that is not
+   * one of the form's fields (a mode editor's date). Shown in the footer's
+   * alert until the next submit.
+   */
+  readonly notice: string | null;
+  /**
+   * A submit refused for a bad-input control (`firstBadInput`); `FormDrawer`
+   * calls this instead of the page's submit. Every failing check is raised as
+   * a Save would, so one press lists everything. On a field of the form the
+   * message goes beside it; elsewhere it is the `notice`. Focus goes to the
+   * first invalid field, or to the control when nothing else is.
+   */
+  refuseBadInput: (control: HTMLInputElement) => void;
   /** What the summary calls a field; `undefined` for a key this form does not show now. */
   labelOf: (key: string) => string | undefined;
   /** Whether a key is one of the form's fields now: a refusal's issue on one is shown beside it. */
@@ -220,6 +250,7 @@ export function useFieldValidation(
   const [server, setServer] = useState<FieldErrors>({});
   const [attempted, setAttempted] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // A raised key that now passes is dropped, during render (React's derived-
   // state pattern, as in DraftNumberField): the fix shows at once, and the
@@ -255,6 +286,7 @@ export function useFieldValidation(
       const failing = Object.keys(checks).filter(scope);
 
       setAttempted(true);
+      setNotice(null);
       setServer((prev) =>
         inScope === undefined
           ? {}
@@ -272,6 +304,32 @@ export function useFieldValidation(
     setServer(errors);
     if (Object.keys(errors).length > 0) setFocusRequest((n) => n + 1);
   }, []);
+
+  const attrsFor = useCallback(
+    (key: string, errorId: string) => fieldAttrs({ key, error: errorFor(key), errorId }),
+    [errorFor],
+  );
+
+  const refuseBadInput = useCallback(
+    (control: HTMLInputElement) => {
+      const message = badInputMessage(control);
+      const key = keyOf(control);
+      const failing = Object.keys(checks);
+      setAttempted(true);
+      setRaised((prev) => new Set([...prev, ...failing]));
+      if (key !== undefined && isKey(key)) {
+        setServer({ [key]: message });
+        setNotice(null);
+        setFocusRequest((n) => n + 1);
+        return;
+      }
+      setServer({});
+      setNotice(message);
+      if (failing.length > 0) setFocusRequest((n) => n + 1);
+      else focusControl(control);
+    },
+    [checks, isKey],
+  );
 
   const formHandlers = useMemo(
     () => ({
@@ -297,6 +355,9 @@ export function useFieldValidation(
 
   return {
     errorFor,
+    attrsFor,
+    notice,
+    refuseBadInput,
     labelOf,
     isKey,
     shown,

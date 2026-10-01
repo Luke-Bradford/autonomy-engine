@@ -80,14 +80,7 @@ import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
-import {
-  badInputMessage,
-  fieldAttrs,
-  firstBadInput,
-  nameCheck,
-  useFieldValidation,
-  type FieldErrors,
-} from '../lib/form/fieldValidation';
+import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
@@ -755,7 +748,7 @@ export function TriggersPage() {
 }
 
 /** `params` must be a JSON object (`params` is a record); blank means `{}`. */
-export function parseParamsText(
+function parseParamsText(
   text: string,
 ): { ok: true; params: Record<string, unknown> } | { ok: false; message: string } {
   try {
@@ -792,7 +785,7 @@ function bindingKey(form: FormState): string {
  *   and step used to refuse before the form took over its own checks.
  * - Params: a JSON object.
  */
-export function triggerChecks(form: FormState): FieldErrors {
+function triggerChecks(form: FormState): FieldErrors {
   const out: Record<string, string> = { ...nameCheck(form.name) };
   if (form.enabled && !bindingIsBound(form.binding)) {
     out[bindingKey(form)] =
@@ -858,9 +851,6 @@ function TriggerForm({
   const bindingErrorId = useId();
   const maxErrorId = useId();
   const paramsErrorId = useId();
-  /** The attributes a control carries for the form's validation. */
-  const checkedBy = (key: string, errorId: string) =>
-    fieldAttrs({ key, error: validation.errorFor(key), errorId });
   /* The version last chosen on the concrete side, so switching to bind-to-active
      and back does not silently discard it. Local to the form: it is undo state
      for a control, not part of what gets written. */
@@ -936,18 +926,9 @@ function TriggerForm({
     event.preventDefault();
     setError(null);
 
-    // #1396 — the form checks its own fields (`noValidate`), so the browser no
-    // longer refuses a half-typed date or number. Such a control reads as
-    // blank, and the converters below would quietly drop that bound or cap:
-    // refuse it here, as the browser did.
-    const bad =
-      event.currentTarget instanceof HTMLFormElement ? firstBadInput(event.currentTarget) : null;
-    if (bad !== null) {
-      setError(badInputMessage(bad));
-      bad.focus();
-      return;
-    }
-    // Every own field that is wrong now is shown beside itself first.
+    // #1396 — every own field that is wrong now is shown beside itself first.
+    // (A half-typed date or number, which reads as blank, never reaches here:
+    // `FormDrawer` refuses it, so the converters below cannot drop it.)
     if (!validation.attempt()) return;
 
     const parsedParams = parseParamsText(form.paramsText);
@@ -1166,7 +1147,7 @@ function TriggerForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
-            {...checkedBy('name', nameErrorId)}
+            {...validation.attrsFor('name', nameErrorId)}
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
@@ -1243,7 +1224,7 @@ function TriggerForm({
                 onChange={(e) =>
                   onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
                 }
-                {...checkedBy('bindToActive.pipelineId', bindingErrorId)}
+                {...validation.attrsFor('bindToActive.pipelineId', bindingErrorId)}
               >
                 {pipelines.map((p) => (
                   <option key={p.pipelineId} value={p.pipelineId}>
@@ -1269,7 +1250,7 @@ function TriggerForm({
                         : { kind: 'concrete', pipelineVersionId: e.target.value },
                   });
                 }}
-                {...checkedBy('pipelineVersionId', bindingErrorId)}
+                {...validation.attrsFor('pipelineVersionId', bindingErrorId)}
               >
                 <option value="">— unbound —</option>
                 {bindings.map((b) => (
@@ -1462,7 +1443,7 @@ function TriggerForm({
               value={form.concurrencyMax}
               onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
               required
-              {...checkedBy('concurrency.max', maxErrorId)}
+              {...validation.attrsFor('concurrency.max', maxErrorId)}
             />
           </label>
         )}
@@ -1480,7 +1461,7 @@ function TriggerForm({
               onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
               rows={4}
               spellCheck={false}
-              {...checkedBy('params', paramsErrorId)}
+              {...validation.attrsFor('params', paramsErrorId)}
             />
           )}
         </LabelledControl>

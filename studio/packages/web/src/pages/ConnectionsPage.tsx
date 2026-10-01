@@ -68,7 +68,7 @@ import { SecretInput } from '../lib/form/SecretInput';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
-import { fieldAttrs, nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
+import { nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
@@ -958,11 +958,7 @@ function ConnectionForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
-            {...fieldAttrs({
-              key: 'name',
-              error: validation.errorFor('name'),
-              errorId: nameErrorId,
-            })}
+            {...validation.attrsFor('name', nameErrorId)}
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />

@@ -23,12 +23,7 @@ import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
-import {
-  fieldAttrs,
-  nameCheck,
-  useFieldValidation,
-  type FieldErrors,
-} from '../lib/form/fieldValidation';
+import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { SecretInput } from '../lib/form/SecretInput';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
@@ -257,7 +252,7 @@ export function SecretsPage() {
  * by the write schema's own rule, so the form never refuses what the server
  * accepts; an empty one gets the plain words every form uses.
  */
-export function secretChecks(form: FormState): FieldErrors {
+function secretChecks(form: FormState): FieldErrors {
   const out: Record<string, string> = {};
   if (form.id === null) {
     const empty = nameCheck(form.name);
@@ -424,11 +419,7 @@ function SecretForm({
             // this one is information worth reaching.
             readOnly={replacing}
             required
-            {...fieldAttrs({
-              key: 'name',
-              error: validation.errorFor('name'),
-              errorId: nameErrorId,
-            })}
+            {...validation.attrsFor('name', nameErrorId)}
           />
         </label>
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
@@ -445,11 +436,7 @@ function SecretForm({
           value={form.secret}
           onChange={(secret) => onChange({ ...form, secret })}
           required
-          field={fieldAttrs({
-            key: 'secret',
-            error: validation.errorFor('secret'),
-            errorId: valueErrorId,
-          })}
+          field={validation.attrsFor('secret', valueErrorId)}
         />
         <FieldError id={valueErrorId} message={validation.errorFor('secret')} />
         <p className="page-hint">
