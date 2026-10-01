@@ -119,6 +119,19 @@ export function fieldLabelOf(schema: unknown): FieldLabel | undefined {
   };
 }
 
+/**
+ * #1396 — a top-level field's human label, from the field or the one wrapper
+ * (`.optional()`, `.default()`) a form reads through. The "every field is
+ * titled" gates on each catalog share this read.
+ */
+export function fieldLabelThrough(schema: unknown): FieldLabel | undefined {
+  const inner =
+    typeof schema === 'object' && schema !== null && '_zod' in schema
+      ? (schema as { _zod: { def: { innerType?: unknown } } })._zod.def.innerType
+      : undefined;
+  return fieldLabelOf(schema) ?? fieldLabelOf(inner);
+}
+
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */
 function presentationOf(schema: unknown): FieldPresentation | undefined {
   // Structural, not `instanceof`: a schema built by another copy of zod would

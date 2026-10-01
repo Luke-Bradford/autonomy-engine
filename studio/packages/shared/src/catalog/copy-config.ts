@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 
 /**
@@ -264,7 +264,10 @@ export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 const copyInputShape = <T extends z.ZodType>(mapping: T) =>
   z.object({
     mapping,
-    mode: z.enum(['append', 'overwrite']).default('append'),
+    mode: presented(z.enum(['append', 'overwrite']).default('append'), {
+      title: 'Write mode',
+      description: 'append adds the rows; overwrite replaces what the sink holds. Defaults to append.',
+    }),
   });
 
 /**
@@ -288,7 +291,14 @@ const copyInputShape = <T extends z.ZodType>(mapping: T) =>
  * hand-typing a `mapping` beside it. M8 slice 1 built the general `objectList`
  * control §13 asked for, so a mapping is now authored as named row controls.
  */
-export const copyInputSchema = copyInputShape(CopyMappingSchema);
+export const copyInputSchema = copyInputShape(
+  // #1396 — tags the exported instance: `copyInputShape` takes the mapping as
+  // given, and only this authored variant is ever rendered by a form.
+  presented(CopyMappingSchema, {
+    title: 'Column mapping',
+    description: 'Which source column, or expression, fills each sink column, and as what type.',
+  }),
+);
 
 /**
  * The DISPATCH variant — what an adapter re-parses out of `preparedInput`

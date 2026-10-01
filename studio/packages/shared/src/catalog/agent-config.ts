@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { presented, singleLine } from '../schemas/field-presentation.js';
 import { llmOutputSchemaSchema } from './llm-config.js';
 
 /**
@@ -25,9 +25,20 @@ import { llmOutputSchemaSchema } from './llm-config.js';
  * `safeParse(ctx.input)` must tolerate them — it reads only these three.
  */
 export const agentTaskConfigSchema = z.object({
-  task: z.string().min(1),
-  cwd: singleLine(z.string()).optional(),
-  outputSchema: llmOutputSchemaSchema.optional(),
+  task: presented(z.string().min(1), {
+    title: 'Task',
+    description: 'What the agent is asked to do. May use ${}.',
+  }),
+  cwd: presented(singleLine(z.string()).optional(), {
+    title: 'Working directory',
+    description: 'Where the agent runs. Overrides the connection\'s working directory.',
+  }),
+  // Titled on the `.optional()` wrapper, never on `llmOutputSchemaSchema`
+  // itself: the form matches that instance by identity, and `llm_call` shares it.
+  outputSchema: presented(llmOutputSchemaSchema.optional(), {
+    title: 'Output schema',
+    description: 'The shape the agent\'s answer must take, as named typed fields.',
+  }),
 });
 
 export type AgentTaskConfig = z.infer<typeof agentTaskConfigSchema>;

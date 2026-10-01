@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { authoredAsExpression, singleLine } from '../schemas/field-presentation.js';
+import { authoredAsExpression, presented, singleLine } from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**
@@ -675,14 +675,29 @@ export const llmCaptureSurfaceSchema = z
 export const llmCallConfigSchema = z
   .object({
     /** v1 shorthand: a single user message. Mutually exclusive with `messages`. */
-    prompt: z.string().min(1).optional(),
+    prompt: presented(z.string().min(1).optional(), {
+      title: 'User prompt',
+      description: 'A single user message. Use this or Conversation, not both.',
+    }),
     /** System instruction; folds together with any `role:'system'` messages. */
-    system: z.string().optional(),
+    system: presented(z.string().optional(), {
+      title: 'System prompt',
+      description: 'Instructions that frame every turn.',
+    }),
     /** v2 role-tagged conversation. Mutually exclusive with `prompt`. */
-    messages: llmMessagesSchema.optional(),
+    messages: presented(llmMessagesSchema.optional(), {
+      title: 'Conversation',
+      description: 'Role-tagged turns sent in order. Use this or User prompt, not both.',
+    }),
     /** Overrides the connection's default model for this node. */
-    model: singleLine(z.string()).optional(),
-    maxTokens: z.number().int().positive().optional(),
+    model: presented(singleLine(z.string()).optional(), {
+      title: 'Model',
+      description: 'Overrides the connection\'s default model for this step.',
+    }),
+    maxTokens: presented(z.number().int().positive().optional(), {
+      title: 'Max output tokens',
+      description: 'The most tokens the model may write in its answer.',
+    }),
     // Only the UNIVERSAL lower bound (0) is enforced here; the upper bound is
     // provider-specific (Anthropic 0–1, OpenAI/Ollama 0–2) so the adapters own
     // it. Catches a negative temperature at save-time, not at the provider call.
@@ -692,42 +707,72 @@ export const llmCallConfigSchema = z
     // request), not at the provider. This schema is deliberately still
     // model-agnostic — it cannot see the model, which may come from the
     // connection or the adapter default. See `connectors/anthropic-models.ts`.
-    temperature: z.number().min(0).optional(),
+    temperature: presented(z.number().min(0).optional(), {
+      title: 'Temperature',
+      description: 'Higher is more varied. The allowed range depends on the provider.',
+    }),
     // L1 sampling — mapped per-provider by the adapters (names differ).
     // `topP` is nucleus sampling: a probability, universally [0, 1].
-    topP: z.number().min(0).max(1).optional(),
+    topP: presented(z.number().min(0).max(1).optional(), {
+      title: 'Top P',
+      description: 'Nucleus sampling, from 0 to 1.',
+    }),
     // Elements are `.min(1)`: an empty stop STRING is invalid at every provider,
     // so catch it at save-time. The ARRAY is intentionally left able to be empty
     // — `stop: []` is benign (no stop sequences, equivalent to omitting the
     // field), so rejecting it would be a false positive on an author who clears
     // every stop entry.
-    stop: z.array(z.string().min(1)).optional(),
-    seed: z.number().int().optional(),
+    stop: presented(z.array(z.string().min(1)).optional(), {
+      title: 'Stop sequences',
+      description: 'The model stops writing when it produces one of these.',
+    }),
+    seed: presented(z.number().int().optional(), {
+      title: 'Seed',
+      description: 'Asks the provider for repeatable sampling, where it supports that.',
+    }),
     // L3 reasoning knob — the portable effort level; each adapter lowers it to
     // that provider's reasoning surface (Anthropic adaptive-thinking+effort,
     // OpenAI `reasoning_effort`, Ollama `think`). `xhigh` is intentionally not
     // offered (see `reasoningEffortSchema`); an unknown level fails at save-time.
-    reasoningEffort: reasoningEffortSchema.optional(),
+    reasoningEffort: presented(reasoningEffortSchema.optional(), {
+      title: 'Reasoning effort',
+      description: 'How much the model thinks before answering.',
+    }),
     // L4a output surface — `outputMode` (absent = text, back-compat) selects the
     // node's output contract; a `structured` node's `outputSchema` (the restricted
     // subset) lowers into `config.outputs` at save. The coupling between the two is
     // the shared `refineOutputModeCoupling` rule (below), applied here so a
     // structured-without-schema config fails at DISPATCH the same way it fails at
     // save.
-    outputMode: outputModeSchema.optional(),
-    outputSchema: llmOutputSchemaSchema.optional(),
+    outputMode: presented(outputModeSchema.optional(), {
+      title: 'Output mode',
+      description: 'text returns free text; structured returns the fields of Output schema.',
+    }),
+    outputSchema: presented(llmOutputSchemaSchema.optional(), {
+      title: 'Output schema',
+      description: 'The named, typed fields a structured answer must have.',
+    }),
     // L10a tool surface — the local pure-tool contract. `tools` declares the
     // callable tools (deferred-eval `${tool.args.*}` expressions — see the
     // ToolDef block above); `toolChoice` maps per provider. The coupling with
     // `outputMode` is the shared `refineLlmToolsCoupling` rule (below), applied
     // here so a tools+structured config fails at DISPATCH the same way it fails
     // at save.
-    tools: llmToolsArraySchema.optional(),
-    toolChoice: llmToolChoiceSchema.optional(),
+    tools: presented(llmToolsArraySchema.optional(), {
+      title: 'Tools',
+      description: 'Tools the model may call while answering.',
+    }),
+    toolChoice: presented(llmToolChoiceSchema.optional(), {
+      title: 'Tool choice',
+      description: 'Whether the model may, must or must not call a tool.',
+    }),
     // L10b bounded tool loop — how many tool round-trips one attempt may spend
     // (absent = 1, the L10a single round-trip). Coupled to `tools` by the shared
     // `refineLlmToolsCoupling` rule below.
-    maxToolIterations: maxToolIterationsSchema.optional(),
+    maxToolIterations: presented(maxToolIterationsSchema.optional(), {
+      title: 'Max tool rounds',
+      description: 'How many tool round trips one attempt may spend. Defaults to 1.',
+    }),
     // L12 conversation surface — multi-turn via STATELESS DATAFLOW (open
     // question 5's v1 answer: no run-variable magic, no conversation object —
     // history is a VALUE threaded through node outputs). At SAVE the field is a
@@ -741,14 +786,20 @@ export const llmCallConfigSchema = z
     // `${}` string this field must be at save. Tagged `authoredAsExpression`
     // (#864 item 4), so the form offers one line of expression text with the
     // reference flyout, and does not check that text against this array type.
-    history: authoredAsExpression(z.array(llmMessageSchema)).optional(),
+    history: presented(authoredAsExpression(z.array(llmMessageSchema)).optional(), {
+      title: 'History',
+      description: 'A whole ${} expression giving earlier turns, e.g. another step\'s messages output.',
+    }),
     // L12 transcript opt-in — lowers an extra `{messages, json}` output row at
     // save (`catalog/lower.ts::lowerLlmEmitMessages`); the executor then augments
     // a successful text completion with the full author-visible transcript
     // (history + authored turns + the final assistant text). A LITERAL boolean
     // only (`z.boolean()` refuses a `${...}` string), so the save-time lowering
     // gate and the dispatch-time emission gate can never disagree about opt-in.
-    emitMessages: z.boolean().optional(),
+    emitMessages: presented(z.boolean().optional(), {
+      title: 'Emit transcript',
+      description: 'Adds a messages output holding the whole conversation.',
+    }),
     // #605 L9b — what the debugging capture (`activity.captured`) keeps of this
     // node's prompt/completion. Absent = `metadata`, the L9a default: lengths and
     // content hashes, no text. `full` also stores the TEXT, bounded by the
@@ -765,7 +816,10 @@ export const llmCallConfigSchema = z
     // `captured` event — `agent.ts` SHAPE LIMITS). A `structured` node is
     // captured once per provider response, repairs included, and a node with
     // tools once per tool-loop round (#605).
-    capture: llmCaptureModeSchema.optional(),
+    capture: presented(llmCaptureModeSchema.optional(), {
+      title: 'Capture level',
+      description: 'metadata keeps lengths and hashes; full also keeps the text. Defaults to metadata.',
+    }),
     // #605 — record the model's REASONING summary on each `activity.captured`
     // (its `reasoning` field). OFF unless set, and only with `capture: 'full'`
     // (`refineLlmCaptureCoupling`). A literal boolean, like `emitMessages`.
@@ -779,7 +833,10 @@ export const llmCallConfigSchema = z
     //
     // Where it is knowingly INERT: OpenAI (Chat Completions returns no reasoning
     // text) and an `agent_cli`-bound node. Ollama records `message.thinking`.
-    captureReasoning: z.boolean().optional(),
+    captureReasoning: presented(z.boolean().optional(), {
+      title: 'Capture reasoning trace',
+      description: 'Also records the model\'s reasoning summary. Needs Capture level full.',
+    }),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
