@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
-  CONNECTION_KIND_LABELS,
   DATASET_CONNECTION_KINDS,
   DATASET_KIND_LABELS,
   DATASET_KINDS,
@@ -51,6 +50,7 @@ import { type FieldChoices } from './pipeline/ConfigFieldControl';
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
+import { connectionOptionLabel } from '../lib/resourceOptionLabel';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
@@ -854,7 +854,7 @@ function DatasetForm({
               )}
               {connections.map((conn) => (
                 <option key={conn.id} value={conn.id}>
-                  {conn.name} ({CONNECTION_KIND_LABELS[conn.kind]})
+                  {connectionOptionLabel(conn)}
                 </option>
               ))}
             </select>

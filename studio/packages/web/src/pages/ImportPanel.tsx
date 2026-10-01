@@ -10,12 +10,12 @@ import {
   type ImportedResource,
 } from '../api/portability';
 import {
-  CONNECTION_KIND_LABELS,
   type ConnectionPublic,
   type ExportKind,
   type ImportAttentionItem,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../lib/LabelledControl';
+import { connectionOptionLabel } from '../lib/resourceOptionLabel';
 import { pipelinePath } from './author/pipelinePath';
 
 /**
@@ -211,7 +211,7 @@ export function ImportPanel({ listKind, onImported, stores }: ImportPanelProps) 
                 <option value="">The connection it was exported from</option>
                 {stores.map((conn) => (
                   <option key={conn.id} value={conn.id}>
-                    {conn.name} ({CONNECTION_KIND_LABELS[conn.kind]})
+                    {connectionOptionLabel(conn)}
                   </option>
                 ))}
               </select>
