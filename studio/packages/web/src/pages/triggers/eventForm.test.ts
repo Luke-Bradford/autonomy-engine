@@ -73,3 +73,13 @@ describe('formToEvent — a preserved subscription is authored state', () => {
     expect(formToEvent({ name: '  ', extras: {} })).toEqual({ ok: true, event: null });
   });
 });
+
+describe('#1396 — a refusal names the event name control', () => {
+  it('clearing the name of a subscription with extras is refused on the name', () => {
+    const result = formToEvent({ name: '', extras: { filter: 'x' } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(Object.keys(result.fields)).toEqual(['name']);
+    expect(result.fields.name).toBe(result.reason);
+  });
+});

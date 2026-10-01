@@ -246,3 +246,43 @@ describe('#861 retry + self-dependency — edited as text, validated by the writ
     expect(windowOf(windowToForm(subSecond))?.startTime).toBe('2026-08-01T08:00:30.500Z');
   });
 });
+
+describe('#1396 — a refusal names the control it is about, by schema path', () => {
+  const fieldsOf = (state: WindowFormState) => {
+    const result = formToWindow(state);
+    if (result.ok) throw new Error('expected a refusal');
+    return result.fields;
+  };
+
+  it('a window with no start time sits on the start time', () => {
+    expect(fieldsOf(form({ interval: '2' }))).toEqual({
+      startTime: 'a tumbling window needs a start time',
+    });
+  });
+
+  it('a half-given retry sits on the half that is missing', () => {
+    expect(Object.keys(fieldsOf(form({ ...START, retryCount: '2' })))).toEqual([
+      'retry.intervalInSeconds',
+    ]);
+    expect(Object.keys(fieldsOf(form({ ...START, retryIntervalSeconds: '60' })))).toEqual([
+      'retry.count',
+    ]);
+  });
+
+  it('a sub-object control that is not a number sits on its schema path', () => {
+    expect(fieldsOf(form({ ...START, dependencySizeSeconds: 'x' }))).toEqual({
+      'selfDependency.sizeInSeconds': "'x' is not a whole number",
+    });
+  });
+
+  it('a schema refusal: an end before the start sits on the end time', () => {
+    const fields = fieldsOf(form({ ...START, endTime: '2026-07-01T09:00' }));
+    expect(Object.keys(fields)).toEqual(['endTime']);
+  });
+
+  it('a retry count over the cap sits on the count', () => {
+    expect(Object.keys(fieldsOf(form({ ...START, retryCount: '9999', retryIntervalSeconds: '60' })))).toEqual([
+      'retry.count',
+    ]);
+  });
+});
