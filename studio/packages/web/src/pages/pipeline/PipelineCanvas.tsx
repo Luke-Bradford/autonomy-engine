@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
+  CONTAINER_KIND_LABELS,
   ContainerKindSchema,
   ContainerSchema,
   fieldLabelThrough,
@@ -93,7 +94,6 @@ import {
   readableIssue,
   sameAttribution,
 } from './containerRules';
-import { CONTAINER_KIND_TITLE } from './containerKindTitle';
 import { nameIssues, propertyIssues } from './paramRules';
 import { PipelineGeneral } from './PipelineGeneral';
 import { ContractSection, OutputRow, ParamRow, VariableRow } from './ContractEditor';
@@ -2475,7 +2475,7 @@ function ContainerSection({
             >
               {ContainerKindSchema.options.map((k) => (
                 <option key={k} value={k}>
-                  {CONTAINER_KIND_TITLE[k]}
+                  {CONTAINER_KIND_LABELS[k]}
                 </option>
               ))}
             </select>

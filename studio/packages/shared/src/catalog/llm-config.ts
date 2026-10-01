@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { authoredAsExpression, optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
+import {
+  authoredAsExpression,
+  optionTitles,
+  presented,
+  singleLine,
+} from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**

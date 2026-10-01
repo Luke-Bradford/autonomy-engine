@@ -1,5 +1,6 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import {
+  CONTAINER_KIND_LABELS,
   COPY_ACTIVITY_TYPE,
   containerMembership,
   type Node,
@@ -14,7 +15,6 @@ import {
   UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
-import { CONTAINER_KIND_TITLE } from '../pipeline/containerKindTitle';
 import { activityBadges, activitySummary, type ActivityBadge } from '../pipeline/activitySummary';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
@@ -434,7 +434,7 @@ export function runFlowNodes(
   const boxes: FlowNode[] = containers.map((c) => {
     const rect = rects.get(c.id)!;
     // Unreachable fallback: `containerNames` is built from this very array.
-    const name = containerNames.get(c.id) ?? CONTAINER_KIND_TITLE[c.kind];
+    const name = containerNames.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind];
     const cs = showStatus ? (state?.containers[c.id] ?? null) : null;
     const status = cs?.status ?? null;
     /* #873 — worded HERE, not at the render site the ticket suggested, so the

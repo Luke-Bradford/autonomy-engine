@@ -743,6 +743,18 @@ export type Edge = z.infer<typeof EdgeSchema>;
 export const ContainerKindSchema = z.enum(['loop', 'stage', 'foreach']);
 export type ContainerKind = z.infer<typeof ContainerKindSchema>;
 
+/**
+ * #1396 — how a container kind is named to a person: the palette's word, the
+ * ADF one. The stored kind (`loop`) stays what the doc holds and what the
+ * validator's messages cite. Every surface naming a box reads this, so the box
+ * an operator drops as "Until" is not then called "loop 1".
+ */
+export const CONTAINER_KIND_LABELS: Record<ContainerKind, string> = {
+  loop: 'Until',
+  stage: 'Stage',
+  foreach: 'ForEach',
+};
+
 export const ContainerSchema = z.object({
   id: z.string().min(1),
   kind: ContainerKindSchema,

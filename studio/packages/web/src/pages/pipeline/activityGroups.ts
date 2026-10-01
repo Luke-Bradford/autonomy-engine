@@ -1,4 +1,5 @@
 import {
+  CONTAINER_KIND_LABELS,
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
   catalog,
@@ -12,7 +13,6 @@ import {
   GroupRegular,
   type FluentIcon,
 } from '@fluentui/react-icons';
-import { CONTAINER_KIND_TITLE } from './containerKindTitle';
 
 /*
  * The toolbox's pure grouping/filtering rules (U5).
@@ -105,19 +105,19 @@ export const CONTAINER_GROUP_LABEL = 'Containers';
 export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
   {
     kind: 'foreach',
-    title: CONTAINER_KIND_TITLE.foreach,
+    title: CONTAINER_KIND_LABELS.foreach,
     description: 'Run the activities inside once for each item of an array',
     icon: ArrowRepeatAllRegular,
   },
   {
     kind: 'loop',
-    title: CONTAINER_KIND_TITLE.loop,
+    title: CONTAINER_KIND_LABELS.loop,
     description: 'Repeat the activities inside until a condition is true (a loop)',
     icon: ArrowSyncRegular,
   },
   {
     kind: 'stage',
-    title: CONTAINER_KIND_TITLE.stage,
+    title: CONTAINER_KIND_LABELS.stage,
     description: 'Group activities into one step',
     icon: GroupRegular,
   },

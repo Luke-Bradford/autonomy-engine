@@ -1,4 +1,5 @@
 import {
+  CONTAINER_KIND_LABELS,
   implicitRouting,
   scanTemplateRefs,
   type Container,
@@ -12,7 +13,6 @@ import {
   type RoutingPartition,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
-import { CONTAINER_KIND_TITLE } from './containerKindTitle';
 import { validateCanvas } from './canvasDoc';
 import { namedList } from '../../lib/namedList';
 
@@ -277,7 +277,7 @@ export function containerLabels(containers: Container[]): Map<string, string> {
   for (const c of containers) {
     const n = (seen.get(c.kind) ?? 0) + 1;
     seen.set(c.kind, n);
-    out.set(c.id, `${CONTAINER_KIND_TITLE[c.kind]} ${n}`);
+    out.set(c.id, `${CONTAINER_KIND_LABELS[c.kind]} ${n}`);
   }
   return out;
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import { fieldLabelOf, fieldLabelThrough, unnamedEnumValues } from '../schemas/field-presentation.js';
+import {
+  fieldLabelOf,
+  fieldLabelThrough,
+  unnamedEnumValues,
+} from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DATASET_KIND_LABELS, DatasetKindSchema } from '../schemas/dataset.js';

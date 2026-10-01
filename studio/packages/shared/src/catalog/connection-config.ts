@@ -231,8 +231,7 @@ export const postgresConnectionConfigSchema = z.object({
   /** Required — see `PostgresSslModeSchema` on why there is no default. */
   sslmode: presented(PostgresSslModeSchema, {
     title: 'TLS mode',
-    description:
-      'Disable sends in plaintext; Verify full checks the certificate and host name.',
+    description: 'Disable sends in plaintext; Verify full checks the certificate and host name.',
     options: optionTitles(PostgresSslModeSchema, {
       disable: 'Disable',
       require: 'Require',
