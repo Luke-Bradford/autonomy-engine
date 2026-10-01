@@ -220,7 +220,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // advisory and #1120's two independent facts rather than one: this is a
     // `sqlite` store and `delimited` lives on `fs`.
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      "dataset kind 'delimited' lives in a store of kind 'fs'",
+      'dataset kind “Delimited text (CSV)” lives in a store of kind “File system”',
     );
 
     // `excel` used to hold the reader gate open, and M11 slice 2 (#1215) closed
@@ -275,7 +275,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // a table name cannot be bound as a parameter, so a name that only quoting
     // would make safe is refused by the reader. The operator learns it here.
     await form(page).getByLabel('Table', { exact: true }).fill('order lines');
-    await expect(form(page).getByText(/This table config is incomplete/)).toContainText(
+    await expect(form(page).getByText(/This Database table config is incomplete/)).toContainText(
       'bare SQL identifier',
     );
 
@@ -303,7 +303,7 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Kind').selectOption('table');
 
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      "names a connection of kind 'http'",
+      'names a connection of kind “HTTP”',
     );
     // ADVISORY, never a gate — the server stores this row today, and a form that
     // refused what the server accepts would be the worse defect.
@@ -322,7 +322,7 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Store').selectOption(storeId);
     await form(page).getByLabel('Kind').selectOption('excel');
     await expect(form(page).getByText(/Kind and store disagree/)).toContainText(
-      "dataset kind 'excel' lives in a store of kind 'fs'",
+      'dataset kind “Excel workbook” lives in a store of kind “File system”',
     );
     await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
@@ -386,7 +386,7 @@ test.describe('#1115 Manage → Datasets', () => {
 
     expect(measured.markerText).toContain('kind mismatch');
     expect(measured.hiddenText).toContain(
-      "dataset kind 'table' lives in a store of kind 'sqlite' or 'postgres', but this one names a connection of kind 'http'",
+      'dataset kind “Database table” lives in a store of kind “SQLite” or “PostgreSQL”, but this one names a connection of kind “HTTP”',
     );
     expect(measured.clipPath).toBe('inset(50%)');
     expect(measured.position).toBe('absolute');

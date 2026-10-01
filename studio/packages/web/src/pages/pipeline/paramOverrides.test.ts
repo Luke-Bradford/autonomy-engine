@@ -43,7 +43,7 @@ describe('paramOverrides (#1304)', () => {
     const r = datasetOverrideResource(dataset('table', { table: 't' }, ['table', 'schema']));
     expect(addableKeys(r, {})).toEqual([]);
     // …and says the KIND has none, not that the allowlist is empty.
-    expect(overrideNote(r, {})).toMatch(/has no settings a node can override/);
+    expect(overrideNote(r, {})).toBe('Database table datasets have no settings a node can override.');
   });
 
   it('tells an empty allowlist apart from a kind with nothing overridable', () => {
@@ -85,14 +85,16 @@ describe('paramOverrides (#1304)', () => {
     expect(overrideRowProblem(r, 'roots', ['/x'])).toMatch(/can never be overridden/);
     expect(overrideRowProblem(r, 'maxBytes', { $secret: 'k' })).toMatch(/secret/);
     const t = datasetOverrideResource(dataset('table', { table: 't' }, ['table']));
-    expect(overrideRowProblem(t, 'table', 'x')).toMatch(/can never be overridden/);
+    expect(overrideRowProblem(t, 'table', 'x')).toBe(
+      '`table` can never be overridden on Database table datasets. Remove this row.',
+    );
     const u = connectionOverrideResource(fsConnection(['ghost']));
-    expect(overrideRowProblem(u, 'ghost', 'x')).toMatch(
-      /has no `ghost` setting, so a run will refuse/,
+    expect(overrideRowProblem(u, 'ghost', 'x')).toBe(
+      'File system connections have no `ghost` setting, so a run will refuse it.',
     );
     const d = datasetOverrideResource(dataset('delimited', { path: 'a' }, ['ghost']));
-    expect(overrideRowProblem(d, 'ghost', 'x')).toMatch(
-      /has no `ghost` setting, so a run will refuse/,
+    expect(overrideRowProblem(d, 'ghost', 'x')).toBe(
+      'Delimited text (CSV) datasets have no `ghost` setting, so a run will refuse it.',
     );
   });
 

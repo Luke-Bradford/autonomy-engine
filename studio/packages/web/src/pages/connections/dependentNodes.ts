@@ -4,6 +4,7 @@ import type {
   DependentNode,
   DynamicDependentNode,
 } from '@autonomy-studio/shared';
+import { kindPlural } from '../pipeline/paramOverrides';
 import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**
@@ -101,12 +102,14 @@ export function nodeKindAdvisory(
   triggersDisabled: boolean,
 ): string | null {
   if (storedKind === nextKind) return null;
-  const question = `whether ${nextKind} suits them`;
+  // #1436 — the kind by the name the Kind picker shows, never its identifier.
+  const accepted = kindPlural(nextKind, 'connection');
+  const question = `whether ${accepted} suit them`;
   switch (check.state) {
     case 'loading':
       return 'Still checking which pipeline nodes use this connection.';
     case 'unavailable':
-      return `Could not check which pipeline nodes use this connection (${check.detail}) — any whose activity does not accept ${nextKind} will fail at run time.`;
+      return `Could not check which pipeline nodes use this connection (${check.detail}) — any whose activity does not accept ${accepted} will fail at run time.`;
     case 'known': {
       const broken = nodeLabels(nodesBrokenByKind(check.nodes, storedKind, nextKind));
       if (broken.length === 0) {
@@ -114,7 +117,7 @@ export function nodeKindAdvisory(
         return dynamic === '' ? null : dynamic;
       }
       const verb = broken.length === 1 ? 'does' : 'do';
-      return `Saving this breaks ${nodePhrase(broken)}: ${broken.length === 1 ? 'its' : 'their'} activity ${verb} not accept a ${nextKind} connection, so every run of ${broken.length === 1 ? 'it' : 'them'} fails${triggersDisabled ? '' : ` — and any trigger bound to ${broken.length === 1 ? 'it' : 'them'} will stay enabled and keep firing`}.${dynamicNodeClause(check.dynamicNodes, true, question)}`;
+      return `Saving this breaks ${nodePhrase(broken)}: ${broken.length === 1 ? 'its' : 'their'} activity ${verb} not accept ${accepted}, so every run of ${broken.length === 1 ? 'it' : 'them'} fails${triggersDisabled ? '' : ` — and any trigger bound to ${broken.length === 1 ? 'it' : 'them'} will stay enabled and keep firing`}.${dynamicNodeClause(check.dynamicNodes, true, question)}`;
     }
   }
 }

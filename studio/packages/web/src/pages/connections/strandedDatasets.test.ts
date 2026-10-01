@@ -104,7 +104,8 @@ describe('kindChangeAdvisory', () => {
     const said = kindChangeAdvisory({ state: 'known', names: ['orders', 'customers'] }, 'http');
     expect(said).toContain('strands 2 datasets');
     expect(said).toContain('orders, customers');
-    expect(said).toContain('http');
+    // #1436 — the kind as the Kind picker names it.
+    expect(said).toContain('as kind “HTTP” strands');
   });
 
   it('reads singular for one', () => {

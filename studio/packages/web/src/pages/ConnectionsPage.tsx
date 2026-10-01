@@ -1019,6 +1019,7 @@ function ConnectionForm({
       <FormSection title="Connection">
         <ConfigEditor
           editor={editor}
+          kindLabel={CONNECTION_KIND_LABELS[editor.kind]}
           className="connection-config"
           rows={8}
           advisory={advisory}

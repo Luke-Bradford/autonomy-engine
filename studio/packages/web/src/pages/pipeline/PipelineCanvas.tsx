@@ -3278,6 +3278,7 @@ export function NodePanel({
                 <FormSection title="Activity settings">
                   <ConfigEditor
                     editor={editor}
+                    kindLabel={entry?.title ?? nodeType}
                     className="contract-section"
                     rows={10}
                     advisory={null}

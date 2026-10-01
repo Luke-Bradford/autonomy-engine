@@ -192,7 +192,7 @@ describe('connection config catalog', () => {
       // only one the form said nothing about.
       expect(fsConnectionConfigSchema.safeParse({ roots: ['relative/path'] }).success).toBe(true);
       expect(connectionConfigAdvisory('fs', { roots: ['relative/path'] })).toMatch(
-        /every fs root must be an absolute path \(relative\/path\)/,
+        /every File system root must be an absolute path \(relative\/path\)/,
       );
     });
 
@@ -253,7 +253,7 @@ describe('#1119 M4 — the sqlite store connection', () => {
 
   it('warns about a relative root and a relative path, naming which', () => {
     expect(connectionConfigAdvisory('sqlite', { roots: ['rel'], path: '/db/app.db' })).toContain(
-      'every sqlite root must be an absolute path (rel)',
+      'every SQLite root must be an absolute path (rel)',
     );
     expect(connectionConfigAdvisory('sqlite', { roots: ['/db'], path: 'app.db' })).toContain(
       "path: 'app.db' is relative",

@@ -1,4 +1,6 @@
 import {
+  CONNECTION_KIND_LABELS,
+  DATASET_KIND_LABELS,
   connectionConfigSchema,
   datasetConfigSchema,
   firstParamOverrideViolation,
@@ -105,9 +107,21 @@ function usableKeys(r: OverrideResource): string[] {
   return overridableKeys(r.fields, r.isNonOverridable);
 }
 
+/**
+ * #1436 — a kind as the forms name it, in the plural: "SQLite connections",
+ * "Database table datasets". Plural so no article ever precedes a name, which
+ * read "a Excel workbook dataset" for every vowel-initial kind. `kind` stays the
+ * stored identifier everywhere else; an unknown one is shown as itself.
+ */
+export function kindPlural(kind: string, noun: OverrideResource['noun']): string {
+  const labels: Readonly<Record<string, string>> =
+    noun === 'connection' ? CONNECTION_KIND_LABELS : DATASET_KIND_LABELS;
+  return `${labels[kind] ?? kind} ${noun}s`;
+}
+
 /** The note for a KIND with no overridable settings at all — which no allowlist edit can change. */
 export function noOverridableSettingsNote(kind: string, noun: OverrideResource['noun']): string {
-  return `A ${kind} ${noun} has no settings a node can override.`;
+  return `${kindPlural(kind, noun)} have no settings a node can override.`;
 }
 
 /**
@@ -149,7 +163,7 @@ export function overrideNote(
     return `${r.name} declares no overridable settings, so there is nothing to override here.`;
   }
   if (r.allowlist.some((k) => usable.includes(k))) return null;
-  return `${r.name}'s declared parameters name no setting a ${r.kind} ${r.noun} can override.`;
+  return `${r.name}'s declared parameters name no setting a node can override on ${kindPlural(r.kind, r.noun)}.`;
 }
 
 /**
@@ -204,7 +218,7 @@ export function coerceOverride(field: ConfigField | undefined, text: string): un
 function violationMessage(r: OverrideResource, v: ParamOverrideViolation): string {
   switch (v.reason) {
     case 'non_overridable':
-      return `A ${r.kind} ${r.noun}'s \`${v.key}\` can never be overridden. Remove this row.`;
+      return `\`${v.key}\` can never be overridden on ${kindPlural(r.kind, r.noun)}. Remove this row.`;
     case 'undeclared':
       return `${r.name} does not declare \`${v.key}\` as overridable, so a run will refuse it.`;
     case 'secret_marker':
@@ -251,7 +265,7 @@ export function overrideRowProblem(
   const field = r.fields.find((f) => f.name === key);
   if (field === undefined) {
     // Both dispatch gates refuse a key the kind lacks (#1306).
-    return `A ${r.kind} ${r.noun} has no \`${key}\` setting, so a run will refuse it.`;
+    return `${kindPlural(r.kind, r.noun)} have no \`${key}\` setting, so a run will refuse it.`;
   }
   const typed = typeProblem(field, value);
   if (typed !== null) return `\`${key}\` ${typed}.`;

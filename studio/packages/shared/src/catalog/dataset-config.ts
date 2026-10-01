@@ -3,8 +3,12 @@ import { optionTitles, presented, singleLine } from '../schemas/field-presentati
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
-import type { ConnectionKind } from '../schemas/connection.js';
-import { DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
+import { CONNECTION_KIND_LABELS, type ConnectionKind } from '../schemas/connection.js';
+import {
+  DATASET_KIND_LABELS,
+  DatasetKindSchema,
+  type DatasetKind,
+} from '../schemas/dataset.js';
 
 /**
  * #1119 M4 — the per-KIND shape of a `Dataset.config` (data-movement spec §2.6).
@@ -556,7 +560,7 @@ export function datasetConfigAdvisory(
   // silent-until-dispatch surprise this function exists to end.
   if (!datasetKindIsImplemented(kind)) {
     notes.push(
-      `no reader exists for a ${kind} dataset yet, so a copy naming it is refused at dispatch`,
+      `no reader exists for ${DATASET_KIND_LABELS[kind]} datasets yet, so a copy naming it is refused at dispatch`,
     );
   }
 
@@ -689,6 +693,8 @@ export function datasetConnectionKindAdvisory(
   // Restructuring is better than an `an`-aware helper: the article rule is
   // orthographic rather than phonetic for identifiers nobody says aloud, and a
   // helper would have to be re-litigated for every kind added.
-  const stores = expected.map((store) => `'${store}'`).join(' or ');
-  return `dataset kind '${kind}' lives in a store of kind ${stores}, but this one names a connection of kind '${connectionKind}'`;
+  // #1436 — kinds by their display names, which is what the form's Kind and
+  // Connection pickers show. Nothing calls this on the server.
+  const stores = expected.map((store) => `“${CONNECTION_KIND_LABELS[store]}”`).join(' or ');
+  return `dataset kind “${DATASET_KIND_LABELS[kind]}” lives in a store of kind ${stores}, but this one names a connection of kind “${CONNECTION_KIND_LABELS[connectionKind]}”`;
 }

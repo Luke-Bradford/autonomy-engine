@@ -333,7 +333,10 @@ describe('ConnectionsPage', () => {
 
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
-    expect(within(form).getByText(/Carried from another kind \(model\)/)).toBeInTheDocument();
+    // #1436 — the kind by its display name, not `fs`.
+    expect(within(form).getByText(/Carried from another kind \(model\)/)).toHaveTextContent(
+      '— File system does not use these',
+    );
 
     // Blanking the carried control is the repair — it OMITS the key.
     await user.clear(within(form).getByLabelText('Default model'));
@@ -384,7 +387,7 @@ describe('ConnectionsPage', () => {
     await user.type(screen.getByLabelText('Name'), 'Empty agent');
     await user.selectOptions(screen.getByLabelText('Kind'), 'agent_cli');
     // `command` is REQUIRED by the adapter and absent here.
-    expect(await screen.findByText(/This agent_cli config is incomplete/)).toBeInTheDocument();
+    expect(await screen.findByText(/This Agent CLI \(subscription\) config is incomplete/)).toBeInTheDocument();
 
     // Advisory, not a gate: the server stores this today, so the form must too.
     await user.click(screen.getByRole('button', { name: 'Create connection' }));
@@ -405,7 +408,7 @@ describe('ConnectionsPage', () => {
     // rewrite the operator's JSON — so without an advisory here, an fs-shaped
     // config saves as an agent_cli with nothing on screen to say so.
     await user.selectOptions(within(form).getByLabelText('Kind'), 'agent_cli');
-    expect(within(form).getByText(/This agent_cli config is incomplete/)).toBeInTheDocument();
+    expect(within(form).getByText(/This Agent CLI \(subscription\) config is incomplete/)).toBeInTheDocument();
     // Still not a gate — the server stores this today.
     expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
@@ -443,7 +446,7 @@ describe('ConnectionsPage', () => {
     const form = screen.getByRole('form', { name: 'Connection form' });
     // The absolute-root check is the SERVER's (`node:path`), so a schema-only
     // advisory would say nothing about the one path-safety key in the catalog.
-    expect(within(form).getByText(/every fs root must be an absolute path/)).toBeInTheDocument();
+    expect(within(form).getByText(/every File system root must be an absolute path/)).toBeInTheDocument();
     // Still advisory: the server stores this row today.
     expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
@@ -1238,7 +1241,7 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       expect(allowlist()).toHaveTextContent(
-        'A sqlite connection has no settings a node can override.',
+        'SQLite connections have no settings a node can override.',
       );
       expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
     });
