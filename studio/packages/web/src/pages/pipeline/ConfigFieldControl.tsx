@@ -14,6 +14,7 @@ import { ExpressionPicker, type FieldOptions, type FunctionOption } from './Expr
 import type { WrapSpan } from './expressionInsert';
 import { useCaretInsert } from './useCaretInsert';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { JsonEditor } from '../../lib/form/JsonEditor';
 import { RequiredMark } from '../../lib/form/RequiredMark';
 import { FieldError } from '../../lib/form/FieldError';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
@@ -395,13 +396,27 @@ export function ConfigFieldControl({
               {...checked}
               onChange={(e) => onChange(e.target.value)}
             />
+          ) : field.kind === 'json' ? (
+            <JsonEditor
+              id={id}
+              label={label}
+              ref={inputRef as RefObject<HTMLTextAreaElement | null>}
+              value={text}
+              onSelect={onSelect}
+              rows={4}
+              placeholder={field.defaultText}
+              aria-required={required || undefined}
+              aria-describedby={describedBy}
+              {...checked}
+              onValueChange={onChange}
+            />
           ) : (
             <textarea
               id={id}
               ref={inputRef as RefObject<HTMLTextAreaElement | null>}
               value={text}
               onSelect={onSelect}
-              rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+              rows={field.kind === 'stringList' ? 4 : 2}
               spellCheck={false}
               placeholder={field.defaultText}
               aria-required={required || undefined}

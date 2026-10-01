@@ -4,6 +4,8 @@ import { completeExternalWait, listExternalWaits } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { formatWhen } from './format';
 import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
+import { JsonEditor } from '../../lib/form/JsonEditor';
+import { notValidJson } from '../../lib/json/jsonText';
 
 /**
  * #900 — the run monitor's pending inbound callbacks.
@@ -131,8 +133,9 @@ export function PendingCallbacks({
    * would `JSON.stringify` the raw textarea STRING and send a JSON string where the
    * route wants an object, and a genuinely malformed body would come back as
    * Fastify's framework 400, which the shared error contract flattens to "Malformed
-   * request" — useless to someone staring at their own typo. `JSON.parse`'s own
-   * message names the position.
+   * request" — useless to someone staring at their own typo. The refusal names the
+   * line and column (#1396 `notValidJson`), which `JSON.parse`'s own message does
+   * not do in every browser.
    *
    * An empty editor means `{}` — the webhook that declares no outputs accepts it,
    * and one that declares some will be refused by name. What it must NOT do is let
@@ -159,18 +162,23 @@ export function PendingCallbacks({
   }
 
   async function send(wait: PendingExternalWait, key: string) {
-    const raw = (drafts[key] ?? '').trim();
-    let payload: Record<string, unknown>;
+    const shown = drafts[key] ?? '';
+    const raw = shown.trim();
+    let parsed: unknown;
     try {
-      const parsed: unknown = raw === '' ? {} : JSON.parse(raw);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('the callback body must be a JSON object, e.g. {"decision": "approve"}');
-      }
-      payload = parsed as Record<string, unknown>;
-    } catch (err: unknown) {
-      setSendError((e) => ({ ...e, [key]: messageOf(err) }));
+      parsed = raw === '' ? {} : JSON.parse(raw);
+    } catch {
+      setSendError((e) => ({ ...e, [key]: notValidJson(raw, shown) }));
       return;
     }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      setSendError((e) => ({
+        ...e,
+        [key]: 'the callback body must be a JSON object, e.g. {"decision": "approve"}',
+      }));
+      return;
+    }
+    const payload = parsed as Record<string, unknown>;
 
     setSending((x) => ({ ...x, [key]: true }));
     clearError(key);
@@ -330,10 +338,10 @@ export function PendingCallbacks({
                     <label htmlFor={fieldId}>
                       Callback body (JSON) for {label} — empty means <code>{'{}'}</code>
                     </label>
-                    <textarea
+                    <JsonEditor
                       id={fieldId}
+                      label={`Callback body (JSON) for ${label}`}
                       rows={4}
-                      spellCheck={false}
                       /* Focus follows the click that opened the editor. Without it
                          the operator has to hunt for the field they just asked for,
                          and a keyboard user is left on a button that no longer
@@ -355,7 +363,7 @@ export function PendingCallbacks({
                           .join(' ') || undefined
                       }
                       aria-invalid={sendError[key] !== undefined ? true : undefined}
-                      onChange={(e) => onDraftChange(key, e.target.value)}
+                      onValueChange={(next) => onDraftChange(key, next)}
                     />
                     {sendError[key] !== undefined && (
                       <p role="alert" className="error" id={errorId}>

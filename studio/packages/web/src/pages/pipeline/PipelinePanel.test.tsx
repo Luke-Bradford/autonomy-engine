@@ -103,7 +103,7 @@ describe('PipelinePanel (U16) — params', () => {
     const field = screen.getByLabelText('param 1 default');
     fireEvent.change(field, { target: { value: '{' } });
     fireEvent.blur(field);
-    expect(screen.getByRole('alert')).toHaveTextContent('expected valid JSON');
+    expect(screen.getByRole('alert')).toHaveTextContent('not valid JSON (line 1');
     expect(screen.queryByText(/used exactly as written/)).toBeNull();
     expect(screen.getByText(/'a b' is not a plain identifier/)).toBeInTheDocument();
   });

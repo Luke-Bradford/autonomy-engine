@@ -399,10 +399,13 @@ describe('parseConfigText (#1088 item 1)', () => {
     }
   });
 
-  it('carries the parser’s own words through on a syntax error', () => {
-    const result = parseConfigText('{ nope');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/^Invalid config JSON: /);
+  it('says where a syntax error is, the same in every browser (#1396)', () => {
+    const result = parseConfigText('{\n  "a": nope\n}');
+    expect(result).toEqual({
+      ok: false,
+      message:
+        "Invalid config JSON: line 2, column 8: 'nope' is not a JSON value (the words are true, false and null)",
+    });
   });
 });
 

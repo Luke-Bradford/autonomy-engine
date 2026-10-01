@@ -427,6 +427,9 @@ describe('coerceGlobalValue (#844 GL2)', () => {
     expect(coerceGlobalValue('boolean', 'false')).toEqual({ ok: true, value: false });
     expect(coerceGlobalValue('json', '{"a":[1]}')).toEqual({ ok: true, value: { a: [1] } });
     expect(coerceGlobalValue('json', 'null')).toEqual({ ok: true, value: null });
-    expect(coerceGlobalValue('json', '{')).toEqual({ ok: false, error: 'expected valid JSON' });
+    expect(coerceGlobalValue('json', '{')).toEqual({
+      ok: false,
+      error: 'not valid JSON (line 1, column 2: unexpected end of input)',
+    });
   });
 });
