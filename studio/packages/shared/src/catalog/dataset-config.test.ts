@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { z } from 'zod';
+import { fieldLabelOf } from '../schemas/field-presentation.js';
+import { isValidDateFormat } from '../datamove/coerce.js';
 import { ConnectionKindSchema } from '../schemas/connection.js';
-import { DatasetKindSchema } from '../schemas/dataset.js';
+import { DATASET_KIND_LABELS, DatasetKindSchema } from '../schemas/dataset.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { catalog } from './registry.js';
 import {
@@ -13,6 +16,7 @@ import {
   datasetConfigSchema,
   datasetKindIsImplemented,
   DELIMITED_ENCODINGS,
+  DelimitedEncodingSchema,
   delimitedDatasetConfigSchema,
   isSqlIdentifier,
   queryDatasetConfigSchema,
@@ -538,5 +542,53 @@ describe('#1144 — DATASET_NON_OVERRIDABLE_CONFIG_KEYS', () => {
     // A file path is confined by the CONNECTION's non-overridable roots.
     expect(isNonOverridableDatasetConfigKey('delimited', 'path')).toBe(false);
     expect(isNonOverridableDatasetConfigKey('excel', 'sheet')).toBe(false);
+  });
+});
+
+describe('dataset form labels (#1396)', () => {
+  // Every top-level key the dataset form renders has a human title, so a new
+  // field cannot ship showing only its camelCase key — the same rule the
+  // connection catalog pins. The title may sit on the field or on its
+  // `.optional()`/`.default()` wrapper, the two layers a form reads.
+  it.each(DATASET_KINDS)('every %s config field has a title', (kind) => {
+    const shape = datasetConfigSchema(kind).shape as Record<string, z.ZodType>;
+    const untitled = Object.entries(shape)
+      .filter(([, field]) => {
+        const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
+        return fieldLabelOf(field) === undefined && fieldLabelOf(inner) === undefined;
+      })
+      .map(([name]) => name);
+    expect(untitled).toEqual([]);
+  });
+
+  // `getByLabel('Name')`, `'Kind'`, `'Store'` and `'Columns'` on the dataset
+  // form are substring matches, so a field title containing one of those words
+  // would make two controls answer to it.
+  it.each(DATASET_KINDS)('no %s field title reuses a Basics label', (kind) => {
+    const shape = datasetConfigSchema(kind).shape as Record<string, z.ZodType>;
+    const titles = Object.values(shape).map((field) => {
+      const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
+      return (fieldLabelOf(field) ?? fieldLabelOf(inner))?.title ?? '';
+    });
+    expect(titles.filter((title) => /name|kind|store|columns/i.test(title))).toEqual([]);
+  });
+
+  it.each(DATASET_KINDS)('%s has a display name', (kind) => {
+    expect(DATASET_KIND_LABELS[kind]).toMatch(/\S/);
+  });
+
+  // The hint's example is what an operator copies, so it must be a format the
+  // coercion matrix accepts.
+  it.each(['delimited', 'excel'] as const)('the %s date format example is valid', (kind) => {
+    const field = datasetConfigSchema(kind).shape['dateFormat'];
+    const example = /e\.g\. (\S+?)\./.exec(fieldLabelOf(field)?.description ?? '')?.[1];
+    expect(example).toBeDefined();
+    expect(isValidDateFormat(example!)).toBe(true);
+  });
+
+  it('never tags the shared encoding enum itself', () => {
+    // `presented()` tags the instance it is given, and this enum is exported;
+    // the title belongs on the dataset field's own wrapper.
+    expect(fieldLabelOf(DelimitedEncodingSchema)).toBeUndefined();
   });
 });

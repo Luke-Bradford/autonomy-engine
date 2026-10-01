@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { presented, singleLine } from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
@@ -75,8 +75,14 @@ export type SqlParameterValue = z.infer<typeof SqlParameterValueSchema>;
 export const tableDatasetConfigSchema = z.object({
   /** Optional namespace. SQLite has no schemas in the Postgres sense but does
    * have ATTACHed database aliases, and `postgres` (M10) needs it for real. */
-  schema: sqlIdentifier('schema').optional(),
-  table: sqlIdentifier('table'),
+  schema: presented(sqlIdentifier('schema').optional(), {
+    title: 'Schema',
+    description: 'The namespace the table is in. Leave blank for the default.',
+  }),
+  table: presented(sqlIdentifier('table'), {
+    title: 'Table',
+    description: 'A bare identifier: letters, digits, _ or $.',
+  }),
 });
 
 /**
@@ -90,7 +96,10 @@ export const tableDatasetConfigSchema = z.object({
  * refused instead of executed.
  */
 export const queryDatasetConfigSchema = z.object({
-  sql: z.string().min(1),
+  sql: presented(z.string().min(1), {
+    title: 'SQL statement',
+    description: 'One statement that returns rows. Write :param for each bind value.',
+  }),
   /**
    * Named bind values, keyed WITHOUT the `:` prefix the SQL carries.
    *
@@ -103,7 +112,10 @@ export const queryDatasetConfigSchema = z.object({
    * postgres. Write `:name` if the dataset should survive being re-pointed at
    * another store, which is the whole point of the dataset layer.
    */
-  parameters: z.record(z.string().min(1), SqlParameterValueSchema).optional(),
+  parameters: presented(z.record(z.string().min(1), SqlParameterValueSchema).optional(), {
+    title: 'Bind values',
+    description: 'A value for each :param in the statement, keyed without the colon.',
+  }),
 });
 
 /**
@@ -183,26 +195,55 @@ export const delimitedDatasetConfigSchema = z
   .object({
     /** Confined against the `fs` connection's `roots` at DISPATCH, never here
      * (§8) — this schema is shared with the browser and knows no filesystem. */
-    path: singleLine(z.string()).min(1),
-    delimiter: delimitedChar('delimiter').default(','),
-    quote: delimitedChar('quote').default('"'),
+    path: presented(singleLine(z.string()).min(1), {
+      title: 'File path',
+      description:
+        'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+    }),
+    delimiter: presented(delimitedChar('delimiter').default(','), {
+      title: 'Delimiter',
+      description: 'The character between fields. Defaults to a comma.',
+    }),
+    quote: presented(delimitedChar('quote').default('"'), {
+      title: 'Quote character',
+      description: 'Wraps a field that holds the delimiter. Defaults to ".',
+    }),
     /** Absent means RFC 4180: a doubled quote is the only escape. Declaring one
      * ADDS "the next character is literal" inside a quoted field. */
-    escape: delimitedChar('escape').optional(),
-    header: z.boolean(),
-    encoding: DelimitedEncodingSchema.default('utf-8'),
+    escape: presented(delimitedChar('escape').optional(), {
+      title: 'Escape character',
+      description: 'Makes the next character literal inside quotes. Blank: only a doubled quote.',
+    }),
+    header: presented(z.boolean(), {
+      title: 'First row is a header',
+      description: 'Read the first line as column headings, not data.',
+    }),
+    encoding: presented(DelimitedEncodingSchema.default('utf-8'), {
+      title: 'Encoding',
+      description: 'The file’s text encoding. Defaults to utf-8.',
+    }),
     /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
      * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */
-    nullValue: singleLine(z.string()).optional(),
+    nullValue: presented(singleLine(z.string()).optional(), {
+      title: 'Null marker',
+      description: 'Text that means NULL. Blank: an empty field is an empty string.',
+    }),
     /** §6.2 — the ONLY way a textual date is read. Absent plus a `date`/
      * `timestamp` target is a refusal (`no_date_format`), never a guess. */
-    dateFormat: singleLine(z.string())
-      .refine(isValidDateFormat, {
-        message:
-          `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
-          'each at most once',
-      })
-      .optional(),
+    dateFormat: presented(
+      singleLine(z.string())
+        .refine(isValidDateFormat, {
+          message:
+            `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+            'each at most once',
+        })
+        .optional(),
+      {
+        title: 'Date format',
+        description:
+          'How dates are written, e.g. yyyy-MM-dd. Needed to read a date or timestamp column.',
+      },
+    ),
   })
   .superRefine((config, ctx) => {
     // Reported on the SECOND role of each colliding pair, so the message names a
@@ -279,25 +320,54 @@ export const excelDatasetConfigSchema = z
   .object({
     /** Confined against the `fs` connection's `roots` at DISPATCH, never here
      * (§8) — this schema is shared with the browser and knows no filesystem. */
-    path: singleLine(z.string()).min(1),
+    path: presented(singleLine(z.string()).min(1), {
+      title: 'Workbook path',
+      description:
+        'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+    }),
     /** The worksheet BY NAME. Mutually exclusive with `sheetIndex`. */
-    sheet: singleLine(z.string()).min(1).optional(),
+    sheet: presented(singleLine(z.string()).min(1).optional(), {
+      title: 'Sheet',
+      description:
+        'The worksheet, as named in the workbook. Give exactly one of Sheet and Sheet number.',
+    }),
     /** The worksheet by 1-BASED position, for a workbook whose sheet names are
      * unstable or unprintable. Mutually exclusive with `sheet`. */
-    sheetIndex: z.int().min(1).optional(),
-    header: z.boolean(),
+    sheetIndex: presented(z.int().min(1).optional(), {
+      title: 'Sheet number',
+      description:
+        'The worksheet by position, counting from 1. Give exactly one of Sheet and Sheet number.',
+    }),
+    header: presented(z.boolean(), {
+      title: 'Has a header row',
+      description: 'Read one row as column headings, not data.',
+    }),
     /** 1-based; only meaningful with `header: true`. */
-    headerRow: z.int().min(1).default(1),
+    headerRow: presented(z.int().min(1).default(1), {
+      title: 'Header row',
+      description:
+        'Which row holds the headings, counting from 1. Defaults to 1; above 1 needs Has a header row.',
+    }),
     /** §6.4 — the NULL sentinel, for TEXT cells that spell null out. */
-    nullValue: singleLine(z.string()).optional(),
+    nullValue: presented(singleLine(z.string()).optional(), {
+      title: 'Null marker',
+      description: 'Text in a cell that means NULL.',
+    }),
     /** §6.2 — the ONLY way a TEXTUAL date is read. A date-typed CELL needs none. */
-    dateFormat: singleLine(z.string())
-      .refine(isValidDateFormat, {
-        message:
-          `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
-          'each at most once',
-      })
-      .optional(),
+    dateFormat: presented(
+      singleLine(z.string())
+        .refine(isValidDateFormat, {
+          message:
+            `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+            'each at most once',
+        })
+        .optional(),
+      {
+        title: 'Date format',
+        description:
+          'How a date written as text is read, e.g. yyyy-MM-dd. A date-typed cell needs none.',
+      },
+    ),
   })
   .superRefine((config, ctx) => {
     // Reported on a FIELD path, never at the object root: `formatZodIssues`

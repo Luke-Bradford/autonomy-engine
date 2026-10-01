@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_KIND_LABELS,
@@ -12,7 +12,6 @@ import {
   type ConnectionDependentsResponse,
   type ConnectionPublic,
   type Dataset,
-  canonicalStringify,
 } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -51,9 +50,10 @@ import {
 } from './connections/dependentNodes';
 import { ImportPanel } from './ImportPanel';
 import {
-  configEditorView,
   deriveFieldsWithCarried,
+  payloadSignature,
   readConfigDraft,
+  saveableConfigOf,
   seedFieldInputs,
   type ConfigField,
   type FieldInput,
@@ -64,11 +64,8 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
-import {
-  useUnsavedChangesGuard,
-  type UnsavedChangesGuard,
-} from '../lib/form/useUnsavedChangesGuard';
-import { OverridableKeysField } from './OverridableKeysField';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = CONNECTION_KINDS;
@@ -149,33 +146,18 @@ function formForEdit(conn: ConnectionPublic): FormState {
 /**
  * #1396 — what Save would write, as one comparable string: the guard's
  * "is this form dirty?" is this against the value taken when the form opened.
- *
- * The ASSEMBLED config, read from the draft the editor is SHOWING — which is
- * the JSON one whenever the editor forces it (a stored value the fields cannot
- * show), not only when the operator asked — so an edit there counts. Switching
- * views rewrites `jsonText` and `inputs` without changing a thing Save would
- * send, and is not an edit. A draft that does not read back (half-typed JSON)
- * is compared as its raw text, which differs from any readable one, so it
- * counts as dirty: the safe side. A typed secret always counts. The allowlist
- * is compared as a set, because Save sends it as one (`allowlistChanged`).
+ * The config is the one the editor is showing (`saveableConfigOf`). A typed
+ * secret always counts. The allowlist is compared as a set, because Save
+ * sends it as one (`allowlistChanged`).
  */
 function savePayloadSignature(form: FormState): string {
-  const view = configEditorView(
-    { kind: form.kind, config: form.config, jsonMode: form.jsonMode, inputs: {}, jsonText: '' },
-    connectionFields,
-  );
-  const draft = readConfigDraft(view.jsonMode, form, view.fields);
-  const config = draft.ok
-    ? draft.config
-    : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
-  const payload = [form.name, form.kind, config, form.secret, [...form.parameters].sort()];
-  try {
-    return canonicalStringify(payload);
-  } catch {
-    // Not canonical JSON (a non-finite number from a half-typed field): still
-    // a string that moves with the edit, and never a crash in render.
-    return JSON.stringify(payload);
-  }
+  return payloadSignature([
+    form.name,
+    form.kind,
+    saveableConfigOf(form, connectionFields),
+    form.secret,
+    [...form.parameters].sort(),
+  ]);
 }
 
 /**
@@ -187,27 +169,15 @@ function savePayloadSignature(form: FormState): string {
 export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
-  /**
-   * How many times a form has been OPENED, and the `key` the form is mounted on.
-   *
-   * Keying on `form.id` was not enough. The "New connection" button is not gated
-   * behind the form being closed, so pressing it with a new-connection form
-   * already open leaves `form.id` at `null` — no remount — while `blankForm()`
-   * hands back byte-identical content, so the recomputed draft signature matches
-   * the stale one and the PREVIOUS draft's verdict renders against a form that
-   * was never tested. A counter cannot collide with itself, so every way of
-   * opening a form (New twice, Edit another row, Edit the same row again) starts
-   * the child clean.
-   */
-  const [formSeq, setFormSeq] = useState(0);
-  /**
-   * #1396 — the same counter, readable from a save that lands LATE. A save
-   * keeps running after its form is gone (Edit on another row, then Discard,
-   * while it is in flight), and its `onSaved` must close only the form it
-   * belongs to, never the one opened since.
-   */
-  const latestSeq = useRef(0);
+  const {
+    form,
+    setForm,
+    openForm,
+    seq: formSeq,
+    guard,
+    openerRef,
+    ...drawer
+  } = useDrawerForm(savePayloadSignature);
   /**
    * #1174 — the datasets bound to the connection being edited, and whether that
    * question could be answered at all.
@@ -231,25 +201,6 @@ export function ConnectionsPage() {
    */
   const [dependents, setDependents] = useState<ConnectionDependentsResponse | null>(null);
   const [dependentsUnavailable, setDependentsUnavailable] = useState<string | null>(null);
-  /** #1396 — the form as it opened, for the unsaved-changes guard. */
-  const [openedAs, setOpenedAs] = useState<string | null>(null);
-  const openForm = useCallback((next: FormState) => {
-    setForm(next);
-    setOpenedAs(savePayloadSignature(next));
-    latestSeq.current += 1;
-    setFormSeq(latestSeq.current);
-  }, []);
-  const dirty = useMemo(
-    () => form !== null && savePayloadSignature(form) !== openedAs,
-    [form, openedAs],
-  );
-  const guard = useUnsavedChangesGuard(dirty);
-  /**
-   * The button that opened the form on screen, so closing it returns focus
-   * there. Set when the open actually HAPPENS (inside the guarded action), so a
-   * held "Edit" that the operator then abandons does not steal it.
-   */
-  const openerRef = useRef<HTMLElement | null>(null);
   const guardedLoad = useGuardedLoad();
   /**
    * A SECOND instance, deliberately — `useGuardedLoad`'s "one instance per state
@@ -518,13 +469,7 @@ export function ConnectionsPage() {
         <h2 id="connections-heading">Connections</h2>
         <button
           type="button"
-          onClick={(e) => {
-            const opener = e.currentTarget;
-            guard.request(() => {
-              openerRef.current = opener;
-              openForm(blankForm());
-            });
-          }}
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >
           New connection
         </button>
@@ -569,13 +514,7 @@ export function ConnectionsPage() {
                     <td>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          const opener = e.currentTarget;
-                          guard.request(() => {
-                            openerRef.current = opener;
-                            openEditForm(conn);
-                          });
-                        }}
+                        onClick={(e) => drawer.openFrom(e.currentTarget, () => openEditForm(conn))}
                         aria-label={`Edit ${conn.name}`}
                       >
                         Edit
@@ -643,9 +582,9 @@ export function ConnectionsPage() {
             onChange={setForm}
             guard={guard}
             returnFocusTo={openerRef}
-            onClose={() => guard.request(() => setForm(null))}
+            onClose={drawer.requestClose}
             onSaved={async () => {
-              if (latestSeq.current === formSeq) setForm(null);
+              drawer.closeIfLatest(formSeq);
               await refresh();
             }}
           />
@@ -1080,19 +1019,12 @@ function ConnectionForm({
         </p>
       </FormSection>
 
-      <FormSection
-        title="Advanced"
-        collapsible
-        // Open when the row already uses it, so its state is never hidden.
-        defaultOpen={form.parametersSeed.length > 0}
-      >
-        <OverridableKeysField
-          subject={connectionAllowlistSubject(form.kind)}
-          seed={form.parametersSeed}
-          value={form.parameters}
-          onChange={(parameters) => onChange({ ...form, parameters })}
-        />
-      </FormSection>
+      <OverridableKeysSection
+        subject={connectionAllowlistSubject(form.kind)}
+        seed={form.parametersSeed}
+        value={form.parameters}
+        onChange={(parameters) => onChange({ ...form, parameters })}
+      />
     </FormDrawer>
   );
 }

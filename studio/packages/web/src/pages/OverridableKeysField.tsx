@@ -5,6 +5,7 @@ import {
   type AllowlistSubject,
   type StrayReason,
 } from './overrideAllowlist';
+import { FormSection } from '../lib/form/FormSection';
 
 const STRAY_NOTE: Record<StrayReason, string> = {
   never: 'never overridable, so a run refuses it',
@@ -61,5 +62,17 @@ export function OverridableKeysField({
         </label>
       ))}
     </fieldset>
+  );
+}
+
+/**
+ * #1396 — the allowlist in a resource form's Advanced section: collapsed,
+ * unless the row already has an allowlist, so stored state is never hidden.
+ */
+export function OverridableKeysSection(props: Parameters<typeof OverridableKeysField>[0]) {
+  return (
+    <FormSection title="Advanced" collapsible defaultOpen={props.seed.length > 0}>
+      <OverridableKeysField {...props} />
+    </FormSection>
   );
 }

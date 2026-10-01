@@ -115,12 +115,16 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     const allowlist = form.getByRole('group', { name: 'Overridable per node' });
 
     await openEdit(page, '/#/manage/datasets', 'Datasets', csv);
+    // #1396 — in the Advanced section, closed while the row has no allowlist.
+    await expect(allowlist).toBeHidden();
+    await form.locator('summary', { hasText: 'Advanced' }).click();
     await allowlist.getByLabel('Overridable: path', { exact: true }).check();
     await form.getByRole('button', { name: 'Save changes' }).click();
     await expect(form).toBeHidden();
     expect(await stored(page, `/api/datasets/${csvId}`)).toEqual(['path']);
 
     await openEdit(page, '/#/manage/datasets', 'Datasets', tbl);
+    await form.locator('summary', { hasText: 'Advanced' }).click();
     await expect(allowlist).toContainText('A table dataset has no settings a node can override.');
     await expect(allowlist.getByRole('checkbox')).toHaveCount(0);
 

@@ -75,6 +75,8 @@ describe('DatasetDetailPage (#996 M9)', () => {
     renderWithRouter(<DatasetDetailPage datasetId="ds_1" />);
 
     expect(await screen.findByRole('heading', { name: 'Customers' })).toBeInTheDocument();
+    // The kind by its display name, as the list shows it (#1396).
+    expect(screen.getByText('Database table')).toBeInTheDocument();
     expect(screen.getByText('id')).toBeInTheDocument();
     expect(screen.getByText(/not null/)).toBeInTheDocument();
   });

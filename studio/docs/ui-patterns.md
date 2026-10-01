@@ -1,7 +1,7 @@
 # UI patterns — resource forms
 
 How every create/edit form in studio looks and behaves (#1396, OR5). Written once here; the shared
-pieces live in `packages/web/src/lib/form/`. Connections follows it. Datasets, Triggers, Secrets,
+pieces live in `packages/web/src/lib/form/`. Connections and Datasets follow it. Triggers, Secrets,
 Global parameters and the node property panel move onto it in the slices that follow #1396.
 
 ## The drawer
@@ -9,6 +9,9 @@ Global parameters and the node property panel move onto it in the slices that fo
 - **Create and edit open in a drawer beside the list** (`FormDrawer`). It is a column of the page,
   not an overlay. The list stays readable, and its row actions stay clickable while a form is open.
   On narrow screens the drawer stacks under the list.
+- While a drawer is open the page widens by the drawer's width (`.content:has(.drawer-layout-open)`),
+  so the list keeps its usual width beside it. Where the window is too narrow even for that, the
+  list scrolls sideways inside its own column. It never runs under the drawer.
 - The drawer has a header (title and a close button), a body, and a **footer that sticks to the
   bottom of the window**. However long the form is, Save stays in view.
 - **Footer actions are right-aligned, with the primary action last**: `Cancel` · secondary actions
@@ -22,11 +25,13 @@ Global parameters and the node property panel move onto it in the slices that fo
 
 ## Sections
 
-- The form is grouped into titled sections (`FormSection`, a `fieldset` and `legend`). For a
-  connection these are *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
-  (the secret) and *Advanced*.
+- The form is grouped into titled sections (`FormSection`, a `fieldset` and `legend`):
+  - for a connection: *Basics* (name, kind), *Connection* (the kind's settings), *Authentication*
+    (the secret) and *Advanced*;
+  - for a dataset: *Basics* (name, store, kind), *Dataset* (the kind's settings), *Columns* (the
+    declared schema) and *Advanced*.
 - **Advanced is collapsed by default**, and opens by default when the record already uses it, so
-  stored state is never hidden.
+  stored state is never hidden. The override allowlist lives there (`OverridableKeysSection`).
 
 ## Labels, hints and required fields
 
@@ -39,8 +44,10 @@ Global parameters and the node property panel move onto it in the slices that fo
 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
 - `unit` names what the stored value is in. It never converts the value.
-- Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`). The stored value
-  stays the identifier.
+- Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
+  `DATASET_KIND_LABELS`). The stored value stays the identifier.
+- A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
+  label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
   Optional fields are unmarked: schema-derived fields no longer carry an "(optional)" suffix (a few
   hand-written labels outside `ConfigFieldControl`, in the canvas and trigger editors, still do
@@ -51,6 +58,13 @@ Global parameters and the node property panel move onto it in the slices that fo
   does next. The toggle sits beside the label, not inside it.
 
 ## Leaving a form with unsaved changes
+
+A page holds its open form with `useDrawerForm(signatureOf)`. The hook returns the form, the
+open counter the form is keyed on, the opener ref focus returns to, the guard below, and three
+actions: `openFrom(button, open)` (through the guard), `requestClose()`, and `closeIfLatest(seq)`
+for a save that lands after another form has opened. `signatureOf` is what Save would write as one
+string: `payloadSignature([...])` over the fields Save sends, with the config read through
+`saveableConfigOf` (both in `pages/pipeline/configForm.ts`).
 
 `useUnsavedChangesGuard(dirty)` holds every way out of a dirty form at one prompt in the drawer's
 footer ("You have unsaved changes. Discard them?" with **Keep editing** and **Discard changes**):

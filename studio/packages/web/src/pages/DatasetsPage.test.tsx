@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ConnectionPublic, Dataset } from '@autonomy-studio/shared';
 import { DatasetsPage } from './DatasetsPage';
@@ -7,7 +7,7 @@ import * as datasetsApi from '../api/datasets';
 import * as connectionsApi from '../api/connections';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
-import { renderWithRouter } from '../testing/renderWithRouter';
+import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
 
 // Mock only the network calls; `DatasetWriteSchema` stays REAL so the form's
@@ -149,15 +149,15 @@ afterEach(() => {
 
 describe('DatasetsPage', () => {
   it('shows the empty state after loading', async () => {
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     expect(await screen.findByText(/No datasets yet/i)).toBeInTheDocument();
   });
 
   it('renders a row with its kind, its store’s NAME and its column count', async () => {
     listMock.mockResolvedValue([dataset()]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     const row = within(await screen.findByRole('row', { name: /Orders/ }));
-    expect(row.getByText('table')).toBeInTheDocument();
+    expect(row.getByText('Database table')).toBeInTheDocument();
     // The store resolves to a name, not the raw `conn_1`.
     expect(row.getByText('Warehouse')).toBeInTheDocument();
     expect(row.getByText('1')).toBeInTheDocument();
@@ -165,13 +165,13 @@ describe('DatasetsPage', () => {
 
   it('surfaces a load error', async () => {
     listMock.mockRejectedValue(new Error('boom'));
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('boom');
   });
 
   it('creates a dataset from the kind’s own fields', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -179,7 +179,7 @@ describe('DatasetsPage', () => {
     await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_1');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
     // `table` is a control derived from the kind's own schema, not a JSON blob.
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), COLUMNS_JSON);
 
     listMock.mockResolvedValue([dataset()]);
@@ -204,12 +204,12 @@ describe('DatasetsPage', () => {
     // absent column list fails loudly instead of being manufactured as "this
     // table has no columns" — which auto-map would read as an empty mapping.
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     await user.click(screen.getByRole('button', { name: 'Create dataset' }));
 
     expect(await within(form()).findByRole('alert')).toHaveTextContent(/Columns is required/);
@@ -218,12 +218,12 @@ describe('DatasetsPage', () => {
 
   it('accepts an EXPLICIT empty column list, because that is a stated fact', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), '[]');
     await user.click(screen.getByRole('button', { name: 'Create dataset' }));
 
@@ -234,12 +234,12 @@ describe('DatasetsPage', () => {
 
   it('names the offending column when the declaration is the wrong shape', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     // `nullable` is REQUIRED with no default — a fact about the store that
     // neither default would answer correctly.
     await pasteInto(
@@ -258,7 +258,7 @@ describe('DatasetsPage', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
     exportMock.mockResolvedValue('{"kind":"dataset","canonical":true}');
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
 
@@ -273,7 +273,7 @@ describe('DatasetsPage', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
     exportMock.mockRejectedValue(new Error('its store connection "conn_1" no longer exists'));
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
 
@@ -285,7 +285,7 @@ describe('DatasetsPage', () => {
 
   it('offers the page’s connections as the store for an imported file', async () => {
     listMock.mockResolvedValue([]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     const picker = await screen.findByLabelText('Store it in');
     await waitFor(() =>
       expect(
@@ -297,7 +297,7 @@ describe('DatasetsPage', () => {
   /* #1253 — Edit names its row, as Delete already did; #1143's Export does too. */
   it('names the row on every row action, Edit included', async () => {
     listMock.mockResolvedValue([dataset()]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     expect(screen.getByRole('button', { name: 'Edit Orders' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Orders' })).toBeInTheDocument();
@@ -308,7 +308,7 @@ describe('DatasetsPage', () => {
   it('seeds the edit form from the stored row, so a rename cannot wipe the columns', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -335,7 +335,7 @@ describe('DatasetsPage', () => {
     // binding while the row says otherwise — and the next Save would write it.
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset({ connectionId: 'conn_gone' })]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     expect(screen.getByText('conn_gone')).toBeInTheDocument();
 
@@ -359,25 +359,25 @@ describe('DatasetsPage', () => {
     listMock.mockResolvedValue([
       dataset({ kind: 'query', config: { sql: 'select 1', table: 'orders' } }),
     ]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     // `table` belongs to the `table` kind, not to `query` — but the stored
     // config holds it, so it is rendered as an optional field and can be blanked away.
-    expect(within(form()).getByLabelText('table')).toHaveValue('orders');
+    expect(within(form()).getByLabelText('Table')).toHaveValue('orders');
     expect(within(form()).getByText(/Carried from another kind \(table\)/)).toBeInTheDocument();
   });
 
   it('warns when the kind’s own schema refuses the draft, without refusing the save', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     // A name only a quoting rule could make safe is refused by the identifier
     // rule (§8) — the operator learns that here, not when a run fails.
-    await user.type(within(form()).getByLabelText('table'), 'order lines');
+    await user.type(within(form()).getByLabelText('Table'), 'order lines');
     expect(
       await within(form()).findByText(/This table config is incomplete: .*bare SQL identifier/),
     ).toBeInTheDocument();
@@ -386,7 +386,7 @@ describe('DatasetsPage', () => {
   it('forces the JSON editor for a kind with no reader, and says why', async () => {
     unreadableKind = 'excel'; // see the seam above — no real kind lacks a reader now
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -419,12 +419,12 @@ describe('DatasetsPage', () => {
     // first, the textarea opens on a `jsonText` written before anything was
     // typed — showing a config the operator did not build, and saving it.
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
     expect(within(form()).getByLabelText('Config (JSON)')).toHaveValue(
@@ -448,13 +448,13 @@ describe('DatasetsPage', () => {
     // new kind's controls from `config` seeds them from before those
     // keystrokes — silently discarding everything typed into the editor.
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.type(within(form()).getByLabelText('Name'), 'Orders');
     await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_1');
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     // A kind with no reader forces the editor open (see the case above).
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
@@ -466,8 +466,8 @@ describe('DatasetsPage', () => {
     // what the JSON said rather than the pre-edit draft — including `table`,
     // where the stale `form.inputs` entry is what used to win.
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'table');
-    expect(within(form()).getByLabelText('table')).toHaveValue('invoices');
-    expect(within(form()).getByLabelText(/^schema/)).toHaveValue('main');
+    expect(within(form()).getByLabelText('Table')).toHaveValue('invoices');
+    expect(within(form()).getByLabelText(/^Schema/)).toHaveValue('main');
 
     // And what is on screen is what is SAVED.
     await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), COLUMNS_JSON);
@@ -490,11 +490,11 @@ describe('DatasetsPage', () => {
     // behind it. `toFieldMode` already refuses to leave JSON mode on a parse
     // failure; a kind change has to refuse for the same reason.
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
-    await user.type(within(form()).getByLabelText('table'), 'orders');
+    await user.type(within(form()).getByLabelText('Table'), 'orders');
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
 
     const editor = within(form()).getByLabelText('Config (JSON)');
@@ -508,7 +508,7 @@ describe('DatasetsPage', () => {
     expect(within(form()).getByLabelText('Kind')).toHaveValue('table');
     expect(within(form()).getByLabelText('Config (JSON)')).toHaveValue('{oops');
     expect(within(form()).getByRole('alert')).toBeInTheDocument();
-    expect(within(form()).queryByLabelText('table')).not.toBeInTheDocument();
+    expect(within(form()).queryByLabelText('Table')).not.toBeInTheDocument();
   });
 
   it('names the unreadable control instead of opening JSON on a draft that omits it', async () => {
@@ -517,13 +517,13 @@ describe('DatasetsPage', () => {
     listMock.mockResolvedValue([
       dataset({ kind: 'query', config: { sql: 'select 1', parameters: { a: 1 } } }),
     ]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
 
     // `parameters` is a record, so it derives a JSON control; typing something
     // unparseable into it makes the field draft unreadable.
-    await pasteInto(user, within(form()).getByLabelText(/^parameters/), '{oops');
+    await pasteInto(user, within(form()).getByLabelText(/^Bind values/), '{oops');
     // `excel` — the kind-change branch this exercises only fires for a kind with
     // NO reader, and #1167 gave `delimited` one.
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
@@ -537,7 +537,7 @@ describe('DatasetsPage', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
     await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
@@ -552,7 +552,7 @@ describe('DatasetsPage', () => {
   it('says a store is needed at all when there are no connections', async () => {
     const user = userEvent.setup();
     listConnectionsMock.mockResolvedValue([]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -565,14 +565,14 @@ describe('DatasetsPage', () => {
     // as raw JSON. The controls are §2.6's, derived from the schema #1163 gave
     // it; what changed here is only the READER gate.
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
 
-    expect(within(form()).getByLabelText('path')).toBeInTheDocument();
-    expect(within(form()).getByLabelText('header')).toBeInTheDocument();
+    expect(within(form()).getByLabelText('File path')).toBeInTheDocument();
+    expect(within(form()).getByLabelText('First row is a header')).toBeInTheDocument();
     expect(within(form()).queryByLabelText('Config (JSON)')).not.toBeInTheDocument();
     // The toggle is back too — it is hidden only for a kind with no reader.
     expect(within(form()).getByRole('button', { name: 'Edit as JSON' })).toBeInTheDocument();
@@ -591,7 +591,7 @@ describe('DatasetsPage', () => {
     // before the operator had touched anything.
     const user = userEvent.setup();
     listConnectionsMock.mockResolvedValue([store({ id: 'conn_files', kind: 'fs' })]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -607,7 +607,7 @@ describe('DatasetsPage', () => {
     // truly, and invisibly, until somebody happened to open it.
     listMock.mockResolvedValue([dataset()]);
     listConnectionsMock.mockResolvedValue([store({ kind: 'http' })]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
 
     const row = within(await screen.findByRole('row', { name: /Orders/ }));
     // The store still resolves — this is not the dangling case.
@@ -628,7 +628,7 @@ describe('DatasetsPage', () => {
   it('leaves an AGREEING row unmarked, so the mark means something (#1158)', async () => {
     listMock.mockResolvedValue([dataset()]);
     listConnectionsMock.mockResolvedValue([store()]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
 
     const row = within(await screen.findByRole('row', { name: /Orders/ }));
     expect(row.getByText('Warehouse')).toBeInTheDocument();
@@ -642,7 +642,7 @@ describe('DatasetsPage', () => {
     // row already has its own, truer, message for this state.
     listMock.mockResolvedValue([dataset({ connectionId: 'conn_gone' })]);
     listConnectionsMock.mockResolvedValue([store()]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
 
     const row = within(await screen.findByRole('row', { name: /Orders/ }));
     expect(row.getByText(/conn_gone/)).toBeInTheDocument();
@@ -666,7 +666,7 @@ describe('DatasetsPage', () => {
       store({ id: 'conn_db', name: 'Orders DB', kind: 'sqlite' }),
       store({ id: 'conn_llm', name: 'Claude', kind: 'anthropic_api' }),
     ]);
-    renderWithRouter(<DatasetsPage />);
+    renderWithDataRouter(<DatasetsPage />);
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -687,7 +687,7 @@ describe('DatasetsPage', () => {
 
   it('stays quiet when the kind and the store agree (#1145)', async () => {
     const user = userEvent.setup();
-    renderWithRouter(<DatasetsPage />); // the default `store()` fixture is `sqlite`
+    renderWithDataRouter(<DatasetsPage />); // the default `store()` fixture is `sqlite`
     await screen.findByText(/No datasets yet/i);
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
@@ -707,11 +707,11 @@ describe('DatasetsPage', () => {
   describe('excel sheet chooser (#1218)', () => {
     async function openExcelForm(user: ReturnType<typeof userEvent.setup>) {
       listConnectionsMock.mockResolvedValue([store({ id: 'conn_fs', kind: 'fs', name: 'Files' })]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await user.click(await screen.findByRole('button', { name: 'New dataset' }));
       await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_fs');
       await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
-      await pasteInto(user, within(form()).getByLabelText('path'), '/data/book.xlsx');
+      await pasteInto(user, within(form()).getByLabelText('Workbook path'), '/data/book.xlsx');
     }
 
     it('offers no chooser until the sheets have been listed', async () => {
@@ -721,7 +721,7 @@ describe('DatasetsPage', () => {
       // The free-text box is the ONLY surface before a listing, and it must
       // remain reachable: a workbook whose path is not readable yet has no list
       // to offer, and a form that demanded one would be unauthorable.
-      expect(within(form()).getByLabelText('sheet')).toBeInTheDocument();
+      expect(within(form()).getByLabelText('Sheet')).toBeInTheDocument();
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
       expect(sheetsMock).not.toHaveBeenCalled();
     });
@@ -729,7 +729,7 @@ describe('DatasetsPage', () => {
     it('asks for a path before it asks the server for anything', async () => {
       const user = userEvent.setup();
       listConnectionsMock.mockResolvedValue([store({ id: 'conn_fs', kind: 'fs', name: 'Files' })]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await user.click(await screen.findByRole('button', { name: 'New dataset' }));
       await user.selectOptions(within(form()).getByLabelText('Store'), 'conn_fs');
       await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
@@ -761,7 +761,7 @@ describe('DatasetsPage', () => {
       // A `sheetIndex` typed first is the trap: the schema refuses a config
       // naming both, so a chooser that only wrote `sheet` would make itself the
       // cause of the refusal on Save.
-      await pasteInto(user, within(form()).getByLabelText('sheetIndex — number'), '2');
+      await pasteInto(user, within(form()).getByLabelText('Sheet number — number'), '2');
 
       await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
       await user.selectOptions(
@@ -769,8 +769,8 @@ describe('DatasetsPage', () => {
         'Costs',
       );
 
-      expect(within(form()).getByLabelText('sheet')).toHaveValue('Costs');
-      expect(within(form()).getByLabelText('sheetIndex — number')).toHaveValue('');
+      expect(within(form()).getByLabelText('Sheet')).toHaveValue('Costs');
+      expect(within(form()).getByLabelText('Sheet number — number')).toHaveValue('');
     });
 
     it('stops offering a listing once the path moves out from under it', async () => {
@@ -779,7 +779,7 @@ describe('DatasetsPage', () => {
       await user.click(within(form()).getByRole('button', { name: 'List sheets' }));
       await within(form()).findByLabelText('Sheet in this workbook');
 
-      await pasteInto(user, within(form()).getByLabelText('path'), '-other');
+      await pasteInto(user, within(form()).getByLabelText('Workbook path'), '-other');
 
       // The names belong to the workbook that WAS named. Offering them against a
       // different path would invite a choice that refuses at dispatch — the very
@@ -800,7 +800,7 @@ describe('DatasetsPage', () => {
       expect(said).toHaveAttribute('role', 'status');
       expect(within(form()).queryByLabelText('Sheet in this workbook')).toBeNull();
       // The box survives the refusal — the operator can still type the name.
-      expect(within(form()).getByLabelText('sheet')).toBeInTheDocument();
+      expect(within(form()).getByLabelText('Sheet')).toBeInTheDocument();
     });
 
     it('declines to offer an unnamed sheet, and says how to reach it', async () => {
@@ -826,7 +826,7 @@ describe('DatasetsPage', () => {
     it('leaves a stored allowlist alone on a rename', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([delimited(['path'])]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -842,7 +842,7 @@ describe('DatasetsPage', () => {
     it('sends the ticked keys when the allowlist changed', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([delimited([])]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -857,7 +857,7 @@ describe('DatasetsPage', () => {
     it('does not write a stored duplicate back when the allowlist is edited', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([delimited(['path', 'path'])]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -871,7 +871,7 @@ describe('DatasetsPage', () => {
     it('shows a stored key the kind cannot use, and keeps it visible once unticked', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([delimited(['bogus'])]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -890,7 +890,7 @@ describe('DatasetsPage', () => {
     it('marks a stored security-boundary key as one a run refuses', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([dataset({ parameters: ['table'] })]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
@@ -902,12 +902,162 @@ describe('DatasetsPage', () => {
     it('says a table dataset has nothing overridable instead of drawing an empty list', async () => {
       const user = userEvent.setup();
       listMock.mockResolvedValue([dataset()]);
-      renderWithRouter(<DatasetsPage />);
+      renderWithDataRouter(<DatasetsPage />);
       await screen.findByText('Orders');
 
       await user.click(screen.getByRole('button', { name: ROW_EDIT }));
       expect(allowlist()).toHaveTextContent('A table dataset has no settings a node can override.');
       expect(within(allowlist()).queryAllByRole('checkbox')).toHaveLength(0);
     });
+  });
+});
+
+describe('the dataset form drawer (#1396)', () => {
+  const prompt = () => screen.queryByRole('alertdialog', { name: 'Unsaved changes' });
+  const drawer = () => screen.queryByRole('dialog', { name: /dataset$/ });
+
+  it('opens in sections, with the list still shown and the primary action last', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: 'New dataset' }));
+
+    const panel = screen.getByRole('dialog', { name: 'New dataset' });
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    for (const section of ['Basics', 'Dataset', 'Columns']) {
+      expect(within(panel).getByRole('group', { name: section })).toBeInTheDocument();
+    }
+    expect(panel.querySelector('details.form-section')).not.toHaveAttribute('open');
+    // Kinds are named for people; the value stays the stored identifier.
+    const kind = within(panel).getByLabelText('Kind');
+    expect(within(kind).getByRole('option', { name: 'Database table' })).toHaveValue('table');
+    expect(within(panel).getByLabelText('Name')).toHaveFocus();
+    expect(within(panel).getByLabelText('Name')).toBeRequired();
+    expect(within(panel).getByLabelText('Columns (JSON)')).toHaveAttribute('aria-required', 'true');
+    const footer = panel.querySelector<HTMLElement>('.form-drawer-footer')!;
+    expect(
+      within(footer)
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['Cancel', 'Create dataset']);
+  });
+
+  it('opens Advanced when the row already has an allowlist', async () => {
+    listMock.mockResolvedValue([dataset({ parameters: ['table'] })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    expect(form().querySelector('details.form-section')).toHaveAttribute('open');
+  });
+
+  it('holds a dirty columns draft at the prompt: Keep editing keeps it, Discard closes', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await user.clear(within(form()).getByLabelText('Columns (JSON)'));
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(within(form()).getByLabelText('Columns (JSON)')).toHaveValue('');
+
+    await user.keyboard('{Escape}');
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(drawer()).not.toBeInTheDocument();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('counts an edit to a config field', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await user.type(within(form()).getByLabelText('Table'), '_v2');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
+  });
+
+  it('does not count a view switch, a kind round trip or a re-ticked allowlist as an edit', async () => {
+    listMock.mockResolvedValue([
+      dataset({
+        kind: 'delimited',
+        config: { path: 'in.csv', header: true },
+        parameters: ['path'],
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+
+    await user.click(within(form()).getByRole('button', { name: 'Edit as JSON' }));
+    await user.click(within(form()).getByRole('button', { name: 'Edit as fields' }));
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'excel');
+    await user.selectOptions(within(form()).getByLabelText('Kind'), 'delimited');
+    const tick = within(form()).getByLabelText('Overridable: path');
+    await user.click(tick);
+    await user.click(tick);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).not.toBeInTheDocument();
+    expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it('holds Edit on another row while the open form is dirty', async () => {
+    listMock.mockResolvedValue([dataset(), dataset({ id: 'ds_2', name: 'Returns' })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
+    await user.type(within(form()).getByLabelText('Name'), ' renamed');
+
+    await user.click(screen.getByRole('button', { name: 'Edit Returns' }));
+    expect(prompt()).toBeInTheDocument();
+    expect(within(form()).getByLabelText('Name')).toHaveValue('Orders renamed');
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(within(form()).getByLabelText('Name')).toHaveValue('Returns');
+    expect(prompt()).not.toBeInTheDocument();
+  });
+
+  it('counts a JSON edit on a kind the form only shows as JSON', async () => {
+    unreadableKind = 'excel';
+    listMock.mockResolvedValue([
+      dataset({
+        kind: 'excel',
+        config: { path: '/data/book.xlsx', sheet: 'People', header: true },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    const json = within(form()).getByLabelText('Config (JSON)');
+    await user.clear(json);
+    await pasteInto(user, json, '{"path":"/data/other.xlsx","sheet":"People","header":true}');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(prompt()).toBeInTheDocument();
+  });
+
+  it('holds a route change while dirty, and lets it through on Discard', async () => {
+    const user = userEvent.setup();
+    const { router } = renderWithDataRouter(<DatasetsPage />, '/manage/datasets');
+    await user.click(await screen.findByRole('button', { name: 'New dataset' }));
+    await user.type(within(form()).getByLabelText('Name'), 'Draft');
+
+    await act(() => router.navigate('/author'));
+    expect(router.state.location.pathname).toBe('/manage/datasets');
+    expect(prompt()).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/author'));
+  });
+
+  it('closes a saved form without asking', async () => {
+    listMock.mockResolvedValue([dataset()]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<DatasetsPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await user.type(within(form()).getByLabelText('Name'), ' v2');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(drawer()).not.toBeInTheDocument());
+    expect(prompt()).not.toBeInTheDocument();
   });
 });

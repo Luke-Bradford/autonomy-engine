@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
   CONNECTION_KIND_LABELS,
   DATASET_CONNECTION_KINDS,
+  DATASET_KIND_LABELS,
   DATASET_KINDS,
   DatasetColumnSchema,
   datasetConfigAdvisory,
@@ -37,7 +38,9 @@ import { StoreCell } from './datasets/StoreCell';
 import { datasetDetailPath } from './datasets/datasetPath';
 import {
   deriveFieldsWithCarried,
+  payloadSignature,
   readConfigDraft,
+  saveableConfigOf,
   seedFieldInputs,
   type ConfigField,
   type FieldInput,
@@ -46,7 +49,11 @@ import { type FieldChoices } from './pipeline/ConfigFieldControl';
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
-import { OverridableKeysField } from './OverridableKeysField';
+import { FormDrawer } from '../lib/form/FormDrawer';
+import { FormSection } from '../lib/form/FormSection';
+import { RequiredMark } from '../lib/form/RequiredMark';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 
 const KINDS = DATASET_KINDS;
@@ -262,6 +269,25 @@ function formForEdit(dataset: Dataset): FormState {
 }
 
 /**
+ * #1396 — what Save would write, as one comparable string, for the
+ * unsaved-changes guard (`useDrawerForm`). The config is the one the editor is
+ * showing, with a kind that has no reader counted as JSON-only, as the editor
+ * counts it. The columns draft is compared as typed, because Save parses that
+ * text. The allowlist is compared as a set, because Save sends it as one
+ * (`allowlistChanged`).
+ */
+function savePayloadSignature(form: FormState): string {
+  return payloadSignature([
+    form.name,
+    form.connectionId,
+    form.kind,
+    saveableConfigOf(form, datasetFields, kindHasNoReader),
+    form.columnsText,
+    [...form.parameters].sort(),
+  ]);
+}
+
+/**
  * Manage → Datasets (#1115; data-movement spec §13, *"a Datasets list + detail
  * beside Connections. No new hub, no parallel authoring idiom"*).
  *
@@ -278,7 +304,15 @@ export function DatasetsPage() {
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
   const [connections, setConnections] = useState<readonly ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const {
+    form,
+    setForm,
+    openForm,
+    seq: formSeq,
+    guard,
+    openerRef,
+    ...drawer
+  } = useDrawerForm(savePayloadSignature);
   const guardedLoad = useGuardedLoad();
 
   // ONE guarded load writing BOTH state targets from a single response, which is
@@ -359,7 +393,10 @@ export function DatasetsPage() {
     <section aria-labelledby="datasets-heading">
       <div className="page-header">
         <h2 id="datasets-heading">Datasets</h2>
-        <button type="button" onClick={() => setForm(blankForm(connections))}>
+        <button
+          type="button"
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm(connections)))}
+        >
           New dataset
         </button>
       </div>
@@ -375,83 +412,97 @@ export function DatasetsPage() {
         </p>
       )}
 
-      {datasets === null && !loadError && <p>Loading datasets…</p>}
+      {/* #1396 — the list and the form side by side; the form is a column, not
+          an overlay, so the row actions stay reachable while it is open. */}
+      {guard.routeHold}
+      <div className={form ? 'drawer-layout-open' : undefined}>
+        <div>
+          {datasets === null && !loadError && <p>Loading datasets…</p>}
 
-      {datasets !== null && datasets.length === 0 && (
-        <p>No datasets yet. Add one to give a copy activity something to read from or write to.</p>
-      )}
+          {datasets !== null && datasets.length === 0 && (
+            <p>
+              No datasets yet. Add one to give a copy activity something to read from or write to.
+            </p>
+          )}
 
-      {datasets !== null && datasets.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Store</th>
-              <th scope="col">Columns</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {datasets.map((dataset) => (
-              <tr key={dataset.id}>
-                <td>
-                  <Link to={datasetDetailPath(dataset.id)}>{dataset.name}</Link>
-                </td>
-                <td>
-                  <code>{dataset.kind}</code>
-                </td>
-                <td>
-                  <StoreCell
-                    connections={connections}
-                    connectionId={dataset.connectionId}
-                    datasetKind={dataset.kind}
-                  />
-                </td>
-                <td>{dataset.columns.length}</td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => setForm(formForEdit(dataset))}
-                    aria-label={`Edit ${dataset.name}`}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onExport(dataset)}
-                    aria-label={`Export ${dataset.name}`}
-                    disabled={exporting.has(dataset.id)}
-                    aria-busy={exporting.has(dataset.id)}
-                  >
-                    Export
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(dataset)}
-                    aria-label={`Delete ${dataset.name}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          {datasets !== null && datasets.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Store</th>
+                  <th scope="col">Columns</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {datasets.map((dataset) => (
+                  <tr key={dataset.id}>
+                    <td>
+                      <Link to={datasetDetailPath(dataset.id)}>{dataset.name}</Link>
+                    </td>
+                    <td>{DATASET_KIND_LABELS[dataset.kind]}</td>
+                    <td>
+                      <StoreCell
+                        connections={connections}
+                        connectionId={dataset.connectionId}
+                        datasetKind={dataset.kind}
+                      />
+                    </td>
+                    <td>{dataset.columns.length}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={(e) =>
+                          drawer.openFrom(e.currentTarget, () => openForm(formForEdit(dataset)))
+                        }
+                        aria-label={`Edit ${dataset.name}`}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onExport(dataset)}
+                        aria-label={`Export ${dataset.name}`}
+                        disabled={exporting.has(dataset.id)}
+                        aria-busy={exporting.has(dataset.id)}
+                      >
+                        Export
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onDelete(dataset)}
+                        aria-label={`Delete ${dataset.name}`}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-      {form && (
-        <DatasetForm
-          form={form}
-          connections={connections}
-          onChange={setForm}
-          onClose={() => setForm(null)}
-          onSaved={async () => {
-            setForm(null);
-            await refresh();
-          }}
-        />
-      )}
+        {form && (
+          <DatasetForm
+            /* Keyed on the open counter, so a sheet listing taken for one draft
+             never renders against the next (see `useDrawerForm`). */
+            key={formSeq}
+            form={form}
+            connections={connections}
+            onChange={setForm}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onSaved={async () => {
+              drawer.closeIfLatest(formSeq);
+              await refresh();
+            }}
+          />
+        )}
+      </div>
 
       <ImportPanel listKind="dataset" stores={connections} onImported={refresh} />
     </section>
@@ -462,12 +513,16 @@ function DatasetForm({
   form,
   connections,
   onChange,
+  guard,
+  returnFocusTo,
   onClose,
   onSaved,
 }: {
   form: FormState;
   connections: readonly ConnectionPublic[];
   onChange: (next: FormState) => void;
+  guard: UnsavedChangesGuard;
+  returnFocusTo: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -684,159 +739,203 @@ function DatasetForm({
   );
 
   return (
-    <form className="dataset-form" onSubmit={(e) => void onSubmit(e)} aria-label="Dataset form">
-      <h3>{editing ? 'Edit dataset' : 'New dataset'}</h3>
-
-      <label>
-        Name
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => onChange({ ...form, name: e.target.value })}
-          required
-        />
-      </label>
-
-      <LabelledControl label="Store">
-        {(id) => (
-          <select
-            id={id}
-            value={form.connectionId}
-            onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
+    <FormDrawer
+      title={editing ? 'Edit dataset' : 'New dataset'}
+      formLabel="Dataset form"
+      className="dataset-form"
+      guard={guard}
+      onRequestClose={onClose}
+      onSubmit={(e) => void onSubmit(e)}
+      busy={saving || listing}
+      returnFocusTo={returnFocusTo}
+      /* In the footer, beside Save, so a refused Save is in view where it was
+         pressed. Errors only: the sheet listing's `role="status"` answers stay
+         in the body beside the button that asked. */
+      status={
+        error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )
+      }
+      actions={
+        <>
+          <button type="button" onClick={onClose} disabled={saving || listing}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={saving || listing}>
+            {saving ? 'Saving…' : editing ? 'Save changes' : 'Create dataset'}
+          </button>
+        </>
+      }
+    >
+      <FormSection title="Basics">
+        <label>
+          <span>
+            Name
+            <RequiredMark />
+          </span>
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
             required
-          >
-            {connections.length === 0 && <option value="">— no connections —</option>}
-            {boundIsUnresolved && (
-              <option value={form.connectionId}>{form.connectionId} (missing)</option>
-            )}
-            {connections.map((conn) => (
-              <option key={conn.id} value={conn.id}>
-                {conn.name} ({CONNECTION_KIND_LABELS[conn.kind]})
-              </option>
-            ))}
-          </select>
-        )}
-      </LabelledControl>
-      {connections.length === 0 && (
-        <p className="page-hint">
-          A dataset lives in a store, so it needs a connection first — add one under Manage →
-          Connections.
-        </p>
-      )}
-      {boundIsUnresolved && (
-        <p className="contract-advisory">
-          This dataset names a connection that no longer exists. A copy using it will fail at
-          dispatch until it is re-pointed.
-        </p>
-      )}
-      {storeKindAdvisory !== null && (
-        <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
-      )}
+          />
+        </label>
 
-      <LabelledControl label="Kind">
-        {(id) => (
-          <select
-            id={id}
-            value={form.kind}
-            onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
-          >
-            {KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        )}
-      </LabelledControl>
-
-      {/* The mode toggle is hidden, not disabled, for a kind with no reader
-          (`kindHasNoReader`): a typed form for a kind every copy refuses at
-          dispatch would present a dataset as ready to copy, and a control that
-          can only refuse is furniture. */}
-      <ConfigEditor
-        editor={editor}
-        className="dataset-config"
-        rows={6}
-        advisory={advisory}
-        choicesFor={choicesFor}
-        fieldModeExtra={
-          /* #1218 — only `excel` names a sheet, and only the field form can
-            offer one (the JSON editor has no control to attach it to). */
-          form.kind === 'excel' && (
+        <LabelledControl
+          label={
             <>
-              <button type="button" onClick={() => void onListSheets()} disabled={listing}>
-                {listing ? 'Listing sheets…' : 'List sheets'}
-              </button>
-              {/* `role="status"`, matching the probe verdict: a refusal here is
-                the server's ANSWER to a question that was asked — the file is
-                not there yet, the path is outside the roots — not a failure of
-                the form, so it does not take the page's `alert` slot. */}
-              {sheets !== null && sheets.signature === sheetSignature && !sheets.result.ok && (
-                <p role="status" className="probe-failed">
-                  {sheets.result.error}
-                </p>
-              )}
-              {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
-                <p role="status" className="page-hint">
-                  This workbook reports no named sheets — name the sheet by position with
-                  <code>sheetIndex</code> instead.
-                </p>
-              )}
+              Store
+              <RequiredMark />
             </>
-          )
-        }
-      >
-        {/* `query`'s config has its OWN `parameters` key — SQL bind values —
-            which is a different thing from `Dataset.parameters`, the per-dispatch
-            override allowlist. Said here because the two would otherwise sit on
-            one form under one word. */}
-        {form.kind === 'query' && (
+          }
+        >
+          {(id) => (
+            <select
+              id={id}
+              value={form.connectionId}
+              onChange={(e) => onChange({ ...form, connectionId: e.target.value })}
+              required
+            >
+              {connections.length === 0 && <option value="">— no connections —</option>}
+              {boundIsUnresolved && (
+                <option value={form.connectionId}>{form.connectionId} (missing)</option>
+              )}
+              {connections.map((conn) => (
+                <option key={conn.id} value={conn.id}>
+                  {conn.name} ({CONNECTION_KIND_LABELS[conn.kind]})
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
+        {connections.length === 0 && (
           <p className="page-hint">
-            These <code>parameters</code> are SQL bind values for the statement. Whether a node may
-            override them per run is the “Overridable per node” setting below.
+            A dataset lives in a store, so it needs a connection first — add one under Manage →
+            Connections.
           </p>
         )}
-      </ConfigEditor>
+        {boundIsUnresolved && (
+          <p className="contract-advisory">
+            This dataset names a connection that no longer exists. A copy using it will fail at
+            dispatch until it is re-pointed.
+          </p>
+        )}
 
-      <OverridableKeysField
+        <LabelledControl
+          label={
+            <>
+              Kind
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <select
+              id={id}
+              value={form.kind}
+              aria-required
+              onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
+            >
+              {KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {DATASET_KIND_LABELS[kind]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
+        {storeKindAdvisory !== null && (
+          <p className="contract-advisory">{`Kind and store disagree: ${storeKindAdvisory}`}</p>
+        )}
+      </FormSection>
+
+      <FormSection title="Dataset">
+        {/* The mode toggle is hidden, not disabled, for a kind with no reader
+            (`kindHasNoReader`): a typed form for a kind every copy refuses at
+            dispatch would present a dataset as ready to copy, and a control that
+            can only refuse is furniture. */}
+        <ConfigEditor
+          editor={editor}
+          className="dataset-config"
+          rows={6}
+          advisory={advisory}
+          choicesFor={choicesFor}
+          fieldModeExtra={
+            /* #1218 — only `excel` names a sheet, and only the field form can
+              offer one (the JSON editor has no control to attach it to). */
+            form.kind === 'excel' && (
+              <>
+                <button type="button" onClick={() => void onListSheets()} disabled={listing}>
+                  {listing ? 'Listing sheets…' : 'List sheets'}
+                </button>
+                {/* `role="status"`, matching the probe verdict: a refusal here is
+                  the server's ANSWER to a question that was asked — the file is
+                  not there yet, the path is outside the roots — not a failure of
+                  the form, so it does not take the page's `alert` slot. */}
+                {sheets !== null && sheets.signature === sheetSignature && !sheets.result.ok && (
+                  <p role="status" className="probe-failed">
+                    {sheets.result.error}
+                  </p>
+                )}
+                {freshSheets !== null && freshSheets.filter((n) => n !== '').length === 0 && (
+                  <p role="status" className="page-hint">
+                    This workbook reports no named sheets — choose the sheet by position with Sheet
+                    number instead.
+                  </p>
+                )}
+              </>
+            )
+          }
+        >
+          {/* `query`'s config has its OWN `parameters` key — SQL bind values —
+              which is a different thing from `Dataset.parameters`, the per-dispatch
+              override allowlist. Said here because the two would otherwise sit on
+              one form under one word. */}
+          {form.kind === 'query' && (
+            <p className="page-hint">
+              Whether a step may override the Bind values per run is the “Overridable per node”
+              setting under Advanced.
+            </p>
+          )}
+        </ConfigEditor>
+      </FormSection>
+
+      <FormSection title="Columns">
+        <LabelledControl
+          label={
+            <>
+              Columns (JSON)
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <textarea
+              id={id}
+              value={form.columnsText}
+              onChange={(e) => onChange({ ...form, columnsText: e.target.value })}
+              rows={6}
+              spellCheck={false}
+              aria-required
+              placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
+            />
+          )}
+        </LabelledControl>
+        <p className="page-hint">
+          The schema this dataset DECLARES — an authoring aid that auto-map matches against, never a
+          run input. A copy is gated against the store’s actual columns, not this list. Write{' '}
+          <code>[]</code> to state that there are none.
+        </p>
+      </FormSection>
+
+      <OverridableKeysSection
         subject={datasetAllowlistSubject(form.kind)}
         seed={form.parametersSeed}
         value={form.parameters}
         onChange={(parameters) => onChange({ ...form, parameters })}
       />
-
-      <LabelledControl label="Columns (JSON)">
-        {(id) => (
-          <textarea
-            id={id}
-            value={form.columnsText}
-            onChange={(e) => onChange({ ...form, columnsText: e.target.value })}
-            rows={6}
-            spellCheck={false}
-            placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
-          />
-        )}
-      </LabelledControl>
-      <p className="page-hint">
-        The schema this dataset DECLARES — an authoring aid that auto-map matches against, never a
-        run input. A copy is gated against the store’s actual columns, not this list. Required:
-        write <code>[]</code> to state that there are none.
-      </p>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : editing ? 'Save changes' : 'Create dataset'}
-        </button>
-        <button type="button" onClick={onClose} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    </FormDrawer>
   );
 }

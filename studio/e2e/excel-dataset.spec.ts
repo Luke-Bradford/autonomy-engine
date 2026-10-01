@@ -128,22 +128,22 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     // inherited — a defaulted one could not be set to `false` distinguishably
     // from unset — but a checkbox carries no `aria-required`, so it is pinned
     // as visible only.
-    await expect(form(page).getByLabel('path', { exact: true })).toHaveAttribute(
+    await expect(form(page).getByLabel('Workbook path', { exact: true })).toHaveAttribute(
       'aria-required',
       'true',
     );
-    await expect(form(page).getByLabel('header', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Has a header row', { exact: true })).toBeVisible();
     // The five optional ones, each by its FULL accessible name. `sheetIndex`
     // and `headerRow` carry the ` — number` suffix `ConfigFieldControl` appends
     // to a numeric control, which is itself worth pinning: those two derived as
     // NUMBER controls rather than degrading to a JSON box, which is what §13's
     // trap would have produced from a `z.union` spelling of one sheet key.
     for (const field of [
-      'sheet',
-      'sheetIndex — number',
-      'headerRow — number',
-      'nullValue',
-      'dateFormat',
+      'Sheet',
+      'Sheet number — number',
+      'Header row — number',
+      'Null marker',
+      'Date format',
     ]) {
       await expect(form(page).getByLabel(field, { exact: true })).not.toHaveAttribute(
         'aria-required',
@@ -153,10 +153,10 @@ test('#1215 — an excel dataset authors through derived controls, and copies in
     await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
     await form(page).getByLabel('Name').fill('#1215 people.xlsx');
-    await form(page).getByLabel('path', { exact: true }).fill(bookPath);
-    await form(page).getByLabel('sheet', { exact: true }).fill('People');
-    await form(page).getByLabel('header', { exact: true }).check();
-    await form(page).getByLabel('headerRow — number', { exact: true }).fill('3');
+    await form(page).getByLabel('Workbook path', { exact: true }).fill(bookPath);
+    await form(page).getByLabel('Sheet', { exact: true }).fill('People');
+    await form(page).getByLabel('Has a header row', { exact: true }).check();
+    await form(page).getByLabel('Header row — number', { exact: true }).fill('3');
     // REQUIRED by the form, and deliberately so: `[]` is a claim about the
     // store and never a stand-in for "not described yet".
     await form(page)
@@ -292,10 +292,10 @@ test('#1218 — the excel sheet chooser offers what the workbook actually holds'
       form(page).getByRole('combobox', { name: 'Sheet in this workbook', exact: true }),
     ).toBeHidden();
     // The free-text box exists from the start and never goes away.
-    await expect(box(page, 'sheet')).toBeVisible();
+    await expect(box(page, 'Sheet')).toBeVisible();
 
     // ── 2. A REFUSAL IS AN ANSWER, NOT AN ERROR ─────────────────────────────
-    await box(page, 'path').fill(join(root, 'not-written-yet.xlsx'));
+    await box(page, 'Workbook path').fill(join(root, 'not-written-yet.xlsx'));
     await form(page).getByRole('button', { name: 'List sheets' }).click();
     // 200 + `{ ok: false }`, rendered as `role="status"`. If this route ever
     // 500s on ENOENT — the shape it had before `openConfinedFd` was wrapped —
@@ -306,11 +306,11 @@ test('#1218 — the excel sheet chooser offers what the workbook actually holds'
     ).toBeHidden();
 
     // ── 3. THE REAL WORKBOOK ────────────────────────────────────────────────
-    await box(page, 'path').fill(bookPath);
+    await box(page, 'Workbook path').fill(bookPath);
     // A `sheetIndex` typed FIRST, because that is the trap: the schema refuses a
     // config naming both `sheet` and `sheetIndex`, so a chooser that wrote only
     // `sheet` would make itself the cause of the refusal on Save.
-    await box(page, 'sheetIndex — number').fill('2');
+    await box(page, 'Sheet number — number').fill('2');
     await form(page).getByRole('button', { name: 'List sheets' }).click();
 
     const chooser = form(page).getByRole('combobox', {
@@ -324,19 +324,19 @@ test('#1218 — the excel sheet chooser offers what the workbook actually holds'
 
     // ── 4. CHOOSING WRITES ONE FIELD AND CLEARS THE OTHER ───────────────────
     await chooser.selectOption('Costs');
-    await expect(box(page, 'sheet')).toHaveValue('Costs');
-    await expect(box(page, 'sheetIndex — number')).toHaveValue('');
+    await expect(box(page, 'Sheet')).toHaveValue('Costs');
+    await expect(box(page, 'Sheet number — number')).toHaveValue('');
 
     // ── 5. A LISTING STOPS BEING OFFERED WHEN ITS DRAFT MOVES ───────────────
     // The names belong to the workbook that WAS named. Offering them against a
     // different path would invite a choice that refuses at dispatch.
-    await box(page, 'path').fill(join(root, 'somewhere-else.xlsx'));
+    await box(page, 'Workbook path').fill(join(root, 'somewhere-else.xlsx'));
     await expect(
       form(page).getByRole('combobox', { name: 'Sheet in this workbook', exact: true }),
     ).toBeHidden();
     // …and the box the operator can always fall back to is still there, still
     // holding what they chose.
-    await expect(box(page, 'sheet')).toHaveValue('Costs');
+    await expect(box(page, 'Sheet')).toHaveValue('Costs');
 
     await expectQuiet(page, problems);
   } finally {

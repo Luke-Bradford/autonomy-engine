@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import {
   SecretRefSchema,
+  canonicalStringify,
   isAddressableOutputName,
   isOptionalProperty,
   isAuthoredAsExpression,
@@ -1318,6 +1319,44 @@ export function configEditorView<K extends string>(
     unrenderable,
     jsonMode: draft.jsonMode || unrenderable.length > 0 || forcedJson(draft.kind),
   };
+}
+
+/**
+ * #1396 — the config half of "what would Save write", for a form's
+ * unsaved-changes guard: a page compares this, inside `payloadSignature`,
+ * against the value taken when the form opened.
+ *
+ * Read from the draft the editor is SHOWING, which is the JSON one whenever
+ * the editor forces it (a stored value the fields cannot show, a kind the page
+ * only shows as JSON), not only when the operator asked, so an edit there
+ * counts. Switching views rewrites `jsonText` and `inputs` without changing a
+ * thing Save would send, and is not an edit. A draft that does not read back
+ * (half-typed JSON) is returned as its raw text, which differs from any
+ * readable one, so it counts as dirty: the safe side.
+ */
+export function saveableConfigOf<K extends string>(
+  form: ConfigDraft<K>,
+  fieldsFor: FieldsFor<K>,
+  forcedJson: ForcedJson<K> = neverForced,
+): unknown {
+  const view = configEditorView(
+    { kind: form.kind, config: form.config, jsonMode: form.jsonMode, inputs: {}, jsonText: '' },
+    fieldsFor,
+    forcedJson,
+  );
+  const draft = readConfigDraft(view.jsonMode, form, view.fields);
+  return draft.ok ? draft.config : { unreadable: view.jsonMode ? form.jsonText : form.inputs };
+}
+
+/** #1396 — a save payload as one comparable string, for an unsaved-changes guard. */
+export function payloadSignature(payload: unknown): string {
+  try {
+    return canonicalStringify(payload);
+  } catch {
+    // Not canonical JSON (a non-finite number from a half-typed field): still
+    // a string that moves with the edit, and never a crash in render.
+    return JSON.stringify(payload);
+  }
 }
 
 /** Read the field draft into `config` AND `jsonText`, so the textarea opens on what Save would write. */
