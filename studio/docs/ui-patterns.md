@@ -148,14 +148,20 @@ message.
   replaced secret's or a stored global's Name), so nothing is checked or filed there.
 - **A conflict on the name is the Name's error.** A 409 from a create, where the name is the only
   thing that can collide, goes beside the Name (`showRefusedFields`), not into the footer's message.
-- **Under `noValidate` the form must refuse bad input itself.** A native `type="number"` holding `1e`,
-  or a half-typed `datetime-local`, reports `value === ''` and sets `validity.badInput`. The browser
-  refused such a submit, but with its check off a form reading the value sees a blank, and quietly
-  drops the bound or cap. A form with native number or date controls calls `firstBadInput` at the
-  top of its submit and refuses with `badInputMessage`, focusing the control. Today that is the
-  trigger form, whose mode editors use them.
+- **Under `noValidate`, `FormDrawer` refuses bad input itself.** A native `type="number"` holding
+  `1e`, or a half-typed `datetime-local`, reports `value === ''` and sets `validity.badInput`. The
+  browser refused such a submit; with its check off, a page reading the value would see a blank and
+  quietly drop the bound or cap. So when `validation` is passed, `FormDrawer` looks for such a
+  control (`firstBadInput`) before calling the page's submit, and refuses in its place
+  (`refuseBadInput`). Every failing check is raised, as on a Save. On a field of the form the
+  message goes beside it; on any other control (a trigger mode editor's date) it is the alert's
+  `notice`. Focus goes to the first invalid field, or to the control when nothing else is invalid.
+  No page needs to remember to do this.
+- **Hand-written controls join with `validation.attrsFor(key, errorId)`** and a `FieldError` under
+  them with that id. `fieldAttrs` stays for a control that must say more (a hint, a row list).
 - **The trigger form checks its own fields only**: Name, the binding (an enabled trigger must be
-  bound), Max parallel runs and Params. Its mode editors (recurrence, tumbling window, event, run
+  bound), Max parallel runs and Params. Max is read as Save reads it (`Number`), so `1e2` passes;
+  empty, `0`, `-1` and `1.5` do not. Its mode editors (recurrence, tumbling window, event, run
   windows) still refuse with the footer's one message on Save, from their converters. Moving them
   onto field keys is a later slice.
 - The canvas's `DraftNumberField` uses the same `FieldError` with `role="alert"`, because there is no
