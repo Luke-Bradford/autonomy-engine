@@ -131,6 +131,9 @@ export function ContainerPanel({
   const ownIssues = useSubjectIssues('container', container.id);
   const label =
     containerLabels(containers).get(container.id) ?? CONTAINER_KIND_LABELS[container.kind];
+  // #1413 — the palette's sentence for this kind. A kind the palette does not
+  // list gets no line rather than a bare type id.
+  const kindDescription = CONTAINER_PALETTE.find((e) => e.kind === container.kind)?.description;
   const stored = container as unknown as Record<string, unknown>;
 
   // #864 — one picker per expression field, since each is its own site. Both
@@ -347,10 +350,11 @@ export function ContainerPanel({
       <h3>{label}</h3>
       {/* #1413 — the palette's hover sentence, kept once the box is placed, as
           the node panel does for an activity. */}
-      <p className="page-hint property-panel__about">
-        {CONTAINER_PALETTE.find((e) => e.kind === container.kind)?.description}{' '}
-        <code>{container.kind}</code>
-      </p>
+      {kindDescription && (
+        <p className="page-hint property-panel__about">
+          {kindDescription} <code>{container.kind}</code>
+        </p>
+      )}
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
         inside. Which activity belongs to which container is edited on the activity itself.

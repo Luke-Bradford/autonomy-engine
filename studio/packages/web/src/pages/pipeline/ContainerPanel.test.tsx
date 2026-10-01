@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { Container, Node, Param } from '@autonomy-studio/shared';
+import {
+  ContainerKindSchema,
+  type Container,
+  type Node,
+  type Param,
+} from '@autonomy-studio/shared';
 import { ContainerPanel } from './ContainerPanel';
 import { CONTAINER_PALETTE } from './activityGroups';
 
@@ -59,9 +64,13 @@ function apply() {
 }
 
 describe('ContainerPanel says what the container does (#1413)', () => {
-  it.each(CONTAINER_PALETTE.map((e) => [e.kind, e.description] as const))(
+  // Every KIND, not every palette entry: a kind the palette forgot would get no
+  // line at all, and this is what catches it.
+  it.each(ContainerKindSchema.options)(
     'a %s box repeats its palette description and names its kind',
-    (kind, description) => {
+    (kind) => {
+      const description = CONTAINER_PALETTE.find((e) => e.kind === kind)?.description;
+      expect(description).toBeDefined();
       mount({ ...LOOP, kind } as Container);
       const about = screen.getAllByRole('heading', { level: 3 })[0]!.nextElementSibling;
       expect(about?.classList.contains('property-panel__about')).toBe(true);
