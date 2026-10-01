@@ -93,8 +93,9 @@ test.describe('#1396 the dataset form drawer', () => {
       kind: 'sqlite',
       config: { file: `/tmp/e2e-1396-narrow-${stamp}.db` },
     });
+    const seeded = `e2e-1396-ds-narrow-dataset-with-a-long-name-${stamp}`;
     await seedDataset(page, {
-      name: `e2e-1396-ds-narrow-dataset-with-a-long-name-${stamp}`,
+      name: seeded,
       kind: 'table',
       connectionId: store,
       config: { table: 'orders' },
@@ -103,15 +104,19 @@ test.describe('#1396 the dataset form drawer', () => {
     await page.setViewportSize({ width: 1100, height: 800 });
     await gotoDatasets(page);
     await page.getByRole('button', { name: 'New dataset' }).click();
-    const layout = await page.evaluate(() => {
-      const list = document.querySelector('.drawer-layout-open > :first-child')!;
+    // The row's Edit button can be brought into view and clicked: it is never
+    // left painted under the drawer.
+    const edit = page.getByRole('button', { name: `Edit ${seeded}` });
+    await edit.scrollIntoViewIfNeeded();
+    const reachable = await edit.evaluate((el) => {
+      const box = el.getBoundingClientRect();
       const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
       return {
-        listEndsBeforeDrawer: list.getBoundingClientRect().right <= aside.left,
-        listScrolls: getComputedStyle(list).overflowX === 'auto',
+        hit: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === el,
+        leftOfDrawer: box.right <= aside.left,
       };
     });
-    expect(layout).toEqual({ listEndsBeforeDrawer: true, listScrolls: true });
+    expect(reachable).toEqual({ hit: true, leftOfDrawer: true });
     await expectQuiet(page, problems);
   });
 
