@@ -946,6 +946,25 @@ has not resolved yet, so the FIRST node added — by click or by drop — re-cen
 viewport as it is measured; every subsequent drop lands where the pointer released. That is
 pre-existing click-add behaviour, not a U5 regression, and **U9** owns zoom/fit.
 
+*Amended by #1413 (OR22), AS BUILT 2026-10-01:* an empty canvas now carries a guide — "This
+pipeline has no activities yet. Drag one here from the Activities palette, or start from a
+template" — with three starter templates (`starterTemplates.ts`): *Load every CSV in a folder into
+a table* (#1420 part 4), *Summarise every document in a folder*, and *Call an API and stop on an
+error response*.
+- **Not a `<Panel>`.** U5's drop guard (`isOverCanvasSurface`) treats anything inside
+  `.react-flow__panel` as chrome and refuses a drop on it, which a guide saying "drag here" cannot be.
+  It is a plain absolutely-positioned child of `<ReactFlow>`, `pointer-events: none` except its
+  buttons, so a drop, pane click or marquee lands on the pane, and a drop on a button still bubbles
+  to `onDrop`. It unmounts as soon as the canvas holds anything, including an empty box.
+- **A template is a skeleton.** It carries the steps and their `${}` wiring and none of the
+  workspace's own choices (connections, datasets, paths, URLs, mapping). `insertTemplate` lays it out
+  with Arrange, lowers it (output contracts, so references are checked), clones it under fresh ids in
+  one undo step, and fits the view. The CSV template stays save-blocked on "bind a dataset" until the
+  operator binds one, because its per-file `datasetParams.source.path` is the line that does the work.
+  `e2e/foreach-copy-folder.spec.ts` runs that template, bound, end to end.
+- The issue's *HTTP → JSON → table* is not offered: `copy` reads datasets only, and there is no
+  HTTP/JSON dataset kind until OR14 (#1405).
+
 ## U6a — typed edges + branch picker (AS BUILT, 2026-07-25)
 
 Edges were one grey default painted with the literal `on` as their label. They now carry a hue

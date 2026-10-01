@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { PipelineVersionSchema } from '@autonomy-studio/shared';
+import { HTTP_REQUEST_ACTIVITY_TYPE, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
@@ -169,6 +169,58 @@ describe('FlowCanvas drop target (U5)', () => {
     // The same predicate gates both, so the operator gets the browser's "no drop"
     // cursor over the minimap rather than an invitation to drop there.
     expect(accepted).toBe(false);
+  });
+});
+
+describe('FlowCanvas empty-canvas guide (#1413 OR22)', () => {
+  const guide = (root: Element) =>
+    root.querySelector('[role="region"][aria-label="Start this pipeline"]');
+
+  it('an empty canvas says where to start and offers the starter templates', () => {
+    const { container } = mountCanvas();
+    const region = guide(container);
+    expect(region).not.toBeNull();
+    expect(region!.textContent).toContain('Drag one here from the Activities palette');
+    const buttons = within(region as HTMLElement).getAllByRole('button');
+    expect(buttons.map((b) => b.querySelector('.canvas-empty__title')?.textContent)).toEqual([
+      'Load every CSV in a folder into a table',
+      'Summarise every document in a folder',
+      'Call an API and stop on an error response',
+    ]);
+    // The description is the button's accessible description, not just text.
+    const describedBy = buttons[0]!.getAttribute('aria-describedby');
+    expect(document.getElementById(describedBy!)?.textContent).toMatch(/^List a folder/);
+    // Space on a focused button is a press, not React Flow's pan key.
+    for (const b of buttons) expect(b.className).toMatch(/\bnokey\b.*\bnopan\b/);
+  });
+
+  it('a template click fills the canvas, and the guide goes', () => {
+    const { store, container } = mountCanvas();
+    const region = guide(container) as HTMLElement;
+    fireEvent.click(within(region).getAllByRole('button')[0]!);
+    expect(store.getState().nodes.map((n) => n.type)).toEqual(['file_list', 'filter', 'copy']);
+    expect(store.getState().containers).toHaveLength(1);
+    expect(guide(container)).toBeNull();
+  });
+
+  it('a drop on the guide still authors a node — it is not canvas chrome', () => {
+    const { store, container } = mountCanvas();
+    const button = within(guide(container) as HTMLElement).getAllByRole('button')[1]!;
+    fireEvent.drop(button, {
+      dataTransfer: activityDrag(HTTP_REQUEST_ACTIVITY_TYPE),
+      clientX: 0,
+      clientY: 0,
+    });
+    expect(store.getState().nodes.map((n) => n.type)).toEqual([HTTP_REQUEST_ACTIVITY_TYPE]);
+    expect(guide(container)).toBeNull();
+  });
+
+  it('an empty box alone is content: the guide does not sit over it', () => {
+    const { store, container } = mountCanvas();
+    act(() => {
+      store.getState().addContainer('foreach', { x: 0, y: 0 });
+    });
+    expect(guide(container)).toBeNull();
   });
 });
 

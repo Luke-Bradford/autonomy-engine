@@ -18,6 +18,7 @@ import {
   FILTER_ACTIVITY_TYPE,
   FILTER_RESULT_OUTPUT,
   IF_ACTIVITY_TYPE,
+  HTTP_REQUEST_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
@@ -86,7 +87,7 @@ export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).opt
 
 const ENTRIES: ActivityCatalogEntry[] = [
   {
-    type: 'http_request',
+    type: HTTP_REQUEST_ACTIVITY_TYPE,
     title: 'HTTP Request',
     description: 'Send a request to a URL over an HTTP connection and capture the response.',
     kind: 'execution',

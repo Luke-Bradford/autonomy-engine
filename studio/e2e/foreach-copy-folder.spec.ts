@@ -4,7 +4,14 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { fireAndSettle, seedVersion } from './support/seedDoc';
+import { STARTER_TEMPLATES } from '../packages/web/src/pages/pipeline/starterTemplates';
+import {
+  fireAndSettle,
+  seedVersion,
+  type SeedContainer,
+  type SeedEdge,
+  type SeedNode,
+} from './support/seedDoc';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
@@ -44,6 +51,9 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
     const inDir = join(root, 'in');
     mkdirSync(join(inDir, 'archive'), { recursive: true });
     for (const [name, body] of Object.entries(FILES)) writeFileSync(join(inDir, name), body);
+    // Not a CSV: the template's filter keeps `.csv` files only, and a copy of
+    // this through the CSV dataset would fail the run (#1413).
+    writeFileSync(join(inDir, 'README.txt'), 'not a csv\n');
     const dbPath = join(root, 'warehouse.db');
     const db = new DatabaseSync(dbPath);
     db.exec('CREATE TABLE people (id INTEGER, name TEXT)');
@@ -83,54 +93,37 @@ test('#1420 — ForEach over a listed folder copies every CSV into a table', asy
       ],
     });
 
+    /* #1413 — built FROM the starter template the empty canvas offers, bound
+       the way an operator binds it: the folder on List Directory, and the two
+       stores, the two datasets and a mapping on Copy Data. So this run is the
+       proof that the template, not a hand-written lookalike, works end to end;
+       a template edit that breaks its wiring fails here. */
+    const template = STARTER_TEMPLATES.find((t) => t.id === 'csv-folder-to-table')!;
+    const bindings: Record<string, Partial<SeedNode>> = {
+      list: { connectionId: fsConnection, config: { path: inDir } },
+      load: {
+        connectionIds: { source: fsConnection, sink: sqliteConnection },
+        datasetIds: { source: sourceDataset, sink: sinkDataset },
+        config: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'name', sink: 'name', type: 'string' },
+          ],
+          mode: 'append',
+        },
+      },
+    };
     const { pipelineVersionId } = await seedVersion(page, `${tag} load folder`, {
-      nodes: [
-        {
-          id: 'list',
-          type: 'file_list',
-          position: { x: 0, y: 0 },
-          connectionId: fsConnection,
-          config: { path: inDir },
-        },
-        {
-          id: 'files',
-          type: 'filter',
-          position: { x: 240, y: 0 },
-          config: {
-            items: '${nodes.list.output.entries}',
-            predicate: "${equals(item.type, 'file')}",
-          },
-        },
-        {
-          id: 'load',
-          type: 'copy',
-          position: { x: 520, y: 0 },
-          connectionIds: { source: fsConnection, sink: sqliteConnection },
-          datasetIds: { source: sourceDataset, sink: sinkDataset },
-          datasetParams: {
-            source: { path: "${concat(nodes.list.output.path, '/', item.name)}" },
-          },
-          config: {
-            mapping: [
-              { source: 'id', sink: 'id', type: 'integer' },
-              { source: 'name', sink: 'name', type: 'string' },
-            ],
-            mode: 'append',
-          },
-        },
-      ],
-      edges: [
-        { from: 'list', to: 'files', on: 'success' },
-        { from: 'files', to: 'each', on: 'success' },
-      ],
-      containers: [
-        {
-          id: 'each',
-          kind: 'foreach',
-          children: ['load'],
-          items: '${nodes.files.output.result}',
-        },
-      ],
+      nodes: template.nodes.map((n): SeedNode => ({
+        id: n.id,
+        type: n.type,
+        position: n.position,
+        ...(n.datasetParams === undefined ? {} : { datasetParams: n.datasetParams }),
+        ...bindings[n.id],
+        config: { ...n.config, ...bindings[n.id]?.config },
+      })),
+      edges: template.edges.map((e): SeedEdge => ({ ...e })),
+      containers: template.containers.map((c): SeedContainer => ({ ...c })),
     });
 
     const runId = await fireAndSettle(page, pipelineVersionId, `${tag} run`);

@@ -32,6 +32,8 @@ import {
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam, blankVariable } from './paramRules';
 import { readClipboard, writeClipboard, type CanvasClipboard, type CutContext } from './clipboard';
+import type { StarterTemplate } from './starterTemplates';
+import { arrangeMoves } from './autoLayout';
 import {
   CONTAINER_GAP,
   CONTAINER_HEADER_HEIGHT,
@@ -1170,6 +1172,21 @@ export interface CanvasState {
    */
   pasteClipboard(pipelineId: string): PasteOutcome;
   /**
+   * #1413 OR22 — add a starter template's activities, ForEach boxes and edges
+   * to an EMPTY canvas, in ONE undo entry. Returns the new activity ids, or `[]`
+   * (and changes nothing) when the canvas already holds an activity or a box.
+   *
+   * Lowered first, the way `addNode` lowers, so each node carries its declared
+   * output contract — without it the reference checks treat the contract as
+   * absent and would pass a misspelt `${nodes.list.output.entires}`. Then cloned
+   * through `cloneNodesInto` as a FOREIGN paste: fresh ids, `${nodes.<id>}`
+   * references and container children remapped, and no edges or membership
+   * re-derived from the live graph, which a template has nothing to do with.
+   * Laid out by Arrange (`arrangeMoves`) and placed there with no stagger, and
+   * nothing is selected: the operator's next act is to look at the whole thing.
+   */
+  insertTemplate(template: StarterTemplate): string[];
+  /**
    * U21 — move nodes, in ONE undo entry.
    *
    * Plural with no singular companion, because React Flow reports a drag as one
@@ -1793,6 +1810,39 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         });
         get().deleteNodesAndEdges(ids, []);
         return ids.length;
+      },
+
+      insertTemplate(template) {
+        // A template lays itself out from the origin, so on a canvas that
+        // already holds anything it would land on top of it. Only an EMPTY
+        // canvas offers templates; the store holds that line too.
+        if (get().nodes.length > 0 || get().containers.length > 0) return [];
+        let newIds: string[] = [];
+        edit((s) => {
+          const laid = new Map(
+            arrangeMoves(template.nodes, template.edges, template.containers).map((m) => [
+              m.id,
+              m.position,
+            ]),
+          );
+          const nodes = template.nodes.map((n) => ({
+            ...n,
+            position: laid.get(n.id) ?? n.position,
+          }));
+          const cloned = cloneNodesInto(s, lowerPipelineNodes(nodes), template.edges, {
+            containers: template.containers,
+            foreign: true,
+            offset: { x: 0, y: 0 },
+          });
+          newIds = cloned.newIds;
+          return {
+            nodes: cloned.nodes,
+            edges: cloned.edges,
+            containers: cloned.containers,
+            selected: [],
+          };
+        });
+        return newIds;
       },
 
       pasteClipboard(pipelineId) {

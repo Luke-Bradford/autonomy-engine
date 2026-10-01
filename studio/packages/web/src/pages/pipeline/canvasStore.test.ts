@@ -24,6 +24,8 @@ import { clearClipboard, readClipboard } from './clipboard';
 import { DEFAULT_MAX_BOUNCES, type EdgeCondition } from './edgeCondition';
 import { unmeasuredNodeSize } from './containerLayout';
 import { sourcePortsOf } from './ports';
+import { STARTER_TEMPLATES } from './starterTemplates';
+import { arrangeMoves } from './autoLayout';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -4498,5 +4500,102 @@ describe('setNodePolicy (#1312)', () => {
     const store = setup();
     store.getState().setNodePolicy('missing', { retry: 1 });
     expect(store.getState().dirty).toBe(false);
+  });
+});
+
+describe('insertTemplate (#1413 OR22)', () => {
+  const csv = STARTER_TEMPLATES.find((t) => t.id === 'csv-folder-to-table')!;
+
+  it('adds the activities, the ForEach box and the edges under fresh ids, references remapped', () => {
+    const s = createCanvasStore();
+    const ids = s.getState().insertTemplate(csv);
+    const { nodes, edges, containers } = s.getState();
+    expect(ids).toHaveLength(3);
+    expect(nodes.map((n) => n.id)).toEqual(ids);
+    const templateIds = new Set(['list', 'files', 'load', 'each']);
+    for (const id of [...ids, ...containers.map((c) => c.id)])
+      expect(templateIds.has(id)).toBe(false);
+
+    const [list, files, load] = nodes.map((n) => n.id);
+    const [box] = containers;
+    expect(nodes[1]!.config.items).toBe(`\${nodes.${list}.output.entries}`);
+    expect(nodes[2]!.datasetParams?.source?.path).toBe(
+      `\${concat(nodes.${list}.output.path, '/', item.name)}`,
+    );
+    expect(box).toMatchObject({
+      kind: 'foreach',
+      children: [load],
+      items: `\${nodes.${files}.output.result}`,
+    });
+    expect(edges.map((e) => [e.from, e.to])).toEqual([
+      [list, files],
+      [files, box!.id],
+    ]);
+  });
+
+  it.each(STARTER_TEMPLATES.map((t) => [t.id, t] as const))(
+    '%s: lands laid out as Arrange lays it out, with no paste stagger',
+    (_id, t) => {
+      const s = createCanvasStore();
+      s.getState().insertTemplate(t);
+      const { nodes, edges, containers } = s.getState();
+      expect(arrangeMoves(nodes, edges, containers)).toEqual([]);
+      // Left to right: the head of each template starts the row.
+      expect(nodes[0]!.position.x).toBeLessThan(nodes[1]!.position.x);
+    },
+  );
+
+  it('lowers the nodes, so each carries its declared output contract', () => {
+    const s = createCanvasStore();
+    s.getState().insertTemplate(csv);
+    const list = s.getState().nodes[0]!;
+    expect((list.config.outputs as { name: string }[]).map((o) => o.name)).toEqual([
+      'entries',
+      'path',
+    ]);
+  });
+
+  it('is ONE undo step, marks the draft dirty, selects nothing and takes no stagger slot', () => {
+    const s = createCanvasStore();
+    const before = s.getState().addCount;
+    s.getState().insertTemplate(csv);
+    expect(s.getState().dirty).toBe(true);
+    expect(s.getState().selected).toEqual([]);
+    expect(s.getState().addCount).toBe(before);
+    s.getState().undo();
+    expect(s.getState().nodes).toEqual([]);
+    expect(s.getState().edges).toEqual([]);
+    expect(s.getState().containers).toEqual([]);
+  });
+
+  it.each(STARTER_TEMPLATES.map((t) => [t.id, t] as const))(
+    '%s: every ${nodes.<id>} reference lands on a node of the copy',
+    (_id, t) => {
+      const s = createCanvasStore();
+      s.getState().insertTemplate(t);
+      const { nodes, containers } = s.getState();
+      const ids = new Set(nodes.map((n) => n.id));
+      const refs = [...nodes, ...containers].flatMap((x) =>
+        [...JSON.stringify(x).matchAll(/nodes\.([A-Za-z0-9_-]+)\./g)].map((m) => m[1]),
+      );
+      expect(refs.length).toBeGreaterThan(0);
+      for (const ref of refs) expect(ids.has(ref!), ref).toBe(true);
+    },
+  );
+
+  it('refuses a canvas that already holds something, and changes nothing', () => {
+    const s = createCanvasStore();
+    s.getState().addContainer('stage', { x: 0, y: 0 });
+    const before = s.getState();
+    expect(s.getState().insertTemplate(csv)).toEqual([]);
+    expect(s.getState().nodes).toBe(before.nodes);
+    expect(s.getState().containers).toBe(before.containers);
+    expect(s.getState().past).toBe(before.past);
+  });
+
+  it('a branch edge keeps its routing key', () => {
+    const s = createCanvasStore();
+    s.getState().insertTemplate(STARTER_TEMPLATES.find((t) => t.id === 'call-api-check')!);
+    expect(s.getState().edges[1]).toMatchObject({ on: 'branch', branch: 'true' });
   });
 });
