@@ -607,9 +607,7 @@ describe('DatasetsPage', () => {
     expect(within(form()).getByRole('button', { name: 'Edit as JSON' })).toBeInTheDocument();
     // And no stale advisory: the no-reader note was the reason the form was
     // locked, so it must go with the lock.
-    expect(
-      within(form()).queryByText(/no reader exists/),
-    ).not.toBeInTheDocument();
+    expect(within(form()).queryByText(/no reader exists/)).not.toBeInTheDocument();
   });
 
   it('opens a NEW dataset on a kind that lives in the store it opens on (#1167)', async () => {
