@@ -55,6 +55,22 @@ export const CONNECTION_KIND_LABELS: Record<ConnectionKind, string> = {
 };
 
 /**
+ * #1413 OR22 — what each kind IS, in one sentence, shown under the form's Kind
+ * picker so choosing one does not need the docs. A `Record` for the reason the
+ * labels are one; `kind-descriptions.test.ts` holds the house rule.
+ */
+export const CONNECTION_KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
+  anthropic_api: "Calls Anthropic's Claude models over the API, authenticated with an API key.",
+  openai_api: 'Calls OpenAI models over the API, authenticated with an API key.',
+  ollama: 'Calls models served by a local or self-hosted Ollama server.',
+  agent_cli: 'Runs an agent CLI, such as claude or codex, as a process on this machine.',
+  http: 'Sends HTTP requests, optionally against a base URL with default headers.',
+  fs: 'Reads and writes files inside the folders you allow.',
+  sqlite: 'Opens one SQLite database file inside the folders you allow.',
+  postgres: 'Connects to a PostgreSQL server with a user name and password.',
+};
+
+/**
  * The CLI/subscription connection kind (`claude -p` / `codex exec`). Named here
  * so the equality checks that gate subscription-only behaviour — the #2 L14c
  * quota admission gate (executor pre-flight) and its window writer (driver) —

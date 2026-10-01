@@ -79,6 +79,10 @@ test.describe('#1396 the trigger form drawer', () => {
     await expect(form.getByLabel('Mode', { exact: true }).locator('option:checked')).toHaveText(
       'Tumbling window',
     );
+    // #1413 — the picker says what the chosen mode does.
+    await expect(form.getByLabel('Mode', { exact: true })).toHaveAccessibleDescription(
+      'Runs once for each fixed-size time window, when that window closes.',
+    );
     await expect(
       form.getByLabel('Concurrency', { exact: true }).locator('option:checked'),
     ).toHaveText('Queue');

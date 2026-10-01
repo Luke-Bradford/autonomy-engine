@@ -34,4 +34,34 @@ describe('LabelledControl (#1227)', () => {
     expect(select.labels?.[0]?.textContent).toBe('Kind');
     expect(select.parentElement?.className).toBe('labelled-control extra');
   });
+
+  // #1413 — a hint under the control (a Kind picker's description) describes it.
+  it('renders a hint under the control and hands its id to the control', () => {
+    render(
+      <LabelledControl label="Kind" hint="Rows of a CSV file.">
+        {(id, hintId) => (
+          <select id={id} aria-describedby={hintId}>
+            <option>CSV</option>
+          </select>
+        )}
+      </LabelledControl>,
+    );
+    const select = screen.getByRole('combobox', { name: 'Kind' });
+    expect(select).toHaveAccessibleDescription('Rows of a CSV file.');
+    expect(select.parentElement?.lastElementChild?.className).toBe('field-hint');
+  });
+
+  it('without a hint, renders no hint and hands the control no id for one', () => {
+    let handed: string | undefined = 'unset';
+    const { container } = render(
+      <LabelledControl label="Kind">
+        {(id, hintId) => {
+          handed = hintId;
+          return <select id={id} />;
+        }}
+      </LabelledControl>,
+    );
+    expect(handed).toBeUndefined();
+    expect(container.querySelector('.field-hint')).toBeNull();
+  });
 });

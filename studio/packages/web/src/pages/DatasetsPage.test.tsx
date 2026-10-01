@@ -189,6 +189,10 @@ describe('DatasetsPage', () => {
         .parentElement?.querySelector('.kind-icon')
         ?.getAttribute('data-kind'),
     ).toBe('table');
+    // #1413 — and its description.
+    expect(within(form()).getByLabelText('Kind')).toHaveAccessibleDescription(
+      'One table in a database, read in full or written to by a copy.',
+    );
     // `table` is a control derived from the kind's own schema, not a JSON blob.
     await user.type(within(form()).getByLabelText('Table'), 'orders');
     await pasteInto(user, within(form()).getByLabelText('Columns (JSON)'), COLUMNS_JSON);

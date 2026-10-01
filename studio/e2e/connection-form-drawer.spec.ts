@@ -59,7 +59,14 @@ test.describe('#1396 the connection form drawer', () => {
     await expect(form(page).getByLabel('Base URL', { exact: true })).toBeVisible();
 
     // Required: the asterisk is drawn (and kept out of the name), the control says so.
+    // #1413 — the picker says what the chosen kind is, and follows a change.
+    await expect(form(page).getByLabel('Kind')).toHaveAccessibleDescription(
+      /^Calls Anthropic's Claude models over the API/,
+    );
     await form(page).getByLabel('Kind').selectOption('fs');
+    await expect(form(page).getByLabel('Kind')).toHaveAccessibleDescription(
+      'Reads and writes files inside the folders you allow.',
+    );
     const roots = form(page).getByLabel(/^Allowed folders/);
     await expect(roots).toHaveAttribute('aria-required', 'true');
     const marks = await page.evaluate(() => {

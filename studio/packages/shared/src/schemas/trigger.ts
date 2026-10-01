@@ -35,6 +35,20 @@ export const TRIGGER_MODE_LABELS: Record<TriggerMode, string> = {
   tumbling: 'Tumbling window',
 };
 
+/**
+ * #1413 OR22 — what each mode DOES, as `CONNECTION_KIND_DESCRIPTIONS` says for
+ * connections. `continuous` describes the mode, not its build status: the form
+ * says it is not dispatched yet in its own note under the picker.
+ */
+export const TRIGGER_MODE_DESCRIPTIONS: Record<TriggerMode, string> = {
+  manual: 'Runs only when someone presses Fire now.',
+  schedule: 'Runs on a recurring schedule, such as every hour or each weekday at 09:00.',
+  webhook: 'Runs when another system posts a signed request to its webhook URL.',
+  event: 'Runs when an event with its name is posted to the studio events endpoint.',
+  continuous: 'Starts the next run as soon as the last one ends.',
+  tumbling: 'Runs once for each fixed-size time window, when that window closes.',
+};
+
 export const ConcurrencyPolicySchema = z.enum(['queue', 'skip_if_running', 'parallel']);
 export type ConcurrencyPolicy = z.infer<typeof ConcurrencyPolicySchema>;
 
