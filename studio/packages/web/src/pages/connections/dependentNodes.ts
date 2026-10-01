@@ -4,7 +4,7 @@ import type {
   DependentNode,
   DynamicDependentNode,
 } from '@autonomy-studio/shared';
-import { kindPlural } from '../pipeline/paramOverrides';
+import { kindPlural } from '../../lib/resourceOptionLabel';
 import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**

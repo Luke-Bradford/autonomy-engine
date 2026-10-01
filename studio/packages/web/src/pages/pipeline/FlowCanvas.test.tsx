@@ -223,6 +223,25 @@ describe('FlowCanvas empty-canvas guide (#1413 OR22)', () => {
     expect(store.getState().selected).toEqual([]);
   });
 
+  it('does not take focus back once the operator has moved it', async () => {
+    const said: string[] = [];
+    const { container } = mountCanvas((m) => said.push(m));
+    const elsewhere = document.createElement('button');
+    document.body.append(elsewhere);
+    try {
+      fireEvent.click(within(guide(container) as HTMLElement).getAllByRole('button')[0]!);
+      // Before the insert's fit has settled, the operator tabs away.
+      elsewhere.focus();
+      await waitFor(() => expect(said).toHaveLength(1));
+      // Past the fit wait (jsdom never measures, so the fallback is what fires)
+      // and well into the retry budget.
+      await new Promise((r) => setTimeout(r, 800));
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it('a drop on the guide still authors a node — it is not canvas chrome', () => {
     const { store, container } = mountCanvas();
     const button = within(guide(container) as HTMLElement).getAllByRole('button')[1]!;

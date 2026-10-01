@@ -114,6 +114,7 @@ import {
   type CanvasState,
   type Selection,
 } from './canvasStore';
+import { countOf } from '../../lib/countOf';
 import { namedList } from '../../lib/namedList';
 import { uiStore } from '../../stores/uiStore';
 import { issueCountLabel, SubjectIssuesContext, useSubjectIssues } from './issueContext';
@@ -1517,10 +1518,12 @@ export function FlowCanvas({
      request from either side and the "last honoured" guard still holds. */
   const [templateFits, setTemplateFits] = useState(0);
   const fitRequests = fitSignal + templateFits;
+  /** #1452 — the fit in flight, so focus-after-insert can wait for it. */
+  const lastFit = useRef<Promise<unknown>>(Promise.resolve());
   useEffect(() => {
     if (fitRequests <= 0 || fitRequests === lastFittedSignal.current) return;
     lastFittedSignal.current = fitRequests;
-    void fitView(FIT_VIEW_OPTIONS);
+    lastFit.current = fitView(FIT_VIEW_OPTIONS);
   }, [fitRequests, fitView]);
 
   /**
@@ -1529,36 +1532,57 @@ export function FlowCanvas({
    * activity instead: React Flow nodes are focusable, and that is where the
    * operator's next act (bind a dataset) starts.
    *
-   * Retried per frame, because React Flow keeps a node `visibility: hidden`
-   * until it is measured and a hidden element refuses focus. Bounded, and it
-   * gives up the moment focus is somewhere other than `<body>` — the operator
-   * has already moved it, and taking it back would be a theft.
+   * It waits for the insert's fit first. React Flow pans to a node that takes
+   * keyboard focus off-screen (`autoPanOnNodeFocus`), and a pan racing the fit
+   * would leave the template off-centre; after the fit every node is in view,
+   * so there is nothing to pan to. Then it retries per frame, because React
+   * Flow keeps a node `visibility: hidden` until it is measured and a hidden
+   * element refuses focus. Bounded, and it gives up the moment focus is
+   * anywhere but `<body>` — the operator has already moved it, and taking it
+   * back would be a theft.
    */
   const [focusAfterInsert, setFocusAfterInsert] = useState<string | null>(null);
   useEffect(() => {
     if (focusAfterInsert === null) return;
     let frames = 0;
     let handle = 0;
+    let cancelled = false;
     const attempt = () => {
+      if (cancelled) return;
       const active = document.activeElement;
+      const unfocused = active === null || active === document.body;
       const target = Array.from(
         reactFlowStore.getState().domNode?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
       ).find((el) => el.dataset.id === focusAfterInsert);
-      if (target !== undefined && active === document.body) {
+      if (target !== undefined && unfocused) {
         // `preventScroll`: the pane is `overflow: hidden`, and a browser
         // scrolling it to reveal the node would shift the canvas off its viewport.
         target.focus({ preventScroll: true });
       }
       const settled = target !== undefined && document.activeElement === target;
-      const moved = active !== null && active !== document.body && active !== target;
+      const moved = !unfocused && active !== target;
       if (settled || moved || ++frames >= FOCUS_AFTER_INSERT_FRAMES) {
         setFocusAfterInsert(null);
         return;
       }
       handle = requestAnimationFrame(attempt);
     };
-    attempt();
-    return () => cancelAnimationFrame(handle);
+    // A fit only settles once React Flow has measured the nodes, so it is
+    // bounded too: focus that never arrives is worse than an early one.
+    let started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      clearTimeout(fallback);
+      attempt();
+    };
+    const fallback = setTimeout(start, FIT_WAIT_MS);
+    void lastFit.current.then(start, start);
+    return () => {
+      cancelled = true;
+      clearTimeout(fallback);
+      cancelAnimationFrame(handle);
+    };
   }, [focusAfterInsert, reactFlowStore]);
 
   const insertTemplate = useCallback(
@@ -2624,6 +2648,18 @@ export function FlowCanvas({
   );
 }
 
+/** #1452 — about one second at 60fps: ample for React Flow to measure a node. */
+const FOCUS_AFTER_INSERT_FRAMES = 60;
+/** #1452 — the longest focus-after-insert waits for the insert's fit to settle. */
+const FIT_WAIT_MS = 500;
+
+/** #1452 — "Added Load every CSV…: 3 activities and 1 container." */
+function templateNotice(template: StarterTemplate): string {
+  const parts = [countOf(template.nodes.length, 'activity', 'activities')];
+  if (template.containers.length > 0) parts.push(countOf(template.containers.length, 'container'));
+  return `Added ${template.title}: ${parts.join(' and ')}.`;
+}
+
 /**
  * #1413 OR22 / #1420 part 4 — what an EMPTY canvas says: where to start, and
  * the starter templates.
@@ -2640,19 +2676,6 @@ export function FlowCanvas({
  * Absolutely positioned over the pane, so it never shifts the layout (#1393)
  * and it unmounts the moment the canvas holds anything, an empty box included.
  */
-/** #1452 — about one second at 60fps: ample for React Flow to measure a node. */
-const FOCUS_AFTER_INSERT_FRAMES = 60;
-
-/** #1452 — "Added Load every CSV…: 3 activities and 1 container." */
-function templateNotice(template: StarterTemplate): string {
-  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const parts = [plural(template.nodes.length, 'activity', 'activities')];
-  if (template.containers.length > 0) {
-    parts.push(plural(template.containers.length, 'container', 'containers'));
-  }
-  return `Added ${template.title}: ${parts.join(' and ')}.`;
-}
-
 function EmptyCanvasGuide({ onInsert }: { onInsert: (template: StarterTemplate) => void }) {
   const idPrefix = useId();
   return (

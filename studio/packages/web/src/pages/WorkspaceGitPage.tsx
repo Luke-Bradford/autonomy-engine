@@ -34,6 +34,7 @@ import {
 } from '../api/workspaceGit';
 import { ApiError, messageOf } from '../api/client';
 import { formatWhen } from './runs/format';
+import { countOf } from '../lib/countOf';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -1392,22 +1393,18 @@ function shortSha(sha: string | null): string {
   return sha === null ? '—' : sha.slice(0, 7);
 }
 
-function pluralize(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function countFiles(files: string[]): string {
-  return pluralize(files.length, 'file', 'files');
+  return countOf(files.length, 'file');
 }
 
 function countResources(count: number): string {
-  return pluralize(count, 'resource', 'resources');
+  return countOf(count, 'resource');
 }
 
 function countPipelines(count: number): string {
-  return pluralize(count, 'pipeline', 'pipelines');
+  return countOf(count, 'pipeline');
 }
 
 function countTriggers(count: number): string {
-  return pluralize(count, 'trigger', 'triggers');
+  return countOf(count, 'trigger');
 }

@@ -1,5 +1,6 @@
 import { appliedActionWroteNothing, type WorkspaceEvent } from '@autonomy-studio/shared';
 import { TRIGGERS_STAY_DISABLED_NOTE } from '../../api/pipelines';
+import { countOf } from '../../lib/countOf';
 import { namedList } from '../../lib/namedList';
 
 /** A workspace-audit row rendered as prose: a one-line act, and the particulars. */
@@ -13,11 +14,6 @@ export interface WorkspaceEventDescription {
 /** Git object ids are rendered short, as every git surface in the app does. */
 function shortSha(sha: string): string {
   return sha.slice(0, 7);
-}
-
-/** `1 trigger` / `3 triggers` — the count is the point, so it is never elided. */
-function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
 /**
@@ -71,7 +67,7 @@ export function describeWorkspaceEvent(event: WorkspaceEvent): WorkspaceEventDes
         summary: `Archived the pipeline ${event.name}`,
         detail:
           event.disabledTriggerIds.length > 0
-            ? `The archive disabled ${plural(event.disabledTriggerIds.length, 'trigger')}.`
+            ? `The archive disabled ${countOf(event.disabledTriggerIds.length, 'trigger')}.`
             : 'No triggers were enabled, so none were disabled.',
       };
 
@@ -119,11 +115,11 @@ export function describeWorkspaceEvent(event: WorkspaceEvent): WorkspaceEventDes
       // operator wondering why a re-import reported so little is owed the
       // difference between "not considered" and "considered, nothing to do".
       if (untouched > 0) {
-        parts.push(`${plural(untouched, 'resource')} already matched.`);
+        parts.push(`${countOf(untouched, 'resource')} already matched.`);
       }
 
       return {
-        summary: `Imported ${plural(
+        summary: `Imported ${countOf(
           wrote.length + event.archived.length,
           'resource',
         )} from ${event.branch} at ${shortSha(event.head)}`,

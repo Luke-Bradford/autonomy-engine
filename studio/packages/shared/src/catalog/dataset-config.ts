@@ -682,15 +682,12 @@ export function datasetConnectionKindAdvisory(
   if (connectionKind === null) return null;
   const expected = DATASET_CONNECTION_KINDS[kind];
   if (expected.includes(connectionKind)) return null;
-  // Phrased so no kind name ever follows an indefinite article. `excel`,
-  // `anthropic_api`, `agent_cli` and `openai_api` are all vowel-initial, so the
-  // natural "a ${kind} dataset ... a ${connectionKind} connection" reads "a
-  // excel dataset ... a anthropic_api connection" for a third of the matrix.
-  // Restructuring is better than an `an`-aware helper: the article rule is
-  // orthographic rather than phonetic for identifiers nobody says aloud, and a
-  // helper would have to be re-litigated for every kind added.
-  // #1436 — kinds by their display names, which is what the form's Kind and
-  // Connection pickers show. Nothing calls this on the server.
+  // Kinds by their display names (#1436), which is what the form's Kind and
+  // Connection pickers show; nothing calls this on the server. Phrased so no
+  // kind name follows an indefinite article: "Excel workbook", "Anthropic API",
+  // "Agent CLI" and "OpenAI API" are vowel-initial, so "a ${kind} dataset ... a
+  // ${connectionKind} connection" would misread for a third of the matrix, and
+  // restructuring beats an `an`-aware helper re-litigated for every kind added.
   const stores = expected.map((store) => `“${CONNECTION_KIND_LABELS[store]}”`).join(' or ');
   return `dataset kind “${DATASET_KIND_LABELS[kind]}” lives in a store of kind ${stores}, but this one names a connection of kind “${CONNECTION_KIND_LABELS[connectionKind]}”`;
 }

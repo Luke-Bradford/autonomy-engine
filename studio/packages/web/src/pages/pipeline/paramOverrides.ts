@@ -1,6 +1,4 @@
 import {
-  CONNECTION_KIND_LABELS,
-  DATASET_KIND_LABELS,
   connectionConfigSchema,
   datasetConfigSchema,
   firstParamOverrideViolation,
@@ -13,6 +11,7 @@ import {
   type ParamOverrideViolation,
   type ParamType,
 } from '@autonomy-studio/shared';
+import { kindPlural } from '../../lib/resourceOptionLabel';
 import { deriveConfigFields, type ConfigField, type ConfigFieldKind } from './configForm';
 import { isExpressionText } from './callRules';
 import { coerceDefaultInput } from './paramRules';
@@ -105,18 +104,6 @@ export function overridableKeys(
 
 function usableKeys(r: OverrideResource): string[] {
   return overridableKeys(r.fields, r.isNonOverridable);
-}
-
-/**
- * #1436 — a kind as the forms name it, in the plural: "SQLite connections",
- * "Database table datasets". Plural so no article ever precedes a name, which
- * read "a Excel workbook dataset" for every vowel-initial kind. `kind` stays the
- * stored identifier everywhere else; an unknown one is shown as itself.
- */
-export function kindPlural(kind: string, noun: OverrideResource['noun']): string {
-  const labels: Readonly<Record<string, string>> =
-    noun === 'connection' ? CONNECTION_KIND_LABELS : DATASET_KIND_LABELS;
-  return `${labels[kind] ?? kind} ${noun}s`;
 }
 
 /** The note for a KIND with no overridable settings at all — which no allowlist edit can change. */

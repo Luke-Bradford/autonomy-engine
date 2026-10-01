@@ -410,7 +410,7 @@ describe('DatasetsPage', () => {
     expect(within(form()).getByLabelText('Config (JSON)')).toBeInTheDocument();
     expect(within(form()).queryByText('This kind has no settings.')).not.toBeInTheDocument();
 
-    // The "no reader exists for a …" SENTENCE is deliberately not asserted
+    // The "no reader exists for …" SENTENCE is deliberately not asserted
     // here. It comes from `datasetConfigAdvisory`, which consults
     // `datasetKindIsImplemented` through an intra-module call the seam above
     // cannot reach — and faking that function too would mean asserting the
@@ -608,7 +608,7 @@ describe('DatasetsPage', () => {
     // And no stale advisory: the no-reader note was the reason the form was
     // locked, so it must go with the lock.
     expect(
-      within(form()).queryByText(/no reader exists for a delimited dataset yet/),
+      within(form()).queryByText(/no reader exists/),
     ).not.toBeInTheDocument();
   });
 
