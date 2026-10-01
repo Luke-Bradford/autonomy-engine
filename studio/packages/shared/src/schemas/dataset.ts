@@ -79,6 +79,19 @@ export type DatasetColumn = z.infer<typeof DatasetColumnSchema>;
 export const DatasetKindSchema = z.enum(['delimited', 'excel', 'table', 'query']);
 export type DatasetKind = z.infer<typeof DatasetKindSchema>;
 
+/**
+ * #1396 — what a form or a list CALLS each kind, as `CONNECTION_KIND_LABELS`
+ * does for connections. The enum value stays the identifier everywhere it is
+ * stored or sent; this is display only, and a `Record` so a new kind cannot
+ * ship without a name.
+ */
+export const DATASET_KIND_LABELS: Record<DatasetKind, string> = {
+  delimited: 'Delimited text (CSV)',
+  excel: 'Excel workbook',
+  table: 'Database table',
+  query: 'SQL query',
+};
+
 export const DatasetSchema = z.object({
   id: z.string().min(1),
   /**
