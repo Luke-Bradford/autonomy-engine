@@ -347,8 +347,10 @@ carried a branch commit's subject verbatim, `fix: #1396 review — …`, and
 GitHub closes on a keyword before `#N` in any commit that lands on the
 default branch. **`closingIssuesReferences` does not report commit-message
 links, so the probe above cannot see this class.** Rule: no commit subject
-or body puts `fix`/`fixes`/`close`/`closes`/`resolve`/`resolves` (with or
-without a colon) directly before `#N` for an issue that must stay open; put
+or body puts any of GitHub's nine keywords — `close`/`closes`/`closed`,
+`fix`/`fixes`/`fixed`, `resolve`/`resolves`/`resolved`, with or without a
+colon — directly before `#N` for an issue that must stay open (a past tense
+like "the merge closed #N" counts too); put
 the scope in parentheses (`fix(studio): … (#N)`) or the ref after other words.
 
 ## 19. Local shellcheck ≠ CI shellcheck — a locally-clean push can still fail the lint gate
