@@ -60,6 +60,13 @@ export interface FieldPresentation {
    * actually holds.
    */
   readonly unit?: string;
+  /**
+   * #1396: an enum field's display name for each value ("Metadata only" for
+   * `metadata`). The option's VALUE is still what is stored and what messages
+   * cite; only the text of the choice changes. Build it with `optionTitles`, so
+   * a value added to the enum without a name fails the typecheck.
+   */
+  readonly options?: Readonly<Record<string, string>>;
 }
 
 /** The human-facing half of a field's presentation (#1396). */
@@ -67,6 +74,7 @@ export interface FieldLabel {
   readonly title: string;
   readonly description?: string;
   readonly unit?: string;
+  readonly options?: Readonly<Record<string, string>>;
 }
 
 export const fieldPresentation = z.registry<FieldPresentation>();
@@ -116,7 +124,41 @@ export function fieldLabelOf(schema: unknown): FieldLabel | undefined {
     title: entry.title,
     ...(entry.description !== undefined && { description: entry.description }),
     ...(entry.unit !== undefined && { unit: entry.unit }),
+    ...(entry.options !== undefined && { options: entry.options }),
   };
+}
+
+/**
+ * #1396 — a display name for every value of `schema`, checked at compile time:
+ * leaving a value out, or naming one the enum does not have, is a type error.
+ * The schema argument only carries the type.
+ */
+export function optionTitles<const V extends string>(
+  _schema: z.ZodEnum<{ [K in V]: K }>,
+  titles: { readonly [K in V]: string },
+): Readonly<Record<V, string>> {
+  return titles;
+}
+
+/**
+ * The values of an enum field, seen through every `.optional()`/`.default()`
+ * wrapper, or `undefined` when the field is not a string enum. What the
+ * "every enum value is named" gates walk.
+ */
+export function enumValuesOf(schema: unknown): readonly string[] | undefined {
+  let current: unknown = schema;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== 'object' || current === null || !('_zod' in current)) return undefined;
+    const def = (current as { _zod: { def: { type?: string; innerType?: unknown } } })._zod.def;
+    if (def.type === 'enum') {
+      const options = (current as { options?: unknown }).options;
+      return Array.isArray(options) && options.every((o) => typeof o === 'string')
+        ? (options as string[])
+        : undefined;
+    }
+    current = def.innerType;
+  }
+  return undefined;
 }
 
 /**
@@ -132,6 +174,29 @@ export function fieldLabelThrough(schema: unknown): FieldLabel | undefined {
       ? (schema as { _zod: { def: { innerType?: unknown } } })._zod.def.innerType
       : undefined;
   return fieldLabelOf(schema) ?? fieldLabelOf(inner);
+}
+
+/**
+ * `field.value` for every enum value in `shape` that has no display name — the
+ * "every enum value is named" gates on each catalog share this read. Names are
+ * read the way `fieldLabelThrough` reads a title: on the field or its one
+ * outermost wrapper. A name shared by two values counts as missing on both.
+ */
+export function unnamedEnumValues(shape: Readonly<Record<string, unknown>>): string[] {
+  return Object.entries(shape).flatMap(([name, field]) => {
+    const values = enumValuesOf(field) ?? [];
+    const names = fieldLabelThrough(field)?.options ?? {};
+    return values
+      .filter((v) => {
+        const title = names[v];
+        return (
+          title === undefined ||
+          !/\S/.test(title) ||
+          values.some((other) => other !== v && names[other] === title)
+        );
+      })
+      .map((v) => `${name}.${v}`);
+  });
 }
 
 /** `schema`'s own presentation entry (not a wrapper's), if it has one. */
