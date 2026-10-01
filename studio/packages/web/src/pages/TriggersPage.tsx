@@ -754,13 +754,13 @@ function parseParamsText(
   try {
     const raw: unknown = JSON.parse(text.trim() === '' ? '{}' : text);
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      return { ok: false, message: 'Params must be a JSON object, e.g. {"day": "2026-10-01"}.' };
+      return { ok: false, message: 'must be a JSON object, e.g. {"day": "2026-10-01"}' };
     }
     return { ok: true, params: raw as Record<string, unknown> };
   } catch (err) {
     return {
       ok: false,
-      message: `Invalid params JSON: ${err instanceof Error ? err.message : String(err)}`,
+      message: `not valid JSON (${err instanceof Error ? err.message : String(err)})`,
     };
   }
 }

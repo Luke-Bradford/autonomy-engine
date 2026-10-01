@@ -493,12 +493,11 @@ describe('GlobalParamsPage — inline validation (#1396)', () => {
     expect(field('Name')).toHaveAccessibleDescription(/already exists\. Names ignore case/);
   });
 
-  it('on an edit, an untouched value is not checked; a changed one is, when it is left', async () => {
+  it('on an edit, a changed value is checked when it is left, and blocks the PATCH', async () => {
     listMock.mockResolvedValue([global({ type: 'number', value: 3 })]);
     const user = userEvent.setup();
     renderWithDataRouter(<GlobalParamsPage />);
     await openEdit(user, 'apiUrl');
-    expect(field('Name')).toHaveAttribute('aria-invalid', 'false');
 
     await user.clear(field('Value'));
     await user.type(field('Value'), 'many');

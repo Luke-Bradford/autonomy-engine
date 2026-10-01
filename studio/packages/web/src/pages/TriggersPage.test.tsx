@@ -1745,15 +1745,32 @@ describe('TriggersPage — inline validation (#1396)', () => {
     await user.type(form.getByLabelText('Name'), 'Hourly');
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     const interval = form.getByLabelText<HTMLInputElement>(/Repeat every/);
-    // jsdom has no bad input: give the control the validity Chromium gives `1e`.
-    Object.defineProperty(interval, 'validity', {
-      configurable: true,
-      value: { ...interval.validity, badInput: true },
-    });
+    // jsdom has no bad input: give the control the validity Chromium gives `1e`
+    // (only `badInput` is read).
+    Object.defineProperty(interval, 'validity', { configurable: true, value: { badInput: true } });
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
     expect(createMock).not.toHaveBeenCalled();
     expect(form.getByRole('alert')).toHaveTextContent(/is not a complete number\. Finish it/);
     expect(interval).toHaveFocus();
+  });
+
+  it('on an edit, a server 400 issue on the name lands beside it', async () => {
+    updateMock.mockRejectedValue(
+      new ApiError(400, 'unused', {
+        error: 'validation_error',
+        issues: [{ path: 'name', message: 'too long' }],
+      }),
+    );
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    const user = userEvent.setup();
+    renderWithDataRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(form.getByLabelText('Name')).toHaveFocus());
+    expect(form.getByLabelText('Name')).toHaveAccessibleDescription('Too long');
+    expect(form.getByRole('alert')).toHaveTextContent('Fix this field:Name: too long');
   });
 });

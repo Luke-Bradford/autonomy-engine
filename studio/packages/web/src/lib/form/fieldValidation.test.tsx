@@ -100,7 +100,16 @@ const LABELS: Record<string, string> = { name: 'Name', age: 'Age', pair: 'Pair' 
  * go together. `checks` is recomputed from the values every render, as a page
  * does it. `refuse` stands in for a server that refuses with field errors.
  */
-function Probe({ refuse, hideAge = false }: { refuse?: FieldErrors; hideAge?: boolean }) {
+function Probe({
+  refuse,
+  hideAge = false,
+  withDate = false,
+}: {
+  refuse?: FieldErrors;
+  hideAge?: boolean;
+  /** An unkeyed native date control, as a trigger's mode editor has. */
+  withDate?: boolean;
+}) {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [pair, setPair] = useState({ a: '', b: '' });
@@ -172,6 +181,12 @@ function Probe({ refuse, hideAge = false }: { refuse?: FieldErrors; hideAge?: bo
         />
       </div>
       <FieldError id="pair-error" message={validation.errorFor('pair')} />
+      {withDate && (
+        <label>
+          When
+          <input type="date" />
+        </label>
+      )}
     </FormDrawer>
   );
 }
@@ -310,5 +325,47 @@ describe('useFieldValidation on the FormDrawer (#1396)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Test' }));
     expect(slot('name-error')).toHaveTextContent('Taken');
+  });
+});
+
+/** jsdom has no bad input: give a control the validity Chromium gives `1e` in a number box. */
+function markBadInput(control: HTMLElement, bad = true): void {
+  Object.defineProperty(control, 'validity', { configurable: true, value: { badInput: bad } });
+}
+
+describe('FormDrawer refuses input the browser could not read (#1396)', () => {
+  it('on a field of the form: beside it, with every other check raised in the same press', async () => {
+    const user = userEvent.setup();
+    render(<Probe />);
+    markBadInput(screen.getByLabelText('Age'));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(screen.getByText('submitted 0')).toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Fix these 2 fields:');
+    expect(screen.getByLabelText('Age')).toHaveAccessibleDescription(
+      '“Age” holds something that is not a complete value. Finish it or clear it.',
+    );
+    expect(screen.getByLabelText('Name')).toHaveFocus();
+  });
+
+  it('elsewhere: a notice in the one alert, focus on the control, gone on the next good Save', async () => {
+    const user = userEvent.setup();
+    render(<Probe withDate />);
+    await user.type(screen.getByLabelText('Name'), 'Ada');
+    const when = screen.getByLabelText('When');
+    markBadInput(when);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(screen.getByText('submitted 0')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '“When” holds something that is not a complete date. Finish it or clear it.',
+    );
+    expect(when).toHaveFocus();
+
+    markBadInput(when, false);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByText('submitted 1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

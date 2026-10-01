@@ -478,7 +478,8 @@ function GlobalParamForm({
             {...checkedBy('name')}
           />
         </label>
-        {errorLine('name')}
+        {/* No error line under a read-only field: it has nothing to fix. */}
+        {!editing && errorLine('name')}
         <LabelledControl
           label={
             <>
@@ -510,7 +511,7 @@ function GlobalParamForm({
             )
           }
         </LabelledControl>
-        {errorLine('type')}
+        {!editing && errorLine('type')}
         {editing && (
           <p className="page-hint">
             A name and type are fixed once created. To change either, delete this global and create
