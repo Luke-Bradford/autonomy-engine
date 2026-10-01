@@ -162,15 +162,15 @@ test.describe('U7 — per-activity node config form', () => {
         Array.from(
           root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
         ).find((el) => Array.from(el.labels ?? []).some((l) => l.textContent === name));
-      const url = byLabel('url');
-      const textareaFont = byLabel('body') ? getComputedStyle(byLabel('body')!).fontFamily : null;
+      const url = byLabel('URL');
+      const textareaFont = byLabel('Request body') ? getComputedStyle(byLabel('Request body')!).fontFamily : null;
       return {
         url: url?.tagName,
         urlFont: url ? getComputedStyle(url).fontFamily : null,
         textareaFont,
-        method: byLabel('method')?.tagName,
-        methodValue: byLabel('method')?.value,
-        body: byLabel('body')?.tagName,
+        method: byLabel('HTTP method')?.tagName,
+        methodValue: byLabel('HTTP method')?.value,
+        body: byLabel('Request body')?.tagName,
       };
     });
     expect(facts).toEqual({
@@ -407,7 +407,7 @@ test.describe('U7 — per-activity node config form', () => {
 
     await canvasNodes(page).first().click();
     const p = properties(page);
-    await expect(p.getByRole('group', { name: 'messages', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'Conversation', exact: true })).toBeVisible();
     await expect(p.getByRole('combobox', { name: 'messages row 1 role', exact: true })).toHaveValue(
       'user',
     );
@@ -596,7 +596,7 @@ test.describe('U7 — per-activity node config form', () => {
     const p = properties(page);
     const cell = (role: 'textbox' | 'combobox' | 'checkbox', row: number, name: string) =>
       p.getByRole(role, { name: new RegExp(`^outputSchema row ${row} ${name}\\b`) });
-    await expect(p.getByRole('group', { name: 'outputSchema', exact: true })).toBeVisible();
+    await expect(p.getByRole('group', { name: 'Output schema', exact: true })).toBeVisible();
     await expect(cell('textbox', 1, 'name')).toHaveValue('category');
     await expect(cell('combobox', 1, 'type')).toHaveValue('string');
     await expect(cell('checkbox', 1, 'required')).toBeChecked();
