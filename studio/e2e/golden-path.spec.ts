@@ -50,7 +50,7 @@ test('#1386 — create a connection, author and bind, trigger it, and read the r
   const connectionForm = page.getByRole('form', { name: 'Connection form' });
   await connectionForm.getByLabel('Name').fill(CONNECTION);
   await connectionForm.getByLabel('Kind').selectOption('agent_cli');
-  await connectionForm.getByLabel('command', { exact: true }).fill('/bin/echo');
+  await connectionForm.getByLabel('Command', { exact: true }).fill('/bin/echo');
   await connectionForm.getByRole('button', { name: 'Create connection' }).click();
   await expect(
     page.getByRole('button', { name: `Export ${CONNECTION}`, exact: true }),

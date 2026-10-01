@@ -40,6 +40,10 @@ test.describe('#1305 — the override allowlist is edited on the resource pages'
     const allowlist = form.getByRole('group', { name: 'Overridable per node' });
 
     await openEdit(page, '/#/manage/connections', 'Connections', name);
+    // #1396 — the allowlist sits in the Advanced section, closed while the row
+    // has none (it opens itself once one is stored, as the re-opens below rely on).
+    await expect(allowlist).toBeHidden();
+    await form.locator('summary', { hasText: 'Advanced' }).click();
     // `roots` is the confinement boundary: never offered.
     await expect(allowlist.getByRole('checkbox')).toHaveCount(2);
     // Laid out as the app's other checkbox sets are: a bordered card of inline
