@@ -77,7 +77,7 @@ test.describe('#1396 the connection form drawer', () => {
 
     // Advanced starts closed on a new connection.
     await expect(form(page).getByRole('group', { name: 'Overridable per node' })).toBeHidden();
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('the footer stays in view while a long form scrolls', async ({ page }) => {
@@ -108,7 +108,7 @@ test.describe('#1396 the connection form drawer', () => {
       labels: ['Cancel', 'Test connection', 'Create connection'],
       flushRight: true,
     });
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('a dirty form is held at a prompt on Escape and on a route change', async ({ page }) => {
@@ -137,7 +137,7 @@ test.describe('#1396 the connection form drawer', () => {
     expect(page.url()).toContain('#/manage/connections');
     await page.getByRole('button', { name: 'Discard changes' }).click();
     await page.getByRole('heading', { name: 'Datasets' }).waitFor();
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('a saved form closes without asking', async ({ page }) => {
@@ -151,6 +151,6 @@ test.describe('#1396 the connection form drawer', () => {
     await expect(drawer(page)).toBeHidden();
     await expect(prompt(page)).toBeHidden();
     await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 });

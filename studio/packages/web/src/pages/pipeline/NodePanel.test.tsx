@@ -1329,9 +1329,9 @@ describe('the expression picker on a mapping cell (#1178)', () => {
     open('mapping row 4 expression');
     fireEvent.click(screen.getByRole('button', { name: /^limit/ }));
 
-    expect(
-      (screen.getByLabelText('mapping row 4 expression') as HTMLTextAreaElement).value,
-    ).toBe('${params.limit}');
+    expect((screen.getByLabelText('mapping row 4 expression') as HTMLTextAreaElement).value).toBe(
+      '${params.limit}',
+    );
   });
 
   it('offers nothing to a column-name cell, which §8 holds to a literal', () => {
