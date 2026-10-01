@@ -160,19 +160,54 @@ test.describe('U7 — per-activity node config form', () => {
       section('Activity settings').getByRole('textbox', { name: 'Request URL', exact: true }),
     ).toBeVisible();
 
-    const rules = await properties(page).evaluate((panel) => {
+    // One read of every computed value. The rule is on each later section's
+    // HEADING; the section body keeps the panel's own gap; the activity's fields
+    // start right under their heading.
+    const layout = await properties(page).evaluate((panel) => {
       const sections = [...panel.querySelectorAll<HTMLElement>('fieldset.form-section')];
-      return sections.map((el) => ({
-        title: el.querySelector('legend')?.textContent,
-        borderTop: getComputedStyle(el).borderTopWidth,
-        gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
-      }));
+      return {
+        panelGap: getComputedStyle(panel).rowGap,
+        sections: sections.map((el) => {
+          const legend = el.querySelector<HTMLElement>(':scope > legend')!;
+          return {
+            title: legend.textContent,
+            fieldsetBorder: getComputedStyle(el).borderTopWidth,
+            ruled: getComputedStyle(legend).borderTopWidth,
+            ruleSpansSection:
+              Math.abs(legend.getBoundingClientRect().width - el.getBoundingClientRect().width) < 1,
+            gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
+          };
+        }),
+        configMarginTop: getComputedStyle(
+          panel.querySelector('[role="group"][aria-label="Config"]')!,
+        ).marginTop,
+      };
     });
-    expect(rules).toEqual([
-      { title: 'Bindings', borderTop: '0px', gap: '9.6px' },
-      { title: 'Container', borderTop: '1px', gap: '9.6px' },
-      { title: 'Activity settings', borderTop: '1px', gap: '9.6px' },
+    const { panelGap } = layout;
+    expect(layout.sections).toEqual([
+      {
+        title: 'Bindings',
+        fieldsetBorder: '0px',
+        ruled: '0px',
+        ruleSpansSection: true,
+        gap: panelGap,
+      },
+      {
+        title: 'Container',
+        fieldsetBorder: '0px',
+        ruled: '1px',
+        ruleSpansSection: true,
+        gap: panelGap,
+      },
+      {
+        title: 'Activity settings',
+        fieldsetBorder: '0px',
+        ruled: '1px',
+        ruleSpansSection: true,
+        gap: panelGap,
+      },
     ]);
+    expect(layout.configMarginTop).toBe('0px');
 
     // A wait binds nothing, so it has no Bindings section at all.
     await canvasNodes(page).nth(1).click();

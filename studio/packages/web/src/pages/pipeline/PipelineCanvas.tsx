@@ -2441,14 +2441,14 @@ function ContainerSection({
   const canCreate =
     kind === 'loop' ? exitWhen.trim() !== '' : kind === 'foreach' ? items.trim() !== '' : true;
 
-  // A fragment, not a wrapper: the panel's Container section is already the
-  // flex column these controls want, so a `<div>` here would need its own rule
-  // saying the same thing — two declarations that have to agree about one rhythm.
+  // #1396 — the Settings tab's Container section, on both panels that show it.
+  // The section's body is already the flex column these controls want, so no
+  // wrapper of their own is needed.
   return (
-    <>
-      {/* #1396 — "Member of", because the section above it is already headed
-          "Container". The select's own name stays "Container membership". */}
-      <LabelledControl label="Member of">
+    <FormSection title="Container">
+      {/* The visible label matches the select's name, so a voice command that
+          reads the label reaches the control (WCAG 2.5.3). */}
+      <LabelledControl label="Container membership">
         {(id) => (
           <select
             id={id}
@@ -2527,7 +2527,7 @@ function ContainerSection({
           {error}
         </p>
       )}
-    </>
+    </FormSection>
   );
 }
 
@@ -3052,9 +3052,7 @@ export function NodePanel({
                       return must not swallow it: a container is exactly the
                       construct that puts a call node in one, and this is the
                       only panel such a node ever gets. */}
-                  <FormSection title="Container">
-                    <ContainerSection store={store} nodeId={nodeId} />
-                  </FormSection>
+                  <ContainerSection store={store} nodeId={nodeId} />
                 </>
               ),
             },
@@ -3264,9 +3262,7 @@ export function NodePanel({
                     )}
                   </FormSection>
                 )}
-                <FormSection title="Container">
-                  <ContainerSection store={store} nodeId={nodeId} />
-                </FormSection>
+                <ContainerSection store={store} nodeId={nodeId} />
 
                 <FormSection title="Activity settings">
                   <ConfigEditor

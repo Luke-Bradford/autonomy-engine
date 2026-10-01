@@ -223,11 +223,13 @@ message.
 - **The Settings tab is in three sections** (`FormSection`, not collapsible), in this order:
   - *Bindings*: the connection or the source and sink pickers, their datasets and their overrides.
     An activity that binds nothing has no Bindings section.
-  - *Container*: which container the activity is in, and the New container form. Its select reads
-    "Member of", so the heading does not repeat as the label.
+  - *Container*: which container the activity is in (Container membership), and the New container
+    form. `ContainerSection` draws this section itself.
   - *Activity settings*: the activity's own fields, Fields or JSON.
 
   Apply config, Duplicate node and Delete node act on the whole node and sit after every section.
+  A section after the first is ruled off on its heading, not on its fieldset: a legend sits across
+  the fieldset's top border and would break the line.
   A call node's settings stay as `CallPanel` heads them ("Call target", "Parameters"), followed by
   the Container section.
 - **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each

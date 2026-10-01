@@ -1771,8 +1771,13 @@ describe('NodePanel — sections on the Settings tab (#1396)', () => {
       document.DOCUMENT_POSITION_FOLLOWING,
     );
     // The actions act on the whole node, so they sit after every section.
-    const apply = screen.getByRole('button', { name: 'Apply config' });
-    for (const s of [bindings, container, settings]) expect(s.contains(apply)).toBe(false);
+    for (const name of ['Apply config', 'Duplicate node', 'Delete node']) {
+      const button = screen.getByRole('button', { name });
+      expect(settings.compareDocumentPosition(button) & document.DOCUMENT_POSITION_FOLLOWING).toBe(
+        document.DOCUMENT_POSITION_FOLLOWING,
+      );
+      for (const s of [bindings, container, settings]) expect(s.contains(button)).toBe(false);
+    }
   });
 
   it('puts a paired activity’s four pickers in Bindings', () => {
@@ -1786,6 +1791,13 @@ describe('NodePanel — sections on the Settings tab (#1396)', () => {
     ]) {
       expect(within(bindings).getByRole('combobox', { name: label })).toBeTruthy();
     }
+  });
+
+  it('puts a dataset picker in Bindings for an unpaired activity', () => {
+    mountOver(node('n_look', 'lookup', {}));
+    expect(
+      within(section('Bindings')).getByRole('combobox', { name: 'Source dataset' }),
+    ).toBeTruthy();
   });
 
   it('has no Bindings section for an activity that binds nothing', () => {

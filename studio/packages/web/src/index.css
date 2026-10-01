@@ -1584,13 +1584,24 @@ button.danger {
   gap: 0.6rem;
 }
 
-.property-panel .form-section + .form-section {
+/* The rule is drawn on the HEADING, not the fieldset: a fieldset's legend sits
+   across its top border and breaks it, so a border there would run through the
+   title instead of above it. `:not(:first-child)` rather than `+`, so a section
+   after a call node's own parts gets its rule too. */
+.property-panel .form-section:not(:first-child) > .form-section-title {
+  width: 100%;
   border-top: 1px solid var(--border);
   padding-top: 0.6rem;
 }
 
-/* U6d — the "New container" form. `.property-panel` is already the flex column
-   the membership `<select>` wants, so only this fieldset needs a rule: it is what
+/* `contract-section`'s top margin separates it from what comes before it in a
+   column. As a section's first field, the heading already does that. */
+.property-panel .form-section-body > .contract-section:first-child {
+  margin-top: 0;
+}
+
+/* U6d — the "New container" form. Its section is already the flex column the
+   membership `<select>` wants, so only this fieldset needs a rule: it is what
    visually separates "which container is this activity in" from "make a new
    one", two different acts reached through one control. */
 /* #1304 — a bound end's parameter overrides share the card idiom, so each
