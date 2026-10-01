@@ -61,6 +61,8 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
+import { DatasetKindName, KindSelect } from '../lib/KindName';
+import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 
 const KINDS = DATASET_KINDS;
 
@@ -457,7 +459,9 @@ export function DatasetsPage() {
                     <td>
                       <Link to={datasetDetailPath(dataset.id)}>{dataset.name}</Link>
                     </td>
-                    <td>{DATASET_KIND_LABELS[dataset.kind]}</td>
+                    <td>
+                      <DatasetKindName kind={dataset.kind} />
+                    </td>
                     <td>
                       <StoreCell
                         connections={connections}
@@ -883,18 +887,20 @@ function DatasetForm({
           }
         >
           {(id) => (
-            <select
-              id={id}
-              value={form.kind}
-              aria-required
-              onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
-            >
-              {KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {DATASET_KIND_LABELS[kind]}
-                </option>
-              ))}
-            </select>
+            <KindSelect icons={DATASET_KIND_ICONS} kind={form.kind}>
+              <select
+                id={id}
+                value={form.kind}
+                aria-required
+                onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}
+              >
+                {KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {DATASET_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </KindSelect>
           )}
         </LabelledControl>
         {storeKindAdvisory !== null && (

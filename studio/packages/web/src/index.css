@@ -1297,6 +1297,35 @@ details.form-section > summary.form-section-title {
   max-width: 100%;
 }
 
+/* #1396 — a kind shown as its name with an icon: the glyph is unsized, so it
+   takes the text's size and a table row is no taller for it. Muted, so the name
+   stays the thing read. */
+.kind-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.kind-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+  font-size: 1.1em;
+}
+
+/* The chosen kind's icon beside the form's Kind/Mode picker. The picker keeps
+   the full width it had as the field's only control. */
+.kind-select {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.kind-select > select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .required-mark::after {
   content: '*';
   color: var(--error);

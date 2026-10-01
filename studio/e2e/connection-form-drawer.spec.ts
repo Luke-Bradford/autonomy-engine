@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedConnection } from './support/seedResources';
-import { fluentRootReady } from './support/theme';
+import { contrastRatio, fluentRootReady, setTheme, surfaceBehind } from './support/theme';
 
 /**
  * #1396 OR5 slice 1 — the shared form pattern on the Connections page: the
@@ -77,6 +77,78 @@ test.describe('#1396 the connection form drawer', () => {
 
     // Advanced starts closed on a new connection.
     await expect(form(page).getByRole('group', { name: 'Overridable per node' })).toBeHidden();
+    await expectQuiet(page, problems);
+  });
+
+  test('a kind shows with its icon: in the row, beside the picker, and swapped with it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const seeded = `e2e 1396 icon ${Date.now()}`;
+    await seedConnection(page, { name: seeded, kind: 'ollama', config: {} });
+    await gotoConnections(page);
+    await setTheme(page, 'dark');
+    await page.getByRole('button', { name: 'New connection' }).click();
+    await expect(drawer(page)).toBeVisible();
+
+    const read = () =>
+      page.evaluate((name) => {
+        const cell = [...document.querySelectorAll('tbody tr')]
+          .find((row) => row.textContent?.includes(name))!
+          .querySelectorAll('td')[1]!;
+        const rowIcon = cell.querySelector('.kind-icon')!;
+        const svg = rowIcon.querySelector('svg')!.getBoundingClientRect();
+        const select = document.querySelector<HTMLSelectElement>(
+          '.form-drawer .kind-select select',
+        )!;
+        const nameInput = [...document.querySelectorAll('.form-drawer label')]
+          .find((label) => label.textContent?.startsWith('Name'))!
+          .parentElement!.querySelector('input')!;
+        return {
+          cellText: cell.textContent,
+          rowKind: rowIcon.getAttribute('data-kind'),
+          rowHidden: rowIcon.getAttribute('aria-hidden'),
+          // Unsized: no taller than the line of text beside it.
+          // A computed `line-height: normal` has no pixel value; 1.5em stands in.
+          iconFitsLine:
+            svg.height > 0 &&
+            svg.height <=
+              (parseFloat(getComputedStyle(cell).lineHeight) ||
+                parseFloat(getComputedStyle(cell).fontSize) * 1.5) +
+                1,
+          pickerKind: document
+            .querySelector('.form-drawer .kind-select .kind-icon')
+            ?.getAttribute('data-kind'),
+          // The picker still reaches the right edge the Name field does: the
+          // icon takes room on its left, the picker is not shrunk to its text.
+          pickerRightEdge: Math.round(select.getBoundingClientRect().right),
+          nameRightEdge: Math.round(nameInput.getBoundingClientRect().right),
+          iconColor: getComputedStyle(rowIcon).color,
+        };
+      }, seeded);
+
+    const before = await read();
+    expect(before).toMatchObject({
+      cellText: 'Ollama',
+      rowKind: 'ollama',
+      rowHidden: 'true',
+      iconFitsLine: true,
+      pickerKind: 'anthropic_api',
+    });
+    expect(before.pickerRightEdge).toBe(before.nameRightEdge);
+    // Legible in both themes: the muted glyph against the surface behind its row.
+    const rowIcon = 'tbody tr .kind-icon[data-kind="ollama"]';
+    expect(
+      contrastRatio(before.iconColor, (await surfaceBehind(page, rowIcon)).color),
+    ).toBeGreaterThanOrEqual(3);
+    await setTheme(page, 'light');
+    const light = await read();
+    expect(
+      contrastRatio(light.iconColor, (await surfaceBehind(page, rowIcon)).color),
+    ).toBeGreaterThanOrEqual(3);
+
+    await form(page).getByLabel('Kind').selectOption('postgres');
+    expect((await read()).pickerKind).toBe('postgres');
     await expectQuiet(page, problems);
   });
 

@@ -89,6 +89,8 @@ import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fie
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
+import { KindSelect, TriggerModeName } from '../lib/KindName';
+import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -652,7 +654,9 @@ export function TriggersPage() {
                 {triggers.map((t) => (
                   <tr key={t.id}>
                     <td>{t.name}</td>
-                    <td>{TRIGGER_MODE_LABELS[t.mode]}</td>
+                    <td>
+                      <TriggerModeName mode={t.mode} />
+                    </td>
                     <td>{labelFor(t.pipelineVersionId)}</td>
                     <td>{t.enabled ? 'yes' : 'no'}</td>
                     <td>
@@ -1371,17 +1375,19 @@ function TriggerForm({
       <FormSection title="Firing">
         <LabelledControl label="Mode">
           {(id) => (
-            <select
-              id={id}
-              value={form.mode}
-              onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
-            >
-              {MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {TRIGGER_MODE_LABELS[mode]}
-                </option>
-              ))}
-            </select>
+            <KindSelect icons={TRIGGER_MODE_ICONS} kind={form.mode}>
+              <select
+                id={id}
+                value={form.mode}
+                onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
+              >
+                {MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {TRIGGER_MODE_LABELS[mode]}
+                  </option>
+                ))}
+              </select>
+            </KindSelect>
           )}
         </LabelledControl>
 

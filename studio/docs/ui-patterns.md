@@ -77,6 +77,14 @@ required marks and display names; its layout is its own, below.
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
   `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`,
   `CONCURRENCY_POLICY_LABELS`, `CONTAINER_KIND_LABELS`). The stored value stays the identifier.
+- **A connection kind, a dataset kind and a trigger mode also show an icon** (`lib/kindIcons.ts`, drawn by `lib/KindName.tsx`):
+  `ConnectionKindName`, `DatasetKindName` and `TriggerModeName` in the lists and on the dataset
+  page, and the chosen kind's `KindGlyph` beside the form's Kind or Mode picker, since a native
+  option cannot hold one. Icons go by family, not vendor (every LLM kind is the sparkle), and
+  reuse the shape `activityIcon.ts` draws for the same act (a test pins the pairs). The glyphs are
+  the unsized variants, so they take the text's size, and muted, so the name stays what is read;
+  the icon is `aria-hidden`. A picker uses `KindSelect`. Kinds named in prose or in a native option
+  (a store picker's "Warehouse (PostgreSQL)") stay text.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
@@ -251,5 +259,5 @@ message.
 
 ## Still to come under #1396
 
-- A JSON code editor, kind icons, and a two-column grid on wide screens.
+- A JSON code editor, and a two-column grid on wide screens.
 - Axe gates on every form (shared with OR24, #1415).

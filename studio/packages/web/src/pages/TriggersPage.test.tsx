@@ -207,6 +207,9 @@ describe('TriggersPage', () => {
     expect(await screen.findByText('Nightly')).toBeInTheDocument();
     // Binding label is `${pipeline.name} v${version}`, not the opaque id.
     expect(await screen.findByText('My pipeline v3')).toBeInTheDocument();
+    // #1396 — the mode by its display name, with its icon.
+    const mode = within(screen.getByRole('row', { name: /Nightly/ })).getByText('Schedule');
+    expect(mode.querySelector('.kind-icon')?.getAttribute('data-kind')).toBe('schedule');
   });
 
   it('shows "unbound" for a trigger with no pipeline version', async () => {
@@ -287,7 +290,15 @@ describe('TriggersPage', () => {
     const form = within(formEl);
     await user.type(form.getByLabelText('Name'), 'Nightly');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    const modeIcon = () =>
+      form
+        .getByLabelText('Mode')
+        .parentElement?.querySelector('.kind-icon')
+        ?.getAttribute('data-kind');
+    expect(modeIcon()).toBe('manual');
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    // #1396 — the Mode picker's icon follows the chosen mode.
+    expect(modeIcon()).toBe('schedule');
     // #439 U14b — a new schedule trigger now opens on the RECURRENCE builder;
     // the raw cron is the deliberate escape hatch behind this toggle.
     await user.selectOptions(form.getByLabelText(/Schedule authored as/i), 'cron');

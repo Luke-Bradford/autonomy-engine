@@ -73,6 +73,8 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
+import { ConnectionKindName, KindSelect } from '../lib/KindName';
+import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -518,7 +520,9 @@ export function ConnectionsPage() {
                 {connections.map((conn) => (
                   <tr key={conn.id}>
                     <td>{conn.name}</td>
-                    <td>{CONNECTION_KIND_LABELS[conn.kind]}</td>
+                    <td>
+                      <ConnectionKindName kind={conn.kind} />
+                    </td>
                     <td>
                       <button
                         type="button"
@@ -972,18 +976,20 @@ function ConnectionForm({
           }
         >
           {(id) => (
-            <select
-              id={id}
-              value={form.kind}
-              aria-required
-              onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
-            >
-              {KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {CONNECTION_KIND_LABELS[kind]}
-                </option>
-              ))}
-            </select>
+            <KindSelect icons={CONNECTION_KIND_ICONS} kind={form.kind}>
+              <select
+                id={id}
+                value={form.kind}
+                aria-required
+                onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+              >
+                {KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {CONNECTION_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </KindSelect>
           )}
         </LabelledControl>
 
