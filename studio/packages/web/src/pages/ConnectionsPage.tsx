@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CONNECTION_KINDS,
+  CONNECTION_KIND_LABELS,
+  canonicalStringify,
   CONNECTION_SECRET_USE,
   connectionConfigAdvisory,
   connectionConfigSchema,
@@ -58,6 +60,13 @@ import {
 import { ConfigEditor } from './pipeline/ConfigEditor';
 import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
+import { FormDrawer } from '../lib/form/FormDrawer';
+import { FormSection } from '../lib/form/FormSection';
+import { RequiredMark } from '../lib/form/RequiredMark';
+import {
+  useUnsavedChangesGuard,
+  type UnsavedChangesGuard,
+} from '../lib/form/useUnsavedChangesGuard';
 import { OverridableKeysField } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 
@@ -137,6 +146,31 @@ function formForEdit(conn: ConnectionPublic): FormState {
 }
 
 /**
+ * #1396 — what Save would write, as one comparable string: the guard's
+ * "is this form dirty?" is this against the value taken when the form opened.
+ *
+ * The ASSEMBLED config, not the drafts: switching to JSON and back rewrites
+ * `jsonText` and `inputs` without changing a thing Save would send, and must
+ * not count as an edit. A draft that does not read back (half-typed JSON) is
+ * compared as its raw text, which differs from any readable one — so it counts
+ * as dirty, which is the safe side. A typed secret always counts.
+ */
+function draftSignature(form: FormState): string {
+  const { fields } = connectionFields(form.kind, form.config);
+  const draft = readConfigDraft(form.jsonMode, form, fields);
+  const config = draft.ok
+    ? draft.config
+    : { unreadable: form.jsonMode ? form.jsonText : form.inputs };
+  try {
+    return canonicalStringify([form.name, form.kind, config, form.secret, form.parameters]);
+  } catch {
+    // Not JSON-representable (a non-finite number from a half-typed field):
+    // still a string, still compared, never a crash in render.
+    return JSON.stringify([form.name, form.kind, String(config), form.secret, form.parameters]);
+  }
+}
+
+/**
  * Connections page: the first MVP-bar step ("Add a Connection"). Full CRUD
  * over `/api/connections`. Secrets are write-only end to end — the list never
  * carries one, and the edit form leaves the secret field blank (blank = keep
@@ -182,10 +216,15 @@ export function ConnectionsPage() {
    */
   const [dependents, setDependents] = useState<ConnectionDependentsResponse | null>(null);
   const [dependentsUnavailable, setDependentsUnavailable] = useState<string | null>(null);
+  /** #1396 — the form as it opened, for the unsaved-changes guard. */
+  const [openedAs, setOpenedAs] = useState<string | null>(null);
   const openForm = useCallback((next: FormState) => {
     setForm(next);
+    setOpenedAs(draftSignature(next));
     setFormSeq((seq) => seq + 1);
   }, []);
+  const dirty = useMemo(() => form !== null && draftSignature(form) !== openedAs, [form, openedAs]);
+  const guard = useUnsavedChangesGuard(dirty);
   const guardedLoad = useGuardedLoad();
   /**
    * A SECOND instance, deliberately — `useGuardedLoad`'s "one instance per state
@@ -452,7 +491,7 @@ export function ConnectionsPage() {
     <section aria-labelledby="connections-heading">
       <div className="page-header">
         <h2 id="connections-heading">Connections</h2>
-        <button type="button" onClick={() => openForm(blankForm())}>
+        <button type="button" onClick={() => guard.request(() => openForm(blankForm()))}>
           New connection
         </button>
       </div>
@@ -468,62 +507,65 @@ export function ConnectionsPage() {
         </p>
       )}
 
-      {connections === null && !loadError && <p>Loading connections…</p>}
+      {/* #1396 — the list and the form side by side; the form is a column, not
+          an overlay, so the row actions stay reachable while it is open. */}
+      <div className={form ? 'drawer-layout drawer-layout-open' : 'drawer-layout'}>
+        <div className="drawer-layout-main">
+          {connections === null && !loadError && <p>Loading connections…</p>}
 
-      {connections !== null && connections.length === 0 && (
-        <p>No connections yet. Add one to give your pipelines something to run against.</p>
-      )}
+          {connections !== null && connections.length === 0 && (
+            <p>No connections yet. Add one to give your pipelines something to run against.</p>
+          )}
 
-      {connections !== null && connections.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {connections.map((conn) => (
-              <tr key={conn.id}>
-                <td>{conn.name}</td>
-                <td>
-                  <code>{conn.kind}</code>
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => openEditForm(conn)}
-                    aria-label={`Edit ${conn.name}`}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onExport(conn)}
-                    aria-label={`Export ${conn.name}`}
-                    disabled={exporting.has(conn.id)}
-                    aria-busy={exporting.has(conn.id)}
-                  >
-                    Export
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(conn)}
-                    aria-label={`Delete ${conn.name}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          {connections !== null && connections.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {connections.map((conn) => (
+                  <tr key={conn.id}>
+                    <td>{conn.name}</td>
+                    <td>{CONNECTION_KIND_LABELS[conn.kind]}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => guard.request(() => openEditForm(conn))}
+                        aria-label={`Edit ${conn.name}`}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onExport(conn)}
+                        aria-label={`Export ${conn.name}`}
+                        disabled={exporting.has(conn.id)}
+                        aria-busy={exporting.has(conn.id)}
+                      >
+                        Export
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onDelete(conn)}
+                        aria-label={`Delete ${conn.name}`}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-      {form && (
-        <ConnectionForm
-          /* Remount on every OPEN. The table stays interactive while the form
+        {form && (
+          <ConnectionForm
+            /* Remount on every OPEN. The table stays interactive while the form
              is open, so "Edit" on another row swaps `form` in place — and
              without a key the child keeps its own local state across that swap:
              connection A's `probing`/`error`, and A's probe verdict, rendered
@@ -538,9 +580,9 @@ export function ConnectionsPage() {
              twice would not remount, and `blankForm()` is byte-identical each
              time, so the signature would match and the previous draft's verdict
              would render against a form nothing has tested. */
-          key={formSeq}
-          form={form}
-          /* #1174 — the inputs the strand note needs, read from the LIST rather
+            key={formSeq}
+            form={form}
+            /* #1174 — the inputs the strand note needs, read from the LIST rather
              than snapshotted at form-open, so a refreshed list moves them;
              `undefined` means the row is gone from under the open form, which
              the save's own 404 reports and the note deliberately stays silent
@@ -552,19 +594,21 @@ export function ConnectionsPage() {
              `connectionNotReadyReason`, which reads `enabled` and
              `secretStatus` as well as the kind. One prop rather than three,
              with the same "from the list" semantics. */
-          stored={connections?.find((conn) => conn.id === form.id)}
-          datasets={datasets}
-          datasetsUnavailable={datasetsUnavailable}
-          dependents={dependents}
-          dependentsUnavailable={dependentsUnavailable}
-          onChange={setForm}
-          onClose={() => setForm(null)}
-          onSaved={async () => {
-            setForm(null);
-            await refresh();
-          }}
-        />
-      )}
+            stored={connections?.find((conn) => conn.id === form.id)}
+            datasets={datasets}
+            datasetsUnavailable={datasetsUnavailable}
+            dependents={dependents}
+            dependentsUnavailable={dependentsUnavailable}
+            onChange={setForm}
+            guard={guard}
+            onClose={() => guard.request(() => setForm(null))}
+            onSaved={async () => {
+              setForm(null);
+              await refresh();
+            }}
+          />
+        )}
+      </div>
 
       {/* The import surface lives on the list an imported connection lands in —
           but it takes ANY export envelope, because `POST /api/import` does (see
@@ -584,6 +628,7 @@ function ConnectionForm({
   dependents,
   dependentsUnavailable,
   onChange,
+  guard,
   onClose,
   onSaved,
 }: {
@@ -594,10 +639,12 @@ function ConnectionForm({
   dependents: ConnectionDependentsResponse | null;
   dependentsUnavailable: string | null;
   onChange: (next: FormState) => void;
+  guard: UnsavedChangesGuard;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [showSecret, setShowSecret] = useState(false);
   const [saving, setSaving] = useState(false);
   /**
    * #1191 — the last probe's verdict, tagged with a SIGNATURE of the draft it
@@ -828,48 +875,120 @@ function ConnectionForm({
     }
   }
 
+  const title = editing ? 'Edit connection' : 'New connection';
   return (
-    <form
+    <FormDrawer
+      title={title}
+      formLabel="Connection form"
       className="connection-form"
+      guard={guard}
+      onRequestClose={onClose}
       onSubmit={(e) => void onSubmit(e)}
-      aria-label="Connection form"
+      actions={
+        <>
+          <button type="button" onClick={onClose} disabled={saving || probing}>
+            Cancel
+          </button>
+          {/* Never a submit: testing must not save. */}
+          <button type="button" onClick={() => void onTest()} disabled={saving || probing}>
+            {probing ? 'Testing…' : 'Test connection'}
+          </button>
+          <button type="submit" className="primary" disabled={saving || probing}>
+            {saving ? 'Saving…' : editing ? 'Save changes' : 'Create connection'}
+          </button>
+        </>
+      }
     >
-      <h3>{editing ? 'Edit connection' : 'New connection'}</h3>
+      <FormSection title="Basics">
+        <label>
+          <span>
+            Name
+            <RequiredMark />
+          </span>
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
+            required
+          />
+        </label>
 
-      <label>
-        Name
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => onChange({ ...form, name: e.target.value })}
-          required
-        />
-      </label>
+        <LabelledControl
+          label={
+            <>
+              Kind
+              <RequiredMark />
+            </>
+          }
+        >
+          {(id) => (
+            <select
+              id={id}
+              value={form.kind}
+              aria-required
+              onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+            >
+              {KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {CONNECTION_KIND_LABELS[kind]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
+      </FormSection>
 
-      <LabelledControl label="Kind">
-        {(id) => (
-          <select
-            id={id}
-            value={form.kind}
-            onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}
+      <FormSection title="Connection">
+        <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
+      </FormSection>
+
+      <FormSection title="Authentication">
+        <div className="secret-field">
+          <label>
+            Secret
+            <input
+              type={showSecret ? 'text' : 'password'}
+              value={form.secret}
+              onChange={(e) => onChange({ ...form, secret: e.target.value })}
+              placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          {/* A sibling of the label, so it never joins the input's name. */}
+          <button
+            type="button"
+            aria-pressed={showSecret}
+            aria-label="Show secret"
+            onClick={() => setShowSecret((shown) => !shown)}
           >
-            {KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        )}
-      </LabelledControl>
+            {showSecret ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {/* Never a `required` input: on edit blank means KEEP the stored secret,
+            and on create the server accepts a secretless row (it derives
+            `needs_secret` and stores it). This says what the kind DOES with one. */}
+        <p className="page-hint">
+          {connectionKindRequiresSecret(form.kind)
+            ? `Required — a ${CONNECTION_KIND_LABELS[form.kind]} connection cannot dispatch without a secret. `
+            : ''}
+          {CONNECTION_SECRET_USE[form.kind]}
+        </p>
+      </FormSection>
 
-      <ConfigEditor editor={editor} className="connection-config" rows={8} advisory={advisory} />
-
-      <OverridableKeysField
-        subject={connectionAllowlistSubject(form.kind)}
-        seed={form.parametersSeed}
-        value={form.parameters}
-        onChange={(parameters) => onChange({ ...form, parameters })}
-      />
+      <FormSection
+        title="Advanced"
+        collapsible
+        // Open when the row already uses it, so its state is never hidden.
+        defaultOpen={form.parametersSeed.length > 0}
+      >
+        <OverridableKeysField
+          subject={connectionAllowlistSubject(form.kind)}
+          seed={form.parametersSeed}
+          value={form.parameters}
+          onChange={(parameters) => onChange({ ...form, parameters })}
+        />
+      </FormSection>
 
       {/* #1174 — outside the Config group, because it is a fact about OTHER
           resources rather than about this config, and outside the mode branch
@@ -899,26 +1018,6 @@ function ConnectionForm({
           conditions. */}
       {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
 
-      <label>
-        Secret
-        <input
-          type="password"
-          value={form.secret}
-          onChange={(e) => onChange({ ...form, secret: e.target.value })}
-          placeholder={editing ? 'leave blank to keep the current secret' : 'optional'}
-          autoComplete="off"
-        />
-      </label>
-      {/* Never a `required` input: on edit blank means KEEP the stored secret,
-          and on create the server accepts a secretless row (it derives
-          `needs_secret` and stores it). This says what the kind DOES with one. */}
-      <p className="page-hint">
-        {connectionKindRequiresSecret(form.kind)
-          ? `Required — an ${form.kind} connection cannot dispatch without a secret. `
-          : ''}
-        {CONNECTION_SECRET_USE[form.kind]}
-      </p>
-
       {error && (
         <p role="alert" className="error">
           {error}
@@ -943,19 +1042,6 @@ function ConnectionForm({
             : probe.result.error}
         </p>
       )}
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving || probing}>
-          {saving ? 'Saving…' : editing ? 'Save changes' : 'Create connection'}
-        </button>
-        {/* Never a submit: testing must not save. */}
-        <button type="button" onClick={() => void onTest()} disabled={saving || probing}>
-          {probing ? 'Testing…' : 'Test connection'}
-        </button>
-        <button type="button" onClick={onClose} disabled={saving || probing}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    </FormDrawer>
   );
 }
