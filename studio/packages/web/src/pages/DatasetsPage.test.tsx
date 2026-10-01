@@ -213,6 +213,12 @@ describe('DatasetsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create dataset' }));
 
     expect(await within(form()).findByRole('alert')).toHaveTextContent(/Columns is required/);
+    // #1396 — beside the field too, with focus taken to it: the only invalid one.
+    const columns = within(form()).getByLabelText('Columns (JSON)');
+    expect(columns).toHaveAttribute('aria-invalid', 'true');
+    expect(columns).toHaveAccessibleDescription(/^Columns is required/);
+    await waitFor(() => expect(columns).toHaveFocus());
+    expect(within(form()).getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false');
     expect(createMock).not.toHaveBeenCalled();
   });
 
@@ -568,6 +574,13 @@ describe('DatasetsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'New dataset' }));
     expect(within(form()).getByText(/needs a connection first/)).toBeInTheDocument();
+
+    // #1396 — and a Save without one says so beside the Store, not in a browser bubble.
+    await user.type(within(form()).getByLabelText('Name'), 'Orders');
+    await user.click(screen.getByRole('button', { name: 'Create dataset' }));
+    expect(within(form()).getByRole('alert')).toHaveTextContent('Store: Choose a store.');
+    await waitFor(() => expect(within(form()).getByLabelText('Store')).toHaveFocus());
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it('gives `delimited` the typed field form now that a reader exists (#1167)', async () => {

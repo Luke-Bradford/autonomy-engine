@@ -1,5 +1,5 @@
 import type { ZodType } from 'zod';
-import { ApiErrorBodySchema, type ApiErrorBody } from '@autonomy-studio/shared';
+import { ApiErrorBodySchema, type ApiErrorBody, type ApiErrorIssue } from '@autonomy-studio/shared';
 
 // `ApiErrorBody`/`ApiErrorBodySchema` are the SSOT for the error-response
 // contract, authored once in `@autonomy-studio/shared` and shared with the
@@ -40,25 +40,48 @@ export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * A server's validation issues as one line, `path: message; …`.
+ *
+ * `issues` may be a SUBSET of `body.issues` (#1396: a form shows the ones that
+ * name its fields beside them, and words only the rest), so the remainder is
+ * counted from the body, not from `issues`.
+ */
+export function formatApiIssues(
+  issues: readonly ApiErrorIssue[],
+  body: Pick<ApiErrorBody, 'issues' | 'truncated' | 'totalIssues'>,
+): string {
+  const joined = issues
+    .map((issue) => (issue.path ? `${issue.path}: ${issue.message ?? ''}` : (issue.message ?? '')))
+    .join('; ');
+  // If the server capped the list, name the remainder rather than presenting
+  // the shown subset as the whole (#496). `message`-bearing errors (e.g.
+  // `invalid_pipeline_doc`) never reach here — `messageFromBody` returns them
+  // first — and carry their own bounded summary, so this suffix is the ZodError
+  // join path only.
+  if (body.truncated && typeof body.totalIssues === 'number') {
+    const rest = body.totalIssues - (body.issues?.length ?? 0);
+    if (rest > 0) return joined === '' ? `…and ${rest} more` : `${joined}; …and ${rest} more`;
+  }
+  return joined;
+}
+
+/**
+ * #1396 — the per-field issues of a refused write, or `null` when the failure
+ * names no fields (a `message` the server chose wins, as in `messageFromBody`).
+ */
+export function apiIssuesOf(
+  err: unknown,
+): { issues: readonly ApiErrorIssue[]; body: ApiErrorBody } | null {
+  if (!(err instanceof ApiError) || err.body === undefined || err.body.message) return null;
+  const { issues } = err.body;
+  return issues !== undefined && issues.length > 0 ? { issues, body: err.body } : null;
+}
+
 function messageFromBody(status: number, body: ApiErrorBody | undefined): string {
   if (!body) return `request failed (${status})`;
   if (body.message) return body.message;
-  if (body.issues && body.issues.length > 0) {
-    const joined = body.issues
-      .map((issue) =>
-        issue.path ? `${issue.path}: ${issue.message ?? ''}` : (issue.message ?? ''),
-      )
-      .join('; ');
-    // If the server capped the list, name the remainder rather than presenting
-    // the shown subset as the whole (#496). `message`-bearing errors (e.g.
-    // `invalid_pipeline_doc`) never reach here — they return above — and carry
-    // their own bounded summary, so this suffix is the ZodError join path only.
-    if (body.truncated && typeof body.totalIssues === 'number') {
-      const rest = body.totalIssues - body.issues.length;
-      if (rest > 0) return `${joined}; …and ${rest} more`;
-    }
-    return joined;
-  }
+  if (body.issues && body.issues.length > 0) return formatApiIssues(body.issues, body);
   if (body.error) return body.error;
   return `request failed (${status})`;
 }

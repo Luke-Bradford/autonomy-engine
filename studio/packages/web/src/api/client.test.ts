@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { apiFetch, ApiError } from './client';
+import type { ApiErrorBody } from '@autonomy-studio/shared';
+import { apiFetch, ApiError, apiIssuesOf, formatApiIssues } from './client';
 
 const Thing = z.object({ id: z.string(), n: z.number() });
 
@@ -127,5 +128,35 @@ describe('apiFetch', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(500);
     expect((err as ApiError).message).toBe('request failed (500)');
+  });
+});
+
+describe('formatApiIssues / apiIssuesOf (#1396)', () => {
+  const body: ApiErrorBody = {
+    error: 'validation_error',
+    issues: [
+      { path: 'name', message: 'too short' },
+      { path: 'config.url', message: 'bad url' },
+    ],
+    truncated: true,
+    totalIssues: 5,
+  };
+
+  it('words a SUBSET of the issues, counting the remainder from the whole body', () => {
+    expect(formatApiIssues([body.issues![1]!], body)).toBe('config.url: bad url; …and 3 more');
+    // Every shown issue found a field: the uncounted remainder is still stated.
+    expect(formatApiIssues([], body)).toBe('…and 3 more');
+    expect(formatApiIssues(body.issues!, { issues: body.issues })).toBe(
+      'name: too short; config.url: bad url',
+    );
+  });
+
+  it('hands back the issues of a refused write, never of a message-bearing error', () => {
+    expect(apiIssuesOf(new ApiError(400, 'x', body))).toEqual({ issues: body.issues, body });
+    expect(apiIssuesOf(new ApiError(400, 'x', { ...body, message: 'said so' }))).toBeNull();
+    expect(
+      apiIssuesOf(new ApiError(400, 'x', { error: 'validation_error', issues: [] })),
+    ).toBeNull();
+    expect(apiIssuesOf(new Error('network'))).toBeNull();
   });
 });

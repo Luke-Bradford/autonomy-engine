@@ -94,10 +94,61 @@ the fields view and the JSON view is not an edit.
 The prompt is an inline `alertdialog`, not `window.confirm`. OR6 (#1397) owns the app's confirm
 dialogs.
 
+## Validation
+
+Connections and Datasets check their own fields (`useFieldValidation`,
+`lib/form/fieldValidation.ts`). Secrets, Global parameters and Triggers move onto it next, and still
+use the browser's own `required` check until then. Passing `validation` to `FormDrawer` turns that
+check off (`noValidate`), so the browser's bubble no longer pre-empts the inline message.
+
+- **The page computes `checks`**, a memo over what they read: what is wrong with the draft now, by
+  field key, in the form's order (`name`, `connectionId`, `config.<field>`, `columns`). A required
+  name or store must be non-empty (`nameCheck`). That is the write schema's `min(1)`, so there is no
+  trim. Config fields report only what `readConfigDraft` would refuse (`configDraftErrors`): a
+  number that is not one, JSON that does not parse. A kind's own schema rules stay advisory,
+  because the form must never refuse what the server accepts.
+- **The page names its fields** with `labelOf(key)`, which returns `undefined` for a key the form
+  does not show now. This changes with the kind and the JSON view; `configKeyLabel` names the config
+  keys. The summary uses these names, and a refusal's issue is filed under a field only if
+  `labelOf` names it.
+- **What is shown is narrower.** A check is shown once the field is left *after an edit*, or after
+  Save is pressed. Tabbing past an untouched field shows nothing, and typing never raises an error.
+  A fix shows at once: the error goes the moment the value is fine, and a new problem in the same
+  field waits for the next blur. A field that leaves the form takes its error with it.
+- **The error sits in a reserved slot under the field** (`FieldError`, `.field-error-slot`), so it
+  does not push the fields below down. `fieldAttrs` gives the control:
+  - its key (`data-field`);
+  - an invalid mark (`data-invalid`, plus `aria-invalid`, except on a row list's `group`, where ARIA
+    does not allow it);
+  - `aria-describedby` with the error first, then the hint.
+
+  The line has no live role.
+- **A refused Save shows a summary and focuses the first invalid field**, after the errors are on
+  screen. The summary lists every invalid field as a button ("Timeout (ms): must be a number") that
+  takes focus to the field, opening a collapsed section on the way. It lives in the **footer**, not
+  at the top as #1396 first sketched: the body scrolls, and the footer is where Save was pressed.
+  Together with any plain message it is the form's **one** `role="alert"` (`FormErrors`). It updates
+  as fields are fixed, and goes when the last one is. Its height is capped, so it never squeezes the
+  body.
+- **A refusal from elsewhere lands on fields too.** The write schema's issues before sending
+  (`schemaRefusal`) and a 400's `issues` from the server (`saveRefusal`) are filed under the field
+  their path names. That is the longest prefix that is a field key, so a row cell's issue marks its
+  row list and keeps the rest of its path ("2.key: duplicate key"). Two issues on one field are both
+  shown. Whatever names no field is worded as before, in the footer. Such an error stays until that
+  field is edited, the next Save, or the field leaving the form, because the client cannot judge it
+  again.
+- **Test connection checks the config only** (`attempt` with a scope). It shows the summary for
+  those fields, and leaves the rest of the form as it was: it does not arm an untouched Name, nor
+  clear a refusal on it.
+- **Fields join by carrying `data-field="<key>"`**, a row list on its group. The form's own change
+  and blur handlers find the key, so a field needs no wiring of its own. Moving between the cells of
+  one row list is not leaving it. `ConfigFieldControl` takes a `validation` prop and `ConfigEditor`
+  an `errorFor`; the canvas passes neither and renders as before.
+- The canvas's `DraftNumberField` uses the same `FieldError` with `role="alert"`, because there is no
+  summary on the canvas to announce it.
+
 ## Still to come under #1396
 
-- Inline validation on blur in a reserved slot, plus an error summary on submit that focuses the
-  first invalid field.
 - Typed number controls (min/max). Number fields stay text inputs today, for the reason given in
   `ConfigFieldControl`: a native number input reports a typo as empty, which would silently delete
   the setting.

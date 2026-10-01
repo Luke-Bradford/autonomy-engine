@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { FieldError } from '../../lib/form/FieldError';
 
 export type DraftNumberParse<V extends number | undefined> =
   { ok: true; value: V } | { ok: false; reason: string };
@@ -116,13 +117,7 @@ export function DraftNumberField<V extends number | undefined>({
           the hint, which moved them by the difference in height. The alert is
           only the populated line inside: an empty `role="alert"` would still
           be found by every page-wide alert query. */}
-      <div className="field-error-slot">
-        {error !== null && (
-          <p id={errorId} className="error" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
+      <FieldError id={errorId} message={error} role="alert" />
     </>
   );
 }

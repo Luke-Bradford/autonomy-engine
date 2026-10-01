@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { UnsavedChangesGuard } from './useUnsavedChangesGuard';
+import { focusFirstInvalid, type FieldValidation } from './fieldValidation';
 
 /** The first field a person can type into: read-only ones are skipped. */
 const FIRST_FIELD = 'input:not([readonly]), select, textarea:not([readonly])';
@@ -31,6 +32,7 @@ export function FormDrawer({
   busy = false,
   returnFocusTo,
   status,
+  validation,
   actions,
   children,
 }: {
@@ -53,6 +55,13 @@ export function FormDrawer({
   returnFocusTo?: RefObject<HTMLElement | null>;
   /** The form's error and result messages, shown in the footer above the actions. */
   status?: ReactNode;
+  /**
+   * The form's inline validation (`useFieldValidation`). With it the form
+   * checks its own fields (`noValidate`: the browser's "fill out this field"
+   * bubble would pre-empt the inline message), its edits and blurs are seen,
+   * and a refused submit moves focus to the first invalid field.
+   */
+  validation?: FieldValidation;
   /** Footer buttons, secondary first and the primary (submit) LAST. */
   actions: ReactNode;
   children: ReactNode;
@@ -86,6 +95,13 @@ export function FormDrawer({
     wasConfirming.current = guard.confirming;
   }, [guard.confirming]);
 
+  // After the errors are on screen, not when they were raised: focusing first
+  // would read the field to assistive tech without its error.
+  const focusRequest = validation?.focusRequest ?? 0;
+  useEffect(() => {
+    if (focusRequest > 0 && bodyRef.current !== null) focusFirstInvalid(bodyRef.current);
+  }, [focusRequest]);
+
   return (
     <div
       className="form-drawer"
@@ -109,7 +125,13 @@ export function FormDrawer({
           ✕
         </button>
       </div>
-      <form className={className} aria-label={formLabel} onSubmit={onSubmit}>
+      <form
+        className={className}
+        aria-label={formLabel}
+        onSubmit={onSubmit}
+        noValidate={validation !== undefined}
+        {...validation?.formHandlers}
+      >
         <div className="form-drawer-body" ref={bodyRef}>
           {children}
         </div>
