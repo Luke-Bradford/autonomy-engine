@@ -142,13 +142,11 @@ for l in lines[start + 1:]:
         break
     section.append(l)
 text = "\n".join(section)
-m = re.search(r"\*\*\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\s*\*\*", text, re.I)
-token = m.group(1).upper() if m else None
-if token is None:
-    # Unbolded only counts as the FIRST thing in the section ("APPROVE -- fine"); a bare word
-    # later in prose ("Cannot APPROVE until X") must never read as a verdict (review WARNING).
-    lead = re.match(r"\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\b", text, re.I)
-    token = lead.group(1).upper() if lead else None
+# The verdict token must be the FIRST thing in the Verdict text, bold or not ("**APPROVE** -- x",
+# "APPROVE -- x"). Anywhere later in prose ("Cannot **APPROVE** until X", "not APPROVE") it is
+# not a verdict and yields none (review WARNINGs, rounds 1 and 2: fail closed, never open).
+lead = re.match(r"\s*\**\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\b", text, re.I)
+token = lead.group(1).upper() if lead else None
 print({"APPROVE": "approve", "REQUEST CHANGES": "block"}.get(token, "none"))
 '
 }

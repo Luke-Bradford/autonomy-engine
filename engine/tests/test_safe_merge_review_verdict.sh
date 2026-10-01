@@ -38,6 +38,10 @@ check "the LAST marker wins over an earlier one" "block" \
 check "unbolded 'Cannot APPROVE until X' in the Verdict -> none (no fail-open)" "none" \
   "$(v '### Verdict\nCannot APPROVE until the migration is fixed.')"
 check "unbolded 'not APPROVE' in an inline Verdict -> none" "none" "$(v 'Verdict: not APPROVE yet.')"
+check "bold 'Cannot **APPROVE** until X' mid-prose -> none (no fail-open)" "none" \
+  "$(v '### Verdict\nCannot **APPROVE** until X is fixed.')"
+check "inline 'Verdict: not **APPROVE**' -> none" "none" "$(v 'Verdict: not **APPROVE**')"
+check "'**Verdict:** **APPROVE**' -> approve" "approve" "$(v '**Verdict:** **APPROVE** — fine.')"
 check "unbolded APPROVE in Verdict -> approve" "approve" "$(v '### Verdict\nAPPROVE — fine.')"
 check "'not APPROVE' prose outside Verdict, Verdict REQUEST CHANGES -> block" "block" \
   "$(v 'This is not APPROVE material.\n### Verdict\n**REQUEST CHANGES**')"
