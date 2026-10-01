@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef } from 'react';
 import { FieldError } from '../../lib/form/FieldError';
-import { editorFields, type FieldSlots } from './editorFields';
+import { editorFields, type RowFieldSlots } from './editorFields';
 import type { TriggerMode } from '@autonomy-studio/shared';
 import { useRowKeys } from '../../hooks/useRowKeys';
 import { WEEK_DAY_NAMES } from './recurrenceForm';
@@ -29,6 +29,19 @@ const UNGATED_REASON: Partial<Record<TriggerMode, string>> = {
     'a tumbling window fires on data completeness, so suppressing it would LOSE the window rather than delay it',
   continuous: 'this mode has no automatic dispatcher yet, so nothing consults a run window',
 };
+
+/**
+ * #1396 — where a run-window field's state goes when row `removed` is removed:
+ * that row's is dropped, and each later row's moves up a place with its row
+ * (`runWindows.2.end` → `runWindows.1.end`). Any other key stays.
+ */
+function afterRemoval(key: string, removed: number): string | null {
+  const match = /^runWindows\.(\d+)\.(.+)$/.exec(key);
+  if (match === null) return key;
+  const index = Number(match[1]);
+  if (index < removed) return key;
+  return index === removed ? null : `runWindows.${index - 1}.${match[2]}`;
+}
 
 /**
  * #1090 U14c — the run-window editor.
@@ -62,10 +75,17 @@ export function RunWindowsEditor({
   value: RunWindowsFormState;
   onChange: (next: RunWindowsFormState) => void;
   mode: TriggerMode;
-  /** #1396 — the trigger form's validation: the whole list is its `runWindows` field. */
-  validation: FieldSlots;
+  /**
+   * #1396 — the trigger form's validation. Each row's controls are fields keyed
+   * by their write path (`runWindows.1.end`), so a refusal sits beside the
+   * faulty row; the list itself (`runWindows`) holds only an issue no row owns.
+   */
+  validation: RowFieldSlots;
 }) {
-  const f = editorFields(validation, useId());
+  const base = useId();
+  const f = editorFields(validation, base);
+  const rowField = editorFields(validation, base, 'runWindows');
+  const { rekey } = validation;
   const { keys, removeAt, insertAt } = useRowKeys(value.rows.length);
 
   /**
@@ -121,10 +141,14 @@ export function RunWindowsEditor({
       const next = keys[index + 1] ?? keys[index - 1] ?? null;
       pendingFocus.current = next;
       delete removeButtons.current[keys[index] ?? ''];
+      // #1396 — the rows after this one move up a place, and their index-keyed
+      // field state moves with them, so a refusal held for window 3 stays beside
+      // that window, now window 2, instead of passing to another row.
+      rekey((key) => afterRemoval(key, index));
       removeAt(index);
       onChange({ ...value, rows: value.rows.filter((_, i) => i !== index) });
     },
-    [keys, removeAt, onChange, value],
+    [keys, removeAt, onChange, value, rekey],
   );
 
   const setRow = (index: number, patch: Partial<RunWindowRow>) => {
@@ -213,8 +237,10 @@ export function RunWindowsEditor({
               onChange={(e) => setRow(index, { start: e.target.value })}
               placeholder="HH:MM"
               spellCheck={false}
+              {...rowField.attrs(`${index}.start`)}
             />
           </label>
+          <FieldError {...rowField.errorProps(`${index}.start`)} />
           <label>
             {`Window ${index + 1} end`}
             <input
@@ -223,8 +249,10 @@ export function RunWindowsEditor({
               onChange={(e) => setRow(index, { end: e.target.value })}
               placeholder="HH:MM"
               spellCheck={false}
+              {...rowField.attrs(`${index}.end`)}
             />
           </label>
+          <FieldError {...rowField.errorProps(`${index}.end`)} />
 
           {(isUnreadableBound(row.start) || isUnreadableBound(row.end)) && (
             <p className="page-hint">
@@ -249,19 +277,22 @@ export function RunWindowsEditor({
           </label>
 
           {row.daysRestricted && (
-            <fieldset className="recurrence-days">
-              <legend>{`Window ${index + 1} days (UTC)`}</legend>
-              {WEEK_DAY_NAMES.map((name, day) => (
-                <label key={name} className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={row.days.includes(day)}
-                    onChange={(e) => toggleDay(index, day, e.target.checked)}
-                  />
-                  {name}
-                </label>
-              ))}
-            </fieldset>
+            <>
+              <fieldset className="recurrence-days" {...rowField.groupAttrs(`${index}.days`)}>
+                <legend>{`Window ${index + 1} days (UTC)`}</legend>
+                {WEEK_DAY_NAMES.map((name, day) => (
+                  <label key={name} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={row.days.includes(day)}
+                      onChange={(e) => toggleDay(index, day, e.target.checked)}
+                    />
+                    {name}
+                  </label>
+                ))}
+              </fieldset>
+              <FieldError {...rowField.errorProps(`${index}.days`)} />
+            </>
           )}
 
           {row.daysRestricted && row.days.length === 0 && (

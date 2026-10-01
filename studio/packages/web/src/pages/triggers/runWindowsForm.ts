@@ -5,6 +5,7 @@ import {
   type RunWindow,
 } from '@autonomy-studio/shared';
 import { z } from 'zod';
+import { refuseSchema, type Refusal } from './formFields';
 
 /**
  * #1090 U14c — the PURE half of the run-window editor: converting between the
@@ -69,8 +70,26 @@ export function blankRunWindowsForm(): RunWindowsFormState {
   return { restricted: false, rows: [] };
 }
 
+/**
+ * #1396 — a row control's path below `runWindows`: `1.start`, `1.end`, and
+ * `1.days` while that row is restricted to days. The write path, so a server
+ * refusal at `runWindows.1.end` and the form's own check key one control.
+ */
+export type RunWindowField = `${number}.${'start' | 'end' | 'days'}`;
+
+/** The row controls on screen for `form`, each with what the error summary calls it. */
+export function runWindowFields(
+  form: RunWindowsFormState,
+): Array<{ field: RunWindowField; label: string }> {
+  return form.rows.flatMap((row, i) =>
+    (row.daysRestricted ? (['start', 'end', 'days'] as const) : (['start', 'end'] as const)).map(
+      (part) => ({ field: `${i}.${part}` as const, label: `Window ${i + 1} ${part}` }),
+    ),
+  );
+}
+
 export type RunWindowsConversion =
-  { ok: true; runWindows: RunWindow[] | null } | { ok: false; reason: string };
+  { ok: true; runWindows: RunWindow[] | null } | Refusal<RunWindowField>;
 
 /** The whole-array write shape. Built once here so the client validates the
  * array exactly as `NewTriggerSchema.runWindows` does. */
@@ -109,7 +128,15 @@ export function formToRunWindows(form: RunWindowsFormState): RunWindowsConversio
   }));
 
   const parsed = RunWindowsWriteSchema.safeParse(candidates);
-  if (!parsed.success) return { ok: false, reason: labelRowPaths(parsed.error.issues) };
+  if (!parsed.success) {
+    // `reason` keeps the on-screen numbering ("window 2.start") for the footer;
+    // `fields` sorts each issue onto the row control that authors its path.
+    return refuseSchema(
+      parsed.error.issues,
+      runWindowFields(form).map(({ field }) => field),
+      labelRowPaths(parsed.error.issues),
+    );
+  }
   return { ok: true, runWindows: parsed.data };
 }
 

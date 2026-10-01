@@ -221,11 +221,12 @@ export function refuseAt<F extends string>(
 export function refuseSchema<F extends string>(
   issues: ReadonlyArray<z.core.$ZodIssue>,
   fields: ReadonlyArray<F>,
+  reason = formatZodIssues(issues),
 ): Refusal<F> {
   const split = splitIssues(issues, (key) => (fields as ReadonlyArray<string>).includes(key));
   return {
     ok: false,
-    reason: formatZodIssues(issues),
+    reason,
     fields: split.fields as Partial<Record<F, string>>,
   };
 }
