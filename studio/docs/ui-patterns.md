@@ -257,7 +257,41 @@ message.
   change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
   to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.
 
+## Typing JSON
+
+Every box for typing JSON uses `JsonEditor` (`lib/form/JsonEditor.tsx`). That covers Config
+(JSON), a node setting of kind JSON, dataset Columns, trigger Params, call Parameters, a JSON run
+parameter and a callback body. Two one-line inputs stay inputs: Global params' Value and a
+pipeline parameter's default. Their refusals still say where the mistake is (below).
+
+- **It is a native `<textarea>`.** The label pairs by `htmlFor`, and `aria-invalid` and `FieldError`
+  attach as on any field. Tab leaves the box, and undo is the browser's.
+- **It has a code face:** monospace, unwrapped (long lines scroll), left-to-right, with spelling and
+  autocorrect off.
+- **Format JSON** lays the text out as `JSON.stringify(value, null, 2)` would.
+  - It moves only whitespace (`formatJsonText`), so a value is never changed: an integer past 2^53,
+    `1E+2`, an escape and a duplicate key all stay as typed.
+  - A form seeded with that layout stays unedited when Format is pressed.
+  - The new text goes in through `insertText`, so Undo brings the old text back.
+  - On text that is not JSON, Format changes nothing. It selects the mistake and shows "Not JSON
+    at line 2, column 7: expected ':'" beside the button. The slot is always there and one line
+    tall, so nothing moves. It is a polite live region and part of the box's description, and it
+    clears as soon as the text changes.
+  - Text a trimming form would accept (a no-break space or BOM around pasted JSON) is laid out as
+    that form reads it.
+  - The button is named "Format JSON" everywhere, so no field's `getByLabel` matches it.
+    `aria-description` says which field it formats.
+- **A refusal says where the mistake is:** `not valid JSON (line 2, column 7: expected ':')`. The
+  forms use `notValidJson` or `describeJsonProblem` from `lib/json/jsonText.ts`, not `JSON.parse`'s
+  message, because that message gives a position in some browsers and not in others.
+  - Columns count characters, not UTF-16 units.
+  - Where a form trims before parsing, the place is given in the text as shown.
+- **Why not CodeMirror or Monaco.** Either would be a third-party dependency, with no version-check
+  home until #1418 (OR25). Either would also replace the native box that the labels, the form
+  validation and the e2e suite rely on. There is no line-number gutter: a textarea cannot align one
+  reliably under zoom or with a horizontal scrollbar. Format selecting the mistake does that job.
+
 ## Still to come under #1396
 
-- A JSON code editor, and a two-column grid on wide screens.
+- A two-column grid on wide screens.
 - Axe gates on every form (shared with OR24, #1415).

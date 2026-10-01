@@ -11,6 +11,7 @@ import type {
 import { messageOf } from '../../api/client';
 import { debugPipelineDraft, runPipelineVersion } from '../../api/pipelines';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { JsonEditor } from '../../lib/form/JsonEditor';
 import { buildRunNowParams, runNowRows } from './runNowRules';
 
 /**
@@ -231,7 +232,7 @@ function ParamValueInput({
   }
   if (param.type === 'json') {
     return (
-      <textarea {...common} rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
+      <JsonEditor {...common} label={param.name} rows={3} value={value} onValueChange={onChange} />
     );
   }
   return (

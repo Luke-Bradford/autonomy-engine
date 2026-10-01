@@ -22,6 +22,7 @@ import type { createCanvasStore } from './canvasStore';
 import type { FieldPicker } from './ConfigFieldControl';
 import { PickableInput } from './PickableInput';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { JsonEditor } from '../../lib/form/JsonEditor';
 
 /**
  * #425 — the call-node editor: the authoring surface for `Node.call`.
@@ -445,10 +446,11 @@ function CallEditor({
         <LabelledControl label="Parameters (JSON object)">
           {(id) => (
             <>
-              <textarea
+              <JsonEditor
                 id={id}
+                label="Parameters (JSON object)"
                 value={draft.paramsJson}
-                onChange={(e) => setDraft((d) => ({ ...d, paramsJson: e.target.value }))}
+                onValueChange={(paramsJson) => setDraft((d) => ({ ...d, paramsJson }))}
                 rows={4}
                 placeholder="{}"
                 aria-describedby={`${id}-hint`}

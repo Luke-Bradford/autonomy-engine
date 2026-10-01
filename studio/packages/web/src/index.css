@@ -1736,6 +1736,60 @@ button.danger {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
+/* #1396 — `JsonEditor`, the one control for typing JSON. Two classes so the
+   box wins over the forms' own `.connection-form textarea`-style rules, and
+   carries its chrome where no form styles it (a Run now JSON parameter).
+   Unwrapped: a line of JSON is a line on screen, and long ones scroll. */
+.json-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.json-editor > .json-editor-input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
+
+/* The tools row is always one line tall, so a problem appearing beside Format
+   does not move the form below it (#1393). */
+.json-editor-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 1.9rem;
+}
+
+.json-editor-format {
+  flex: none;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.json-editor-problem {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--error);
+  font-size: 0.8rem;
+}
+
 /* React Flow needs a parent with a resolved height — but DEFINITE is not the
    same as CONSTANT, which is what the old `--canvas-height: 620px` literal
    conflated.

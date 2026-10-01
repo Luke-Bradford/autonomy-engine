@@ -8,6 +8,7 @@ import {
   type VariableDef,
   type VariableType,
 } from '@autonomy-studio/shared';
+import { notValidJson } from '../../lib/json/jsonText';
 
 /**
  * The pure rules behind the pipeline-level params/outputs editor (U16).
@@ -312,7 +313,7 @@ export function coerceDefaultInput(type: ParamType, raw: string): DefaultParse {
       try {
         return { ok: true, has: true, value: JSON.parse(text) as unknown };
       } catch {
-        return { ok: false, error: 'expected valid JSON' };
+        return { ok: false, error: notValidJson(text, raw) };
       }
     case 'secret':
       if (!SECRET_LABEL.test(text))

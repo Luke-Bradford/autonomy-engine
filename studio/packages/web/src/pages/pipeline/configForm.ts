@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { describeJsonProblem, notValidJson } from '../../lib/json/jsonText';
 import {
   enumValuesOf,
   SecretRefSchema,
@@ -1164,7 +1165,7 @@ export function parseFieldInput(field: ConfigField, raw: FieldInput): FieldParse
       try {
         return { ok: true, omit: false, value: JSON.parse(raw) };
       } catch {
-        return { ok: false, message: 'is not valid JSON' };
+        return { ok: false, message: notValidJson(raw) };
       }
     // No `boolean`, `objectList` or `keyValue` case: the guards above return for them, and
     // the compiler proves this switch is exhaustive without them.
@@ -1262,10 +1263,10 @@ export function parseConfigText(
       return { ok: false, message: 'Invalid config JSON: config must be a JSON object' };
     }
     return { ok: true, config: raw as Record<string, unknown> };
-  } catch (err) {
+  } catch {
     return {
       ok: false,
-      message: `Invalid config JSON: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Invalid config JSON: ${describeJsonProblem(text) ?? 'not valid JSON'}`,
     };
   }
 }

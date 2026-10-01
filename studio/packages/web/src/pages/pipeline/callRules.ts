@@ -2,6 +2,7 @@ import { interpolationMode, type CallConfig, type Node, type Param } from '@auto
 import type { PickerTarget } from './ConfigFieldControl';
 import { listAllPipelineVersions } from '../../api/pipelines';
 import { coerceDefaultInput, formatDefaultInput } from './paramRules';
+import { notValidJson } from '../../lib/json/jsonText';
 
 /**
  * #425 — the call-node editor's pure half: its read model and its two write
@@ -255,7 +256,7 @@ export function parseJsonParams(raw: string): ParamsParse {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { ok: false, error: 'Parameters: expected valid JSON.' };
+    return { ok: false, error: `Parameters: ${notValidJson(text, raw)}.` };
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { ok: false, error: 'Parameters: expected a JSON object.' };

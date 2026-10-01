@@ -4,6 +4,7 @@ import { emptyControlValue } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { FieldError } from '../../lib/form/FieldError';
+import { JsonEditor } from '../../lib/form/JsonEditor';
 import { fieldAttrs } from '../../lib/form/fieldValidation';
 
 /**
@@ -75,12 +76,12 @@ export function ConfigEditor<K extends string>({
         <LabelledControl label="Config (JSON)">
           {(id) => (
             <>
-              <textarea
+              <JsonEditor
                 id={id}
+                label="Config (JSON)"
                 value={editor.jsonText}
-                onChange={(e) => editor.setJsonText(e.target.value)}
+                onValueChange={editor.setJsonText}
                 rows={rows}
-                spellCheck={false}
                 {...(errorFor === undefined
                   ? {}
                   : fieldAttrs({ key: 'config', error: jsonError, errorId: jsonErrorId }))}

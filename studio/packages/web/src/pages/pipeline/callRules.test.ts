@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Param } from '@autonomy-studio/shared';
-import { buildParams, rowsFrom, sameSeed, storedBlankKeys, type Seed } from './callRules';
+import {
+  buildParams,
+  parseJsonParams,
+  rowsFrom,
+  sameSeed,
+  storedBlankKeys,
+  type Seed,
+} from './callRules';
 
 /**
  * #425 — the call editor's pure half, tested directly, on the
@@ -136,5 +143,14 @@ describe('sameSeed', () => {
     expect(sameSeed(SEED, { ...SEED, paramsJson: '{}' })).toBe(false);
     expect(sameSeed(SEED, { ...SEED, params: { query: 'boats' } })).toBe(false);
     expect(sameSeed(SEED, { ...SEED, params: { query: 'ships', extra: '' } })).toBe(false);
+  });
+});
+
+describe('parseJsonParams (#1396)', () => {
+  it('says where the mistake is in the text as typed, though it parses the text trimmed', () => {
+    expect(parseJsonParams('\n  {"a" 1}')).toEqual({
+      ok: false,
+      error: "Parameters: not valid JSON (line 2, column 8: expected ':').",
+    });
   });
 });

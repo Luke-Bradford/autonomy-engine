@@ -84,6 +84,8 @@ import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
+import { JsonEditor } from '../lib/form/JsonEditor';
+import { notValidJson } from '../lib/json/jsonText';
 import { FormErrors } from '../lib/form/FormErrors';
 import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
@@ -766,10 +768,10 @@ function parseParamsText(
       return { ok: false, message: 'must be a JSON object, e.g. {"day": "2026-10-01"}' };
     }
     return { ok: true, params: raw as Record<string, unknown> };
-  } catch (err) {
+  } catch {
     return {
       ok: false,
-      message: `not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+      message: notValidJson(text),
     };
   }
 }
@@ -1548,12 +1550,12 @@ function TriggerForm({
       <FormSection title="Parameters">
         <LabelledControl label="Params (JSON)">
           {(id) => (
-            <textarea
+            <JsonEditor
               id={id}
+              label="Params (JSON)"
               value={form.paramsText}
-              onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
+              onValueChange={(paramsText) => onChange({ ...form, paramsText })}
               rows={4}
-              spellCheck={false}
               {...validation.attrsFor('params', paramsErrorId)}
             />
           )}

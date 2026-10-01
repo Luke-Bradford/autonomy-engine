@@ -55,6 +55,8 @@ import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
+import { JsonEditor } from '../lib/form/JsonEditor';
+import { describeJsonProblem } from '../lib/json/jsonText';
 import { FormErrors } from '../lib/form/FormErrors';
 import { nameCheck, useFieldValidation } from '../lib/form/fieldValidation';
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
@@ -187,10 +189,10 @@ function parseColumnsText(
   let raw: unknown;
   try {
     raw = JSON.parse(text);
-  } catch (err) {
+  } catch {
     return {
       ok: false,
-      message: `Invalid columns JSON: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Invalid columns JSON: ${describeJsonProblem(text) ?? 'not valid JSON'}`,
     };
   }
   const parsed = ColumnsSchema.safeParse(raw);
@@ -971,12 +973,12 @@ function DatasetForm({
           }
         >
           {(id) => (
-            <textarea
+            <JsonEditor
               id={id}
+              label="Columns (JSON)"
               value={form.columnsText}
-              onChange={(e) => onChange({ ...form, columnsText: e.target.value })}
+              onValueChange={(columnsText) => onChange({ ...form, columnsText })}
               rows={6}
-              spellCheck={false}
               aria-required
               placeholder='[{ "name": "id", "type": "integer", "nullable": false }]'
               {...validation.attrsFor('columns', columnsErrorId)}
