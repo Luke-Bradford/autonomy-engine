@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, within } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { HTTP_REQUEST_ACTIVITY_TYPE, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
@@ -30,12 +30,12 @@ function activityDrag(type: string, protectedMode = false): DataTransfer {
   return dataTransfer({ [ACTIVITY_DND_MIME]: type }, protectedMode);
 }
 
-function mountCanvas() {
+function mountCanvas(onNotice?: (message: string) => void) {
   const store = createCanvasStore();
   store.getState().loadVersion(null);
   const { container } = render(
     <ReactFlowProvider>
-      <FlowCanvas store={store} />
+      <FlowCanvas store={store} {...(onNotice === undefined ? {} : { onNotice })} />
     </ReactFlowProvider>,
   );
   const surface = container.querySelector('.react-flow__pane');
@@ -201,6 +201,26 @@ describe('FlowCanvas empty-canvas guide (#1413 OR22)', () => {
     expect(store.getState().nodes.map((n) => n.type)).toEqual(['file_list', 'filter', 'copy']);
     expect(store.getState().containers).toHaveLength(1);
     expect(guide(container)).toBeNull();
+  });
+
+  /**
+   * #1452 — the button that held focus unmounts with the guide. Focus lands on
+   * the first inserted activity, not `<body>`, and the insert is said aloud.
+   */
+  it('a template click moves focus to the first activity, and says what it added', async () => {
+    const said: string[] = [];
+    const { store, container } = mountCanvas((m) => said.push(m));
+    fireEvent.click(within(guide(container) as HTMLElement).getAllByRole('button')[0]!);
+    const first = store.getState().nodes[0]!.id;
+    await waitFor(() =>
+      expect((document.activeElement as HTMLElement | null)?.dataset.id).toBe(first),
+    );
+    expect(document.activeElement).toHaveClass('react-flow__node');
+    expect(said).toEqual([
+      'Added Load every CSV in a folder into a table: 3 activities and 1 container.',
+    ]);
+    // Focus is not selection: the template still arrives with nothing selected.
+    expect(store.getState().selected).toEqual([]);
   });
 
   it('a drop on the guide still authors a node — it is not canvas chrome', () => {

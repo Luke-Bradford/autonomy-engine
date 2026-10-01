@@ -1562,6 +1562,7 @@ export function PipelineCanvas({
                       fitSignal={fitSignal}
                       measuredSizesRef={measuredSizesRef}
                       datasets={datasets}
+                      onNotice={showCanvasMsg}
                     />
                   </ReactFlowProvider>
                 </div>

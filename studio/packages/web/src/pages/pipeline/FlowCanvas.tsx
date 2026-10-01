@@ -567,6 +567,7 @@ export function FlowCanvas({
   fitSignal = 0,
   measuredSizesRef,
   datasets = NO_DATASETS,
+  onNotice,
 }: {
   store: StoreApi<CanvasState>;
   /**
@@ -602,6 +603,8 @@ export function FlowCanvas({
   measuredSizesRef?: MutableRefObject<MeasuredSizes>;
   /** #1394 OR3 — the workspace's datasets, so a Copy Data card names its ends. */
   datasets?: readonly Dataset[];
+  /** #1452 — the page's `role="status"` notice, for what an insert added. */
+  onNotice?: (message: string) => void;
 }) {
   const nodes = useStore(store, (s) => s.nodes);
   const datasetName = useMemo(() => datasetNameLookup(datasets), [datasets]);
@@ -1520,12 +1523,54 @@ export function FlowCanvas({
     void fitView(FIT_VIEW_OPTIONS);
   }, [fitRequests, fitView]);
 
+  /**
+   * #1452 — the template button that held focus unmounts with the guide, so
+   * without this focus falls to `<body>`. It lands on the first inserted
+   * activity instead: React Flow nodes are focusable, and that is where the
+   * operator's next act (bind a dataset) starts.
+   *
+   * Retried per frame, because React Flow keeps a node `visibility: hidden`
+   * until it is measured and a hidden element refuses focus. Bounded, and it
+   * gives up the moment focus is somewhere other than `<body>` — the operator
+   * has already moved it, and taking it back would be a theft.
+   */
+  const [focusAfterInsert, setFocusAfterInsert] = useState<string | null>(null);
+  useEffect(() => {
+    if (focusAfterInsert === null) return;
+    let frames = 0;
+    let handle = 0;
+    const attempt = () => {
+      const active = document.activeElement;
+      const target = Array.from(
+        reactFlowStore.getState().domNode?.querySelectorAll<HTMLElement>('.react-flow__node') ??
+          [],
+      ).find((el) => el.dataset.id === focusAfterInsert);
+      if (target !== undefined && active === document.body) {
+        // `preventScroll`: the pane is `overflow: hidden`, and a browser
+        // scrolling it to reveal the node would shift the canvas off its viewport.
+        target.focus({ preventScroll: true });
+      }
+      const settled = target !== undefined && document.activeElement === target;
+      const moved = active !== null && active !== document.body && active !== target;
+      if (settled || moved || ++frames >= FOCUS_AFTER_INSERT_FRAMES) {
+        setFocusAfterInsert(null);
+        return;
+      }
+      handle = requestAnimationFrame(attempt);
+    };
+    attempt();
+    return () => cancelAnimationFrame(handle);
+  }, [focusAfterInsert, reactFlowStore]);
+
   const insertTemplate = useCallback(
     (template: StarterTemplate) => {
-      store.getState().insertTemplate(template);
+      const added = store.getState().insertTemplate(template);
       setTemplateFits((n) => n + 1);
+      if (added.length === 0) return;
+      setFocusAfterInsert(added[0]!);
+      onNotice?.(templateNotice(template));
     },
-    [store],
+    [store, onNotice],
   );
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
@@ -2596,6 +2641,19 @@ export function FlowCanvas({
  * Absolutely positioned over the pane, so it never shifts the layout (#1393)
  * and it unmounts the moment the canvas holds anything, an empty box included.
  */
+/** #1452 — about one second at 60fps: ample for React Flow to measure a node. */
+const FOCUS_AFTER_INSERT_FRAMES = 60;
+
+/** #1452 — "Added Load every CSV…: 3 activities and 1 container." */
+function templateNotice(template: StarterTemplate): string {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts = [plural(template.nodes.length, 'activity', 'activities')];
+  if (template.containers.length > 0) {
+    parts.push(plural(template.containers.length, 'container', 'containers'));
+  }
+  return `Added ${template.title}: ${parts.join(' and ')}.`;
+}
+
 function EmptyCanvasGuide({ onInsert }: { onInsert: (template: StarterTemplate) => void }) {
   const idPrefix = useId();
   return (
