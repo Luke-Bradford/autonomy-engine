@@ -173,8 +173,13 @@ test.describe('U7 — per-activity node config form', () => {
             title: legend.textContent,
             fieldsetBorder: getComputedStyle(el).borderTopWidth,
             ruled: getComputedStyle(legend).borderTopWidth,
+            // Asked only of a ruled heading: an unruled one may be its text's width.
             ruleSpansSection:
-              Math.abs(legend.getBoundingClientRect().width - el.getBoundingClientRect().width) < 1,
+              getComputedStyle(legend).borderTopWidth === '0px'
+                ? null
+                : Math.abs(
+                    legend.getBoundingClientRect().width - el.getBoundingClientRect().width,
+                  ) < 1,
             gap: getComputedStyle(el.querySelector('.form-section-body')!).rowGap,
           };
         }),
@@ -189,7 +194,7 @@ test.describe('U7 — per-activity node config form', () => {
         title: 'Bindings',
         fieldsetBorder: '0px',
         ruled: '0px',
-        ruleSpansSection: true,
+        ruleSpansSection: null,
         gap: panelGap,
       },
       {
