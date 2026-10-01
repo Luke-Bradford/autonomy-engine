@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
+  CONCURRENCY_POLICY_LABELS,
   ConcurrencyPolicySchema,
+  TRIGGER_MODE_LABELS,
   TriggerModeSchema,
   formatZodIssues,
   type ConcurrencyPolicy,
@@ -74,6 +76,11 @@ import {
   type TriggerWrite,
 } from '../api/triggers';
 import { LabelledControl } from '../lib/LabelledControl';
+import { FormDrawer } from '../lib/form/FormDrawer';
+import { FormSection } from '../lib/form/FormSection';
+import { RequiredMark } from '../lib/form/RequiredMark';
+import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
+import { payloadSignature } from './pipeline/configForm';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -140,6 +147,36 @@ type FormState = {
 function withMode(form: FormState, mode: TriggerMode): FormState {
   if (mode !== 'tumbling') return { ...form, mode };
   return { ...form, mode, concurrencyPolicy: 'queue', concurrencyMax: '' };
+}
+
+/**
+ * #1396 — what Save would write, for the unsaved-changes guard. Only the
+ * ACTIVE mode's config counts: Save sends every other mode's as `null`, so
+ * typing an event name and then switching to manual changes nothing Save would
+ * write, and is not an unsaved change.
+ */
+function savePayloadSignature(form: FormState): string {
+  const modeConfig =
+    form.mode === 'schedule'
+      ? form.scheduleKind === 'recurrence'
+        ? { recurrence: form.recurrence }
+        : { schedule: form.schedule }
+      : form.mode === 'event'
+        ? { event: form.event }
+        : form.mode === 'tumbling'
+          ? { window: form.window }
+          : null;
+  return payloadSignature([
+    form.name,
+    form.binding,
+    form.mode,
+    modeConfig,
+    form.concurrencyPolicy,
+    form.concurrencyPolicy === 'parallel' ? form.concurrencyMax : null,
+    form.enabled,
+    form.paramsText,
+    form.runWindows,
+  ]);
 }
 
 function blankForm(): FormState {
@@ -243,7 +280,16 @@ export function TriggersPage() {
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState | null>(null);
+  const {
+    form,
+    setForm,
+    openForm,
+    seq: formSeq,
+    guard,
+    openerRef,
+    closeWhere,
+    ...drawer
+  } = useDrawerForm(savePayloadSignature);
   // Since #1247 this carries `onProvisionSecret`'s failure ONLY — a fire reports
   // through `fireOutcomes`, because a fire's outcome has to survive another
   // trigger being fired beside it and a single slot cannot do that.
@@ -345,12 +391,14 @@ export function TriggersPage() {
       if (!window.confirm(`Delete trigger "${t.name}"?`)) return;
       try {
         await deleteTrigger(t.id);
+        // A form open on the trigger just deleted would save to nothing.
+        closeWhere((open) => open.id === t.id);
         await refresh();
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refresh],
+    [refresh, closeWhere],
   );
 
   /**
@@ -482,7 +530,10 @@ export function TriggersPage() {
     <section aria-labelledby="triggers-heading">
       <div className="page-header">
         <h2 id="triggers-heading">Triggers</h2>
-        <button type="button" onClick={() => setForm(blankForm())}>
+        <button
+          type="button"
+          onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
+        >
           New trigger
         </button>
       </div>
@@ -567,34 +618,37 @@ export function TriggersPage() {
         </div>
       )}
 
-      {triggers === null && !loadError && <p>Loading triggers…</p>}
+      {/* #1396 — the list and the form side by side; the form is a column, not
+          an overlay, so the row actions stay reachable while it is open. */}
+      {guard.routeHold}
+      <div className={form ? 'drawer-layout-open' : undefined}>
+        <div>
+          {triggers === null && !loadError && <p>Loading triggers…</p>}
 
-      {triggers !== null && triggers.length === 0 && (
-        <p>No triggers yet. Create one to bind a pipeline version and fire it.</p>
-      )}
+          {triggers !== null && triggers.length === 0 && (
+            <p>No triggers yet. Create one to bind a pipeline version and fire it.</p>
+          )}
 
-      {triggers !== null && triggers.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Mode</th>
-              <th scope="col">Bound to</th>
-              <th scope="col">Enabled</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {triggers.map((t) => (
-              <tr key={t.id}>
-                <td>{t.name}</td>
-                <td>
-                  <code>{t.mode}</code>
-                </td>
-                <td>{labelFor(t.pipelineVersionId)}</td>
-                <td>{t.enabled ? 'yes' : 'no'}</td>
-                <td>
-                  {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
+          {triggers !== null && triggers.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Mode</th>
+                  <th scope="col">Bound to</th>
+                  <th scope="col">Enabled</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {triggers.map((t) => (
+                  <tr key={t.id}>
+                    <td>{t.name}</td>
+                    <td>{TRIGGER_MODE_LABELS[t.mode]}</td>
+                    <td>{labelFor(t.pipelineVersionId)}</td>
+                    <td>{t.enabled ? 'yes' : 'no'}</td>
+                    <td>
+                      {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
                       visible label deliberately does NOT flip to "Firing…". Verbatim
                       the rule `onExport` states earlier in this file: this button carries an
                       `aria-label` naming the row, so a visible string absent from that
@@ -608,67 +662,77 @@ export function TriggersPage() {
                       visible "Fire now" in half. Lead-then-detail is the shape `runLinkLabel`
                       and the Export button beside it already use, and it is the only one
                       that survives the check — hence the assertion in the spec. */}
-                  <button
-                    type="button"
-                    onClick={() => void onFire(t)}
-                    disabled={firing.has(t.id)}
-                    aria-busy={firing.has(t.id)}
-                    aria-label={`Fire now: ${t.name}`}
-                  >
-                    Fire now
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setForm(formForEdit(t))}
-                    aria-label={`Edit ${t.name}`}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onExport(t)}
-                    aria-label={`Export ${t.name}`}
-                    disabled={exporting.has(t.id)}
-                    aria-busy={exporting.has(t.id)}
-                  >
-                    Export
-                  </button>
-                  {t.mode === 'webhook' && (
-                    <button
-                      type="button"
-                      onClick={() => void onProvisionSecret(t)}
-                      aria-label={`Provision webhook secret for ${t.name}`}
-                    >
-                      Webhook secret
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(t)}
-                    aria-label={`Delete ${t.name}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+                      <button
+                        type="button"
+                        onClick={() => void onFire(t)}
+                        disabled={firing.has(t.id)}
+                        aria-busy={firing.has(t.id)}
+                        aria-label={`Fire now: ${t.name}`}
+                      >
+                        Fire now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) =>
+                          drawer.openFrom(e.currentTarget, () => openForm(formForEdit(t)))
+                        }
+                        aria-label={`Edit ${t.name}`}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onExport(t)}
+                        aria-label={`Export ${t.name}`}
+                        disabled={exporting.has(t.id)}
+                        aria-busy={exporting.has(t.id)}
+                      >
+                        Export
+                      </button>
+                      {t.mode === 'webhook' && (
+                        <button
+                          type="button"
+                          onClick={() => void onProvisionSecret(t)}
+                          aria-label={`Provision webhook secret for ${t.name}`}
+                        >
+                          Webhook secret
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void onDelete(t)}
+                        aria-label={`Delete ${t.name}`}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-      {form && (
-        <TriggerForm
-          form={form}
-          bindings={bindings}
-          pipelines={pipelines}
-          onChange={setForm}
-          onClose={() => setForm(null)}
-          onSaved={async () => {
-            setForm(null);
-            await refresh();
-          }}
-        />
-      )}
+        {form && (
+          <TriggerForm
+            /* Keyed on the open counter, so the error, the remembered version
+               and the publish reading of one draft never render against the
+               next (see `useDrawerForm`). */
+            key={formSeq}
+            form={form}
+            bindings={bindings}
+            pipelines={pipelines}
+            onChange={setForm}
+            guard={guard}
+            returnFocusTo={openerRef}
+            onClose={drawer.requestClose}
+            onSaved={async () => {
+              drawer.closeIfLatest(formSeq);
+              await refresh();
+            }}
+          />
+        )}
+      </div>
 
       {/* The import surface lives on the list an imported trigger lands in —
           but it takes ANY export envelope, because `POST /api/import` does (see
@@ -685,6 +749,8 @@ function TriggerForm({
   bindings,
   pipelines,
   onChange,
+  guard,
+  returnFocusTo,
   onClose,
   onSaved,
 }: {
@@ -692,6 +758,8 @@ function TriggerForm({
   bindings: BindingOption[];
   pipelines: PipelineOption[];
   onChange: (next: FormState) => void;
+  guard: UnsavedChangesGuard;
+  returnFocusTo: React.RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -968,328 +1036,353 @@ function TriggerForm({
   }
 
   return (
-    <form className="trigger-form" onSubmit={(e) => void onSubmit(e)} aria-label="Trigger form">
-      <h3>{editing ? 'Edit trigger' : 'New trigger'}</h3>
+    <FormDrawer
+      title={editing ? 'Edit trigger' : 'New trigger'}
+      formLabel="Trigger form"
+      className="trigger-form"
+      guard={guard}
+      onRequestClose={onClose}
+      onSubmit={(e) => void onSubmit(e)}
+      busy={saving}
+      returnFocusTo={returnFocusTo}
+      status={
+        error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )
+      }
+      actions={
+        <>
+          <button type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={saving}>
+            {saving ? 'Saving…' : editing ? 'Save changes' : 'Create trigger'}
+          </button>
+        </>
+      }
+    >
+      <FormSection title="Basics">
+        <label>
+          <span>
+            Name
+            <RequiredMark />
+          </span>
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
+            required
+          />
+        </label>
 
-      <label>
-        Name
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => onChange({ ...form, name: e.target.value })}
-          required
-        />
-      </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(e) => onChange({ ...form, enabled: e.target.checked })}
+          />
+          Enabled (fires on its schedule, event, window or webhook)
+        </label>
+      </FormSection>
 
-      {/* #981 — the binding, in the two shapes the CREATE endpoint accepts. The
+      <FormSection title="Pipeline">
+        {/* #981 — the binding, in the two shapes the CREATE endpoint accepts. The
           choice is a radio pair rather than a third sentinel option inside the
           version select, because the two branches pick different KINDS of thing
           (a version vs a pipeline) and the create body differs structurally.
           Editing shows only the version select: PATCH is concrete-only, so
           bind-to-active has nothing to mean on an existing trigger — it was
           resolved once, at creation, and the stored row is a concrete id. */}
-      {!editing && (
-        <fieldset className="binding-kind">
-          <legend>Binding</legend>
-          <label>
-            <input
-              type="radio"
-              name={bindingKindId}
-              checked={form.binding.kind !== 'active'}
-              // Switching back RESTORES the version that was picked before,
-              // rather than dropping to unbound. Toggling a radio to look at
-              // the other option is not an instruction to discard the choice
-              // already made, and the version select is long enough that
-              // re-finding an entry is real work.
-              onChange={() =>
-                onChange({
-                  ...form,
-                  binding:
-                    lastConcrete === null
-                      ? { kind: 'unbound' }
-                      : { kind: 'concrete', pipelineVersionId: lastConcrete },
-                })
-              }
-            />
-            A specific version
-          </label>
-          <label>
-            <input
-              type="radio"
-              name={bindingKindId}
-              checked={form.binding.kind === 'active'}
-              disabled={pipelines.length === 0}
-              onChange={() =>
-                onChange({
-                  ...form,
-                  binding: { kind: 'active', pipelineId: pipelines[0]?.pipelineId ?? '' },
-                })
-              }
-            />
-            The active published version
-          </label>
-        </fieldset>
-      )}
+        {!editing && (
+          <fieldset className="binding-kind">
+            <legend>Binding</legend>
+            <label>
+              <input
+                type="radio"
+                name={bindingKindId}
+                checked={form.binding.kind !== 'active'}
+                // Switching back RESTORES the version that was picked before,
+                // rather than dropping to unbound. Toggling a radio to look at
+                // the other option is not an instruction to discard the choice
+                // already made, and the version select is long enough that
+                // re-finding an entry is real work.
+                onChange={() =>
+                  onChange({
+                    ...form,
+                    binding:
+                      lastConcrete === null
+                        ? { kind: 'unbound' }
+                        : { kind: 'concrete', pipelineVersionId: lastConcrete },
+                  })
+                }
+              />
+              A specific version
+            </label>
+            <label>
+              <input
+                type="radio"
+                name={bindingKindId}
+                checked={form.binding.kind === 'active'}
+                disabled={pipelines.length === 0}
+                onChange={() =>
+                  onChange({
+                    ...form,
+                    binding: { kind: 'active', pipelineId: pipelines[0]?.pipelineId ?? '' },
+                  })
+                }
+              />
+              The active published version
+            </label>
+          </fieldset>
+        )}
 
-      {form.binding.kind === 'active' ? (
-        <LabelledControl label="Pipeline">
-          {(id) => (
-            <select
-              id={id}
-              // Re-narrowed: the render-prop is a closure, which the ternary's
-              // narrowing of `form.binding` does not reach.
-              value={form.binding.kind === 'active' ? form.binding.pipelineId : ''}
-              onChange={(e) =>
-                onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
-              }
-            >
-              {pipelines.map((p) => (
-                <option key={p.pipelineId} value={p.pipelineId}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </LabelledControl>
-      ) : (
-        <LabelledControl label="Pipeline version">
-          {(id) => (
-            <select
-              id={id}
-              value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
-              onChange={(e) => {
-                setLastConcrete(e.target.value === '' ? null : e.target.value);
-                onChange({
-                  ...form,
-                  binding:
-                    e.target.value === ''
-                      ? { kind: 'unbound' }
-                      : { kind: 'concrete', pipelineVersionId: e.target.value },
-                });
-              }}
-            >
-              <option value="">— unbound —</option>
-              {bindings.map((b) => (
-                <option key={b.value} value={b.value}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-          )}
-        </LabelledControl>
-      )}
+        {form.binding.kind === 'active' ? (
+          <LabelledControl label="Pipeline">
+            {(id) => (
+              <select
+                id={id}
+                // Re-narrowed: the render-prop is a closure, which the ternary's
+                // narrowing of `form.binding` does not reach.
+                value={form.binding.kind === 'active' ? form.binding.pipelineId : ''}
+                onChange={(e) =>
+                  onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
+                }
+              >
+                {pipelines.map((p) => (
+                  <option key={p.pipelineId} value={p.pipelineId}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
+        ) : (
+          <LabelledControl label="Pipeline version">
+            {(id) => (
+              <select
+                id={id}
+                value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
+                onChange={(e) => {
+                  setLastConcrete(e.target.value === '' ? null : e.target.value);
+                  onChange({
+                    ...form,
+                    binding:
+                      e.target.value === ''
+                        ? { kind: 'unbound' }
+                        : { kind: 'concrete', pipelineVersionId: e.target.value },
+                  });
+                }}
+              >
+                <option value="">— unbound —</option>
+                {bindings.map((b) => (
+                  <option key={b.value} value={b.value}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </LabelledControl>
+        )}
 
-      {advice && activePipeline && (
-        <p className="page-hint" role="status">
-          {advice.text}
-          {/* The way OUT is offered only by the state that needs one. Rendered
+        {advice && activePipeline && (
+          <p className="page-hint" role="status">
+            {advice.text}
+            {/* The way OUT is offered only by the state that needs one. Rendered
               unconditionally it told a DB-only workspace to publish — which this
               app's own gate refuses without a connected repo — and told anyone
               mid-read to act on a reading that had not arrived. `refusal` is the
               honest discriminator: it is non-null exactly when the read SUCCEEDED
               and said there is nothing to bind to. */}
-          {advice.refusal !== null && (
-            <>
-              {' '}
-              <Link to={pipelinePath(activePipeline.pipelineId)}>
-                Open {activePipeline.name}
-              </Link>{' '}
-              {/* There is no route to the version-history panel — it is a toggle
+            {advice.refusal !== null && (
+              <>
+                {' '}
+                <Link to={pipelinePath(activePipeline.pipelineId)}>
+                  Open {activePipeline.name}
+                </Link>{' '}
+                {/* There is no route to the version-history panel — it is a toggle
                   on the canvas — so the link goes to the canvas and the prose
                   names the panel, rather than inventing URL state for a panel. */}
-              and use the Version history panel to publish.
-            </>
-          )}
-        </p>
-      )}
-
-      <LabelledControl label="Mode">
-        {(id) => (
-          <select
-            id={id}
-            value={form.mode}
-            onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
-          >
-            {MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {mode}
-              </option>
-            ))}
-          </select>
-        )}
-      </LabelledControl>
-
-      {form.mode === 'schedule' && (
-        <>
-          {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
-           * option's text into the control's accessible name (#857, #1227). */}
-          <LabelledControl label="Schedule authored as">
-            {(id) => (
-              <select
-                id={id}
-                value={form.scheduleKind}
-                onChange={(e) =>
-                  onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })
-                }
-              >
-                <option value="recurrence">Recurrence</option>
-                <option value="cron">Cron expression</option>
-              </select>
+                and use the Version history panel to publish.
+              </>
             )}
-          </LabelledControl>
+          </p>
+        )}
+      </FormSection>
 
-          {form.scheduleKind === 'recurrence' ? (
-            <RecurrenceEditor
-              value={form.recurrence}
-              onChange={(recurrence) => onChange({ ...form, recurrence })}
-            />
-          ) : (
+      <FormSection title="Firing">
+        <LabelledControl label="Mode">
+          {(id) => (
+            <select
+              id={id}
+              value={form.mode}
+              onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
+            >
+              {MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {TRIGGER_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
+
+        {form.mode === 'schedule' && (
+          <>
+            {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
+             * option's text into the control's accessible name (#857, #1227). */}
+            <LabelledControl label="Schedule authored as">
+              {(id) => (
+                <select
+                  id={id}
+                  value={form.scheduleKind}
+                  onChange={(e) =>
+                    onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })
+                  }
+                >
+                  <option value="recurrence">Recurrence</option>
+                  <option value="cron">Cron expression</option>
+                </select>
+              )}
+            </LabelledControl>
+
+            {form.scheduleKind === 'recurrence' ? (
+              <RecurrenceEditor
+                value={form.recurrence}
+                onChange={(recurrence) => onChange({ ...form, recurrence })}
+              />
+            ) : (
+              <label>
+                Schedule (cron)
+                <input
+                  type="text"
+                  value={form.schedule}
+                  onChange={(e) => onChange({ ...form, schedule: e.target.value })}
+                  placeholder="0 2 * * *"
+                  spellCheck={false}
+                />
+              </label>
+            )}
+          </>
+        )}
+
+        {form.mode === 'event' && (
+          <>
             <label>
-              Schedule (cron)
+              Event
               <input
                 type="text"
-                value={form.schedule}
-                onChange={(e) => onChange({ ...form, schedule: e.target.value })}
-                placeholder="0 2 * * *"
+                value={form.event.name}
+                onChange={(e) =>
+                  onChange({ ...form, event: { ...form.event, name: e.target.value } })
+                }
+                placeholder="order.placed"
                 spellCheck={false}
               />
             </label>
-          )}
-        </>
-      )}
-
-      {form.mode === 'event' && (
-        <>
-          <label>
-            Event name
-            <input
-              type="text"
-              value={form.event.name}
-              onChange={(e) =>
-                onChange({ ...form, event: { ...form.event, name: e.target.value } })
-              }
-              placeholder="order.placed"
-              spellCheck={false}
-            />
-          </label>
-          <p className="page-hint">
-            Fires when <code>POST /api/events</code> is called with this exact name. An enabled
-            event trigger must carry one.
-          </p>
-          {/* The subscription schema has a catchall, so one authored through the
+            <p className="page-hint">
+              Fires when <code>POST /api/events</code> is called with this exact name. An enabled
+              event trigger must carry one.
+            </p>
+            {/* The subscription schema has a catchall, so one authored through the
               API can carry keys this form has no control for. Say so — otherwise
               it looks like there is nothing else there, and the name field is a
               one-character path to destroying it. */}
-          {Object.keys(form.event.extras).length > 0 && (
-            <p className="page-hint" data-testid="event-preserved">
-              This subscription also carries{' '}
-              <code>{Object.keys(form.event.extras).sort().join(', ')}</code>, authored outside this
-              form. There is no control for it here; it is preserved unchanged while this trigger
-              stays in event mode, and the name cannot be cleared while it is there.
-            </p>
-          )}
-        </>
-      )}
-
-      {form.mode === 'tumbling' && (
-        <WindowEditor value={form.window} onChange={(window) => onChange({ ...form, window })} />
-      )}
-
-      {form.mode === 'continuous' && (
-        <p className="page-hint">
-          Continuous triggers are not dispatched yet — nothing schedules one. It can be saved and
-          run with “Fire now”, but it will never fire on its own.
-        </p>
-      )}
-
-      {form.mode === 'webhook' && (
-        <p className="page-hint">
-          Save the trigger, then use “Webhook secret” on its row to mint the signing secret.
-        </p>
-      )}
-
-      <LabelledControl label="Concurrency">
-        {(id) => (
-          <select
-            id={id}
-            value={form.concurrencyPolicy}
-            disabled={form.mode === 'tumbling'}
-            onChange={(e) =>
-              onChange({ ...form, concurrencyPolicy: e.target.value as ConcurrencyPolicy })
-            }
-          >
-            {POLICIES.map((policy) => (
-              <option key={policy} value={policy}>
-                {policy}
-              </option>
-            ))}
-          </select>
+            {Object.keys(form.event.extras).length > 0 && (
+              <p className="page-hint" data-testid="event-preserved">
+                This subscription also carries{' '}
+                <code>{Object.keys(form.event.extras).sort().join(', ')}</code>, authored outside
+                this form. There is no control for it here; it is preserved unchanged while this
+                trigger stays in event mode, and the name cannot be cleared while it is there.
+              </p>
+            )}
+          </>
         )}
-      </LabelledControl>
 
-      {form.mode === 'tumbling' && (
-        <p className="page-hint">
-          A tumbling trigger must use <code>queue</code>: <code>skip_if_running</code> would drop a
-          window&rsquo;s one materialization and strand it forever, and per-window parallelism is
-          set by &ldquo;Max concurrent windows&rdquo; above rather than by the <code>parallel</code>{' '}
-          policy.
-        </p>
-      )}
+        {form.mode === 'tumbling' && (
+          <WindowEditor value={form.window} onChange={(window) => onChange({ ...form, window })} />
+        )}
 
-      {form.concurrencyPolicy === 'parallel' && (
-        <label>
-          Max parallel runs
-          <input
-            type="number"
-            min={1}
-            value={form.concurrencyMax}
-            onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
-            required
-          />
-        </label>
-      )}
+        {form.mode === 'continuous' && (
+          <p className="page-hint">
+            Continuous triggers are not dispatched yet — nothing schedules one. It can be saved and
+            run with “Fire now”, but it will never fire on its own.
+          </p>
+        )}
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={form.enabled}
-          onChange={(e) => onChange({ ...form, enabled: e.target.checked })}
+        {form.mode === 'webhook' && (
+          <p className="page-hint">
+            Save the trigger, then use “Webhook secret” on its row to mint the signing secret.
+          </p>
+        )}
+
+        <RunWindowsEditor
+          value={form.runWindows}
+          onChange={(runWindows) => onChange({ ...form, runWindows })}
+          mode={form.mode}
         />
-        Enabled (fires automatically per its mode)
-      </label>
+      </FormSection>
 
-      <LabelledControl label="Params (JSON)">
-        {(id) => (
-          <textarea
-            id={id}
-            value={form.paramsText}
-            onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
-            rows={4}
-            spellCheck={false}
-          />
+      <FormSection title="Concurrency">
+        <LabelledControl label="Concurrency">
+          {(id) => (
+            <select
+              id={id}
+              value={form.concurrencyPolicy}
+              disabled={form.mode === 'tumbling'}
+              onChange={(e) =>
+                onChange({ ...form, concurrencyPolicy: e.target.value as ConcurrencyPolicy })
+              }
+            >
+              {POLICIES.map((policy) => (
+                <option key={policy} value={policy}>
+                  {CONCURRENCY_POLICY_LABELS[policy]}
+                </option>
+              ))}
+            </select>
+          )}
+        </LabelledControl>
+
+        {form.mode === 'tumbling' && (
+          <p className="page-hint">
+            A tumbling trigger must use Queue (<code>queue</code>): Skip if running (
+            <code>skip_if_running</code>) would drop a window&rsquo;s one materialization and strand
+            it forever, and per-window parallelism is set by &ldquo;Max concurrent windows&rdquo;
+            above rather than by the Parallel (<code>parallel</code>) policy.
+          </p>
         )}
-      </LabelledControl>
 
-      <RunWindowsEditor
-        value={form.runWindows}
-        onChange={(runWindows) => onChange({ ...form, runWindows })}
-        mode={form.mode}
-      />
+        {form.concurrencyPolicy === 'parallel' && (
+          <label>
+            <span>
+              Max parallel runs
+              <RequiredMark />
+            </span>
+            <input
+              type="number"
+              min={1}
+              value={form.concurrencyMax}
+              onChange={(e) => onChange({ ...form, concurrencyMax: e.target.value })}
+              required
+            />
+          </label>
+        )}
+      </FormSection>
 
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : editing ? 'Save changes' : 'Create trigger'}
-        </button>
-        <button type="button" onClick={onClose} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </form>
+      <FormSection title="Parameters">
+        <LabelledControl label="Params (JSON)">
+          {(id) => (
+            <textarea
+              id={id}
+              value={form.paramsText}
+              onChange={(e) => onChange({ ...form, paramsText: e.target.value })}
+              rows={4}
+              spellCheck={false}
+            />
+          )}
+        </LabelledControl>
+      </FormSection>
+    </FormDrawer>
   );
 }

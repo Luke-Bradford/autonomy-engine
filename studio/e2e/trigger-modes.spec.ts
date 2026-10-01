@@ -47,7 +47,7 @@ test.describe('#854 event mode', () => {
     const form = triggerForm(page);
     await form.getByLabel('Name').fill('On order placed');
     await form.getByLabel(/^Mode/).selectOption('event');
-    await form.getByLabel('Event name').fill('order.placed');
+    await form.getByLabel('Event', { exact: true }).fill('order.placed');
     await form.getByRole('button', { name: /Create trigger/i }).click();
     await expect(form).toBeHidden();
 
@@ -60,7 +60,9 @@ test.describe('#854 event mode', () => {
       .getByRole('row', { name: /On order placed/ })
       .getByRole('button', { name: /^Edit / })
       .click();
-    await expect(triggerForm(page).getByLabel('Event name')).toHaveValue('order.placed');
+    await expect(triggerForm(page).getByLabel('Event', { exact: true })).toHaveValue(
+      'order.placed',
+    );
 
     await expectQuiet(page, problems);
   });
@@ -87,7 +89,7 @@ test.describe('#854 event mode', () => {
     const row = page.getByRole('row', { name: /Seeded subscription/ });
     await row.getByRole('button', { name: /^Edit / }).click();
     const form = triggerForm(page);
-    await expect(form.getByLabel('Event name')).toHaveValue('order.placed');
+    await expect(form.getByLabel('Event', { exact: true })).toHaveValue('order.placed');
 
     await form.getByLabel(/^Mode/).selectOption('manual');
     await form.getByRole('button', { name: /Save changes/i }).click();
