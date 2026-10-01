@@ -877,11 +877,14 @@ Decisions worth not re-deriving:
 - **The `DataTransfer` fake lives once**, in `testing/fakeDataTransfer.ts`, used by both drag
   specs. Its protected-mode behaviour is precisely the subtlety that gets hardened in one copy
   and not the other — the failure `e2e/support/theme.ts` records this repo already paying for.
-- **`title={entry.type}` on an item is a pointer-only affordance, accepted as such.** A native
+- **An item's native `title` is a pointer-only affordance, accepted as such.** (It held `entry.type` until #1413.) A native
   `title` never appears on keyboard focus, so the raw activity type is not reachable by the users
   this ticket's keyboard path is for. Fluent's `Tooltip relationship="label"` (U4's answer) is not
   used here because it would attach a portalling surface to every one of ~15 items for a hint the
   properties panel (**U7**) will show properly.
+  *Amended by #1413 (OR22):* the item's `title` is now the activity's catalog `description` (what
+  it does), matching the Containers group; the type id moved to the properties panel, under the
+  node's name. Still a native `title`, for the same portal-cost reason.
 - **`.activity-toolbox__list[hidden] { display: none }` is load-bearing**, and was a real bug
   for one commit. `display: flex` outranks the UA stylesheet's `[hidden] { display: none }` —
   ANY author `display` does — so a collapsed group stayed fully visible and fully in the

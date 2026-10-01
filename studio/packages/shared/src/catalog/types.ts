@@ -311,6 +311,13 @@ export interface ActivityCatalogEntry {
   /** Human label for the authoring UI. */
   title: string;
   /**
+   * #1413 OR22 — one sentence saying what the activity DOES, for an operator
+   * meeting it for the first time: the palette shows it on hover, the property
+   * panel under the node's name. Display-only metadata — nothing persists it on
+   * a pipeline version, so it never bumps `CATALOG_VERSION`.
+   */
+  description: string;
+  /**
    * Connector-dispatched vs engine-evaluated. See `ActivityKind` — the field
    * #1 D6 makes the framework's SSOT for which dispatch path an activity takes,
    * so no consumer has to infer it from a proxy like "declares no connection".

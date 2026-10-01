@@ -234,6 +234,53 @@ describe('NodePanel heading (#878)', () => {
   });
 });
 
+/**
+ * #1413 OR22 — under the node's name the panel says what the activity DOES, and
+ * which type it is. The type id appears nowhere else in the editor: the palette
+ * hover used to carry it, and now carries the description instead. (The run
+ * monitor's node panel shows neither yet.)
+ */
+describe('NodePanel says what the activity does (#1413)', () => {
+  function about(nodeType: string, call?: { pipelineVersionId: string; params: object }) {
+    render(
+      <NodePanel
+        store={createCanvasStore()}
+        connections={[]}
+        datasets={[]}
+        nodeId="n_1"
+        nodeType={nodeType}
+        config={{}}
+        connectionId={undefined}
+        call={call as never}
+      />,
+    );
+    const h3 = screen.getAllByRole('heading', { level: 3 })[0]!;
+    const next = h3.nextElementSibling;
+    return next?.classList.contains('property-panel__about') ? next : null;
+  }
+
+  it('shows the description and the type id under the heading', () => {
+    const hint = about('http_request');
+    expect(hint?.textContent).toBe(`${getActivity('http_request')!.description} http_request`);
+    expect(hint?.querySelector('code')?.textContent).toBe('http_request');
+  });
+
+  /* The call arm returns early with its OWN heading — the same second copy #878
+     had to fix twice. */
+  it('shows it in the call-editor arm too', () => {
+    const hint = about('execute_pipeline');
+    expect(hint?.textContent).toContain(getActivity('execute_pipeline')!.description);
+  });
+
+  it('shows nothing for an uncatalogued type rather than an empty line', () => {
+    expect(about('call_pipeline', { pipelineVersionId: 'pv_1', params: {} })).toBeNull();
+  });
+
+  it('shows nothing for an uncatalogued type in the config-form arm either', () => {
+    expect(about('not_a_catalogued_type')).toBeNull();
+  });
+});
+
 describe('NodePanel (U7 per-activity config form)', () => {
   it('renders a labelled control per config key instead of one JSON blob', () => {
     mountOver(httpNode({}));

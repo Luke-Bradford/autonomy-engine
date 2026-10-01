@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { Container, Node, Param } from '@autonomy-studio/shared';
+import {
+  ContainerKindSchema,
+  type Container,
+  type Node,
+  type Param,
+} from '@autonomy-studio/shared';
 import { ContainerPanel } from './ContainerPanel';
+import { CONTAINER_PALETTE } from './activityGroups';
 
 /**
  * U23 — the container config form, at the tier most of it belongs to.
@@ -56,6 +62,24 @@ function applied(onApply: ReturnType<typeof vi.fn>): Container {
 function apply() {
   fireEvent.click(screen.getByRole('button', { name: 'Apply container settings' }));
 }
+
+describe('ContainerPanel says what the container does (#1413)', () => {
+  // Every KIND, not every palette entry: a kind the palette forgot would get no
+  // line at all, and this is what catches it.
+  it.each(ContainerKindSchema.options)(
+    'a %s box repeats its palette description and names its kind',
+    (kind) => {
+      const description = CONTAINER_PALETTE.find((e) => e.kind === kind)?.description;
+      expect(description).toBeDefined();
+      mount({ ...LOOP, kind } as Container);
+      const about = screen.getAllByRole('heading', { level: 3 })[0]!.nextElementSibling;
+      expect(about?.classList.contains('property-panel__about')).toBe(true);
+      expect(about?.textContent).toBe(`${description} ${kind}`);
+      // One sentence, like an activity's (registry.test.ts holds those).
+      expect(description).toMatch(/^[^.!?]+\.$/);
+    },
+  );
+});
 
 describe('ContainerPanel — which fields it offers', () => {
   it('offers a loop its own fields and none of the foreach-only ones', () => {
