@@ -1156,6 +1156,20 @@ td button + button {
   align-items: start;
 }
 
+/* The drawer is a column BESIDE the list, so the page grows by the drawer's
+   width instead of squeezing the list into what is left of 900px. A five-column
+   list (Datasets) otherwise ran under the drawer, which then covered its Edit
+   buttons. `.content` is left-aligned, so the list does not move. */
+.content:has(.drawer-layout-open) {
+  max-width: calc(900px + 460px + 1.25rem);
+}
+
+/* Where even that is too narrow, the list scrolls inside its own column rather
+   than running under the drawer. */
+.drawer-layout-open > :first-child {
+  overflow-x: auto;
+}
+
 /* Narrow screens stack the drawer under the list. */
 @media (max-width: 960px) {
   .drawer-layout-open {

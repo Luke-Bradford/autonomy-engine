@@ -83,6 +83,38 @@ test.describe('#1396 the dataset form drawer', () => {
     await expectQuiet(page, problems);
   });
 
+  test('on a narrower window the list scrolls in its own column, never under the drawer', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const stamp = Date.now();
+    const store = await seedConnection(page, {
+      name: `e2e-1396-ds-narrow-store-with-a-long-name-${stamp}`,
+      kind: 'sqlite',
+      config: { file: `/tmp/e2e-1396-narrow-${stamp}.db` },
+    });
+    await seedDataset(page, {
+      name: `e2e-1396-ds-narrow-dataset-with-a-long-name-${stamp}`,
+      kind: 'table',
+      connectionId: store,
+      config: { table: 'orders' },
+      columns: [],
+    });
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await gotoDatasets(page);
+    await page.getByRole('button', { name: 'New dataset' }).click();
+    const layout = await page.evaluate(() => {
+      const list = document.querySelector('.drawer-layout-open > :first-child')!;
+      const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
+      return {
+        listEndsBeforeDrawer: list.getBoundingClientRect().right <= aside.left,
+        listScrolls: getComputedStyle(list).overflowX === 'auto',
+      };
+    });
+    expect(layout).toEqual({ listEndsBeforeDrawer: true, listScrolls: true });
+    await expectQuiet(page, problems);
+  });
+
   test('the footer stays in view, primary last', async ({ page }) => {
     const problems = collectPageProblems(page);
     await page.setViewportSize({ width: 1280, height: 560 });
