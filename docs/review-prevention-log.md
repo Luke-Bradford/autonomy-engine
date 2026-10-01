@@ -340,6 +340,19 @@ exactly what the merge will close.** Same class as prevention-log #13's
 ("GitHub is stricter") deserves an empirical check before code is built on
 it — one `gh api` probe would have caught this at spec time.
 
+*Addendum, 2026-10-01 — the COMMIT-MESSAGE variant.* PR #1447's body said
+only "Part of #1396" and its `closingIssuesReferences` was empty, yet the
+merge closed #1396 (OR5) with four items still open. The squash message
+carried a branch commit's subject verbatim, `fix: #1396 review — …`, and
+GitHub closes on a keyword before `#N` in any commit that lands on the
+default branch. **`closingIssuesReferences` does not report commit-message
+links, so the probe above cannot see this class.** Rule: no commit subject
+or body puts any of GitHub's nine keywords — `close`/`closes`/`closed`,
+`fix`/`fixes`/`fixed`, `resolve`/`resolves`/`resolved`, with or without a
+colon — directly before `#N` for an issue that must stay open (a past tense
+like "the merge closed #N" counts too); put
+the scope in parentheses (`fix(studio): … (#N)`) or the ref after other words.
+
 ## 19. Local shellcheck ≠ CI shellcheck — a locally-clean push can still fail the lint gate
 
 *Origin: 2026-07-05, PR #296 (#294 self-re-exec).* `shellcheck -S warning`
