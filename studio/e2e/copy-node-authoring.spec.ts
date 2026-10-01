@@ -193,7 +193,7 @@ test.describe('#1139 — copy-node authoring', () => {
 
     // The JSON textarea this control replaces — for the field, and for the whole
     // node. Their ABSENCE is the ticket.
-    await expect(properties(page).getByLabel('mapping — JSON')).toHaveCount(0);
+    await expect(properties(page).getByLabel('Column mapping — JSON')).toHaveCount(0);
     await expect(properties(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
     // Two rows, each authored through named controls rather than as JSON.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import { fieldLabelOf } from '../schemas/field-presentation.js';
+import { fieldLabelOf, fieldLabelThrough } from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DATASET_KIND_LABELS, DatasetKindSchema } from '../schemas/dataset.js';
@@ -553,10 +553,7 @@ describe('dataset form labels (#1396)', () => {
   it.each(DATASET_KINDS)('every %s config field has a title', (kind) => {
     const shape = datasetConfigSchema(kind).shape as Record<string, z.ZodType>;
     const untitled = Object.entries(shape)
-      .filter(([, field]) => {
-        const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
-        return fieldLabelOf(field) === undefined && fieldLabelOf(inner) === undefined;
-      })
+      .filter(([, field]) => fieldLabelThrough(field) === undefined)
       .map(([name]) => name);
     expect(untitled).toEqual([]);
   });
@@ -566,10 +563,7 @@ describe('dataset form labels (#1396)', () => {
   // would make two controls answer to it.
   it.each(DATASET_KINDS)('no %s field title reuses a Basics label', (kind) => {
     const shape = datasetConfigSchema(kind).shape as Record<string, z.ZodType>;
-    const titles = Object.values(shape).map((field) => {
-      const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
-      return (fieldLabelOf(field) ?? fieldLabelOf(inner))?.title ?? '';
-    });
+    const titles = Object.values(shape).map((field) => fieldLabelThrough(field)?.title ?? '');
     expect(titles.filter((title) => /name|kind|store|columns/i.test(title))).toEqual([]);
   });
 

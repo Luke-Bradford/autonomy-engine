@@ -2,7 +2,8 @@
 
 How every create/edit form in studio looks and behaves (#1396, OR5). Written once here; the shared
 pieces live in `packages/web/src/lib/form/`. Connections, Datasets, Secrets, Global parameters and
-Triggers follow it. The node property panel moves onto it in a slice that follows #1396.
+Triggers follow it. The node property panel (and the container panel) share its labels, hints,
+required marks and display names; its layout is its own, below.
 
 ## The drawer
 
@@ -58,9 +59,8 @@ Triggers follow it. The node property panel moves onto it in a slice that follow
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).
-  Optional fields are unmarked: schema-derived fields no longer carry an "(optional)" suffix (a few
-  hand-written labels outside `ConfigFieldControl`, in the canvas, still do until the node panel
-  moves onto this pattern). The asterisk is `RequiredMark`.
+  Optional fields are unmarked: no label carries an "(optional)" suffix. The asterisk is
+  `RequiredMark`.
   CSS draws it, and it is `aria-hidden`, so it never becomes part of a field's name. A row list is a
   `group` and cannot take `aria-required`, so it gets the asterisk alone.
 - A field that cannot change on an edit (a secret's name, a global's name and type) is
@@ -167,10 +167,41 @@ message.
 - The canvas's `DraftNumberField` uses the same `FieldError` with `role="alert"`, because there is no
   summary on the canvas to announce it.
 
+## The node property panel
+
+- **Activity config fields are titled like any other form's** (#1396 slice 7). Every field of every
+  activity the generic form renders, and every container setting, carries `presented(...)`, pinned
+  by `catalog/__tests__/activity-labels.test.ts`. A structural call (`execute_pipeline`) is authored
+  by `CallPanel` and is not part of that gate.
+- **No title may contain another label on the panel, or sit inside one.** The panel adds its own
+  labels around the activity's fields (Connection, Source/Sink dataset, Declared variable, container
+  membership, the General tab's policy), so the check runs on the RENDERED panel:
+  `NodePanelLabels.test.tsx`, with one row in every row list and an override row for every setting of
+  the bound connection. This is why `prompt` is "User prompt" beside "System prompt", `variable` is
+  "Variable name" beside "Declared variable", `url` is "Request URL" beside a "Base URL" override,
+  `model` is "Model for this step" beside "Default model", `tools` is "Tool definitions" beside its
+  `tools row 1 …` cells, and the connection's own `headers` is "Default headers". Buttons are not
+  checked: the ones named by key (below) would always match a title that spells the key.
+- A field that must be a whole `${}` expression says so in its hint. The duration fields (`wait`,
+  `webhook`) also give an example the save gate accepts ("e.g. ${30}"), pinned by a test, because a
+  bare number there is refused.
+- Connection and dataset pickers read `Name (Display kind)`, from `lib/resourceOptionLabel.ts`; an
+  override row and its "Add … override" option use the setting's title, falling back to its key.
+- What still names the KEY: the expression picker's buttons ("Insert reference into url"), a row
+  list's buttons and its cells ("tools row 1 name"). The key is what a `${}` reference and a server
+  message cite.
+- **It is not a drawer.** The panel already sits beside the canvas it edits, and it applies each
+  change to the editor's draft rather than saving a record, so there is no per-record Save or Cancel
+  to put in a drawer footer. The editor's Save writes the draft, and its dirty dot says it is unsaved.
+
 ## Still to come under #1396
 
 - Typed number controls (min/max). Number fields stay text inputs today, for the reason given in
   `ConfigFieldControl`: a native number input reports a typo as empty, which would silently delete
   the setting.
 - A JSON code editor, kind icons, and a two-column grid on wide screens.
+- A leave guard on the pipeline editor. Leaving it with an unsaved draft is not yet held the way a
+  resource drawer's route change is.
+- Sections on the node panel's Settings tab (bindings, the activity's settings, container).
+- Display names for enum values (reasoning effort, capture level, write mode, container kind).
 - Axe gates on every form (shared with OR24, #1415).

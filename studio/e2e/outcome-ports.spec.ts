@@ -454,7 +454,7 @@ test.describe('U19 outcome ports', () => {
        carries the field's name in its accessible name, so `getByLabel('cases')`
        matches the textarea AND the button (`node-config-form.spec.ts` records
        the same constraint). */
-    const cases = properties(page).getByRole('textbox', { name: /^cases/ });
+    const cases = properties(page).getByRole('textbox', { name: /^Cases/ });
     await cases.fill('red');
     // The form is APPLY-gated — typing alone edits nothing, which is what keeps
     // a half-typed identifier out of the doc.

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { presented } from './field-presentation.js';
 import { CATALOG_VERSION } from './version.js';
 
 /**
@@ -747,9 +748,15 @@ export const ContainerSchema = z.object({
   kind: ContainerKindSchema,
   children: z.array(z.string().min(1)),
   /** `${}` boolean over child outputs; evaluated only when a round is terminal. Loop only. */
-  exitWhen: z.string().optional(),
+  exitWhen: presented(z.string().optional(), {
+    title: 'Exit when',
+    description: "A whole ${} expression over the body's outputs, checked after each round.",
+  }),
   /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
-  maxRounds: z.number().int().positive().optional(),
+  maxRounds: presented(z.number().int().positive().optional(), {
+    title: 'Max rounds',
+    description: 'The loop fails if it reaches this many rounds before Exit when is true.',
+  }),
   /**
    * #4 A17 — whole-loop WALL-CLOCK bound in seconds, a durable-alarm safety net
    * ALONGSIDE the `maxRounds` count. When the timeout elapses while the loop is
@@ -763,7 +770,11 @@ export const ContainerSchema = z.object({
    * resolved at enter, before the loop body has run, so a `${}` over child
    * outputs could not resolve anyway.
    */
-  timeout: z.number().int().positive().optional(),
+  timeout: presented(z.number().int().positive().optional(), {
+    title: 'Timeout',
+    unit: 'seconds',
+    description: 'The loop fails if it is still running this long after it started.',
+  }),
   /**
    * `${}` whole-value expression resolving to an ARRAY over the container's OUTER
    * scope (params/trigger/upstream outputs — NOT its own children, which have not
@@ -771,7 +782,11 @@ export const ContainerSchema = z.object({
    * `${item}` bound to that element. A4a runs items SEQUENTIALLY (one per round);
    * parallel `batchCount` is deferred to A4b.
    */
-  items: z.string().optional(),
+  items: presented(z.string().optional(), {
+    title: 'Items',
+    description:
+      'A whole ${} expression giving the array to go through. Inside the box, item is the current element.',
+  }),
   /**
    * #4 A4b (#566 slice 2) — foreach-only PARALLEL item cap: how many items may be
    * in flight at once. Absent or `1` = sequential (the A4a round machinery,
@@ -783,7 +798,10 @@ export const ContainerSchema = z.object({
    * touching the body (bare-id machinery would be silently dead) or any doc id
    * containing `@` (instance-key collision).
    */
-  batchCount: z.number().int().min(1).max(50).optional(),
+  batchCount: presented(z.number().int().min(1).max(50).optional(), {
+    title: 'Batch count',
+    description: 'How many items run at once, from 1 to 50. Absent or 1 runs them one at a time.',
+  }),
   /**
    * #844 V5 (spec V-D6) — foreach-only OPT-IN to nondeterministic variable
    * writes. The determinism guard refuses a `set_variable`/`append_variable`
@@ -793,9 +811,15 @@ export const ContainerSchema = z.object({
    * is whatever order the items finished in. Every other guard rule still applies.
    * Refused by `validateDoc` on a loop or stage.
    */
-  allowNondeterministicVars: z.boolean().optional(),
+  allowNondeterministicVars: presented(z.boolean().optional(), {
+    title: 'Allow unordered variable writes',
+    description: 'Lets parallel items set or append variables, in whatever order they finish.',
+  }),
   /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
-  join: z.enum(['all', 'any']).optional(),
+  join: presented(z.enum(['all', 'any']).optional(), {
+    title: 'Join',
+    description: 'all waits for every incoming edge; any starts on the first. Defaults to all.',
+  }),
 });
 export type Container = z.infer<typeof ContainerSchema>;
 

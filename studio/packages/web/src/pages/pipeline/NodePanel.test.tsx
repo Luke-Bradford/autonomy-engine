@@ -240,11 +240,11 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     // The whole point of the ticket: the activity's settings are NAMED on screen,
     // so authoring one no longer means knowing its JSON shape by heart.
-    expect(screen.getByLabelText('url')).toBeTruthy();
-    expect(screen.getByLabelText('method')).toBeTruthy();
-    expect(screen.getByLabelText('body')).toBeTruthy();
+    expect(screen.getByLabelText('Request URL')).toBeTruthy();
+    expect(screen.getByLabelText('HTTP method')).toBeTruthy();
+    expect(screen.getByLabelText('Request body')).toBeTruthy();
     // A record of headers authors as ROWS (#852), under its own name.
-    expect(screen.getByRole('group', { name: 'headers' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Request headers' })).toBeTruthy();
     // The blob editor is gone by default.
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
@@ -252,7 +252,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('writes an edited field into the doc', () => {
     const panel = mountOver(httpNode({ url: 'https://old' }));
 
-    fireEvent.change(screen.getByLabelText('url'), { target: { value: 'https://new' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://new' } });
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({ url: 'https://new' });
@@ -272,7 +272,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
       }),
     );
 
-    fireEvent.change(screen.getByLabelText('url'), { target: { value: 'https://y' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://y' } });
     panel.apply();
 
     expect(panel.storedConfig()).toEqual({
@@ -285,7 +285,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('drops a key the author clears, rather than writing an empty value', () => {
     const panel = mountOver(httpNode({ url: 'https://x', method: 'POST' }));
 
-    fireEvent.change(screen.getByLabelText('method'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('HTTP method'), { target: { value: '' } });
     panel.apply();
 
     expect(panel.storedConfig()).toEqual({ url: 'https://x' });
@@ -355,7 +355,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     // `url` is `z.string().min(1)`, so clearing it is a schema violation, not a
     // parse failure — a different path to the same "nothing was written".
-    fireEvent.change(screen.getByLabelText('url'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: '' } });
     panel.apply();
 
     expect(screen.getByRole('alert')).toBeTruthy();
@@ -369,7 +369,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const panel = mountOver(httpNode({ url: { was: 'authored elsewhere' } }));
 
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
-    expect(screen.queryByLabelText('url')).toBeNull();
+    expect(screen.queryByLabelText('Request URL')).toBeNull();
     expect(screen.getByText(/Saved settings this form cannot show \(url\)/)).toBeTruthy();
     // And the fallback is not a dead end: the JSON editor still applies.
     fireEvent.change(screen.getByLabelText('Config (JSON)'), {
@@ -385,7 +385,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
     fireEvent.click(toJson());
     expect(screen.getByLabelText('Config (JSON)')).toBeTruthy();
-    expect(screen.queryByLabelText('url')).toBeNull();
+    expect(screen.queryByLabelText('Request URL')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Config (JSON)'), {
       target: { value: '{"url":"https://hatch"}' },
@@ -411,8 +411,10 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // Back to the form: it must now show what JSON just wrote, and applying
     // unchanged must be a no-op rather than a revert.
     fireEvent.click(toFields());
-    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
-    expect((screen.getByLabelText('method') as HTMLTextAreaElement).value).toBe('POST');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://from-json',
+    );
+    expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('POST');
 
     panel.apply();
     expect(panel.storedConfig()).toMatchObject({ url: 'https://from-json', method: 'POST' });
@@ -431,7 +433,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
 
     expect(screen.queryByText(/Saved settings this form cannot show/)).toBeNull();
     expect(toJson()).toBeTruthy();
-    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://repaired',
+    );
   });
 
   it('lets a forced JSON editor hand back the form once the draft is repaired, and not before', () => {
@@ -449,7 +453,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
     expect(screen.queryByRole('alert')).toBeNull();
-    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://repaired',
+    );
   });
 
   // #1088 — the mode toggle is the shared one (`useConfigEditor`), so it COMMITS
@@ -459,7 +465,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('carries an unapplied field edit into the JSON it opens', () => {
     const panel = mountOver(httpNode({ url: 'https://x' }));
 
-    fireEvent.change(screen.getByLabelText('url'), { target: { value: 'https://typed' } });
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://typed' } });
     fireEvent.click(toJson());
     expect(
       JSON.parse((screen.getByLabelText('Config (JSON)') as HTMLTextAreaElement).value),
@@ -478,8 +484,10 @@ describe('NodePanel (U7 per-activity config form)', () => {
     });
     fireEvent.click(toFields());
 
-    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
-    expect((screen.getByLabelText('method') as HTMLTextAreaElement).value).toBe('PUT');
+    expect((screen.getByLabelText('Request URL') as HTMLTextAreaElement).value).toBe(
+      'https://from-json',
+    );
+    expect((screen.getByLabelText('HTTP method') as HTMLTextAreaElement).value).toBe('PUT');
     panel.apply();
     expect(panel.storedConfig()).toEqual({ url: 'https://from-json', method: 'PUT' });
   });
@@ -552,7 +560,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // delete it, and must not leave the author unable to apply at all.
     const panel = mountOver(node('n_fw', 'file_write', { path: '/tmp/a', content: '' }));
 
-    fireEvent.change(screen.getByLabelText('path'), { target: { value: '/tmp/b' } });
+    fireEvent.change(screen.getByLabelText('File path'), { target: { value: '/tmp/b' } });
     panel.apply();
 
     expect(screen.queryByRole('alert')).toBeNull();
@@ -570,7 +578,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     const permitted = derived?.find((f) => f.name === 'reasoningEffort')?.enumOptions;
     expect(permitted?.length, 'reasoningEffort is still an enum').toBeGreaterThan(0);
 
-    const select = screen.getByLabelText('reasoningEffort') as HTMLSelectElement;
+    const select = screen.getByLabelText('Reasoning effort') as HTMLSelectElement;
     // The blank leads: an optional enum must offer "not set" as a reachable state.
     expect([...select.options].map((o) => o.value)).toEqual(['', ...permitted!]);
   });
@@ -584,7 +592,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     panel.apply();
     expect('emitMessages' in panel.storedConfig()).toBe(false);
 
-    fireEvent.click(screen.getByLabelText('emitMessages'));
+    fireEvent.click(screen.getByLabelText('Emit transcript'));
     panel.apply();
     expect(panel.storedConfig()).toMatchObject({ emitMessages: true });
   });
@@ -595,7 +603,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // makes that reachable from a form.
     const panel = mountOver(node('n_llm', 'llm_call', { prompt: 'hi' }));
 
-    fireEvent.change(screen.getByLabelText('prompt'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('User prompt'), { target: { value: '' } });
     panel.apply();
 
     expect(screen.getByRole('alert')).toBeTruthy();
@@ -609,7 +617,9 @@ describe('NodePanel (U7 per-activity config form)', () => {
     // one, and `validateDoc` remains the actual judge at save.
     const panel = mountOver(node('n_wait', 'wait', { seconds: '5' }));
 
-    fireEvent.change(screen.getByLabelText('seconds'), { target: { value: '${params.delay}' } });
+    fireEvent.change(screen.getByLabelText('Wait time (seconds)'), {
+      target: { value: '${params.delay}' },
+    });
     panel.apply();
 
     expect(panel.storedConfig()).toEqual({ seconds: '${params.delay}' });
@@ -619,7 +629,7 @@ describe('NodePanel (U7 per-activity config form)', () => {
   it('authors a list field one value per line', () => {
     const panel = mountOver(node('n_sw', 'switch', { on: '${x}', cases: [] }));
 
-    fireEvent.change(screen.getByLabelText('cases — one per line'), {
+    fireEvent.change(screen.getByLabelText('Cases — one per line'), {
       target: { value: 'red\n\ngreen\n' },
     });
     panel.apply();
@@ -642,7 +652,7 @@ describe('NodePanel — duplicate (U21)', () => {
 
   it('copies what Apply last wrote, not what the form is holding unapplied', () => {
     const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
-    fireEvent.change(screen.getByLabelText('url'), {
+    fireEvent.change(screen.getByLabelText('Request URL'), {
       target: { value: 'https://example.test/edited' },
     });
     // No apply — the edit is still only in the form's draft state.
@@ -1037,7 +1047,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
     });
 
-    expect(screen.getByLabelText('prompt')).toBeTruthy();
+    expect(screen.getByLabelText('User prompt')).toBeTruthy();
     expect(screen.queryByLabelText('Config (JSON)')).toBeNull();
   });
 
@@ -1050,7 +1060,7 @@ describe('NodePanel (the objectList control, #1169)', () => {
       position: { x: 0, y: 0 },
       config: { model: 'claude-opus-5', prompt: 'hi', history: '${nodes.a.outputs.turns}' },
     });
-    fireEvent.change(screen.getByLabelText('prompt'), { target: { value: 'bye' } });
+    fireEvent.change(screen.getByLabelText('User prompt'), { target: { value: 'bye' } });
     panel.apply();
 
     expect(panel.storedConfig()).toMatchObject({
@@ -1500,7 +1510,7 @@ describe('parameter override editor (#1304)', () => {
     addOverride('Connection overrides', 'maxBytes');
     expect(docNode(store).connectionParams).toEqual({ maxBytes: 1000 });
     // A number field's text is COERCED as it is written, so dispatch's re-validation sees a number.
-    fireEvent.change(screen.getByRole('textbox', { name: 'maxBytes' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Largest file read (bytes)' }), {
       target: { value: '2048' },
     });
     expect(docNode(store).connectionParams).toEqual({ maxBytes: 2048 });
@@ -1509,7 +1519,7 @@ describe('parameter override editor (#1304)', () => {
   it('writes a dataset end’s override, and keeps a whole ${} verbatim', () => {
     const { store } = mountOver(lookup(), [fsConn([])], [csv(['path'])]);
     addOverride('Source dataset overrides', 'path');
-    fireEvent.change(screen.getByRole('textbox', { name: 'path' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'File path' }), {
       target: { value: '${params.file}' },
     });
     expect(docNode(store).datasetParams).toEqual({ source: { path: '${params.file}' } });
@@ -1519,7 +1529,9 @@ describe('parameter override editor (#1304)', () => {
     const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
       fsConn(['maxBytes']),
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove override maxBytes' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove override Largest file read (bytes)' }),
+    );
     expect('connectionParams' in docNode(store)).toBe(false);
   });
 
@@ -1527,7 +1539,7 @@ describe('parameter override editor (#1304)', () => {
     const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
       fsConn(['maxBytes']),
     ]);
-    const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    const input = screen.getByRole('textbox', { name: 'Largest file read (bytes)' });
     // `12.50` already stores the number 12.5. Rendering the STORED value back
     // would snap the input to `12.5` while the operator is still typing.
     fireEvent.change(input, { target: { value: '12.50' } });
@@ -1543,7 +1555,7 @@ describe('parameter override editor (#1304)', () => {
     const { store } = mountOver(lookup({ connectionParams: { maxBytes: 5 } }), [
       fsConn(['maxBytes']),
     ]);
-    const input = screen.getByRole('textbox', { name: 'maxBytes' });
+    const input = screen.getByRole('textbox', { name: 'Largest file read (bytes)' });
     fireEvent.change(input, { target: { value: '6' } });
     fireEvent.change(input, { target: { value: '64' } });
     act(() => store.getState().undo());
@@ -1713,7 +1725,7 @@ describe('NodePanel — a single-line field takes a reference at its caret (#852
     const params: Param[] = [{ name: 'limit', type: 'number', required: true }];
     const panel = mountOver(httpNode({ url: 'https://api.test/?n=&x=1' }), [], [], params);
 
-    const url = screen.getByLabelText('url') as HTMLInputElement;
+    const url = screen.getByLabelText('Request URL') as HTMLInputElement;
     expect(url.tagName).toBe('INPUT');
     url.setSelectionRange(20, 20);
     fireEvent.select(url);

@@ -4,6 +4,8 @@ import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   ContainerKindSchema,
+  ContainerSchema,
+  fieldLabelThrough,
   autoMapMapping,
   checkSinkCoverage,
   checkSourceDrift,
@@ -64,6 +66,7 @@ import type { FieldChoices, FieldPicker } from './ConfigFieldControl';
 import { variableWriteChoices } from './variableChoices';
 import { ParamOverridesEditor } from './ParamOverridesEditor';
 import { DraftNumberField, type DraftNumberParse } from './DraftNumberField';
+import { connectionOptionLabel, datasetOptionLabel } from '../../lib/resourceOptionLabel';
 import { parseWholeNumber } from '../triggers/formFields';
 import {
   connectionOverrideResource,
@@ -2421,7 +2424,7 @@ function ContainerSection({
         {kind === 'loop' && (
           <>
             <label>
-              Exit when
+              {containerSettingTitle('exitWhen')}
               <input
                 value={exitWhen}
                 spellCheck={false}
@@ -2430,7 +2433,7 @@ function ContainerSection({
               />
             </label>
             <label>
-              Max rounds (optional)
+              {containerSettingTitle('maxRounds')}
               <input
                 value={maxRounds}
                 inputMode="numeric"
@@ -2441,7 +2444,7 @@ function ContainerSection({
         )}
         {kind === 'foreach' && (
           <label>
-            Items
+            {containerSettingTitle('items')}
             <input
               value={items}
               spellCheck={false}
@@ -2538,6 +2541,14 @@ function DatasetOverrides({
       })}
     />
   );
+}
+
+/**
+ * #1396 — a container setting's title, from `ContainerSchema`, so the New
+ * container fieldset and the container panel cannot name one setting twice.
+ */
+function containerSettingTitle(key: 'exitWhen' | 'maxRounds' | 'items'): string {
+  return fieldLabelThrough(ContainerSchema.shape[key])?.title ?? key;
 }
 
 /**
@@ -3022,7 +3033,7 @@ export function NodePanel({
                         <option value="">— none —</option>
                         {eligible.map((c) => (
                           <option key={c.id} value={c.id}>
-                            {c.name} ({c.kind})
+                            {connectionOptionLabel(c)}
                           </option>
                         ))}
                       </select>
@@ -3065,7 +3076,7 @@ export function NodePanel({
                         connections,
                         (c) => entry.connectionKinds.includes(c.kind),
                         boundConnections?.source,
-                      ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+                      ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
                       onPick={(id) =>
                         store.getState().setNodeBindingEnd(nodeId, 'connections', 'source', id)
                       }
@@ -3077,7 +3088,7 @@ export function NodePanel({
                         connections,
                         (c) => sinkConnectionKinds.includes(c.kind),
                         boundConnections?.sink,
-                      ).map((c) => ({ id: c.id, label: `${c.name} (${c.kind})` }))}
+                      ).map((c) => ({ id: c.id, label: connectionOptionLabel(c) }))}
                       onPick={(id) =>
                         store.getState().setNodeBindingEnd(nodeId, 'connections', 'sink', id)
                       }
@@ -3103,7 +3114,7 @@ export function NodePanel({
                           (sourceConnectionId === undefined ||
                             d.connectionId === sourceConnectionId),
                         boundDatasets?.source,
-                      ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+                      ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
                       onPick={(id) =>
                         store.getState().setNodeBindingEnd(nodeId, 'datasets', 'source', id)
                       }
@@ -3126,7 +3137,7 @@ export function NodePanel({
                             (boundConnections?.sink === undefined ||
                               d.connectionId === boundConnections.sink),
                           boundDatasets?.sink,
-                        ).map((d) => ({ id: d.id, label: `${d.name} (${d.kind})` }))}
+                        ).map((d) => ({ id: d.id, label: datasetOptionLabel(d) }))}
                         onPick={(id) =>
                           store.getState().setNodeBindingEnd(nodeId, 'datasets', 'sink', id)
                         }

@@ -291,7 +291,7 @@ describe('ConnectionsPage', () => {
     await user.click(screen.getByRole('button', { name: ROW_EDIT }));
     const form = screen.getByRole('form', { name: 'Connection form' });
     // A row group, not a JSON blob — derived from the same schema the server reads.
-    expect(within(form).getByRole('group', { name: 'Headers' })).toBeInTheDocument();
+    expect(within(form).getByRole('group', { name: 'Default headers' })).toBeInTheDocument();
     expect(within(form).getByLabelText('headers row 1 key')).toHaveValue('X-A');
     await user.click(within(form).getByRole('button', { name: 'Add headers row' }));
     await user.type(within(form).getByLabelText('headers row 2 key'), 'X-B');

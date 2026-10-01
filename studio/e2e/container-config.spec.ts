@@ -69,7 +69,7 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    const field = page.getByLabel(/^exitWhen/);
+    const field = page.getByLabel(/^Exit when/);
     await expect(field).toHaveValue('${equals(1, 2)}');
     await field.fill('${equals(1, 1)}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -103,15 +103,15 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'foreach 1');
-    await expect(page.getByLabel(/^items/)).toHaveValue('${createArray(1, 2)}');
-    await expect(page.getByLabel(/^batchCount/)).toHaveCount(1);
+    await expect(page.getByLabel(/^Items/)).toHaveValue('${createArray(1, 2)}');
+    await expect(page.getByLabel(/^Batch count/)).toHaveCount(1);
     // Refused on a foreach by `validateDoc`, so never offered here.
-    await expect(page.getByLabel(/^exitWhen/)).toHaveCount(0);
-    await expect(page.getByLabel(/^maxRounds/)).toHaveCount(0);
-    await expect(page.getByLabel(/^timeout/)).toHaveCount(0);
+    await expect(page.getByLabel(/^Exit when/)).toHaveCount(0);
+    await expect(page.getByLabel(/^Max rounds/)).toHaveCount(0);
+    await expect(page.getByLabel(/^Timeout \(seconds\)/)).toHaveCount(0);
 
-    await page.getByLabel(/^items/).fill('${createArray(1, 2, 3)}');
-    await page.getByLabel(/^batchCount/).fill('2');
+    await page.getByLabel(/^Items/).fill('${createArray(1, 2, 3)}');
+    await page.getByLabel(/^Batch count/).fill('2');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -141,8 +141,8 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel(/^timeout/).fill('45');
-    await page.getByLabel(/^join/).selectOption('any');
+    await page.getByLabel(/^Timeout \(seconds\)/).fill('45');
+    await page.getByLabel(/^Join/).selectOption('any');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -185,8 +185,8 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('7');
-    await page.getByLabel(/^maxRounds/).fill('');
+    await expect(page.getByLabel(/^Max rounds/)).toHaveValue('7');
+    await page.getByLabel(/^Max rounds/).fill('');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -215,11 +215,11 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel(/^timeout/).fill('1.5');
+    await page.getByLabel(/^Timeout \(seconds\)/).fill('1.5');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await expect(page.getByRole('alert')).toContainText('timeout');
-    await expect(page.getByLabel(/^timeout/)).toHaveValue('1.5');
+    await expect(page.getByLabel(/^Timeout \(seconds\)/)).toHaveValue('1.5');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
     await expectQuiet(page, problems);
   });
@@ -240,7 +240,7 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel(/^exitWhen/).fill('${nodes.n_b.status == "success"}');
+    await page.getByLabel(/^Exit when/).fill('${nodes.n_b.status == "success"}');
     const message = await captureConfirm(page, async () => {
       await page.getByRole('button', { name: 'Apply container settings' }).click();
     });
@@ -263,7 +263,7 @@ test.describe('U23 — container config editing', () => {
 
     await configure(page, 'loop 1');
     const message = await captureConfirm(page, async () => {
-      await page.getByLabel(/^timeout/).fill('30');
+      await page.getByLabel(/^Timeout \(seconds\)/).fill('30');
       await page.getByRole('button', { name: 'Apply container settings' }).click();
     });
 
@@ -296,7 +296,7 @@ test.describe('U23 — container config editing', () => {
 
     // Two loops, so the ordinal is what tells the two ⚙ buttons apart at all.
     await configure(page, 'loop 2');
-    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${equals(2, 2)}');
+    await expect(page.getByLabel(/^Exit when/)).toHaveValue('${equals(2, 2)}');
     await expect(page.locator('.react-flow__node[data-id="loop_2"] .flow-container')).toHaveClass(
       /flow-container--selected/,
     );
@@ -306,9 +306,9 @@ test.describe('U23 — container config editing', () => {
 
     // Switching subjects must carry no draft across — the panel is keyed per
     // container for exactly this.
-    await page.getByLabel(/^exitWhen/).fill('${equals(9, 9)}');
+    await page.getByLabel(/^Exit when/).fill('${equals(9, 9)}');
     await configure(page, 'loop 1');
-    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${equals(1, 1)}');
+    await expect(page.getByLabel(/^Exit when/)).toHaveValue('${equals(1, 1)}');
 
     await page.locator('.react-flow__pane').click({ position: { x: 8, y: 8 } });
     await expect(page.getByRole('heading', { name: 'loop 1' })).toHaveCount(0);
@@ -405,7 +405,7 @@ test.describe('#864 — the expression flyout on container fields', () => {
     await properties(page)
       .getByRole('button', { name: /→ done/ })
       .click();
-    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${nodes.n_body.output.done}');
+    await expect(page.getByLabel(/^Exit when/)).toHaveValue('${nodes.n_body.output.done}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -439,7 +439,7 @@ test.describe('#864 — the expression flyout on container fields', () => {
     await properties(page)
       .getByRole('button', { name: /→ rows/ })
       .click();
-    await expect(page.getByLabel(/^items/)).toHaveValue('${nodes.n_src.output.rows}');
+    await expect(page.getByLabel(/^Items/)).toHaveValue('${nodes.n_src.output.rows}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();

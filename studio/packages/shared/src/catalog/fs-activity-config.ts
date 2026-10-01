@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { singleLine } from '../schemas/field-presentation.js';
+import { presented, singleLine } from '../schemas/field-presentation.js';
+
+// #1396 — the human labels the node panel shows. Built per field (each call
+// returns a fresh instance), so no two activities share a tagged schema.
+const filePath = (title: string, description: string) =>
+  presented(singleLine(z.string()).min(1), { title, description });
+const IN_ROOTS = "Must sit inside one of the connection's allowed folders.";
 
 /**
  * #4 A11/A12 — the `fs` connector activities' input/config schemas. This is the
@@ -16,28 +22,31 @@ import { singleLine } from '../schemas/field-presentation.js';
  */
 
 /** `file_read`: a single non-empty `path`. */
-export const fileReadConfigSchema = z.object({ path: singleLine(z.string()).min(1) });
+export const fileReadConfigSchema = z.object({ path: filePath('File path', IN_ROOTS) });
 
 /** `file_write`: a `path` plus the UTF-8 text `content` to write. */
 export const fileWriteConfigSchema = z.object({
-  path: singleLine(z.string()).min(1),
-  content: z.string(),
+  path: filePath('File path', IN_ROOTS),
+  content: presented(z.string(), {
+    title: 'Content',
+    description: 'The text written to the file.',
+  }),
 });
 
 /** `file_copy`: a `source` and a `dest`, both non-empty. */
 export const fileCopyConfigSchema = z.object({
-  source: singleLine(z.string()).min(1),
-  dest: singleLine(z.string()).min(1),
+  source: filePath('Source path', IN_ROOTS),
+  dest: filePath('Destination path', IN_ROOTS),
 });
 
 /** `file_move`: a `source` and a `dest`, both non-empty. */
 export const fileMoveConfigSchema = z.object({
-  source: singleLine(z.string()).min(1),
-  dest: singleLine(z.string()).min(1),
+  source: filePath('Source path', IN_ROOTS),
+  dest: filePath('Destination path', IN_ROOTS),
 });
 
 /** `file_delete`: a single `path`. */
-export const fileDeleteConfigSchema = z.object({ path: singleLine(z.string()).min(1) });
+export const fileDeleteConfigSchema = z.object({ path: filePath('File path', IN_ROOTS) });
 
 /** `file_list`: a single directory `path`. */
-export const fileListConfigSchema = z.object({ path: singleLine(z.string()).min(1) });
+export const fileListConfigSchema = z.object({ path: filePath('Folder path', IN_ROOTS) });

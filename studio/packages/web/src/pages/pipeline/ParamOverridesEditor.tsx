@@ -11,7 +11,7 @@ import {
   takesWholeValue,
   type OverrideResource,
 } from './paramOverrides';
-import type { ConfigField } from './configForm';
+import { configFieldTitle, type ConfigField } from './configForm';
 import { LabelledControl } from '../../lib/LabelledControl';
 
 /**
@@ -98,7 +98,10 @@ export function ParamOverridesEditor({
               <select id={id} value={picked} onChange={(e) => setChoice(e.target.value)}>
                 {addable.map((key) => (
                   <option key={key} value={key}>
-                    {key}
+                    {overrideLabel(
+                      resource?.fields.find((f) => f.name === key),
+                      key,
+                    )}
                   </option>
                 ))}
               </select>
@@ -173,9 +176,13 @@ function OverrideRow({
         pickerName={name}
         target={target}
       >
-        {name}
+        {overrideLabel(field, name)}
       </PickableInput>
-      <button type="button" onClick={onRemove} aria-label={`Remove override ${name}`}>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove override ${overrideLabel(field, name)}`}
+      >
         Remove
       </button>
       {/* A sibling of the input's label, not inside it, so the flag does not
@@ -183,6 +190,15 @@ function OverrideRow({
       {problem !== null && <p className="contract-advisory">{problem}</p>}
     </div>
   );
+}
+
+/**
+ * #1396 — an override names its setting the way the resource's own form does
+ * ("Timeout (ms)"), falling back to the key for a setting the resource's kind
+ * no longer declares.
+ */
+function overrideLabel(field: ConfigField | undefined, key: string): string {
+  return field === undefined ? key : configFieldTitle(field);
 }
 
 /** Structural equality for the JSON values an override can hold. */

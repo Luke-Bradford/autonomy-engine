@@ -101,7 +101,7 @@ test.describe('#1394 readable activity cards', () => {
     const before = await height();
 
     await added.click();
-    await properties(page).getByLabel('seconds', { exact: true }).fill('${45}');
+    await properties(page).getByLabel('Wait time (seconds)', { exact: true }).fill('${45}');
     await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
     await expect(summary).toHaveText('wait 45s');
     expect(await height()).toEqual(before);

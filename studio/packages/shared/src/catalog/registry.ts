@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { literalText, singleLine } from '../schemas/field-presentation.js';
+import { literalText, presented, singleLine } from '../schemas/field-presentation.js';
 import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
@@ -60,6 +60,13 @@ import {
 const out = (name: string, type: Output['type']): Output => ({ name, type });
 
 /**
+ * #1396 — the hint on a `${}` duration field (`wait.seconds`,
+ * `webhook.timeoutSeconds`). A bare `30` is refused at save, so the example is
+ * the most useful thing the form can say; it is pinned valid by a test.
+ */
+const WHOLE_SECONDS_HINT = 'A whole ${} expression giving a number, e.g. ${30}.';
+
+/**
  * The `http_request` secret-SINK config field name (item 7 / S4) — the ONE
  * source of truth. The catalog declares it as a sink here; the server http
  * adapter (`connectors/http.ts`) imports it to derive the `secretFields` key
@@ -92,15 +99,29 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // sends the dispatch-resolved plaintext as that header, LAST, never echoed.
     secretSinkFields: [HTTP_SECRET_HEADERS_FIELD],
     configSchema: z.object({
-      url: singleLine(z.string()).min(1),
-      method: singleLine(z.string()).optional(),
-      headers: z.record(z.string(), z.string()).optional(),
-      body: z.string().optional(),
+      url: presented(singleLine(z.string()).min(1), {
+        title: 'Request URL',
+        description:
+          "The address to call, joined to the connection's base URL when it is relative.",
+      }),
+      method: presented(singleLine(z.string()).optional(), {
+        title: 'HTTP method',
+        description: 'Defaults to GET.',
+      }),
+      headers: presented(z.record(z.string(), z.string()).optional(), {
+        title: 'Request headers',
+      }),
+      body: presented(z.string().optional(), { title: 'Request body' }),
       // Metadata only (catalog `configSchema` is not a save-time validator — the
       // adapter validates the live request). Documents the sink shape for the UI.
       // Computed key + shared shape (`httpSecretHeadersSchema`) so neither the
       // field name NOR the record shape can desync from the adapter's schema.
-      [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
+      // Titled on the shared instance itself: there is no wrapper of its own to
+      // tag, and the registry is presentation only, so the adapter never sees it.
+      [HTTP_SECRET_HEADERS_FIELD]: presented(httpSecretHeadersSchema, {
+        title: 'Secret headers',
+        description: 'Headers whose values come from stored secrets, sent last and never echoed.',
+      }),
     }),
   },
   {
@@ -160,7 +181,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ condition: z.string().min(1) }),
+    configSchema: z.object({
+      condition: presented(z.string().min(1), {
+        title: 'Condition',
+        description: 'A whole ${} expression. True takes the true branch, false the false one.',
+      }),
+    }),
   },
   {
     // #4 A2 — the `switch` CONTROL activity. Same engine-evaluated shape as `if`
@@ -180,7 +206,16 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ on: z.string().min(1), cases: z.array(z.string()) }),
+    configSchema: z.object({
+      on: presented(z.string().min(1), {
+        title: 'Switch on',
+        description: 'The ${} value matched against the cases.',
+      }),
+      cases: presented(z.array(z.string()), {
+        title: 'Cases',
+        description: 'Each case is a branch; a value matching none takes the default branch.',
+      }),
+    }),
   },
   {
     // #4 A7 — the `fail` CONTROL activity. Same engine-evaluated shape as `if`/
@@ -202,7 +237,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ message: z.string().min(1) }),
+    configSchema: z.object({
+      message: presented(z.string().min(1), {
+        title: 'Error message',
+        description: 'This step fails with this message. May use ${}.',
+      }),
+    }),
   },
   {
     // #844 V5 — the `set_variable` CONTROL activity (spec V-D4). Engine-evaluated
@@ -224,8 +264,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({
-      variable: literalText(singleLine(z.string())).min(1),
-      value: singleLine(z.string()),
+      variable: presented(literalText(singleLine(z.string())).min(1), {
+        title: 'Variable name',
+        description: 'The name of a variable declared on the pipeline.',
+      }),
+      value: presented(singleLine(z.string()), { title: 'Value' }),
     }),
   },
   {
@@ -241,8 +284,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({
-      variable: literalText(singleLine(z.string())).min(1),
-      value: singleLine(z.string()),
+      variable: presented(literalText(singleLine(z.string())).min(1), {
+        title: 'Variable name',
+        description: 'The name of a variable declared on the pipeline.',
+      }),
+      value: presented(singleLine(z.string()), { title: 'Value' }),
     }),
   },
   {
@@ -266,7 +312,17 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [out(FILTER_RESULT_OUTPUT, 'json')],
-    configSchema: z.object({ items: z.string().min(1), predicate: z.string().min(1) }),
+    configSchema: z.object({
+      items: presented(z.string().min(1), {
+        title: 'Input array',
+        description: 'A whole ${} expression giving the array to filter.',
+      }),
+      predicate: presented(z.string().min(1), {
+        title: 'Keep when',
+        description:
+          'A whole ${} expression over item. The items it is true for are kept, in order.',
+      }),
+    }),
   },
   {
     // #4 A5+A6 — the `wait` CONTROL activity. Engine-evaluated like `if`/`switch`/
@@ -292,7 +348,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ seconds: singleLine(z.string()).min(1) }),
+    configSchema: z.object({
+      seconds: presented(singleLine(z.string()).min(1), {
+        title: 'Wait time',
+        unit: 'seconds',
+        description: WHOLE_SECONDS_HINT,
+      }),
+    }),
   },
   {
     // #4 A13 — the `webhook` external-wait CONTROL activity. Engine-evaluated like
@@ -330,7 +392,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({ timeoutSeconds: singleLine(z.string()).min(1) }),
+    configSchema: z.object({
+      timeoutSeconds: presented(singleLine(z.string()).min(1), {
+        title: 'Timeout',
+        unit: 'seconds',
+        description: `How long to wait for the callback before failing. ${WHOLE_SECONDS_HINT}`,
+      }),
+    }),
   },
   {
     // #4 A9 — the `execute_pipeline` CONTROL activity. It does NOT introduce a new

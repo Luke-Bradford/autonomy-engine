@@ -55,16 +55,16 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     // The Add list is the connection's allowlist: `maxBytes` and nothing else.
     // `maxEntries` exists on the kind and is not declared, so it is absent.
     const addConn = connGroup.getByRole('combobox', { name: 'Add connection override' });
-    await expect(addConn.locator('option')).toHaveText(['maxBytes']);
+    await expect(addConn.locator('option')).toHaveText(['Largest file read (bytes)']);
     await connGroup.getByRole('button', { name: 'Add override' }).click();
     // It starts from the connection's own value, so adding it changes nothing yet.
-    const maxBytes = connGroup.getByRole('textbox', { name: 'maxBytes' });
+    const maxBytes = connGroup.getByRole('textbox', { name: 'Largest file read (bytes)' });
     await expect(maxBytes).toHaveValue('1000');
     await maxBytes.fill('4096');
 
     const setGroup = properties(page).getByRole('group', { name: 'Source dataset overrides' });
     await setGroup.getByRole('button', { name: 'Add override' }).click();
-    const path = setGroup.getByRole('textbox', { name: 'path' });
+    const path = setGroup.getByRole('textbox', { name: 'File path' });
     await expect(path).toHaveValue('people.csv');
     await path.fill('out-${run.runId}.csv');
 
@@ -77,8 +77,10 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
     await expect(canvasNodes(page)).toHaveCount(1);
     await canvasNodes(page).first().click();
-    await expect(connGroup.getByRole('textbox', { name: 'maxBytes' })).toHaveValue('4096');
-    await expect(setGroup.getByRole('textbox', { name: 'path' })).toHaveValue(
+    await expect(connGroup.getByRole('textbox', { name: 'Largest file read (bytes)' })).toHaveValue(
+      '4096',
+    );
+    await expect(setGroup.getByRole('textbox', { name: 'File path' })).toHaveValue(
       'out-${run.runId}.csv',
     );
 
@@ -100,8 +102,12 @@ test.describe('#1304 — parameter overrides on the canvas', () => {
     expect(stored?.datasetParams).toEqual({ source: { path: 'out-${run.runId}.csv' } });
 
     // Removing the last row clears the end outright. `{}` is never written.
-    await connGroup.getByRole('button', { name: 'Remove override maxBytes' }).click();
-    await expect(connGroup.getByRole('textbox', { name: 'maxBytes' })).toHaveCount(0);
+    await connGroup
+      .getByRole('button', { name: 'Remove override Largest file read (bytes)' })
+      .click();
+    await expect(connGroup.getByRole('textbox', { name: 'Largest file read (bytes)' })).toHaveCount(
+      0,
+    );
     await expect(
       connGroup.getByRole('combobox', { name: 'Add connection override' }),
     ).toBeVisible();

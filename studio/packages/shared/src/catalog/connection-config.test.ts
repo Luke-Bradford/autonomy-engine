@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { CONNECTION_KIND_LABELS, ConnectionKindSchema } from '../schemas/connection.js';
-import { fieldLabelOf } from '../schemas/field-presentation.js';
+import { fieldLabelThrough } from '../schemas/field-presentation.js';
 import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
@@ -314,10 +314,7 @@ describe('connection form labels (#1396)', () => {
   it.each(CONNECTION_KINDS)('every %s config field has a title', (kind) => {
     const shape = connectionConfigSchema(kind).shape as Record<string, z.ZodType>;
     const untitled = Object.entries(shape)
-      .filter(([, field]) => {
-        const inner = (field as unknown as { def: { innerType?: unknown } }).def.innerType;
-        return fieldLabelOf(field) === undefined && fieldLabelOf(inner) === undefined;
-      })
+      .filter(([, field]) => fieldLabelThrough(field) === undefined)
       .map(([name]) => name);
     expect(untitled).toEqual([]);
   });

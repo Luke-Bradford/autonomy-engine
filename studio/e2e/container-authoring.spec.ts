@@ -284,7 +284,7 @@ test.describe('U6d — creating a container from the canvas', () => {
     await select(page, 'a');
     await page.getByLabel('New container kind').selectOption('loop');
     await page.getByLabel('Exit when').fill('${equals(nodes.a.status, "success")}');
-    await page.getByLabel('Max rounds (optional)').fill('0');
+    await page.getByLabel('Max rounds').fill('0');
     await page.getByRole('button', { name: 'Create container' }).click();
 
     // Scoped by TEXT: `.property-panel .error` alone also matches NodePanel's
