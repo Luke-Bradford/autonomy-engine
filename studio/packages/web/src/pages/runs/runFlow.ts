@@ -1,5 +1,6 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import {
+  CONTAINER_KIND_LABELS,
   COPY_ACTIVITY_TYPE,
   containerMembership,
   type Node,
@@ -246,7 +247,7 @@ export function runNodeHeight(portCount: number): number {
 export interface RunContainerData extends Record<string, unknown> {
   /**
    * What the box DRAWS, and therefore what `containerAriaLabel` announces —
-   * the `containerLabels` ordinal (`loop 2`), not the bare kind (#886). It is
+   * the `containerLabels` ordinal (`Until 2`), not the bare kind (#886). It is
    * the kind that is not identifying: a doc with two loops has two boxes whose
    * kind is the same string, which is what the author canvas learned in #883.
    */
@@ -425,7 +426,7 @@ export function runFlowNodes(
   );
 
   /* #886 — the same ordinal the author canvas draws, so a doc authored as
-     `loop 1` / `loop 2` is not drawn as `loop` / `loop` the moment it runs. The
+     `Until 1` / `Until 2` is not drawn as `loop` / `loop` the moment it runs. The
      activities inside these boxes have been named this way since #878; before
      this, the two halves of one picture named the same rectangle differently. */
   const containerNames = containerLabels(containers);
@@ -433,7 +434,7 @@ export function runFlowNodes(
   const boxes: FlowNode[] = containers.map((c) => {
     const rect = rects.get(c.id)!;
     // Unreachable fallback: `containerNames` is built from this very array.
-    const name = containerNames.get(c.id) ?? c.kind;
+    const name = containerNames.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind];
     const cs = showStatus ? (state?.containers[c.id] ?? null) : null;
     const status = cs?.status ?? null;
     /* #873 — worded HERE, not at the render site the ticket suggested, so the

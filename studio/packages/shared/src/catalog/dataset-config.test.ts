@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import { fieldLabelOf, fieldLabelThrough } from '../schemas/field-presentation.js';
+import {
+  fieldLabelOf,
+  fieldLabelThrough,
+  unnamedEnumValues,
+} from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { ConnectionKindSchema } from '../schemas/connection.js';
 import { DATASET_KIND_LABELS, DatasetKindSchema } from '../schemas/dataset.js';
@@ -565,6 +569,10 @@ describe('dataset form labels (#1396)', () => {
     const shape = datasetConfigSchema(kind).shape as Record<string, z.ZodType>;
     const titles = Object.values(shape).map((field) => fieldLabelThrough(field)?.title ?? '');
     expect(titles.filter((title) => /name|kind|store|columns/i.test(title))).toEqual([]);
+  });
+
+  it.each(DATASET_KINDS)('every %s enum value has a display name (#1396)', (kind) => {
+    expect(unnamedEnumValues(datasetConfigSchema(kind).shape)).toEqual([]);
   });
 
   it.each(DATASET_KINDS)('%s has a display name', (kind) => {

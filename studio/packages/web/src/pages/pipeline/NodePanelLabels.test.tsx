@@ -162,3 +162,37 @@ describe('node panel labels (#1396)', () => {
     expect(getByRole('option', { name: `Bound (${CONNECTION_KIND_LABELS.http})` })).toBeTruthy();
   });
 });
+
+describe('node panel enum choices (#1396)', () => {
+  /** Each choice of the select labelled `title`, as `value=text`. */
+  const choicesOf = (root: HTMLElement, title: string): string[] => {
+    const select = [...root.querySelectorAll('select')].find((el) =>
+      [...(el.labels ?? [])].some((l) => l.textContent?.trim() === title),
+    );
+    return [...(select?.options ?? [])].map((o) => `${o.value}=${o.textContent ?? ''}`);
+  };
+
+  it('names each value of an enum setting, and stores the value itself', () => {
+    const store = createCanvasStore();
+    const config = { capture: 'full' };
+    store.setState({ nodes: [{ id: 'n', type: 'llm_call', config, position: { x: 0, y: 0 } }] });
+    const { container } = render(
+      <NodePanel
+        store={store}
+        connections={[]}
+        datasets={[]}
+        nodeId="n"
+        nodeType="llm_call"
+        config={config}
+        connectionId={undefined}
+        call={undefined}
+      />,
+    );
+    expect(choicesOf(container, 'Capture level')).toEqual([
+      '=— none —',
+      'metadata=Metadata only',
+      'full=Full text',
+    ]);
+    expect(choicesOf(container, 'Tool choice')).toContain('auto=Model decides');
+  });
+});

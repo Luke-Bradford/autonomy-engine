@@ -388,16 +388,16 @@ test.describe('copy/paste on the canvas (U21)', () => {
       ],
     });
 
-    await page.getByRole('button', { name: 'Configure loop 1' }).click();
+    await page.getByRole('button', { name: 'Configure Until 1' }).click();
     await page.keyboard.press('Meta+c');
-    await expect(page.getByText('Copied loop 1.')).toBeVisible();
+    await expect(page.getByText('Copied Until 1.')).toBeVisible();
     // A container is never cut — said, not silently ignored.
     await page.keyboard.press('Meta+x');
     await expect(page.getByText('A container cannot be cut. Copy it with ⌘C.')).toBeVisible();
 
     await openInApp(page, targetId, ['z', 'a']);
     await page.keyboard.press('Meta+v');
-    await expect(page.getByText('Pasted loop 1 from another pipeline.')).toBeVisible();
+    await expect(page.getByText('Pasted Until 1 from another pipeline.')).toBeVisible();
     await expect(page.locator('.flow-container')).toHaveCount(1);
 
     await page.getByRole('button', { name: 'Save version' }).click();

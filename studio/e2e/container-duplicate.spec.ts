@@ -65,15 +65,15 @@ test.describe('duplicate a container (U21)', () => {
     const boxes = page.locator('.flow-container');
     await expect(boxes).toHaveCount(1);
 
-    await page.getByRole('button', { name: 'Configure loop 1' }).click();
+    await page.getByRole('button', { name: 'Configure Until 1' }).click();
     await page.getByRole('button', { name: 'Duplicate container' }).click();
-    await expect(page.getByText('Duplicated loop 1.')).toBeVisible();
+    await expect(page.getByText('Duplicated Until 1.')).toBeVisible();
     // The copy lands clear of its row, often past the pane's edge, and is
     // panned into view: it is the panel's subject.
-    await expect(page.getByRole('group', { name: /^loop 2 container/ })).toBeInViewport();
+    await expect(page.getByRole('group', { name: /^Until 2 container/ })).toBeInViewport();
     // The copy is the panel's subject now — "another one of these, but different".
     const panel = properties(page);
-    await expect(panel.getByRole('heading', { name: 'loop 2' })).toBeVisible();
+    await expect(panel.getByRole('heading', { name: 'Until 2' })).toBeVisible();
 
     // Beside the original, not over it. Fit first: after the reveal the original
     // may be culled (`onlyRenderVisibleElements`), and this is about the boxes.
@@ -91,8 +91,8 @@ test.describe('duplicate a container (U21)', () => {
     // (`onlyRenderVisibleElements`) because a container that appears is panned
     // into view — the canvas's current subject is never left culled.
     await page.keyboard.press('Meta+d');
-    await expect(page.getByText('Duplicated loop 2.')).toBeVisible();
-    await expect(page.getByRole('group', { name: /^loop 3 container/ })).toBeInViewport();
+    await expect(page.getByText('Duplicated Until 2.')).toBeVisible();
+    await expect(page.getByRole('group', { name: /^Until 3 container/ })).toBeInViewport();
 
     await page.getByRole('button', { name: 'Save version' }).click();
     // The server runs `validatePipelineDoc` on the write; an exitWhen still

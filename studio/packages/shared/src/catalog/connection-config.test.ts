@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { CONNECTION_KIND_LABELS, ConnectionKindSchema } from '../schemas/connection.js';
-import { fieldLabelThrough } from '../schemas/field-presentation.js';
+import { fieldLabelThrough, unnamedEnumValues } from '../schemas/field-presentation.js';
 import {
   CONNECTION_CONFIG_SCHEMAS,
   CONNECTION_KINDS,
@@ -317,6 +317,10 @@ describe('connection form labels (#1396)', () => {
       .filter(([, field]) => fieldLabelThrough(field) === undefined)
       .map(([name]) => name);
     expect(untitled).toEqual([]);
+  });
+
+  it.each(CONNECTION_KINDS)('every %s enum value has a display name (#1396)', (kind) => {
+    expect(unnamedEnumValues(connectionConfigSchema(kind).shape)).toEqual([]);
   });
 
   it.each(CONNECTION_KINDS)('%s has a display name', (kind) => {

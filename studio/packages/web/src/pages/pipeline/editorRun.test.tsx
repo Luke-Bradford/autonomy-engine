@@ -136,7 +136,7 @@ describe('the authoring canvas under an editor run', () => {
       }),
     );
     expect(container.querySelector('.flow-container-label')?.textContent).toBe(
-      'stage 1 · running · round 2',
+      'Stage 1 · running · round 2',
     );
   });
 
@@ -148,14 +148,14 @@ describe('the authoring canvas under an editor run', () => {
         ]),
       }),
     );
-    expect(container.querySelector('.flow-container-label')?.textContent).toBe('stage 1');
+    expect(container.querySelector('.flow-container-label')?.textContent).toBe('Stage 1');
     expect(container.querySelector('.flow-container')?.getAttribute('data-run-status')).toBeNull();
   });
 
   it('draws nothing at all with no run', () => {
     const { container } = mountCanvas(null);
     expect(container.querySelector('[data-testid="node-run-status"]')).toBeNull();
-    expect(container.querySelector('.flow-container-label')?.textContent).toBe('stage 1');
+    expect(container.querySelector('.flow-container-label')?.textContent).toBe('Stage 1');
   });
 });
 

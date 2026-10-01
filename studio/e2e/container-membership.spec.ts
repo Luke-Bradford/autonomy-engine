@@ -231,7 +231,9 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     expect(translateOf(afterDelete).x).not.toBe(translateOf(beforeDelete).x);
 
     // The way out — the box's own control, inside a box that is otherwise inert.
-    await nodeById(page, 'loop_1').getByRole('button', { name: 'Delete loop 1 container' }).click();
+    await nodeById(page, 'loop_1')
+      .getByRole('button', { name: 'Delete Until 1 container' })
+      .click();
     await expect(nodeById(page, 'loop_1')).toHaveCount(0);
     // The activity outside the box is untouched.
     await expect(nodeById(page, 'after')).toHaveCount(1);
@@ -281,7 +283,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     const pipelineId = await openSeededCanvas(page, 'container-ungroup', stageDoc());
 
     await nodeById(page, 'stage_1')
-      .getByRole('button', { name: 'Delete stage 1 container' })
+      .getByRole('button', { name: 'Delete Stage 1 container' })
       .click();
 
     await expect(nodeById(page, 'stage_1')).toHaveCount(0);
@@ -326,7 +328,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     const before = await viewportTransform(page);
 
     const button = nodeById(page, 'stage_1').getByRole('button', {
-      name: 'Delete stage 1 container',
+      name: 'Delete Stage 1 container',
     });
     const box = (await button.boundingBox())!;
     const [cx, cy] = [box.x + box.width / 2, box.y + box.height / 2];

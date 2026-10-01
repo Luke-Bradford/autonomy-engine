@@ -372,7 +372,7 @@ describe('connectRejection — container boundaries', () => {
     expect(message).toBeDefined();
     // The ordinal, not a bare `toContain('loop')` — which a bare-kind message
     // would satisfy just as well, and did before #883.
-    expect(message).toContain('the loop 1 container');
+    expect(message).toContain('the Until 1 container');
     expect(message).not.toContain(id);
   });
 
@@ -394,7 +394,7 @@ describe('connectRejection — container boundaries', () => {
     );
     const message = reject(g, 'c_1', 'b')?.message;
     expect(message).toBeDefined();
-    expect(message).toContain('loop 1 container');
+    expect(message).toContain('Until 1 container');
     expect(message).not.toContain('c_1');
   });
 
@@ -418,8 +418,8 @@ describe('connectRejection — container boundaries', () => {
     const message = reject(g, 'a', 'b')?.message;
     expect(message).toBeDefined();
     expect(message).not.toContain('the stage container and the stage container');
-    expect(message).toContain('the stage 1 container');
-    expect(message).toContain('the stage 2 container');
+    expect(message).toContain('the Stage 1 container');
+    expect(message).toContain('the Stage 2 container');
     expect(message).not.toContain('c_11111111');
     expect(message).not.toContain('c_22222222');
   });
@@ -435,8 +435,8 @@ describe('connectRejection — container boundaries', () => {
       ],
     );
     const message = reject(g, 'a', 'b')?.message;
-    expect(message).toContain('the loop 1 container');
-    expect(message).toContain('the stage 1 container');
+    expect(message).toContain('the Until 1 container');
+    expect(message).toContain('the Stage 1 container');
   });
 
   /**

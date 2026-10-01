@@ -310,7 +310,7 @@ export function ConfigFieldControl({
               <option value="">— none —</option>
               {(field.enumOptions ?? []).map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {field.label?.options?.[option] ?? option}
                 </option>
               ))}
             </select>

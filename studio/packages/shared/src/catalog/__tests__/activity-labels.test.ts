@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { CONTAINER_CONFIG_FIELD_NAMES, validateDoc, validateRefs } from '../../engine/params.js';
-import { fieldLabelThrough } from '../../schemas/field-presentation.js';
+import { fieldLabelThrough, unnamedEnumValues } from '../../schemas/field-presentation.js';
 import { ContainerSchema } from '../../schemas/pipeline.js';
 import { catalog, isStructuralCallActivity } from '../registry.js';
 
@@ -44,6 +44,20 @@ describe('activity config labels (#1396)', () => {
       expect(clashes).toEqual([]);
     },
   );
+
+  // The select shows the name; the stored value stays the enum value.
+  it.each(FORM_ACTIVITIES.map((e) => [e.type, e] as const))(
+    'every %s enum value has a display name',
+    (_type, entry) => {
+      expect(unnamedEnumValues(shapeOf(entry.configSchema))).toEqual([]);
+    },
+  );
+
+  it('every container setting enum value has a display name', () => {
+    const shape = shapeOf(ContainerSchema);
+    const settings = Object.fromEntries(CONTAINER_CONFIG_FIELD_NAMES.map((n) => [n, shape[n]]));
+    expect(unnamedEnumValues(settings)).toEqual([]);
+  });
 
   it('every container setting has a title', () => {
     const shape = shapeOf(ContainerSchema);

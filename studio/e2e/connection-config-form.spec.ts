@@ -112,9 +112,11 @@ test.describe('U13b per-kind connection config', () => {
       // starts on "— none —" and the operator has to pick. The schema refuses
       // the empty one, which is the whole point of having no safe default.
       '— none —',
-      'disable',
-      'require',
-      'verify-full',
+      // #1396 — each mode by its display name; the stored value (asserted
+      // below) is still the mode itself.
+      'Disable',
+      'Require',
+      'Verify full',
     ]);
 
     await form(page).getByLabel('Host', { exact: true }).fill('db.example.test');

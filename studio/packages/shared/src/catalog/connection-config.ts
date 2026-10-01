@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { presented, singleLine } from '../schemas/field-presentation.js';
+import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { ConnectionKindSchema, type ConnectionKind } from '../schemas/connection.js';
@@ -231,7 +231,12 @@ export const postgresConnectionConfigSchema = z.object({
   /** Required — see `PostgresSslModeSchema` on why there is no default. */
   sslmode: presented(PostgresSslModeSchema, {
     title: 'TLS mode',
-    description: 'disable sends in plaintext; verify-full checks the certificate and host name.',
+    description: 'Disable sends in plaintext; Verify full checks the certificate and host name.',
+    options: optionTitles(PostgresSslModeSchema, {
+      disable: 'Disable',
+      require: 'Require',
+      'verify-full': 'Verify full',
+    }),
   }),
   /** How long to wait for the CONNECTION itself (`connectionTimeoutMillis`). */
   connectTimeoutMs: presented(z.number().int().positive().optional(), {

@@ -53,9 +53,14 @@ required marks and display names; its layout is its own, below.
 
   Keep the key visible: server errors, advisories and `${}` expressions all cite it.
 - `unit` names what the stored value is in. It never converts the value.
+- **An enum's values are named too.** Add `options: optionTitles(enumSchema, { value: 'Name' })`
+  to the same `presented(...)` call. The select shows the name and stores the value; a value left
+  unnamed is a type error, and each catalog's "every enum value has a display name" test catches an
+  enum field with no names at all. Descriptions use the names ("Append adds the rows"), not the
+  values.
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
   `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`,
-  `CONCURRENCY_POLICY_LABELS`). The stored value stays the identifier.
+  `CONCURRENCY_POLICY_LABELS`, `CONTAINER_KIND_LABELS`). The stored value stays the identifier.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).

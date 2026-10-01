@@ -1,4 +1,5 @@
 import {
+  CONTAINER_KIND_LABELS,
   implicitRouting,
   scanTemplateRefs,
   type Container,
@@ -70,7 +71,7 @@ export interface ContainerEditConsequence {
    * doc must not be blocked by the breakage they are repairing.
    *
    * Matched by exact STRING, which over-reports in one case: an issue whose text
-   * merely changes (a boundary error gaining `(child of 'stage 2')` on its far
+   * merely changes (a boundary error gaining `(child of 'Stage 2')` on its far
    * end) reads as new. Kept anyway — the alternative is a coarser key, and a
    * coarser key can MASK a genuinely new issue about the same element, since
    * more than one rule can report the same edge. Over-warning on a doc that is
@@ -252,7 +253,7 @@ export function containerEditConsequence(
  * one gesture; #883 ended that split — see below.
  *
  * #883 CLOSED the cost this docblock used to state. The ordinal was not DRAWN on
- * the box, so with two loops on screen "loop 2" identified the option but not the
+ * the box, so with two loops on screen "Until 2" identified the option but not the
  * rectangle — U23 narrowed that (the ⚙ button's accessible name carries it, so it
  * was addressable to a screen reader and to a spec) without closing it for a
  * SIGHTED operator. `ContainerNode` now renders this label, so the ordinal names
@@ -276,7 +277,7 @@ export function containerLabels(containers: Container[]): Map<string, string> {
   for (const c of containers) {
     const n = (seen.get(c.kind) ?? 0) + 1;
     seen.set(c.kind, n);
-    out.set(c.id, `${c.kind} ${n}`);
+    out.set(c.id, `${CONTAINER_KIND_LABELS[c.kind]} ${n}`);
   }
   return out;
 }
@@ -355,7 +356,7 @@ const NODE_LOCATION = String.raw`nodes?\.([^.\s:]+)(\.?)`;
 /**
  * The CONTAINER labels need no quoting treatment of their own, for a reason worth
  * writing down rather than leaving to be re-derived: `containerLabels` mints
- * `` `${c.kind} ${n}` `` from `kind`, which is a closed union rather than free
+ * `` `${CONTAINER_KIND_LABELS[c.kind]} ${n}` `` from a fixed map rather than free
  * text, so it cannot carry a separator at all. They go through `namedList` anyway
  * because both kinds of label flow through the same `label()` lookup.
  */

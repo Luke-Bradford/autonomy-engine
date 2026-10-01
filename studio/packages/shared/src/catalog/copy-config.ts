@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { presented, singleLine } from '../schemas/field-presentation.js';
+import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { DataTypeSchema } from '../schemas/dataset.js';
 
 /**
@@ -237,6 +237,9 @@ export const CopyMappingSchema = mappingArray(z.string().optional());
  */
 export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 
+/** How a `copy` writes into its sink: add rows, or replace what it holds. */
+const copyWriteModeSchema = z.enum(['append', 'overwrite']);
+
 /**
  * The whole `copy` config, minus the one field the two variants disagree about
  * (#1134, §6.1+§4). Both variants below are built from this, for the reason the
@@ -264,10 +267,11 @@ export const CopyDispatchMappingSchema = mappingArray(z.unknown().optional());
 const copyInputShape = <T extends z.ZodType>(mapping: T) =>
   z.object({
     mapping,
-    mode: presented(z.enum(['append', 'overwrite']).default('append'), {
+    mode: presented(copyWriteModeSchema.default('append'), {
       title: 'Write mode',
       description:
-        'append adds the rows; overwrite replaces what the sink holds. Defaults to append.',
+        'Append adds the rows; Overwrite replaces what the sink holds. Defaults to Append.',
+      options: optionTitles(copyWriteModeSchema, { append: 'Append', overwrite: 'Overwrite' }),
     }),
   });
 

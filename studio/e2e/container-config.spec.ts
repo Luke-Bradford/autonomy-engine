@@ -68,7 +68,7 @@ test.describe('U23 — container config editing', () => {
       containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 2)}' }],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     const field = page.getByLabel(/^Exit when/);
     await expect(field).toHaveValue('${equals(1, 2)}');
     await field.fill('${equals(1, 1)}');
@@ -102,7 +102,7 @@ test.describe('U23 — container config editing', () => {
       ],
     });
 
-    await configure(page, 'foreach 1');
+    await configure(page, 'ForEach 1');
     await expect(page.getByLabel(/^Items/)).toHaveValue('${createArray(1, 2)}');
     await expect(page.getByLabel(/^Batch count/)).toHaveCount(1);
     // Refused on a foreach by `validateDoc`, so never offered here.
@@ -140,7 +140,7 @@ test.describe('U23 — container config editing', () => {
       containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await page.getByLabel(/^Timeout \(seconds\)/).fill('45');
     await page.getByLabel(/^Join/).selectOption('any');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -184,7 +184,7 @@ test.describe('U23 — container config editing', () => {
       ],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await expect(page.getByLabel(/^Max rounds/)).toHaveValue('7');
     await page.getByLabel(/^Max rounds/).fill('');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -214,7 +214,7 @@ test.describe('U23 — container config editing', () => {
       containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await page.getByLabel(/^Timeout \(seconds\)/).fill('1.5');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
@@ -239,7 +239,7 @@ test.describe('U23 — container config editing', () => {
       containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await page.getByLabel(/^Exit when/).fill('${nodes.n_b.status == "success"}');
     const message = await captureConfirm(page, async () => {
       await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -261,7 +261,7 @@ test.describe('U23 — container config editing', () => {
       containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     const message = await captureConfirm(page, async () => {
       await page.getByLabel(/^Timeout \(seconds\)/).fill('30');
       await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -295,7 +295,7 @@ test.describe('U23 — container config editing', () => {
     });
 
     // Two loops, so the ordinal is what tells the two ⚙ buttons apart at all.
-    await configure(page, 'loop 2');
+    await configure(page, 'Until 2');
     await expect(page.getByLabel(/^Exit when/)).toHaveValue('${equals(2, 2)}');
     await expect(page.locator('.react-flow__node[data-id="loop_2"] .flow-container')).toHaveClass(
       /flow-container--selected/,
@@ -307,11 +307,11 @@ test.describe('U23 — container config editing', () => {
     // Switching subjects must carry no draft across — the panel is keyed per
     // container for exactly this.
     await page.getByLabel(/^Exit when/).fill('${equals(9, 9)}');
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await expect(page.getByLabel(/^Exit when/)).toHaveValue('${equals(1, 1)}');
 
     await page.locator('.react-flow__pane').click({ position: { x: 8, y: 8 } });
-    await expect(page.getByRole('heading', { name: 'loop 1' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Until 1' })).toHaveCount(0);
     await expect(
       page.locator('.react-flow__node[data-id="loop_1"] .flow-container'),
     ).not.toHaveClass(/flow-container--selected/);
@@ -396,7 +396,7 @@ test.describe('#864 — the expression flyout on container fields', () => {
       ],
     });
 
-    await configure(page, 'loop 1');
+    await configure(page, 'Until 1');
     await properties(page).getByRole('button', { name: 'Insert reference into exitWhen' }).click();
     // The save gate's boolean check is what filters `note` out, and the scope
     // rule is what keeps the upstream `rows` out — neither restated in the UI.
@@ -433,7 +433,7 @@ test.describe('#864 — the expression flyout on container fields', () => {
       ],
     });
 
-    await configure(page, 'foreach 1');
+    await configure(page, 'ForEach 1');
     await properties(page).getByRole('button', { name: 'Insert reference into items' }).click();
     await expect(properties(page).getByRole('button', { name: /→ done/ })).toHaveCount(0);
     await properties(page)

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { presented, singleLine } from '../schemas/field-presentation.js';
+import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
@@ -220,7 +220,13 @@ export const delimitedDatasetConfigSchema = z
     }),
     encoding: presented(DelimitedEncodingSchema.default('utf-8'), {
       title: 'Encoding',
-      description: 'The file’s text encoding. Defaults to utf-8.',
+      description: 'The file’s text encoding. Defaults to UTF-8.',
+      options: optionTitles(DelimitedEncodingSchema, {
+        'utf-8': 'UTF-8',
+        'utf-16le': 'UTF-16 LE',
+        'utf-16be': 'UTF-16 BE',
+        'windows-1252': 'Windows-1252',
+      }),
     }),
     /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
      * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */

@@ -353,23 +353,23 @@ describe('runFlowNodes', () => {
 
   /* #886 — the run graph names a container the way the AUTHOR canvas does.
      Before this, its box drew and announced the bare `kind`, so a pipeline
-     authored as `loop 1` / `loop 2` ran as `loop` / `loop`: the two halves of
+     authored as `Until 1` / `Until 2` ran as `loop` / `loop`: the two halves of
      one picture, disagreeing about which rectangle is which. The activities
      beside them have been named this way since #878. */
   it('names a container box by its ordinal, not by its bare kind', () => {
     const box = runFlowNodes(CONTAINER_DOC, projected())[0]!;
-    expect(box.data.name).toBe('stage 1');
-    expect(box.ariaLabel).toContain('stage 1 container');
+    expect(box.data.name).toBe('Stage 1');
+    expect(box.ariaLabel).toContain('Stage 1 container');
   });
 
   it('tells two containers of ONE kind apart, in the box and in its accessible name', () => {
     const boxes = runFlowNodes(TWO_LOOP_DOC, null).filter((n) => n.type === 'runContainer');
     // The bare kind — what this drew before — is the same string for both, so
     // only the ordinal can carry the difference.
-    expect(boxes.map((b) => b.data.name)).toEqual(['loop 1', 'loop 2']);
+    expect(boxes.map((b) => b.data.name)).toEqual(['Until 1', 'Until 2']);
     expect(boxes.map((b) => b.ariaLabel)).toEqual([
-      expect.stringContaining('loop 1 container'),
-      expect.stringContaining('loop 2 container'),
+      expect.stringContaining('Until 1 container'),
+      expect.stringContaining('Until 2 container'),
     ]);
   });
 

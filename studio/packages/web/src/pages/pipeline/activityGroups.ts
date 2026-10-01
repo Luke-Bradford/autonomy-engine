@@ -1,4 +1,5 @@
 import {
+  CONTAINER_KIND_LABELS,
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
   catalog,
@@ -104,20 +105,19 @@ export const CONTAINER_GROUP_LABEL = 'Containers';
 export const CONTAINER_PALETTE: readonly ContainerPaletteEntry[] = [
   {
     kind: 'foreach',
-    title: 'ForEach',
+    title: CONTAINER_KIND_LABELS.foreach,
     description: 'Run the activities inside once for each item of an array',
     icon: ArrowRepeatAllRegular,
   },
   {
     kind: 'loop',
-    title: 'Until',
-    // The canvas names the box by its kind ("loop 1"), so the tooltip says so.
+    title: CONTAINER_KIND_LABELS.loop,
     description: 'Repeat the activities inside until a condition is true (a loop)',
     icon: ArrowSyncRegular,
   },
   {
     kind: 'stage',
-    title: 'Stage',
+    title: CONTAINER_KIND_LABELS.stage,
     description: 'Group activities into one step',
     icon: GroupRegular,
   },

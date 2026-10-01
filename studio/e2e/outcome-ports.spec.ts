@@ -361,7 +361,7 @@ test.describe('U19 outcome ports', () => {
     await expect(label('failure')).toHaveCSS('opacity', '0');
 
     await page.keyboard.press('Shift');
-    await box.getByRole('button', { name: 'Configure stage 1' }).focus();
+    await box.getByRole('button', { name: 'Configure Stage 1' }).focus();
     await expect(label('failure')).toHaveCSS('opacity', '1');
     await expect(label('success')).toHaveCSS('opacity', '1');
   });

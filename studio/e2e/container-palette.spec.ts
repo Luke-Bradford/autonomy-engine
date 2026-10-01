@@ -104,8 +104,8 @@ test.describe('#1420 containers in the Activities palette', () => {
     const dropAt = { x: node.x, y: node.y + node.height + 60 };
     await dropFromPalette(page, 'ForEach', dropAt);
 
-    const box = containerBox(page, 'foreach 1');
-    await expect(box).toHaveAttribute('aria-label', /^foreach 1 container, 0 activities\b/);
+    const box = containerBox(page, 'ForEach 1');
+    await expect(box).toHaveAttribute('aria-label', /^ForEach 1 container, 0 activities\b/);
     // Two edge-less activities are an inferred chain, and the first container
     // turns it into parallel partitions — the one thing the drop confirms.
     expect(dialogs).toHaveLength(1);
@@ -124,8 +124,8 @@ test.describe('#1420 containers in the Activities palette', () => {
 
     await dragNodeCentreTo(page, 'b', centre(boxRect));
 
-    await expect(box).toHaveAttribute('aria-label', /^foreach 1 container, 1 activity\b/);
-    expect(await membershipOf(page, 'b')).toBe('foreach 1');
+    await expect(box).toHaveAttribute('aria-label', /^ForEach 1 container, 1 activity\b/);
+    expect(await membershipOf(page, 'b')).toBe('ForEach 1');
     expect(await issues(page)).not.toContain('needs at least one child');
 
     await expectQuiet(page, problems);
@@ -141,19 +141,19 @@ test.describe('#1420 containers in the Activities palette', () => {
 
     const node = (await nodeById(page, 'a').boundingBox())!;
     await dropFromPalette(page, 'Stage', { x: node.x + node.width + 220, y: node.y });
-    const box = containerBox(page, 'stage 1');
-    await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 0 activities\b/);
+    const box = containerBox(page, 'Stage 1');
+    await expect(box).toHaveAttribute('aria-label', /^Stage 1 container, 0 activities\b/);
 
     const boxRect = (await box.boundingBox())!;
     await dropFromPalette(page, 'HTTP Request', { x: boxRect.x + 30, y: boxRect.y + 40 });
 
-    await expect(box).toHaveAttribute('aria-label', /^stage 1 container, 1 activity\b/);
+    await expect(box).toHaveAttribute('aria-label', /^Stage 1 container, 1 activity\b/);
 
     // The click path (the keyboard-reachable one) adds an empty box too.
     await toolbox(page).getByRole('button', { name: 'Until', exact: true }).click();
-    await expect(containerBox(page, 'loop 1')).toHaveAttribute(
+    await expect(containerBox(page, 'Until 1')).toHaveAttribute(
       'aria-label',
-      /^loop 1 container, 0 activities\b/,
+      /^Until 1 container, 0 activities\b/,
     );
 
     await expectQuiet(page, problems);
@@ -177,9 +177,9 @@ test.describe('#1420 containers in the Activities palette', () => {
     await dragNodeCentreTo(page, 'b', { x: centre(b).x + 8, y: centre(b).y + 4 });
 
     expect(await membershipOf(page, 'b')).toBe('— none —');
-    await expect(containerBox(page, 'stage 1')).toHaveAttribute(
+    await expect(containerBox(page, 'Stage 1')).toHaveAttribute(
       'aria-label',
-      /^stage 1 container, 2 activities\b/,
+      /^Stage 1 container, 2 activities\b/,
     );
 
     await expectQuiet(page, problems);

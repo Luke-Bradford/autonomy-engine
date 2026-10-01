@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { authoredAsExpression, presented, singleLine } from '../schemas/field-presentation.js';
+import {
+  authoredAsExpression,
+  optionTitles,
+  presented,
+  singleLine,
+} from '../schemas/field-presentation.js';
 import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**
@@ -737,6 +742,12 @@ export const llmCallConfigSchema = z
     reasoningEffort: presented(reasoningEffortSchema.optional(), {
       title: 'Reasoning effort',
       description: 'How much the model thinks before answering.',
+      options: optionTitles(reasoningEffortSchema, {
+        low: 'Low',
+        medium: 'Medium',
+        high: 'High',
+        max: 'Max',
+      }),
     }),
     // L4a output surface — `outputMode` (absent = text, back-compat) selects the
     // node's output contract; a `structured` node's `outputSchema` (the restricted
@@ -746,7 +757,8 @@ export const llmCallConfigSchema = z
     // save.
     outputMode: presented(outputModeSchema.optional(), {
       title: 'Output mode',
-      description: 'text returns free text; structured returns the fields of Output schema.',
+      description: 'Text returns free text; Structured returns the fields of Output schema.',
+      options: optionTitles(outputModeSchema, { text: 'Text', structured: 'Structured' }),
     }),
     outputSchema: presented(llmOutputSchemaSchema.optional(), {
       title: 'Output schema',
@@ -765,6 +777,11 @@ export const llmCallConfigSchema = z
     toolChoice: presented(llmToolChoiceSchema.optional(), {
       title: 'Tool choice',
       description: 'Whether the model may, must or must not call a tool.',
+      options: optionTitles(llmToolChoiceSchema, {
+        auto: 'Model decides',
+        required: 'Must call a tool',
+        none: 'No tool calls',
+      }),
     }),
     // L10b bounded tool loop — how many tool round-trips one attempt may spend
     // (absent = 1, the L10a single round-trip). Coupled to `tools` by the shared
@@ -821,7 +838,8 @@ export const llmCallConfigSchema = z
     capture: presented(llmCaptureModeSchema.optional(), {
       title: 'Capture level',
       description:
-        'metadata keeps lengths and hashes; full also keeps the text. Defaults to metadata.',
+        'Metadata only keeps lengths and hashes; Full text also keeps the text. Defaults to Metadata only.',
+      options: optionTitles(llmCaptureModeSchema, { metadata: 'Metadata only', full: 'Full text' }),
     }),
     // #605 — record the model's REASONING summary on each `activity.captured`
     // (its `reasoning` field). OFF unless set, and only with `capture: 'full'`

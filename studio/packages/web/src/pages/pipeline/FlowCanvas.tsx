@@ -36,6 +36,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+  CONTAINER_KIND_LABELS,
   containerMembership,
   implicitRouting,
   type ContainerKind,
@@ -58,7 +59,6 @@ import {
   routingSentence,
 } from './containerRules';
 import { hasCanvasDragType, readActivityDragType, readContainerDragKind } from './activityDnd';
-import { CONTAINER_PALETTE } from './activityGroups';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { useNodeFan } from './useNodeFan';
@@ -290,7 +290,7 @@ function RunChip({ entry }: { entry: RunOverlayEntry }) {
 
 interface ContainerData extends Record<string, unknown> {
   kind: ContainerKind;
-  /** This container's within-kind name (`loop 2`) — `containerLabels`' ordinal. */
+  /** This container's within-kind name (`Until 2`) — `containerLabels`' ordinal. */
   label: string;
   /** Whether this container is the property panel's current subject (U23). */
   selected: boolean;
@@ -317,14 +317,14 @@ interface ContainerData extends Record<string, unknown> {
 /**
  * U6c — a container, drawn as the box its children sit in.
  *
- * The header states the container in WORDS ('loop 2' / 'stage 1'), not by colour
+ * The header states the container in WORDS ('Until 2' / 'Stage 1'), not by colour
  * or shape alone — the epic's non-color-status-labels criterion — and it is the
  * same text `connectRules` names the container by when it refuses a boundary
  * crossing, so a refusal points at something on screen.
  *
  * #883 put the within-kind ORDINAL in that header. It used to be the bare kind,
  * on the reasoning that the kind is what the box IS; but `containerLabels` had
- * already made "loop 2" the name every surface that OFFERS a container uses, so
+ * already made "Until 2" the name every surface that OFFERS a container uses, so
  * the box was the one place the name could not be matched to a rectangle. #878
  * settled the question by drawing the activity ordinal on its box: leaving the
  * container's off made a single sentence identify one end and not the other
@@ -431,7 +431,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
           button IS the selection gesture. Same `nodrag nopan` + stylesheet
           `pointer-events` opt-in, same id-from-RF's-own-prop.
 
-          Its accessible name carries the WITHIN-KIND ORDINAL (`loop 2`), not the
+          Its accessible name carries the WITHIN-KIND ORDINAL (`Until 2`), not the
           bare kind: two loops on screen would otherwise give two buttons with
           one name, which is ambiguous to a screen reader and unaddressable to a
           spec. Since #883 the ✕ beside it and the BOX's own label read the same
@@ -1049,7 +1049,7 @@ export function FlowCanvas({
         routingChangeBetween(state, { ...state, ...cascadeDeleteContainer(state, id) }),
       );
       // #883 — the container is named the way its box now is. Naming the button
-      // "Delete loop 2 container" and then asking "Delete this loop container?"
+      // "Delete Until 2 container" and then asking "Delete this loop container?"
       // would relocate the one-end-identified split rather than close it, and
       // with two loops on screen the dialog would not say which one is going.
       //
@@ -1058,7 +1058,7 @@ export function FlowCanvas({
       // on `[store]` alone, so closing over the memo would name the container
       // from the render that created the callback, not from the doc as it stands
       // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
-      const name = containerLabels(state.containers).get(id) ?? kind;
+      const name = containerLabels(state.containers).get(id) ?? CONTAINER_KIND_LABELS[kind];
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
           // U17 — this used to end "and this cannot be undone", which was true
@@ -1196,7 +1196,7 @@ export function FlowCanvas({
 
   const containerNodes: FlowNode[] = useMemo(() => {
     // The SAME within-kind ordinals the membership `<select>` offers and
-    // `readableIssue` quotes, so "loop 2" names one container everywhere it
+    // `readableIssue` quotes, so "Until 2" names one container everywhere it
     // appears rather than three things that happen to agree.
     const labels = containerLabelsById;
     return containers.map((c) => {
@@ -1248,7 +1248,7 @@ export function FlowCanvas({
         data: {
           kind: c.kind,
           ports: portsOf(c.id),
-          label: labels.get(c.id) ?? c.kind,
+          label: labels.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind],
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
           selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
@@ -1267,7 +1267,7 @@ export function FlowCanvas({
         // announced: its badge is `aria-hidden` (see `IssueBadge`). An activity
         // has no label override and reads its badge directly.
         ariaLabel: withIssueCount(
-          containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
+          containerAriaLabel(labels.get(c.id) ?? CONTAINER_KIND_LABELS[c.kind], rect.childCount),
           bySubject.get(subjectKey('container', c.id))?.length ?? 0,
         ),
         /* Still NOT selectable, and that is now a decision rather than a default
@@ -2214,7 +2214,7 @@ export function FlowCanvas({
    */
   function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
     const state = store.getState();
-    const title = CONTAINER_PALETTE.find((e) => e.kind === kind)?.title ?? kind;
+    const title = CONTAINER_KIND_LABELS[kind];
     if (!confirmNewContainer(state, kind, title)) return;
     state.addContainer(kind, position);
   }

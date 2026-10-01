@@ -94,7 +94,7 @@ test.describe('U6d — creating a container from the canvas', () => {
        READ here rather than left to Playwright's default dismissal, which is what
        silently declined the edit and turned this into a red spec. */
     const joined = await captureConfirm(page, async () => {
-      await page.getByLabel('Container membership').selectOption({ label: 'stage 1' });
+      await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
     });
     expect(joined, 'joining an existing container went unstated — #840 regressed?').toContain(
       'changes that inferred routing',
@@ -177,6 +177,12 @@ test.describe('U6d — creating a container from the canvas', () => {
     });
 
     await select(page, 'b');
+    // #1396 — each kind by the palette's name; the option's value is the kind.
+    await expect(page.getByLabel('New container kind').locator('option')).toHaveText([
+      'Until',
+      'Stage',
+      'ForEach',
+    ]);
     await page.getByLabel('New container kind').selectOption('loop');
     await page.getByLabel('Exit when').fill('${equals(nodes.b.status, "success")}');
     const message = await captureConfirm(page, async () => {
@@ -191,7 +197,7 @@ test.describe('U6d — creating a container from the canvas', () => {
 
     // The recovery the dialog actually named.
     await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Delete loop 1 container' }).click();
+      await page.getByRole('button', { name: 'Delete Until 1 container' }).click();
     });
     await expect(page.locator('.flow-container')).toHaveCount(0);
     expect(await validationIssues(page)).toEqual([]);
@@ -264,7 +270,7 @@ test.describe('U6d — creating a container from the canvas', () => {
       await create.click();
     });
     await expect(page.locator('.flow-container')).toHaveCount(1);
-    await expect(page.locator('.flow-container-label')).toHaveText('loop 1');
+    await expect(page.locator('.flow-container-label')).toHaveText('Until 1');
 
     await expectQuiet(page, problems);
   });
@@ -365,7 +371,7 @@ test.describe('#840 — a container edit states the routing it changes', () => {
 
     await select(page, 'b');
     const message = await captureConfirm(page, async () => {
-      await page.getByLabel('Container membership').selectOption({ label: 'stage 1' });
+      await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
     });
     expect(message).toBeNull();
 
