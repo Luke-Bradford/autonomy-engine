@@ -13,7 +13,7 @@ import { getDataset, getDatasetReferences } from '../../api/datasets';
 import { useGuardedLoad } from '../../hooks/useGuardedLoad';
 import { pipelinePath } from '../author/pipelinePath';
 import { StoreCell } from './StoreCell';
-import { DatasetKindName } from '../../lib/kindIcon';
+import { DatasetKindName } from '../../lib/KindName';
 import { useShellLabel } from '../../shell/shellLabel';
 
 /**

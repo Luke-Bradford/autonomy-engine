@@ -89,7 +89,8 @@ import { nameCheck, useFieldValidation, type FieldErrors } from '../lib/form/fie
 import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
-import { KindGlyph, TRIGGER_MODE_ICONS, TriggerModeName } from '../lib/kindIcon';
+import { KindGlyph, TriggerModeName } from '../lib/KindName';
+import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;

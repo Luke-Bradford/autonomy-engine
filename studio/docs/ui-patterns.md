@@ -77,7 +77,7 @@ required marks and display names; its layout is its own, below.
 - Kinds and other enum identifiers show a display name (`CONNECTION_KIND_LABELS`,
   `DATASET_KIND_LABELS`, `TRIGGER_MODE_LABELS`,
   `CONCURRENCY_POLICY_LABELS`, `CONTAINER_KIND_LABELS`). The stored value stays the identifier.
-- **A connection kind, a dataset kind and a trigger mode also show an icon** (`lib/kindIcon.tsx`):
+- **A connection kind, a dataset kind and a trigger mode also show an icon** (`lib/kindIcons.ts`, drawn by `lib/KindName.tsx`):
   `ConnectionKindName`, `DatasetKindName` and `TriggerModeName` in the lists and on the dataset
   page, and the chosen kind's `KindGlyph` beside the form's Kind or Mode picker, since a native
   option cannot hold one. Icons go by family, not vendor (every LLM kind is the sparkle), and

@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import {
-  CONNECTION_KIND_ICONS,
-  ConnectionKindName,
-  DatasetKindName,
-  KindGlyph,
-  TriggerModeName,
-} from './kindIcon';
+import { ConnectionKindName, DatasetKindName, KindGlyph, TriggerModeName } from './KindName';
+import { CONNECTION_KIND_ICONS } from './kindIcons';
 
 /**
  * #1396 — a kind is shown as its display name WITH an icon. The icon is

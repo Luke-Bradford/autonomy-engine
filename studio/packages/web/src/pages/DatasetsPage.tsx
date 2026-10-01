@@ -61,7 +61,8 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
-import { DATASET_KIND_ICONS, DatasetKindName, KindGlyph } from '../lib/kindIcon';
+import { DatasetKindName, KindGlyph } from '../lib/KindName';
+import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 
 const KINDS = DATASET_KINDS;
 

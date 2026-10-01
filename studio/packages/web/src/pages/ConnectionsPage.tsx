@@ -73,7 +73,8 @@ import { saveRefusal, schemaRefusal } from '../lib/form/saveErrors';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
-import { CONNECTION_KIND_ICONS, ConnectionKindName, KindGlyph } from '../lib/kindIcon';
+import { ConnectionKindName, KindGlyph } from '../lib/KindName';
+import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 
 const KINDS = CONNECTION_KINDS;
 
