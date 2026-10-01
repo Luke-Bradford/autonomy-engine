@@ -145,8 +145,10 @@ text = "\n".join(section)
 m = re.search(r"\*\*\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\s*\*\*", text, re.I)
 token = m.group(1).upper() if m else None
 if token is None:
-    words = re.findall(r"\b(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\b", text, re.I)
-    token = words[0].upper() if words else None
+    # Unbolded only counts as the FIRST thing in the section ("APPROVE -- fine"); a bare word
+    # later in prose ("Cannot APPROVE until X") must never read as a verdict (review WARNING).
+    lead = re.match(r"\s*(APPROVE|REQUEST CHANGES|NEEDS DISCUSSION)\b", text, re.I)
+    token = lead.group(1).upper() if lead else None
 print({"APPROVE": "approve", "REQUEST CHANGES": "block"}.get(token, "none"))
 '
 }

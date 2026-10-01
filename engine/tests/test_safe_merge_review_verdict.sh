@@ -35,6 +35,9 @@ check "prose starting 'Verdict only —' is not the marker; the later heading is
   "$(v 'Verdict only — the incremental change is fine.\n\n### Verdict\n**APPROVE**')"
 check "the LAST marker wins over an earlier one" "block" \
   "$(v '### Verdict\n**APPROVE**\n\n### Verdict\n**REQUEST CHANGES**')"
+check "unbolded 'Cannot APPROVE until X' in the Verdict -> none (no fail-open)" "none" \
+  "$(v '### Verdict\nCannot APPROVE until the migration is fixed.')"
+check "unbolded 'not APPROVE' in an inline Verdict -> none" "none" "$(v 'Verdict: not APPROVE yet.')"
 check "unbolded APPROVE in Verdict -> approve" "approve" "$(v '### Verdict\nAPPROVE — fine.')"
 check "'not APPROVE' prose outside Verdict, Verdict REQUEST CHANGES -> block" "block" \
   "$(v 'This is not APPROVE material.\n### Verdict\n**REQUEST CHANGES**')"
