@@ -43,15 +43,21 @@ test.describe('#1396 the dataset form drawer', () => {
     await page.getByRole('button', { name: 'New dataset' }).click();
     await expect(drawer(page)).toBeVisible();
 
-    // A column to the right of the list, not an overlay on top of it.
+    // A column to the right of the list, not an overlay on top of it, and the
+    // list keeps a usable width beside it. Earlier specs leave rows here, so the
+    // row is brought into view first.
+    await page.getByRole('button', { name: `Edit ${seeded}` }).scrollIntoViewIfNeeded();
     const geometry = await page.evaluate((name) => {
-      const table = document.querySelector('table')!.getBoundingClientRect();
+      const list = document.querySelector('.drawer-layout-open > :first-child')!;
+      const column = list.getBoundingClientRect();
       const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
       const edit = document.querySelector(`[aria-label="Edit ${name}"]`)!;
       const box = edit.getBoundingClientRect();
       const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
       return {
-        drawerRightOfTable: aside.left >= table.right,
+        drawerRightOfList: aside.left >= column.right,
+        // Not squeezed into what is left of the 900px reading width.
+        listWidthKept: column.width >= 700,
         editReachable: hit === edit,
         listKind: [...document.querySelectorAll('tbody tr')]
           .find((row) => row.textContent?.includes(name))
@@ -59,7 +65,8 @@ test.describe('#1396 the dataset form drawer', () => {
       };
     }, seeded);
     expect(geometry).toEqual({
-      drawerRightOfTable: true,
+      drawerRightOfList: true,
+      listWidthKept: true,
       editReachable: true,
       listKind: 'Database table',
     });
