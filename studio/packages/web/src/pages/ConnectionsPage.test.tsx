@@ -1439,6 +1439,25 @@ describe('the connection form drawer (#1396)', () => {
     expect(prompt()).not.toBeInTheDocument();
   });
 
+  it('a save that lands after another form opened does not close that form', async () => {
+    listMock.mockResolvedValue([conn(), conn({ id: 'conn_2', name: 'Other' })]);
+    const save = deferred<ConnectionPublic>();
+    updateMock.mockReturnValue(save.promise);
+    const user = userEvent.setup();
+    renderWithRouter(<ConnectionsPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit Claude' }));
+    await user.type(screen.getByLabelText('Name'), ' renamed');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await user.click(screen.getByRole('button', { name: 'Edit Other' }));
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Other');
+
+    await act(async () => save.resolve(conn({ name: 'Claude renamed' })));
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('dialog', { name: 'Edit connection' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Other');
+  });
+
   it('returns focus to the row that opened the form, even through the prompt', async () => {
     listMock.mockResolvedValue([conn(), conn({ id: 'conn_2', name: 'Other' })]);
     const user = userEvent.setup();

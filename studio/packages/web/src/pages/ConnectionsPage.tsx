@@ -202,6 +202,13 @@ export function ConnectionsPage() {
    */
   const [formSeq, setFormSeq] = useState(0);
   /**
+   * #1396 — the same counter, readable from a save that lands LATE. A save
+   * keeps running after its form is gone (Edit on another row, then Discard,
+   * while it is in flight), and its `onSaved` must close only the form it
+   * belongs to, never the one opened since.
+   */
+  const latestSeq = useRef(0);
+  /**
    * #1174 — the datasets bound to the connection being edited, and whether that
    * question could be answered at all.
    *
@@ -229,7 +236,8 @@ export function ConnectionsPage() {
   const openForm = useCallback((next: FormState) => {
     setForm(next);
     setOpenedAs(savePayloadSignature(next));
-    setFormSeq((seq) => seq + 1);
+    latestSeq.current += 1;
+    setFormSeq(latestSeq.current);
   }, []);
   const dirty = useMemo(
     () => form !== null && savePayloadSignature(form) !== openedAs,
@@ -637,7 +645,7 @@ export function ConnectionsPage() {
             returnFocusTo={openerRef}
             onClose={() => guard.request(() => setForm(null))}
             onSaved={async () => {
-              setForm(null);
+              if (latestSeq.current === formSeq) setForm(null);
               await refresh();
             }}
           />
@@ -1066,7 +1074,7 @@ function ConnectionForm({
             `needs_secret` and stores it). This says what the kind DOES with one. */}
         <p className="page-hint">
           {connectionKindRequiresSecret(form.kind)
-            ? `Required — a ${CONNECTION_KIND_LABELS[form.kind]} connection cannot dispatch without a secret. `
+            ? `Required — ${CONNECTION_KIND_LABELS[form.kind]} connections cannot dispatch without a secret. `
             : ''}
           {CONNECTION_SECRET_USE[form.kind]}
         </p>
