@@ -132,7 +132,7 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Kind').selectOption('table');
 
     // A control that exists ONLY because the form read `table`'s own schema.
-    await form(page).getByLabel('table', { exact: true }).fill('orders');
+    await form(page).getByLabel('Table', { exact: true }).fill('orders');
     await form(page)
       .getByLabel('Columns (JSON)')
       .fill(JSON.stringify([{ name: 'id', type: 'integer', nullable: false }]));
@@ -173,7 +173,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // not re-derive the kind (that would clobber a choice the operator may have
     // made deliberately), so the kind is this test's to state.
     await form(page).getByLabel('Kind').selectOption('table');
-    await form(page).getByLabel('table', { exact: true }).fill('orders');
+    await form(page).getByLabel('Table', { exact: true }).fill('orders');
     // Columns left EMPTY on purpose.
     await form(page).getByRole('button', { name: 'Create dataset' }).click();
 
@@ -199,21 +199,21 @@ test.describe('#1115 Manage → Datasets', () => {
     await form(page).getByLabel('Store').selectOption(storeId);
 
     await form(page).getByLabel('Kind').selectOption('table');
-    await expect(form(page).getByLabel('table', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Table', { exact: true })).toBeVisible();
 
     await form(page).getByLabel('Kind').selectOption('query');
     // `exact` here: `getByLabel` substring-matches, and a `<select>`'s
     // accessible name absorbs its option text — so a plain 'sql' also matches
     // the Store picker whenever any connection in the shared suite database is
     // a `sqlite` one, which is most of them.
-    await expect(form(page).getByLabel('sql', { exact: true })).toBeVisible();
-    await expect(form(page).getByLabel('table', { exact: true })).toBeHidden();
+    await expect(form(page).getByLabel('SQL statement', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Table', { exact: true })).toBeHidden();
 
     // #1167 gave `delimited` a READER, so it gets §2.6's typed controls now.
     // The gate that forces JSON is the reader and never an absent field form,
     // which is exactly why this kind changed sides while its schema did not.
     await form(page).getByLabel('Kind').selectOption('delimited');
-    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('File path', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
     await expect(form(page).getByText(/no reader exists for a delimited dataset yet/)).toBeHidden();
     // The MIS-STORE note survives on its own, which is what keeps #1145's
@@ -231,7 +231,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // renders derived controls rather than a JSON textarea, and says nothing
     // about readers.
     await form(page).getByLabel('Kind').selectOption('excel');
-    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('Workbook path', { exact: true })).toBeVisible();
     await expect(form(page).getByLabel('Config (JSON)')).toBeHidden();
     await expect(form(page).getByText(/no reader exists/)).toBeHidden();
 
@@ -255,7 +255,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // without the operator being told the pair disagrees.
     await form(page).getByLabel('Kind').selectOption('delimited');
     await expect(form(page).getByText(/Kind and store disagree/)).toBeHidden();
-    await expect(form(page).getByLabel('path', { exact: true })).toBeVisible();
+    await expect(form(page).getByLabel('File path', { exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -274,7 +274,7 @@ test.describe('#1115 Manage → Datasets', () => {
     // #1120 — the advisory. §8's identifier rule is the security-relevant one:
     // a table name cannot be bound as a parameter, so a name that only quoting
     // would make safe is refused by the reader. The operator learns it here.
-    await form(page).getByLabel('table', { exact: true }).fill('order lines');
+    await form(page).getByLabel('Table', { exact: true }).fill('order lines');
     await expect(form(page).getByText(/This table config is incomplete/)).toContainText(
       'bare SQL identifier',
     );

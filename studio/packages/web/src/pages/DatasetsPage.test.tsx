@@ -981,7 +981,11 @@ describe('the dataset form drawer (#1396)', () => {
 
   it('does not count a view switch, a kind round trip or a re-ticked allowlist as an edit', async () => {
     listMock.mockResolvedValue([
-      dataset({ kind: 'delimited', config: { path: 'in.csv', header: true }, parameters: ['path'] }),
+      dataset({
+        kind: 'delimited',
+        config: { path: 'in.csv', header: true },
+        parameters: ['path'],
+      }),
     ]);
     const user = userEvent.setup();
     renderWithDataRouter(<DatasetsPage />);

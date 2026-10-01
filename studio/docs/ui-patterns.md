@@ -1,7 +1,7 @@
 # UI patterns — resource forms
 
 How every create/edit form in studio looks and behaves (#1396, OR5). Written once here; the shared
-pieces live in `packages/web/src/lib/form/`. Connections follows it. Datasets, Triggers, Secrets,
+pieces live in `packages/web/src/lib/form/`. Connections and Datasets follow it. Triggers, Secrets,
 Global parameters and the node property panel move onto it in the slices that follow #1396.
 
 ## The drawer
@@ -51,6 +51,12 @@ Global parameters and the node property panel move onto it in the slices that fo
   does next. The toggle sits beside the label, not inside it.
 
 ## Leaving a form with unsaved changes
+
+A page holds its open form with `useDrawerForm(signatureOf)`. The hook returns the form, the
+open counter the form is keyed on, `isLatest` for a save that lands after another form opened, the
+opener ref focus returns to, and the guard below. `signatureOf` is what Save would write as one
+string: `payloadSignature([...])` over the fields Save sends, with the config read through
+`saveableConfigOf` (both in `pages/pipeline/configForm.ts`).
 
 `useUnsavedChangesGuard(dirty)` holds every way out of a dirty form at one prompt in the drawer's
 footer ("You have unsaved changes. Discard them?" with **Keep editing** and **Discard changes**):
