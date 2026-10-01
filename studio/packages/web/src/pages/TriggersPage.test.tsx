@@ -1744,7 +1744,7 @@ describe('TriggersPage — inline validation (#1396)', () => {
     const { user, form } = await openNew();
     await user.type(form.getByLabelText('Name'), 'Hourly');
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
-    const interval = form.getByLabelText(/Repeat every/);
+    const interval = form.getByLabelText<HTMLInputElement>(/Repeat every/);
     // jsdom has no bad input: give the control the validity Chromium gives `1e`.
     Object.defineProperty(interval, 'validity', {
       configurable: true,
