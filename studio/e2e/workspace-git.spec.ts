@@ -318,7 +318,12 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const publish = bar.getByRole('button', { name: 'Publish v1' });
   await expect(publish).toBeEnabled();
 
-  const confirmText = await withConfirm(page, () => publish.click());
+  await publish.click();
+  // #1397 — publishing destroys nothing, so its action is not drawn as danger.
+  await expect(
+    page.getByRole('alertdialog').getByRole('button', { name: 'Publish', exact: true }),
+  ).toHaveClass(/\bprimary\b/);
+  const confirmText = await answerConfirm(page, 'accept');
   // The confirmation's load-bearing sentence: publishing moves what is created
   // NEXT, and does not re-point the triggers that already exist.
   expect(confirmText).toContain('Publish v1?');

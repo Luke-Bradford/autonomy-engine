@@ -92,8 +92,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
-  const [confirm, confirmDialog] = useConfirm();
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   /* Whether this mount is still on screen, read by the rerun settle handlers.
      Set on mount rather than only cleared on unmount, so a StrictMode

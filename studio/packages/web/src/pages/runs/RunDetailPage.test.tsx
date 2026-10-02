@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, within } from '@testing-library/react';
-import { answerConfirm } from '../../testing/confirmDialog';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
 import { renderWithRouter } from '../../testing/renderWithRouter';
+import { answerConfirm } from '../../testing/confirmDialog';
 import type {
   EngineEvent,
   PipelineVersion,

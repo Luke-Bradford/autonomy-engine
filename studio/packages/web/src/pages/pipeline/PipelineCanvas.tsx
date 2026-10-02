@@ -469,11 +469,10 @@ export function PipelineCanvas({
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
          listener and behind the same text-entry guard as the history keys.
-         #1397 — and gated on the preview as the clipboard keys are: behind a
-         preview the editor is unmounted but its selection is not, so Delete
-         would cut nodes out of a working graph the operator cannot see. The
-         restore and publish confirmations made that a likely key, not a stray
-         one — a native confirm swallowed it, the in-app dialog does not. */
+         #1397 — and locked out as the clipboard keys are: behind a preview the
+         editor is unmounted but its selection is not (the restore dialog no
+         longer swallows the key as `window.confirm` did), and a save or restore
+         in flight would land over the deletion. */
       if (isDeleteKeystroke(e)) {
         if (previewing !== null || previewLocked) return;
         if (store.getState().selected.length === 0) return;
@@ -2396,9 +2395,9 @@ function ContainerSection({
    *
    * ONE evaluation, at the moment of the click, against live state — the
    * consequence is never stored, so it cannot go stale the way a frozen
-   * `role="alert"` does (`FlowCanvas` documents that failure). `window.confirm`
-   * is the canvas's existing confirmation route (`confirmDeleteContainer`);
-   * the list pages moved to `useConfirm` in #1397 and this follows.
+   * `role="alert"` does (`FlowCanvas` documents that failure). The gate still
+   * asks through `window.confirm`, as `confirmDeleteContainer` does; both move
+   * to `useConfirm` in a later #1397 slice.
    */
   function withConfirmation(
     nextContainers: Container[],
