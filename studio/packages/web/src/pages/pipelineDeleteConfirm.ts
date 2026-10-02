@@ -16,8 +16,9 @@ export type PipelineDependentsRead =
  * What a pipeline Delete does next: refuse outright, or ask.
  *
  * `typeToConfirm` is set only when a read that SUCCEEDED found something the
- * delete takes with it or breaks — the connections rule (#1145/#1158): a failed
- * read is advisory and an outage adds no friction.
+ * delete definitely takes with it or breaks — the connections rule
+ * (#1145/#1158): a failed read is advisory and an outage adds no friction. A
+ * `${}` caller is a MAY, and advisory too (see `pipelineDeletePlan`).
  */
 export type PipelineDeletePlan =
   | { kind: 'refused'; message: string }
@@ -78,7 +79,11 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
         `${nodePhrase(dynamic)} ${verb} a pipeline chosen at run time and may call this one.`,
       );
     }
-    hasDependants = triggers.length + literal.length + dynamic.length > 0;
+    // A `${}` caller is NAMED but does not arm the typed name, unlike a
+    // connection's dynamic ref: a call target can resolve to ANY pipeline, so
+    // one router node in the workspace would make every pipeline delete demand
+    // the name — friction that teaches typing without reading.
+    hasDependants = triggers.length + literal.length > 0;
   }
   parts.push(`If this workspace is connected to git, ${GIT_COMMIT_DELETES_FILES_NOTE}.`);
   return {

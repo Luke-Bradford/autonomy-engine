@@ -139,7 +139,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     const problems = collectPageProblems(page);
     const child = await seedVersion(page, CHILD, { nodes: [] });
     const triggerId = await seedManualTrigger(page, child.pipelineVersionId, `${CHILD} trigger`);
-    await seedVersion(page, `${CHILD} parent`, {
+    const parent = await seedVersion(page, `${CHILD} parent`, {
       nodes: [
         {
           id: 'callChild',
@@ -171,6 +171,11 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     // The cascade the dialog named really happened.
     await expect(page.getByRole('link', { name: `Open ${CHILD}`, exact: true })).toHaveCount(0);
     expect((await page.request.get(`/api/triggers/${triggerId}`)).status()).toBe(404);
+    // The parent now calls a version that no longer exists — exactly what the
+    // dialog warned of — and a later git spec committing this shared workspace
+    // would be refused over it. Remove it.
+    const removed = await page.request.delete(`/api/pipelines/${parent.pipelineId}`);
+    expect(removed.status(), await removed.text()).toBe(204);
     await expectQuiet(page, problems);
   });
 

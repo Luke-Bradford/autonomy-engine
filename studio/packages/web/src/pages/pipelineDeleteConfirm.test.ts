@@ -62,7 +62,7 @@ describe('pipelineDeletePlan', () => {
     expect(plan.typeToConfirm).toBe('Child');
   });
 
-  it('a call whose target is chosen at run time is named as a MAY, and still asks for the name', () => {
+  it('a call whose target is chosen at run time is named as a MAY, without demanding the name', () => {
     const plan = pipelineDeletePlan('Child', {
       state: 'known',
       value: { ...none, dynamicCallers: [caller('p2', 'Router', 'dispatch')] },
@@ -70,7 +70,7 @@ describe('pipelineDeletePlan', () => {
     if (plan.kind !== 'confirm') throw new Error('expected a confirmation');
     expect(plan.message).toContain('Router › dispatch');
     expect(plan.message).toMatch(/chosen at run time/);
-    expect(plan.typeToConfirm).toBe('Child');
+    expect(plan.typeToConfirm).toBeUndefined();
   });
 
   it('a failed read says what it could not check and adds no friction', () => {
