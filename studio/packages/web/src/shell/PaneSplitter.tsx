@@ -22,7 +22,7 @@ interface PaneSplitterProps {
    * the property dock sits BELOW its divider, so dragging UP makes it taller.
    */
   grow?: 1 | -1;
-  /** `pane-splitter` (the nav pane), `dock-splitter` or `toolbox-splitter` (#1475). */
+  /** `pane-splitter` (the nav pane); `dock-splitter`, `toolbox-splitter` or `problems-splitter` (#1475). */
   className: string;
   /**
    * Transient size during a pointer drag. The owner writes it straight onto

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useStore } from 'zustand';
 import { PaneSplitter } from '../../shell/PaneSplitter';
+import { useElementSize } from './useElementSize';
 import { DOCK_MIN_HEIGHT, DOCK_RESIZE_STEP, dockMaxHeight, uiStore } from '../../stores/uiStore';
 
 /** The custom property `.property-dock`'s height reads (`index.css`). */
@@ -40,7 +41,7 @@ interface DockSplitterProps {
 export function DockSplitter({ columnRef, dockRef, dockId }: DockSplitterProps) {
   const dockHeight = useStore(uiStore, (s) => s.dockHeight);
   const setDockHeight = useStore(uiStore, (s) => s.setDockHeight);
-  const [column, setColumn] = useState(0);
+  const column = useElementSize(columnRef, 'height');
   const [rendered, setRendered] = useState(0);
   /**
    * The preference to go back to from a double-click maximise. `undefined`
@@ -48,23 +49,10 @@ export function DockSplitter({ columnRef, dockRef, dockId }: DockSplitterProps) 
    */
   const beforeMaximise = useRef<number | null | undefined>(undefined);
 
-  /* Passive effects, NOT layout effects, and that is load-bearing: both refs
-     are on elements AROUND this component (its parent and its next sibling),
-     and React attaches a host element's ref only after its children's layout
-     effects have run — so a layout effect here sees two nulls on mount and the
-     divider never appears. Passive effects run after every ref is attached. */
-  useEffect(() => {
-    const el = columnRef.current;
-    if (!el) return;
-    setColumn(el.getBoundingClientRect().height);
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => setColumn(el.getBoundingClientRect().height));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [columnRef]);
-
   // Re-read after anything that can change the dock's height: a committed
   // preference, or a new column height (which moves the default share and the cap).
+  // Passive, not layout, for `useElementSize`'s reason: `dockRef` is on this
+  // component's next sibling, attached only after its layout effects.
   useEffect(() => {
     const el = dockRef.current;
     if (el) setRendered(Math.round(el.getBoundingClientRect().height));

@@ -1566,15 +1566,24 @@ button.danger {
   font-size: 0.95rem;
 }
 
-/* #1475 — the divider between the toolbox and the canvas: `.dock-splitter`
-   (below, which also carries the rules the two share) turned on its side. */
-.toolbox-splitter {
+/* #1475 — the dividers between the toolbox and the canvas, and between the
+   properties and Problems: `.dock-splitter` (below, which also carries the
+   rules they share) turned on its side. */
+.toolbox-splitter,
+.problems-splitter {
   cursor: col-resize;
   touch-action: none;
 }
 
+/* A flex item in the dock body, where the toolbox's is a grid track. */
+.problems-splitter {
+  flex: 0 0 8px;
+}
+
 .toolbox-splitter:hover,
-.toolbox-splitter:focus-visible {
+.toolbox-splitter:focus-visible,
+.problems-splitter:hover,
+.problems-splitter:focus-visible {
   background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
 }
 
@@ -1978,14 +1987,16 @@ button.danger {
 /* The track `DockSplitter` draws before it has measured the column, and the one
    `ToolboxSplitter` draws while the toolbox is a rail: the same box, no control. */
 .dock-splitter[aria-hidden='true'],
-.toolbox-splitter[aria-hidden='true'] {
+.toolbox-splitter[aria-hidden='true'],
+.problems-splitter[aria-hidden='true'] {
   cursor: auto;
   background: none;
 }
 
 /* A real outline for keyboard focus, for the reasons `.pane-splitter` gives. */
 .dock-splitter:focus-visible,
-.toolbox-splitter:focus-visible {
+.toolbox-splitter:focus-visible,
+.problems-splitter:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: -1px;
 }
@@ -2048,9 +2059,17 @@ button.danger {
    arriving never re-flows the form beside it. It scrolls inside the dock's
    height like the panel does. */
 .problems-panel:not([hidden]) {
-  flex: 0 0 20rem;
+  /* #1475 — the operator's width, written on `.property-dock__body` from
+     `uiStore`; the fallback repeats `PROBLEMS_DEFAULT_WIDTH`. The cap repeats
+     `problemsMaxWidth` (half the body, at most `PROBLEMS_MAX_WIDTH`), so the
+     properties keep the rest bar the divider; `ProblemsSplitter` reports the same
+     number. No left margin: `.problems-splitter` is the gap. */
+  flex: 0 0 var(--problems-width, 320px);
+  /* The first line is for a browser without `round()`, which drops the
+     second whole; it can only differ from the reported cap by a subpixel. */
+  max-width: max(200px, min(480px, 50%));
+  max-width: max(200px, min(480px, round(down, 50%, 1px)));
   overflow-y: auto;
-  margin-left: 0.5rem;
   min-height: 0;
 }
 

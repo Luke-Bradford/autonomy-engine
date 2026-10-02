@@ -8,6 +8,13 @@ import {
   DOCK_SPLITTER_HEIGHT,
   MINIMAP_STORAGE_KEY,
   PROBLEMS_OPEN_STORAGE_KEY,
+  DOCK_NODE_TAB_STORAGE_KEY,
+  DOCK_PIPELINE_TAB_STORAGE_KEY,
+  PROBLEMS_DEFAULT_WIDTH,
+  PROBLEMS_MAX_WIDTH,
+  PROBLEMS_MIN_WIDTH,
+  PROBLEMS_WIDTH_STORAGE_KEY,
+  problemsMaxWidth,
   dockMaxHeight,
   PANE_DEFAULT_WIDTH,
   PANE_MAX_WIDTH,
@@ -449,5 +456,75 @@ describe('uiStore Activities toolbox (#1475 OR27)', () => {
       createUiStore(fakeStorage({ [TOOLBOX_COLLAPSED_STORAGE_KEY]: 'yes' })).getState()
         .toolboxCollapsed,
     ).toBe(false);
+  });
+});
+
+describe('uiStore Problems column (#1475 OR27)', () => {
+  it('starts at the default width and persists a new one across a new store', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    expect(first.problemsWidth).toBe(PROBLEMS_DEFAULT_WIDTH);
+    first.setProblemsWidth(351.4);
+    expect(storage.data.get(PROBLEMS_WIDTH_STORAGE_KEY)).toBe('351');
+    expect(createUiStore(storage).getState().problemsWidth).toBe(351);
+  });
+
+  it('clamps a width to its bounds on write and on read', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setProblemsWidth(10);
+    expect(store.getState().problemsWidth).toBe(PROBLEMS_MIN_WIDTH);
+    store.getState().setProblemsWidth(9000);
+    expect(store.getState().problemsWidth).toBe(PROBLEMS_MAX_WIDTH);
+    expect(
+      createUiStore(fakeStorage({ [PROBLEMS_WIDTH_STORAGE_KEY]: '900' })).getState().problemsWidth,
+    ).toBe(PROBLEMS_MAX_WIDTH);
+  });
+
+  it('keeps the default for a non-finite or garbage width', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setProblemsWidth(Number.NaN);
+    expect(store.getState().problemsWidth).toBe(PROBLEMS_DEFAULT_WIDTH);
+    for (const raw of ['', '1e3', '-300', 'wide', '12345']) {
+      expect(
+        createUiStore(fakeStorage({ [PROBLEMS_WIDTH_STORAGE_KEY]: raw })).getState().problemsWidth,
+      ).toBe(PROBLEMS_DEFAULT_WIDTH);
+    }
+  });
+
+  it('caps at half the dock body, never above the max or under the min, floored', () => {
+    expect(problemsMaxWidth(2000)).toBe(PROBLEMS_MAX_WIDTH);
+    expect(problemsMaxWidth(701.8)).toBe(350);
+    expect(problemsMaxWidth(300)).toBe(PROBLEMS_MIN_WIDTH);
+  });
+});
+
+describe('uiStore dock tabs (#1475 OR27)', () => {
+  it('starts on Settings and Parameters', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.dockNodeTab).toBe('settings');
+    expect(state.dockPipelineTab).toBe('params');
+  });
+
+  it('persists each tab under its own key', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    first.setDockNodeTab('general');
+    first.setDockPipelineTab('variables');
+    expect(storage.data.get(DOCK_NODE_TAB_STORAGE_KEY)).toBe('general');
+    expect(storage.data.get(DOCK_PIPELINE_TAB_STORAGE_KEY)).toBe('variables');
+    const second = createUiStore(storage).getState();
+    expect(second.dockNodeTab).toBe('general');
+    expect(second.dockPipelineTab).toBe('variables');
+  });
+
+  it('falls back to the default for a tab it does not know', () => {
+    const state = createUiStore(
+      fakeStorage({
+        [DOCK_NODE_TAB_STORAGE_KEY]: 'params',
+        [DOCK_PIPELINE_TAB_STORAGE_KEY]: 'Settings',
+      }),
+    ).getState();
+    expect(state.dockNodeTab).toBe('settings');
+    expect(state.dockPipelineTab).toBe('params');
   });
 });
