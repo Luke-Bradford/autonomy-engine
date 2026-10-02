@@ -41,9 +41,7 @@ test.describe('#1 F8a — pipeline description + annotations', () => {
     // #1413 — the section says what it holds, as the region's description.
     await expect(
       page.getByRole('region', { name: 'General', exact: true }),
-    ).toHaveAccessibleDescription(
-      'What this pipeline is for, saved with each version like the rest of the pipeline.',
-    );
+    ).toHaveAccessibleDescription('A short account of what this pipeline does and why it exists.');
     await page.getByLabel('pipeline description').fill('Loads the nightly batch');
     await page.getByRole('button', { name: 'Add annotation' }).click();
     await page.getByLabel('annotation 1', { exact: true }).fill('prod');

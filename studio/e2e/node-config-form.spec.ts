@@ -171,7 +171,13 @@ test.describe('U7 — per-activity node config form', () => {
     // HEADING; the section body keeps the panel's own gap; the activity's fields
     // start right under their heading.
     const layout = await properties(page).evaluate((panel) => {
-      const sections = [...panel.querySelectorAll<HTMLElement>('fieldset.form-section')];
+      // The Settings tab's sections only: the hidden General tab's Run policy
+      // is a form section too, mounted but not on screen.
+      const sections = [
+        ...panel.querySelectorAll<HTMLElement>(
+          '[role="tabpanel"]:not([hidden]) fieldset.form-section',
+        ),
+      ];
       return {
         panelGap: getComputedStyle(panel).rowGap,
         sections: sections.map((el) => {
