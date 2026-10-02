@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_KIND_DESCRIPTIONS,
@@ -78,6 +78,7 @@ import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlis
 import { ConnectionKindName, KindSelect } from '../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const KINDS = CONNECTION_KINDS;
@@ -181,6 +182,9 @@ function savePayloadSignature(form: FormState): string {
 export function ConnectionsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(connections, createRef);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -482,7 +486,7 @@ export function ConnectionsPage() {
           confirmLabel: 'Delete',
           ...(hasDependants ? { typeToConfirm: conn.name } : {}),
           // The menu item that asked unmounted while the reads above ran.
-          restoreFocus: origin.find,
+          restoreFocus: focusAfterRemoval(conn.id, origin),
         });
         if (!confirmed) return;
         try {
@@ -493,7 +497,7 @@ export function ConnectionsPage() {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
       }),
-    [confirm, runDelete, refresh, closeWhere],
+    [focusAfterRemoval, confirm, runDelete, refresh, closeWhere],
   );
 
   return (
@@ -501,6 +505,7 @@ export function ConnectionsPage() {
       <div className="page-header">
         <h2 id="connections-heading">Connections</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >

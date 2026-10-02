@@ -438,6 +438,35 @@ describe('PipelinesPage', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
 
+  // #1470 — the row and its ⋯ unmount with the delete; focus goes to the next
+  // row's ⋯ rather than to <body>, and to the New pipeline name when none is left.
+  it("hands focus to the next row's ⋯ after a confirmed delete", async () => {
+    const user = userEvent.setup();
+    const kept = pipeline({ id: 'pl_2', name: 'Kept' });
+    listMock.mockResolvedValue([pipeline({ name: 'Doomed' }), kept]);
+    renderPage();
+    await screen.findByText('Kept');
+    listMock.mockResolvedValue([kept]);
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(screen.queryByText('Doomed')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Actions for Kept' })).toHaveFocus(),
+    );
+  });
+
+  it('hands focus to the New pipeline name after archiving the last pipeline', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Only' })]);
+    renderPage();
+    await screen.findByText('Only');
+    listMock.mockResolvedValue([]);
+    await chooseRowAction(user, 'Only', 'Archive');
+    await answerConfirm(user, 'accept');
+    const form = screen.getByRole('form', { name: 'New pipeline' });
+    await waitFor(() => expect(within(form).getByLabelText('Name')).toHaveFocus());
+  });
+
   it('shows a friendly message when deleting a pipeline that has runs (409)', async () => {
     const user = userEvent.setup();
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));

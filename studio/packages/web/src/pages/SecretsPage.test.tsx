@@ -228,6 +228,8 @@ describe('SecretsPage', () => {
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('sec_1'));
     expect(await screen.findByText(/No secrets yet/)).toBeInTheDocument();
+    // #1470 — the list emptied, so focus goes to the page's create control.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New secret' })).toHaveFocus());
   });
 
   it('warns that deleting breaks the nodes referencing that name', async () => {
@@ -294,6 +296,9 @@ describe('SecretsPage', () => {
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull());
       expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
+      // #1470 — neither the drawer's opener (Replace) nor the ⋯ survives the
+      // delete, so focus goes to New secret rather than to <body>.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'New secret' })).toHaveFocus());
     });
   });
 

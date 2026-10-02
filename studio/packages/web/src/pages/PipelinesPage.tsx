@@ -18,6 +18,7 @@ import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /**
@@ -41,6 +42,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const [confirm, confirmDialog] = useConfirm();
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLInputElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(pipelines, createRef);
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
   const retryIfFailed = useStore(store, (s) => s.retryIfFailed);
@@ -141,7 +145,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       const confirmed = await confirm({
         message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
         confirmLabel: 'Delete',
-        restoreFocus: origin.find,
+        restoreFocus: focusAfterRemoval(p.id, origin),
       });
       if (!confirmed) return;
       setActionMsg(null);
@@ -154,7 +158,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(describeDeleteFailure(p.name, err));
       }
     },
-    [confirm, refresh],
+    [focusAfterRemoval, confirm, refresh],
   );
 
   /**
@@ -248,7 +252,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       const confirmed = await confirm({
         message: archiveConfirmMessage(p.name),
         confirmLabel: 'Archive',
-        restoreFocus: origin.find,
+        restoreFocus: focusAfterRemoval(p.id, origin),
       });
       if (!confirmed) return;
       setActionMsg(null);
@@ -263,7 +267,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
       }
     },
-    [confirm, refresh, loadArchived, invalidateArchived],
+    [focusAfterRemoval, confirm, refresh, loadArchived, invalidateArchived],
   );
 
   /**
@@ -451,6 +455,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         <label>
           Name
           <input
+            ref={createRef}
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}

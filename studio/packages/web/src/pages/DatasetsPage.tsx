@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
   DATASET_CONNECTION_KINDS,
@@ -68,6 +68,7 @@ import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 import { DatasetKindName, KindSelect } from '../lib/KindName';
 import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const KINDS = DATASET_KINDS;
@@ -324,6 +325,9 @@ function savePayloadSignature(form: FormState): string {
 export function DatasetsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(datasets, createRef);
   const [connections, setConnections] = useState<readonly ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
@@ -398,7 +402,7 @@ export function DatasetsPage() {
       const confirmed = await confirm({
         message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
         confirmLabel: 'Delete',
-        restoreFocus: origin.find,
+        restoreFocus: focusAfterRemoval(dataset.id, origin),
       });
       if (!confirmed) return;
       try {
@@ -409,7 +413,7 @@ export function DatasetsPage() {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [confirm, refresh, closeWhere],
+    [focusAfterRemoval, confirm, refresh, closeWhere],
   );
 
   return (
@@ -417,6 +421,7 @@ export function DatasetsPage() {
       <div className="page-header">
         <h2 id="datasets-heading">Datasets</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm(connections)))}
         >

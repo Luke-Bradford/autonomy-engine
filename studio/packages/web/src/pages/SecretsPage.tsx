@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type FormEvent,
-  type RefObject,
-} from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { ApiError, messageOf } from '../api/client';
 import {
   SecretRotateSchema,
@@ -31,6 +23,7 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { payloadSignature } from './pipeline/configForm';
 import { formatWhen } from './runs/format';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
@@ -87,6 +80,9 @@ function savePayloadSignature(form: FormState): string {
 export function SecretsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(secrets, createRef);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -133,7 +129,7 @@ export function SecretsPage() {
           `dispatch until a secret of that name exists again.\n\n` +
           `To change its VALUE and keep the name, use Replace instead.`,
         confirmLabel: 'Delete',
-        restoreFocus: origin.find,
+        restoreFocus: focusAfterRemoval(secret.id, origin),
       });
       if (!confirmed) return;
       try {
@@ -144,7 +140,7 @@ export function SecretsPage() {
         setLoadError(`Could not delete “${secret.name}”: ${messageOf(err)}`);
       }
     },
-    [confirm, refresh, closeWhere],
+    [focusAfterRemoval, confirm, refresh, closeWhere],
   );
 
   return (
@@ -152,6 +148,7 @@ export function SecretsPage() {
       <div className="page-header">
         <h2 id="secrets-heading">Secrets</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >

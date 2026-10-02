@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type FormEvent,
-  type RefObject,
-} from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
   GlobalParamCreateBodySchema,
@@ -45,6 +37,7 @@ import { ImportPanel } from './ImportPanel';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 import { payloadSignature } from './pipeline/configForm';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /**
@@ -110,6 +103,9 @@ const VALUE_PLACEHOLDER: Record<GlobalParamType, string> = {
 export function GlobalParamsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [globals, setGlobals] = useState<GlobalParam[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(globals, createRef);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -159,7 +155,7 @@ export function GlobalParamsPage() {
           confirmLabel: 'Delete',
           ...(read ? { typeToConfirm: global.name } : {}),
           // The menu item that asked unmounted while the usage read ran.
-          restoreFocus: origin.find,
+          restoreFocus: focusAfterRemoval(global.id, origin),
         });
         if (!confirmed) return;
         try {
@@ -170,7 +166,7 @@ export function GlobalParamsPage() {
           setLoadError(`Could not delete “${global.name}”: ${messageOf(err)}`);
         }
       }),
-    [confirm, runDelete, refresh, closeWhere],
+    [focusAfterRemoval, confirm, runDelete, refresh, closeWhere],
   );
 
   /** #844 GL6 — save the global's export file, as Datasets does (#1143). */
@@ -196,6 +192,7 @@ export function GlobalParamsPage() {
       <div className="page-header">
         <h2 id="global-params-heading">Global parameters</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >

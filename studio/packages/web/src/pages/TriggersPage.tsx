@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   CONCURRENCY_POLICY_LABELS,
   ConcurrencyPolicySchema,
@@ -97,6 +97,7 @@ import { payloadSignature } from './pipeline/configForm';
 import { KindSelect, TriggerModeName } from '../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const MODES = TriggerModeSchema.options;
@@ -295,6 +296,9 @@ interface FireOutcome {
 export function TriggersPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(triggers, createRef);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -409,7 +413,7 @@ export function TriggersPage() {
       const confirmed = await confirm({
         message: `Delete trigger "${t.name}"?`,
         confirmLabel: 'Delete',
-        restoreFocus: origin.find,
+        restoreFocus: focusAfterRemoval(t.id, origin),
       });
       if (!confirmed) return;
       try {
@@ -421,7 +425,7 @@ export function TriggersPage() {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [confirm, refresh, closeWhere],
+    [focusAfterRemoval, confirm, refresh, closeWhere],
   );
 
   /**
@@ -553,6 +557,7 @@ export function TriggersPage() {
       <div className="page-header">
         <h2 id="triggers-heading">Triggers</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >
