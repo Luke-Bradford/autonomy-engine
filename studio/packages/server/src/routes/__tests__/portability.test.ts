@@ -107,6 +107,51 @@ describe('portability routes (export + import)', () => {
       expect(imported.attention).toEqual([]);
     });
 
+    // #1480 — an import mints versions through the same save gate, so a
+    // hand-edited envelope carrying a config the adapter refuses is refused as a
+    // whole, naming the node and field, and leaves nothing behind (the import
+    // is one transaction). It is not an attention item: those are repairable
+    // bindings on a pipeline that DID import; this version could never run.
+    it('refuses an envelope whose node config the adapter would refuse, and stores nothing (#1480)', async () => {
+      const pipeline = (
+        await app.inject({ method: 'POST', url: '/api/pipelines', payload: { name: 'Copier' } })
+      ).json();
+      const saved = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: {
+          params: [],
+          outputs: [],
+          nodes: [
+            {
+              id: 'load',
+              type: 'copy',
+              config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'append' },
+              position: { x: 0, y: 0 },
+            },
+          ],
+          edges: [],
+          basedOnVersionId: null,
+        },
+      });
+      expect(saved.statusCode).toBe(201);
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/pipelines/${pipeline.id}/export` })
+      ).json();
+      envelope.data.pipeline.name = 'Copier (imported)';
+      envelope.data.versions[0].nodes[0].config.mode = 'truncate'; // the hand-edit
+
+      const before = (await app.inject({ method: 'GET', url: '/api/pipelines' })).json().length;
+      const importRes = await app.inject({ method: 'POST', url: '/api/import', payload: envelope });
+      expect(importRes.statusCode).toBe(400);
+      expect(importRes.json().error).toBe('invalid_pipeline_doc');
+      expect(importRes.json().issues.map((i: { message: string }) => i.message)).toEqual([
+        expect.stringMatching(/^node 'load': config\.mode: /),
+      ]);
+      const after = (await app.inject({ method: 'GET', url: '/api/pipelines' })).json().length;
+      expect(after).toBe(before);
+    });
+
     it('404 for a missing or not-owned pipeline', async () => {
       const missing = await app.inject({
         method: 'GET',

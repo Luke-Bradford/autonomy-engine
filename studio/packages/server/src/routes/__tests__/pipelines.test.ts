@@ -12,6 +12,7 @@ import {
   getTrigger,
 } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 
 /**
  * A minimal version doc. #904 — the POST body also declares the version the
@@ -800,6 +801,91 @@ describe('pipelines routes', () => {
         url: `/api/pipelines/${pipeline.id}/versions`,
       });
       expect(list.json()).toEqual([]);
+    });
+
+    // #1480 — the operator demo's cases: a version that saves must be one the
+    // run accepts, so each is refused at save with the node and field it names.
+    const MAPPING = [{ source: 'id', sink: 'id', type: 'integer' }];
+    const AT = { x: 0, y: 0 };
+    it.each([
+      [
+        'an unknown activity type',
+        { id: 'n', type: 'sql_execute', config: {}, position: AT },
+        /^node 'n': type: unknown activity type 'sql_execute' \(closest: /,
+      ],
+      [
+        'a bad enum literal',
+        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'truncate' }, position: AT },
+        /^node 'n': config\.mode: /,
+      ],
+      [
+        'a bad literal type',
+        { id: 'n', type: 'file_read', config: { path: 42 }, position: AT },
+        /^node 'n': config\.path: /,
+      ],
+    ])(
+      '400 invalid_pipeline_doc for %s, naming the field (#1480)',
+      async (_label, node, message) => {
+        const { pipeline, res } = await postDoc({ ...emptyVersionBody, nodes: [node] });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error).toBe('invalid_pipeline_doc');
+        expect(res.json().issues.map((i: { message: string }) => i.message)).toEqual([
+          expect.stringMatching(message),
+        ]);
+        const list = await app.inject({
+          method: 'GET',
+          url: `/api/pipelines/${pipeline.id}/versions`,
+        });
+        expect(list.json()).toEqual([]);
+      },
+    );
+
+    it('accepts a ${} expression in the field whose literal was refused (#1480)', async () => {
+      const { res } = await postDoc({
+        ...emptyVersionBody,
+        params: [{ name: 'mode', type: 'string', required: false, default: 'append' }],
+        nodes: [
+          {
+            id: 'n',
+            type: 'copy',
+            config: { mapping: MAPPING, mode: '${params.mode}' },
+            position: AT,
+          },
+        ],
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    // An invalid version saved BEFORE the gate is immutable history: it still
+    // opens (the editor lists it in Problems, through the same validator), and
+    // a new version saved from it must fix it.
+    it('an invalid version saved before the gate still opens, and a save from it is refused (#1480)', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Legacy' });
+      const nodes = [
+        { id: 'n', type: 'copy', config: { mapping: MAPPING, mode: 'truncate' }, position: AT },
+      ];
+      const legacy = insertLegacyVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes,
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const opened = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions/${legacy.version}`,
+      });
+      expect(opened.statusCode).toBe(200);
+      expect(opened.json().nodes[0].config.mode).toBe('truncate');
+
+      const resaved = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: { ...versionBodyOn(legacy.id), nodes },
+      });
+      expect(resaved.statusCode).toBe(400);
+      expect(resaved.json().issues[0].message).toMatch(/^node 'n': config\.mode: /);
     });
 
     /**
