@@ -5,6 +5,7 @@ import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { mintVersion, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
+import { answerConfirm } from './support/confirmDialog';
 
 /**
  * #1044 — the whole #1018 chain, end to end: a version names a connection, the
@@ -103,8 +104,8 @@ test('a pull over a version whose connection was deleted proceeds, and says what
   await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
 
   // ── the import proceeds — no tamper refusal — and says it too ─────────────
-  page.once('dialog', (dialog) => void dialog.accept());
   await incoming.getByRole('button', { name: 'Import' }).click();
+  await answerConfirm(page, 'accept');
 
   const outcome = incoming.getByRole('status');
   await expect(outcome).toContainText(CAVEAT);

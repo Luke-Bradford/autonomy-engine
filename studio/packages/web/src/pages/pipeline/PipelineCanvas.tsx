@@ -468,8 +468,14 @@ export function PipelineCanvas({
       if (leaveGuard.confirming) return;
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
-         listener and behind the same text-entry guard as the history keys. */
+         listener and behind the same text-entry guard as the history keys.
+         #1397 — and gated on the preview as the clipboard keys are: behind a
+         preview the editor is unmounted but its selection is not, so Delete
+         would cut nodes out of a working graph the operator cannot see. The
+         restore and publish confirmations made that a likely key, not a stray
+         one — a native confirm swallowed it, the in-app dialog does not. */
       if (isDeleteKeystroke(e)) {
+        if (previewing !== null || previewLocked) return;
         if (store.getState().selected.length === 0) return;
         e.preventDefault();
         store.getState().deleteSelection();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, within } from '@testing-library/react';
+import { answerConfirm } from '../../testing/confirmDialog';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
@@ -2110,10 +2111,8 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     await screen.findByRole('link', { name: 'Test pipeline' });
   }
 
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     cancelRunMock.mockResolvedValue({ runId: 'run_1', state: 'requested' });
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
   it.each(['pending', 'queued', 'running', 'waiting'] as const)(
@@ -2136,17 +2135,21 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     useRunStreamMock.mockReturnValue(stream({ events: [started(), dispatched()] }));
     await mountWithStatus('running');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    const text = String(confirmSpy.mock.calls[0]?.[0]);
+    // #1397 — "Keep running", not a second "Cancel" beside "Cancel run".
+    const dialog = await screen.findByRole('alertdialog', { name: 'Cancel this run?' });
+    expect(within(dialog).getByRole('button', { name: 'Keep running' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(cancelRunMock).not.toHaveBeenCalled();
+    const text = await answerConfirm(userEvent, 'accept');
     expect(text).toContain('HTTP Request 1 — running');
     expect(text).toContain('is not undone');
     expect(cancelRunMock).toHaveBeenCalledWith('run_1');
   });
 
   it('sends nothing when the confirmation is declined', async () => {
-    confirmSpy.mockReturnValue(false);
     await mountWithStatus('running');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    await answerConfirm(userEvent, 'cancel');
     expect(cancelRunMock).not.toHaveBeenCalled();
   });
 
@@ -2154,6 +2157,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     cancelRunMock.mockRejectedValue(new ApiError(409, "run 'run_1' has already ended (success)"));
     await mountWithStatus('running');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    await answerConfirm(userEvent, 'accept');
     expect(await screen.findByRole('alert')).toHaveTextContent('has already ended (success)');
     expect(screen.getByRole('button', { name: ACTION })).toBeEnabled();
   });
@@ -2166,6 +2170,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     vi.mocked(runsApi.getRun).mockResolvedValue(run({ status: 'cancelled' }));
     await mountWithStatus('queued');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    await answerConfirm(userEvent, 'accept');
     expect(
       await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
     ).toBeInTheDocument();
@@ -2177,6 +2182,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     vi.mocked(runsApi.getRun).mockRejectedValue(new Error('network blip'));
     await mountWithStatus('queued');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    await answerConfirm(userEvent, 'accept');
     expect(
       await screen.findByText('cancelled', { selector: '.page-hint .run-status' }),
     ).toBeInTheDocument();
@@ -2191,6 +2197,7 @@ describe('RunDetailPage — the cancel-run action (CX4)', () => {
     useRunStreamMock.mockReturnValue(stream({ events: [started(), dispatched()] }));
     await mountWithStatus('running');
     await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    await answerConfirm(userEvent, 'accept');
     expect(cancelRunMock).toHaveBeenCalled();
     expect(screen.queryByText('Cancelling…', { selector: '.run-status' })).not.toBeInTheDocument();
   });
