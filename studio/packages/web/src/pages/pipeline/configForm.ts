@@ -30,7 +30,7 @@ import {
  * instead of silently rendering the wrong control.
  *
  * The division of labour with the SERVER matters and is deliberately narrow:
- * this form is a UX affordance, NOT a gate. Several activities' `configSchema` is
+ * this form is a UX affordance, NOT a gate. A CONTROL activity's `configSchema` is
  * palette metadata whose real constraints live in `validateDoc` (`wait.seconds`
  * is a `z.string()` so it can hold a `${}` expression; `validateWaitConfig` is
  * what actually judges it). The panel's local `safeParse` only spares the author a

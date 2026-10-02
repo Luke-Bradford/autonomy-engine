@@ -91,6 +91,16 @@ describe('activityNodeErrors (#1480)', () => {
     expect(activityNodeErrors(node('llm_call', opaque))).toEqual([]);
   });
 
+  it('does not overflow the stack on a hostile nesting under a refinement issue', () => {
+    // prompt AND messages raise a root-level refinement, whose drop decision
+    // walks the whole config: past MAX_CONFIG_DEPTH it stops, and the issue is
+    // left to dispatch rather than thrown out of the save gate as a 500.
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 20_000; i += 1) deep = [deep];
+    const config = { prompt: 'p', messages: [{ role: 'user', content: 'x' }], extra: deep };
+    expect(() => activityNodeErrors(node('llm_call', config))).not.toThrow();
+  });
+
   it('checks against an injected catalog, the one the executor dispatches with', () => {
     const entry = {
       type: 'test_activity',

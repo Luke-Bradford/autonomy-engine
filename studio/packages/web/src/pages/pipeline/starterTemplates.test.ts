@@ -106,18 +106,30 @@ describe('STARTER_TEMPLATES (#1413 OR22, #1420 part 4)', () => {
     ]);
   });
 
-  it.each([
-    ['summarise-folder', /^node 'list': config\.path: /],
-    ['call-api-check', /^node 'call': config\.url: /],
-  ] as const)(
+  // #1480 — what each OTHER template is held for until the operator fills it.
+  // Keyed by id and checked for completeness below, so a new template has to
+  // state its holds here rather than slip past an unbound-save check.
+  const UNBOUND_HOLDS: Readonly<Record<string, RegExp>> = {
+    'summarise-folder': /^node 'list': config\.path: required$/,
+    'call-api-check': /^node 'call': config\.url: required$/,
+  };
+
+  it('every template after the CSV one states what it is held for unbound', () => {
+    expect(Object.keys(UNBOUND_HOLDS).sort()).toEqual(
+      STARTER_TEMPLATES.slice(1)
+        .map((t) => t.id)
+        .sort(),
+    );
+  });
+
+  it.each(STARTER_TEMPLATES.slice(1).map((t) => [t.id, t] as const))(
     '%s: unbound, it is held only for the folder or URL it leaves to the operator',
-    (id, field) => {
-      // #1480 — before the gate checked config a template saved without these
-      // and failed at its first run; now Problems names the field to fill.
-      const t = STARTER_TEMPLATES.find((x) => x.id === id)!;
+    (id, t) => {
+      // Before the gate checked config a template saved without these and
+      // failed at its first run; now Problems names the field to fill.
       expect(
         validateCanvas(lowerPipelineNodes(t.nodes), t.edges, t.containers, [], [], []),
-      ).toEqual([expect.stringMatching(field)]);
+      ).toEqual([expect.stringMatching(UNBOUND_HOLDS[id] ?? /^$/)]);
     },
   );
 });

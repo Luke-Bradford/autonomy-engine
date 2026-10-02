@@ -38,6 +38,9 @@ import { isSecretRef } from '../schemas/secret-ref.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { catalog as sharedCatalog } from '../catalog/registry.js';
 import { interpolationMode } from './expr.js';
+// A cycle (params.ts imports this module), and a safe one: the binding is read
+// only inside a function call, never while either module is evaluating.
+import { MAX_CONFIG_DEPTH } from './params.js';
 
 /** How many catalog types an unknown-type refusal offers. */
 const CLOSEST_TYPES = 3;
@@ -52,36 +55,43 @@ function opaque(v: unknown, depth: Opacity): boolean {
   return depth === 'any' ? mode !== 'literal' : mode === 'whole';
 }
 
-/** Whether anything in `v`'s subtree (itself included) is opaque at `depth`. */
-function subtreeOpaque(v: unknown, depth: Opacity): boolean {
+/**
+ * Whether anything in `v`'s subtree (itself included) is opaque at `depth`.
+ * Bounded at `MAX_CONFIG_DEPTH`, as every config walk in `validateDoc` is, so a
+ * hostile nesting cannot overflow the stack. Past the bound the subtree counts
+ * as opaque, which only leaves the issue to dispatch.
+ */
+function subtreeOpaque(v: unknown, depth: Opacity, level = 0): boolean {
+  if (level > MAX_CONFIG_DEPTH) return true;
   if (opaque(v, depth)) return true;
-  if (Array.isArray(v)) return v.some((x) => subtreeOpaque(x, depth));
-  if (typeof v === 'object' && v !== null) {
-    return Object.values(v).some((x) => subtreeOpaque(x, depth));
-  }
-  return false;
+  if (typeof v !== 'object' || v === null) return false;
+  return Object.values(v).some((x) => subtreeOpaque(x, depth, level + 1));
 }
 
-/** The raw value at `path` in `config`; `undefined` when any step is missing. */
-function valueAt(config: unknown, path: readonly PropertyKey[]): unknown {
+/**
+ * The raw values from `config` down `path`, `config` first. Shorter than
+ * `path.length + 1` when a step's parent is not an object (the path is absent).
+ */
+function valuesAlong(config: unknown, path: readonly PropertyKey[]): unknown[] {
+  const values: unknown[] = [config];
   let v: unknown = config;
   for (const key of path) {
-    if (typeof v !== 'object' || v === null) return undefined;
+    if (typeof v !== 'object' || v === null) break;
     v = (v as Record<PropertyKey, unknown>)[key];
+    values.push(v);
   }
-  return v;
+  return values;
 }
 
 /** True when the issue could be an artefact of judging the template, not its value. */
 function decidedByExpression(config: unknown, issue: z.core.$ZodIssue): boolean {
-  let v: unknown = config;
-  if (opaque(v, 'any')) return true;
-  for (const key of issue.path) {
-    if (typeof v !== 'object' || v === null) return false;
-    v = (v as Record<PropertyKey, unknown>)[key];
-    if (opaque(v, 'any')) return true;
-  }
-  return (issue.code === 'custom' || issue.code === 'invalid_union') && subtreeOpaque(v, 'whole');
+  const values = valuesAlong(config, issue.path);
+  if (values.some((v) => opaque(v, 'any'))) return true;
+  if (values.length <= issue.path.length) return false;
+  const atPath = values[values.length - 1];
+  return (
+    (issue.code === 'custom' || issue.code === 'invalid_union') && subtreeOpaque(atPath, 'whole')
+  );
 }
 
 function editDistance(a: string, b: string): number {
@@ -132,8 +142,8 @@ export function activityNodeErrors(node: Node, catalog: ActivityCatalog = shared
       const path = ['config', ...issue.path.map(String)].join('.');
       // A field that is simply absent reads as Zod's "expected string, received
       // undefined"; the operator's next step is to fill it, so say that.
-      const missing =
-        issue.code === 'invalid_type' && valueAt(node.config, issue.path) === undefined;
+      const values = valuesAlong(node.config, issue.path);
+      const missing = issue.code === 'invalid_type' && values[issue.path.length] === undefined;
       return `node '${node.id}': ${path}: ${missing ? 'required' : issue.message}`;
     });
 }

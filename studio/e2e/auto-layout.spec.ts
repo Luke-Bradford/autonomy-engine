@@ -128,12 +128,11 @@ test.describe('canvas auto-layout (U9)', () => {
   }) => {
     const problems = collectPageProblems(page);
     // A node is as wide as its TITLE, and the title falls back to the raw
-    // activity `type` when the catalog has no entry for it — which the write
-    // gate permits (an unknown type fails at DISPATCH, not at save), so this is
-    // the doc an import from a newer or older build actually produces. The save
-    // gate now refuses an unknown type (#1480) UNLESS the node carries `call`,
-    // which the engine dispatches structurally and never through an adapter, so
-    // the fixture is a call node with an unregistered `type`. One
+    // activity `type` when the catalog has no entry for it. The save gate
+    // refuses an unknown type (#1480) UNLESS the node carries `call`, which the
+    // engine dispatches structurally and never through an adapter, so the
+    // fixture is a call node with an unregistered `type` (a version saved before
+    // #1480 can also still hold one). One
     // unbroken token on purpose: a multi-word title can wrap, which would make
     // the width precondition below depend on the pane width instead of on the
     // layout.

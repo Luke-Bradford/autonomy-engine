@@ -483,8 +483,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // bytes); it is the first activity to opt into the read-only idempotent case
     // the fail-safe `false` default anticipates. Outputs the file `content` (as
     // UTF-8 text) and the canonical `path` actually read. `configSchema` is
-    // also the `dispatchConfigSchema`: the adapter validates the live (`${}`-
-    // substituted) `path` with it, and the save gate a literal one (#1480). No `secretSinkFields` — `fs` is credential-less.
+    // also the `dispatchConfigSchema`: the adapter validates the live
+    // (`${}`-substituted) `path` with it, and the save gate a literal one
+    // (#1480). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_READ_ACTIVITY_TYPE,
     title: 'Read File',
     description: 'Read the contents of a file on a file system connection.',
@@ -504,7 +505,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // the `${}`-substituted `content` as UTF-8 text; outputs the `bytesWritten`
     // and the canonical `path`. Bounded by the same server-side root/traversal
     // guard as the read. The adapter validates the live request against
-    // `dispatchConfigSchema`, as the save gate does a literal one (#1480). No `secretSinkFields` — `fs` is credential-less.
+    // `dispatchConfigSchema`, as the save gate does a literal one (#1480). No
+    // `secretSinkFields` — `fs` is credential-less.
     type: FILE_WRITE_ACTIVITY_TYPE,
     title: 'Write File',
     description: 'Write text to a file on a file system connection.',

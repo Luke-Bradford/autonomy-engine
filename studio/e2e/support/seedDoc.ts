@@ -164,15 +164,6 @@ export async function seedVersion(
   return { pipelineId: id, pipelineVersionId };
 }
 
-/**
- * Mint ONE more version on an EXISTING pipeline, and return its id.
- *
- * Split out of `seedVersion` for the version-history spec (#903), which is the
- * first to need a pipeline carrying several versions. The defaults and the edge
- * id-minting live here so that every seeded version has one shape — a spec
- * hand-writing raw request bodies for its second and third versions would be
- * expressing the same doc two different ways in one file.
- */
 /** #1480 — the placeholder URL a seeded `http_request` carries unless the spec sets one. */
 export const SEED_URL = 'https://example.test/seed';
 
@@ -199,6 +190,15 @@ function seedNode(n: SeedNode): SeedNode {
   return { ...n, type, config: { ...SEED_CONFIG[type], ...n.config } };
 }
 
+/**
+ * Mint ONE more version on an EXISTING pipeline, and return its id.
+ *
+ * Split out of `seedVersion` for the version-history spec (#903), which is the
+ * first to need a pipeline carrying several versions. The defaults and the edge
+ * id-minting live here so that every seeded version has one shape — a spec
+ * hand-writing raw request bodies for its second and third versions would be
+ * expressing the same doc two different ways in one file.
+ */
 export async function mintVersion(
   page: Page,
   pipelineId: string,
