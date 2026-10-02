@@ -31,6 +31,7 @@ import { exportPipeline } from '../../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 
 /** The tree's own ids — the disclosure's `aria-controls` must name a real one. */
 const PIPELINES_LIST_ID = 'factory-pipelines';
@@ -136,6 +137,7 @@ interface FactoryResourcesProps {
  * list page and still supplies the breadcrumb.
  */
 export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourcesProps) {
+  const [confirm, confirmDialog] = useConfirm();
   const navigate = useNavigate();
   const { key: locationKey } = useLocation();
   const editing = useMatch(CANVAS_ROUTE)?.params.pipelineId;
@@ -418,7 +420,14 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
-      if (!window.confirm(`Delete pipeline “${p.name}”? This cannot be undone.`)) return;
+      const ok = await confirm({
+        message: `Delete pipeline “${p.name}”?\n\nThis cannot be undone.`,
+        confirmLabel: 'Delete',
+        // The menu item that asked unmounts with its menu; Cancel lands back
+        // on the row's ⋯ button, which is where the keyboard user came from.
+        restoreFocus: () => document.getElementById(rowMenuId(p.id)),
+      });
+      if (!ok) return;
       /* The row — and the Fluent menu anchored to it — is about to be unmounted
          by the refresh, so focus needs somewhere to land. Fluent restores focus
          to its trigger on close, which by then is gone.
@@ -454,7 +463,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          lands on "Pipeline not found". */
       if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
     },
-    [editing, hub.path, navigate, run, section],
+    [confirm, editing, hub.path, navigate, run, section],
   );
 
   /** One pipeline's row — or the draft standing in for it (rename, move). */
@@ -714,6 +723,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
           </button>
         </p>
       )}
+      {confirmDialog}
     </div>
   );
 }

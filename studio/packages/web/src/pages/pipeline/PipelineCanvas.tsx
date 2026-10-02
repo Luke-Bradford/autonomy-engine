@@ -957,6 +957,7 @@ export function PipelineCanvas({
       return;
     }
     if (
+      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
       !window.confirm(restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }))
     ) {
       return;
@@ -1068,6 +1069,7 @@ export function PipelineCanvas({
     // too important to rest on a function's return value alone.
     if (active === undefined) return;
     if (
+      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
       !window.confirm(
         publishConfirmMessage({
           selectedVersion: previewed.version,

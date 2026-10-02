@@ -67,6 +67,7 @@ import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 import { DatasetKindName, KindSelect } from '../lib/KindName';
 import { DATASET_KIND_ICONS } from '../lib/kindIcons';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 const KINDS = DATASET_KINDS;
 
@@ -320,6 +321,7 @@ function savePayloadSignature(form: FormState): string {
  * longer agree) is M9 and is deliberately not here.
  */
 export function DatasetsPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
   const [connections, setConnections] = useState<readonly ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -392,13 +394,11 @@ export function DatasetsPage() {
       // dependants at delete time (the ref is checked at DISPATCH, §3.1), so a
       // `copy` node bound to this dataset keeps its binding and fails when it
       // next runs.
-      if (
-        !window.confirm(
-          `Delete dataset "${dataset.name}"? Any pipeline node bound to it will fail at dispatch.`,
-        )
-      ) {
-        return;
-      }
+      const ok = await confirm({
+        message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
       try {
         await deleteDataset(dataset.id);
         closeWhere((open) => open.id === dataset.id);
@@ -407,7 +407,7 @@ export function DatasetsPage() {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refresh, closeWhere],
+    [confirm, refresh, closeWhere],
   );
 
   return (
@@ -421,18 +421,15 @@ export function DatasetsPage() {
           New dataset
         </button>
       </div>
-
       <p className="page-hint">
         A dataset is a thing in a store, in a shape: which connection it lives in, how it is
         addressed, and the columns it declares. A copy activity binds one at each end.
       </p>
-
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
-
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -526,8 +523,7 @@ export function DatasetsPage() {
           />
         )}
       </div>
-
-      <ImportPanel listKind="dataset" stores={connections} onImported={refresh} />
+      <ImportPanel listKind="dataset" stores={connections} onImported={refresh} /> {confirmDialog}
     </section>
   );
 }

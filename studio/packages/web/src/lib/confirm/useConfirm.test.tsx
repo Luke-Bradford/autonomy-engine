@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { splitConfirmMessage, useConfirm, type ConfirmRequest } from './useConfirm';
 
 /** A page that asks one question per click and shows each answer. */
@@ -22,6 +22,15 @@ function Harness({ request }: { request: ConfirmRequest }): ReactNode {
       {dialog}
     </>
   );
+}
+
+type Ask = (r: ConfirmRequest) => Promise<boolean>;
+
+/** Hands the hook's `confirm` to the test, to ask questions from outside a click. */
+function Capture({ onReady }: { onReady: (confirm: Ask) => void }): ReactNode {
+  const [confirm, dialog] = useConfirm();
+  useEffect(() => onReady(confirm), [onReady, confirm]);
+  return dialog;
 }
 
 const DELETE: ConfirmRequest = {
@@ -91,27 +100,30 @@ describe('useConfirm', () => {
   });
 
   it('refuses a second question while one is open, and leaves the open one alone', async () => {
-    let confirmFn: ((r: ConfirmRequest) => Promise<boolean>) | null = null;
-    function Capture(): ReactNode {
-      const [confirm, dialog] = useConfirm();
-      confirmFn = confirm;
-      return dialog;
-    }
+    let ask: Ask | null = null;
     const user = userEvent.setup();
-    render(<Capture />);
+    render(
+      <Capture
+        onReady={(c) => {
+          ask = c;
+        }}
+      />,
+    );
     let first: Promise<boolean> | null = null;
     act(() => {
-      first = confirmFn!({ ...DELETE, typeToConfirm: 'Nightly' });
+      first = ask!({ ...DELETE, typeToConfirm: 'Nightly' });
     });
     const input = await screen.findByLabelText('Type Nightly to confirm');
     await user.type(input, 'Night');
     let second: Promise<boolean> | null = null;
     act(() => {
-      second = confirmFn!({ message: 'Delete pipeline "Other"?', confirmLabel: 'Delete' });
+      second = ask!({ message: 'Delete pipeline "Other"?', confirmLabel: 'Delete' });
     });
     await expect(second!).resolves.toBe(false);
     // Still the first question, half-typed name and all.
-    expect(screen.getByRole('alertdialog', { name: 'Delete pipeline "Nightly"?' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('alertdialog', { name: 'Delete pipeline "Nightly"?' }),
+    ).toBeInTheDocument();
     expect(input).toHaveValue('Night');
     await user.type(input, 'ly{Enter}');
     await expect(first!).resolves.toBe(true);
@@ -161,16 +173,17 @@ describe('useConfirm', () => {
   });
 
   it('answers an open question false when the page unmounts', async () => {
-    let confirmFn: ((r: ConfirmRequest) => Promise<boolean>) | null = null;
-    function Capture(): ReactNode {
-      const [confirm, dialog] = useConfirm();
-      confirmFn = confirm;
-      return dialog;
-    }
-    const { unmount } = render(<Capture />);
+    let ask: Ask | null = null;
+    const { unmount } = render(
+      <Capture
+        onReady={(c) => {
+          ask = c;
+        }}
+      />,
+    );
     let pending: Promise<boolean> | null = null;
     act(() => {
-      pending = confirmFn!(DELETE);
+      pending = ask!(DELETE);
     });
     await screen.findByRole('alertdialog');
     unmount();

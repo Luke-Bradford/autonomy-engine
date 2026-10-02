@@ -30,6 +30,7 @@ import { SecretInput } from '../lib/form/SecretInput';
 import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerForm';
 import { payloadSignature } from './pipeline/configForm';
 import { formatWhen } from './runs/format';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -83,6 +84,7 @@ function savePayloadSignature(form: FormState): string {
  * existed.
  */
 export function SecretsPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
@@ -123,16 +125,15 @@ export function SecretsPage() {
       // value behind it (#1061 gave that its own route and button). What it
       // costs is the same either way, so the confirmation states it: every node
       // referencing the name breaks until a secret of that name exists again.
-      if (
-        !window.confirm(
+      const ok = await confirm({
+        message:
           `Delete secret "${secret.name}"?\n\n` +
-            `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
-            `dispatch until a secret of that name exists again.\n\n` +
-            `To change its VALUE and keep the name, use Replace instead.`,
-        )
-      ) {
-        return;
-      }
+          `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
+          `dispatch until a secret of that name exists again.\n\n` +
+          `To change its VALUE and keep the name, use Replace instead.`,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
       try {
         await deleteSecret(secret.id);
         closeWhere((open) => open.id === secret.id);
@@ -141,7 +142,7 @@ export function SecretsPage() {
         setLoadError(`Could not delete “${secret.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, closeWhere],
+    [confirm, refresh, closeWhere],
   );
 
   return (
@@ -155,20 +156,17 @@ export function SecretsPage() {
           New secret
         </button>
       </div>
-
       <p className="page-hint">
         A secret is a named credential, stored encrypted. A pipeline never contains the value — a
         node references it by name as <code>{'{"$secret": "<name>"}'}</code>, and it is decrypted
         only at dispatch. Values are write-only: once saved, a secret can be replaced or deleted,
         never read back.
       </p>
-
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
-
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -242,7 +240,8 @@ export function SecretsPage() {
             }}
           />
         )}
-      </div>
+      </div>{' '}
+      {confirmDialog}
     </section>
   );
 }

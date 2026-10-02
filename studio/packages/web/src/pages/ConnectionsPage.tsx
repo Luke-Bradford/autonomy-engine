@@ -77,6 +77,7 @@ import { OverridableKeysSection } from './OverridableKeysField';
 import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlist';
 import { ConnectionKindName, KindSelect } from '../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -177,6 +178,7 @@ function savePayloadSignature(form: FormState): string {
  * the existing secret; typing a value rotates it).
  */
 export function ConnectionsPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
@@ -392,14 +394,15 @@ export function ConnectionsPage() {
   /**
    * Re-entrancy guard for the delete path, which #1174 made necessary.
    *
-   * `window.confirm` BLOCKS the main thread, so while it was the FIRST statement
-   * of this handler a second click could not even be dispatched — the old code
-   * was accidentally immune to a double-click. Reading the dataset list first
-   * puts a real round trip in front of the dialog and the event loop is free for
-   * the whole of it: a double-click queues two handlers, the second raises a
-   * second confirm for a connection the first has already deleted, and accepting
-   * it 404s into `loadError` — an error banner over an operation that in fact
-   * succeeded.
+   * The old `window.confirm` BLOCKED the main thread, so while it was the FIRST
+   * statement of this handler a second click could not even be dispatched — the
+   * old code was accidentally immune to a double-click. Reading the dataset list
+   * first puts a real round trip in front of the dialog, and the dialog itself
+   * (#1397) no longer blocks anything: a double-click queues two handlers, the
+   * second raises a second confirm for a connection the first has already
+   * deleted, and accepting it 404s into `loadError` — an error banner over an
+   * operation that in fact succeeded. The guard spans the dialog too, so the
+   * row stays held while its question is open.
    *
    * The guard itself now lives in `useBusyAction`, which was extracted from this
    * handler in #960 and carries both of its arguments — the ref (read and
@@ -463,7 +466,21 @@ export function ConnectionsPage() {
         ]
           .filter((part) => part !== '')
           .join('\n\n');
-        if (!window.confirm(message)) return;
+        // Typing the name is asked for only when something is KNOWN to depend
+        // on it. A check that failed stays advisory (#1145/#1158): the message
+        // says so, and an outage adds no friction to the delete.
+        const hasDependants =
+          (check.state === 'known' && check.names.length > 0) ||
+          (triggerCheck.state === 'known' &&
+            triggerCheck.names.length + triggerCheck.dynamicNames.length > 0) ||
+          (dependentsResult.status === 'fulfilled' &&
+            dependentsResult.value.nodes.length + dependentsResult.value.dynamicNodes.length > 0);
+        const ok = await confirm({
+          message,
+          confirmLabel: 'Delete',
+          ...(hasDependants ? { typeToConfirm: conn.name } : {}),
+        });
+        if (!ok) return;
         try {
           await deleteConnection(conn.id);
           closeWhere((open) => open.id === conn.id);
@@ -472,7 +489,7 @@ export function ConnectionsPage() {
           setLoadError(err instanceof Error ? err.message : String(err));
         }
       }),
-    [runDelete, refresh, closeWhere],
+    [confirm, runDelete, refresh, closeWhere],
   );
 
   return (
@@ -486,18 +503,15 @@ export function ConnectionsPage() {
           New connection
         </button>
       </div>
-
       <p className="page-hint">
         A connection is a worker: an LLM API key, a local model, an agent CLI, or an HTTP endpoint.
         Pipelines reference connections; secrets are stored encrypted and never shown again.
       </p>
-
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
-
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -604,13 +618,12 @@ export function ConnectionsPage() {
           />
         )}
       </div>
-
       {/* The import surface lives on the list an imported connection lands in —
           but it takes ANY export envelope, because `POST /api/import` does (see
           `ImportPanel`). A pipeline or trigger file is imported and then
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
-      <ImportPanel listKind="connection" onImported={refresh} />
+      <ImportPanel listKind="connection" onImported={refresh} /> {confirmDialog}
     </section>
   );
 }

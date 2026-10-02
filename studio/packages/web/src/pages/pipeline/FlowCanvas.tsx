@@ -1065,6 +1065,7 @@ export function FlowCanvas({
       // from the render that created the callback, not from the doc as it stands
       // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
       const name = containerLabels(state.containers).get(id) ?? CONTAINER_KIND_LABELS[kind];
+      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
           // U17 — this used to end "and this cannot be undone", which was true

@@ -96,6 +96,7 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { payloadSignature } from './pipeline/configForm';
 import { KindSelect, TriggerModeName } from '../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -291,6 +292,7 @@ interface FireOutcome {
  * server refuses otherwise — mirrored here for a friendlier message).
  */
 export function TriggersPage() {
+  const [confirm, confirmDialog] = useConfirm();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
@@ -403,7 +405,8 @@ export function TriggersPage() {
 
   const onDelete = useCallback(
     async (t: TriggerPublic) => {
-      if (!window.confirm(`Delete trigger "${t.name}"?`)) return;
+      const ok = await confirm({ message: `Delete trigger "${t.name}"?`, confirmLabel: 'Delete' });
+      if (!ok) return;
       try {
         await deleteTrigger(t.id);
         // A form open on the trigger just deleted would save to nothing.
@@ -413,7 +416,7 @@ export function TriggersPage() {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refresh, closeWhere],
+    [confirm, refresh, closeWhere],
   );
 
   /**
@@ -552,19 +555,16 @@ export function TriggersPage() {
           New trigger
         </button>
       </div>
-
       <p className="page-hint">
         A trigger binds one pipeline version to a firing mode (manual, schedule, webhook…) and a
         concurrency policy. Fire it now, or enable it to fire automatically. An enabled trigger must
         be bound to a pipeline version.
       </p>
-
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
-
       {/* ONE region for both, rather than a second live region beside the three
           this page already has (#1249 tracks the app-wide count).
 
@@ -614,7 +614,6 @@ export function TriggersPage() {
           ))}
         </div>
       )}
-
       {webhookSecret && (
         <div role="status" className="secret-reveal">
           <p>
@@ -632,7 +631,6 @@ export function TriggersPage() {
           </button>
         </div>
       )}
-
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -750,13 +748,12 @@ export function TriggersPage() {
           />
         )}
       </div>
-
       {/* The import surface lives on the list an imported trigger lands in —
           but it takes ANY export envelope, because `POST /api/import` does (see
           `ImportPanel`). A pipeline or connection file is imported and then
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
-      <ImportPanel listKind="trigger" onImported={refresh} />
+      <ImportPanel listKind="trigger" onImported={refresh} /> {confirmDialog}
     </section>
   );
 }

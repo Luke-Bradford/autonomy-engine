@@ -12,10 +12,7 @@ import type { UserEvent } from '@testing-library/user-event';
  * `expect(deleteMock).not.toHaveBeenCalled()` straight after the click would
  * pass while the dialog was still open, whichever way it was answered.
  */
-export async function answerConfirm(
-  user: UserEvent,
-  answer: 'accept' | 'cancel',
-): Promise<string> {
+export async function answerConfirm(user: UserEvent, answer: 'accept' | 'cancel'): Promise<string> {
   const dialog = await screen.findByRole('alertdialog');
   const text = dialog.textContent ?? '';
   const buttons = within(dialog).getAllByRole('button');

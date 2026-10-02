@@ -18,6 +18,7 @@ import { exportPipeline } from '../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
@@ -37,6 +38,7 @@ import { pipelinePath } from './author/pipelinePath';
  * pipeline at all.
  */
 export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
+  const [confirm, confirmDialog] = useConfirm();
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
@@ -137,7 +139,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
-      if (!window.confirm(`Delete pipeline "${p.name}"? This cannot be undone.`)) return;
+      const ok = await confirm({
+        message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
       setActionMsg(null);
       try {
         await deletePipeline(p.id);
@@ -148,7 +154,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(describeDeleteFailure(p.name, err));
       }
     },
-    [refresh],
+    [confirm, refresh],
   );
 
   /**
@@ -239,7 +245,8 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    */
   const onArchive = useCallback(
     async (p: Pipeline) => {
-      if (!window.confirm(archiveConfirmMessage(p.name))) return;
+      const ok = await confirm({ message: archiveConfirmMessage(p.name), confirmLabel: 'Archive' });
+      if (!ok) return;
       setActionMsg(null);
       try {
         await archivePipeline(p.id);
@@ -252,7 +259,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, loadArchived, invalidateArchived],
+    [confirm, refresh, loadArchived, invalidateArchived],
   );
 
   /**
@@ -283,7 +290,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         A pipeline is a graph of activities. Open one to build it on the canvas; saving creates a
         new immutable version that a trigger can bind to.
       </p>
-
       {loadError && (
         <p className="error" role="alert">
           {loadError}
@@ -310,11 +316,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           {actionMsg}
         </p>
       )}
-
       {/* Gated on a load having SUCCEEDED: an empty list and a failed load are
           different facts, and "no pipelines yet" is a lie about the second. */}
       {status === 'ready' && pipelines.length === 0 && <p>No pipelines yet — create one below.</p>}
-
       {pipelines.length > 0 && (
         <table>
           <thead>
@@ -368,7 +372,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </tbody>
         </table>
       )}
-
       {/* #1058 — the ARCHIVED set. Behind a toggle rather than always on
           screen: it is a recovery surface, not part of the day-to-day list, and
           leaving it closed costs no request. Archiving is only safe to offer
@@ -434,7 +437,6 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </>
         )}
       </section>
-
       <form
         className="connection-form"
         aria-label="New pipeline"
@@ -456,13 +458,12 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </button>
         </div>
       </form>
-
       {/* The import surface lives here, on the list an imported pipeline lands
           in — but it takes ANY export envelope, because `POST /api/import` does
           (see `ImportPanel`). A connection or trigger file is imported and then
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
-      <ImportPanel listKind="pipeline" onImported={refresh} />
+      <ImportPanel listKind="pipeline" onImported={refresh} /> {confirmDialog}
     </section>
   );
 }

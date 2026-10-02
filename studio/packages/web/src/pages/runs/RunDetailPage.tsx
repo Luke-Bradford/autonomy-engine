@@ -338,6 +338,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
     const message = cancelConfirmMessage(
       nodes.map((n) => ({ name: nameOf(n.nodeId) ?? n.nodeId, status: n.status })),
     );
+    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
     if (!window.confirm(message)) return;
     setCancelBusy(true);
     setCancelError(null);
