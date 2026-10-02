@@ -293,9 +293,7 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
     /* An on/off preference: its stored value, and a setter that writes it
        through. One helper for every flag — the minimap's, then #1475's two —
        so none of them can be the one that forgets to persist. */
-    const flag = <
-      K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen' | 'toolboxCollapsed',
-    >(
+    const flag = <K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen' | 'toolboxCollapsed'>(
       field: K,
       key: string,
       fallback: boolean,
