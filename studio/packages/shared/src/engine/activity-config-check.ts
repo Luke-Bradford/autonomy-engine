@@ -58,11 +58,13 @@ function opaque(v: unknown, depth: Opacity): boolean {
 /**
  * Whether anything in `v`'s subtree (itself included) is opaque at `depth`.
  * Bounded at `MAX_CONFIG_DEPTH`, as every config walk in `validateDoc` is, so a
- * hostile nesting cannot overflow the stack. Past the bound the subtree counts
- * as opaque, which only leaves the issue to dispatch.
+ * hostile nesting cannot overflow the stack. Past the bound nothing counts as
+ * opaque, so the issue STANDS: an over-deep config is refused, never waved
+ * through unchecked — and it could not run anyway, since dispatch-time
+ * substitution refuses a config nested past the same bound.
  */
 function subtreeOpaque(v: unknown, depth: Opacity, level = 0): boolean {
-  if (level > MAX_CONFIG_DEPTH) return true;
+  if (level > MAX_CONFIG_DEPTH) return false;
   if (opaque(v, depth)) return true;
   if (typeof v !== 'object' || v === null) return false;
   return Object.values(v).some((x) => subtreeOpaque(x, depth, level + 1));
