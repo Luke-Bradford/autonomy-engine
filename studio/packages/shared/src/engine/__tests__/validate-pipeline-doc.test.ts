@@ -13,7 +13,7 @@ import type { Container, Edge, Node, Param, VariableDef } from '../../index.js';
  * already own.
  */
 
-const NODE: Node = { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };
+const NODE: Node = { id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } };
 
 function doc(
   over: Partial<{

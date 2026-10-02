@@ -25,7 +25,7 @@ import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config, position: { x: seq, y: 0 }, ...extra };
+  return { id, type: 'agent_task', config: { task: 't', ...config }, position: { x: seq, y: 0 }, ...extra };
 }
 function callNode(id: string, pipelineVersionId: string): Node {
   return node(id, {}, { type: 'call_pipeline', call: { pipelineVersionId, params: {} } });
@@ -944,8 +944,13 @@ describe('validateDoc — execute_pipeline requires a call config (#4 A9)', () =
   it('does NOT require a call on a legacy call_pipeline-typed node (rule is type-specific, back-compat)', () => {
     // The rule keys on `type === 'execute_pipeline'`, so a legacy `call_pipeline`
     // node (any other type) is untouched — its call is optional as before.
+    // #1480 — with no `call` it is an ordinary node of an unknown type, which
+    // the executor would refuse, so the save gate refuses it as that (and only
+    // that: the A9 rule still does not fire).
     const d = doc([node('c', {}, { type: 'call_pipeline' })]);
-    expect(validateDoc(d)).toEqual([]);
+    expect(validateDoc(d)).toEqual([
+      expect.stringMatching(/^node 'c': type: unknown activity type 'call_pipeline'/),
+    ]);
   });
 });
 

@@ -13,7 +13,9 @@ import { validatePipelineDoc } from '../validate-pipeline.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, type = 'agent_task'): Node {
   seq += 1;
-  return { id, type, config, position: { x: seq, y: 0 } };
+  // #1480 — an agent_task saves only with its required `task`.
+  const filled = type === 'agent_task' ? { task: 't', ...config } : config;
+  return { id, type, config: filled, position: { x: seq, y: 0 } };
 }
 const set = (id: string, variable: unknown, value: unknown): Node =>
   node(id, { variable, value }, 'set_variable');

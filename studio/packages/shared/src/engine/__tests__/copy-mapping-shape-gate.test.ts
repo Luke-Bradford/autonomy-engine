@@ -21,6 +21,16 @@ import type { Container, Edge, Node, Param, PipelineVersion } from '../types.js'
 import { validateDoc } from '../params.js';
 import { COPY_ACTIVITY_TYPE } from '../../catalog/types.js';
 
+/**
+ * #1480 — a malformed mapping is no longer a skip for the GATE: the dispatch
+ * schema refuses a mapping the adapter could not run (`config.mapping…`). It is
+ * still a skip for THIS rule, whose own messages read `mapping[i]`.
+ */
+function expectOnlySchemaIssues(issues: string[]): void {
+  expect(issues.length).toBeGreaterThan(0);
+  for (const issue of issues) expect(issue).toMatch(/^node '[^']+': config\.mapping/);
+}
+
 function doc(
   nodes: Node[],
   edges: Edge[] = [],
@@ -94,7 +104,7 @@ describe('#1176 — the cross-row mapping rules reach the write gate', () => {
     const other: Node = {
       id: 'n',
       type: 'file_read',
-      config: { mapping: [] },
+      config: { path: 'a.txt', mapping: [] },
       position: { x: 0, y: 0 },
     };
     expect(validateDoc(doc([other]))).toEqual([]);
@@ -111,8 +121,8 @@ describe('#1176 — what the gate still declines to read', () => {
    */
   it('skips a mapping it cannot see rows in', () => {
     expect(validateDoc(doc([copyNode('${params.everything}')]))).toEqual([]);
-    expect(validateDoc(doc([copyNode(undefined)]))).toEqual([]);
-    expect(validateDoc(doc([copyNode({ not: 'an array' })]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode(undefined)])));
+    expectOnlySchemaIssues(validateDoc(doc([copyNode({ not: 'an array' })])));
   });
 
   /*
@@ -122,7 +132,7 @@ describe('#1176 — what the gate still declines to read', () => {
    * belongs, and an uncaught throw in the canvas's validation memo.
    */
   it('does not throw on rows that are not objects, and does not count them as a sink', () => {
-    expect(validateDoc(doc([copyNode([null, 7, ['x'], '${params.col}'])]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode([null, 7, ['x'], '${params.col}'])])));
   });
 
   it('does not fold a non-string sink into the duplicate check', () => {
@@ -134,7 +144,7 @@ describe('#1176 — what the gate still declines to read', () => {
       { source: 'a', sink: null },
       { source: 'b', sink: null },
     ];
-    expect(validateDoc(doc([copyNode(rows)]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode(rows)])));
   });
 
   it('compares sink names as STRINGS — the store owns what "the same column" means', () => {

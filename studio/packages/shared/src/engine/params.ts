@@ -2827,9 +2827,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // root cause, so per-ref errors would just bury it.
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
   for (const node of doc.nodes) {
-    // #1480 — an unknown `type`, or a literal config the adapter would refuse
-    // at dispatch, is refused here: a version that saves must be one that runs.
-    errors.push(...activityNodeErrors(node, options.catalog));
+    const beforeNode = errors.length;
     const contract = outputsById.get(node.id);
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
@@ -2869,6 +2867,13 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       validateCopyMappingIdentifiers(node, errors);
       validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
     }
+    // #1480 — an unknown `type`, or a literal config the adapter would refuse
+    // at dispatch, is refused here: a version that saves must be one that runs.
+    // Only for a node the hand-written rules above found clean: they are the
+    // more specific diagnostics for the fields they own, and the dispatch schema
+    // replays several of them (`llm_call`'s output coupling, `copy`'s cross-row
+    // mapping rules), so running both would report one fault twice.
+    if (errors.length === beforeNode) errors.push(...activityNodeErrors(node, options.catalog));
     // #2 L13b — connectionParams shape rules (activity-agnostic: any
     // connection-bound node may carry bindings). Both refusals follow the L12
     // call-node precedent: config that would be silently INERT is refused with
