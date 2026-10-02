@@ -56,9 +56,9 @@ interface RowMoreMenuProps {
  *
  * It is built like the editor header's menu (`PipelineCanvas.tsx`). That menu
  * stays separate because it has no destructive item and gives a reason under
- * each disabled entry. This one uses Fluent's default body portal, because the resource pane clips its
- * own overflow and the U0 spike forbids reparenting a surface into the React
- * Flow viewport.
+ * each disabled entry. This one uses Fluent's default body portal, because
+ * the resource pane clips its own overflow and the U0 spike forbids
+ * reparenting a surface into the React Flow viewport.
  */
 export function RowMoreMenu({
   name,
