@@ -56,7 +56,6 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
   let hasDependants = false;
   if (read.state === 'unavailable') {
     parts.push(
-      // One line: a multi-paragraph error would split into dialog paragraphs.
       `Could not check what depends on it (${advisoryDetail(read.detail)}) — any trigger bound to it is deleted with it, and any pipeline that calls it will fail at that step.`,
     );
   } else {

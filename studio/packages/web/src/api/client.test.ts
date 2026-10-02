@@ -183,4 +183,13 @@ describe('advisoryDetail (#1487)', () => {
     expect(out).toHaveLength(ADVISORY_DETAIL_MAX);
     expect(out.endsWith('…')).toBe(true);
   });
+
+  it('never cuts an astral character in half at the bound', () => {
+    const out = advisoryDetail(`${'a'.repeat(ADVISORY_DETAIL_MAX - 2)}😀zz`);
+    expect(out).toBe(`${'a'.repeat(ADVISORY_DETAIL_MAX - 2)}😀…`);
+  });
+
+  it('names an empty detail rather than quoting empty parentheses', () => {
+    expect(advisoryDetail(' \n ')).toBe('no detail given');
+  });
 });
