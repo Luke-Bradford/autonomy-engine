@@ -1331,7 +1331,9 @@ td button + button {
    `top` clears the app bar, so it sits just under the page header it guards. */
 .editor-leave-prompt {
   position: fixed;
-  top: 4.5rem;
+  /* Under the command bar AND the editor's toolbar row (#1475: 40 + 40px), so
+     the prompt never covers the Save it is asking about. */
+  top: 5.5rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
@@ -1498,10 +1500,9 @@ button.danger {
 /* Header (with the notice strip in it, #1475) and version history are
    content-sized; the editor grid takes everything that is left. Since #1393 the
    notice strip is a FIXED height and the issue list lives in the dock, so only
-   version history still comes and goes. A flex column rather than explicit grid rows because a child can be
-   CONDITIONAL — a
-   `grid-template-rows` listing them would silently mis-assign the `1fr` row the
-   moment one of them is absent. */
+   version history still comes and goes. A flex column rather than explicit grid
+   rows because a child can be CONDITIONAL — a `grid-template-rows` listing them
+   would silently mis-assign the `1fr` row the moment one of them is absent. */
 .canvas-page {
   display: flex;
   flex-direction: column;
@@ -2035,19 +2036,20 @@ button.danger {
    It replaced a 55px header (a 20px title in the browser's 17px h2 margins)
    plus a 36px strip band that was empty most of the time.
 
-   A fixed MINIMUM height and a fixed-basis strip, so what a notice says never
-   changes the row (#1393): the strip's flex basis and minimum are constants,
-   so whether the row wraps depends on the viewport alone. It wraps only below
-   about 1000px, where the actions move to a second line rather than crushing
-   the notices to nothing.
+   A fixed height and NO wrapping, so nothing can change the row's height
+   (#1393): not what a notice says, and not an action's label ("Saving…" is
+   narrower than "Save version", which near a wrap threshold would flip the
+   wrap and move the canvas on Save). The title gives way first, down to
+   nothing; the strip keeps its minimum. Only a content area narrower than
+   about 750px runs out of room, and there the row scrolls sideways with
+   `.content` rather than growing.
 
    `position: relative` here, not on the strip: the `+N more` list is drawn
    across the whole row's width, not just the strip's slice of it. */
 .canvas-page > .page-header {
   position: relative;
   flex: 0 0 auto;
-  flex-wrap: wrap;
-  min-height: 2.5rem;
+  height: 2.5rem;
   column-gap: 0.75rem;
 }
 
@@ -2075,8 +2077,10 @@ button.danger {
   align-items: center;
   gap: 0.75rem;
   height: 2.25rem;
-  flex: 1 1 12rem;
-  min-width: 12rem;
+  /* The minimum holds a standing banner's buttons ("Preview vN" and "Save as
+     vN+1 anyway" are about 230px) with a little of its text beside them. */
+  flex: 1 1 18rem;
+  min-width: 18rem;
   font-size: 0.85rem;
 }
 
@@ -2106,8 +2110,9 @@ button.danger {
 }
 
 /* The message's text gives way first; its link (#1395 "Open run") keeps its
-   width, so an ellipsis never swallows the act. */
-.editor-status-strip__transient > .notice {
+   width, so an ellipsis never swallows the act. In the `+N more` list too. */
+.editor-status-strip__transient > .notice,
+.editor-status-strip__list > .notice {
   display: flex;
   gap: 0.3em;
 }
@@ -2118,7 +2123,8 @@ button.danger {
   text-overflow: ellipsis;
 }
 
-.editor-status-strip__transient > .notice > a {
+.editor-status-strip__transient > .notice > a,
+.editor-status-strip__list > .notice > a {
   flex: 0 0 auto;
 }
 
@@ -4286,7 +4292,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-top: 1rem;
+  margin-top: 0.25rem; /* `.canvas-grid`'s, so entering a preview moves nothing above it. */
   /* Takes the leftover height exactly as `.canvas-grid` does — swapping between
      the editor and a preview must not resize the page. */
   flex: 1 1 auto;

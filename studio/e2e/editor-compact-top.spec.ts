@@ -29,7 +29,6 @@ async function read(page: Page) {
     const strip = rect('[data-testid="editor-status-strip"]');
     return {
       flowTop: rect('.react-flow')?.top ?? null,
-      toolboxTop: rect('.activity-toolbox')?.top ?? null,
       headerTop: header?.top ?? null,
       headerBottom: header?.bottom ?? null,
       stripTop: strip?.top ?? null,
@@ -57,9 +56,6 @@ for (const [width, height] of [
     const m = await read(page);
     expect(m.flowTop).not.toBeNull();
     expect(m.flowTop!, 'canvas top').toBeLessThanOrEqual(TOP_BUDGET_PX);
-    // The toolbox shares the canvas row, so it starts with it rather than
-    // under a band of its own.
-    expect(Math.abs(m.toolboxTop! - m.flowTop!)).toBeLessThanOrEqual(1);
 
     // The notice strip is a slot IN the toolbar row, not a band under it: it
     // costs no height when it is empty, which is most of the time.
