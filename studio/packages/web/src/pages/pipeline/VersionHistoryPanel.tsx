@@ -12,6 +12,7 @@
  * marks, whether a restore is allowed and what the confirmation says) is made
  * in `versionHistory.ts`, where a unit test can reach it without React Flow.
  */
+import { DismissRegular } from '@fluentui/react-icons';
 import { formatWhen } from '../runs/format';
 import type { VersionEntry } from './versionHistory';
 
@@ -20,15 +21,20 @@ interface VersionHistoryProps {
   /** The version being previewed, or `null` while the editor is on screen. */
   previewing: number | null;
   /**
-   * Inert rows. Set while a restore is in flight: a row toggles the preview,
-   * and both directions (leaving it, or switching to another version) remount
-   * the editor under a response that is about to rebase the canvas.
+   * Why the rows and Close are inert, or `null` while they are live. Set while
+   * a restore or a save is in flight: a row toggles the preview, and both
+   * directions (leaving it, or switching to another version) remount the
+   * editor under a response that is about to rebase the canvas. The REASON,
+   * not a flag, so the tooltip names the request actually running — the same
+   * sentence as the ⋯ menu's item.
    *
-   * Required rather than defaulted to `false` — a caller that forgets it should
+   * Required rather than defaulted to `null` — a caller that forgets it should
    * fail to compile, not silently get the unlocked behaviour.
    */
-  locked: boolean;
+  locked: string | null;
   onPreview: (version: number) => void;
+  /** Close the column — the same act as the ⋯ menu's "Hide version history". */
+  onClose: () => void;
 }
 
 function count(n: number, word: string): string {
@@ -56,49 +62,86 @@ export function VersionHistoryPanel({
   previewing,
   locked,
   onPreview,
+  onClose,
 }: VersionHistoryProps) {
-  if (entries.length === 0) {
-    return (
-      <div className="version-history" id="version-history-panel" data-testid="version-history">
+  /* #1475 OR27 — a column beside the editor, so it carries its own name and
+     its own way out: the ⋯ menu that opened it is across the page. */
+  return (
+    <aside
+      className="version-history"
+      id="version-history-panel"
+      data-testid="version-history"
+      aria-labelledby="version-history-heading"
+    >
+      <div className="version-history__header">
+        <h3 id="version-history-heading">Version history</h3>
+        <button
+          type="button"
+          /* The editor header's 32px icon-button size, so the hit target is
+             not the bare glyph. */
+          className="icon-button editor-header__icon-button"
+          aria-label="Close version history"
+          title={locked ?? 'Close version history'}
+          /* Closing leaves the preview, which would remount the editor under a
+             restore that is about to rebase it — the menu item is dead then too. */
+          disabled={locked !== null}
+          onClick={onClose}
+        >
+          <DismissRegular aria-hidden="true" />
+        </button>
+      </div>
+      {entries.length === 0 ? (
         <p className="page-hint">
           No versions yet — “Save version” mints the first one, and every save after it is kept.
         </p>
-      </div>
-    );
-  }
+      ) : (
+        <VersionList
+          entries={entries}
+          previewing={previewing}
+          locked={locked}
+          onPreview={onPreview}
+        />
+      )}
+    </aside>
+  );
+}
 
+function VersionList({
+  entries,
+  previewing,
+  locked,
+  onPreview,
+}: Omit<VersionHistoryProps, 'onClose'>) {
   return (
-    <div className="version-history" id="version-history-panel" data-testid="version-history">
-      <ul className="version-history-list">
-        {entries.map((e) => (
-          <li key={e.id}>
-            <button
-              type="button"
-              className={`version-history-row${e.version === previewing ? ' is-previewing' : ''}`}
-              /* The pressed state is the honest role here: the row is a toggle
-                 into a preview, not a navigation. */
-              aria-pressed={e.version === previewing}
-              disabled={locked}
-              title={locked ? 'Restoring — wait for it to finish.' : undefined}
-              onClick={() => {
-                onPreview(e.version);
-              }}
-            >
-              <strong>v{e.version}</strong>
-              {e.isHead && <span className="version-history-tag">latest</span>}
-              {/* Two different facts, and they part company the moment a
-                  preview is open: `current` is what the EDITOR is based on. */}
-              {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
-              {/* #979 — a THIRD fact, and the only one that describes what is
-                  deployed: what a new `active`-bound trigger will resolve to. */}
-              {e.isActive && <span className="version-history-tag is-active">active</span>}
-              <span className="version-history-when">{formatWhen(e.createdAt)}</span>
-              <span className="version-history-shape">{shapeSummary(e)}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <ul className="version-history-list">
+      {entries.map((e) => (
+        <li key={e.id}>
+          <button
+            type="button"
+            className={`version-history-row${e.version === previewing ? ' is-previewing' : ''}`}
+            /* The pressed state is the honest role here: the row is a toggle
+               into a preview, not a navigation. */
+            aria-pressed={e.version === previewing}
+            disabled={locked !== null}
+            title={locked ?? undefined}
+            onClick={() => {
+              onPreview(e.version);
+            }}
+          >
+            <strong>v{e.version}</strong>
+            {e.isHead && <span className="version-history-tag">latest</span>}
+            {/* Two different facts, and they part company the moment a
+               preview is open: `current` is what the EDITOR is based on. */}
+            {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
+            {/* #979 — a THIRD fact, and the only one that describes what is
+               deployed: what a new `active`-bound trigger will resolve to. */}
+            {e.isActive && <span className="version-history-tag is-active">active</span>}
+            <span className="version-history-when">{formatWhen(e.createdAt)}</span>
+            <span className="version-history-shape">{shapeSummary(e)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

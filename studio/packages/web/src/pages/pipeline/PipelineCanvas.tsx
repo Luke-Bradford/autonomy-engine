@@ -363,7 +363,9 @@ export function PipelineCanvas({
   // they were reduced to `latestVersion` and thrown away; the history is that
   // same array, kept.
   const [versions, setVersions] = useState<PipelineVersion[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // #1475 OR27 — a per-viewer preference, like the dock's fold.
+  const historyOpen = useStore(uiStore, (s) => s.historyOpen);
+  const setHistoryOpen = useStore(uiStore, (s) => s.setHistoryOpen);
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -407,6 +409,16 @@ export function PipelineCanvas({
    * canvas the operator can see is the canvas the in-flight write is about.
    */
   const previewLocked = restoring || saving;
+  /**
+   * Close the version-history column — from the ⋯ menu or its own Close
+   * button. Closing also leaves any preview it opened, which would otherwise
+   * be stranded with no list to leave it from. Both setters at the TOP LEVEL:
+   * an impure updater is double-invoked by StrictMode.
+   */
+  const closeHistory = () => {
+    setPreviewing(null);
+    setHistoryOpen(false);
+  };
   /**
    * Why the ⋯ menu's version-history item is dead, or `null` while it is live.
    *
@@ -1606,12 +1618,8 @@ export function PipelineCanvas({
                   disabled={!ready || previewLocked}
                   subText={historyDisabledReason ?? undefined}
                   onClick={() => {
-                    // Both setters at the TOP LEVEL: an impure updater is
-                    // double-invoked by StrictMode. Closing the list also
-                    // leaves any preview it opened, which would otherwise be
-                    // stranded with no list to leave it from.
-                    if (historyOpen) setPreviewing(null);
-                    setHistoryOpen(!historyOpen);
+                    if (historyOpen) closeHistory();
+                    else setHistoryOpen(true);
                   }}
                 >
                   {historyOpen ? 'Hide version history' : 'Show version history'}
@@ -1638,50 +1646,44 @@ export function PipelineCanvas({
         </div>
       </div>
 
-      {/* `ready` gates the panel, because `versions` is `[]` both before the
-          load resolves AND forever after it fails — and the panel's empty state
-          says "no versions yet", which would be a flat falsehood printed next
-          to the load-error banner. An unloaded page has no history to show, not
-          an empty one. */}
-      {historyOpen && ready && (
-        <VersionHistoryPanel
-          entries={entries}
-          previewing={previewing}
-          locked={previewLocked}
-          onPreview={(version) => {
-            setPreviewing((current) => (current === version ? null : version));
-          }}
-        />
-      )}
-
-      {/* The preview REPLACES the editor rather than hiding it, and that is
+      {/* #1475 OR27 — the editor (or a preview) and the version-history column
+          side by side. History used to be a band ABOVE the editor, so opening it
+          pushed the canvas down; as a column it takes width instead, and the
+          canvas top never moves. */}
+      <div className="canvas-body">
+        {/* The preview REPLACES the editor rather than hiding it, and that is
           correctness rather than tidiness: React Flow owns a node's position
           once its id is in the view array, so a restore into a live canvas
           would write the restored positions to the domain and leave the head's
           on screen. Unmounting here means the editor remounts empty after a
           restore and reads the restored geometry. */}
-      {ready && previewed !== null && (
-        <div className="canvas-preview" data-testid="canvas-preview">
-          <VersionPreviewBar
-            version={previewed.version}
-            refusal={restoreRefusal({
-              dirty,
-              selectedVersion: previewed.version,
-              headVersion,
-            })}
-            restoring={restoring}
-            publishRefusal={publishRefusal({ selected: previewed, active, gitConnected, archived })}
-            publishing={publishing}
-            onPublish={() => void onPublish()}
-            onRestore={() => void onRestore()}
-            onBackToEditing={() => {
-              setPreviewing(null);
-            }}
-          />
-          {/* `showStatus={false}` — there is no run behind a stored version, so
+        {ready && previewed !== null && (
+          <div className="canvas-preview" data-testid="canvas-preview">
+            <VersionPreviewBar
+              version={previewed.version}
+              refusal={restoreRefusal({
+                dirty,
+                selectedVersion: previewed.version,
+                headVersion,
+              })}
+              restoring={restoring}
+              publishRefusal={publishRefusal({
+                selected: previewed,
+                active,
+                gitConnected,
+                archived,
+              })}
+              publishing={publishing}
+              onPublish={() => void onPublish()}
+              onRestore={() => void onRestore()}
+              onBackToEditing={() => {
+                setPreviewing(null);
+              }}
+            />
+            {/* `showStatus={false}` — there is no run behind a stored version, so
               the monitor's "not projected" would be a sentence about a run that
               does not exist. */}
-          {/* KEYED BY VERSION, and this is not cosmetic. `RunCanvas` was built
+            {/* KEYED BY VERSION, and this is not cosmetic. `RunCanvas` was built
               for a doc that is immutable for its whole lifetime, so switching
               `doc` on a live instance leaves two things stale that nothing
               rebuilds: `mergeRunNodes` keeps a container box WHOLE when its
@@ -1693,184 +1695,214 @@ export function PipelineCanvas({
               by a 20-node one would stay at the first version's viewport with
               the rest culled by `onlyRenderVisibleElements`. Remounting is the
               same answer this page already gives for the editor. */}
-          <RunCanvas
-            key={previewed.id}
-            doc={previewed}
-            state={null}
-            showStatus={false}
-            datasets={datasets}
-          />
-        </div>
-      )}
+            <RunCanvas
+              key={previewed.id}
+              doc={previewed}
+              state={null}
+              showStatus={false}
+              datasets={datasets}
+            />
+          </div>
+        )}
 
-      {ready && previewed === null && (
-        /* #863 — one provider over the canvas AND the property panel, so a box's
+        {ready && previewed === null && (
+          /* #863 — one provider over the canvas AND the property panel, so a box's
            badge and the panel's list read the same attribution. */
-        <SubjectIssuesContext.Provider value={bySubject}>
-          {/* #1395 OR4 — the editor's run, over the canvas and in the dock. */}
-          <EditorRunProvider run={editorRun}>
-            <div
-              ref={canvasGridRef}
-              className="canvas-grid"
-              /* Folded, the track is the rail's; the stored width is kept for
+          <SubjectIssuesContext.Provider value={bySubject}>
+            {/* #1395 OR4 — the editor's run, over the canvas and in the dock. */}
+            <EditorRunProvider run={editorRun}>
+              <div
+                ref={canvasGridRef}
+                className="canvas-grid"
+                /* Folded, the track is the rail's; the stored width is kept for
                  unfolding to restore. */
-              style={
-                {
-                  [TOOLBOX_WIDTH_VAR]: `${String(toolboxRail ? TOOLBOX_RAIL_WIDTH : toolboxWidth)}px`,
-                } as CSSProperties
-              }
-            >
-              {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
+                style={
+                  {
+                    [TOOLBOX_WIDTH_VAR]: `${String(toolboxRail ? TOOLBOX_RAIL_WIDTH : toolboxWidth)}px`,
+                  } as CSSProperties
+                }
+              >
+                {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
-              <ActivityToolbox store={store} id={toolboxId} />
-              <ToolboxSplitter gridRef={canvasGridRef} toolboxId={toolboxId} />
-              {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
+                <ActivityToolbox store={store} id={toolboxId} />
+                <ToolboxSplitter gridRef={canvasGridRef} toolboxId={toolboxId} />
+                {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
                 properties sit under it (ADF's layout), and one dock serves both
                 the activity forms and the pipeline's params/outputs. */}
-              <div className="canvas-main" ref={canvasMainRef}>
-                <div className="canvas-wrap">
-                  <ReactFlowProvider>
-                    <FlowCanvas
-                      store={store}
-                      fitSignal={fitSignal}
-                      measuredSizesRef={measuredSizesRef}
-                      datasets={datasets}
-                      onNotice={showCanvasMsg}
-                    />
-                  </ReactFlowProvider>
-                </div>
-                {dockOpen && (
-                  <DockSplitter columnRef={canvasMainRef} dockRef={dockRef} dockId={dockId} />
-                )}
-                <div
-                  id={dockId}
-                  ref={dockRef}
-                  className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
-                  /* Written from the stored preference on EVERY render, so a
+                <div className="canvas-main" ref={canvasMainRef}>
+                  <div className="canvas-wrap">
+                    <ReactFlowProvider>
+                      <FlowCanvas
+                        store={store}
+                        fitSignal={fitSignal}
+                        measuredSizesRef={measuredSizesRef}
+                        datasets={datasets}
+                        onNotice={showCanvasMsg}
+                      />
+                    </ReactFlowProvider>
+                  </div>
+                  {dockOpen && (
+                    <DockSplitter columnRef={canvasMainRef} dockRef={dockRef} dockId={dockId} />
+                  )}
+                  <div
+                    id={dockId}
+                    ref={dockRef}
+                    className={
+                      dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'
+                    }
+                    /* Written from the stored preference on EVERY render, so a
                      reload paints the operator's height first time rather than
                      the default and then a jump. `null` leaves the CSS default. */
-                  style={
-                    dockHeight === null
-                      ? undefined
-                      : ({ [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` } as CSSProperties)
-                  }
-                >
-                  <div className="property-dock__header">
-                    <button
-                      type="button"
-                      className="property-dock__toggle"
-                      aria-expanded={dockOpen}
-                      aria-controls={dockBodyId}
-                      onClick={() => setDockOpen(!dockOpen)}
-                    >
-                      {/* Folded, a selection would otherwise change nothing on screen
+                    style={
+                      dockHeight === null
+                        ? undefined
+                        : ({ [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` } as CSSProperties)
+                    }
+                  >
+                    <div className="property-dock__header">
+                      <button
+                        type="button"
+                        className="property-dock__toggle"
+                        aria-expanded={dockOpen}
+                        aria-controls={dockBodyId}
+                        onClick={() => setDockOpen(!dockOpen)}
+                      >
+                        {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
                       the operator folded it to look at the graph, and a click or a
                       drag selects — so the toggle says what is waiting instead. */}
-                      {dockOpen
-                        ? 'Hide properties'
-                        : selectedCount > 0
-                          ? `Show properties (${String(selectedCount)} selected)`
-                          : 'Show properties'}
-                    </button>
-                    {/* #1393 — the count is on the header, so a folded dock still
+                        {dockOpen
+                          ? 'Hide properties'
+                          : selectedCount > 0
+                            ? `Show properties (${String(selectedCount)} selected)`
+                            : 'Show properties'}
+                      </button>
+                      {/* #1393 — the count is on the header, so a folded dock still
                     says why Save is refused. Opening Problems from a folded
                     dock opens the dock too: a toggle whose effect is hidden
                     would read as broken. */}
-                    <button
-                      type="button"
-                      className="property-dock__toggle"
-                      aria-expanded={dockOpen && problemsOpen}
-                      aria-controls={problemsId}
-                      onClick={() => {
-                        if (!dockOpen) {
-                          setDockOpen(true);
-                          setProblemsOpen(true);
-                        } else setProblemsOpen(!problemsOpen);
-                      }}
-                    >
-                      Problems{' '}
-                      <span
-                        className={
-                          issues.length > 0 ? 'count-badge count-badge--error' : 'count-badge'
-                        }
+                      <button
+                        type="button"
+                        className="property-dock__toggle"
+                        aria-expanded={dockOpen && problemsOpen}
+                        aria-controls={problemsId}
+                        onClick={() => {
+                          if (!dockOpen) {
+                            setDockOpen(true);
+                            setProblemsOpen(true);
+                          } else setProblemsOpen(!problemsOpen);
+                        }}
                       >
-                        {issues.length}
-                      </span>
-                    </button>
-                    {/* The page's ONE announcer of a blocked save (#1249). Here
+                        Problems{' '}
+                        <span
+                          className={
+                            issues.length > 0 ? 'count-badge count-badge--error' : 'count-badge'
+                          }
+                        >
+                          {issues.length}
+                        </span>
+                      </button>
+                      {/* The page's ONE announcer of a blocked save (#1249). Here
                       in the always-shown header, not on the list: the list is
                       `hidden` whenever Problems or the dock is folded, and a
                       `display: none` region announces nothing. Always mounted,
                       because a live region is announced only if it already
                       exists when its content changes. */}
-                    <span className="visually-hidden" role="status">
-                      {issues.length > 0
-                        ? `${String(issues.length)} validation issue(s) — fix these to save.`
-                        : ''}
-                    </span>
-                  </div>
-                  {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
+                      <span className="visually-hidden" role="status">
+                        {issues.length > 0
+                          ? `${String(issues.length)} validation issue(s) — fix these to save.`
+                          : ''}
+                      </span>
+                    </div>
+                    {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
                     the dock to look at the graph must not throw away. */}
-                  <div
-                    id={dockBodyId}
-                    ref={dockBodyRef}
-                    className="property-dock__body"
-                    hidden={!dockOpen}
-                    /* #1475 — from the stored preference on every render, like
+                    <div
+                      id={dockBodyId}
+                      ref={dockBodyRef}
+                      className="property-dock__body"
+                      hidden={!dockOpen}
+                      /* #1475 — from the stored preference on every render, like
                        the dock's height, so a reload paints it first time. */
-                    style={{ [PROBLEMS_WIDTH_VAR]: `${String(problemsWidth)}px` } as CSSProperties}
-                  >
-                    <SelectedRunDrawer store={store} />
-                    <PropertyPanel
-                      store={store}
-                      connections={connections}
-                      datasets={datasets}
-                      pipelineId={pipelineId}
-                      onNotice={showCanvasMsg}
-                    />
-                    {problemsOpen && (
-                      <ProblemsSplitter bodyRef={dockBodyRef} problemsId={problemsId} />
-                    )}
-                    {/* #1393 — the validation list, moved here from above the
+                      style={
+                        { [PROBLEMS_WIDTH_VAR]: `${String(problemsWidth)}px` } as CSSProperties
+                      }
+                    >
+                      <SelectedRunDrawer store={store} />
+                      <PropertyPanel
+                        store={store}
+                        connections={connections}
+                        datasets={datasets}
+                        pipelineId={pipelineId}
+                        onNotice={showCanvasMsg}
+                      />
+                      {problemsOpen && (
+                        <ProblemsSplitter bodyRef={dockBodyRef} problemsId={problemsId} />
+                      )}
+                      {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
                       keystroke. Plain text: the header above announces. */}
-                    <aside
-                      id={problemsId}
-                      className="problems-panel"
-                      aria-label="Problems"
-                      hidden={!problemsOpen}
-                    >
-                      {issues.length === 0 && <p className="page-hint">No problems.</p>}
-                      {issues.length > 0 && (
-                        <div className="badge-list">
-                          {/* #444: this used to say "you can still save … a run will refuse an
+                      <aside
+                        id={problemsId}
+                        className="problems-panel"
+                        aria-label="Problems"
+                        hidden={!problemsOpen}
+                      >
+                        {issues.length === 0 && <p className="page-hint">No problems.</p>}
+                        {issues.length > 0 && (
+                          <div className="badge-list">
+                            {/* #444: this used to say "you can still save … a run will refuse an
                                 invalid graph". Both halves were wrong — nothing refused a save,
                                 and no run refused the doc either. The server now refuses it on
                                 save, so the copy states what actually happens, and no more: the
                                 graph on screen is an editable draft, so anything about immutable
                                 stored versions would just read as "yours is unfixable". */}
-                          <strong>{issues.length} validation issue(s)</strong> — fix these to save.
-                          <ul>
-                            {issues.map((msg, i) => (
-                              // Indexed, because the messages are NOT unique: three params sharing
-                              // a name emit the identical duplicate-name string twice, and a bare
-                              // `key={msg}` makes that a React duplicate-key warning — which the
-                              // e2e console guard treats as a failure.
-                              <li key={`${String(i)}-${msg}`}>{msg}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </aside>
+                            <strong>{issues.length} validation issue(s)</strong> — fix these to
+                            save.
+                            <ul>
+                              {issues.map((msg, i) => (
+                                // Indexed, because the messages are NOT unique: three params sharing
+                                // a name emit the identical duplicate-name string twice, and a bare
+                                // `key={msg}` makes that a React duplicate-key warning — which the
+                                // e2e console guard treats as a failure.
+                                <li key={`${String(i)}-${msg}`}>{msg}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </aside>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </EditorRunProvider>
-        </SubjectIssuesContext.Provider>
-      )}
+            </EditorRunProvider>
+          </SubjectIssuesContext.Provider>
+        )}
+
+        {/* `ready` gates the column, because `versions` is `[]` both before the
+            load resolves AND forever after it fails — and its empty state says
+            "no versions yet", which would be a flat falsehood printed next to
+            the load-error banner. An unloaded page has no history to show, not
+            an empty one. */}
+        {historyOpen && ready && (
+          <VersionHistoryPanel
+            entries={entries}
+            previewing={previewing}
+            /* Non-null exactly while `previewLocked`: the column only renders
+               once `ready`, so the reason's "loading" branch never reaches it. */
+            locked={historyDisabledReason}
+            onPreview={(version) => {
+              setPreviewing((current) => (current === version ? null : version));
+            }}
+            onClose={() => {
+              closeHistory();
+              // The button that had focus is gone with the column; hand focus to
+              // the ⋯ menu that reopens it rather than dropping it on <body>.
+              document.getElementById(moreActionsId)?.focus();
+            }}
+          />
+        )}
+      </div>
       {confirmDialog}
     </section>
   );

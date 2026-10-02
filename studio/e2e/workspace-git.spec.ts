@@ -340,7 +340,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    */
   await page.reload();
   await page.locator('.react-flow__renderer').waitFor();
-  await (await editorMenuItem(page, /^Show version history/)).click();
+  // #1475 OR27 — the column is remembered open across the reload.
   await expect(
     page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
   ).toContainText('active');

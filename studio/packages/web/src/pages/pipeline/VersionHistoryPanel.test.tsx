@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import type { VersionEntry } from './versionHistory';
@@ -21,6 +21,9 @@ function entry(overrides: Partial<VersionEntry> = {}): VersionEntry {
   };
 }
 
+/** The version rows — the list's buttons, not the column's Close button. */
+const rowButtons = () => within(screen.getByRole('list')).getAllByRole('button');
+
 describe('VersionHistoryPanel', () => {
   it('renders the entries in the order it is given, marking the latest and the canvas one', () => {
     render(
@@ -31,12 +34,13 @@ describe('VersionHistoryPanel', () => {
           entry({ id: 'plv_1', version: 1 }),
         ]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
 
-    const rows = screen.getAllByRole('button');
+    const rows = rowButtons();
     expect(rows.map((r) => r.textContent?.startsWith('v'))).toEqual([true, true, true]);
     expect(rows[0]!.textContent).toContain('v3');
     expect(rows[0]!.textContent).toContain('latest');
@@ -49,11 +53,12 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ nodeCount: 4, edgeCount: 3, containerCount: 1, paramCount: 2 })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
-    const row = screen.getByRole('button');
+    const row = within(screen.getByRole('list')).getByRole('button');
     expect(row.textContent).toContain('4 nodes');
     expect(row.textContent).toContain('3 edges');
     expect(row.textContent).toContain('1 container');
@@ -70,11 +75,14 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ createdAt })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button').textContent).toContain(new Date(createdAt).toLocaleString());
+    expect(within(screen.getByRole('list')).getByRole('button').textContent).toContain(
+      new Date(createdAt).toLocaleString(),
+    );
   });
 
   it('reports which row is being previewed as pressed', () => {
@@ -82,11 +90,12 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
         previewing={1}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
-    const rows = screen.getAllByRole('button');
+    const rows = rowButtons();
     expect(rows[0]!).toHaveAttribute('aria-pressed', 'false');
     expect(rows[1]!).toHaveAttribute('aria-pressed', 'true');
   });
@@ -97,11 +106,12 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ version: 7 })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={onPreview}
+        onClose={vi.fn()}
       />,
     );
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(within(screen.getByRole('list')).getByRole('button'));
     expect(onPreview).toHaveBeenCalledWith(7);
   });
 
@@ -115,11 +125,12 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
         previewing={1}
-        locked
+        locked="Saving — wait for it to finish."
         onPreview={onPreview}
+        onClose={vi.fn()}
       />,
     );
-    const rows = screen.getAllByRole('button');
+    const rows = rowButtons();
     expect(rows).toHaveLength(2);
     for (const row of rows) expect(row).toBeDisabled();
     await userEvent.click(rows[0]!);
@@ -128,10 +139,63 @@ describe('VersionHistoryPanel', () => {
 
   it('says a pipeline has no versions rather than rendering an empty list', () => {
     render(
-      <VersionHistoryPanel entries={[]} previewing={null} locked={false} onPreview={vi.fn()} />,
+      <VersionHistoryPanel
+        entries={[]}
+        previewing={null}
+        locked={null}
+        onPreview={vi.fn()}
+        onClose={vi.fn()}
+      />,
     );
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByRole('list')).toBeNull();
     expect(screen.getByTestId('version-history').textContent).toMatch(/no versions yet/i);
+  });
+});
+
+describe('VersionHistoryPanel — the column (#1475 OR27)', () => {
+  it('is a named region whose Close button closes it, and is dead while a restore runs', async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <VersionHistoryPanel
+        entries={[entry()]}
+        previewing={null}
+        locked={null}
+        onPreview={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    expect(screen.getByRole('complementary', { name: 'Version history' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Close version history' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <VersionHistoryPanel
+        entries={[entry()]}
+        previewing={1}
+        locked="Saving — wait for it to finish."
+        onPreview={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    const close = screen.getByRole('button', { name: 'Close version history' });
+    expect(close).toBeDisabled();
+    // The tooltip names the request that is running, not always "Restoring".
+    expect(close).toHaveAttribute('title', 'Saving — wait for it to finish.');
+    await userEvent.click(close);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps its Close button when there are no versions yet', () => {
+    render(
+      <VersionHistoryPanel
+        entries={[]}
+        previewing={null}
+        locked={null}
+        onPreview={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Close version history' })).toBeEnabled();
   });
 });
 
@@ -144,11 +208,12 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
           entry({ id: 'plv_1', version: 1, isActive: true }),
         ]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
-    const rows = screen.getAllByRole('button');
+    const rows = rowButtons();
     expect(rows[0]!.textContent).not.toContain('active');
     // The whole point of the tag: what is deployed is NOT what is on screen.
     expect(rows[1]!.textContent).toContain('active');
@@ -159,8 +224,9 @@ describe('VersionHistoryPanel — the active tag (#979)', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_1', version: 1, isHead: true })]}
         previewing={null}
-        locked={false}
+        locked={null}
         onPreview={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
     expect(screen.getByTestId('version-history').textContent).not.toContain('active');

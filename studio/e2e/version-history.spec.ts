@@ -629,3 +629,115 @@ test.describe('pipeline version history', () => {
     ]);
   });
 });
+
+/**
+ * #1475 OR27 — version history is a COLUMN beside the editor, not a band above
+ * it. Opening it used to push the canvas down 62px and squeeze the list to 50px;
+ * now it takes width from the canvas and leaves the canvas top where it was.
+ * Whether it is open is a per-viewer preference, like the dock's fold.
+ */
+test.describe('version history column (#1475 OR27)', () => {
+  const box = async (page: Page, selector: string) => {
+    const b = await page.locator(selector).boundingBox();
+    expect(b, `${selector} has no box`).not.toBeNull();
+    return b!;
+  };
+  const closeButton = (page: Page) => page.getByRole('button', { name: 'Close version history' });
+
+  test('opens beside the canvas without moving its top, and is remembered across a reload', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedThreeVersions(page, 'history-column');
+
+    const canvasBefore = await box(page, '.canvas-wrap');
+    const gridBefore = await box(page, '.canvas-grid');
+
+    await (await historyItem(page)).click();
+    const panel = page.getByRole('complementary', { name: 'Version history' });
+    await expect(panel).toBeVisible();
+    await expect(rows(page)).toHaveCount(3);
+
+    const panelBox = await box(page, '#version-history-panel');
+    const gridAfter = await box(page, '.canvas-grid');
+    const canvasAfter = await box(page, '.canvas-wrap');
+    // Beside, not above: the editor's top and height are untouched…
+    expect(canvasAfter.y).toBe(canvasBefore.y);
+    expect(gridAfter.y).toBe(gridBefore.y);
+    expect(gridAfter.height).toBe(gridBefore.height);
+    // …the column sits to its right, at the same top and the full height…
+    expect(panelBox.x).toBeGreaterThanOrEqual(gridAfter.x + gridAfter.width);
+    expect(Math.abs(panelBox.y - gridAfter.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(panelBox.height - gridAfter.height)).toBeLessThanOrEqual(1);
+    // …and the width it takes (plus the 8px gap) comes out of the canvas, and
+    // nothing more.
+    expect(
+      Math.abs(canvasBefore.width - canvasAfter.width - panelBox.width - 8),
+    ).toBeLessThanOrEqual(1);
+
+    await page.reload();
+    await fluentRootReady(page);
+    await expect(rows(page)).toHaveCount(3);
+
+    await closeButton(page).click();
+    await expect(page.locator('#version-history-panel')).toHaveCount(0);
+    await expect
+      .poll(async () => Math.abs((await box(page, '.canvas-wrap')).width - canvasBefore.width))
+      .toBeLessThanOrEqual(1);
+
+    await page.reload();
+    await fluentRootReady(page);
+    await page.locator('.react-flow__renderer').waitFor();
+    await expect(page.locator('#version-history-panel')).toHaveCount(0);
+    await expect(await historyItem(page)).toHaveAccessibleName('Show version history');
+
+    await expectQuiet(page, problems);
+  });
+
+  test('closing the column leaves a preview and puts the editor back', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-column-close');
+
+    await (await historyItem(page)).click();
+    await page.getByRole('button', { name: /^v1\b/ }).click();
+    await expect(page.getByTestId('canvas-preview')).toBeVisible();
+    // The list stays beside the preview, so another version is one click away.
+    await expect(rows(page)).toHaveCount(3);
+
+    await closeButton(page).click();
+    await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
+    await expect(page.locator('.canvas-grid')).toBeVisible();
+    // The Close button went with the column; focus lands on the ⋯ menu that
+    // reopens it, not on <body>.
+    await expect(page.getByRole('button', { name: 'More pipeline actions' })).toBeFocused();
+    await expect(nodeById(page, 'n_c')).toHaveClass(/\bdraggable\b/);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('on a narrow screen the column gives way before the canvas does', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    // A wide toolbox on a small laptop: the case where the canvas would be
+    // squeezed hardest.
+    await page.addInitScript(() => {
+      localStorage.setItem('autonomy-studio.toolbox-width', '360');
+    });
+    await page.setViewportSize({ width: 1140, height: 720 });
+    await seedThreeVersions(page, 'history-column-narrow');
+
+    await (await historyItem(page)).click();
+    await expect(rows(page)).toHaveCount(3);
+
+    const canvas = await box(page, '.canvas-wrap');
+    const panelBox = await box(page, '#version-history-panel');
+    expect(canvas.width).toBeGreaterThanOrEqual(239);
+    // The column shrank below its 240px clamp, but stays a readable list and
+    // stays on screen.
+    expect(panelBox.width).toBeLessThan(240);
+    expect(panelBox.width).toBeGreaterThanOrEqual(179);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1140);
+
+    await expectQuiet(page, problems);
+  });
+});
