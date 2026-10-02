@@ -10,7 +10,7 @@ import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT, chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
-import { typedNameLabel } from '../lib/confirm/typedName';
+import { TYPED_NAME_SUFFIX, typedNameLabel } from '../lib/confirm/typedName';
 import { ApiError } from '../api/client';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
@@ -1137,7 +1137,9 @@ describe('ConnectionsPage', () => {
       const dialog = await screen.findByRole('alertdialog');
       expect(dialog).toHaveTextContent('Could not check');
       expect(dialog).toHaveTextContent('datasets offline');
-      expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByLabelText(new RegExp(TYPED_NAME_SUFFIX)),
+      ).not.toBeInTheDocument();
       expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
 
       await answerConfirm(user, 'accept');
@@ -1153,7 +1155,9 @@ describe('ConnectionsPage', () => {
       await chooseRowAction(user, 'Local store', 'Delete');
 
       const dialog = await screen.findByRole('alertdialog');
-      expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByLabelText(new RegExp(TYPED_NAME_SUFFIX)),
+      ).not.toBeInTheDocument();
       expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
 
       await answerConfirm(user, 'accept');

@@ -16,7 +16,9 @@ import { MoreHorizontalRegular } from '@fluentui/react-icons';
  * `element` is the button as it is now, for `useDrawerForm.openFrom`.
  * Confirmations should use `find`, because it looks the button up again by id
  * when focus is restored. A list that refreshes while the dialog is open may
- * replace the node, and `useConfirm` silently skips a disconnected one.
+ * replace the node, and `useConfirm` silently skips a disconnected one. A
+ * confirmation that REMOVES the row uses `useFocusAfterRemoval` instead, which
+ * falls back to the neighbouring row once this button has gone (#1470).
  */
 export interface RowMenuOrigin {
   readonly element: HTMLElement;

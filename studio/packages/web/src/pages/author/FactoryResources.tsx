@@ -400,7 +400,8 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   /**
    * Export (#959). Deliberately NOT routed through `run`: `run` refreshes the
    * shared list because it exists for MUTATIONS, and an export changes nothing
-   * — a refresh here would be a request that implies something moved.
+   * — a refresh here would be a request that implies something moved. It is
+   * single-flight per row through `useBusyAction` instead (#1470).
    */
   const { active: exporting, run: runExport } = useBusyAction();
   const onExport = useCallback(

@@ -1320,9 +1320,10 @@ td button + button {
   margin-top: 0.75rem;
 }
 
-/* #1466 — a name that is only whitespace still shows as a gap to type. */
+/* #1466 — a name that is only whitespace still shows as a gap to type; a
+   long name still wraps. */
 .confirm-dialog-name {
-  white-space: pre;
+  white-space: pre-wrap;
 }
 
 /* #1396 — the pipeline editor's leave prompt. Fixed, so it takes no space in
