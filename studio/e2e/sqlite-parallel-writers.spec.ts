@@ -27,8 +27,8 @@ import { seedConnection, seedDataset } from './support/seedResources';
  * Mutation-proved: with the sink's per-store queue removed, both tests fail.
  */
 
+/** Rows per CSV — several batches each, and enough that siblings overlap. */
 const ROWS = 4000;
-
 async function warehouse(page: Page, tag: string, root: string, dbPath: string) {
   return seedConnection(page, {
     name: `${tag} warehouse`,
@@ -50,6 +50,20 @@ function tableDataset(page: Page, tag: string, connectionId: string, table: stri
   });
 }
 
+function csvDataset(page: Page, tag: string, connectionId: string, path: string) {
+  return seedDataset(page, {
+    name: `${tag} csv`,
+    kind: 'delimited',
+    connectionId,
+    config: { path, header: true },
+    parameters: ['path'],
+    columns: [
+      { name: 'id', type: 'string', nullable: false },
+      { name: 'name', type: 'string', nullable: true },
+    ],
+  });
+}
+
 const MAPPING = [
   { source: 'id', sink: 'id', type: 'integer' },
   { source: 'name', sink: 'name', type: 'string' },
@@ -58,37 +72,54 @@ const MAPPING = [
 test('#1423 — two parallel Copy branches into one sqlite file both land', async ({ page }) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1423a-')));
   try {
-    /* The demo's shape: a staging table, read by two branches that each write
-       their own table in the SAME file. */
+    /* The demo's shape: two branches, each writing its own table in the SAME
+       file. The source is a CSV rather than a table in that same store: with a
+       same-store source, the second branch was measured NOT to be dispatched
+       until the first had finished — recorded on the same ticket as the root
+       case below, and not relied on here. */
+    const csv = join(root, 'orders.csv');
+    const lines = ['id,name'];
+    for (let i = 1; i <= ROWS; i += 1) lines.push(`${i},row-${i}`);
+    writeFileSync(csv, `${lines.join('\n')}\n`);
     const dbPath = join(root, 'warehouse.db');
     const db = new DatabaseSync(dbPath);
-    db.exec('CREATE TABLE staging (id INTEGER, name TEXT)');
     db.exec('CREATE TABLE clean_a (id INTEGER, name TEXT)');
     db.exec('CREATE TABLE clean_b (id INTEGER, name TEXT)');
-    const insert = db.prepare('INSERT INTO staging (id, name) VALUES (?, ?)');
-    db.exec('BEGIN');
-    for (let i = 1; i <= ROWS; i += 1) insert.run(i, `row-${i}`);
-    db.exec('COMMIT');
     db.close();
 
     const tag = '#1423 branches';
+    const folder = await seedConnection(page, {
+      name: `${tag} landing folder`,
+      kind: 'fs',
+      config: { roots: [root] },
+    });
     const store = await warehouse(page, tag, root, dbPath);
-    const staging = await tableDataset(page, tag, store, 'staging');
+    const orders = await csvDataset(page, tag, folder, csv);
     const cleanA = await tableDataset(page, tag, store, 'clean_a');
     const cleanB = await tableDataset(page, tag, store, 'clean_b');
 
     const copyInto = (id: string, sink: string, y: number): SeedNode => ({
       id,
       type: 'copy',
-      position: { x: 0, y },
-      connectionIds: { source: store, sink: store },
-      datasetIds: { source: staging, sink },
+      position: { x: 300, y },
+      connectionIds: { source: folder, sink: store },
+      datasetIds: { source: orders, sink },
       config: { mapping: MAPPING, mode: 'append' },
     });
-    // No edges: both are roots, so they dispatch together.
+    // Fanned out from one upstream node, as the demo's branches are. Two ROOT
+    // copies were measured to run one after the other (the second dispatched
+    // only once the first finished), so a root pair never contends — that is
+    // on its own ticket, and this shape is the one that does.
     const { pipelineVersionId } = await seedVersion(page, `${tag} pipeline`, {
-      nodes: [copyInto('a', cleanA, 0), copyInto('b', cleanB, 120)],
-      edges: [],
+      nodes: [
+        { id: 'start', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 60 } },
+        copyInto('a', cleanA, 0),
+        copyInto('b', cleanB, 120),
+      ],
+      edges: [
+        { id: 'e1', from: 'start', to: 'a', on: 'success' },
+        { id: 'e2', from: 'start', to: 'b', on: 'success' },
+      ],
     });
 
     const runId = await fireAndSettle(page, pipelineVersionId, `${tag} run`);
@@ -146,17 +177,8 @@ test('#1423 — a PARALLEL ForEach (batchCount 3) copies every file into one tab
       config: { roots: [root] },
     });
     const store = await warehouse(page, tag, root, dbPath);
-    const source = await seedDataset(page, {
-      name: `${tag} any csv`,
-      kind: 'delimited',
-      connectionId: folder,
-      config: { path: join(inDir, 'a.csv'), header: true },
-      parameters: ['path'],
-      columns: [
-        { name: 'id', type: 'string', nullable: false },
-        { name: 'name', type: 'string', nullable: true },
-      ],
-    });
+    // Points at one real file; every dispatch overrides it per item.
+    const source = await csvDataset(page, tag, folder, join(inDir, 'a.csv'));
     const sink = await tableDataset(page, tag, store, 'people');
 
     // The #1420 starter template, bound as `foreach-copy-folder.spec.ts` binds
