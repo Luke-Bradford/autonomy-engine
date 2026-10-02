@@ -14,6 +14,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
 import { makeStubExecutor } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #844 V2 — a run reads `${vars.<name>}` from the STORED version: the column
@@ -47,7 +48,7 @@ function seedVersion(db: Db, flag: boolean): string {
     edges: [branchEdge('gate', 'yes', 'true'), branchEdge('gate', 'no', 'false')],
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function deps(db: Db): DriverDeps {
@@ -111,7 +112,7 @@ describe('driver — set_variable / append_variable (#844 V5)', () => {
       ],
       catalogVersion: CATALOG_VERSION,
     };
-    return createPipelineVersion(db, input).id;
+    return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
   }
   const runOf = (db: Db, pvId: string, params: Record<string, unknown>) =>
     createRun(db, {

@@ -36,8 +36,13 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
     params: [],
     outputs: [],
     nodes: [
-      { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
-      { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+      {
+        id: 'n_a',
+        type: 'http_request',
+        config: { url: 'https://example.test/x' },
+        position: { x: 10, y: 20 },
+      },
+      { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
     ],
     edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' }],
     containers: [],
@@ -60,7 +65,7 @@ function branchingVersion(overrides: Partial<PipelineVersion> = {}): PipelineVer
   return version({
     nodes: [
       { id: 'n_a', type: 'if', config: {}, position: { x: 10, y: 20 } },
-      { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+      { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
     ],
     ...overrides,
   });
@@ -554,9 +559,14 @@ describe('canvasStore', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-          { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } },
-          { id: 'n_c', type: 'llm_call', config: {}, position: { x: 200, y: 0 } },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 0, y: 0 },
+          },
+          { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 0 } },
+          { id: 'n_c', type: 'llm_call', config: { prompt: 'p' }, position: { x: 200, y: 0 } },
         ],
         edges: [
           { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
@@ -576,9 +586,14 @@ describe('canvasStore', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-          { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } },
-          { id: 'n_c', type: 'llm_call', config: {}, position: { x: 200, y: 0 } },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 0, y: 0 },
+          },
+          { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 0 } },
+          { id: 'n_c', type: 'llm_call', config: { prompt: 'p' }, position: { x: 200, y: 0 } },
         ],
       }),
     );
@@ -800,7 +815,12 @@ describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)
     // as the SAME object, so the store's own copy pass is still load-bearing.
     const v = version({
       nodes: [
-        { id: 'n_a', type: 'http_request', config: { outputs: [] }, position: { x: 0, y: 0 } },
+        {
+          id: 'n_a',
+          type: 'http_request',
+          config: { url: 'https://example.test/x', outputs: [] },
+          position: { x: 0, y: 0 },
+        },
       ],
       edges: [],
     });
@@ -1106,9 +1126,19 @@ describe('canvasStore — deleteContainer (#748)', () => {
   function boxed(kind: 'stage' | 'loop' = 'stage', children: string[] = ['n_a', 'n_b']) {
     return version({
       nodes: [
-        { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
-        { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
-        { id: 'after', type: 'http_request', config: {}, position: { x: 300, y: 20 } },
+        {
+          id: 'n_a',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 10, y: 20 },
+        },
+        { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
+        {
+          id: 'after',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 300, y: 20 },
+        },
       ],
       edges: [
         { id: 'e_in', from: 'n_a', to: 'n_b', on: 'success' },
@@ -2208,7 +2238,12 @@ describe('canvasStore — back-edges (U6e)', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 0, y: 0 },
+          },
           {
             id: 'n_b',
             type: 'llm_call',
@@ -2578,7 +2613,7 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
           {
             id: 'n_a',
             type: 'http_request',
-            config: { outputs: [{ name: 'body', type: 'string' }] },
+            config: { url: 'https://example.test/x', outputs: [{ name: 'body', type: 'string' }] },
             position: { x: 0, y: 0 },
           },
           {
@@ -2714,9 +2749,24 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_z', type: 'http_request', config: {}, position: { x: 0, y: 300 } },
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 100, y: 300 } },
-          { id: 'n_b', type: 'http_request', config: {}, position: { x: 200, y: 300 } },
+          {
+            id: 'n_z',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 0, y: 300 },
+          },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 100, y: 300 },
+          },
+          {
+            id: 'n_b',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 200, y: 300 },
+          },
         ],
         edges: [{ id: 'e_zb', from: 'n_z', to: 'n_b', on: 'success' }],
       }),
@@ -2811,7 +2861,12 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 0, y: 0 },
+          },
           {
             id: 'n_call',
             type: 'call_pipeline',
@@ -3184,8 +3239,18 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
           version({
             pipelineId,
             nodes: [
-              { id: 'n_p', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-              { id: 'n_q', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+              {
+                id: 'n_p',
+                type: 'http_request',
+                config: { url: 'https://example.test/x' },
+                position: { x: 0, y: 0 },
+              },
+              {
+                id: 'n_q',
+                type: 'http_request',
+                config: { url: 'https://example.test/x' },
+                position: { x: 200, y: 0 },
+              },
             ],
             edges: [{ id: 'e_pq', from: 'n_p', to: 'n_q', on: 'success' }],
           }),
@@ -3213,7 +3278,12 @@ describe('canvasStore — duplicateNode (U21)', () => {
     s.getState().loadVersion(
       version({
         nodes: [
-          { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 10, y: 20 },
+          },
           {
             id: 'n_b',
             type: 'llm_call',
@@ -3310,9 +3380,19 @@ describe('canvasStore — duplicateNode (U21)', () => {
     // the case where a ref still resolves and the graph is still wrong.
     const s = loaded({
       nodes: [
-        { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
-        { id: 'n_c', type: 'http_request', config: {}, position: { x: 10, y: 90 } },
-        { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+        {
+          id: 'n_a',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 10, y: 20 },
+        },
+        {
+          id: 'n_c',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 10, y: 90 },
+        },
+        { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
       ],
       edges: [
         { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
@@ -3650,9 +3730,19 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
       s.getState().loadVersion(
         version({
           nodes: [
-            { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
-            { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
-            { id: 'n_c', type: 'http_request', config: {}, position: { x: 200, y: 20 } },
+            {
+              id: 'n_a',
+              type: 'http_request',
+              config: { url: 'https://example.test/x' },
+              position: { x: 10, y: 20 },
+            },
+            { id: 'n_b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 100, y: 20 } },
+            {
+              id: 'n_c',
+              type: 'http_request',
+              config: { url: 'https://example.test/x' },
+              position: { x: 200, y: 20 },
+            },
           ],
           edges: [
             { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
@@ -4053,13 +4143,13 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
           {
             id: 'n_up',
             type: 'http_request',
-            config: { outputs: [{ name: 'body', type: 'string' }] },
+            config: { url: 'https://example.test/x', outputs: [{ name: 'body', type: 'string' }] },
             position: { x: 0, y: 0 },
           },
           {
             id: 'n_x',
             type: 'http_request',
-            config: { outputs: [{ name: 'body', type: 'string' }] },
+            config: { url: 'https://example.test/x', outputs: [{ name: 'body', type: 'string' }] },
             position: { x: 200, y: 0 },
           },
           {
@@ -4068,7 +4158,12 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
             config: { url: 'https://example.test/${nodes.n_x.output.body}' },
             position: { x: 400, y: 100 },
           },
-          { id: 'n_down', type: 'http_request', config: {}, position: { x: 800, y: 0 } },
+          {
+            id: 'n_down',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 800, y: 0 },
+          },
         ],
         edges: [
           { id: 'e_in', from: 'n_up', to: 'c_loop', on: 'success' },
@@ -4144,10 +4239,15 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
         {
           id: 'n_up',
           type: 'http_request',
-          config: { outputs: [{ name: 'rows', type: 'json' }] },
+          config: { url: 'https://example.test/x', outputs: [{ name: 'rows', type: 'json' }] },
           position: { x: 0, y: 0 },
         },
-        { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+        {
+          id: 'n_x',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 200, y: 0 },
+        },
       ],
       edges: [{ id: 'e_in', from: 'n_up', to: 'c_each', on: 'success' }],
       containers: [
@@ -4253,8 +4353,18 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
           id: 'plv_2',
           pipelineId: 'pl_2',
           nodes: [
-            { id: 'n_up', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-            { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+            {
+              id: 'n_up',
+              type: 'http_request',
+              config: { url: 'https://example.test/x' },
+              position: { x: 0, y: 0 },
+            },
+            {
+              id: 'n_x',
+              type: 'http_request',
+              config: { url: 'https://example.test/x' },
+              position: { x: 200, y: 0 },
+            },
           ],
           edges: [{ id: 'e_t', from: 'n_up', to: 'c_loop', on: 'success' }],
           containers: [{ id: 'c_loop', kind: 'stage', children: ['n_x'] }],
@@ -4362,10 +4472,15 @@ describe('canvasStore — duplicateContainer (U21 #935)', () => {
           {
             id: 'n_up',
             type: 'http_request',
-            config: { outputs: [{ name: 'rows', type: 'json' }] },
+            config: { url: 'https://example.test/x', outputs: [{ name: 'rows', type: 'json' }] },
             position: { x: 0, y: 0 },
           },
-          { id: 'n_x', type: 'http_request', config: {}, position: { x: 200, y: 0 } },
+          {
+            id: 'n_x',
+            type: 'http_request',
+            config: { url: 'https://example.test/x' },
+            position: { x: 200, y: 0 },
+          },
         ],
         edges: [{ id: 'e_in', from: 'n_up', to: 'c_each', on: 'success' }],
         containers: [
@@ -4465,7 +4580,13 @@ describe('setNodePolicy (#1312)', () => {
     const store = createCanvasStore();
     store.setState({
       nodes: [
-        { id: 'n', type: 'http_request', config: {}, position: { x: 0, y: 0 }, policy } as Node,
+        {
+          id: 'n',
+          type: 'http_request',
+          config: { url: 'https://example.test/x' },
+          position: { x: 0, y: 0 },
+          policy,
+        } as Node,
       ],
     });
     return store;

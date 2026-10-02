@@ -35,6 +35,7 @@ import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createRetryAlarmHandler } from '../retry-alarm.js';
 import { silentLog } from './testLog.js';
 import { until as pollUntil } from '../../__tests__/poll-until.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #1 F2c — the DRIVER + CLOCK half of D4's retry, against a real DB, real
@@ -76,7 +77,7 @@ function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {

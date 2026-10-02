@@ -41,7 +41,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: { model: 'x' },
+          config: { prompt: 'p', model: 'x' },
           connectionId: connection.id,
           position: { x: 1, y: 2 },
         },
@@ -103,7 +103,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.provider}',
           position: { x: 1, y: 2 },
         },
@@ -140,14 +140,14 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: '${params.provider}', sink: '${params.provider}' },
           position: { x: 0, y: 0 },
         },
         {
           id: 'mixed',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: '${params.provider}', sink: connection.id },
           position: { x: 1, y: 1 },
         },
@@ -189,7 +189,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: '${params.target}', sink: '${params.target}' },
           datasetParams: { source: { path: 'in.csv' } },
           position: { x: 0, y: 0 },
@@ -197,7 +197,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'stripped',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: '${params.target}', sink: 'ds_local_id' },
           datasetParams: { sink: { path: 'out.csv' } },
           position: { x: 1, y: 1 },
@@ -228,21 +228,21 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: '${params.target}', sink: '${params.target}' },
           position: { x: 0, y: 0 },
         },
         {
           id: 'mixed',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           // Also carries a connection PAIR, so this pins that the two fields
           // survive independently rather than one masking the other.
           connectionIds: { source: '${params.target}', sink: '${params.target}' },
           datasetIds: { source: '${params.target}', sink: 'ds_local_id' },
           position: { x: 1, y: 1 },
         },
-        { id: 'plain', type: 'llm_call', config: {}, position: { x: 2, y: 2 } },
+        { id: 'plain', type: 'llm_call', config: { prompt: 'p' }, position: { x: 2, y: 2 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,
@@ -292,14 +292,14 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'dynamic_source',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: '${params.target}' },
           position: { x: 0, y: 0 },
         },
         {
           id: 'stripped_source',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           // A source-only node whose ONE end is a local primary key. There is no
           // portable half left, so it drops and IS reported — a source-only pair
           // is not a licence to keep an unresolvable source.
@@ -339,7 +339,7 @@ describe('importEnvelope: pipeline', () => {
       {
         id: 'n1',
         type: 'llm_call',
-        config: {},
+        config: { prompt: 'p' },
         datasetIds: { source: 'ds_local_id', sink: '${params.target}' },
         position: { x: 0, y: 0 },
       },
@@ -392,7 +392,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'lit',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           connectionParams: { model: 'claude-sonnet' },
           position: { x: 0, y: 0 },
@@ -400,7 +400,7 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'dyn',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.provider}',
           connectionParams: { model: '${params.model}' },
           position: { x: 1, y: 1 },
@@ -437,7 +437,7 @@ describe('importEnvelope: pipeline', () => {
       pipelineId: pipeline.id,
       params: [],
       outputs: [],
-      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     };
@@ -551,11 +551,11 @@ describe('importEnvelope: pipeline', () => {
       params: [],
       outputs: [],
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
+        { id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } },
         {
           id: 'n2',
           type: 'llm_call',
-          config: { outputs: [{ name: 'done', type: 'boolean' }] },
+          config: { prompt: 'p', outputs: [{ name: 'done', type: 'boolean' }] },
           position: { x: 0, y: 0 },
         },
       ],
@@ -692,19 +692,19 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: { model: 'x', outputs: [{ name: 'text', type: 'string' }] },
+          config: { prompt: 'p', model: 'x', outputs: [{ name: 'text', type: 'string' }] },
           position: { x: 3, y: 4 },
         },
         {
           id: 'n3',
           type: 'agent_task',
-          config: { outputs: [{ name: 'output', type: 'string' }] },
+          config: { task: 't', outputs: [{ name: 'output', type: 'string' }] },
           position: { x: 5, y: 6 },
         },
         {
           id: 'n2',
           type: 'llm_call',
-          config: { outputs: [{ name: 'done', type: 'boolean' }] },
+          config: { prompt: 'p', outputs: [{ name: 'done', type: 'boolean' }] },
           position: { x: 7, y: 8 },
         },
       ],
@@ -793,7 +793,7 @@ describe('importEnvelope: pipeline', () => {
       pipelineId: pipeline.id,
       params: [{ name: 'topic', type: 'string', required: true }],
       outputs: [],
-      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     });
@@ -818,7 +818,7 @@ describe('importEnvelope: pipeline', () => {
       pipelineId: pipeline.id,
       params: [],
       outputs: [{ name: 'summary', type: 'string' }],
-      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     });
@@ -846,7 +846,9 @@ describe('importEnvelope: pipeline', () => {
       pipelineId: pipeline.id,
       params: [],
       outputs: [],
-      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 }, policy }],
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 }, policy },
+      ],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     });
@@ -879,11 +881,11 @@ describe('importEnvelope: pipeline', () => {
         {
           id: 'bound',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           position: { x: 0, y: 0 },
         },
-        { id: 'unbound', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+        { id: 'unbound', type: 'llm_call', config: { prompt: 'p' }, position: { x: 1, y: 1 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,
@@ -906,8 +908,8 @@ describe('importEnvelope: pipeline', () => {
       params: [],
       outputs: [],
       nodes: [
-        { id: 'a', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
-        { id: 'b', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+        { id: 'a', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 1, y: 1 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,

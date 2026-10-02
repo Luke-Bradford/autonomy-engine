@@ -27,7 +27,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
 import { agentTaskConfigSchema } from './agent-config.js';
-import { copyInputSchema } from './copy-config.js';
+import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -85,6 +85,23 @@ export const HTTP_SECRET_HEADERS_FIELD = 'secretHeaders';
  */
 export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).optional();
 
+/**
+ * The per-activity request settings the http adapter reads from a node's
+ * prepared `input` (`connectors/http.ts`). Shared, not adapter-private, because
+ * the save gate checks a literal config against this same instance (#1480).
+ */
+export const httpRequestInputSchema = z.object({
+  url: z.string().min(1),
+  method: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.string().optional(),
+  // The declared secret SINK (item 7 / S4): header name → inert `{$secret:name}`
+  // marker. The RESOLVED plaintext is read from the `secretFields` side channel,
+  // NEVER from this marker; this schema exists so a malformed value at the sink is
+  // caught rather than silently ignored.
+  [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
+});
+
 const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: HTTP_REQUEST_ACTIVITY_TYPE,
@@ -114,8 +131,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
         title: 'Request headers',
       }),
       body: presented(z.string().optional(), { title: 'Request body' }),
-      // Metadata only (catalog `configSchema` is not a save-time validator — the
-      // adapter validates the live request). Documents the sink shape for the UI.
+      // Presentation only: the save gate and the adapter both parse
+      // `httpRequestInputSchema` (#1480). Documents the sink shape for the UI.
       // Computed key + shared shape (`httpSecretHeadersSchema`) so neither the
       // field name NOR the record shape can desync from the adapter's schema.
       // Titled on the shared instance itself: there is no wrapper of its own to
@@ -125,6 +142,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
         description: 'Headers whose values come from stored secrets, sent last and never echoed.',
       }),
     }),
+    dispatchConfigSchema: httpRequestInputSchema,
   },
   {
     type: LLM_CALL_ACTIVITY_TYPE,
@@ -146,6 +164,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // palette metadata and the live request validation can never desync (the
     // same shared→server pattern `http_request` uses for `httpSecretHeadersSchema`).
     configSchema: llmCallConfigSchema,
+    dispatchConfigSchema: llmCallConfigSchema,
   },
   {
     type: AGENT_TASK_ACTIVITY_TYPE,
@@ -167,6 +186,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // at the cap — stdout may itself be whole.
     outputs: [out('output', 'string'), out('exitCode', 'number'), out('truncated', 'boolean')],
     configSchema: agentTaskConfigSchema,
+    dispatchConfigSchema: agentTaskConfigSchema,
   },
   {
     // #4 A1 — the `if` CONTROL activity. `kind:'control'` = engine-evaluated: the
@@ -463,8 +483,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // bytes); it is the first activity to opt into the read-only idempotent case
     // the fail-safe `false` default anticipates. Outputs the file `content` (as
     // UTF-8 text) and the canonical `path` actually read. `configSchema` is
-    // palette metadata; the adapter validates the live request (the `${}`-
-    // substituted `path`). No `secretSinkFields` — `fs` is credential-less.
+    // also the `dispatchConfigSchema`: the adapter validates the live
+    // (`${}`-substituted) `path` with it, and the save gate a literal one
+    // (#1480). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_READ_ACTIVITY_TYPE,
     title: 'Read File',
     description: 'Read the contents of a file on a file system connection.',
@@ -474,6 +495,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('content', 'string'), out('path', 'string')],
     configSchema: fileReadConfigSchema,
+    dispatchConfigSchema: fileReadConfigSchema,
   },
   {
     // #4 A11 — the `file_write` EXECUTION activity. Same `fs` connector as
@@ -482,8 +504,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // double write on resume (fail-safe). Overwrites the target (truncate) with
     // the `${}`-substituted `content` as UTF-8 text; outputs the `bytesWritten`
     // and the canonical `path`. Bounded by the same server-side root/traversal
-    // guard as the read. `configSchema` is palette metadata; the adapter
-    // validates the live request. No `secretSinkFields` — `fs` is credential-less.
+    // guard as the read. The adapter validates the live request against
+    // `dispatchConfigSchema`, as the save gate does a literal one (#1480). No
+    // `secretSinkFields` — `fs` is credential-less.
     type: FILE_WRITE_ACTIVITY_TYPE,
     title: 'Write File',
     description: 'Write text to a file on a file system connection.',
@@ -493,6 +516,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('bytesWritten', 'number'), out('path', 'string')],
     configSchema: fileWriteConfigSchema,
+    dispatchConfigSchema: fileWriteConfigSchema,
   },
   {
     // #4 A12 — `file_copy`. Copies `source` → `dest`, both confined to the `fs`
@@ -500,8 +524,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // copy overwrites `dest` (a side effect), so the reconciler FREEZES an
     // in-flight copy rather than risk a partial re-copy on resume. The adapter
     // STREAMS source→temp→rename (no in-memory size cap, unlike `file_read`), so
-    // an arbitrarily large file copies without OOM. `configSchema` is palette
-    // metadata; the adapter validates the live `${}`-substituted request.
+    // an arbitrarily large file copies without OOM. The adapter validates the
+    // live `${}`-substituted request against `dispatchConfigSchema`, as the save
+    // gate does a literal one (#1480).
     type: FILE_COPY_ACTIVITY_TYPE,
     title: 'Copy File',
     description: 'Copy a file to another path on a file system connection.',
@@ -511,6 +536,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('bytesWritten', 'number'), out('source', 'string'), out('dest', 'string')],
     configSchema: fileCopyConfigSchema,
+    dispatchConfigSchema: fileCopyConfigSchema,
   },
   {
     // #4 A12 — `file_move`. Atomic same-filesystem `rename(source, dest)`, both
@@ -528,6 +554,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('source', 'string'), out('dest', 'string')],
     configSchema: fileMoveConfigSchema,
+    dispatchConfigSchema: fileMoveConfigSchema,
   },
   {
     // #4 A12 — `file_delete`. `unlink`s a single regular file confined to the
@@ -544,6 +571,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('path', 'string')],
     configSchema: fileDeleteConfigSchema,
+    dispatchConfigSchema: fileDeleteConfigSchema,
   },
   {
     // #4 A12 — `file_list`. Lists the entries of a directory confined to the
@@ -564,6 +592,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     outputs: [out('entries', 'json'), out('path', 'string')],
     outputElements: { entries: [out('name', 'string'), out('type', 'string')] },
     configSchema: fileListConfigSchema,
+    dispatchConfigSchema: fileListConfigSchema,
   },
   {
     /*
@@ -689,6 +718,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('truncated', 'boolean'),
     ],
     configSchema: copyInputSchema,
+    dispatchConfigSchema: copyDispatchInputSchema,
   },
   {
     /**

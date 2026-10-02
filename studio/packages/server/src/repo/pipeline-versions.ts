@@ -7,6 +7,7 @@ import {
   PipelineVersionSchema,
   StrictNodeSchema,
   validatePipelineDoc,
+  type ActivityCatalog,
   type NewPipelineVersion,
   type PipelineResolver,
   type GlobalRead,
@@ -79,6 +80,12 @@ export interface CreatePipelineVersionOptions extends CreateResourceOptions {
    * by the retention sweep. Only `POST /api/pipelines/:id/debug-runs` sets it.
    */
   debug?: boolean;
+  /**
+   * #1480 — the activity catalog the save gate checks `type` and literal
+   * `config` against. Defaults to the shared catalog, which is the executor's;
+   * a test that runs an injected executor catalog passes the same one here.
+   */
+  catalog?: ActivityCatalog;
 }
 
 export function createPipelineVersion(
@@ -238,6 +245,7 @@ export function createPipelineVersion(
     resolvePipeline,
     globals,
     globalReads: globalReadNames,
+    ...(opts?.catalog !== undefined ? { catalog: opts.catalog } : {}),
   });
   if (issues.length > 0) throw new InvalidPipelineDocError(issues);
   const globalReads: GlobalRead[] = [...globalReadNames].sort().map((name) => {

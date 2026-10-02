@@ -22,6 +22,9 @@ import { hasSecureOutput } from './secure.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
+import type { ActivityCatalog } from '../catalog/types.js';
+import { activityNodeErrors } from './activity-config-check.js';
+import { MAX_CONFIG_DEPTH } from './limits.js';
 import {
   APPEND_VARIABLE_ACTIVITY_TYPE,
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
@@ -85,28 +88,10 @@ import {
 // `substitute`.
 // ---------------------------------------------------------------------------
 
-/**
- * Bounds how deep any walk may descend the node-`config` TREE (nested
- * objects/arrays) before it refuses. `config` is `z.record(z.string(),
- * z.unknown())` — opaque to Zod, so a stored/run-now config can nest
- * arbitrarily deep. Every recursor over the tree — `substitute` (RUN),
- * `scan` (the `${}` SAVE walk) and `walkConfigForMarkers`/`walkMarkerRegion`
- * (the `{$secret}` SAVE gate + DISPATCH resolver) — checks this cap at entry, so
- * a pathological config fails with a CLEAN error/throw instead of overflowing
- * the stack (`RangeError`). This is the config-TREE axis; it is ORTHOGONAL to
- * `MAX_EXPR_DEPTH` (expression AST nesting, `expr.ts`) and `MAX_PATH_DEPTH` (ref
- * path segments, `functions.ts`) — neither of those bounds the tree walk. It is
- * the SAME axis as server-side `MAX_REDACT_DEPTH` (`connectors/redact.ts`, which
- * caps the resolved-config redaction walk at 100); the two compose safely — a
- * config within this 64 cap is comfortably within redaction's 100 ceiling. The
- * config-tree analogue of #453, which bounded expression nesting for the same
- * class of raw-`RangeError` bug. 64 is reasoned by analogy to the sibling caps,
- * not a measured overflow point: a native stack blows in the low thousands of
- * frames (#453 measured ~2000 for the expression walk), and real config is a
- * handful of levels deep, so 64 is a wide safe band the cap only ever bites a
- * pathological input against.
- */
-export const MAX_CONFIG_DEPTH = 64;
+// The config-tree depth cap lives in a leaf module (`limits.ts`) so a module
+// `params.ts` imports can share it without an import cycle; re-exported here
+// for its existing importers.
+export { MAX_CONFIG_DEPTH } from './limits.js';
 
 /**
  * Closed field set readable via `${run.<field>}`. SSOT — extend here only.
@@ -2590,6 +2575,12 @@ export interface ValidateDocOptions {
    * the validators report nothing, as {@link variableReadsOf} explains.
    */
   globalReads?: Set<string>;
+  /**
+   * #1480 — the activity catalog the save gate checks `type` and literal
+   * `config` against: the one the executor dispatches with. The shared catalog
+   * when absent; a test that runs an injected catalog saves against it too.
+   */
+  catalog?: ActivityCatalog;
 }
 
 /** #844 GL3 — the globals a scan may read, and where it collects the reads. */
@@ -2819,6 +2810,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   // root cause, so per-ref errors would just bury it.
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
   for (const node of doc.nodes) {
+    const beforeNode = errors.length;
     const contract = outputsById.get(node.id);
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
@@ -2858,6 +2850,13 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       validateCopyMappingIdentifiers(node, errors);
       validateCopyMappingShape(node, errors); // #1176 — the three cross-row rules
     }
+    // #1480 — an unknown `type`, or a literal config the adapter would refuse
+    // at dispatch, is refused here: a version that saves must be one that runs.
+    // Only for a node the hand-written rules above found clean: they are the
+    // more specific diagnostics for the fields they own, and the dispatch schema
+    // replays several of them (`llm_call`'s output coupling, `copy`'s cross-row
+    // mapping rules), so running both would report one fault twice.
+    if (errors.length === beforeNode) errors.push(...activityNodeErrors(node, options.catalog));
     // #2 L13b — connectionParams shape rules (activity-agnostic: any
     // connection-bound node may carry bindings). Both refusals follow the L12
     // call-node precedent: config that would be silently INERT is refused with

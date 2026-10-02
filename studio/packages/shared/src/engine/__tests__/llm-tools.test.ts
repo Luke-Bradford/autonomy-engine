@@ -15,7 +15,13 @@ import type { EngineCommand, EngineEvent } from '../types.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config, position: { x: seq, y: 0 }, ...extra };
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: seq, y: 0 },
+    ...extra,
+  };
 }
 
 function llm(id: string, config: Record<string, unknown>): Node {

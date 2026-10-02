@@ -24,7 +24,13 @@ import { createEngine } from '../reduce.js';
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config, position: { x: seq, y: 0 }, ...extra };
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: seq, y: 0 },
+    ...extra,
+  };
 }
 
 const GLOBALS = new Map<string, GlobalParamType>([
@@ -230,7 +236,7 @@ describe('RunState.globals', () => {
     const cmd = r.commands.find((c) => c.type === 'dispatchNode') as {
       preparedInput: Record<string, unknown>;
     };
-    expect(cmd.preparedInput).toEqual({ u: 'https://h/x', c: { k: 1 } });
+    expect(cmd.preparedInput).toEqual({ task: 't', u: 'https://h/x', c: { k: 1 } });
     expect(eng.projectRunState([ev])).toEqual(eng.projectRunState([ev]));
   });
 

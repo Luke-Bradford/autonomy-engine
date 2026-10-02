@@ -76,7 +76,13 @@ describe('workspace-git import route', () => {
     createPipelineVersion(app.db, {
       ...baseVersion(pipeline.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     expect((await commit('author')).json().commit.committed).toBe(true);
@@ -130,7 +136,13 @@ describe('workspace-git import route', () => {
     createPipelineVersion(app.db, {
       ...baseVersion(pipeline.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     expect((await commit('author')).json().commit.committed).toBe(true);
@@ -276,7 +288,13 @@ describe('workspace-git import route', () => {
     const version = createPipelineVersion(app.db, {
       ...baseVersion(pipeline.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     // #3 G5c-2 — a trigger too, so the real wiring (fetch → read → apply →

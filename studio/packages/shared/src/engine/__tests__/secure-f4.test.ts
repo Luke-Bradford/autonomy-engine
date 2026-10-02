@@ -20,7 +20,15 @@ const RUN = 'R1';
 let seq = 0;
 function node(id: string, over: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 }, ...over };
+  // #1480 — an agent_task saves only with its required `task`.
+  const { config, ...rest } = over;
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: seq, y: 0 },
+    ...rest,
+  };
 }
 const SECURE = { policy: { secureOutput: true } } as const;
 function declares(outputs: { name: string; type: string; optional?: boolean }[]) {

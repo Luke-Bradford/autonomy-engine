@@ -17,7 +17,12 @@ import {
 } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
-  return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
+  return {
+    id,
+    type: 'http_request',
+    config: { url: 'https://example.test/x', ...config },
+    position: { x: 0, y: 0 },
+  };
 }
 
 function edge(id: string, from: string, to: string, on: EdgeOn = 'success'): Edge {
@@ -127,6 +132,21 @@ describe('validateCanvas', () => {
 
   it('an empty doc has no issues', () => {
     expect(validateCanvas([], [], [], [], [], [])).toEqual([]);
+  });
+
+  // #1480 — a version saved before the gate checked config still opens (reads
+  // never validate), and Problems lists what a new save must fix: the same
+  // validator the server gate runs, so the badge and the 400 agree.
+  it('lists a config the adapter would refuse, as a version saved before #1480 holds', () => {
+    const copy: Node = {
+      id: 'load',
+      type: 'copy',
+      config: { mapping: [{ source: 'id', sink: 'id', type: 'integer' }], mode: 'truncate' },
+      position: { x: 0, y: 0 },
+    };
+    expect(validateCanvas([copy], [], [], [], [], [])).toEqual([
+      expect.stringMatching(/^node 'load': config\.mode: /),
+    ]);
   });
 
   // #844 V2 — the badge must agree with the server gate about `${vars.x}`,

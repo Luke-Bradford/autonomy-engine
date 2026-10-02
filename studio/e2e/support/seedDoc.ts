@@ -164,6 +164,32 @@ export async function seedVersion(
   return { pipelineId: id, pipelineVersionId };
 }
 
+/** #1480 — the placeholder URL a seeded `http_request` carries unless the spec sets one. */
+export const SEED_URL = 'https://example.test/seed';
+
+/**
+ * The config a seeded node of each type needs to pass the save gate (#1480),
+ * which checks a literal config against the schema its adapter parses at
+ * dispatch. A spec that sets its own value for a field keeps it.
+ */
+const SEED_CONFIG: Record<string, Record<string, unknown>> = {
+  http_request: { url: SEED_URL },
+  file_write: { path: '/tmp/seed.txt', content: 'seed' },
+  file_read: { path: '/tmp/seed.txt' },
+  file_list: { path: '/tmp' },
+  file_delete: { path: '/tmp/seed.txt' },
+};
+
+/**
+ * A seed node as the write path receives it: `http_request` by default, and,
+ * because the save gate checks a literal config against the schema its adapter
+ * parses (#1480), a node of a type with required config carries it (`SEED_CONFIG`).
+ */
+function seedNode(n: SeedNode): SeedNode {
+  const type = n.type ?? 'http_request';
+  return { ...n, type, config: { ...SEED_CONFIG[type], ...n.config } };
+}
+
 /**
  * Mint ONE more version on an EXISTING pipeline, and return its id.
  *
@@ -191,7 +217,7 @@ export async function mintVersion(
       data: {
         params: doc.params ?? [],
         outputs: doc.outputs ?? [],
-        nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
+        nodes: doc.nodes.map(seedNode),
         // `Edge.id` is required on the write path; a seed cares about the shape of
         // the graph, not about the ids, so one is minted from the edge itself —
         // stable across runs (no randomness), and unique for any doc a spec can

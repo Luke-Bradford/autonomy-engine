@@ -44,6 +44,7 @@ import {
 } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -83,7 +84,7 @@ function seedVersion(
     edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedTrigger(
@@ -1285,7 +1286,7 @@ describe('RunLauncher — #5 S6b per-pipeline both-must-pass admission', () => {
         edges: [],
         catalogVersion: CATALOG_VERSION,
       };
-      return createPipelineVersion(db, input).id;
+      return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
     };
     return { pipeline, mkVersion };
   }

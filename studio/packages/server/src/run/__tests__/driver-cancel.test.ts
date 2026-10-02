@@ -25,6 +25,7 @@ import { createRunDrives } from '../drives.js';
 import { loadEngineEvents } from '../events.js';
 import { abortableExecutor } from './abortable-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * CX2 (#1320) — the server half of run cancellation, driven through the REAL
@@ -46,14 +47,18 @@ function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
 
 function seedRun(db: Db, nodes: Node[], edges: Edge[]) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-  const pv = createPipelineVersion(db, {
-    pipelineId: pipeline.id,
-    params: [],
-    outputs: [],
-    nodes,
-    edges,
-    catalogVersion: CATALOG_VERSION,
-  });
+  const pv = createPipelineVersion(
+    db,
+    {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes,
+      edges,
+      catalogVersion: CATALOG_VERSION,
+    },
+    { catalog: STUB_SAVE_CATALOG },
+  );
   return createRun(db, {
     ownerId: 'local',
     pipelineVersionId: pv.id,

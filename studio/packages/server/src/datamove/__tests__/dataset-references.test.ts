@@ -16,6 +16,7 @@ import { createWorkspaceGit } from '../../repo/workspace-git.js';
 import { appendWorkspaceEvent } from '../../repo/workspace-events.js';
 import { getPipeline } from '../../repo/pipelines.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
+import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 import type { Db } from '../../repo/types.js';
 import { datasetReferences, type CatalogOverride } from '../dataset-references.js';
 
@@ -54,24 +55,28 @@ function copyNode(source: string, sink: string, mapping: unknown, id = 'n1', typ
   };
 }
 
-function versionOf(db: Db, pipelineId: string, nodes: Node[]): string {
-  return createPipelineVersion(db, {
+function versionOf(db: Db, pipelineId: string, nodes: Node[], legacy = false): string {
+  const doc = {
     pipelineId,
-    params: [{ name: 'which', type: 'string', required: false }],
+    params: [{ name: 'which', type: 'string' as const, required: false }],
     outputs: [],
     nodes,
     edges: [],
     catalogVersion: CATALOG_VERSION,
-  }).id;
+  };
+  // #1480 — `legacy` inserts the version directly, as one saved before the save
+  // gate; the gate now refuses a copy with no/empty mapping and an uncatalogued type.
+  return legacy ? insertLegacyVersion(db, doc).id : createPipelineVersion(db, doc).id;
 }
 
 function pipelineWith(
   db: Db,
   nodes: Node[],
   name = 'P',
+  legacy = false,
 ): { pipelineId: string; versionId: string } {
   const pipeline = createPipeline(db, { ownerId: OWNER, name });
-  return { pipelineId: pipeline.id, versionId: versionOf(db, pipeline.id, nodes) };
+  return { pipelineId: pipeline.id, versionId: versionOf(db, pipeline.id, nodes, legacy) };
 }
 
 function bindTrigger(db: Db, versionId: string): string {
@@ -169,9 +174,13 @@ describe('datasetReferences (#996 M9)', () => {
     // and it claims nothing — so the mapping is READABLE and disagrees with
     // nothing on the source side. The counts are the only thing that says the
     // copy moves no column at all.
-    pipelineWith(db, [
-      copyNode(ds.id, ds.id, [{ source: 'id', sink: '', type: 'string', onError: 'fail' }]),
-    ]);
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    pipelineWith(
+      db,
+      [copyNode(ds.id, ds.id, [{ source: 'id', sink: '', type: 'string', onError: 'fail' }])],
+      'P',
+      true,
+    );
 
     const [source] = datasetReferences(db, OWNER, ds).references;
     expect(source?.status).toBe('agrees');
@@ -183,7 +192,8 @@ describe('datasetReferences (#996 M9)', () => {
     const { db } = freshDb();
     const conn = store(db);
     const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
-    pipelineWith(db, [copyNode(ds.id, ds.id, undefined)]);
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    pipelineWith(db, [copyNode(ds.id, ds.id, undefined)], 'P', true);
 
     const [ref] = datasetReferences(db, OWNER, ds).references;
     expect(ref?.status).toBe('unreadable');
@@ -227,7 +237,8 @@ describe('datasetReferences (#996 M9)', () => {
     const { db } = freshDb();
     const conn = store(db);
     const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
-    pipelineWith(db, [copyNode(ds.id, ds.id, undefined)]);
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    pipelineWith(db, [copyNode(ds.id, ds.id, undefined)], 'P', true);
 
     expect(datasetReferences(db, OWNER, ds).references[0]?.status).toBe('unreadable');
   });
@@ -360,7 +371,8 @@ describe('datasetReferences (#996 M9)', () => {
     const { db } = freshDb();
     const conn = store(db);
     const ds = table(db, conn, [{ name: 'id', type: 'string', nullable: true }]);
-    pipelineWith(db, [copyNode(ds.id, ds.id, [ROW('id', 'id')], 'n1', 'lookup_stub')]);
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    pipelineWith(db, [copyNode(ds.id, ds.id, [ROW('id', 'id')], 'n1', 'lookup_stub')], 'P', true);
 
     // M12's `lookup` reads a source only — `datasetKinds.sink` is optional.
     const sourceOnly: CatalogOverride = {

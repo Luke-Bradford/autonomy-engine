@@ -22,7 +22,7 @@ function bindEnabledTrigger(db: Db, ownerId: string, connId: string): string {
   const node: Node = {
     id: 'n1',
     type: 'llm_call',
-    config: {},
+    config: { prompt: 'p' },
     connectionId: connId,
     position: { x: 0, y: 0 },
   };

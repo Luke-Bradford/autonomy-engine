@@ -77,7 +77,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           position: { x: 0, y: 0 },
         },
@@ -100,7 +100,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.conn}',
           position: { x: 0, y: 0 },
         },
@@ -135,14 +135,14 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: source.id, sink: sink.id },
           position: { x: 0, y: 0 },
         },
         {
           id: 'n2',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: '${params.conn}', sink: sink.id },
           position: { x: 1, y: 1 },
         },
@@ -180,7 +180,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: source.id, sink: 'conn_does_not_exist' },
           position: { x: 0, y: 0 },
         },
@@ -226,7 +226,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: src.id },
           position: { x: 0, y: 0 },
         },
@@ -267,14 +267,14 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: src.id, sink: snk.id },
           position: { x: 0, y: 0 },
         },
         {
           id: 'n2',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           // A dynamic end beside a remapped one, and a CONNECTION pair on the
           // same node — the two fields are remapped through different maps and
           // must not be able to resolve each other's ids.
@@ -327,7 +327,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: src.id, sink: 'ds_does_not_exist' },
           position: { x: 0, y: 0 },
         },
@@ -530,7 +530,7 @@ describe('serializeWorkspace', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: 'conn_does_not_exist',
           position: { x: 0, y: 0 },
         },
@@ -559,7 +559,7 @@ describe('serializeWorkspace', () => {
           {
             id: 'n1',
             type: 'llm_call',
-            config: {},
+            config: { prompt: 'p' },
             connectionId: conn.id,
             position: { x: 0, y: 0 },
           },
@@ -860,7 +860,13 @@ describe('ownedVersionForms — compare (#1018)', () => {
       ...baseVersion(pipe.id),
       outputs: [{ name: 'a', type: 'string' }],
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
@@ -974,7 +980,7 @@ describe('ownedVersionForms — compare (#1018)', () => {
           {
             id: 'n1',
             type: 'llm_call',
-            config: {},
+            config: { prompt: 'p' },
             connectionIds: { source: src.id, sink: snk.id },
             position: { x: 0, y: 0 },
           },
@@ -1050,7 +1056,7 @@ describe('ownedVersionForms — compare (#1018)', () => {
           {
             id: 'n1',
             type: 'llm_call',
-            config: {},
+            config: { prompt: 'p' },
             datasetIds: { source: src.id, sink: snk.id },
             position: { x: 0, y: 0 },
           },
@@ -1120,7 +1126,7 @@ describe('ownedVersionForms — compare (#1018)', () => {
           {
             id: 'n1',
             type: 'llm_call',
-            config: {},
+            config: { prompt: 'p' },
             datasetIds: { source: src.id },
             position: { x: 0, y: 0 },
           },
@@ -1169,11 +1175,17 @@ describe('ownedVersionForms — compare (#1018)', () => {
       ...baseVersion(pipe.id),
       params: [{ name: 'target', type: 'string', required: true }],
       nodes: [
-        { id: 'one', type: 'llm_call', config: {}, connectionId: single.id, position: at },
+        {
+          id: 'one',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: single.id,
+          position: at,
+        },
         {
           id: 'pair',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: src.id, sink: '${params.target}' },
           datasetIds: { source: dsSrc.id, sink: dsSnk.id },
           position: at,

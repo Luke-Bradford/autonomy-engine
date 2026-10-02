@@ -168,7 +168,13 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const srcVersion = createPipelineVersion(src, {
       ...baseVersion(pipe.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     const incoming = snapshot(src);
@@ -221,7 +227,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: source.id, sink: sink.id },
           position: { x: 0, y: 0 },
         },
@@ -310,7 +316,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           datasetIds: { source: source.id, sink: sink.id },
           position: { x: 0, y: 0 },
         },
@@ -957,7 +963,13 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const v1 = createPipelineVersion(db, {
       ...baseVersion(pipe.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     // The branch is committed while the connection still exists.
@@ -1008,7 +1020,13 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       ...baseVersion(pipe.id),
       outputs: [{ name: 'orig', type: 'string' }],
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     const incoming = snapshot(db);
@@ -1035,7 +1053,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.conn}',
           position: { x: 0, y: 0 },
         },
@@ -1608,7 +1626,13 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     createPipelineVersion(src, {
       ...baseVersion(pipe.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     // Drop the connection file — the node's connection ref now dangles.
@@ -1802,7 +1826,7 @@ describe('applyWorkspace — #3 G6b git provenance on minted versions', () => {
 const llmNode = (id: string, connectionId: string): NewPipelineVersion['nodes'][number] => ({
   id,
   type: 'llm_call',
-  config: {},
+  config: { prompt: 'p' },
   connectionId,
   position: { x: 0, y: 0 },
 });
@@ -2223,7 +2247,7 @@ describe('#1110 — a refused apply says what to fix', () => {
         {
           id: 'send',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: conn.id,
           position: { x: 0, y: 0 },
         },

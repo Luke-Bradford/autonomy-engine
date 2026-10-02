@@ -30,6 +30,7 @@ import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createContainerTimeoutAlarmHandler } from '../container-timeout-alarm.js';
 import { containerActiveGuard, RUN_CANCEL_REQUESTED } from '../durable-alarm-handler.js';
 import { silentLog } from './testLog.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #4 A17 — the DRIVER + CLOCK half of a `loop`'s wall-clock timeout, against a real
@@ -50,7 +51,7 @@ function gate(id: string): Node {
   return {
     id,
     type: 'agent_task',
-    config: { outputs: [{ name: 'done', type: 'boolean' }] },
+    config: { task: 't', outputs: [{ name: 'done', type: 'boolean' }] },
     position: { x: seq, y: 0 },
   };
 }
@@ -78,7 +79,7 @@ function seedVersion(
     containers,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string) {

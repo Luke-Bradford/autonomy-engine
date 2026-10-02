@@ -52,10 +52,17 @@ test.describe('starter templates on an empty canvas (#1413)', () => {
     await expect(
       page.getByRole('group', { name: /^ForEach 1 container, 1 activity/ }),
     ).toBeVisible();
-    // The one thing still to do before it saves is the operator's own: bind a dataset.
+    // What is still to do before it saves is the operator's own, and the template
+    // leaves it blank on purpose (#1480): the folder to list, the column mapping,
+    // and the dataset to bind. The save gate holds each as its own Problems entry
+    // — exactly these three, so a template that grew a fourth hole fails here.
     await expect
       .poll(() => validationIssues(page))
-      .toEqual([expect.stringMatching(/bind a dataset/)]);
+      .toEqual([
+        expect.stringMatching(/^node 'List Directory 1': config\.path:/),
+        expect.stringMatching(/^node 'Copy Data 1': config\.mapping:/),
+        expect.stringMatching(/^node 'Copy Data 1': .*bind a dataset/),
+      ]);
 
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(canvasNodes(page)).toHaveCount(0);

@@ -17,6 +17,7 @@ import {
   listRuns,
 } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #844 GL1 — the global-params store's REST surface (spec
@@ -215,7 +216,7 @@ describe('global params read by pipelines (#844 GL3)', () => {
         edges: [],
         catalogVersion: CATALOG_VERSION,
       };
-      return createPipelineVersion(app.db, input).id;
+      return createPipelineVersion(app.db, input, { catalog: STUB_SAVE_CATALOG }).id;
     });
     return { pipelineId: p.id, versionIds: ids };
   }
@@ -397,21 +398,25 @@ describe('global params export and import (#844 GL6)', () => {
   it('refuses a pipeline import that reads a global this workspace lacks, naming it', async () => {
     const g = global('apiUrl');
     const p = createPipeline(app.db, { ownerId: 'local', name: 'P' });
-    createPipelineVersion(app.db, {
-      pipelineId: p.id,
-      params: [],
-      outputs: [],
-      nodes: [
-        {
-          id: 'a',
-          type: 'test_activity',
-          config: { u: '${global.apiUrl}' },
-          position: { x: 0, y: 0 },
-        },
-      ],
-      edges: [],
-      catalogVersion: CATALOG_VERSION,
-    });
+    createPipelineVersion(
+      app.db,
+      {
+        pipelineId: p.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          {
+            id: 'a',
+            type: 'test_activity',
+            config: { u: '${global.apiUrl}' },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      { catalog: STUB_SAVE_CATALOG },
+    );
     const envelope = (
       await app.inject({ method: 'GET', url: `/api/pipelines/${p.id}/export` })
     ).json();

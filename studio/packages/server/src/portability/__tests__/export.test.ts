@@ -30,7 +30,7 @@ describe('exportPipeline', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: { model: 'x' },
+          config: { prompt: 'p', model: 'x' },
           connectionId: connection.id,
           position: { x: 0, y: 0 },
         },
@@ -73,14 +73,14 @@ describe('exportPipeline', () => {
         {
           id: 'bound',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           position: { x: 0, y: 0 },
         },
         {
           id: 'unbound',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           position: { x: 1, y: 1 },
         },
       ],
@@ -117,7 +117,7 @@ describe('exportPipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.provider}',
           position: { x: 0, y: 0 },
         },
@@ -125,7 +125,7 @@ describe('exportPipeline', () => {
         {
           id: 'literal',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           position: { x: 1, y: 1 },
         },
@@ -168,7 +168,7 @@ describe('exportPipeline', () => {
         {
           id: 'mixed',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: connection.id, sink: '${params.target}' },
           position: { x: 0, y: 0 },
         },
@@ -176,13 +176,13 @@ describe('exportPipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionIds: { source: '${params.target}', sink: '${params.target}' },
           position: { x: 1, y: 1 },
         },
         // No pair at all — must NOT gain the key (it would churn git drift for
         // every existing pipeline in every workspace).
-        { id: 'plain', type: 'llm_call', config: {}, position: { x: 2, y: 2 } },
+        { id: 'plain', type: 'llm_call', config: { prompt: 'p' }, position: { x: 2, y: 2 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,
@@ -219,7 +219,7 @@ describe('exportPipeline', () => {
         {
           id: 'portable',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           position: { x: 0, y: 0 },
           datasetIds: { source: '${params.target}' },
           datasetParams: params,
@@ -227,7 +227,7 @@ describe('exportPipeline', () => {
         {
           id: 'stripped',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           position: { x: 1, y: 1 },
           datasetIds: { source: '${params.target}', sink: 'ds_local_primary_key' },
           datasetParams: params,
@@ -258,7 +258,7 @@ describe('exportPipeline', () => {
     const node = (id: string, extra: Record<string, unknown>) => ({
       id,
       type: 'llm_call',
-      config: {},
+      config: { prompt: 'p' },
       position: { x: 0, y: 0 },
       datasetIds: { source: DS, sink: '${params.target}' },
       ...extra,
@@ -280,7 +280,7 @@ describe('exportPipeline', () => {
         }),
         // No datasets at all — must NOT gain the key, or every pipeline file in
         // every workspace changes bytes and reports as drifted.
-        { id: 'plain', type: 'llm_call', config: {}, position: { x: 9, y: 9 } },
+        { id: 'plain', type: 'llm_call', config: { prompt: 'p' }, position: { x: 9, y: 9 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,
@@ -333,7 +333,7 @@ describe('exportPipeline', () => {
         {
           id: 'dynamic',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.provider}',
           connectionParams: { model: '${params.model}' },
           position: { x: 0, y: 0 },
@@ -341,7 +341,7 @@ describe('exportPipeline', () => {
         {
           id: 'literal',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id,
           connectionParams: { model: 'claude-sonnet' },
           position: { x: 1, y: 1 },
@@ -376,8 +376,8 @@ describe('exportPipeline', () => {
       params: [],
       outputs: [],
       nodes: [
-        { id: 'a', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
-        { id: 'b', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+        { id: 'a', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'llm_call', config: { prompt: 'p' }, position: { x: 1, y: 1 } },
       ],
       edges: [],
       catalogVersion: CATALOG_VERSION,

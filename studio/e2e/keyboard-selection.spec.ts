@@ -131,6 +131,13 @@ test.describe('#737 keyboard selection', () => {
     await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
     await expect(canvasNodes(page).first()).toHaveClass(/\bselected\b/);
 
+    // A palette-dropped HTTP node has no URL, and the save gate refuses it until
+    // it does (#1480). Filled in the open panel, so the selection is the same
+    // keyboard-made one the save then has to clear.
+    await panel.getByRole('textbox', { name: 'Request URL', exact: true }).fill('https://x.test');
+    await panel.getByRole('button', { name: 'Apply config', exact: true }).click();
+    await expect(canvasNodes(page).first()).toHaveClass(/\bselected\b/);
+
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(panel.getByText(/^Select a node or an edge to edit it/)).toBeVisible();
     // The half a panel-only assertion would miss: React Flow must agree.

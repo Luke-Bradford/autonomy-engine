@@ -22,7 +22,7 @@ import { resolveRunParams, substitute, validateDoc, validateRefs } from '../para
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config, position: { x: seq, y: 0 } };
+  return { id, type: 'agent_task', config: { task: 't', ...config }, position: { x: seq, y: 0 } };
 }
 function edge(from: string, to: string, on: EdgeOn): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };

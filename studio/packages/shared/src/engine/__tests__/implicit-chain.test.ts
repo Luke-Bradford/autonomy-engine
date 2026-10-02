@@ -15,7 +15,7 @@ import { effectiveEdges, implicitRouting, partitionReadiness, validateDoc } from
 let nodeSeq = 0;
 function node(id: string): Node {
   nodeSeq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: nodeSeq, y: 0 } };
+  return { id, type: 'agent_task', config: { task: 't' }, position: { x: nodeSeq, y: 0 } };
 }
 
 function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {

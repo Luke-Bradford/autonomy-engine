@@ -52,7 +52,10 @@ function leaf(id: string, outputs: { name: string; type: 'number' | 'string' }[]
   return {
     id,
     type: 'http_request',
-    config: outputs.length > 0 ? { outputs } : {},
+    config:
+      outputs.length > 0
+        ? { url: 'https://example.test/x', outputs }
+        : { url: 'https://example.test/x' },
     position: { x: seq, y: 0 },
   };
 }

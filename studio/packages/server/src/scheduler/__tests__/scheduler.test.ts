@@ -38,7 +38,12 @@ const NEXT_MINUTE = Date.parse('2026-07-15T12:01:00.000Z');
 
 function seedVersion(db: Db): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-  const node: Node = { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };
+  const node: Node = {
+    id: 'a',
+    type: 'agent_task',
+    config: { task: 't' },
+    position: { x: 0, y: 0 },
+  };
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
     params: [],

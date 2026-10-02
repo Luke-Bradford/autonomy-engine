@@ -17,6 +17,7 @@ import { buildEngine, startRun, type DriverDeps, type DocResolver } from '../dri
 import { loadEngineEvents } from '../events.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -59,7 +60,7 @@ function seedVersion(
     ...(extra.containers !== undefined ? { containers: extra.containers } : {}),
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string, params: Record<string, unknown> = {}) {

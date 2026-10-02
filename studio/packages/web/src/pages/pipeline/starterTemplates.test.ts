@@ -3,6 +3,8 @@ import {
   ContainerSchema,
   COPY_ACTIVITY_TYPE,
   EdgeSchema,
+  FILE_LIST_ACTIVITY_TYPE,
+  HTTP_REQUEST_ACTIVITY_TYPE,
   getActivity,
   lowerPipelineNodes,
   StrictNodeSchema,
@@ -13,13 +15,25 @@ import { validateCanvas } from './canvasDoc';
 import { STARTER_TEMPLATES, type StarterTemplate } from './starterTemplates';
 
 /**
- * What the operator does after inserting a template: bind each activity to a
- * connection of a kind it accepts, bind the Copy's datasets and map a column.
+ * #1480 — the literals a template leaves to the operator's own workspace (a
+ * folder, a URL). The save gate checks a literal config against the schema the
+ * adapter parses, so a template node is held until its required field is filled.
+ */
+const OPERATOR_FIELDS: Readonly<Record<string, Record<string, unknown>>> = {
+  [FILE_LIST_ACTIVITY_TYPE]: { path: 'inbox' },
+  [HTTP_REQUEST_ACTIVITY_TYPE]: { url: 'https://example.test/status' },
+};
+
+/**
+ * What the operator does after inserting a template: fill the folder or URL,
+ * bind each activity to a connection of a kind it accepts, bind the Copy's
+ * datasets and map a column.
  * Fake ids are enough — the doc validator checks shape and `${}` wiring, not
  * that a connection exists (that is the run's `CONNECTION_MISSING`).
  */
 function bound(template: StarterTemplate): Node[] {
-  return template.nodes.map((n): Node => {
+  return template.nodes.map((filled): Node => {
+    const n = { ...filled, config: { ...filled.config, ...OPERATOR_FIELDS[filled.type] } };
     if (n.type === COPY_ACTIVITY_TYPE) {
       return {
         ...n,
@@ -72,7 +86,10 @@ describe('STARTER_TEMPLATES (#1413 OR22, #1420 part 4)', () => {
     },
   );
 
-  it('unbound, the CSV template is held only for its dataset — the next step to take', () => {
+  it('unbound, the CSV template is held for exactly what the operator binds: folder, mapping, dataset', () => {
+    // #1480 — the save gate checks each literal config against the schema the
+    // adapter parses, so a required field the template leaves out is the next
+    // step in Problems, beside the dataset the per-item path needs.
     const csv = STARTER_TEMPLATES[0]!;
     const errors = validateCanvas(
       lowerPipelineNodes(csv.nodes),
@@ -82,16 +99,37 @@ describe('STARTER_TEMPLATES (#1413 OR22, #1420 part 4)', () => {
       [],
       [],
     );
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/datasetParams need datasetIds .* bind a dataset/);
+    expect(errors).toEqual([
+      expect.stringMatching(/^node 'list': config\.path: /),
+      expect.stringMatching(/^node 'load': config\.mapping: /),
+      expect.stringMatching(/datasetParams need datasetIds .* bind a dataset/),
+    ]);
+  });
+
+  // #1480 — what each OTHER template is held for until the operator fills it.
+  // Keyed by id and checked for completeness below, so a new template has to
+  // state its holds here rather than slip past an unbound-save check.
+  const UNBOUND_HOLDS: Readonly<Record<string, RegExp>> = {
+    'summarise-folder': /^node 'list': config\.path: required$/,
+    'call-api-check': /^node 'call': config\.url: required$/,
+  };
+
+  it('every template after the CSV one states what it is held for unbound', () => {
+    expect(Object.keys(UNBOUND_HOLDS).sort()).toEqual(
+      STARTER_TEMPLATES.slice(1)
+        .map((t) => t.id)
+        .sort(),
+    );
   });
 
   it.each(STARTER_TEMPLATES.slice(1).map((t) => [t.id, t] as const))(
-    '%s: unbound, it already saves — bindings are a run-time requirement',
-    (_id, t) => {
+    '%s: unbound, it is held only for the folder or URL it leaves to the operator',
+    (id, t) => {
+      // Before the gate checked config a template saved without these and
+      // failed at its first run; now Problems names the field to fill.
       expect(
         validateCanvas(lowerPipelineNodes(t.nodes), t.edges, t.containers, [], [], []),
-      ).toEqual([]);
+      ).toEqual([expect.stringMatching(UNBOUND_HOLDS[id] ?? /^$/)]);
     },
   );
 });

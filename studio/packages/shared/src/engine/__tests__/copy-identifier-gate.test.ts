@@ -16,6 +16,16 @@ import type { Container, Edge, Node, Param, PipelineVersion } from '../types.js'
 import { validateDoc } from '../params.js';
 import { COPY_ACTIVITY_TYPE } from '../../catalog/types.js';
 
+/**
+ * #1480 — a malformed mapping is no longer a skip for the GATE: the dispatch
+ * schema refuses a mapping the adapter could not run (`config.mapping…`). It is
+ * still a skip for THIS rule, whose own messages read `mapping[i]`.
+ */
+function expectOnlySchemaIssues(issues: string[]): void {
+  expect(issues.length).toBeGreaterThan(0);
+  for (const issue of issues) expect(issue).toMatch(/^node '[^']+': config\.mapping/);
+}
+
 function doc(
   nodes: Node[],
   edges: Edge[] = [],
@@ -89,7 +99,7 @@ describe('§8 — a copy mapping column name must be a literal identifier', () =
     const other: Node = {
       id: 'n',
       type: 'file_read',
-      config: { mapping: [{ ...literalRow, sink: '${params.col}' }] },
+      config: { path: 'a.txt', mapping: [{ ...literalRow, sink: '${params.col}' }] },
       position: { x: 0, y: 0 },
     };
     expect(validateDoc(doc([other]))).toEqual([]);
@@ -105,16 +115,16 @@ describe('the §8 rule is identifier-only — a malformed per-FIELD shape is not
   // `copy-mapping-shape-gate.test.ts`. These fixtures are chosen to be clean
   // under those too, so a skip here stays a statement about §8.)
   it('skips a mapping that is not an array', () => {
-    expect(validateDoc(doc([copyNode({ not: 'an array' })]))).toEqual([]);
-    expect(validateDoc(doc([copyNode(undefined)]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode({ not: 'an array' })])));
+    expectOnlySchemaIssues(validateDoc(doc([copyNode(undefined)])));
     expect(validateDoc(doc([copyNode('${params.everything}')]))).toEqual([]);
   });
 
   it('skips a row that is not an object', () => {
-    expect(validateDoc(doc([copyNode(['${params.col}', null, 7, ['x']])]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode(['${params.col}', null, 7, ['x']])])));
   });
 
   it('skips a source/sink that is not a string', () => {
-    expect(validateDoc(doc([copyNode([{ source: 42, sink: null }])]))).toEqual([]);
+    expectOnlySchemaIssues(validateDoc(doc([copyNode([{ source: 42, sink: null }])])));
   });
 });

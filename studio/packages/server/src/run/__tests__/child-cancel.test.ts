@@ -33,6 +33,7 @@ import { createExecutor } from '../executor.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { abortableExecutor } from './abortable-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * CX3 (#1320, spec D8) — a cancel propagates to a run's LIVE, NON-DETACHED
@@ -103,7 +104,7 @@ function seedVersion(db: Db, nodes: Node[] | { nodes: Node[]; edges: Edge[] }): 
     edges: doc.edges,
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function seedRun(db: Db, pvId: string, parentRunId: string | null = null): Run {

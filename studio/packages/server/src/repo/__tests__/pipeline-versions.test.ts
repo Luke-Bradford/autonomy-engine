@@ -20,6 +20,7 @@ import {
 } from '../pipeline-versions.js';
 import * as pipelineVersionsRepo from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 import { freshDb } from './helpers.js';
 
 /**
@@ -31,7 +32,7 @@ import { freshDb } from './helpers.js';
 const LOOP_CHILD_NODE: Node = {
   id: 'node_2',
   type: 'llm_call',
-  config: { outputs: [{ name: 'done', type: 'boolean' }] },
+  config: { prompt: 'p', outputs: [{ name: 'done', type: 'boolean' }] },
   position: { x: 0, y: 0 },
 };
 const CHILD_EXIT_WHEN = '${nodes.node_2.output.done}';
@@ -41,7 +42,7 @@ function buildVersionInput(pipelineId: string): NewPipelineVersion {
     pipelineId,
     params: [{ name: 'topic', type: 'string', required: true }],
     outputs: [{ name: 'summary', type: 'string' }],
-    nodes: [{ id: 'node_1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+    nodes: [{ id: 'node_1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } }],
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
@@ -55,8 +56,8 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
       ...buildVersionInput(pipeline.id),
       params: [],
       nodes: [
-        { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
-        { id: 'b', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+        { id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } },
       ],
       edges: [
         { id: 'e1', from: 'a', to: 'b', on: 'success' },
@@ -77,7 +78,7 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     expect(() =>
       createPipelineVersion(db, {
         ...buildVersionInput(pipeline.id),
-        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+        nodes: [{ id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
         edges: [{ id: 'e1', from: 'ghost', to: 'a', on: 'success' }],
       }),
     ).toThrow(InvalidPipelineDocError);
@@ -302,7 +303,7 @@ describe('pipeline-versions repo — the write gate call-graph (#495)', () => {
       pipelineId,
       params: [],
       outputs: [],
-      nodes: [{ id: 'leaf', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'leaf', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     };
@@ -670,13 +671,13 @@ describe('pipeline-versions repo', () => {
         {
           id: 'node_1',
           type: 'llm_call',
-          config: { model: 'x', outputs: [{ name: 'text', type: 'string' }] },
+          config: { model: 'x', prompt: 'p', outputs: [{ name: 'text', type: 'string' }] },
           position: { x: 3, y: 4 },
         },
         {
           id: 'node_3',
           type: 'agent_task',
-          config: { outputs: [{ name: 'output', type: 'string' }] },
+          config: { task: 't', outputs: [{ name: 'output', type: 'string' }] },
           position: { x: 5, y: 6 },
         },
         LOOP_CHILD_NODE,
@@ -786,11 +787,17 @@ describe('pipeline-versions repo', () => {
     it('leaves an uncatalogued type absent — no catalog default to seed', () => {
       const { db } = freshDb();
       const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-      // `not_a_catalogued_type` is in no catalog, so it has no default contract.
-      const created = createPipelineVersion(db, {
-        ...buildVersionInput(pipeline.id),
-        nodes: [{ id: 'u', type: 'not_a_catalogued_type', config: {}, position: { x: 0, y: 0 } }],
-      });
+      // `test_activity` is in no catalog lowering reads, so it has no default
+      // contract. #1480 — the save gate refuses an unknown type, so it saves
+      // against the stub catalog that names it.
+      const created = createPipelineVersion(
+        db,
+        {
+          ...buildVersionInput(pipeline.id),
+          nodes: [{ id: 'u', type: 'test_activity', config: {}, position: { x: 0, y: 0 } }],
+        },
+        { catalog: STUB_SAVE_CATALOG },
+      );
       const node = getPipelineVersion(db, created.id)!.nodes.find((n) => n.id === 'u')!;
       expect(node.config['outputs']).toBeUndefined();
     });

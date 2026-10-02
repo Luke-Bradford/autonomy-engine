@@ -28,7 +28,15 @@ type Doc = {
 };
 
 function node(id: string, over: Partial<Node> = {}): Node {
-  return { id, type: 'agent_task', config: {}, position: { x: 0, y: 0 }, ...over };
+  // #1480 — an agent_task saves only with its required `task`.
+  const { config, ...rest } = over;
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 't', ...config },
+    position: { x: 0, y: 0 },
+    ...rest,
+  };
 }
 
 /** A node with a DECLARED output contract — the only kind whose names are enumerable. */

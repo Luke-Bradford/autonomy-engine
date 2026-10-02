@@ -94,7 +94,7 @@ describe('workspace-git import-preview route', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: conn.id,
           position: { x: 0, y: 0 },
         },

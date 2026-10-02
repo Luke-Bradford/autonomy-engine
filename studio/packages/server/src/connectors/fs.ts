@@ -131,9 +131,10 @@ const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
 const DEFAULT_MAX_LIST_ENTRIES = 10_000;
 
 // The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
-// SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-
-// config.ts`), imported here so the palette metadata and this live-request guard
-// can never drift. `input` here is the node's prepared (substituted) value.
+// SAME schema the catalog `configSchema` and `dispatchConfigSchema` declare
+// (`shared/catalog/fs-activity-config.ts`), imported here so the palette, the
+// save gate (#1480) and this live-request guard can never drift. `input` here
+// is the node's prepared (substituted) value.
 
 /**
  * Map a thrown fs error to a terminal `failed` event.

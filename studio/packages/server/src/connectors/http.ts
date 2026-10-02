@@ -1,9 +1,8 @@
-import { z } from 'zod';
 import {
   formatZodIssues,
   HTTP_SECRET_HEADERS_FIELD,
   httpConnectionConfigSchema,
-  httpSecretHeadersSchema,
+  httpRequestInputSchema,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import { redactSecrets } from './redact.js';
@@ -56,24 +55,9 @@ const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
  */
 const SECRET_HEADERS_PREFIX = `${HTTP_SECRET_HEADERS_FIELD}.`;
 
-// #1087 — the shape moved to `shared/catalog/connection-config.ts` so the
-// Manage › Connections form derives its controls from the schema this adapter
-// parses at dispatch. Imported, never re-declared.
-
-/** The per-activity request settings, read from the node's prepared `input`. */
-const httpRequestInputSchema = z.object({
-  url: z.string().min(1),
-  method: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  body: z.string().optional(),
-  // The declared secret SINK (item 7 / S4): header name → inert `{$secret:name}`
-  // marker. The RESOLVED plaintext is read from the `secretFields` side channel,
-  // NEVER from this marker; this schema exists so a malformed value at the sink is
-  // caught rather than silently ignored. Both the field NAME and the record SHAPE
-  // come from the shared SSOT (`HTTP_SECRET_HEADERS_FIELD` + `httpSecretHeadersSchema`)
-  // so neither can desync from the catalog declaration or the sink/prefix wiring.
-  [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
-});
+// #1087 — the connection shape lives in `shared/catalog/connection-config.ts`, and
+// #1480 moved the request shape (`httpRequestInputSchema`) to the shared catalog,
+// where the save gate checks a literal config against this same instance.
 
 /**
  * Map the resolved `secretFields` (keyed by config path) to request headers.

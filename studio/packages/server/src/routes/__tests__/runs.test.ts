@@ -752,8 +752,18 @@ describe('runs routes (read-only)', () => {
         params: [],
         outputs: [],
         nodes: [
-          { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
-          { id: 'b', type: 'http_request', position: { x: 200, y: 0 }, config: {} },
+          {
+            id: 'a',
+            type: 'http_request',
+            position: { x: 0, y: 0 },
+            config: { url: 'https://example.test/x' },
+          },
+          {
+            id: 'b',
+            type: 'http_request',
+            position: { x: 200, y: 0 },
+            config: { url: 'https://example.test/x' },
+          },
         ],
         edges: [{ id: 'e1', from: 'a', to: 'b', on: 'success' }],
         catalogVersion: CATALOG_VERSION,

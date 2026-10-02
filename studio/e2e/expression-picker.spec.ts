@@ -170,6 +170,9 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
+    // The save gate requires a url, so the seed carries one (#1480); the operator
+    // clears it first, which is what makes this the empty-field insert it tests.
+    await properties(page).getByRole('textbox', { name: 'Request URL' }).fill('');
     await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
 
     // The discovery this ticket exists for: the producer is named by the text
@@ -215,6 +218,9 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
+    // The save gate requires a url, so the seed carries one (#1480); the operator
+    // clears it first, which is what makes this the empty-field insert it tests.
+    await properties(page).getByRole('textbox', { name: 'Request URL' }).fill('');
     await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
     await expect(properties(page).getByText('Pipeline variables')).toBeVisible();
     await properties(page)
@@ -264,6 +270,9 @@ test.describe('U8a — expression insert flyout', () => {
     });
 
     await nodeById(page, 'call').click();
+    // The save gate requires a url, so the seed carries one (#1480); the operator
+    // clears it first, which is what makes this the empty-field insert it tests.
+    await properties(page).getByRole('textbox', { name: 'Request URL' }).fill('');
     await properties(page).getByRole('button', { name: 'Insert reference into url' }).click();
     await expect(properties(page).getByText('Global parameters')).toBeVisible();
     await properties(page)

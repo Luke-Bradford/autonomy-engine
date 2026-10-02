@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { RECONNECT_RADIUS } from '../../packages/web/src/pages/pipeline/ports';
+import { properties } from './panels';
 
 /**
  * Driving the canvas: the toolbox, node placement, and building an actual GRAPH.
@@ -85,6 +86,67 @@ export function outcomeRadio(page: Page, encoded: string): Locator {
 /** Add an activity by CLICK — the accessible path; no drag needed. */
 export async function addActivity(page: Page, title: string): Promise<void> {
   await toolbox(page).getByRole('button', { name: title, exact: true }).click();
+}
+
+/**
+ * Select the node at `index` and fill its config form the way an operator does:
+ * one text box per entry, keyed by the field's TITLE, then Apply config.
+ *
+ * A node dropped from the palette starts with an empty config, and the save
+ * gate (#1480) refuses one whose adapter has a required field — `http_request`
+ * without `url`, `file_write` without `path` and `content` — so a spec that
+ * authors a graph by gesture and then SAVES must give each such node its field
+ * first. A spec whose subject is not the config form uses this rather than
+ * seeding, because it is the path the operator actually walks.
+ */
+export async function fillNodeConfig(
+  page: Page,
+  index: number,
+  fields: Record<string, string>,
+): Promise<void> {
+  await canvasNodes(page).nth(index).click();
+  await fillSelectedNodeConfig(page, fields);
+}
+
+/**
+ * `fillNodeConfig` for the node ALREADY selected — which is the one a palette
+ * add just placed, so a spec that adds an activity and does not know its index
+ * among a seeded doc's nodes need not guess it.
+ */
+export async function fillSelectedNodeConfig(
+  page: Page,
+  fields: Record<string, string>,
+): Promise<void> {
+  for (const [title, value] of Object.entries(fields)) {
+    await properties(page).getByRole('textbox', { name: title, exact: true }).fill(value);
+  }
+  await properties(page).getByRole('button', { name: 'Apply config', exact: true }).click();
+}
+
+/** The fields `fillNodeConfig` needs to make a palette-dropped node of each title savable. */
+export const SAVABLE_CONFIG: Readonly<Record<string, Record<string, string>>> = {
+  'HTTP Request': { 'Request URL': 'https://example.test/e2e' },
+  'Write File': { 'File path': 'out.txt', Content: 'e2e' },
+};
+
+/**
+ * Add a palette activity to a canvas that ALREADY holds nodes, and give it the
+ * config its adapter requires (`SAVABLE_CONFIG`), so a Save that follows is not
+ * refused by the #1480 gate. The new node is found by DIFFING the canvas's ids
+ * across the add, because a palette add does not select what it places and its
+ * index among a seeded doc's nodes is not a given.
+ */
+export async function addSavableActivity(page: Page, title: string): Promise<void> {
+  const ids = () =>
+    page
+      .locator('.react-flow__node')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
+  const before = new Set(await ids());
+  await addActivity(page, title);
+  await expect.poll(async () => (await ids()).filter((id) => !before.has(id)).length).toBe(1);
+  const [added] = (await ids()).filter((id) => !before.has(id));
+  await page.locator(`.react-flow__node[data-id="${added}"]`).click();
+  await fillSelectedNodeConfig(page, SAVABLE_CONFIG[title] ?? {});
 }
 
 /**

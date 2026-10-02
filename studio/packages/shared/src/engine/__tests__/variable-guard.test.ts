@@ -15,7 +15,9 @@ import { copiedIdsOf, copiedVariableWritesOf, variableGuardErrors } from '../var
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}, type = 'agent_task'): Node {
   seq += 1;
-  return { id, type, config, position: { x: seq, y: 0 } };
+  // #1480 — an agent_task saves only with its required `task`.
+  const filled = type === 'agent_task' ? { task: 't', ...config } : config;
+  return { id, type, config: filled, position: { x: seq, y: 0 } };
 }
 // An array variable has no literal form, so its `set` writes a whole-value `${}`.
 const set = (id: string, variable = 'v'): Node =>

@@ -31,6 +31,7 @@ import { createReseedService, RerunNotEligibleError } from '../reseed.js';
 import { GlobalStartError, resolveRunGlobals } from '../globals.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
+import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 
 /**
  * #844 GL3 (global-params spec GL-D3) — a version records the globals it reads
@@ -60,7 +61,7 @@ function seedVersion(db: Db, nodes: Node[], ownerId = 'local'): string {
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };
-  return createPipelineVersion(db, input).id;
+  return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
 }
 
 function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriveDeps {
