@@ -67,6 +67,13 @@ test.describe('#1396 the connection form drawer', () => {
       'Reads and writes files inside the folders you allow.',
     );
 
+    // #1413 — each section says what it holds, as the group's description.
+    await expect(
+      form(page).getByRole('group', { name: 'Authentication', exact: true }),
+    ).toHaveAccessibleDescription(
+      'The secret this connection uses, if its kind needs one; it is stored encrypted.',
+    );
+
     // Required: the asterisk is drawn (and kept out of the name), the control says so.
     const roots = form(page).getByLabel(/^Allowed folders/);
     await expect(roots).toHaveAttribute('aria-required', 'true');

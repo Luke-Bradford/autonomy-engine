@@ -6,6 +6,7 @@ import {
   type StrayReason,
 } from './overrideAllowlist';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 
 const STRAY_NOTE: Record<StrayReason, string> = {
   never: 'never overridable, so a run refuses it',
@@ -71,7 +72,12 @@ export function OverridableKeysField({
  */
 export function OverridableKeysSection(props: Parameters<typeof OverridableKeysField>[0]) {
   return (
-    <FormSection title="Advanced" collapsible defaultOpen={props.seed.length > 0}>
+    <FormSection
+      title="Advanced"
+      hint={FORM_SECTION_HINTS.advanced}
+      collapsible
+      defaultOpen={props.seed.length > 0}
+    >
       <OverridableKeysField {...props} />
     </FormSection>
   );

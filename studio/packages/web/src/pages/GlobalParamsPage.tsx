@@ -33,6 +33,7 @@ import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
@@ -459,7 +460,7 @@ function GlobalParamForm({
         </>
       }
     >
-      <FormSection title="Basics">
+      <FormSection title="Basics" hint={FORM_SECTION_HINTS.globalParam.basics}>
         {/* On an edit both are READ-ONLY rather than disabled: a disabled
             control is skipped by keyboard navigation and by some screen
             readers, and which global this is remains worth reaching. A
@@ -527,7 +528,7 @@ function GlobalParamForm({
         )}
       </FormSection>
 
-      <FormSection title="Value">
+      <FormSection title="Value" hint={FORM_SECTION_HINTS.globalParam.value}>
         {/* Not `required`: empty text is a real value for a string global. */}
         <label>
           Value

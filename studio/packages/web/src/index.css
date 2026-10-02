@@ -1281,6 +1281,12 @@ td button + button {
   margin-bottom: 0.5rem;
 }
 
+/* #1413 — the section's one-line hint, between its title and its fields. Inside
+   a collapsible section's body the flex gap already spaces it. */
+.form-section > .form-section-hint {
+  margin: -0.25rem 0 0.5rem;
+}
+
 details.form-section > summary.form-section-title {
   cursor: pointer;
 }

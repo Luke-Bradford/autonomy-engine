@@ -20,6 +20,7 @@ import {
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { FormErrors } from '../lib/form/FormErrors';
@@ -399,7 +400,7 @@ function SecretForm({
         </>
       }
     >
-      <FormSection title="Basics">
+      <FormSection title="Basics" hint={FORM_SECTION_HINTS.secret.basics}>
         <label>
           <span>
             Name
@@ -425,7 +426,7 @@ function SecretForm({
         <FieldError id={nameErrorId} message={validation.errorFor('name')} />
       </FormSection>
 
-      <FormSection title="Value">
+      <FormSection title="Value" hint={FORM_SECTION_HINTS.secret.value}>
         <SecretInput
           label={
             <span>

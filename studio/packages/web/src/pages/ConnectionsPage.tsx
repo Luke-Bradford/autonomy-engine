@@ -65,6 +65,7 @@ import { useConfigEditor } from './pipeline/useConfigEditor';
 import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { SecretInput } from '../lib/form/SecretInput';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
@@ -952,7 +953,7 @@ function ConnectionForm({
         </>
       }
     >
-      <FormSection title="Basics">
+      <FormSection title="Basics" hint={FORM_SECTION_HINTS.connection.basics}>
         <label>
           <span>
             Name
@@ -1025,7 +1026,7 @@ function ConnectionForm({
         {nodeAdvisory !== null && <p className="contract-advisory">{nodeAdvisory}</p>}
       </FormSection>
 
-      <FormSection title="Connection">
+      <FormSection title="Connection" hint={FORM_SECTION_HINTS.connection.connection}>
         <ConfigEditor
           editor={editor}
           kindLabel={CONNECTION_KIND_LABELS[editor.kind]}
@@ -1036,7 +1037,7 @@ function ConnectionForm({
         />
       </FormSection>
 
-      <FormSection title="Authentication">
+      <FormSection title="Authentication" hint={FORM_SECTION_HINTS.connection.authentication}>
         <SecretInput
           label="Secret"
           value={form.secret}

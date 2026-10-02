@@ -84,6 +84,7 @@ import {
 import { LabelledControl } from '../lib/LabelledControl';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { JsonEditor } from '../lib/form/JsonEditor';
@@ -1232,7 +1233,7 @@ function TriggerForm({
         </>
       }
     >
-      <FormSection title="Basics">
+      <FormSection title="Basics" hint={FORM_SECTION_HINTS.trigger.basics}>
         <label>
           <span>
             Name
@@ -1258,7 +1259,7 @@ function TriggerForm({
         </label>
       </FormSection>
 
-      <FormSection title="Pipeline">
+      <FormSection title="Pipeline" hint={FORM_SECTION_HINTS.trigger.pipeline}>
         {/* #981 — the binding, in the two shapes the CREATE endpoint accepts. The
           choice is a radio pair rather than a third sentinel option inside the
           version select, because the two branches pick different KINDS of thing
@@ -1385,7 +1386,7 @@ function TriggerForm({
         )}
       </FormSection>
 
-      <FormSection title="Firing">
+      <FormSection title="Firing" hint={FORM_SECTION_HINTS.trigger.firing}>
         <LabelledControl label="Mode" hint={TRIGGER_MODE_DESCRIPTIONS[form.mode]}>
           {(id, hintId) => (
             <KindSelect icons={TRIGGER_MODE_ICONS} kind={form.mode}>
@@ -1509,7 +1510,7 @@ function TriggerForm({
         />
       </FormSection>
 
-      <FormSection title="Concurrency">
+      <FormSection title="Concurrency" hint={FORM_SECTION_HINTS.trigger.concurrency}>
         <LabelledControl label="Concurrency">
           {(id) => (
             <select
@@ -1559,7 +1560,7 @@ function TriggerForm({
         )}
       </FormSection>
 
-      <FormSection title="Parameters">
+      <FormSection title="Parameters" hint={FORM_SECTION_HINTS.trigger.parameters}>
         <LabelledControl label="Params (JSON)">
           {(id) => (
             <JsonEditor
