@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@autonomy-studio/shared';
-import { applyInsert, applyWrap, insertModeFor, wrapTarget } from './expressionInsert';
+import {
+  applyInsert,
+  applyWrap,
+  insertModeFor,
+  outsideExpressions,
+  wrapTarget,
+} from './expressionInsert';
 import { validateCanvas } from './canvasDoc';
 
 describe('applyInsert', () => {
@@ -94,7 +100,7 @@ describe('insertModeFor', () => {
   });
 });
 
-// #864 — what "Wrap in function" wraps, and the text wrapping it produces.
+// #864 — what a function wrap goes around, and the text wrapping it produces.
 describe('wrapTarget', () => {
   it('wraps the WHOLE body of the expression the caret sits in', () => {
     const v = 'Hi ${params.name}!';
@@ -127,6 +133,34 @@ describe('wrapTarget', () => {
   it('answers null outside every expression, so nothing is offered', () => {
     expect(wrapTarget('plain text', 3, 3)).toBeNull();
     expect(wrapTarget('${params.a} and ${params.b}', 3, 20)).toBeNull();
+  });
+});
+
+describe('outsideExpressions', () => {
+  it('is true in plain text and in an empty field', () => {
+    expect(outsideExpressions('plain text', 3, 3)).toBe(true);
+    expect(outsideExpressions('', 0, 0)).toBe(true);
+    expect(outsideExpressions('Hi ${params.a} there', 0, 2)).toBe(true);
+  });
+
+  it('is false with either end inside an expression, its edges included', () => {
+    const v = 'Hi ${params.a} there';
+    expect(outsideExpressions(v, 6, 6)).toBe(false);
+    // Just past the `}` is inside, as `refAt` (and so the wrap) reads it.
+    expect(outsideExpressions(v, v.indexOf('}') + 1, v.indexOf('}') + 1)).toBe(false);
+    expect(outsideExpressions(v, 0, 6)).toBe(false);
+    expect(outsideExpressions('${params.a} and ${params.b}', 3, 20)).toBe(false);
+  });
+
+  it('is false where a spliced ${…} would not stay its own expression', () => {
+    // After an unterminated `${`, the splice would be swallowed into it.
+    expect(outsideExpressions('${abc', 5, 5)).toBe(false);
+    // After a lone `$`, the splice would become the escape `$${` — plain text.
+    expect(outsideExpressions('cost: $', 7, 7)).toBe(false);
+    // A selection holding whole expressions would delete them.
+    expect(outsideExpressions('x ${a} y ${b} z', 0, 15)).toBe(false);
+    // An escape already in the text is plain text, so after it is outside.
+    expect(outsideExpressions('$${a} ', 6, 6)).toBe(true);
   });
 });
 

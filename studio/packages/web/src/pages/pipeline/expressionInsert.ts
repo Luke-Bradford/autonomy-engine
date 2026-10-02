@@ -88,7 +88,7 @@ export function insertModeFor(issuesWith: (fieldValue: string) => string[]): Ins
 export type WrapSpan = { start: number; end: number };
 
 /**
- * The text a "Wrap in function" choice goes around (#864), as a half-open
+ * The text a function WRAP goes around (#864), as a half-open
  * `[start, end)` range of the field's value — or `null` when the caret is in
  * no `${}` at all, and there is nothing to wrap.
  *
@@ -122,6 +122,38 @@ export function wrapTarget(
     return { start: selectionStart, end: selectionEnd };
   }
   return { start: bodyStart, end: ref.end };
+}
+
+/** The smallest whole expression, spliced to test a position (see below). */
+const SPLICE_PROBE = '${x}';
+
+/**
+ * Whether a function EXAMPLE can be inserted at this selection (#1413): both of
+ * its ends lie outside every `${}`, it covers no `${` of its own, AND a `${…}`
+ * spliced there stays its own expression. An example is inserted as a whole
+ * `${call}`, so inside an expression it would nest one `${` in another, and
+ * over a selection holding expressions it would silently delete them.
+ *
+ * The second half is a postcondition, not a restated grammar: after an
+ * unterminated `${abc` the splice is swallowed into that expression, and after
+ * a lone `$` it becomes the escape `$${` and is plain text. Either way the
+ * spliced probe is not read back as an expression starting where it was put,
+ * and that is the one question asked.
+ *
+ * Not the same as `wrapTarget` answering `null`, which also covers a caret in
+ * an expression's quoted text — there neither act is offered. Edges count as
+ * inside, as `refAt` decides, so a caret just past a `}` wraps that expression.
+ */
+export function outsideExpressions(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): boolean {
+  if (refAt(value, selectionStart) !== null || refAt(value, selectionEnd) !== null) return false;
+  if (value.slice(selectionStart, selectionEnd).includes('${')) return false;
+  const probe = applyInsert(value, selectionStart, selectionEnd, SPLICE_PROBE, 'insert').value;
+  const read = refAt(probe, selectionStart + 2);
+  return read?.start === selectionStart && read.end === selectionStart + SPLICE_PROBE.length - 1;
 }
 
 /**

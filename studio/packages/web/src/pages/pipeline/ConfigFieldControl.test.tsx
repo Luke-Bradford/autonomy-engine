@@ -164,6 +164,7 @@ describe('ConfigFieldControl — the expression flyout is withheld on a JSON fie
     describe: () => '',
     resolve: () => ({ mode: 'insert' as const, suggestions: [] }),
     wraps: () => [],
+    examples: () => ({ mode: 'insert' as const, functions: [] }),
   };
 
   it('offers the picker on a text field and not on a json field', () => {

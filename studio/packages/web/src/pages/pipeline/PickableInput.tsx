@@ -39,7 +39,7 @@ export function PickableInput({
     ref: inputRef,
     onSelect,
     insert: insertAtCaret,
-    wrapOptions,
+    functionOptions,
   } = useCaretInsert<HTMLInputElement>();
   return (
     <div className="config-field">
@@ -60,10 +60,15 @@ export function PickableInput({
           describe={picker.describe}
           resolve={() => picker.resolve(target)}
           onSelect={(insert, mode) => onChange(insertAtCaret(value, insert, mode))}
-          wrap={{
+          functions={{
             value,
             resolve: () =>
-              wrapOptions(value, (span) => picker.wraps(target, value, span), onChange),
+              functionOptions(
+                value,
+                (span) => picker.wraps(target, value, span),
+                () => picker.examples(target),
+                onChange,
+              ),
           }}
         />
       )}

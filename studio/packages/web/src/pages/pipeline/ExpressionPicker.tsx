@@ -14,7 +14,8 @@ export type FieldOptions = { mode: InsertMode; suggestions: RefSuggestion[] };
 /**
  * One catalog function as the flyout lists it (#864), with its help text
  * (#1413): the signature names each parameter and ends in the return type, and
- * the description and examples say what it does.
+ * the description and examples say what it does. Each example keeps its bare
+ * `call`, which is what inserting it writes.
  */
 export type FunctionOption = { name: string } & Pick<
   FunctionDoc,
@@ -22,17 +23,32 @@ export type FunctionOption = { name: string } & Pick<
 >;
 
 /**
- * The functions half, resolved per OPENING like {@link FieldOptions}: what the
- * expression at the caret can be wrapped in, and how a choice is applied. The
- * wrap target is fixed when the list opens and `apply` closes over it, so the
- * choice lands around what the author was pointing at, whatever focus did
- * since. `null` means the caret is in no `${}` — there is nothing to wrap.
+ * The functions that offer an example a field accepts (#1413), each keeping
+ * only those examples, and the mode the chosen one is inserted in — the same
+ * mode, and the same filter, a reference gets in that field.
  */
-export type WrapOptions = { functions: FunctionOption[]; apply: (name: string) => void } | null;
+export type ExampleChoices = { mode: InsertMode; functions: FunctionOption[] };
+
+/**
+ * The functions half, resolved per OPENING like {@link FieldOptions}, by where
+ * the author's selection is when the list opens:
+ *  - `examples` — in no `${}`, so a function's worked example is inserted there
+ *    as a whole `${call}` (#1413);
+ *  - `wrap` — in one, so a function is put around the expression at the caret
+ *    (#864). The target is fixed when the list opens and `apply` closes over
+ *    it, so the choice lands around what the author was pointing at, whatever
+ *    focus did since;
+ *  - `null` — neither fits: an end inside quoted text, a selection across
+ *    expressions, or straight after a `$` (see `outsideExpressions`).
+ */
+export type FunctionsOptions =
+  | { kind: 'wrap'; functions: FunctionOption[]; apply: (name: string) => void }
+  | ({ kind: 'examples'; apply: (call: string) => void } & ExampleChoices)
+  | null;
 
 type Open =
   | { kind: 'refs'; options: FieldOptions }
-  | { kind: 'functions'; wrap: WrapOptions; against: string };
+  | { kind: 'functions'; options: FunctionsOptions; against: string };
 
 /**
  * The U8a expression-insert flyout: pick a `${}` reference instead of knowing
@@ -57,18 +73,20 @@ type Open =
  * from the toggle where focus actually sits after opening) closes and returns.
  *
  * FUNCTIONS (#864) are a second disclosure beside the first, not rows in it,
- * because they are a different act: a reference is INSERTED at the caret, a
- * function is put AROUND the expression the caret is in (`toUpper(X)`). A bare
- * `${name()}` would be refused at save the moment it landed, so a function is
- * never inserted on its own. The two lists share one open state — opening one
- * closes the other, so the panel never carries both.
+ * because they are a different act. Inside a `${}` a function is put AROUND
+ * the expression the caret is in (`toUpper(X)`); a bare `${name()}` would be
+ * refused at save the moment it landed. Outside every `${}` (#1413) the list
+ * offers each function's worked EXAMPLES instead, inserted at the caret as a
+ * whole `${call}` the field accepts — a working start the author edits, which
+ * inside an expression would nest. The two lists share one open state —
+ * opening one closes the other, so the panel never carries both.
  */
 export function ExpressionPicker({
   fieldName,
   describe,
   resolve,
   onSelect,
-  wrap,
+  functions: functionsProp,
 }: {
   fieldName: string;
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
@@ -87,7 +105,7 @@ export function ExpressionPicker({
    * is open CLOSES it, rather than letting a choice put back what the author
    * had since changed.
    */
-  wrap?: { value: string; resolve: () => WrapOptions };
+  functions?: { value: string; resolve: () => FunctionsOptions };
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -101,8 +119,8 @@ export function ExpressionPicker({
   // not just hidden, or editing back to the same text (an undo) would revive a
   // list resolved against a span from before. Set during render, React's
   // pattern for state derived from a changed prop: it re-renders at once.
-  if (open?.kind === 'functions' && open.against !== wrap?.value) setOpen(null);
-  const functions = open?.kind === 'functions' ? open.wrap : undefined;
+  if (open?.kind === 'functions' && open.against !== functionsProp?.value) setOpen(null);
+  const functions = open?.kind === 'functions' ? open.options : undefined;
   const functionsOpen = functions !== undefined;
 
   // Focus returns to the toggle that OPENED the list, which is where the
@@ -139,7 +157,7 @@ export function ExpressionPicker({
       >
         Insert reference
       </button>
-      {wrap && (
+      {functionsProp && (
         <button
           type="button"
           id={fnToggleId}
@@ -147,16 +165,20 @@ export function ExpressionPicker({
           className="expression-picker-toggle"
           aria-expanded={functionsOpen}
           aria-controls={functionsOpen ? fnListId : undefined}
-          aria-label={`Wrap an expression in ${fieldName} in a function`}
+          aria-label={`Functions for ${fieldName}`}
           onClick={() =>
             setOpen(
               functionsOpen
                 ? null
-                : { kind: 'functions', wrap: wrap.resolve(), against: wrap.value },
+                : {
+                    kind: 'functions',
+                    options: functionsProp.resolve(),
+                    against: functionsProp.value,
+                  },
             )
           }
         >
-          Wrap in function
+          Functions
         </button>
       )}
 
@@ -169,9 +191,62 @@ export function ExpressionPicker({
         >
           {functions === null ? (
             <p className="page-hint">
-              Put the cursor inside a {'${…}'} expression in {fieldName}, or select part of one
-              outside its quoted text, to wrap it in a function.
+              Put the cursor inside one {'${…}'} expression in {fieldName}, outside its quoted text,
+              to wrap it in a function. To insert an example, put it in plain text: not inside or
+              across a {'${…}'}, and not straight after a $.
             </p>
+          ) : functions.kind === 'examples' ? (
+            <>
+              <p className="page-hint">
+                {functions.mode === 'replace'
+                  ? `${fieldName} takes one whole expression — inserting an example REPLACES its current value.`
+                  : `Inserts a worked example at the cursor in ${fieldName}. To wrap an expression in a function instead, put the cursor inside its \${…}.`}
+              </p>
+              {functions.functions.length === 0 ? (
+                // Reachable: a field with a narrow type, or one that refuses
+                // `${}` outright, can accept no example at all.
+                <p className="page-hint">
+                  No function example fits {fieldName} — it would be refused at save.
+                </p>
+              ) : (
+                <ul>
+                  {functions.functions.map(({ name, signature, description, examples }) => (
+                    <li key={name} className="expression-picker-example">
+                      <FunctionHead
+                        name={name}
+                        signature={signature}
+                        description={description}
+                        descId={`${fnListId}-${name}-desc`}
+                      />
+                      {examples.map(({ call, result }, i) => (
+                        <button
+                          key={call}
+                          type="button"
+                          // Named by its visible text, `Insert ${call}` — what
+                          // lands. The result is hidden from that name, so it
+                          // does not read as part of the insert, and is read
+                          // as the description, before what the function does.
+                          aria-describedby={`${fnListId}-${name}-res${i} ${fnListId}-${name}-desc`}
+                          onClick={() => {
+                            functions.apply(call);
+                            close();
+                          }}
+                        >
+                          <span className="expression-picker-type">Insert {`\${${call}}`}</span>{' '}
+                          <span
+                            id={`${fnListId}-${name}-res${i}`}
+                            className="expression-picker-type"
+                            aria-hidden="true"
+                          >
+                            → {result}
+                          </span>
+                        </button>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           ) : functions.functions.length === 0 ? (
             // Reachable: a field with a narrow type, or an expression that is
             // already refused, can leave no function that adds nothing new.
@@ -182,6 +257,7 @@ export function ExpressionPicker({
             <>
               <p className="page-hint">
                 Wraps the expression at the cursor in {fieldName} — or the part of it you selected.
+                To insert an example instead, put the cursor outside every {'${…}'}.
               </p>
               <ul>
                 {functions.functions.map(({ name, signature, description, examples }) => (
@@ -204,16 +280,19 @@ export function ExpressionPicker({
                         close();
                       }}
                     >
-                      <span className="expression-picker-name">{name}</span>
-                      <span className="expression-picker-type">{signature}</span>
-                      <span id={`${fnListId}-${name}-desc`}>{description}</span>
-                      {examples.map((example, i) => (
+                      <FunctionHead
+                        name={name}
+                        signature={signature}
+                        description={description}
+                        descId={`${fnListId}-${name}-desc`}
+                      />
+                      {examples.map(({ call, result }, i) => (
                         <span
-                          key={example}
+                          key={call}
                           id={`${fnListId}-${name}-ex${i}`}
                           className="expression-picker-type"
                         >
-                          Example: {example}
+                          Example: {call} → {result}
                         </span>
                       ))}
                     </button>
@@ -277,6 +356,26 @@ export function ExpressionPicker({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What one function row says about the function, whichever act the row is
+ * for: its name, its named signature, and what it does — the last under
+ * `descId`, which the row's buttons name as their description.
+ */
+function FunctionHead({
+  name,
+  signature,
+  description,
+  descId,
+}: Pick<FunctionOption, 'name' | 'signature' | 'description'> & { descId: string }) {
+  return (
+    <>
+      <span className="expression-picker-name">{name}</span>
+      <span className="expression-picker-type">{signature}</span>
+      <span id={descId}>{description}</span>
+    </>
   );
 }
 

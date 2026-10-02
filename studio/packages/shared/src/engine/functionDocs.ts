@@ -458,8 +458,11 @@ export type FunctionDoc = {
    * return type is its `→` tail.
    */
   signature: string;
-  /** Each example as `call → result`, the result printed as JSON. */
-  examples: string[];
+  /**
+   * Each example's bare `call`, which is what an author can insert as
+   * `${call}`, and its `result` printed as JSON. Shown as `call → result`.
+   */
+  examples: { call: string; result: string }[];
 };
 
 export function functionDoc(name: string): FunctionDoc {
@@ -471,6 +474,9 @@ export function functionDoc(name: string): FunctionDoc {
   return {
     description: doc.description,
     signature: formatSignature(name, doc.params),
-    examples: doc.examples.map(({ expr, result }) => `${expr} → ${JSON.stringify(result)}`),
+    examples: doc.examples.map(({ expr, result }) => ({
+      call: expr,
+      result: JSON.stringify(result),
+    })),
   };
 }

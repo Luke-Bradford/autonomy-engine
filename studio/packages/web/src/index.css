@@ -3975,6 +3975,23 @@ button.danger {
   color: var(--muted);
 }
 
+/* #1413 — outside every `${}`, a row is a function's name, signature and
+   description as text, with one button per example under it: the example is
+   what is inserted, so it is the only thing to press. */
+.expression-picker-list li.expression-picker-example {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.expression-picker-list li.expression-picker-example button {
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 /* The `default()` wrapping is a real property of the author's graph, not a
    detail to hide behind a longer string — so it is stated, and warning-coloured
    for the same reason `.contract-advisory` is. */

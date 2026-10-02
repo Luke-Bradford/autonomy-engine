@@ -80,7 +80,7 @@ test.describe('U8a — expression insert flyout', () => {
     for (let i = to; i > from; i -= 1) await url.press('Shift+ArrowLeft');
 
     const wrap = properties(page).getByRole('button', {
-      name: 'Wrap an expression in url in a function',
+      name: 'Functions for url',
     });
     await wrap.click();
     // Offered by what the save gate accepts: a two-argument function is not.
@@ -112,6 +112,48 @@ test.describe('U8a — expression insert flyout', () => {
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
     expect(await persistedConfig(page, id, 'call')).toMatchObject({
       url: '${toLower(concat(toUpper(nodes.fetch.output.body), "x"))}',
+    });
+
+    await expectQuiet(page, problems);
+  });
+
+  test('an EXAMPLE is inserted at the caret outside every ${}, and reaches the stored version', async ({
+    page,
+  }) => {
+    // #1413 — outside an expression the same list offers worked examples. What
+    // only a real browser proves: the caret the author left survives the click
+    // on the toggle, so the example lands there and not at the end.
+    const problems = collectPageProblems(page);
+    const id = await openSeededCanvas(page, 'or22 insert an example', {
+      nodes: [
+        FETCH,
+        { id: 'call', type: 'http_request', position: { x: 260, y: 0 }, config: { method: 'GET' } },
+      ],
+      edges: [{ id: 'e1', from: 'fetch', to: 'call', on: 'success' }],
+    });
+
+    await nodeById(page, 'call').click();
+    const url = properties(page).getByRole('textbox', { name: 'Request URL' });
+    await url.fill('https://a.test/?q=');
+    // A caret placed with the keyboard, before `?q=`, so an append would differ.
+    for (let i = 0; i < '?q='.length; i += 1) await url.press('ArrowLeft');
+
+    await properties(page).getByRole('button', { name: 'Functions for url' }).click();
+    const insert = properties(page).getByRole('button', { name: "Insert ${toUpper('hello')}" });
+    await expect(insert).toHaveAccessibleDescription('→ "HELLO" Converts a string to upper case.');
+    // No wrap row: there is no expression here to go around.
+    await expect(
+      properties(page).getByRole('button', { name: 'toUpper(text: string) → string' }),
+    ).toHaveCount(0);
+    await insert.click();
+    await expect(url).toHaveValue("https://a.test/${toUpper('hello')}?q=");
+    await expect(url).toBeFocused();
+
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await persistedConfig(page, id, 'call')).toMatchObject({
+      url: "https://a.test/${toUpper('hello')}?q=",
     });
 
     await expectQuiet(page, problems);

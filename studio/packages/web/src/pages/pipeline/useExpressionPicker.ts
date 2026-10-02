@@ -15,7 +15,7 @@ import {
 import { globalTypes, validateCanvas } from './canvasDoc';
 import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
 import { containerLabels } from './containerRules';
-import { applyWrap, insertModeFor, LITERAL_PROBE } from './expressionInsert';
+import { applyWrap, insertModeFor, LITERAL_PROBE, type InsertMode } from './expressionInsert';
 
 /**
  * The U8a flyout's context for one SITE — a node, or one container expression
@@ -127,6 +127,27 @@ export function useExpressionPicker(
             return issuesWith(target, '').filter((issue) => literal.includes(issue));
           })();
 
+    const modeFor = (target: PickerTarget): InsertMode =>
+      target.wholeValue ? 'replace' : insertModeFor((value) => issuesWith(target, value));
+
+    // Whether the field accepts `insert` applied in `mode`, by the field's
+    // position's own baseline. Filtered in BOTH modes. REPLACE makes the field
+    // become the insert, which is where a field's own type check rejects one.
+    // INSERT used to skip the filter on the argument that a template always
+    // resolves to a string — true of TYPES, and false of a field that refuses
+    // `${}` outright: a copy mapping's `source`/`sink` must be literal (§8),
+    // both mode probes carry that refusal equally, so such a field reads as a
+    // template and an unfiltered list offered references that were ALL refused
+    // at save (#1178). An insert candidate is probed in the shape a splice
+    // makes — the same prefix `INTERPOLATED_PROBE` uses.
+    const acceptor = (target: PickerTarget, mode: InsertMode) => {
+      const baseline = baselineFor(target);
+      return (insert: string) => {
+        const after = issuesWith(target, mode === 'replace' ? insert : `${LITERAL_PROBE}${insert}`);
+        return !after.some((issue) => !baseline.includes(issue));
+      };
+    };
+
     return {
       describe: (s: RefSuggestion) => {
         if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
@@ -142,27 +163,29 @@ export function useExpressionPicker(
       // Run only when a flyout OPENS, never per render: this validates the whole
       // doc once for the mode and once more per candidate.
       resolve: (target: PickerTarget) => {
-        const mode = target.wholeValue
-          ? 'replace'
-          : insertModeFor((value) => issuesWith(target, value));
-        const baseline = baselineFor(target);
-        // Filtered in BOTH modes. REPLACE makes the field become the reference,
-        // which is where a field's own type check rejects one. INSERT used to
-        // skip the filter on the argument that a template always resolves to a
-        // string — true of TYPES, and false of a field that refuses `${}`
-        // outright: a copy mapping's `source`/`sink` must be literal (§8), both
-        // mode probes carry that refusal equally, so such a field reads as a
-        // template and an unfiltered list offered references that were ALL
-        // refused at save (#1178). An insert candidate is probed in the shape a
-        // splice makes — the same prefix `INTERPOLATED_PROBE` uses.
-        const shaped = (insert: string) =>
-          mode === 'replace' ? insert : `${LITERAL_PROBE}${insert}`;
+        const mode = modeFor(target);
+        const accepts = acceptor(target, mode);
+        return { mode, suggestions: suggestionsFor(target).filter((s) => accepts(s.insert)) };
+      },
+      // #1413 — a function's worked examples, offered where the caret is in no
+      // `${}`: each is inserted as a whole `${call}`, exactly as a reference is,
+      // so it is judged by the same probe and mode. An example the field would
+      // refuse is not offered, and a function left with none is not listed.
+      examples: (target: PickerTarget) => {
+        const mode = modeFor(target);
+        const accepts = acceptor(target, mode);
         return {
           mode,
-          suggestions: suggestionsFor(target).filter((s) => {
-            const after = issuesWith(target, shaped(s.insert));
-            return !after.some((issue) => !baseline.includes(issue));
-          }),
+          functions: listFunctions()
+            .map((name) => {
+              const doc = functionDoc(name);
+              return {
+                name,
+                ...doc,
+                examples: doc.examples.filter(({ call }) => accepts(`\${${call}}`)),
+              };
+            })
+            .filter((fn) => fn.examples.length > 0),
         };
       },
       // #864 — the FUNCTIONS half, under the same no-false-offer rule and by the
