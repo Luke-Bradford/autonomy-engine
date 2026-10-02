@@ -8,7 +8,7 @@ import { ApiError } from '../api/client';
 import * as download from '../api/download';
 import * as portability from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
-import { answerConfirm } from '../testing/confirmDialog';
+import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 
 // Network calls only; the shared schemas stay REAL, so the client-side checks
 // run exactly as they ship.
@@ -406,11 +406,10 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     expect(action).toBeDisabled();
 
     const box = within(dialog).getByRole('textbox', { name: 'Type apiUrl to confirm' });
-    await user.type(box, 'apiUrL');
+    setConfirmName('apiUrl', 'apiUrL');
     expect(box).toHaveValue('apiUrL');
     expect(action).toBeDisabled();
-    await user.clear(box);
-    await user.type(box, 'apiUrl');
+    setConfirmName('apiUrl', 'apiUrl');
     expect(box).toHaveValue('apiUrl');
     expect(action).toBeEnabled();
     expect(deleteMock).not.toHaveBeenCalled();

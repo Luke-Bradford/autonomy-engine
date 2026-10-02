@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { pressInConfirm, setConfirmName } from '../../testing/confirmDialog';
 import { useEffect, useState, type ReactNode } from 'react';
 import { splitConfirmMessage } from './splitConfirmMessage';
 import { useConfirm, type ConfirmRequest } from './useConfirm';
@@ -76,9 +77,9 @@ describe('useConfirm', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Ask' }));
     await screen.findByRole('alertdialog');
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('false,false');
+    pressInConfirm('Escape');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('false,false'));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
   });
 
   it('keeps the action disabled until the exact name is typed', async () => {
@@ -90,19 +91,19 @@ describe('useConfirm', () => {
     const input = screen.getByLabelText('Type Nightly to confirm');
     await waitFor(() => expect(input).toHaveFocus());
     expect(action).toBeDisabled();
-    await user.type(input, 'nightly{Enter}');
+    setConfirmName('Nightly', 'nightly');
+    pressInConfirm('Enter', input);
     expect(action).toBeDisabled();
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
-    await user.clear(input);
-    await user.type(input, 'Nightly');
+    setConfirmName('Nightly', 'Nightly');
+    expect(input).toHaveValue('Nightly');
     expect(action).toBeEnabled();
-    await user.keyboard('{Enter}');
-    expect(screen.getByRole('status')).toHaveTextContent('true');
+    pressInConfirm('Enter', input);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('true'));
   });
 
   it('refuses a second question while one is open, and leaves the open one alone', async () => {
     let ask: Ask | null = null;
-    const user = userEvent.setup();
     render(
       <Capture
         onReady={(c) => {
@@ -115,7 +116,7 @@ describe('useConfirm', () => {
       first = ask!({ ...DELETE, typeToConfirm: 'Nightly' });
     });
     const input = await screen.findByLabelText('Type Nightly to confirm');
-    await user.type(input, 'Night');
+    setConfirmName('Nightly', 'Night');
     let second: Promise<boolean> | null = null;
     act(() => {
       second = ask!({ message: 'Delete pipeline "Other"?', confirmLabel: 'Delete' });
@@ -126,7 +127,8 @@ describe('useConfirm', () => {
       screen.getByRole('alertdialog', { name: 'Delete pipeline "Nightly"?' }),
     ).toBeInTheDocument();
     expect(input).toHaveValue('Night');
-    await user.type(input, 'ly{Enter}');
+    setConfirmName('Nightly', 'Nightly');
+    pressInConfirm('Enter', input);
     await expect(first!).resolves.toBe(true);
   });
 
@@ -138,7 +140,7 @@ describe('useConfirm', () => {
       await user.click(ask);
       await screen.findByRole('alertdialog');
       if (answer === 'cancel') await user.click(screen.getByRole('button', { name: 'Cancel' }));
-      else if (answer === 'escape') await user.keyboard('{Escape}');
+      else if (answer === 'escape') pressInConfirm('Escape');
       else await user.click(screen.getByRole('button', { name: 'Delete' }));
       await waitFor(() => expect(ask).toHaveFocus());
     }

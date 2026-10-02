@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { UserEvent } from '@testing-library/user-event';
 
 /**
@@ -24,4 +24,28 @@ export async function answerConfirm(user: UserEvent, answer: 'accept' | 'cancel'
   await user.click(target);
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
   return text;
+}
+
+/*
+ * Typing and keys INTO the dialog go through `fireEvent`, not `user.type` /
+ * `user.keyboard`. In jsdom, tabster (Fluent's focus manager) sees user-event's
+ * focus calls as user focus, schedules its 100 ms "pull focus back into the
+ * modal" timer, and — with no layout, so no element it can call focusable —
+ * BLURS the focused control instead. Keystrokes after that land on <body>: a
+ * name typed as "Nightly" arrives as "Ni" about one run in two under load. In a
+ * browser the same timer finds the control and refocuses it, so this is a jsdom
+ * artifact; real keyboard behaviour is covered by e2e/confirm-dialog.spec.ts.
+ */
+
+/** Set the dialog's `Type <name> to confirm` box to `value`. */
+export function setConfirmName(name: string, value: string): void {
+  const dialog = screen.getByRole('alertdialog');
+  fireEvent.change(within(dialog).getByLabelText(`Type ${name} to confirm`), {
+    target: { value },
+  });
+}
+
+/** Press a key on the open dialog (Escape answers Cancel), or on `target` inside it. */
+export function pressInConfirm(key: 'Escape' | 'Enter', target?: HTMLElement): void {
+  fireEvent.keyDown(target ?? screen.getByRole('alertdialog'), { key });
 }

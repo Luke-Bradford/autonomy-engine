@@ -6,7 +6,7 @@ import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
-import { answerConfirm } from '../testing/confirmDialog';
+import { answerConfirm, pressInConfirm } from '../testing/confirmDialog';
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
@@ -183,7 +183,7 @@ describe('PipelinesPage', () => {
 
       await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
       await screen.findByRole('alertdialog');
-      await user.keyboard('{Escape}');
+      pressInConfirm('Escape');
       await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 
       expect(archiveMock).not.toHaveBeenCalled();

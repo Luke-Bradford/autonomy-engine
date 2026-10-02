@@ -7,7 +7,7 @@ import { FactoryResources } from './FactoryResources';
 import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
 import { renderWithRouter } from '../../testing/renderWithRouter';
-import { answerConfirm } from '../../testing/confirmDialog';
+import { answerConfirm, pressInConfirm } from '../../testing/confirmDialog';
 import { hubById } from '../../shell/hubs';
 import * as pipelinesApi from '../../api/pipelines';
 import * as downloadApi from '../../api/download';
@@ -555,7 +555,7 @@ describe('FactoryResources — row actions', () => {
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
     await screen.findByRole('alertdialog');
-    await user.keyboard('{Escape}');
+    pressInConfirm('Escape');
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 
     expect(deleteMock).not.toHaveBeenCalled();

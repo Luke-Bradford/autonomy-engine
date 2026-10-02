@@ -9,7 +9,7 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
-import { answerConfirm } from '../testing/confirmDialog';
+import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
 import { ApiError } from '../api/client';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
@@ -1058,11 +1058,12 @@ describe('ConnectionsPage', () => {
 
       // A near miss does not unlock it — the whole name, exactly.
       const box = within(dialog).getByLabelText('Type Local store to confirm');
-      await user.type(box, 'Local stor');
+      expect(box).toBeInTheDocument();
+      setConfirmName('Local store', 'Local stor');
       expect(action).toBeDisabled();
       expect(deleteMock).not.toHaveBeenCalled();
 
-      await user.type(box, 'e');
+      setConfirmName('Local store', 'Local store');
       expect(action).toBeEnabled();
 
       await answerConfirm(user, 'accept');
