@@ -483,8 +483,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // bytes); it is the first activity to opt into the read-only idempotent case
     // the fail-safe `false` default anticipates. Outputs the file `content` (as
     // UTF-8 text) and the canonical `path` actually read. `configSchema` is
-    // palette metadata; the adapter validates the live request (the `${}`-
-    // substituted `path`). No `secretSinkFields` — `fs` is credential-less.
+    // also the `dispatchConfigSchema`: the adapter validates the live (`${}`-
+    // substituted) `path` with it, and the save gate a literal one (#1480). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_READ_ACTIVITY_TYPE,
     title: 'Read File',
     description: 'Read the contents of a file on a file system connection.',
@@ -503,8 +503,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // double write on resume (fail-safe). Overwrites the target (truncate) with
     // the `${}`-substituted `content` as UTF-8 text; outputs the `bytesWritten`
     // and the canonical `path`. Bounded by the same server-side root/traversal
-    // guard as the read. `configSchema` is palette metadata; the adapter
-    // validates the live request. No `secretSinkFields` — `fs` is credential-less.
+    // guard as the read. The adapter validates the live request against
+    // `dispatchConfigSchema`, as the save gate does a literal one (#1480). No `secretSinkFields` — `fs` is credential-less.
     type: FILE_WRITE_ACTIVITY_TYPE,
     title: 'Write File',
     description: 'Write text to a file on a file system connection.',
@@ -522,8 +522,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // copy overwrites `dest` (a side effect), so the reconciler FREEZES an
     // in-flight copy rather than risk a partial re-copy on resume. The adapter
     // STREAMS source→temp→rename (no in-memory size cap, unlike `file_read`), so
-    // an arbitrarily large file copies without OOM. `configSchema` is palette
-    // metadata; the adapter validates the live `${}`-substituted request.
+    // an arbitrarily large file copies without OOM. The adapter validates the
+    // live `${}`-substituted request against `dispatchConfigSchema`, as the save
+    // gate does a literal one (#1480).
     type: FILE_COPY_ACTIVITY_TYPE,
     title: 'Copy File',
     description: 'Copy a file to another path on a file system connection.',
