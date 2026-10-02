@@ -158,6 +158,7 @@ import { useUnsavedChangesGuard } from '../../lib/form/useUnsavedChangesGuard';
 import { leavesPath } from '../../lib/form/leavesPath';
 import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { FormSection } from '../../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
 
@@ -2446,7 +2447,7 @@ function ContainerSection({
   // The section's body is already the flex column these controls want, so no
   // wrapper of their own is needed.
   return (
-    <FormSection title="Container">
+    <FormSection title="Container" hint={FORM_SECTION_HINTS.node.container}>
       {/* The visible label matches the select's name, so a voice command that
           reads the label reaches the control (WCAG 2.5.3). */}
       <LabelledControl label="Container membership">
@@ -3112,7 +3113,7 @@ export function NodePanel({
                     it does. Apply, Duplicate and Delete act on the whole node,
                     so they stay after every section. */}
                 {hasBindings && (
-                  <FormSection title="Bindings">
+                  <FormSection title="Bindings" hint={FORM_SECTION_HINTS.node.bindings}>
                     {entry && !paired && entry.connectionKinds.length > 0 && (
                       <LabelledControl label="Connection">
                         {(id) => (
@@ -3276,7 +3277,10 @@ export function NodePanel({
                 )}
                 <ContainerSection store={store} nodeId={nodeId} />
 
-                <FormSection title="Activity settings">
+                <FormSection
+                  title="Activity settings"
+                  hint={FORM_SECTION_HINTS.node.activitySettings}
+                >
                   <ConfigEditor
                     editor={editor}
                     kindLabel={entry?.title ?? nodeType}

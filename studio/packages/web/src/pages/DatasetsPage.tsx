@@ -54,6 +54,7 @@ import { LabelledControl } from '../lib/LabelledControl';
 import { connectionOptionLabel } from '../lib/resourceOptionLabel';
 import { FormDrawer } from '../lib/form/FormDrawer';
 import { FormSection } from '../lib/form/FormSection';
+import { FORM_SECTION_HINTS } from '../lib/form/sectionHints';
 import { RequiredMark } from '../lib/form/RequiredMark';
 import { FieldError } from '../lib/form/FieldError';
 import { JsonEditor } from '../lib/form/JsonEditor';
@@ -823,7 +824,7 @@ function DatasetForm({
         </>
       }
     >
-      <FormSection title="Basics">
+      <FormSection title="Basics" hint={FORM_SECTION_HINTS.dataset.basics}>
         <label>
           <span>
             Name
@@ -913,7 +914,7 @@ function DatasetForm({
         )}
       </FormSection>
 
-      <FormSection title="Dataset">
+      <FormSection title="Dataset" hint={FORM_SECTION_HINTS.dataset.dataset}>
         {/* The mode toggle is hidden, not disabled, for a kind with no reader
             (`kindHasNoReader`): a typed form for a kind every copy refuses at
             dispatch would present a dataset as ready to copy, and a control that
@@ -966,7 +967,7 @@ function DatasetForm({
         </ConfigEditor>
       </FormSection>
 
-      <FormSection title="Columns">
+      <FormSection title="Columns" hint={FORM_SECTION_HINTS.dataset.columns}>
         <LabelledControl
           label={
             <>

@@ -92,6 +92,12 @@ required marks and display names; its layout is its own, below.
   rule activities follow: one sentence of at most 120 characters, not the name, no two the same. A
   kind that is not built yet says "Planned:" rather than claim a behaviour (`continuous`); the form's
   own note under the picker says why.
+- **Every form section says what it holds, in one line under its title** (#1413): `FormSection`'s
+  `hint` is required, so a section without one does not compile. The copy lives in
+  `FORM_SECTION_HINTS` (`web/src/lib/form/sectionHints.ts`), held to the same house rule by
+  `sectionHints.test.ts`. The line is the group's `aria-describedby`. A hint never restates a note
+  already inside its section, which a screen reader would read twice. A collapsed section's hint
+  shows once it is opened.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).

@@ -159,6 +159,13 @@ test.describe('U7 — per-activity node config form', () => {
     await expect(
       section('Activity settings').getByRole('textbox', { name: 'Request URL', exact: true }),
     ).toBeVisible();
+    // #1413 — each section says what it holds, as the group's description.
+    await expect(section('Bindings')).toHaveAccessibleDescription(
+      'The connections and datasets this activity uses, and any settings it overrides on them.',
+    );
+    await expect(section('Activity settings')).toHaveAccessibleDescription(
+      'What this activity does when it runs; the settings follow from its type.',
+    );
 
     // One read of every computed value. The rule is on each later section's
     // HEADING; the section body keeps the panel's own gap; the activity's fields
