@@ -73,10 +73,7 @@ test('#1423 — two parallel Copy branches into one sqlite file both land', asyn
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1423a-')));
   try {
     /* The demo's shape: two branches, each writing its own table in the SAME
-       file. The source is a CSV rather than a table in that same store: with a
-       same-store source, the second branch was measured NOT to be dispatched
-       until the first had finished — recorded on the same ticket as the root
-       case below, and not relied on here. */
+       file, from one CSV. */
     const csv = join(root, 'orders.csv');
     const lines = ['id,name'];
     for (let i = 1; i <= ROWS; i += 1) lines.push(`${i},row-${i}`);
@@ -108,8 +105,8 @@ test('#1423 — two parallel Copy branches into one sqlite file both land', asyn
     });
     // Fanned out from one upstream node, as the demo's branches are. Two ROOT
     // copies were measured to run one after the other (the second dispatched
-    // only once the first finished), so a root pair never contends — that is
-    // on its own ticket, and this shape is the one that does.
+    // only once the first finished), so a root pair never contends — that is #1488,
+    // and this shape is the one that does.
     const { pipelineVersionId } = await seedVersion(page, `${tag} pipeline`, {
       nodes: [
         { id: 'start', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 60 } },

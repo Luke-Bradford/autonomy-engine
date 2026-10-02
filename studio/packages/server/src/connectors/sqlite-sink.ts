@@ -233,7 +233,9 @@ function certainlyNotNull(
  *
  * Process-wide, deliberately — not per run: two concurrent runs writing one
  * store collide exactly the same way. Another PROCESS writing the store is still
- * met by the busy timeout and reported `transient`, unchanged.
+ * met by the busy timeout and reported `transient`, unchanged. So is a streaming
+ * READER of the store in this process: it holds a shared lock across its awaits,
+ * and a commit that meets it can still fail the same way — #1489.
  */
 const storeWriteQueue = new KeyedQueue();
 
