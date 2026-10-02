@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 
 /**
  * #1060 — the standalone secret vault, end to end through the browser.
@@ -49,20 +50,20 @@ test.describe('#1060 the secrets vault has a front end', () => {
     // closes and the page refetches rather than pushing local state.
     await expect(page.getByRole('cell', { name: NAME, exact: true })).toBeVisible();
 
-    const deleteButton = page.getByRole('button', { name: `Delete ${NAME}`, exact: true });
+    const menuButton = rowMenuButton(page, NAME);
 
     // The confirmation is the only place the cost of deleting is stated, and
     // the route cannot state it — read the real dialog.
-    await deleteButton.click();
+    await chooseRowAction(page, 'Delete', NAME);
     const confirmText = await answerConfirm(page, 'accept');
 
-    await expect(deleteButton).toHaveCount(0);
+    await expect(menuButton).toHaveCount(0);
     expect(confirmText).toContain(`{"$secret":"${NAME}"}`);
 
     // Gone from the server, not just from this render: a reload re-reads it.
     await page.reload();
     await page.getByRole('heading', { name: 'Secrets' }).waitFor();
-    await expect(page.getByRole('button', { name: `Delete ${NAME}`, exact: true })).toHaveCount(0);
+    await expect(rowMenuButton(page, NAME)).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
@@ -121,11 +122,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
       // In a `finally` for the reason the test below states: `reset-state.mjs`
       // wipes once per RUN, so a row left behind 409s the next attempt's
       // CREATE and reads as "create is broken".
-      await page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }).click();
+      await chooseRowAction(page, 'Delete', ROTATE_NAME);
       await answerConfirm(page, 'accept');
-      await expect(
-        page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }),
-      ).toHaveCount(0);
+      await expect(rowMenuButton(page, ROTATE_NAME)).toHaveCount(0);
     }
 
     await expectQuiet(page, problems);
@@ -167,11 +166,9 @@ test.describe('#1060 the secrets vault has a front end', () => {
       // The form still holds what was typed, so Cancel asks first (#1396).
       await page.getByRole('button', { name: 'Cancel' }).click();
       await page.getByRole('button', { name: 'Discard changes' }).click();
-      await page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }).click();
+      await chooseRowAction(page, 'Delete', DUP_NAME);
       await answerConfirm(page, 'accept');
-      await expect(
-        page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }),
-      ).toHaveCount(0);
+      await expect(rowMenuButton(page, DUP_NAME)).toHaveCount(0);
     }
 
     // This test PROVOKES the 409, so the browser's own network entry for it is
@@ -202,12 +199,14 @@ test.describe('#1060 the secrets vault has a front end', () => {
       const geometry = await page.evaluate((name) => {
         const table = document.querySelector('table')!.getBoundingClientRect();
         const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
-        const del = document.querySelector(`[aria-label="Delete ${name}"]`)!;
+        // #1397 — Delete is in the row's ⋯ menu; its button must stay clickable
+        // (the point lands on its icon, hence `contains`).
+        const del = document.querySelector(`[aria-label="Actions for ${name}"]`)!;
         const box = del.getBoundingClientRect();
         const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
         return {
           drawerRightOfTable: aside.left >= table.right,
-          deleteReachable: hit === del,
+          rowMenuReachable: hit !== null && del.contains(hit),
           sections: [...document.querySelectorAll('.form-drawer legend')].map((l) => l.textContent),
           actions: [...document.querySelectorAll('.form-drawer-footer button')].map(
             (b) => b.textContent,
@@ -216,7 +215,7 @@ test.describe('#1060 the secrets vault has a front end', () => {
       }, DRAWER_NAME);
       expect(geometry).toEqual({
         drawerRightOfTable: true,
-        deleteReachable: true,
+        rowMenuReachable: true,
         sections: ['Basics', 'Value'],
         actions: ['Cancel', 'Replace value'],
       });

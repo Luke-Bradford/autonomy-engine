@@ -3,6 +3,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #844 GL6 — a workspace global parameter is a git resource and a portable
@@ -78,7 +79,7 @@ test('a global parameter commits to git, and exports and imports as a file', asy
   // ── export to a file, delete, import the file back ─────────────────────────
   await page.goto('/#/manage/global-params');
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: `Export ${NAME}` }).click();
+  await chooseRowAction(page, 'Export', NAME);
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^global-param-e2e-844-gl6-gp_[\w-]+\.json$/);
   const file = (await download.path())!;

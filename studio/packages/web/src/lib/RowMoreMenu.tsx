@@ -99,7 +99,9 @@ export function RowMoreMenu({
           ))}
           {destructive && (
             <>
-              <MenuDivider />
+              {/* Separates Delete from the rest; a menu holding only Delete
+                  (Secrets) would otherwise open on a bare line. */}
+              {actions.length > 0 && <MenuDivider />}
               <MenuItem
                 className="row-menu__danger"
                 disabled={destructive.disabled}

@@ -31,6 +31,7 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { payloadSignature } from './pipeline/configForm';
 import { formatWhen } from './runs/format';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
  *  value (#1061). The `id: string | null` discriminator is the shape
@@ -120,7 +121,7 @@ export function SecretsPage() {
   }, [refresh]);
 
   const onDelete = useCallback(
-    async (secret: NamedSecret) => {
+    async (secret: NamedSecret, origin: RowMenuOrigin) => {
       // Deleting RETIRES the name, which is a different act from replacing the
       // value behind it (#1061 gave that its own route and button). What it
       // costs is the same either way, so the confirmation states it: every node
@@ -132,6 +133,7 @@ export function SecretsPage() {
           `dispatch until a secret of that name exists again.\n\n` +
           `To change its VALUE and keep the name, use Replace instead.`,
         confirmLabel: 'Delete',
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       try {
@@ -203,22 +205,28 @@ export function SecretsPage() {
                       shows the name read-only, and takes an explicit submit —
                       and a dialog over a form the operator has just filled in
                       is noise rather than a check. */}
-                      <button
-                        type="button"
-                        onClick={(e) =>
-                          drawer.openFrom(e.currentTarget, () => openForm(formForReplace(secret)))
-                        }
-                        aria-label={`Replace ${secret.name}`}
-                      >
-                        Replace
-                      </button>{' '}
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(secret)}
-                        aria-label={`Delete ${secret.name}`}
-                      >
-                        Delete
-                      </button>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          onClick={(e) =>
+                            drawer.openFrom(e.currentTarget, () => openForm(formForReplace(secret)))
+                          }
+                          aria-label={`Replace ${secret.name}`}
+                        >
+                          Replace
+                        </button>
+                        {/* #1397 — Replace is the row's one inline action; Delete
+                            is in its menu, alone, so it is never one stray
+                            click away. */}
+                        <RowMoreMenu
+                          name={secret.name}
+                          actions={[]}
+                          destructive={{
+                            label: 'Delete',
+                            onSelect: (origin) => void onDelete(secret, origin),
+                          }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

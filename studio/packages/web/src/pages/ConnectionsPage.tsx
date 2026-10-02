@@ -78,6 +78,7 @@ import { allowlistChanged, connectionAllowlistSubject } from './overrideAllowlis
 import { ConnectionKindName, KindSelect } from '../lib/KindName';
 import { CONNECTION_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const KINDS = CONNECTION_KINDS;
 
@@ -349,10 +350,9 @@ export function ConnectionsPage() {
    * and an import turns that boolean into the `requiresSecret` attention item
    * the panel below renders. That is the server's guarantee, not this page's.
    */
-  /* #960 — per-row single-flight. The visible label deliberately does NOT
-     change to "Exporting…": these buttons carry an `aria-label` naming the row,
-     and a visible string absent from the accessible name violates WCAG 2.5.3
-     (label in name). `disabled` + `aria-busy` is the affordance. */
+  /* #960 — per-row single-flight. Since #1397 Export is an item in the row's
+     menu, which shows it disabled while that row's export is in flight; the
+     guard still refuses a second start, whatever asks. */
   const { active: exporting, run: runExport } = useBusyAction();
 
   const onExport = useCallback(
@@ -417,7 +417,7 @@ export function ConnectionsPage() {
   const { run: runDelete } = useBusyAction();
 
   const onDelete = useCallback(
-    (conn: ConnectionPublic) =>
+    (conn: ConnectionPublic, origin: RowMenuOrigin) =>
       runDelete(conn.id, async () => {
         /**
          * #1211 — TWO reads now, CONCURRENTLY and independently failable. The
@@ -481,6 +481,8 @@ export function ConnectionsPage() {
           message,
           confirmLabel: 'Delete',
           ...(hasDependants ? { typeToConfirm: conn.name } : {}),
+          // The menu item that asked unmounted while the reads above ran.
+          restoreFocus: origin.find,
         });
         if (!confirmed) return;
         try {
@@ -545,29 +547,33 @@ export function ConnectionsPage() {
                       <ConnectionKindName kind={conn.kind} />
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        onClick={(e) => drawer.openFrom(e.currentTarget, () => openEditForm(conn))}
-                        aria-label={`Edit ${conn.name}`}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onExport(conn)}
-                        aria-label={`Export ${conn.name}`}
-                        disabled={exporting.has(conn.id)}
-                        aria-busy={exporting.has(conn.id)}
-                      >
-                        Export
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(conn)}
-                        aria-label={`Delete ${conn.name}`}
-                      >
-                        Delete
-                      </button>
+                      {/* #1397 — Edit is the row's one inline action; the rest
+                          are in its menu, Delete last. */}
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          onClick={(e) =>
+                            drawer.openFrom(e.currentTarget, () => openEditForm(conn))
+                          }
+                          aria-label={`Edit ${conn.name}`}
+                        >
+                          Edit
+                        </button>
+                        <RowMoreMenu
+                          name={conn.name}
+                          actions={[
+                            {
+                              label: 'Export',
+                              onSelect: () => void onExport(conn),
+                              disabled: exporting.has(conn.id),
+                            },
+                          ]}
+                          destructive={{
+                            label: 'Delete',
+                            onSelect: (origin) => void onDelete(conn, origin),
+                          }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

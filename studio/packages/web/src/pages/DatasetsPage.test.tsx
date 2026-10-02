@@ -8,7 +8,7 @@ import * as connectionsApi from '../api/connections';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
-import { ROW_EDIT } from '../testing/rowActions';
+import { ROW_EDIT, chooseRowAction } from '../testing/rowActions';
 import { answerConfirm } from '../testing/confirmDialog';
 
 // Mock only the network calls; `DatasetWriteSchema` stays REAL so the form's
@@ -282,7 +282,7 @@ describe('DatasetsPage', () => {
     exportMock.mockResolvedValue('{"kind":"dataset","canonical":true}');
     renderWithDataRouter(<DatasetsPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
+    await chooseRowAction(user, 'Orders', 'Export');
 
     expect(exportMock).toHaveBeenCalledWith(dataset().id);
     expect(downloadMock).toHaveBeenCalledWith(
@@ -297,7 +297,7 @@ describe('DatasetsPage', () => {
     exportMock.mockRejectedValue(new Error('its store connection "conn_1" no longer exists'));
     renderWithDataRouter(<DatasetsPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export Orders' }));
+    await chooseRowAction(user, 'Orders', 'Export');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /Could not export .*Orders.*no longer exists/,
@@ -316,14 +316,14 @@ describe('DatasetsPage', () => {
     );
   });
 
-  /* #1253 — Edit names its row, as Delete already did; #1143's Export does too. */
+  /* #1253 — Edit names its row; since #1397 Export and Delete are in the row's
+     menu, whose button names the row too. */
   it('names the row on every row action, Edit included', async () => {
     listMock.mockResolvedValue([dataset()]);
     renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
     expect(screen.getByRole('button', { name: 'Edit Orders' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete Orders' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Export Orders' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Orders' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 
@@ -566,15 +566,16 @@ describe('DatasetsPage', () => {
     renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
-    await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await chooseRowAction(user, 'Orders', 'Delete');
     expect(await answerConfirm(user, 'cancel')).toContain('fail at dispatch');
     expect(deleteMock).not.toHaveBeenCalled();
-    // Declining hands focus back to the button that asked.
+    // Declining hands focus back to the row's ⋯ (the menu item that asked has
+    // unmounted).
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Delete Orders' })).toHaveFocus(),
+      expect(screen.getByRole('button', { name: 'Actions for Orders' })).toHaveFocus(),
     );
 
-    await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await chooseRowAction(user, 'Orders', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('ds_1'));
   });
@@ -585,7 +586,7 @@ describe('DatasetsPage', () => {
     renderWithDataRouter(<DatasetsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
     expect(form()).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await chooseRowAction(user, 'Orders', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Dataset form' })).toBeNull());
   });
