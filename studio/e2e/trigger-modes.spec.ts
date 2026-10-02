@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #854 — the trigger modes that were selectable but not configurable.
@@ -56,10 +57,7 @@ test.describe('#854 event mode', () => {
     expect(created.event).toEqual({ name: 'order.placed' });
 
     // Re-opening rebuilds the same form from what was persisted.
-    await page
-      .getByRole('row', { name: /On order placed/ })
-      .getByRole('button', { name: /^Edit / })
-      .click();
+    await chooseRowAction(page.getByRole('row', { name: /On order placed/ }), 'Edit');
     await expect(triggerForm(page).getByLabel('Event', { exact: true })).toHaveValue(
       'order.placed',
     );
@@ -87,7 +85,7 @@ test.describe('#854 event mode', () => {
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded subscription/ });
-    await row.getByRole('button', { name: /^Edit / }).click();
+    await chooseRowAction(row, 'Edit');
     const form = triggerForm(page);
     await expect(form.getByLabel('Event', { exact: true })).toHaveValue('order.placed');
 
@@ -146,10 +144,7 @@ test.describe('#854 tumbling mode', () => {
     expect(created.window).toMatchObject({ frequency: 'hour', interval: 2 });
     expect(typeof (created.window as { startTime: unknown }).startTime).toBe('string');
 
-    await page
-      .getByRole('row', { name: /Two-hourly windows/ })
-      .getByRole('button', { name: /^Edit / })
-      .click();
+    await chooseRowAction(page.getByRole('row', { name: /Two-hourly windows/ }), 'Edit');
     const reopened = triggerForm(page);
     await expect(reopened.getByLabel('Window frequency')).toHaveValue('hour');
     await expect(reopened.getByLabel(/Each window covers/)).toHaveValue('2');
@@ -202,10 +197,7 @@ test.describe('#854 tumbling mode', () => {
       'sizeInSeconds',
     );
 
-    await page
-      .getByRole('row', { name: /Retrying windows/ })
-      .getByRole('button', { name: /^Edit / })
-      .click();
+    await chooseRowAction(page.getByRole('row', { name: /Retrying windows/ }), 'Edit');
     const reopened = triggerForm(page);
     await expect(reopened.getByLabel(/Retry a failed window/)).toHaveValue('3');
     await expect(reopened.getByLabel(/Seconds between retries/)).toHaveValue('120');
@@ -237,7 +229,7 @@ test.describe('#854 tumbling mode', () => {
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded windows/ });
-    await row.getByRole('button', { name: /^Edit / }).click();
+    await chooseRowAction(row, 'Edit');
     const form = triggerForm(page);
     await expect(form.getByLabel('Window frequency')).toHaveValue('hour');
 

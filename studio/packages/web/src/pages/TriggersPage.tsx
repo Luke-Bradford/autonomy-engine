@@ -97,6 +97,7 @@ import { payloadSignature } from './pipeline/configForm';
 import { KindSelect, TriggerModeName } from '../lib/KindName';
 import { TRIGGER_MODE_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const MODES = TriggerModeSchema.options;
 const POLICIES = ConcurrencyPolicySchema.options;
@@ -404,10 +405,11 @@ export function TriggersPage() {
   );
 
   const onDelete = useCallback(
-    async (t: TriggerPublic) => {
+    async (t: TriggerPublic, origin: RowMenuOrigin) => {
       const confirmed = await confirm({
         message: `Delete trigger "${t.name}"?`,
         confirmLabel: 'Delete',
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       try {
@@ -432,10 +434,9 @@ export function TriggersPage() {
    * both come back as attention items on import, which the panel below
    * renders. That is the server's guarantee, not this page's.
    */
-  /* #960 — per-row single-flight. The visible label deliberately does NOT
-     change to "Exporting…": these buttons carry an `aria-label` naming the row,
-     and a visible string absent from the accessible name violates WCAG 2.5.3
-     (label in name). `disabled` + `aria-busy` is the affordance. */
+  /* #960 — per-row single-flight. Since #1397 Export is an item in the row's
+     menu, which shows it disabled while that row's export is in flight; the
+     guard still refuses a second start, whatever asks. */
   const { active: exporting, run: runExport } = useBusyAction();
 
   const onExport = useCallback(
@@ -671,63 +672,58 @@ export function TriggersPage() {
                     <td>{labelFor(t.pipelineVersionId)}</td>
                     <td>{t.enabled ? 'yes' : 'no'}</td>
                     <td>
-                      {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
-                      visible label deliberately does NOT flip to "Firing…". Verbatim
-                      the rule `onExport` states earlier in this file: this button carries an
-                      `aria-label` naming the row, so a visible string absent from that
-                      accessible name violates WCAG 2.5.3 (label in name). Its sibling
-                      in this same cell already resolves it this way, and two busy
-                      treatments on two buttons in one `<td>` is the defect #1242 closed.
+                      <div className="row-actions">
+                        {/* #1247 — the busy treatment is `disabled` + `aria-busy`, and the
+                        visible label deliberately does NOT flip to "Firing…". This
+                        button carries an `aria-label` naming the row, so a visible
+                        string absent from that accessible name violates WCAG 2.5.3
+                        (label in name).
 
-                      The label is `Fire now: <name>` and NOT `Fire <name> now`, which is
-                      what it was and which failed the same rule for a second reason: 2.5.3
-                      is a literal SUBSTRING test, and infixing the row name split the
-                      visible "Fire now" in half. Lead-then-detail is the shape `runLinkLabel`
-                      and the Export button beside it already use, and it is the only one
-                      that survives the check — hence the assertion in the spec. */}
-                      <button
-                        type="button"
-                        onClick={() => void onFire(t)}
-                        disabled={firing.has(t.id)}
-                        aria-busy={firing.has(t.id)}
-                        aria-label={`Fire now: ${t.name}`}
-                      >
-                        Fire now
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) =>
-                          drawer.openFrom(e.currentTarget, () => openForm(formForEdit(t)))
-                        }
-                        aria-label={`Edit ${t.name}`}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onExport(t)}
-                        aria-label={`Export ${t.name}`}
-                        disabled={exporting.has(t.id)}
-                        aria-busy={exporting.has(t.id)}
-                      >
-                        Export
-                      </button>
-                      {t.mode === 'webhook' && (
+                        The label is `Fire now: <name>` and NOT `Fire <name> now`, which is
+                        what it was and which failed the same rule for a second reason: 2.5.3
+                        is a literal SUBSTRING test, and infixing the row name split the
+                        visible "Fire now" in half. Lead-then-detail is the shape `runLinkLabel`
+                        already uses, and it is the only one that survives the check — hence
+                        the assertion in the spec. */}
                         <button
                           type="button"
-                          onClick={() => void onProvisionSecret(t)}
-                          aria-label={`Provision webhook secret for ${t.name}`}
+                          onClick={() => void onFire(t)}
+                          disabled={firing.has(t.id)}
+                          aria-busy={firing.has(t.id)}
+                          aria-label={`Fire now: ${t.name}`}
                         >
-                          Webhook secret
+                          Fire now
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(t)}
-                        aria-label={`Delete ${t.name}`}
-                      >
-                        Delete
-                      </button>
+                        {/* #1397 — Fire now is the row's one inline action; the
+                            rest are in its menu, Delete last. */}
+                        <RowMoreMenu
+                          name={t.name}
+                          actions={[
+                            {
+                              label: 'Edit',
+                              onSelect: (origin) =>
+                                drawer.openFrom(origin.element, () => openForm(formForEdit(t))),
+                            },
+                            {
+                              label: 'Export',
+                              onSelect: () => void onExport(t),
+                              disabled: exporting.has(t.id),
+                            },
+                            ...(t.mode === 'webhook'
+                              ? [
+                                  {
+                                    label: 'Provision webhook secret',
+                                    onSelect: () => void onProvisionSecret(t),
+                                  },
+                                ]
+                              : []),
+                          ]}
+                          destructive={{
+                            label: 'Delete',
+                            onSelect: (origin) => void onDelete(t, origin),
+                          }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1182,7 +1178,7 @@ function TriggerForm({
           // Editing a trigger that stays a webhook: OMIT `webhook` so an
           // already-provisioned secret is preserved (PATCH is partial; sending
           // `webhook:null` would clear it, and this form has no secret to
-          // re-send — it is provisioned out-of-band via "Webhook secret").
+          // re-send — it is provisioned out-of-band via "Provision webhook secret").
           const { webhook: _webhook, ...patch } = parsed.data;
           void _webhook;
           await updateTrigger(form.id, patch);
@@ -1505,7 +1501,8 @@ function TriggerForm({
 
         {form.mode === 'webhook' && (
           <p className="page-hint">
-            Save the trigger, then use “Webhook secret” on its row to mint the signing secret.
+            Save the trigger, then choose “Provision webhook secret” from its row’s ⋯ menu to mint
+            the signing secret.
           </p>
         )}
 

@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #439 U14b — authoring a schedule as a structured RECURRENCE.
@@ -82,7 +83,7 @@ test.describe('U14b recurrence builder', () => {
     expect(created?.schedule).toBe('0 9 * * 1,3');
 
     // Re-opening rebuilds the SAME form from what was persisted.
-    await row.getByRole('button', { name: /^Edit / }).click();
+    await chooseRowAction(row, 'Edit');
     const reopened = triggerForm(page);
     await expect(reopened.getByLabel('Frequency')).toHaveValue('week');
     await expect(reopened.getByRole('checkbox', { name: 'Mon' })).toBeChecked();
@@ -120,7 +121,7 @@ test.describe('U14b recurrence builder', () => {
 
     const problems = await openTriggers(page);
     const row = page.getByRole('row', { name: /Seeded weekly/ });
-    await row.getByRole('button', { name: /^Edit / }).click();
+    await chooseRowAction(row, 'Edit');
 
     const form = triggerForm(page);
     await expect(form.getByLabel('Frequency')).toHaveValue('week');
@@ -167,10 +168,7 @@ test.describe('U14b recurrence builder', () => {
     expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
-    await page
-      .getByRole('row', { name: /Inert schedule/ })
-      .getByRole('button', { name: /^Edit / })
-      .click();
+    await chooseRowAction(page.getByRole('row', { name: /Inert schedule/ }), 'Edit');
 
     const form = triggerForm(page);
     await form.getByLabel('Name').fill('Inert schedule (renamed)');

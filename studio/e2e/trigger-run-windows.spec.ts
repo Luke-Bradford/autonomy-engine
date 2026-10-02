@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { triggerForm } from './support/panels';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #1090 U14c — authoring a RUN WINDOW through controls instead of raw JSON.
@@ -81,7 +82,7 @@ test.describe('U14c run-window editor', () => {
 
     // Re-opening rebuilds the SAME form from what was persisted.
     const row = page.getByRole('row', { name: /Weekday office hours/ });
-    await row.getByRole('button', { name: /^Edit / }).click();
+    await chooseRowAction(row, 'Edit');
     const reopened = triggerForm(page).getByRole('group', { name: 'Window 1' });
     await expect(reopened.getByLabel(/Window 1 start/)).toHaveValue('09:00');
     await expect(reopened.getByLabel(/Window 1 end/)).toHaveValue('17:00');
@@ -156,10 +157,7 @@ test.describe('U14c run-window editor', () => {
     expect(seeded.status()).toBe(201);
 
     const problems = await openTriggers(page);
-    await page
-      .getByRole('row', { name: /Held closed/ })
-      .getByRole('button', { name: /^Edit / })
-      .click();
+    await chooseRowAction(page.getByRole('row', { name: /Held closed/ }), 'Edit');
     const form = triggerForm(page);
 
     await expect(

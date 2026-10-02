@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { triggerForm } from './support/panels';
 import { fluentRootReady } from './support/theme';
+import { rowMenuButton } from './support/rowMenu';
 
 /**
  * #1396 OR5 slice 4 — the Triggers page on the shared form pattern: the form
@@ -45,17 +46,20 @@ test.describe('#1396 the trigger form drawer', () => {
     await page.getByRole('button', { name: 'New trigger' }).click();
     await expect(drawer(page)).toBeVisible();
 
-    await page.getByRole('button', { name: `Edit ${seeded}` }).scrollIntoViewIfNeeded();
+    // #1397 — Edit is in the row's ⋯ menu, so the menu button is what must stay
+    // reachable beside the open drawer.
+    await rowMenuButton(page, seeded).scrollIntoViewIfNeeded();
     const geometry = await page.evaluate((name) => {
       const list = document.querySelector('.drawer-layout-open > :first-child')!;
       const column = list.getBoundingClientRect();
       const aside = document.querySelector('.form-drawer')!.getBoundingClientRect();
-      const edit = document.querySelector(`[aria-label="Edit ${name}"]`)!;
-      const box = edit.getBoundingClientRect();
+      const menu = document.querySelector(`[aria-label="Actions for ${name}"]`)!;
+      const box = menu.getBoundingClientRect();
       const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
       return {
         drawerRightOfList: aside.left >= column.right,
-        editReachable: hit === edit,
+        // The ⋯ button's hit point lands on its icon, which is inside it.
+        menuReachable: hit !== null && menu.contains(hit),
         listMode: [...document.querySelectorAll('tbody tr')]
           .find((row) => row.textContent?.includes(name))
           ?.querySelectorAll('td')[1]?.textContent,
@@ -64,7 +68,7 @@ test.describe('#1396 the trigger form drawer', () => {
     }, seeded);
     expect(geometry).toEqual({
       drawerRightOfList: true,
-      editReachable: true,
+      menuReachable: true,
       listMode: 'Schedule',
       // The drawer puts focus on its first field, the Name.
       focused: 'text',

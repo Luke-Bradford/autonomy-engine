@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { mintVersion, seedVersion } from './support/seedDoc';
 import { triggerForm } from './support/panels';
+import { chooseRowAction } from './support/rowMenu';
 
 /**
  * #981 — binding a trigger to "the active published version", from the UI.
@@ -140,10 +141,7 @@ test('editing an existing trigger offers no bind-to-active', async ({ page }) =>
   const problems = collectPageProblems(page);
   await page.goto('/#/manage/triggers');
   await fluentRootReady(page);
-  await page
-    .getByRole('row', { name: /Already bound/ })
-    .getByRole('button', { name: /^Edit / })
-    .click();
+  await chooseRowAction(page.getByRole('row', { name: /Already bound/ }), 'Edit');
 
   const form = triggerForm(page);
   await expect(form.getByLabel(/^Pipeline version/)).toBeVisible();

@@ -18,6 +18,7 @@ import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
@@ -117,10 +118,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * written a 404 body to the operator's disk as a `.json` file with nothing
    * said (see `api/download.ts`).
    */
-  /* #960 — per-row single-flight. The visible label deliberately does NOT
-     change to "Exporting…": these buttons carry an `aria-label` naming the row,
-     and a visible string absent from the accessible name violates WCAG 2.5.3
-     (label in name). `disabled` + `aria-busy` is the affordance. */
+  /* #960 — per-row single-flight. Since #1397 Export is an item in the row's
+     menu, which shows it disabled while that row's export is in flight; the
+     guard still refuses a second start, whatever asks. */
   const { active: exporting, run: runExport } = useBusyAction();
 
   const onExport = useCallback(
@@ -137,10 +137,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   );
 
   const onDelete = useCallback(
-    async (p: Pipeline) => {
+    async (p: Pipeline, origin: RowMenuOrigin) => {
       const confirmed = await confirm({
         message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
         confirmLabel: 'Delete',
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       setActionMsg(null);
@@ -243,10 +244,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * fact even if we wanted to.
    */
   const onArchive = useCallback(
-    async (p: Pipeline) => {
+    async (p: Pipeline, origin: RowMenuOrigin) => {
       const confirmed = await confirm({
         message: archiveConfirmMessage(p.name),
         confirmLabel: 'Archive',
+        restoreFocus: origin.find,
       });
       if (!confirmed) return;
       setActionMsg(null);
@@ -337,40 +339,36 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
               <tr key={p.id}>
                 <td>{p.name}</td>
                 <td>
-                  {/* A link, so it can be middle-clicked, copied and bookmarked
-                      — the navigation idiom U2 settled: `useNavigate` on a
-                      button is only for navigating as the RESULT of an action. */}
-                  <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
-                    Open
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => void onExport(p)}
-                    aria-label={`Export ${p.name}`}
-                    disabled={exporting.has(p.id)}
-                    aria-busy={exporting.has(p.id)}
-                  >
-                    Export
-                  </button>
-                  {/* #1058 — sits BESIDE Delete on purpose. Delete is refused
-                      with a 409 the moment the pipeline has run history, and
-                      `describeDeleteFailure` (shared with the Factory Resources
-                      pane, which has no Archive) says so without naming a way
-                      out. The way out is this button, in the same row. */}
-                  <button
-                    type="button"
-                    onClick={() => void onArchive(p)}
-                    aria-label={`Archive ${p.name}`}
-                  >
-                    Archive
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(p)}
-                    aria-label={`Delete ${p.name}`}
-                  >
-                    Delete
-                  </button>
+                  <div className="row-actions">
+                    {/* A link, so it can be middle-clicked, copied and bookmarked
+                        — the navigation idiom U2 settled: `useNavigate` on a
+                        button is only for navigating as the RESULT of an action. */}
+                    <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
+                      Open
+                    </Link>
+                    {/* #1397 — Open is the row's one inline action; the rest are
+                        in its menu. #1058: Archive stays in the same menu as
+                        Delete on purpose. Delete is refused with a 409 the
+                        moment the pipeline has run history, and
+                        `describeDeleteFailure` (shared with the Factory
+                        Resources pane, which has no Archive) says so without
+                        naming a way out. The way out is the item above it. */}
+                    <RowMoreMenu
+                      name={p.name}
+                      actions={[
+                        {
+                          label: 'Export',
+                          onSelect: () => void onExport(p),
+                          disabled: exporting.has(p.id),
+                        },
+                        { label: 'Archive', onSelect: (origin) => void onArchive(p, origin) },
+                      ]}
+                      destructive={{
+                        label: 'Delete',
+                        onSelect: (origin) => void onDelete(p, origin),
+                      }}
+                    />
+                  </div>
                 </td>
               </tr>
             ))}

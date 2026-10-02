@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { expectAccessibleNameContainsText } from '../testing/accessibleName';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
-import { ROW_EDIT } from '../testing/rowActions';
+import { chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm } from '../testing/confirmDialog';
 import userEvent from '@testing-library/user-event';
 import type {
@@ -443,7 +443,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Inert', mode: 'schedule', schedule: null, recurrence: null }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Inert', 'Edit');
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByLabelText(/Schedule authored as/i)).toHaveValue('cron');
@@ -471,7 +471,7 @@ describe('TriggersPage', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Weekly', 'Edit');
 
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // The builder round-trips the stored recurrence, and the raw-cron field is
@@ -557,9 +557,7 @@ describe('TriggersPage', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(
-      await screen.findByRole('button', { name: /Provision webhook secret for Hook/i }),
-    );
+    await chooseRowAction(user, 'Hook', 'Provision webhook secret');
     await waitFor(() => expect(provisionMock).toHaveBeenCalledWith('trg_1'));
     expect(await screen.findByText('sk_abc')).toBeInTheDocument();
     expect(screen.getByText('/api/webhooks/trg_1')).toBeInTheDocument();
@@ -571,7 +569,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Hook', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
 
@@ -587,7 +585,7 @@ describe('TriggersPage', () => {
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Hook', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // Switch away from webhook — the stored secret must be actively cleared.
     await user.selectOptions(form.getByLabelText('Mode'), 'manual');
@@ -756,7 +754,7 @@ describe('TriggersPage', () => {
 
     // Alpha is deleted; the refresh that follows returns only Beta.
     listTriggersMock.mockResolvedValue([beta]);
-    await user.click(screen.getByRole('button', { name: 'Delete Alpha' }));
+    await chooseRowAction(user, 'Alpha', 'Delete');
     await answerConfirm(user, 'accept');
 
     await waitFor(() => expect(screen.queryByText(/Fired "Alpha"/)).not.toBeInTheDocument());
@@ -948,7 +946,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Windowed', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -969,7 +967,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Subscribed', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.selectOptions(form.getByLabelText('Mode'), 'manual');
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -998,7 +996,7 @@ describe('#854 — the trigger modes that had no config UI', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Retrying', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByLabelText(/Retry a failed window/)).toHaveValue(3);
     expect(form.getByLabelText(/Seconds between retries/)).toHaveValue(60);
@@ -1043,7 +1041,7 @@ describe('#854 review follow-ups', () => {
     ]);
     return (async () => {
       renderWithDataRouter(<TriggersPage />);
-      await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+      await chooseRowAction(user, 'Imported windows', 'Edit');
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
       expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
@@ -1075,7 +1073,7 @@ describe('#854 review follow-ups', () => {
     ]);
     return (async () => {
       renderWithDataRouter(<TriggersPage />);
-      await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+      await chooseRowAction(user, 'Sub-second epoch', 'Edit');
       const form = within(screen.getByRole('form', { name: /Trigger form/i }));
       expect(form.getByTestId('window-bounds-utc')).toHaveTextContent('2026-08-01T08:00:30.500Z');
     })();
@@ -1093,7 +1091,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Filtered', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(form.getByTestId('event-preserved')).toHaveTextContent('filter, source');
   });
@@ -1110,7 +1108,7 @@ describe('#854 review follow-ups', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Filtered', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.clear(form.getByLabelText('Event', { exact: true }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -1127,7 +1125,7 @@ describe('#959 portability — export and import on the triggers list', () => {
    * here would prove nothing, because `user.click` does not dispatch on a
    * natively disabled button.
    */
-  it('disables the Export button for THAT trigger while its export is in flight', async () => {
+  it('disables the Export item for THAT trigger while its export is in flight', async () => {
     const user = userEvent.setup();
     const gate = deferred<string>();
     exportMock.mockReturnValue(gate.promise);
@@ -1137,17 +1135,27 @@ describe('#959 portability — export and import on the triggers list', () => {
     ]);
     renderWithDataRouter(<TriggersPage />);
 
-    const target = await screen.findByRole('button', { name: 'Export Nightly' });
-    const other = await screen.findByRole('button', { name: 'Export Weekly' });
+    const openExport = async (row: string) => {
+      await user.click(await screen.findByRole('button', { name: `Actions for ${row}` }));
+      return screen.findByRole('menuitem', { name: 'Export' });
+    };
 
-    await user.click(target);
+    const idle = await openExport('Nightly');
+    expect(idle).not.toHaveAttribute('aria-disabled', 'true');
+    await user.click(idle);
+    await waitFor(() => expect(exportMock).toHaveBeenCalledWith('trg_9'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
-    await waitFor(() => expect(target).toBeDisabled());
-    expect(target).toHaveAttribute('aria-busy', 'true');
-    expect(other).toBeEnabled();
+    // Reopen the row's menu: its Export is busy while the request is in flight.
+    expect(await openExport('Nightly')).toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
+    // Keyed by row: another trigger stays exportable.
+    expect(await openExport('Weekly')).not.toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
 
     gate.resolve('{"kind":"trigger"}');
-    await waitFor(() => expect(target).toBeEnabled());
+    expect(await openExport('Nightly')).not.toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
   });
 
   // #959 — the export half. The server has carried
@@ -1158,7 +1166,7 @@ describe('#959 portability — export and import on the triggers list', () => {
     exportMock.mockResolvedValue('{"kind":"trigger","canonical":true}');
     renderWithDataRouter(<TriggersPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
+    await chooseRowAction(user, 'Nightly', 'Export');
 
     expect(exportMock).toHaveBeenCalledWith('trg_9');
     // The bytes go to disk UNCHANGED — an export body is canonical JSON, and
@@ -1175,7 +1183,7 @@ describe('#959 portability — export and import on the triggers list', () => {
     exportMock.mockRejectedValue(new Error('trigger not found'));
     renderWithDataRouter(<TriggersPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
+    await chooseRowAction(user, 'Nightly', 'Export');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /Could not export .*Nightly.*trigger not found/,
@@ -1214,7 +1222,7 @@ describe('#959 portability — export and import on the triggers list', () => {
     // The ROW, not the panel's own sentence — both name the trigger, so this
     // asks for the one only a refreshed list can produce.
     expect(
-      await screen.findByRole('button', { name: 'Export Imported nightly' }),
+      await screen.findByRole('button', { name: 'Actions for Imported nightly' }),
     ).toBeInTheDocument();
     const outcome = screen.getByRole('status');
     expect(outcome).toHaveTextContent(/not bound to a pipeline version/);
@@ -1281,14 +1289,17 @@ describe('TriggersPage — binding to the active published version', () => {
   });
 
   /* #1253 — Edit names its row, as Export and Delete already did. */
-  it('names the row on every row action, Edit included', async () => {
+  it('names the row on its actions menu, and that menu holds Edit, Export and Delete', async () => {
+    const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithDataRouter(<TriggersPage />);
     await screen.findByRole('row', { name: /Nightly/ });
-    for (const act of ['Edit', 'Export', 'Delete']) {
-      expect(screen.getByRole('button', { name: `${act} Nightly` })).toBeInTheDocument();
-    }
-    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Nightly' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Actions for Nightly' }));
+    const menu = within(await screen.findByRole('menu'));
+    const items = menu.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Edit', 'Export', 'Delete']);
+    await closeRowMenu(user);
   });
 
   /* PATCH is concrete-only by design, so that a patch can never silently
@@ -1297,8 +1308,8 @@ describe('TriggersPage — binding to the active published version', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithDataRouter(<TriggersPage />);
-    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
-    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await screen.findByRole('row', { name: /Nightly/ });
+    await chooseRowAction(user, 'Nightly', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     expect(
       form.queryByRole('radio', { name: /active published version/i }),
@@ -1534,7 +1545,7 @@ describe('TriggersPage run windows (#1090)', () => {
       trigger({ name: 'Broken', runWindows: [{ start: '9am', end: '17:00' }] }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit/i }));
+    await chooseRowAction(user, 'Broken', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
     const win = within(form.getByRole('group', { name: 'Window 1' }));
@@ -1549,7 +1560,7 @@ describe('TriggersPage run windows (#1090)', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Closed', runWindows: [] })]);
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: /^Edit/i }));
+    await chooseRowAction(user, 'Closed', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
 
     expect(
@@ -1641,8 +1652,8 @@ describe('#1396 the trigger form drawer', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly', mode: 'manual' })]);
     renderWithDataRouter(<TriggersPage />);
-    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
-    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await screen.findByRole('row', { name: /Nightly/ });
+    await chooseRowAction(user, 'Nightly', 'Edit');
     const form = within(formEl());
     // Save sends an inactive mode's config as null, so this edit writes nothing.
     await user.selectOptions(form.getByLabelText('Mode'), 'event');
@@ -1657,8 +1668,8 @@ describe('#1396 the trigger form drawer', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly', mode: 'manual' })]);
     renderWithDataRouter(<TriggersPage />);
-    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
-    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await screen.findByRole('row', { name: /Nightly/ });
+    await chooseRowAction(user, 'Nightly', 'Edit');
     const form = within(formEl());
     await user.selectOptions(form.getByLabelText('Mode'), 'event');
     await user.type(form.getByLabelText('Event', { exact: true }), 'order.placed');
@@ -1670,11 +1681,11 @@ describe('#1396 the trigger form drawer', () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     renderWithDataRouter(<TriggersPage />);
-    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
-    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await screen.findByRole('row', { name: /Nightly/ });
+    await chooseRowAction(user, 'Nightly', 'Edit');
     await user.type(within(formEl()).getByLabelText('Name'), ' renamed');
     listTriggersMock.mockResolvedValue([]);
-    await user.click(screen.getByRole('button', { name: 'Delete Nightly' }));
+    await chooseRowAction(user, 'Nightly', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Trigger form' })).toBeNull());
     expect(deleteMock).toHaveBeenCalledWith('trg_1');
@@ -1692,8 +1703,8 @@ describe('#1396 the trigger form drawer', () => {
       }),
     ]);
     renderWithDataRouter(<TriggersPage />);
-    const row = within(await screen.findByRole('row', { name: /Weekly/ }));
-    await user.click(row.getByRole('button', { name: ROW_EDIT }));
+    await screen.findByRole('row', { name: /Weekly/ });
+    await chooseRowAction(user, 'Weekly', 'Edit');
     const form = within(formEl());
     await user.selectOptions(form.getByLabelText(/Schedule authored as/), 'cron');
     await user.type(form.getByLabelText(/Schedule \(cron\)/), '0 2 * * *');
@@ -1964,7 +1975,7 @@ describe('TriggersPage — inline validation (#1396)', () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
     const user = userEvent.setup();
     renderWithDataRouter(<TriggersPage />);
-    await user.click(await screen.findByRole('button', { name: ROW_EDIT }));
+    await chooseRowAction(user, 'Nightly', 'Edit');
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
 
