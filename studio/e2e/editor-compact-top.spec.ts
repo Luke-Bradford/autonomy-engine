@@ -35,8 +35,9 @@ async function read(page: Page) {
       stripTop: strip?.top ?? null,
       stripBottom: strip?.bottom ?? null,
       stripInHeader:
-        document.querySelector('.canvas-page > .page-header [data-testid="editor-status-strip"]') !==
-        null,
+        document.querySelector(
+          '.canvas-page > .page-header [data-testid="editor-status-strip"]',
+        ) !== null,
     };
   });
 }
@@ -68,9 +69,13 @@ for (const [width, height] of [
 
     // A notice arriving in that slot moves nothing (#1393's guarantee, kept).
     await page.getByRole('button', { name: 'Save version' }).click();
-    await expect(page.locator('.editor-status-strip .notice', { hasText: /Saved v\d+\./ })).toBeVisible();
+    await expect(
+      page.locator('.editor-status-strip .notice', { hasText: /Saved v\d+\./ }),
+    ).toBeVisible();
     const after = await read(page);
-    expect(Math.abs(after.flowTop! - m.flowTop!), 'canvas top after a notice').toBeLessThanOrEqual(1);
+    expect(Math.abs(after.flowTop! - m.flowTop!), 'canvas top after a notice').toBeLessThanOrEqual(
+      1,
+    );
 
     await expectQuiet(page, problems);
   });
