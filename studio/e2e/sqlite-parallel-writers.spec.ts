@@ -181,7 +181,8 @@ test('#1423 — a PARALLEL ForEach (batchCount 3) copies every file into one tab
 
     // The #1420 starter template, bound as `foreach-copy-folder.spec.ts` binds
     // it — with the one change under test: the ForEach runs items in parallel.
-    const template = STARTER_TEMPLATES.find((t) => t.id === 'csv-folder-to-table')!;
+    const template = STARTER_TEMPLATES.find((t) => t.id === 'csv-folder-to-table');
+    if (template === undefined) throw new Error("starter template 'csv-folder-to-table' is gone");
     const bindings: Record<string, Partial<SeedNode>> = {
       list: { connectionId: folder, config: { path: inDir } },
       load: {
