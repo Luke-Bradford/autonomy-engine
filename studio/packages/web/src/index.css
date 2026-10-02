@@ -1249,6 +1249,21 @@ td button + button {
   margin: 0 0 0.5rem;
 }
 
+/* #1397 — the confirmation dialog (lib/confirm/useConfirm). Its message
+   builders put list items on single-newline lines inside one paragraph
+   ("Read by the latest version of:\n  • Nightly (v3)"), so newlines are kept. */
+.confirm-dialog-paragraph {
+  margin: 0 0 0.5rem;
+  white-space: pre-line;
+}
+
+.confirm-dialog-typed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+}
+
 /* #1396 — the pipeline editor's leave prompt. Fixed, so it takes no space in
    the editor's layout (#1393's no-shift gate), and above React Flow's panes.
    `top` clears the app bar, so it sits just under the page header it guards. */

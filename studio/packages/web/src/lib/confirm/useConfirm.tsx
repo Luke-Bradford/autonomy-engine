@@ -31,10 +31,17 @@ export interface ConfirmRequest {
    * action button stays disabled until this exact name is typed.
    */
   readonly typeToConfirm?: string;
+  /**
+   * Where focus goes when the dialog closes. Defaults to whatever had focus
+   * when the question was asked — the row's button, as `window.confirm` did.
+   * Pass this when that element is about to disappear (a menu item).
+   */
+  readonly restoreFocus?: () => HTMLElement | null;
 }
 
 interface Pending extends ConfirmRequest {
   readonly id: number;
+  readonly opener: Element | null;
   readonly resolve: (confirmed: boolean) => void;
 }
 
@@ -55,26 +62,50 @@ export function splitConfirmMessage(message: string): {
  * rendering a page on its own (as its tests do) needs no wrapper.
  *
  * Only one question is open at a time. Asking again while one is open answers
- * the first with `false` rather than leaving its caller waiting forever, and so
- * does the page unmounting.
+ * the NEW question `false` and leaves the open one alone: swapping the dialog
+ * under the operator could turn a click meant for "Delete B" into a delete of
+ * A. The page unmounting answers an open question `false`, so no caller waits
+ * forever.
  */
 export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, ReactNode] {
   const [pending, setPending] = useState<Pending | null>(null);
   const pendingRef = useRef<Pending | null>(null);
   const seq = useRef(0);
 
+  // The element to refocus once the dialog has unmounted. Fluent restores
+  // focus only to a `DialogTrigger`, and these dialogs have none.
+  const restoreTo = useRef<HTMLElement | null>(null);
+
   const settle = useCallback((confirmed: boolean) => {
     const current = pendingRef.current;
+    if (current === null) return;
     pendingRef.current = null;
+    const target = current.restoreFocus?.() ?? current.opener;
+    restoreTo.current = target instanceof HTMLElement ? target : null;
     setPending(null);
-    current?.resolve(confirmed);
+    current.resolve(confirmed);
   }, []);
+
+  useEffect(() => {
+    if (pending !== null) return;
+    const target = restoreTo.current;
+    restoreTo.current = null;
+    if (target?.isConnected) target.focus();
+  }, [pending]);
 
   const confirm = useCallback(
     (request: ConfirmRequest) =>
       new Promise<boolean>((resolve) => {
-        pendingRef.current?.resolve(false);
-        const next = { ...request, id: ++seq.current, resolve };
+        if (pendingRef.current !== null) {
+          resolve(false);
+          return;
+        }
+        const next = {
+          ...request,
+          id: ++seq.current,
+          opener: document.activeElement,
+          resolve,
+        };
         pendingRef.current = next;
         setPending(next);
       }),
@@ -111,6 +142,7 @@ function ConfirmDialog({
   const { title, paragraphs } = splitConfirmMessage(request.message);
   const [typed, setTyped] = useState('');
   const inputId = useId();
+  const bodyId = useId();
   const blocked = request.typeToConfirm !== undefined && typed !== request.typeToConfirm;
   // Focus lands on the safe choice: Cancel, or the name box when one is asked
   // for — never the action, so a stray Enter cannot confirm a delete. Set here
@@ -129,10 +161,10 @@ function ConfirmDialog({
         if (!data.open) onAnswer(false);
       }}
     >
-      <DialogSurface className="confirm-dialog">
+      <DialogSurface className="confirm-dialog" aria-describedby={bodyId}>
         <DialogBody>
           <DialogTitle>{title}</DialogTitle>
-          <DialogContent>
+          <DialogContent id={bodyId}>
             {paragraphs.map((p, i) => (
               <p key={i} className="confirm-dialog-paragraph">
                 {p}

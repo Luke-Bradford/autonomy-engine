@@ -90,7 +90,7 @@ describe('useConfirm', () => {
     expect(screen.getByRole('status')).toHaveTextContent('true');
   });
 
-  it('answers a superseded question false, and a fresh question starts with an empty name', async () => {
+  it('refuses a second question while one is open, and leaves the open one alone', async () => {
     let confirmFn: ((r: ConfirmRequest) => Promise<boolean>) | null = null;
     function Capture(): ReactNode {
       const [confirm, dialog] = useConfirm();
@@ -103,15 +103,61 @@ describe('useConfirm', () => {
     act(() => {
       first = confirmFn!({ ...DELETE, typeToConfirm: 'Nightly' });
     });
-    await user.type(await screen.findByLabelText('Type Nightly to confirm'), 'Night');
+    const input = await screen.findByLabelText('Type Nightly to confirm');
+    await user.type(input, 'Night');
     let second: Promise<boolean> | null = null;
     act(() => {
-      second = confirmFn!({ ...DELETE, typeToConfirm: 'Nightly' });
+      second = confirmFn!({ message: 'Delete pipeline "Other"?', confirmLabel: 'Delete' });
     });
-    await expect(first!).resolves.toBe(false);
-    expect(await screen.findByLabelText('Type Nightly to confirm')).toHaveValue('');
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await expect(second!).resolves.toBe(false);
+    // Still the first question, half-typed name and all.
+    expect(screen.getByRole('alertdialog', { name: 'Delete pipeline "Nightly"?' })).toBeInTheDocument();
+    expect(input).toHaveValue('Night');
+    await user.type(input, 'ly{Enter}');
+    await expect(first!).resolves.toBe(true);
+  });
+
+  it('gives focus back to the button that asked, after Cancel, Escape and the action', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={DELETE} />);
+    const ask = screen.getByRole('button', { name: 'Ask' });
+    for (const answer of ['cancel', 'escape', 'action'] as const) {
+      await user.click(ask);
+      await screen.findByRole('alertdialog');
+      if (answer === 'cancel') await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      else if (answer === 'escape') await user.keyboard('{Escape}');
+      else await user.click(screen.getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(ask).toHaveFocus());
+    }
+    expect(screen.getByRole('status')).toHaveTextContent('false,false,true');
+  });
+
+  it('gives focus to restoreFocus instead, when the asker is going away', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button type="button">More actions</button>
+        <Harness
+          request={{
+            ...DELETE,
+            restoreFocus: () => screen.getByRole('button', { name: 'More actions', hidden: true }),
+          }}
+        />
+      </>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('alertdialog');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'More actions' })).toHaveFocus());
+  });
+
+  it('describes the dialog by its consequences, not only its title', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={DELETE} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(await screen.findByRole('alertdialog')).toHaveAccessibleDescription(
+      'Its triggers stop. This cannot be undone.',
+    );
   });
 
   it('answers an open question false when the page unmounts', async () => {
