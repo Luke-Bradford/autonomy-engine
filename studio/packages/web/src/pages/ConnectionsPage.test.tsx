@@ -601,8 +601,8 @@ describe('ConnectionsPage', () => {
 
     gate.resolve('{"kind":"connection"}');
     await user.click(screen.getByRole('button', { name: 'Actions for My Claude' }));
-    await waitFor(async () =>
-      expect(await screen.findByRole('menuitem', { name: 'Export' })).not.toHaveAttribute(
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: 'Export' })).not.toHaveAttribute(
         'aria-disabled',
         'true',
       ),
