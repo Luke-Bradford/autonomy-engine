@@ -30,21 +30,25 @@ import type { RowMenuOrigin } from '../lib/RowMoreMenu';
  */
 export interface FocusAfterRemoval {
   /**
-   * For `confirm({ restoreFocus })` on a row's removal. Records the row, so the
-   * row leaving the list later moves a stranded focus to its neighbour; and
-   * returns the lookup the dialog uses on close: the row's `⋯` while it is
-   * still there (a declined or failed delete), else the neighbour's, else the
-   * fallback.
-   *
-   * A declined or failed delete leaves its row listed, and a listed row is
-   * never acted on, so nothing has to be unwound.
+   * For `confirm({ restoreFocus })` on a row's removal: the row's `⋯` while it
+   * is still there (a declined or failed delete), else the neighbour's, else
+   * the fallback. Records nothing, so a declined question leaves no trace.
    */
-  readonly restoreFocus: (id: string, origin: RowMenuOrigin) => () => HTMLElement | null;
+  readonly restoreFocus: (origin: RowMenuOrigin) => () => HTMLElement | null;
+  /**
+   * Once the removal is CONFIRMED: when row `id` leaves the list with focus
+   * stranded, focus moves to its neighbour or the fallback. Returns `forget`,
+   * for a removal that failed, so a row that stayed is not acted on later when
+   * it leaves for some other reason.
+   */
+  readonly removing: (id: string, origin: RowMenuOrigin) => () => void;
 }
 
-/** The `⋯` of the row after the origin's row, else the one before it. */
+/** The row after the origin's row, else the one before it. */
 function neighbourRow(origin: RowMenuOrigin): Element | null {
-  const row = origin.element.closest('tr');
+  // Looked up again: a list refreshed while a dependants read ran may have
+  // replaced the node `element` holds.
+  const row = (origin.find() ?? origin.element).closest('tr');
   return row?.nextElementSibling ?? row?.previousElementSibling ?? null;
 }
 
@@ -67,11 +71,11 @@ export function useFocusAfterRemoval(
   fallback: RefObject<HTMLElement | null>,
 ): FocusAfterRemoval {
   // Keyed by row: two rows' deletes can be in flight at once.
-  const pending = useRef(new Map<string, Element | null>());
+  const pending = useRef(new Map<string, { readonly neighbour: Element | null }>());
 
   useEffect(() => {
     if (rows === null || pending.current.size === 0) return;
-    for (const [id, neighbour] of [...pending.current]) {
+    for (const [id, { neighbour }] of [...pending.current]) {
       if (rows.some((row) => row.id === id)) continue;
       pending.current.delete(id);
       if (stranded()) (menuButtonIn(neighbour) ?? fallback.current)?.focus();
@@ -79,13 +83,22 @@ export function useFocusAfterRemoval(
   }, [rows, fallback]);
 
   const restoreFocus = useCallback(
-    (id: string, origin: RowMenuOrigin) => {
+    (origin: RowMenuOrigin) => {
       const neighbour = neighbourRow(origin);
-      pending.current.set(id, neighbour);
       return () => origin.find() ?? menuButtonIn(neighbour) ?? fallback.current;
     },
     [fallback],
   );
 
-  return { restoreFocus };
+  const removing = useCallback((id: string, origin: RowMenuOrigin) => {
+    const entry = { neighbour: neighbourRow(origin) };
+    pending.current.set(id, entry);
+    // Compare-and-clear, as `FactoryResources` does: a later removal of the
+    // same row may have replaced this entry.
+    return () => {
+      if (pending.current.get(id) === entry) pending.current.delete(id);
+    };
+  }, []);
+
+  return { restoreFocus, removing };
 }

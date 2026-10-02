@@ -44,7 +44,15 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const pipelines = useStore(store, (s) => s.pipelines);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
   const createRef = useRef<HTMLInputElement>(null);
-  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(pipelines, createRef);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    pipelines,
+    createRef,
+  );
+  /* One removal per row at a time, spanning the dialog and the request: with
+     the delete in flight the row's ⋯ still works, and a second Delete would
+     ask again and 404 into the banner over a delete that succeeded (#1470).
+     `ConnectionsPage.onDelete` states the race. */
+  const { run: runRemove } = useBusyAction();
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
   const retryIfFailed = useStore(store, (s) => s.retryIfFailed);
@@ -141,24 +149,27 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   );
 
   const onDelete = useCallback(
-    async (p: Pipeline, origin: RowMenuOrigin) => {
-      const confirmed = await confirm({
-        message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
-        confirmLabel: 'Delete',
-        restoreFocus: focusAfterRemoval(p.id, origin),
-      });
-      if (!confirmed) return;
-      setActionMsg(null);
-      try {
-        await deletePipeline(p.id);
-        await refresh();
-      } catch (err) {
-        // Shared with the Factory Resources row menu, which faces the same
-        // 409 refusal — two hand-written copies had already drifted apart.
-        setActionMsg(describeDeleteFailure(p.name, err));
-      }
-    },
-    [focusAfterRemoval, confirm, refresh],
+    (p: Pipeline, origin: RowMenuOrigin) =>
+      runRemove(p.id, async () => {
+        const confirmed = await confirm({
+          message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
+          confirmLabel: 'Delete',
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(p.id, origin);
+        setActionMsg(null);
+        try {
+          await deletePipeline(p.id);
+          await refresh();
+        } catch (err) {
+          forget();
+          // Shared with the Factory Resources row menu, which faces the same
+          // 409 refusal — two hand-written copies had already drifted apart.
+          setActionMsg(describeDeleteFailure(p.name, err));
+        }
+      }),
+    [removalFocus, removingRow, runRemove, confirm, refresh],
   );
 
   /**
@@ -248,26 +259,29 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * fact even if we wanted to.
    */
   const onArchive = useCallback(
-    async (p: Pipeline, origin: RowMenuOrigin) => {
-      const confirmed = await confirm({
-        message: archiveConfirmMessage(p.name),
-        confirmLabel: 'Archive',
-        restoreFocus: focusAfterRemoval(p.id, origin),
-      });
-      if (!confirmed) return;
-      setActionMsg(null);
-      try {
-        await archivePipeline(p.id);
-        // The row leaves the live list; the archived list it joins is now
-        // stale. Refetch it when it is open, invalidate it when it is not.
-        await refresh();
-        if (showArchivedRef.current) await loadArchived();
-        else invalidateArchived();
-      } catch (err) {
-        setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
-      }
-    },
-    [focusAfterRemoval, confirm, refresh, loadArchived, invalidateArchived],
+    (p: Pipeline, origin: RowMenuOrigin) =>
+      runRemove(p.id, async () => {
+        const confirmed = await confirm({
+          message: archiveConfirmMessage(p.name),
+          confirmLabel: 'Archive',
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(p.id, origin);
+        setActionMsg(null);
+        try {
+          await archivePipeline(p.id);
+          // The row leaves the live list; the archived list it joins is now
+          // stale. Refetch it when it is open, invalidate it when it is not.
+          await refresh();
+          if (showArchivedRef.current) await loadArchived();
+          else invalidateArchived();
+        } catch (err) {
+          forget();
+          setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [removalFocus, removingRow, runRemove, confirm, refresh, loadArchived, invalidateArchived],
   );
 
   /**

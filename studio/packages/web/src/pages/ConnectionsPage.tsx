@@ -184,7 +184,10 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
   const createRef = useRef<HTMLButtonElement>(null);
-  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(connections, createRef);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    connections,
+    createRef,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -486,18 +489,20 @@ export function ConnectionsPage() {
           confirmLabel: 'Delete',
           ...(hasDependants ? { typeToConfirm: conn.name } : {}),
           // The menu item that asked unmounted while the reads above ran.
-          restoreFocus: focusAfterRemoval(conn.id, origin),
+          restoreFocus: removalFocus(origin),
         });
         if (!confirmed) return;
+        const forget = removingRow(conn.id, origin);
         try {
           await deleteConnection(conn.id);
           closeWhere((open) => open.id === conn.id);
           await refresh();
         } catch (err) {
+          forget();
           setLoadError(err instanceof Error ? err.message : String(err));
         }
       }),
-    [focusAfterRemoval, confirm, runDelete, refresh, closeWhere],
+    [removalFocus, removingRow, confirm, runDelete, refresh, closeWhere],
   );
 
   return (

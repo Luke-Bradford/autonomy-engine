@@ -114,7 +114,10 @@ export function GlobalParamsPage() {
   const [globals, setGlobals] = useState<GlobalParam[] | null>(null);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
   const createRef = useRef<HTMLButtonElement>(null);
-  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(globals, createRef);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    globals,
+    createRef,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -164,18 +167,20 @@ export function GlobalParamsPage() {
           confirmLabel: 'Delete',
           ...(read ? { typeToConfirm: global.name } : {}),
           // The menu item that asked unmounted while the usage read ran.
-          restoreFocus: focusAfterRemoval(global.id, origin),
+          restoreFocus: removalFocus(origin),
         });
         if (!confirmed) return;
+        const forget = removingRow(global.id, origin);
         try {
           await deleteGlobalParam(global.id);
           closeWhere((open) => open.stored?.id === global.id);
           await refresh();
         } catch (err) {
+          forget();
           setLoadError(`Could not delete “${global.name}”: ${messageOf(err)}`);
         }
       }),
-    [focusAfterRemoval, confirm, runDelete, refresh, closeWhere],
+    [removalFocus, removingRow, confirm, runDelete, refresh, closeWhere],
   );
 
   /** #844 GL6 — save the global's export file, as Datasets does (#1143). */

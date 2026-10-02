@@ -298,7 +298,15 @@ export function TriggersPage() {
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
   const createRef = useRef<HTMLButtonElement>(null);
-  const { restoreFocus: focusAfterRemoval } = useFocusAfterRemoval(triggers, createRef);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    triggers,
+    createRef,
+  );
+  /* One removal per row at a time, spanning the dialog and the request: with
+     the delete in flight the row's ⋯ still works, and a second Delete would
+     ask again and 404 into the banner over a delete that succeeded (#1470).
+     `ConnectionsPage.onDelete` states the race. */
+  const { run: runRemove } = useBusyAction();
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -409,23 +417,26 @@ export function TriggersPage() {
   );
 
   const onDelete = useCallback(
-    async (t: TriggerPublic, origin: RowMenuOrigin) => {
-      const confirmed = await confirm({
-        message: `Delete trigger "${t.name}"?`,
-        confirmLabel: 'Delete',
-        restoreFocus: focusAfterRemoval(t.id, origin),
-      });
-      if (!confirmed) return;
-      try {
-        await deleteTrigger(t.id);
-        // A form open on the trigger just deleted would save to nothing.
-        closeWhere((open) => open.id === t.id);
-        await refresh();
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [focusAfterRemoval, confirm, refresh, closeWhere],
+    (t: TriggerPublic, origin: RowMenuOrigin) =>
+      runRemove(t.id, async () => {
+        const confirmed = await confirm({
+          message: `Delete trigger "${t.name}"?`,
+          confirmLabel: 'Delete',
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(t.id, origin);
+        try {
+          await deleteTrigger(t.id);
+          // A form open on the trigger just deleted would save to nothing.
+          closeWhere((open) => open.id === t.id);
+          await refresh();
+        } catch (err) {
+          forget();
+          setLoadError(err instanceof Error ? err.message : String(err));
+        }
+      }),
+    [removalFocus, removingRow, runRemove, confirm, refresh, closeWhere],
   );
 
   /**

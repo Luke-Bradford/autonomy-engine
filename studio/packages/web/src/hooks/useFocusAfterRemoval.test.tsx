@@ -11,6 +11,7 @@ interface Row {
 interface Api {
   setRows: (rows: Row[] | null) => void;
   restoreFocus: (id: string) => () => HTMLElement | null;
+  removing: (id: string) => () => void;
 }
 let api: Api | null = null;
 const expose = (next: Api) => {
@@ -27,10 +28,15 @@ function origin(id: string): RowMenuOrigin {
 function Table({ initial }: { initial: Row[] }): ReactNode {
   const [rows, setRows] = useState<Row[] | null>(initial);
   const createRef = useRef<HTMLButtonElement>(null);
-  const { restoreFocus } = useFocusAfterRemoval(rows, createRef);
+  const { restoreFocus, removing } = useFocusAfterRemoval(rows, createRef);
   useEffect(
-    () => expose({ setRows, restoreFocus: (id) => restoreFocus(id, origin(id)) }),
-    [restoreFocus],
+    () =>
+      expose({
+        setRows,
+        restoreFocus: (id) => restoreFocus(origin(id)),
+        removing: (id) => removing(id, origin(id)),
+      }),
+    [restoreFocus, removing],
   );
   return (
     <>
@@ -58,9 +64,9 @@ function Table({ initial }: { initial: Row[] }): ReactNode {
 const ABC = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 const button = (name: string) => screen.getByRole('button', { name });
 
-/** Ask about `id`'s removal, with focus on its `⋯` as the dialog leaves it, then remove it. */
+/** Confirm `id`'s removal, with focus on its `⋯` as the dialog leaves it, then remove it. */
 function remove(id: string, rest: Row[]): void {
-  api!.restoreFocus(id);
+  api!.removing(id);
   button(`Actions for ${id}`).focus();
   act(() => api!.setRows(rest));
 }
@@ -86,23 +92,35 @@ describe('useFocusAfterRemoval (#1470)', () => {
 
   it('leaves focus alone when the operator has moved it somewhere else', () => {
     render(<Table initial={ABC} />);
-    api!.restoreFocus('b');
+    api!.removing('b');
     button('Elsewhere').focus();
     act(() => api!.setRows([{ id: 'a' }, { id: 'c' }]));
     expect(button('Elsewhere')).toHaveFocus();
   });
 
-  it('does nothing while the row is still listed (a declined or failed delete)', () => {
+  it('does nothing while the row is still listed', () => {
     render(<Table initial={ABC} />);
-    api!.restoreFocus('b');
+    api!.removing('b');
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => api!.setRows([...ABC]));
     expect(document.body).toHaveFocus();
   });
 
+  // A declined question records nothing, and a failed delete forgets its row:
+  // the row leaving LATER, for some other reason, must not pull focus about.
+  it('does not act for a declined question, nor for a removal that failed', () => {
+    render(<Table initial={ABC} />);
+    api!.restoreFocus('a');
+    const forget = api!.removing('b');
+    forget();
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => api!.setRows([{ id: 'c' }]));
+    expect(document.body).toHaveFocus();
+  });
+
   it('reads an unknown list (null) as unknown, not as emptied', () => {
     render(<Table initial={ABC} />);
-    api!.restoreFocus('b');
+    api!.removing('b');
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => api!.setRows(null));
     expect(document.body).toHaveFocus();

@@ -467,6 +467,30 @@ describe('PipelinesPage', () => {
     await waitFor(() => expect(within(form).getByLabelText('Name')).toHaveFocus());
   });
 
+  // #1470 — the row's ⋯ still works while its delete is in flight; Delete
+  // again must not ask a second time (accepting that would 404 into the banner).
+  it("asks once while the row's delete is in flight", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
+    let release: () => void = () => {};
+    deleteMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderPage();
+    await screen.findByText('Doomed');
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    release();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a friendly message when deleting a pipeline that has runs (409)', async () => {
     const user = userEvent.setup();
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));

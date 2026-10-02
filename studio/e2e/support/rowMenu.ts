@@ -46,15 +46,17 @@ export async function deleteRowAndExpectFocus(
   fallback: Locator,
   answer: (page: Page) => Promise<unknown>,
 ): Promise<void> {
+  // By element id, not by name: the shared e2e database can hold two rows of
+  // one name (an import spec leaves copies), and the row's DOM node, so its id,
+  // survives the refresh.
   const neighbour = await row.evaluate((tr) => {
     const next = tr.nextElementSibling ?? tr.previousElementSibling;
-    return next?.querySelector('.row-menu__trigger')?.getAttribute('aria-label') ?? null;
+    return next?.querySelector('.row-menu__trigger')?.id || null;
   });
   await rowMenuButton(row).click();
   await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   await answer(page);
   await expect(row).toHaveCount(0);
-  const target =
-    neighbour === null ? fallback : page.getByRole('button', { name: neighbour, exact: true });
+  const target = neighbour === null ? fallback : page.locator(`[id="${neighbour}"]`);
   await expect(target).toBeFocused();
 }
