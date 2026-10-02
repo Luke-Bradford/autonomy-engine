@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
-import { arrowToItem, rowMenuButton } from './support/rowMenu';
+import { arrowToItem, deleteRowAndExpectFocus, rowMenuButton } from './support/rowMenu';
+import { answerConfirm } from './support/confirmDialog';
 import { seedConnection, seedDataset } from './support/seedResources';
 
 /**
@@ -30,7 +31,7 @@ function menuShape(page: Page): Promise<string[]> {
 }
 
 test.describe('#1397 row ⋯ menus, by keyboard', () => {
-  test('Pipelines: Tab from Open to ⋯, Delete last in red, focus returns to ⋯', async ({
+  test('Pipelines: Tab from Open to ⋯, Delete last in red, focus returns to ⋯, then moves on after a Delete', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -78,6 +79,14 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     await expect(dialog).toBeHidden();
     await expect(opener).toBeFocused();
     await expect(opener).toBeVisible();
+
+    // #1470 — accepted, the row and its ⋯ are gone: focus moves to the next row.
+    await deleteRowAndExpectFocus(
+      page,
+      row,
+      page.getByRole('form', { name: 'New pipeline' }).getByLabel('Name'),
+      (p) => answerConfirm(p, 'accept'),
+    );
 
     await expectQuiet(page, problems);
   });
@@ -143,6 +152,14 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     await expect(dialog).toBeHidden();
     await expect(opener).toBeFocused();
 
+    // #1470 — accepted: focus moves on rather than falling to <body>.
+    await deleteRowAndExpectFocus(
+      page,
+      row,
+      page.getByRole('button', { name: 'New trigger' }),
+      (p) => answerConfirm(p, 'accept'),
+    );
+
     await expectQuiet(page, problems);
   });
 
@@ -155,10 +172,12 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     readonly route: string;
     readonly inline: string;
     readonly shape: readonly string[];
+    readonly create: string;
     readonly seed: (page: Page) => Promise<string>;
   }[] = [
     {
       page: 'Connections',
+      create: 'New connection',
       route: '/#/manage/connections',
       inline: 'Edit',
       shape: ['Export', '—', 'Delete'],
@@ -174,6 +193,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     },
     {
       page: 'Datasets',
+      create: 'New dataset',
       route: '/#/manage/datasets',
       inline: 'Edit',
       shape: ['Export', '—', 'Delete'],
@@ -196,6 +216,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     },
     {
       page: 'Global parameters',
+      create: 'New global parameter',
       route: '/#/manage/global-params',
       inline: 'Edit',
       shape: ['Export', '—', 'Delete'],
@@ -210,6 +231,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
     },
     {
       page: 'Secrets',
+      create: 'New secret',
       route: '/#/manage/secrets',
       inline: 'Replace',
       // Delete alone: no separator above it.
@@ -224,7 +246,7 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
   ];
 
   for (const spec of RESOURCE_PAGES) {
-    test(`${spec.page}: ${spec.inline} inline, Delete last in red, a declined Delete returns to ⋯`, async ({
+    test(`${spec.page}: ${spec.inline} inline, Delete last in red, a declined Delete returns to ⋯, an accepted one moves on`, async ({
       page,
     }) => {
       const problems = collectPageProblems(page);
@@ -262,6 +284,14 @@ test.describe('#1397 row ⋯ menus, by keyboard', () => {
       await expect(opener).toBeFocused();
       // Declined: the row is still there.
       await expect(row).toBeVisible();
+
+      // #1470 — accepted: focus goes to the neighbouring row's ⋯, or New.
+      await deleteRowAndExpectFocus(
+        page,
+        row,
+        page.getByRole('button', { name: spec.create, exact: true }),
+        (p) => answerConfirm(p, 'accept'),
+      );
 
       await expectQuiet(page, problems);
     });

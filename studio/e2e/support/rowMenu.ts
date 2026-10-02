@@ -33,3 +33,28 @@ export async function arrowToItem(page: Page, item: Locator): Promise<void> {
   }
   await expect(item).toBeFocused();
 }
+
+/**
+ * #1470 — a confirmed Delete removes its row, and focus moves to the next row's
+ * `⋯`, else the previous row's, else the page's create control (`fallback`).
+ * Accepts the Delete from `row`'s menu and asserts focus lands on the one this
+ * page should pick, read from the table BEFORE the row goes.
+ */
+export async function deleteRowAndExpectFocus(
+  page: Page,
+  row: Locator,
+  fallback: Locator,
+  answer: (page: Page) => Promise<unknown>,
+): Promise<void> {
+  const neighbour = await row.evaluate((tr) => {
+    const next = tr.nextElementSibling ?? tr.previousElementSibling;
+    return next?.querySelector('.row-menu__trigger')?.getAttribute('aria-label') ?? null;
+  });
+  await rowMenuButton(row).click();
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+  await answer(page);
+  await expect(row).toHaveCount(0);
+  const target =
+    neighbour === null ? fallback : page.getByRole('button', { name: neighbour, exact: true });
+  await expect(target).toBeFocused();
+}
