@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { seedConnection, seedDataset } from './support/seedResources';
+import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 
 /**
  * #959 — export and import, end to end through a real browser.
@@ -40,7 +41,7 @@ test.describe('#959 portability', () => {
     await createPipeline(page, name);
 
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: `Export ${name}`, exact: true }).click();
+    await chooseRowAction(page, 'Export', name);
     const download = await downloadPromise;
 
     // The file name carries the resource id, which is what tells two
@@ -83,10 +84,10 @@ test.describe('#959 portability', () => {
     // is exactly why the panel reports the id and why this assertion counts
     // rows rather than looking one up by name.
     //
-    // Counted by the ROW's Export button, not by the "Open" link: the outcome
+    // Counted by the ROW's ⋯ menu button, not by the "Open" link: the outcome
     // panel renders an `Open <name>` link of its own, so a link count here is
     // 3 and says nothing about how many pipelines exist.
-    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toHaveCount(2);
+    await expect(rowMenuButton(page, name)).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });
@@ -94,7 +95,7 @@ test.describe('#959 portability', () => {
   test('refuses a file that is not an envelope, without creating anything', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoPipelines(page);
-    const before = await page.getByRole('button', { name: /^Export / }).count();
+    const before = await rowMenuButton(page).count();
 
     await page.getByLabel('Export file').setInputFiles({
       name: 'notes.txt',
@@ -103,7 +104,7 @@ test.describe('#959 portability', () => {
     });
 
     await expect(page.getByRole('alert')).toContainText('is not a JSON file');
-    expect(await page.getByRole('button', { name: /^Export / }).count()).toBe(before);
+    expect(await rowMenuButton(page).count()).toBe(before);
 
     await expectQuiet(page, problems);
   });

@@ -6,6 +6,7 @@ import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import { chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm, pressInConfirm } from '../testing/confirmDialog';
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
@@ -150,7 +151,7 @@ describe('PipelinesPage', () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
-      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       // The confirm is where every consequence is named — the route discards
       // the trigger ids it disabled, so nothing can be reported afterwards.
       const asked = await answerConfirm(user, 'accept');
@@ -170,7 +171,7 @@ describe('PipelinesPage', () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
-      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'cancel');
       expect(archiveMock).not.toHaveBeenCalled();
     });
@@ -181,13 +182,15 @@ describe('PipelinesPage', () => {
       listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
       renderPage();
 
-      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await screen.findByRole('alertdialog');
       pressInConfirm('Escape');
       await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 
       expect(archiveMock).not.toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Archive Nightly digest' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Actions for Nightly digest' }),
+      ).toBeInTheDocument();
     });
 
     it('fetches the archived set only when the section is opened', async () => {
@@ -258,7 +261,7 @@ describe('PipelinesPage', () => {
       // 2. Close before it answers, 3. archive (invalidating the cache),
       //    4. reopen — load #2 starts and is the only correct answer.
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
-      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
       await user.click(screen.getByRole('button', { name: /Show archived/i }));
@@ -294,7 +297,7 @@ describe('PipelinesPage', () => {
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
 
-      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
 
@@ -328,7 +331,7 @@ describe('PipelinesPage', () => {
       await user.click(await screen.findByRole('button', { name: /Show archived/i }));
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
-      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
 
       // Reopen while the archive is still in flight. Load A is still 'loading',
@@ -359,7 +362,7 @@ describe('PipelinesPage', () => {
       await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole('button', { name: /Hide archived/i }));
 
-      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(archiveMock).toHaveBeenCalled());
       // Still closed, so still no second request.
@@ -398,7 +401,7 @@ describe('PipelinesPage', () => {
       listMock.mockRejectedValue(new Error('live list down'));
       listArchivedMock.mockRejectedValue(new Error('archived list down'));
 
-      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await chooseRowAction(user, 'Nightly digest', 'Archive');
       await answerConfirm(user, 'accept');
 
       await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
@@ -430,7 +433,7 @@ describe('PipelinesPage', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
     renderPage();
-    await user.click(await screen.findByRole('button', { name: /Delete Doomed/i }));
+    await chooseRowAction(user, 'Doomed', 'Delete');
     await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
@@ -440,7 +443,7 @@ describe('PipelinesPage', () => {
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));
     listMock.mockResolvedValue([pipeline({ name: 'Busy' })]);
     renderPage();
-    await user.click(await screen.findByRole('button', { name: /Delete Busy/i }));
+    await chooseRowAction(user, 'Busy', 'Delete');
     await answerConfirm(user, 'accept');
     expect(await screen.findByText(/it has run history/i)).toBeInTheDocument();
   });
@@ -449,7 +452,7 @@ describe('PipelinesPage', () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([pipeline({ name: 'Safe' })]);
     renderPage();
-    await user.click(await screen.findByRole('button', { name: /Delete Safe/i }));
+    await chooseRowAction(user, 'Safe', 'Delete');
     await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
   });
@@ -472,7 +475,7 @@ describe('PipelinesPage', () => {
     listMock.mockResolvedValue([pipeline({ id: 'pl_7', name: 'Nightly digest' })]);
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: /Export Nightly digest/i }));
+    await chooseRowAction(user, 'Nightly digest', 'Export');
 
     await waitFor(() => expect(exportMock).toHaveBeenCalledWith('pl_7'));
     // The bytes go to disk untouched — an export is a canonical artifact.
@@ -489,7 +492,7 @@ describe('PipelinesPage', () => {
    * disabled button, so a click-twice test through this page would stay green
    * with the ref guard deleted and would certify nothing.
    */
-  it('disables the Export button for THAT row while its export is in flight', async () => {
+  it('disables the Export item for THAT row while its export is in flight', async () => {
     const user = userEvent.setup();
     const gate = deferred<string>();
     exportMock.mockReturnValue(gate.promise);
@@ -499,20 +502,29 @@ describe('PipelinesPage', () => {
     ]);
     renderPage();
 
-    const target = await screen.findByRole('button', { name: /Export Nightly digest/i });
-    const other = await screen.findByRole('button', { name: /Export Other/i });
-    expect(target).toBeEnabled();
+    const openExport = async (row: string) => {
+      await user.click(await screen.findByRole('button', { name: `Actions for ${row}` }));
+      return screen.findByRole('menuitem', { name: 'Export' });
+    };
 
-    await user.click(target);
+    const idle = await openExport('Nightly digest');
+    expect(idle).not.toHaveAttribute('aria-disabled', 'true');
+    await user.click(idle);
+    await waitFor(() => expect(exportMock).toHaveBeenCalledWith('pl_7'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
-    await waitFor(() => expect(target).toBeDisabled());
-    expect(target).toHaveAttribute('aria-busy', 'true');
+    // Reopen the row's menu: its Export is busy while the request is in flight.
+    expect(await openExport('Nightly digest')).toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
+
     // Keyed by row, not page-wide: a second pipeline stays exportable, which is
     // why this is a Set rather than one busy flag.
-    expect(other).toBeEnabled();
+    expect(await openExport('Other')).not.toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
 
     gate.resolve('{"canonical":"bytes"}');
-    await waitFor(() => expect(target).toBeEnabled());
+    expect(await openExport('Nightly digest')).not.toHaveAttribute('aria-disabled', 'true');
+    await closeRowMenu(user);
   });
 
   it('reports a failed export instead of saving the error body to disk', async () => {
@@ -521,7 +533,7 @@ describe('PipelinesPage', () => {
     listMock.mockResolvedValue([pipeline({ name: 'Gone' })]);
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: /Export Gone/i }));
+    await chooseRowAction(user, 'Gone', 'Export');
 
     expect(await screen.findByText(/Could not export “Gone”.*not found/)).toBeInTheDocument();
     expect(downloadMock).not.toHaveBeenCalled();

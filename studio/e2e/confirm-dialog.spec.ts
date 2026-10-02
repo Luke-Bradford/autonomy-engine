@@ -4,6 +4,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { tree } from './support/authorPane';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
+import { arrowToItem } from './support/rowMenu';
 
 /**
  * #1397 — the list pages' confirmations are an in-app alert dialog, not
@@ -31,13 +32,7 @@ async function chooseDeleteByKeyboard(page: Page, name: string): Promise<void> {
   await page.keyboard.press('Enter');
   const del = page.getByRole('menuitem', { name: 'Delete' });
   await expect(del).toBeVisible();
-  // Arrow down until Delete holds focus; bounded, so a menu that stops
-  // responding fails here instead of looping.
-  for (let i = 0; i < 8; i += 1) {
-    if (await del.evaluate((el) => el === document.activeElement)) break;
-    await page.keyboard.press('ArrowDown');
-  }
-  await expect(del).toBeFocused();
+  await arrowToItem(page, del);
   await page.keyboard.press('Enter');
 }
 

@@ -610,6 +610,40 @@ body {
   outline-offset: -2px;
 }
 
+/* #1397 OR6 — a list row's actions cell: the one common action inline, then
+   the row's `⋯` menu (`lib/RowMoreMenu.tsx`). A flex row, because
+   `.icon-button` is itself `display: flex` and would otherwise drop onto a
+   line of its own below the inline action. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* The gap spaces the cell; the global `td button + button` margin would double it. */
+.row-actions > button + button {
+  margin-left: 0;
+}
+
+.row-actions .row-menu__trigger {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+/* The menu's last item (Delete) in the theme's error colour. Fluent's own item
+   rules are atomic classes injected AFTER this sheet, at up to (0,3,0) for
+   hover/active, so every state here is matched at (0,4,0) or more to outrank
+   them. A DISABLED item keeps Fluent's disabled colour: red would read as
+   available. */
+.fui-MenuList .fui-MenuItem.row-menu__danger:not([aria-disabled='true']),
+.fui-MenuList .fui-MenuItem.row-menu__danger:not([aria-disabled='true']):hover,
+.fui-MenuList .fui-MenuItem.row-menu__danger:not([aria-disabled='true']):focus,
+.fui-MenuList .fui-MenuItem.row-menu__danger:not([aria-disabled='true']):focus-visible {
+  color: var(--error);
+}
+
 /* #1397 — the pipeline editor header's icon buttons (Undo, Redo, the ⋯ menu),
    sized to sit level with the text buttons beside them. The ICON is sized, not
    the button's font: the Fluent icons are `1em`, and growing the button's

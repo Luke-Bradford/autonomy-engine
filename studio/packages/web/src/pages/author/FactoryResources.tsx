@@ -1,20 +1,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router';
 import { useStore } from 'zustand';
-import {
-  Menu,
-  MenuItem,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
-  Tooltip,
-} from '@fluentui/react-components';
+import { Tooltip } from '@fluentui/react-components';
 import {
   AddRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   FolderRegular,
-  MoreHorizontalRegular,
 } from '@fluentui/react-icons';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { messageOf } from '../../api/client';
@@ -27,6 +19,7 @@ import {
   renamePipeline,
 } from '../../api/pipelines';
 import { downloadPipelineExport } from '../../api/pipelineExport';
+import { RowMoreMenu } from '../../lib/RowMoreMenu';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
@@ -488,56 +481,42 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
         >
           {p.name}
         </NavLink>
-        <Menu>
-          <MenuTrigger disableButtonEnhancement>
-            <button
-              id={rowMenuId(p.id)}
-              type="button"
-              className="icon-button factory-resources__icon-button"
-              aria-label={`More actions for ${p.name}`}
-            >
-              <MoreHorizontalRegular aria-hidden="true" />
-            </button>
-          </MenuTrigger>
-          {/* Fluent's DEFAULT body portal — the U0 spike forbids
-                    reparenting a surface into the React Flow viewport, and the
-                    pane clips its own overflow, so an in-flow popover would be
-                    sliced off at the pane's edge. */}
-          <MenuPopover>
-            <MenuList>
-              <MenuItem
-                onClick={() =>
-                  openDraft({ kind: 'rename', pipelineId: p.id, name: p.name }, rowMenuId(p.id))
-                }
-              >
-                Rename
-              </MenuItem>
-              <MenuItem
-                onClick={() =>
-                  openDraft(
-                    { kind: 'move', pipelineId: p.id, name: p.folder ?? '' },
-                    rowMenuId(p.id),
-                  )
-                }
-              >
-                Move to folder…
-              </MenuItem>
-              <MenuItem
-                onClick={() => {
-                  setExpanded(true);
-                  openDraft(
-                    { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
-                    rowMenuId(p.id),
-                  );
-                }}
-              >
-                Duplicate
-              </MenuItem>
-              <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
-              <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
-            </MenuList>
-          </MenuPopover>
-        </Menu>
+        {/* #1397 — the shared row menu. Its own label, because on the
+            Pipelines page the table beside this pane has a menu for the same
+            pipeline ("Actions for …"). Delete is last, separated, in red. */}
+        <RowMoreMenu
+          name={p.name}
+          label={`More actions for ${p.name}`}
+          id={rowMenuId(p.id)}
+          className="factory-resources__icon-button"
+          actions={[
+            {
+              label: 'Rename',
+              onSelect: () =>
+                openDraft({ kind: 'rename', pipelineId: p.id, name: p.name }, rowMenuId(p.id)),
+            },
+            {
+              label: 'Move to folder…',
+              onSelect: () =>
+                openDraft(
+                  { kind: 'move', pipelineId: p.id, name: p.folder ?? '' },
+                  rowMenuId(p.id),
+                ),
+            },
+            {
+              label: 'Duplicate',
+              onSelect: () => {
+                setExpanded(true);
+                openDraft(
+                  { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
+                  rowMenuId(p.id),
+                );
+              },
+            },
+            { label: 'Export', onSelect: () => void onExport(p) },
+          ]}
+          destructive={{ label: 'Delete', onSelect: () => void onDelete(p) }}
+        />
       </li>
     );
 

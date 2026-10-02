@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { chooseRowAction, rowMenuButton } from './support/rowMenu';
 
 /**
  * #1058 — a pipeline can be RETIRED from the app, and brought back.
@@ -37,17 +38,18 @@ test.describe('#1058 archive from the pipelines list, and unarchive back', () =>
     await page.getByRole('textbox', { name: 'Name', exact: true }).fill(NAME);
     await page.getByRole('button', { name: 'Create pipeline' }).click();
 
-    const archiveButton = page.getByRole('button', { name: `Archive ${NAME}`, exact: true });
-    await expect(archiveButton).toBeVisible();
+    // #1397 — Archive is in the row's ⋯ menu; the menu button stands for the row.
+    const rowMenu = rowMenuButton(page, NAME);
+    await expect(rowMenu).toBeVisible();
 
     // The confirm is the only place the consequences can be stated — the route
     // discards the trigger ids it disabled. Capture the real dialog text rather
     // than trusting the builder's unit test, which is what makes this the seam.
-    await archiveButton.click();
+    await chooseRowAction(page, 'Archive', NAME);
     const confirmText = await answerConfirm(page, 'accept');
 
     // Gone from the live list — the actual retirement.
-    await expect(archiveButton).toHaveCount(0);
+    await expect(rowMenu).toHaveCount(0);
     expect(confirmText).toContain(NAME);
     expect(confirmText).toMatch(/run history are KEPT/i);
     expect(confirmText).toContain('triggers stay disabled');
@@ -62,7 +64,7 @@ test.describe('#1058 archive from the pipelines list, and unarchive back', () =>
 
     // Back in the live list, and out of the archived one — which is what makes
     // the round trip mean something rather than just rendering two tables.
-    await expect(archiveButton).toBeVisible();
+    await expect(rowMenu).toBeVisible();
     await expect(unarchiveButton).toHaveCount(0);
 
     await expectQuiet(page, problems);

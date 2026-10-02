@@ -31,9 +31,12 @@ import { useCallback, useRef, useState } from 'react';
  *
  *   - `FactoryResources`'s Export. It is a Fluent `<MenuItem>`, and
  *     `useMenuItemBase` calls `setOpen(event, {open: false})` BEFORE delegating
- *     to the handler, so the item unmounts on the first click. There is no
- *     second click to guard, and a guard there would be dead code that no test
- *     could redden.
+ *     to the handler, so the item unmounts on the first click. That argument
+ *     is weaker than it reads: the menu can be reopened while the export is in
+ *     flight, and reopening it IS the second click. The Pipelines and Triggers
+ *     tables moved their Exports into a row menu in #1397 and KEPT this guard
+ *     for that reason, drawing the item disabled from `active`; the pane's
+ *     Export is still unguarded.
  *
  * `TriggersPage`'s `onFire` WAS on that list, as the page-wide flag this hook
  * argues against, deferred because the page reported a fire through ONE
