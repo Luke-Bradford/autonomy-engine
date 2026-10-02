@@ -48,6 +48,10 @@ test.describe('#1312 — node run policy editor', () => {
     await openGeneralTab(page);
 
     const section = policySection(page);
+    // #1413 — the section says what it holds, as the group's description.
+    await expect(section).toHaveAccessibleDescription(
+      'How this activity retries a transient failure, and what of it is kept out of the run log.',
+    );
     await section.getByLabel('Retries').fill('2');
     await section.getByLabel('Retries').blur();
     await section.getByLabel('Retry interval (seconds)').fill('60');
