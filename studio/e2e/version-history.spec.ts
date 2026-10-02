@@ -642,8 +642,7 @@ test.describe('version history column (#1475 OR27)', () => {
     expect(b, `${selector} has no box`).not.toBeNull();
     return b!;
   };
-  const closeButton = (page: Page) =>
-    page.getByRole('button', { name: 'Close version history' });
+  const closeButton = (page: Page) => page.getByRole('button', { name: 'Close version history' });
 
   test('opens beside the canvas without moving its top, and is remembered across a reload', async ({
     page,

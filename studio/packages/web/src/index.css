@@ -1497,12 +1497,12 @@ button.danger {
   padding: 0 0.75rem 0.5rem;
 }
 
-/* Header (with the notice strip in it, #1475) and version history are
-   content-sized; the editor grid takes everything that is left. Since #1393 the
-   notice strip is a FIXED height and the issue list lives in the dock, so only
-   version history still comes and goes. A flex column rather than explicit grid
-   rows because a child can be CONDITIONAL — a `grid-template-rows` listing them
-   would silently mis-assign the `1fr` row the moment one of them is absent. */
+/* The header (with the notice strip in it, #1475) is content-sized;
+   `.canvas-body` takes everything that is left. Since #1393 the notice strip is
+   a FIXED height and the issue list lives in the dock, and since #1475 version
+   history is a column INSIDE `.canvas-body` rather than a band above it — so
+   nothing in this column comes and goes. Still a flex column rather than grid
+   rows, so a later conditional child cannot silently take the `1fr` row. */
 .canvas-page {
   display: flex;
   flex-direction: column;
@@ -1535,9 +1535,22 @@ button.danger {
      a case the current fixture can demonstrate. */
   grid-template-rows: minmax(0, 1fr);
   column-gap: 0;
+  /* Take the width `.canvas-body` leaves beside version history. A zero basis,
+     not `auto`: an auto basis is the grid's content width, which would let a
+     wide canvas push the history column off the row. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* #1475 OR27 — the editor (or a preview) and the version-history column, side
+   by side, taking the height `.canvas-page` leaves under the header. A row, so
+   opening history takes WIDTH from the canvas and never moves its top; the
+   default `align-items: stretch` gives both children this row's definite
+   height, which React Flow needs. */
+.canvas-body {
+  display: flex;
+  gap: 0.5rem;
   margin-top: 0.25rem;
-  /* Take the leftover height from `.canvas-page`, and allow shrinking below
-     intrinsic content height (same reason as the `minmax` above). */
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -4329,16 +4342,31 @@ button.danger {
 /* --- U22 slice 1: pipeline version history (#903) ------------------------- */
 
 .version-history {
-  margin-top: 0.75rem;
+  /* #1475 OR27 — a column beside the editor, the full height of `.canvas-body`.
+     Narrower on a small screen, so it does not take a laptop canvas's width;
+     the list scrolls inside it once a pipeline has a long history. */
+  flex: 0 0 clamp(240px, 22vw, 300px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0.5rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  /* The list is the SHORT half of the page — it must never take the height the
-     canvas below it needs, so it scrolls inside itself once a pipeline has a
-     long history. */
-  max-height: 30vh;
-  overflow-y: auto;
+}
+
+.version-history__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.version-history__header h3 {
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 .version-history-list {
@@ -4353,6 +4381,9 @@ button.danger {
 .version-history-row {
   width: 100%;
   display: flex;
+  /* The column is 240–300px: the date and shape summary go under the tags
+     rather than being squeezed into one line. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
@@ -4401,11 +4432,10 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-top: 0.25rem; /* `.canvas-grid`'s, so entering a preview moves nothing above it. */
-  /* Takes the leftover height exactly as `.canvas-grid` does — swapping between
+  /* Takes the leftover width exactly as `.canvas-grid` does — swapping between
      the editor and a preview must not resize the page. */
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .canvas-preview .run-canvas {
