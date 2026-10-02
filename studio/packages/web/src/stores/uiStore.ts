@@ -25,6 +25,22 @@ export interface UiState {
    */
   minimapHidden: boolean;
   setMinimapHidden: (hidden: boolean) => void;
+  /**
+   * #1475 OR27 — the editor's property dock, one preference for every
+   * pipeline (it is about the operator's screen, like the minimap).
+   * `dockHeight` is px, or `null` for the default viewport-relative share that
+   * applies until the operator first resizes it. The container-relative cap is
+   * applied where the container is known (`dockMaxHeight` and the CSS), never
+   * stored: a height taken on a tall monitor must not be cut down for good on a
+   * laptop.
+   */
+  dockHeight: number | null;
+  setDockHeight: (height: number | null) => void;
+  dockOpen: boolean;
+  setDockOpen: (open: boolean) => void;
+  /** The Problems column inside the dock (#1393). */
+  problemsOpen: boolean;
+  setProblemsOpen: (open: boolean) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -32,6 +48,12 @@ export type UiStore = StoreApi<UiState>;
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
 export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
+/* One key per dock preference, like the minimap's, rather than one record: a
+   field added by a later slice must not make every stored record fail to parse
+   and reset the others. */
+export const DOCK_HEIGHT_STORAGE_KEY = 'autonomy-studio.dock-height';
+export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
+export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -57,6 +79,50 @@ export const PANE_RESIZE_STEP = 16;
 export function clampPaneWidth(width: number): number {
   if (!Number.isFinite(width)) return PANE_DEFAULT_WIDTH;
   return Math.round(Math.min(PANE_MAX_WIDTH, Math.max(PANE_MIN_WIDTH, width)));
+}
+
+/**
+ * #1475 — property-dock bounds. The minimum is the floor of the default share
+ * (`.property-dock` in `index.css`), so a resized dock can never be smaller
+ * than one nobody touched; folding it is how it gets out of the way.
+ *
+ * The maximum depends on the column the dock shares with the canvas: at most
+ * `DOCK_MAX_SHARE` of it, and never so much that the canvas drops under
+ * `CANVAS_MIN_HEIGHT`, which keeps `canvas-fills-viewport.spec.ts`'s 200px
+ * floor (the flow sits inside a bordered wrapper). `DOCK_SPLITTER_HEIGHT` is
+ * the divider's own track. `index.css` repeats these three as the dock's
+ * `max-height` — CSS cannot import them — so change both together.
+ */
+export const DOCK_MIN_HEIGHT = 200;
+export const DOCK_MAX_SHARE = 0.75;
+export const CANVAS_MIN_HEIGHT = 220;
+export const DOCK_SPLITTER_HEIGHT = 8;
+export const DOCK_RESIZE_STEP = 16;
+
+/**
+ * The tallest the dock may be in a `.canvas-main` column `columnHeight` px
+ * tall. Never below `DOCK_MIN_HEIGHT`: on a screen too short for both floors
+ * the dock keeps its own, as the default share always has.
+ *
+ * FLOORED, not rounded: the column is measured with `getBoundingClientRect`,
+ * which is fractional, and this value is both committed (End, maximise) and
+ * reported (`aria-valuemax`). Rounding up could commit half a pixel more than
+ * the CSS cap draws, and the divider would then report a size it is not.
+ */
+export function dockMaxHeight(columnHeight: number): number {
+  const byShare = columnHeight * DOCK_MAX_SHARE;
+  const byCanvasFloor = columnHeight - DOCK_SPLITTER_HEIGHT - CANVAS_MIN_HEIGHT;
+  return Math.max(DOCK_MIN_HEIGHT, Math.floor(Math.min(byShare, byCanvasFloor)));
+}
+
+/**
+ * A stored or committed dock height. Only the FLOOR is applied: the ceiling
+ * belongs to the container (see `dockHeight`). Non-finite has no nearest value
+ * and becomes "not resized", the default share.
+ */
+export function clampDockHeight(height: number): number | null {
+  if (!Number.isFinite(height)) return null;
+  return Math.round(Math.max(DOCK_MIN_HEIGHT, height));
 }
 
 /** The slice of the Web Storage API a stored preference actually needs. */
@@ -131,6 +197,15 @@ function parseBoolean(raw: string): boolean | undefined {
   return raw === 'true' ? true : raw === 'false' ? false : undefined;
 }
 
+/**
+ * Up to five digits only: `Number('')` is 0, `Number('1e9')` parses, and a
+ * twenty-digit string is finite — none of which any divider stored. Five
+ * digits is far beyond any screen, so the CSS cap is never the only bound.
+ */
+function parseDockHeight(raw: string): number | undefined {
+  return /^\d{1,5}$/.test(raw) ? (clampDockHeight(Number(raw)) ?? undefined) : undefined;
+}
+
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
   width: number;
@@ -175,6 +250,25 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
   });
 
   return createStore<UiState>((set, get) => {
+    /* An on/off preference: its stored value, and a setter that writes it
+       through. One helper for every flag — the minimap's, then #1475's two —
+       so none of them can be the one that forgets to persist. */
+    const flag = <K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen'>(
+      field: K,
+      key: string,
+      fallback: boolean,
+    ) =>
+      [
+        readStored(storage, key, parseBoolean, fallback),
+        (value: boolean) => {
+          writeStored(storage, key, String(value));
+          set({ [field]: value } as Pick<UiState, K>);
+        },
+      ] as const;
+    const [minimapHidden, setMinimapHidden] = flag('minimapHidden', MINIMAP_STORAGE_KEY, false);
+    const [dockOpen, setDockOpen] = flag('dockOpen', DOCK_OPEN_STORAGE_KEY, true);
+    const [problemsOpen, setProblemsOpen] = flag('problemsOpen', PROBLEMS_OPEN_STORAGE_KEY, true);
+
     /* Both pane setters persist the WHOLE record, so the two fields can never
        drift apart in storage — a width that survived a write the collapse flag
        did not is a state neither the user nor the code asked for. */
@@ -200,11 +294,29 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
         set({ paneCollapsed });
       },
 
-      minimapHidden: readStored(storage, MINIMAP_STORAGE_KEY, parseBoolean, false),
-      setMinimapHidden: (minimapHidden) => {
-        writeStored(storage, MINIMAP_STORAGE_KEY, String(minimapHidden));
-        set({ minimapHidden });
+      minimapHidden,
+      setMinimapHidden,
+
+      dockHeight: readStored<number | null>(
+        storage,
+        DOCK_HEIGHT_STORAGE_KEY,
+        parseDockHeight,
+        null,
+      ),
+      setDockHeight: (height) => {
+        const dockHeight = height === null ? null : clampDockHeight(height);
+        // An empty value reads back as "not resized" (`parseDockHeight`).
+        writeStored(
+          storage,
+          DOCK_HEIGHT_STORAGE_KEY,
+          dockHeight === null ? '' : String(dockHeight),
+        );
+        set({ dockHeight });
       },
+      dockOpen,
+      setDockOpen,
+      problemsOpen,
+      setProblemsOpen,
     };
   });
 }

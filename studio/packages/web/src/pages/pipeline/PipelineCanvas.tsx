@@ -1,4 +1,13 @@
-import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
@@ -157,6 +166,8 @@ import {
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
+import { DOCK_HEIGHT_VAR, DockSplitter } from './DockSplitter';
+import { uiStore } from '../../stores/uiStore';
 import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
 import { EditorRunContext, type EditorRun } from './editorRunContext';
@@ -253,13 +264,21 @@ export function PipelineCanvas({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
-  // #852 — the property dock can be folded away to give the canvas the height.
-  const [dockOpen, setDockOpen] = useState(true);
+  /* #852 — the property dock can be folded away to give the canvas the height.
+     #1475 — that, its height and the Problems toggle are per-viewer
+     preferences that survive a reload (`uiStore`). */
+  const dockOpen = useStore(uiStore, (s) => s.dockOpen);
+  const setDockOpen = useStore(uiStore, (s) => s.setDockOpen);
+  const dockHeight = useStore(uiStore, (s) => s.dockHeight);
+  const dockId = useId();
   const dockBodyId = useId();
+  const canvasMainRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
   /* #1393 — the Problems column beside the properties. Open by default, and
      present while open whether or not anything is wrong, so an issue arriving
      never narrows the properties it sits beside. */
-  const [problemsOpen, setProblemsOpen] = useState(true);
+  const problemsOpen = useStore(uiStore, (s) => s.problemsOpen);
+  const setProblemsOpen = useStore(uiStore, (s) => s.setProblemsOpen);
   const problemsId = useId();
   const unsavedId = useId();
   const saveReasonId = useId();
@@ -1687,7 +1706,7 @@ export function PipelineCanvas({
               {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
                 properties sit under it (ADF's layout), and one dock serves both
                 the activity forms and the pipeline's params/outputs. */}
-              <div className="canvas-main">
+              <div className="canvas-main" ref={canvasMainRef}>
                 <div className="canvas-wrap">
                   <ReactFlowProvider>
                     <FlowCanvas
@@ -1699,8 +1718,21 @@ export function PipelineCanvas({
                     />
                   </ReactFlowProvider>
                 </div>
+                {dockOpen && (
+                  <DockSplitter columnRef={canvasMainRef} dockRef={dockRef} dockId={dockId} />
+                )}
                 <div
+                  id={dockId}
+                  ref={dockRef}
                   className={dockOpen ? 'property-dock' : 'property-dock property-dock--collapsed'}
+                  /* Written from the stored preference on EVERY render, so a
+                     reload paints the operator's height first time rather than
+                     the default and then a jump. `null` leaves the CSS default. */
+                  style={
+                    dockHeight === null
+                      ? undefined
+                      : ({ [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` } as CSSProperties)
+                  }
                 >
                   <div className="property-dock__header">
                     <button
@@ -1708,7 +1740,7 @@ export function PipelineCanvas({
                       className="property-dock__toggle"
                       aria-expanded={dockOpen}
                       aria-controls={dockBodyId}
-                      onClick={() => setDockOpen((open) => !open)}
+                      onClick={() => setDockOpen(!dockOpen)}
                     >
                       {/* Folded, a selection would otherwise change nothing on screen
                       but the canvas highlight. The dock does NOT reopen by itself:
@@ -1733,7 +1765,7 @@ export function PipelineCanvas({
                         if (!dockOpen) {
                           setDockOpen(true);
                           setProblemsOpen(true);
-                        } else setProblemsOpen((open) => !open);
+                        } else setProblemsOpen(!problemsOpen);
                       }}
                     >
                       Problems{' '}
