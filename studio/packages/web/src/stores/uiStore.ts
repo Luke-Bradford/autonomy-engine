@@ -38,6 +38,17 @@ export interface UiState {
   setDockHeight: (height: number | null) => void;
   dockOpen: boolean;
   setDockOpen: (open: boolean) => void;
+  /**
+   * #1475 OR27 — where the dock sits: under the canvas (ADF's layout, the
+   * default) or beside it, which suits a wide screen. A per-viewer preference,
+   * like the rest of the dock's. `dockWidth` is the right-hand dock's size, kept
+   * apart from `dockHeight` so switching back restores each; `null` and the cap
+   * follow `dockHeight`'s rules.
+   */
+  dockPosition: DockPosition;
+  setDockPosition: (position: DockPosition) => void;
+  dockWidth: number | null;
+  setDockWidth: (width: number | null) => void;
   /** The Problems column inside the dock (#1393). */
   problemsOpen: boolean;
   setProblemsOpen: (open: boolean) => void;
@@ -87,6 +98,10 @@ export type NodeTab = (typeof NODE_TABS)[number];
 export const PIPELINE_TABS = ['params', 'variables', 'outputs', 'general'] as const;
 export type PipelineTab = (typeof PIPELINE_TABS)[number];
 
+/** #1475 OR27 — the dock's places; the first is the default. */
+export const DOCK_POSITIONS = ['bottom', 'right'] as const;
+export type DockPosition = (typeof DOCK_POSITIONS)[number];
+
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
 export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
@@ -95,6 +110,8 @@ export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
    and reset the others. */
 export const DOCK_HEIGHT_STORAGE_KEY = 'autonomy-studio.dock-height';
 export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
+export const DOCK_POSITION_STORAGE_KEY = 'autonomy-studio.dock-position';
+export const DOCK_WIDTH_STORAGE_KEY = 'autonomy-studio.dock-width';
 export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
 export const TOOLBOX_WIDTH_STORAGE_KEY = 'autonomy-studio.toolbox-width';
 export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed';
@@ -189,14 +206,14 @@ export function problemsMaxWidth(bodyWidth: number): number {
  * The maximum depends on the column the dock shares with the canvas: at most
  * `DOCK_MAX_SHARE` of it, and never so much that the canvas drops under
  * `CANVAS_MIN_HEIGHT`, which keeps `canvas-fills-viewport.spec.ts`'s 200px
- * floor (the flow sits inside a bordered wrapper). `DOCK_SPLITTER_HEIGHT` is
- * the divider's own track. `index.css` repeats these three as the dock's
+ * floor (the flow sits inside a bordered wrapper). `DOCK_SPLITTER_SIZE` is
+ * the divider's own track, in either position. `index.css` repeats these three as the dock's
  * `max-height` — CSS cannot import them — so change both together.
  */
 export const DOCK_MIN_HEIGHT = 200;
 export const DOCK_MAX_SHARE = 0.75;
 export const CANVAS_MIN_HEIGHT = 220;
-export const DOCK_SPLITTER_HEIGHT = 8;
+export const DOCK_SPLITTER_SIZE = 8;
 export const DOCK_RESIZE_STEP = 16;
 
 /**
@@ -210,9 +227,27 @@ export const DOCK_RESIZE_STEP = 16;
  * the CSS cap draws, and the divider would then report a size it is not.
  */
 export function dockMaxHeight(columnHeight: number): number {
-  const byShare = columnHeight * DOCK_MAX_SHARE;
-  const byCanvasFloor = columnHeight - DOCK_SPLITTER_HEIGHT - CANVAS_MIN_HEIGHT;
-  return Math.max(DOCK_MIN_HEIGHT, Math.floor(Math.min(byShare, byCanvasFloor)));
+  return dockMaxSize(columnHeight, DOCK_MAX_SHARE, CANVAS_MIN_HEIGHT, DOCK_MIN_HEIGHT);
+}
+
+/**
+ * #1475 OR27 — the right-hand dock's bounds, the same rules on the other axis.
+ * The canvas floor is the 240px `.canvas-grid` already keeps for the canvas
+ * beside version history, and the floor is a form's readable width. `index.css`
+ * repeats these as the right-hand dock's `max-width` and the grid's `min-width`.
+ */
+export const DOCK_MIN_WIDTH = 320;
+export const DOCK_MAX_WIDTH_SHARE = 0.6;
+export const CANVAS_MIN_WIDTH = 240;
+
+/** The widest a right-hand dock may be in a `.canvas-main` row `columnWidth` px wide. */
+export function dockMaxWidth(columnWidth: number): number {
+  return dockMaxSize(columnWidth, DOCK_MAX_WIDTH_SHARE, CANVAS_MIN_WIDTH, DOCK_MIN_WIDTH);
+}
+
+function dockMaxSize(column: number, share: number, canvasMin: number, dockMin: number): number {
+  const byCanvasFloor = column - DOCK_SPLITTER_SIZE - canvasMin;
+  return Math.max(dockMin, Math.floor(Math.min(column * share, byCanvasFloor)));
 }
 
 /**
@@ -221,8 +256,17 @@ export function dockMaxHeight(columnHeight: number): number {
  * and becomes "not resized", the default share.
  */
 export function clampDockHeight(height: number): number | null {
-  if (!Number.isFinite(height)) return null;
-  return Math.round(Math.max(DOCK_MIN_HEIGHT, height));
+  return clampDockSize(height, DOCK_MIN_HEIGHT);
+}
+
+/** `clampDockHeight`, for the right-hand dock's width. */
+export function clampDockWidth(width: number): number | null {
+  return clampDockSize(width, DOCK_MIN_WIDTH);
+}
+
+function clampDockSize(size: number, min: number): number | null {
+  if (!Number.isFinite(size)) return null;
+  return Math.round(Math.max(min, size));
 }
 
 /** The slice of the Web Storage API a stored preference actually needs. */
@@ -302,11 +346,13 @@ function parseBoolean(raw: string): boolean | undefined {
  * twenty-digit string is finite — none of which any divider stored. Five
  * digits is far beyond any screen, so the CSS cap is never the only bound.
  */
-function parseDockHeight(raw: string): number | undefined {
-  return /^\d{1,5}$/.test(raw) ? (clampDockHeight(Number(raw)) ?? undefined) : undefined;
+function parseDockSize(
+  clamp: (size: number) => number | null,
+): (raw: string) => number | undefined {
+  return (raw) => (/^\d{1,5}$/.test(raw) ? (clamp(Number(raw)) ?? undefined) : undefined);
 }
 
-/** Up to three digits, then clamped: `parseDockHeight`'s reasons, at a width's scale. */
+/** Up to three digits, then clamped: `parseDockSize`'s reasons, at a fixed-bound width's scale. */
 function parseWidth(clamp: (width: number) => number): (raw: string) => number | undefined {
   return (raw) => (/^\d{1,3}$/.test(raw) ? clamp(Number(raw)) : undefined);
 }
@@ -324,6 +370,7 @@ function parseOneOf<T extends string>(choices: readonly T[]): (raw: string) => T
 type StoredAsIs =
   | 'minimapHidden'
   | 'dockOpen'
+  | 'dockPosition'
   | 'problemsOpen'
   | 'toolboxCollapsed'
   | 'dockNodeTab'
@@ -398,6 +445,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       false,
     );
     const [dockOpen, setDockOpen] = pref('dockOpen', DOCK_OPEN_STORAGE_KEY, parseBoolean, true);
+    const [dockPosition, setDockPosition] = pref(
+      'dockPosition',
+      DOCK_POSITION_STORAGE_KEY,
+      parseOneOf(DOCK_POSITIONS),
+      'bottom',
+    );
     const [problemsOpen, setProblemsOpen] = pref(
       'problemsOpen',
       PROBLEMS_OPEN_STORAGE_KEY,
@@ -461,12 +514,12 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       dockHeight: readStored<number | null>(
         storage,
         DOCK_HEIGHT_STORAGE_KEY,
-        parseDockHeight,
+        parseDockSize(clampDockHeight),
         null,
       ),
       setDockHeight: (height) => {
         const dockHeight = height === null ? null : clampDockHeight(height);
-        // An empty value reads back as "not resized" (`parseDockHeight`).
+        // An empty value reads back as "not resized" (`parseDockSize`).
         writeStored(
           storage,
           DOCK_HEIGHT_STORAGE_KEY,
@@ -476,6 +529,19 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       },
       dockOpen,
       setDockOpen,
+      dockPosition,
+      setDockPosition,
+      dockWidth: readStored<number | null>(
+        storage,
+        DOCK_WIDTH_STORAGE_KEY,
+        parseDockSize(clampDockWidth),
+        null,
+      ),
+      setDockWidth: (width) => {
+        const dockWidth = width === null ? null : clampDockWidth(width);
+        writeStored(storage, DOCK_WIDTH_STORAGE_KEY, dockWidth === null ? '' : String(dockWidth));
+        set({ dockWidth });
+      },
       problemsOpen,
       setProblemsOpen,
       problemsWidth: readStored(

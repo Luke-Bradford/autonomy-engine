@@ -1545,6 +1545,14 @@ button.danger {
   min-width: calc(var(--toolbox-width, 180px) + 8px + 240px);
 }
 
+/* #1475 OR27 — a right-hand dock is beside the canvas, so the canvas track's
+   240px floor has to fit the dock's 320px floor and its 8px divider as well
+   (`CANVAS_MIN_WIDTH`, `DOCK_MIN_WIDTH`, `DOCK_SPLITTER_SIZE` in `uiStore.ts`);
+   otherwise a narrow screen with history open squeezes the canvas under it. */
+.canvas-grid--dock-right {
+  min-width: calc(var(--toolbox-width, 180px) + 8px + 240px + 8px + 320px);
+}
+
 /* #1475 OR27 — the editor (or a preview) and the version-history column, side
    by side, taking the height `.canvas-page` leaves under the header. A row, so
    opening history takes WIDTH from the canvas and never moves its top; the
@@ -1987,7 +1995,7 @@ button.danger {
 }
 
 /* #1475 OR27 — the divider between the canvas and the dock. Its height is
-   `DOCK_SPLITTER_HEIGHT` in `uiStore.ts`. The hover/focus mark is a thin line
+   `DOCK_SPLITTER_SIZE` in `uiStore.ts`. The hover/focus mark is a thin line
    drawn in the middle of the track rather than a filled 8px band. */
 .dock-splitter {
   flex: 0 0 8px;
@@ -2037,6 +2045,54 @@ button.danger {
   max-height: max(200px, round(down, min(75%, 100% - 228px), 1px));
   flex: 0 0 auto;
   min-height: 0;
+}
+
+/* #1475 OR27 — the dock BESIDE the canvas. The same rules turned on their
+   side: a default share of the row, the operator's `--dock-width` once they
+   resize it, capped by `dockMaxWidth` in `uiStore.ts` (at most 60% of the row,
+   and the canvas keeps 240px + the 8px divider), floored at 320px. Only an OPEN
+   dock is ever here: folded, it is the bar under the canvas again. */
+.canvas-main--dock-right {
+  flex-direction: row;
+}
+
+/* A zero basis, for `.canvas-grid`'s reason: the canvas takes what the dock
+   leaves, never its content's width. */
+.canvas-main--dock-right > .canvas-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.canvas-main--dock-right > .property-dock {
+  height: auto;
+  max-height: none;
+  width: var(--dock-width, clamp(320px, 34%, 520px));
+  /* The first line is for a browser without `round()`, as `.problems-panel`'s. */
+  max-width: max(320px, min(60%, 100% - 248px));
+  max-width: max(320px, round(down, min(60%, 100% - 248px), 1px));
+}
+
+.dock-splitter--right {
+  cursor: col-resize;
+}
+
+.dock-splitter--right:hover,
+.dock-splitter--right:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
+}
+
+/* A right-hand dock is too narrow for Problems BESIDE the properties, so it is
+   stacked under them — at a FIXED height whether or not anything is wrong
+   (#1393: an issue arriving re-flows nothing). The stored width is left alone
+   for the bottom dock. */
+.canvas-main--dock-right .property-dock__body {
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.canvas-main--dock-right .problems-panel:not([hidden]) {
+  flex: 0 0 min(35%, 14rem);
+  max-width: none;
 }
 
 /* Folded: only the toggle remains, and the canvas takes the height back. No
