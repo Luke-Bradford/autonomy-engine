@@ -2,7 +2,8 @@ import { useStore } from 'zustand';
 import { PIPELINE_DESCRIPTION_MAX_CHARS } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
 import type { createCanvasStore } from './canvasStore';
-import { ContractSection } from './ContractEditor';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
+import { ContractSection, DockSection } from './ContractEditor';
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -24,8 +25,7 @@ export function PipelineGeneral({ store }: { store: Store }) {
 
   return (
     <>
-      <section className="contract-section">
-        <h4>General</h4>
+      <DockSection heading="General" hint={FORM_SECTION_HINTS.pipeline.general}>
         <LabelledControl label="Description">
           {(id) => (
             <textarea
@@ -38,7 +38,7 @@ export function PipelineGeneral({ store }: { store: Store }) {
             />
           )}
         </LabelledControl>
-      </section>
+      </DockSection>
       <ContractSection
         heading="Annotations"
         hint="Tags that describe this pipeline — an environment, a team, a data domain. Saved with the version, like the rest of the pipeline."

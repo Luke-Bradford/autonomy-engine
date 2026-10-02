@@ -44,5 +44,13 @@ export const FORM_SECTION_HINTS = {
       'The connections and datasets this activity uses, and any settings it overrides on them.',
     activitySettings: 'What this activity does when it runs; the settings follow from its type.',
   },
+  pipeline: {
+    general: 'What this pipeline is for, saved with each version like the rest of the pipeline.',
+  },
+  call: {
+    target:
+      'Which pipeline version this activity runs as a child run, and whether it waits for it to finish.',
+    parameters: "The values this activity passes to the child pipeline's parameters.",
+  },
   advanced: 'Rarely needed: which settings a node using this may override.',
 } as const;

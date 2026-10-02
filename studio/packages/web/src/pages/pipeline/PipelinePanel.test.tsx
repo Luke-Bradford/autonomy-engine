@@ -4,6 +4,7 @@ import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/sh
 import { PipelinePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
 import { clearClipboard } from './clipboard';
+import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -585,6 +586,18 @@ describe('PipelinePanel (#1 F8a) — General', () => {
     expect(screen.getByLabelText('pipeline description')).toHaveValue('Nightly load');
     expect(screen.getByLabelText('annotation 1')).toHaveValue('prod');
     expect(screen.getByLabelText('annotation 2')).toHaveValue('finance');
+  });
+
+  // #1413 — the General and Annotations sections each say what they hold, as
+  // the section's accessible description, like every FormSection.
+  it('names each section and describes it with its hint', () => {
+    mountGeneral(version());
+    expect(screen.getByRole('region', { name: 'General' })).toHaveAccessibleDescription(
+      FORM_SECTION_HINTS.pipeline.general,
+    );
+    expect(screen.getByRole('region', { name: 'Annotations' })).toHaveAccessibleDescription(
+      /^Tags that describe this pipeline/,
+    );
   });
 
   it('writes edits straight to the store — no draft that an undo could leave stale', () => {
