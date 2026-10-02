@@ -881,7 +881,11 @@ export function newContainerQuestion(
 }
 
 /** The action button a new-container confirmation draws (`newContainerQuestion`). */
-export const NEW_CONTAINER_CONFIRM = { confirmLabel: 'Add container', tone: 'primary' } as const;
+export const NEW_CONTAINER_CONFIRM = {
+  confirmLabel: 'Add container',
+  // Adding a box is a container edit, and drawn like one.
+  tone: CONTAINER_EDIT_TONE,
+} as const;
 
 /**
  * Do two `issuesBySubject` results say the same thing — the same subjects, each
