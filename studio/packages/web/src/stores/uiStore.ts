@@ -197,9 +197,13 @@ function parseBoolean(raw: string): boolean | undefined {
   return raw === 'true' ? true : raw === 'false' ? false : undefined;
 }
 
-/** Digits only: `Number('')` is 0 and `Number('1e9')` parses, neither of which anyone stored. */
+/**
+ * Up to five digits only: `Number('')` is 0, `Number('1e9')` parses, and a
+ * twenty-digit string is finite — none of which any divider stored. Five
+ * digits is far beyond any screen, so the CSS cap is never the only bound.
+ */
 function parseDockHeight(raw: string): number | undefined {
-  return /^\d+$/.test(raw) ? (clampDockHeight(Number(raw)) ?? undefined) : undefined;
+  return /^\d{1,5}$/.test(raw) ? (clampDockHeight(Number(raw)) ?? undefined) : undefined;
 }
 
 /** The pane preference as it is persisted — one record, written atomically. */

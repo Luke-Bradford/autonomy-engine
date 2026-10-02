@@ -38,6 +38,9 @@ interface PaneSplitterProps {
   controls: string;
 }
 
+/** Pointer travel below this is a click, not a drag (`drag` in `PaneSplitter`). */
+const DRAG_THRESHOLD_PX = 3;
+
 /**
  * A draggable divider: between the secondary pane and the workspace (U3), and
  * between the canvas and its property dock (#1475 OR27).
@@ -70,9 +73,6 @@ interface PaneSplitterProps {
  * `onPreview` — because a keyboard step is already a discrete, committed
  * action, and a preview-only step would be reverted by the very next render.
  */
-/** Pointer travel below this is a click, not a drag (`drag` below). */
-const DRAG_THRESHOLD_PX = 3;
-
 export function PaneSplitter({
   value,
   min,

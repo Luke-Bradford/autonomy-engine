@@ -344,7 +344,7 @@ describe('uiStore property dock (#1475 OR27)', () => {
     expect(state.problemsOpen).toBe(false);
   });
 
-  it.each(['', 'abc', '-50', '1e9', '12.5', 'NaN'])(
+  it.each(['', 'abc', '-50', '1e9', '12.5', 'NaN', '99999999999999999999'])(
     'reads a stored height of %j as not resized',
     (raw) => {
       expect(
