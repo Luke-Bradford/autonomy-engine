@@ -6,9 +6,8 @@ import {
   PanelLeftContractRegular,
   PanelLeftExpandRegular,
 } from '@fluentui/react-icons';
-import { useStore } from 'zustand';
+import { useStore, type StoreApi } from 'zustand';
 import type { ContainerKind } from '@autonomy-studio/shared';
-import type { StoreApi } from 'zustand';
 import { setActivityDragType, setContainerDragKind } from './activityDnd';
 import { ActivityGlyph } from './ActivityGlyph';
 import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from './activityGroups';
