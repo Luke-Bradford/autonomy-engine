@@ -1,3 +1,4 @@
+import { linkSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1186,6 +1187,132 @@ describe('the busy timeout (§9)', () => {
       blocker.exec('rollback');
       blocker.close();
     }
+  });
+});
+
+describe('concurrent writers in ONE process (#1423)', () => {
+  /** Several batches, so the sink's between-batch yield actually happens — a
+   * single-batch write never yields and would pass with or without the queue. */
+  async function* batchesOf(ids: number[]): AsyncIterable<readonly Record<string, SinkValue>[]> {
+    for (const id of ids) yield [{ id }];
+  }
+
+  const writeTo = (root: string, path: string, ids: number[], signal?: AbortSignal) =>
+    writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id'],
+        mode: 'append',
+        ...(signal === undefined ? {} : { signal }),
+      },
+      batchesOf(ids),
+    );
+
+  it('three copies into one store QUEUE and all land, rather than failing `database is locked`', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    const results = await Promise.allSettled([
+      writeTo(root, path, [1, 2, 3]),
+      writeTo(root, path, [4, 5, 6]),
+      writeTo(root, path, [7, 8, 9]),
+    ]);
+    expect(results.map((r) => (r.status === 'fulfilled' ? r.value : String(r.reason)))).toEqual([
+      { rowsWritten: 3 },
+      { rowsWritten: 3 },
+      { rowsWritten: 3 },
+    ]);
+    // Serialised, not interleaved: each copy's rows are contiguous. Which copy
+    // goes FIRST is not fixed — the async path confinement before the queue can
+    // settle in any order — so the runs are compared as a set.
+    const ids = (rowsOf(path, 'SELECT id FROM sink ORDER BY rowid') as { id: number }[]).map(
+      (r) => r.id,
+    );
+    const runs = [ids.slice(0, 3), ids.slice(3, 6), ids.slice(6, 9)].map((r) => r.join(','));
+    expect(runs.sort()).toEqual(['1,2,3', '4,5,6', '7,8,9']);
+  });
+
+  it('the same FILE under another name (a hard link) still shares one queue', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    // A different path string, the same inode — which is what SQLite's own
+    // locks key on. A path-keyed queue would let these two collide.
+    const alias = join(root, 'alias.db');
+    linkSync(path, alias);
+    const results = await Promise.allSettled([
+      writeTo(root, path, [1, 2, 3]),
+      writeTo(root, alias, [4, 5, 6]),
+      writeTo(root, path, [7, 8, 9]),
+    ]);
+    expect(results.map((r) => (r.status === 'fulfilled' ? 'ok' : String(r.reason)))).toEqual([
+      'ok',
+      'ok',
+      'ok',
+    ]);
+    expect(rowsOf(path, 'SELECT id FROM sink ORDER BY rowid')).toHaveLength(9);
+  });
+
+  it('a copy cancelled while QUEUED stops at once as `cancelled`, writes nothing, and the holder commits', async () => {
+    const root = tempRoot();
+    const path = seedSink(root);
+    let releaseHolder!: () => void;
+    const gate = new Promise<void>((r) => (releaseHolder = r));
+    async function* held(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      yield [{ id: 1 }];
+      await gate;
+      yield [{ id: 2 }];
+    }
+    const holder = writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id'],
+        mode: 'append',
+      },
+      held(),
+    );
+    const controller = new AbortController();
+    const queued = writeTo(root, path, [99], controller.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    // Settles while the holder is still mid-transaction — a cancel does not
+    // wait out somebody else's copy.
+    const err = await failure(queued);
+    expect(err.kind).toBe('cancelled');
+    releaseHolder();
+    await expect(holder).resolves.toEqual({ rowsWritten: 2 });
+    expect(rowsOf(path, 'SELECT id FROM sink ORDER BY rowid')).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('copies into DIFFERENT stores are not serialised', async () => {
+    const root = tempRoot();
+    const a = seedSink(root, 'a.db');
+    const b = seedSink(root, 'b.db');
+    let releaseA!: () => void;
+    const gate = new Promise<void>((r) => (releaseA = r));
+    async function* held(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      yield [{ id: 1 }];
+      await gate;
+    }
+    const holder = writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, a),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id'],
+        mode: 'append',
+      },
+      held(),
+    );
+    // Completes while `a.db`'s copy is still open: a different key never queues.
+    await expect(writeTo(root, b, [5, 6])).resolves.toEqual({ rowsWritten: 2 });
+    releaseA();
+    await holder;
   });
 });
 
