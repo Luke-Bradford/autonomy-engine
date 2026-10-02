@@ -799,6 +799,11 @@ Decisions worth not re-deriving:
   keeping the pipelines PAGE alive alongside the pane tree. Note this is *not* an argument about
   `hubs.test.ts` pinning Author at one pane SECTION — that pins the nav list, and pane BODY
   content is a different thing; the collapse argument is the load-bearing one.)
+- **Amended by #1475 OR27 (2026-10-02): the toolbox is the operator's to size and fold.** Its
+  track is 140–360px (default 180), resized through the same `PaneSplitter` as the nav pane, and
+  it folds to a 48px ICON RAIL, never away, for the reason above: the rail offers every activity
+  and container, unfiltered, by click or drag. Width and fold are per-viewer `uiStore`
+  preferences (`toolbox-width`, `toolbox-collapsed`).
 - **`dragover` gates on `dataTransfer.types`, never `getData()`.** During `dragenter`/`dragover`
   the HTML drag-data store is in PROTECTED mode: `types` is readable, `getData()` returns `''`.
   A gate written against the payload passes any test whose `DataTransfer` fake hands the data
