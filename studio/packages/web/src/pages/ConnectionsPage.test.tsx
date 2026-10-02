@@ -250,9 +250,16 @@ describe('ConnectionsPage', () => {
         .parentElement?.querySelector('.kind-icon')
         ?.getAttribute('data-kind');
     expect(kindIcon()).toBe('anthropic_api');
+    // #1413 — and says what the chosen kind is, as the picker's description.
+    expect(screen.getByLabelText('Kind')).toHaveAccessibleDescription(
+      "Calls Anthropic's Claude models over the API, authenticated with an API key.",
+    );
 
     await user.selectOptions(screen.getByLabelText('Kind'), 'fs');
     expect(kindIcon()).toBe('fs');
+    expect(screen.getByLabelText('Kind')).toHaveAccessibleDescription(
+      'Reads and writes files inside the folders you allow.',
+    );
     // The one-per-line control labels itself `roots — one per line`.
     expect(screen.getByLabelText(/^Allowed folders/)).toBeInTheDocument();
     expect(screen.queryByLabelText('API version')).not.toBeInTheDocument();

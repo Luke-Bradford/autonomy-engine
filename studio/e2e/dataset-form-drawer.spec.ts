@@ -77,6 +77,13 @@ test.describe('#1396 the dataset form drawer', () => {
     await expect(form(page).getByLabel('Kind').locator('option:checked')).toHaveText(
       'Database table',
     );
+    // #1413 — and what that kind is, under the picker.
+    await expect(form(page).getByLabel('Kind')).toHaveAccessibleDescription(
+      'One table in a database, read in full, or on SQLite also written to by a copy.',
+    );
+    await expect(
+      form(page).locator('.field-hint', { hasText: /^One table in a database/ }),
+    ).toBeVisible();
     const table = form(page).getByLabel('Table', { exact: true });
     await expect(table).toHaveAttribute('aria-required', 'true');
     await expect(table).toHaveAccessibleDescription(/bare identifier.*table/);

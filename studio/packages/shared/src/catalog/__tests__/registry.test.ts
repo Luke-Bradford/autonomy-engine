@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expectOneSentence } from '../../__tests__/helpers/description.js';
+import { expectOneSentence, withoutStop } from '../../__tests__/helpers/description.js';
 import { DATASET_CONNECTION_KINDS } from '../dataset-config.js';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
 import {
@@ -419,7 +419,7 @@ describe('activity descriptions (#1413)', () => {
     '%s has a one-sentence description',
     (_type, entry) => {
       const { description } = entry;
-      expect(description).not.toBe(entry.title);
+      expect(withoutStop(description)).not.toBe(entry.title.toLowerCase());
       expectOneSentence(description);
     },
   );

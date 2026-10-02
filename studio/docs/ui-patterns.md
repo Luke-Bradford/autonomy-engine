@@ -85,6 +85,13 @@ required marks and display names; its layout is its own, below.
   the unsized variants, so they take the text's size, and muted, so the name stays what is read;
   the icon is `aria-hidden`. A picker uses `KindSelect`. Kinds named in prose or in a native option
   (a store picker's "Warehouse (PostgreSQL)") stay text.
+- **Under the Kind or Mode picker, one line says what the chosen kind is** (#1413):
+  `CONNECTION_KIND_DESCRIPTIONS`, `DATASET_KIND_DESCRIPTIONS` and `TRIGGER_MODE_DESCRIPTIONS`
+  in shared, beside the label maps. `LabelledControl`'s `hint` draws it as a `.field-hint` and hands
+  its id to the picker's `aria-describedby`. `kind-descriptions.test.ts` holds them to the house
+  rule activities follow: one sentence of at most 120 characters, not the name, no two the same. A
+  kind that is not built yet says "Planned:" rather than claim a behaviour (`continuous`); the form's
+  own note under the picker says why.
 - A field's title must not contain another label on the same form ("Name", "Kind", "Store"):
   label lookups by substring, in tests and in assistive tech, would then find two controls.
 - **Required fields get an asterisk and `aria-required`** (native `required` on a plain input).

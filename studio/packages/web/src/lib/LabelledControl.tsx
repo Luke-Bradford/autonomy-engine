@@ -19,18 +19,32 @@ import type { ReactNode } from 'react';
  */
 export function LabelledControl({
   label,
+  hint,
   className,
   children,
 }: {
   label: ReactNode;
+  /**
+   * #1413 — a line under the control saying what the current choice means (a
+   * Kind picker's description). Its id is the render-prop's second argument,
+   * for the control's `aria-describedby`; `undefined` when there is no hint.
+   */
+  hint?: string;
   className?: string;
-  children: (id: string) => ReactNode;
+  children: (id: string, hintId: string | undefined) => ReactNode;
 }) {
   const id = useId();
+  const hintId = useId();
+  const shownHintId = hint === undefined ? undefined : hintId;
   return (
     <div className={className === undefined ? 'labelled-control' : `labelled-control ${className}`}>
       <label htmlFor={id}>{label}</label>
-      {children(id)}
+      {children(id, shownHintId)}
+      {hint !== undefined && (
+        <p id={hintId} className="field-hint">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

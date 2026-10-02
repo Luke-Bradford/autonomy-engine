@@ -296,9 +296,16 @@ describe('TriggersPage', () => {
         .parentElement?.querySelector('.kind-icon')
         ?.getAttribute('data-kind');
     expect(modeIcon()).toBe('manual');
+    // #1413 — the picker says what the chosen mode does.
+    expect(form.getByLabelText('Mode')).toHaveAccessibleDescription(
+      'Runs only when someone fires it by hand, with Fire now on its row.',
+    );
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
     // #1396 — the Mode picker's icon follows the chosen mode.
     expect(modeIcon()).toBe('schedule');
+    expect(form.getByLabelText('Mode')).toHaveAccessibleDescription(
+      /^Runs on a recurring schedule/,
+    );
     // #439 U14b — a new schedule trigger now opens on the RECURRENCE builder;
     // the raw cron is the deliberate escape hatch behind this toggle.
     await user.selectOptions(form.getByLabelText(/Schedule authored as/i), 'cron');

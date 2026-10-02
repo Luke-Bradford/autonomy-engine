@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from
 import { Link } from 'react-router';
 import {
   DATASET_CONNECTION_KINDS,
+  DATASET_KIND_DESCRIPTIONS,
   DATASET_KIND_LABELS,
   DATASET_KINDS,
   DatasetColumnSchema,
@@ -887,11 +888,13 @@ function DatasetForm({
               <RequiredMark />
             </>
           }
+          hint={DATASET_KIND_DESCRIPTIONS[form.kind]}
         >
-          {(id) => (
+          {(id, hintId) => (
             <KindSelect icons={DATASET_KIND_ICONS} kind={form.kind}>
               <select
                 id={id}
+                aria-describedby={hintId}
                 value={form.kind}
                 aria-required
                 onChange={(e) => editor.onKindChange(e.target.value as DatasetKind)}

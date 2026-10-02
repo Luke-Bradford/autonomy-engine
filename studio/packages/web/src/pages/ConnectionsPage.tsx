@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
 import {
   CONNECTION_KINDS,
+  CONNECTION_KIND_DESCRIPTIONS,
   CONNECTION_KIND_LABELS,
   CONNECTION_SECRET_USE,
   connectionConfigAdvisory,
@@ -974,11 +975,13 @@ function ConnectionForm({
               <RequiredMark />
             </>
           }
+          hint={CONNECTION_KIND_DESCRIPTIONS[form.kind]}
         >
-          {(id) => (
+          {(id, hintId) => (
             <KindSelect icons={CONNECTION_KIND_ICONS} kind={form.kind}>
               <select
                 id={id}
+                aria-describedby={hintId}
                 value={form.kind}
                 aria-required
                 onChange={(e) => editor.onKindChange(e.target.value as ConnectionKind)}

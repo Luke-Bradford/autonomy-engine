@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   CONCURRENCY_POLICY_LABELS,
   ConcurrencyPolicySchema,
+  TRIGGER_MODE_DESCRIPTIONS,
   TRIGGER_MODE_LABELS,
   TriggerModeSchema,
   type ConcurrencyPolicy,
@@ -1385,11 +1386,12 @@ function TriggerForm({
       </FormSection>
 
       <FormSection title="Firing">
-        <LabelledControl label="Mode">
-          {(id) => (
+        <LabelledControl label="Mode" hint={TRIGGER_MODE_DESCRIPTIONS[form.mode]}>
+          {(id, hintId) => (
             <KindSelect icons={TRIGGER_MODE_ICONS} kind={form.mode}>
               <select
                 id={id}
+                aria-describedby={hintId}
                 value={form.mode}
                 onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
               >

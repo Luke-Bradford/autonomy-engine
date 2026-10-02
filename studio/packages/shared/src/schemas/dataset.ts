@@ -98,6 +98,14 @@ export const DATASET_KIND_LABELS: Record<DatasetKind, string> = {
   query: 'SQL query',
 };
 
+/** #1413 OR22 — what each kind IS, as `CONNECTION_KIND_DESCRIPTIONS` says for connections. */
+export const DATASET_KIND_DESCRIPTIONS: Record<DatasetKind, string> = {
+  delimited: 'Rows of a CSV or other delimited text file on a file system connection.',
+  excel: 'Rows of one sheet in an Excel workbook on a file system connection.',
+  table: 'One table in a database, read in full, or on SQLite also written to by a copy.',
+  query: 'The rows a SQL query returns from a database.',
+};
+
 export const DatasetSchema = z.object({
   id: z.string().min(1),
   /**
