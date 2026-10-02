@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_THEME_MODE } from '../theme/fluentTheme';
 import {
+  CANVAS_MIN_HEIGHT,
+  DOCK_HEIGHT_STORAGE_KEY,
+  DOCK_MIN_HEIGHT,
+  DOCK_OPEN_STORAGE_KEY,
+  DOCK_SPLITTER_HEIGHT,
   MINIMAP_STORAGE_KEY,
+  PROBLEMS_OPEN_STORAGE_KEY,
+  dockMaxHeight,
   PANE_DEFAULT_WIDTH,
   PANE_MAX_WIDTH,
   PANE_MIN_WIDTH,
@@ -301,5 +308,94 @@ describe('uiStore minimap (#1394 OR3)', () => {
     expect(createUiStore(storage).getState().minimapHidden).toBe(true);
     createUiStore(storage).getState().setMinimapHidden(false);
     expect(createUiStore(storage).getState().minimapHidden).toBe(false);
+  });
+});
+
+describe('uiStore property dock (#1475 OR27)', () => {
+  it('starts open, with Problems open, at the default share', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.dockOpen).toBe(true);
+    expect(state.problemsOpen).toBe(true);
+    expect(state.dockHeight).toBeNull();
+  });
+
+  it('persists each preference across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    first.setDockHeight(333.6);
+    first.setDockOpen(false);
+    first.setProblemsOpen(false);
+    const second = createUiStore(storage).getState();
+    expect(second.dockHeight).toBe(334);
+    expect(second.dockOpen).toBe(false);
+    expect(second.problemsOpen).toBe(false);
+  });
+
+  it('keeps one preference when another key is garbage', () => {
+    const state = createUiStore(
+      fakeStorage({
+        [DOCK_HEIGHT_STORAGE_KEY]: '360',
+        [DOCK_OPEN_STORAGE_KEY]: 'maybe',
+        [PROBLEMS_OPEN_STORAGE_KEY]: 'false',
+      }),
+    ).getState();
+    expect(state.dockHeight).toBe(360);
+    expect(state.dockOpen).toBe(true);
+    expect(state.problemsOpen).toBe(false);
+  });
+
+  it.each(['', 'abc', '-50', '1e9', '12.5', 'NaN'])(
+    'reads a stored height of %j as not resized',
+    (raw) => {
+      expect(
+        createUiStore(fakeStorage({ [DOCK_HEIGHT_STORAGE_KEY]: raw })).getState().dockHeight,
+      ).toBeNull();
+    },
+  );
+
+  it('raises a height under the floor to the floor, on write and on read', () => {
+    const storage = fakeStorage({ [DOCK_HEIGHT_STORAGE_KEY]: '40' });
+    const store = createUiStore(storage);
+    expect(store.getState().dockHeight).toBe(DOCK_MIN_HEIGHT);
+    store.getState().setDockHeight(10);
+    expect(store.getState().dockHeight).toBe(DOCK_MIN_HEIGHT);
+    expect(storage.data.get(DOCK_HEIGHT_STORAGE_KEY)).toBe(String(DOCK_MIN_HEIGHT));
+  });
+
+  /** The ceiling is the container's, so a tall-monitor height is kept as is. */
+  it('stores a height above any one column, uncut', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setDockHeight(1400);
+    expect(store.getState().dockHeight).toBe(1400);
+  });
+
+  it('goes back to the default share, and stays there, on null', () => {
+    const storage = fakeStorage();
+    const store = createUiStore(storage);
+    store.getState().setDockHeight(400);
+    store.getState().setDockHeight(null);
+    expect(store.getState().dockHeight).toBeNull();
+    expect(createUiStore(storage).getState().dockHeight).toBeNull();
+  });
+});
+
+describe('dockMaxHeight (#1475)', () => {
+  it('caps the dock at three quarters of a tall column', () => {
+    expect(dockMaxHeight(1000)).toBe(750);
+  });
+
+  it('keeps the canvas floor in a shorter column', () => {
+    // 75% of 600 is 450, which would leave the canvas 142px.
+    expect(dockMaxHeight(600)).toBe(600 - DOCK_SPLITTER_HEIGHT - CANVAS_MIN_HEIGHT);
+  });
+
+  /** A measured column is fractional; the cap must never round UP past what CSS draws. */
+  it('floors a fractional cap to a whole pixel', () => {
+    expect(dockMaxHeight(1000.9)).toBe(750);
+    expect(dockMaxHeight(700.6)).toBe(472);
+  });
+
+  it('never goes under the dock floor', () => {
+    expect(dockMaxHeight(300)).toBe(DOCK_MIN_HEIGHT);
   });
 });

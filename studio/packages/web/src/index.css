@@ -1902,13 +1902,42 @@ button.danger {
   min-height: 0;
 }
 
-/* #852 / #844 — the canvas over its bottom property dock (U7). */
+/* #852 / #844 — the canvas over its bottom property dock (U7). No gap: #1475's
+   8px divider IS the gap while the dock is open, and the folded dock carries
+   its own margin. */
 .canvas-main {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
   min-width: 0;
   min-height: 0;
+}
+
+/* #1475 OR27 — the divider between the canvas and the dock. Its height is
+   `DOCK_SPLITTER_HEIGHT` in `uiStore.ts`. The hover/focus mark is a thin line
+   drawn in the middle of the track rather than a filled 8px band. */
+.dock-splitter {
+  flex: 0 0 8px;
+  cursor: row-resize;
+  /* A touch drag must resize the dock, not scroll the page. */
+  touch-action: none;
+}
+
+.dock-splitter:hover,
+.dock-splitter:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 100% 3px no-repeat;
+}
+
+/* The track `DockSplitter` draws before it has measured the column: the same
+   box, no control yet. */
+.dock-splitter[aria-hidden='true'] {
+  cursor: auto;
+  background: none;
+}
+
+/* A real outline for keyboard focus, for the reasons `.pane-splitter` gives. */
+.dock-splitter:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -1px;
 }
 
 .property-dock {
@@ -1918,15 +1947,26 @@ button.danger {
   /* A share of the column, bounded both ways: enough rows to edit a form in on
      a short screen, never so much that the canvas drops under the 200px
      `canvas-fills-viewport.spec.ts` guards. The percentage resolves against
-     `.canvas-main`, whose height is definite (stretched to the grid row). */
-  height: clamp(200px, 42%, 460px);
+     `.canvas-main`, whose height is definite (stretched to the grid row).
+     #1475 — that share is the DEFAULT; `--dock-height` is the operator's own
+     height once they resize it (written inline from `uiStore`). Either way it
+     is capped by `dockMaxHeight` in `uiStore.ts`, repeated here because CSS
+     cannot import it: at most 75% of the column, and the canvas keeps
+     220px + the 8px divider. The outer max() is the dock's own 200px floor.
+     Rounded DOWN to a whole pixel as `dockMaxHeight` is, so the divider's
+     reported maximum is exactly what is drawn. */
+  height: var(--dock-height, clamp(200px, 42%, 460px));
+  max-height: max(200px, round(down, min(75%, 100% - 228px), 1px));
   flex: 0 0 auto;
   min-height: 0;
 }
 
-/* Folded: only the toggle remains, and the canvas takes the height back. */
+/* Folded: only the toggle remains, and the canvas takes the height back. No
+   divider is drawn then, so the dock keeps its own distance from the canvas. */
 .property-dock--collapsed {
   height: auto;
+  max-height: none;
+  margin-top: 0.5rem;
 }
 
 .property-dock__toggle {

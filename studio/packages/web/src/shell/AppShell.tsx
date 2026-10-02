@@ -22,7 +22,7 @@ import {
   type PublishedLabels,
 } from './routeHandle';
 import { ShellLabelContext, withLabel, type ShellLabelApi } from './shellLabel';
-import { uiStore } from '../stores/uiStore';
+import { PANE_MAX_WIDTH, PANE_MIN_WIDTH, PANE_RESIZE_STEP, uiStore } from '../stores/uiStore';
 import { UpdateBanner } from './UpdateBanner';
 
 /** The custom property the secondary pane takes its width from. */
@@ -128,7 +128,12 @@ export function AppShell() {
         {hasPane && <SecondaryPane hub={hub!} collapsed={paneCollapsed} />}
         {paneShown && (
           <PaneSplitter
-            width={paneWidth}
+            value={paneWidth}
+            min={PANE_MIN_WIDTH}
+            max={PANE_MAX_WIDTH}
+            step={PANE_RESIZE_STEP}
+            label="Resize navigation pane"
+            className="pane-splitter"
             onPreview={previewPaneWidth}
             onCommit={setPaneWidth}
             controls={PANE_ELEMENT_ID}
