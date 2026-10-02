@@ -42,12 +42,11 @@ const CONTAINERS_KEY = 'containers';
  * — an operator who collapsed the pane to widen the canvas would lose the ability
  * to add activities to the canvas they just widened. (Same reasoning U4 used to
  * keep the pipelines PAGE alive alongside the pane tree.)
- */
-/**
+ *
  * #1475 OR27 — folded, the toolbox is an ICON RAIL, not gone: the same
  * entries as glyph-only buttons, still added by click or drag, so an operator
- * who gave the canvas the toolbox's width can still author on it (U5's
- * reason above). The fold is a per-viewer `uiStore` preference, like the
+ * who gave the canvas the toolbox's width can still author on it (the reason
+ * above, again). The fold is a per-viewer `uiStore` preference, like the
  * dock's; the divider that sizes the open toolbox is the canvas grid's
  * (`PipelineCanvas.tsx`).
  */

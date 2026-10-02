@@ -168,7 +168,7 @@ import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { DOCK_HEIGHT_VAR, DockSplitter } from './DockSplitter';
 import { TOOLBOX_WIDTH_VAR, ToolboxSplitter } from './ToolboxSplitter';
-import { uiStore } from '../../stores/uiStore';
+import { TOOLBOX_RAIL_WIDTH, uiStore } from '../../stores/uiStore';
 import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
 import { EditorRunContext, type EditorRun } from './editorRunContext';
@@ -1708,8 +1708,14 @@ export function PipelineCanvas({
           <EditorRunProvider run={editorRun}>
             <div
               ref={canvasGridRef}
-              className={toolboxRail ? 'canvas-grid canvas-grid--toolbox-rail' : 'canvas-grid'}
-              style={{ [TOOLBOX_WIDTH_VAR]: `${String(toolboxWidth)}px` } as CSSProperties}
+              className="canvas-grid"
+              /* Folded, the track is the rail's; the stored width is kept for
+                 unfolding to restore. */
+              style={
+                {
+                  [TOOLBOX_WIDTH_VAR]: `${String(toolboxRail ? TOOLBOX_RAIL_WIDTH : toolboxWidth)}px`,
+                } as CSSProperties
+              }
             >
               {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}

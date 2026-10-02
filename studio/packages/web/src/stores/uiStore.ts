@@ -101,10 +101,9 @@ function clampWidth(width: number, min: number, max: number, fallback: number): 
 /**
  * #1475 OR27 — Activities toolbox bounds (the ticket's 140–360px). Unlike the
  * dock's ceiling these are FIXED, so the ceiling is stored as well as drawn,
- * the way the nav pane's is. `TOOLBOX_RAIL_WIDTH` is the folded icon rail,
- * the hub rail's 48px; `index.css` repeats it (`.canvas-grid--toolbox-rail`)
- * because CSS cannot import it, as it repeats `TOOLBOX_DEFAULT_WIDTH` for the
- * grid track's fallback.
+ * the way the nav pane's is. `TOOLBOX_RAIL_WIDTH` is the folded icon rail's
+ * track, the hub rail's 48px. `index.css` repeats `TOOLBOX_DEFAULT_WIDTH` as
+ * the grid track's fallback, because CSS cannot import it.
  */
 export const TOOLBOX_MIN_WIDTH = 140;
 export const TOOLBOX_MAX_WIDTH = 360;
