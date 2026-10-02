@@ -1775,7 +1775,9 @@ export function PipelineCanvas({
                         ...(dockHeight === null
                           ? {}
                           : { [DOCK_HEIGHT_VAR]: `${String(dockHeight)}px` }),
-                        ...(dockWidth === null ? {} : { [DOCK_WIDTH_VAR]: `${String(dockWidth)}px` }),
+                        ...(dockWidth === null
+                          ? {}
+                          : { [DOCK_WIDTH_VAR]: `${String(dockWidth)}px` }),
                       } as CSSProperties
                     }
                   >

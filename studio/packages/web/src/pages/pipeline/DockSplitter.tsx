@@ -31,7 +31,13 @@ const AXES = {
     maxFor: dockMaxHeight,
     cssVar: DOCK_HEIGHT_VAR,
   },
-  right: { axis: 'x', size: 'width', min: DOCK_MIN_WIDTH, maxFor: dockMaxWidth, cssVar: DOCK_WIDTH_VAR },
+  right: {
+    axis: 'x',
+    size: 'width',
+    min: DOCK_MIN_WIDTH,
+    maxFor: dockMaxWidth,
+    cssVar: DOCK_WIDTH_VAR,
+  },
 } as const;
 
 interface DockSplitterProps {

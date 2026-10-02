@@ -2090,6 +2090,11 @@ button.danger {
   gap: 0.5rem;
 }
 
+/* Stacked, the panel must shrink under its content to scroll inside the dock. */
+.canvas-main--dock-right .property-dock__body > .property-panel {
+  min-height: 0;
+}
+
 .canvas-main--dock-right .problems-panel:not([hidden]) {
   flex: 0 0 min(35%, 14rem);
   max-width: none;
