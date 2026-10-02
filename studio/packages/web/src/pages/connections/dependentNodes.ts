@@ -69,7 +69,7 @@ export function nodeLabels(nodes: readonly DynamicDependentNode[]): string[] {
   return [...byNode.values()];
 }
 
-function nodePhrase(labels: readonly string[], qualifier = ''): string {
+export function nodePhrase(labels: readonly string[], qualifier = ''): string {
   const noun = labels.length === 1 ? 'pipeline node' : 'pipeline nodes';
   return `${labels.length} ${qualifier}${noun} (${formatNameList(labels)})`;
 }

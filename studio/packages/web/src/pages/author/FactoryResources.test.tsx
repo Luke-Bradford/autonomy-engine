@@ -7,7 +7,7 @@ import { FactoryResources } from './FactoryResources';
 import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
 import { renderWithRouter } from '../../testing/renderWithRouter';
-import { answerConfirm, pressInConfirm } from '../../testing/confirmDialog';
+import { answerConfirm, pressInConfirm, setConfirmName } from '../../testing/confirmDialog';
 import { hubById } from '../../shell/hubs';
 import * as pipelinesApi from '../../api/pipelines';
 import * as downloadApi from '../../api/download';
@@ -612,6 +612,49 @@ describe('FactoryResources — row actions', () => {
     await answerConfirm(user, 'accept');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/run history/i);
+  });
+
+  it('#1397 — run history refuses before asking, and names where Archive is', async () => {
+    const user = userEvent.setup();
+    vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValueOnce({
+      hasRuns: true,
+      triggers: [],
+      callers: [],
+      dynamicCallers: [],
+    });
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Archive it instead, from the Pipelines list or the editor's ⋯ menu",
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it('#1397 — names a bound trigger and asks for the name before deleting', async () => {
+    const user = userEvent.setup();
+    vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValueOnce({
+      hasRuns: false,
+      triggers: [{ id: 't1', name: 'At 2am' }],
+      callers: [],
+      dynamicCallers: [],
+    });
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('also deletes 1 trigger bound to it (At 2am)');
+    const del = within(dialog).getByRole('button', { name: 'Delete' });
+    expect(del).toBeDisabled();
+    setConfirmName('Alpha', 'Alpha');
+    await user.click(del);
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
 
   it('navigates OFF a pipeline it just deleted, so the canvas cannot 404', async () => {

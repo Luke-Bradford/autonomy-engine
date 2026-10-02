@@ -378,9 +378,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                         in its menu. #1058: Archive stays in the same menu as
                         Delete on purpose. Delete is refused with a 409 the
                         moment the pipeline has run history, and
-                        `describeDeleteFailure` (shared with the Factory
-                        Resources pane, which has no Archive) says so without
-                        naming a way out. The way out is the item above it. */}
+                        `pipelineHasRunsMessage` (shared with the Factory
+                        Resources pane, which has no Archive) names where
+                        Archive is. Here it is the item above Delete. */}
                     <RowMoreMenu
                       name={p.name}
                       actions={[

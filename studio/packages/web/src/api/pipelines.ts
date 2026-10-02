@@ -541,10 +541,14 @@ export function debugPipelineDraft(
  * The refusal a pipeline with run history gets, before the confirmation
  * (`pipelineDeletePlan`) or after a 409 from a delete that raced a new run.
  * Runs are immutable audit history (`runs.pipeline_version_id` is FK-restrict),
- * so the way out is an archive.
+ * so the way out is an archive — named by WHERE, because the Factory Resources
+ * pane that also shows this has no Archive of its own.
  */
 export function pipelineHasRunsMessage(name: string): string {
-  return `Cannot delete “${name}”: it has run history. Archive it instead — that keeps every version and run.`;
+  return (
+    `Cannot delete “${name}”: it has run history. Archive it instead, from the ` +
+    "Pipelines list or the editor's ⋯ menu — archiving keeps every version and run."
+  );
 }
 
 /**

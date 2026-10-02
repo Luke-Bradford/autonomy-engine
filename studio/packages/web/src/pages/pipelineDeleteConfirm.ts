@@ -6,7 +6,7 @@ import {
 } from '../api/pipelines';
 import { messageOf } from '../api/client';
 import { formatNameList } from './connections/dependencyCheck';
-import { nodeLabels } from './connections/dependentNodes';
+import { nodeLabels, nodePhrase } from './connections/dependentNodes';
 
 /** The dependents read, settled: a failure is carried, never thrown. */
 export type PipelineDependentsRead =
@@ -55,7 +55,8 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
   let hasDependants = false;
   if (read.state === 'unavailable') {
     parts.push(
-      `Could not check what depends on it (${read.detail}) — any trigger bound to it is deleted with it, and any pipeline that calls it will fail at that step.`,
+      // One line: a multi-paragraph error would split into dialog paragraphs.
+      `Could not check what depends on it (${read.detail.replace(/\s+/g, ' ').trim()}) — any trigger bound to it is deleted with it, and any pipeline that calls it will fail at that step.`,
     );
   } else {
     const { triggers, callers, dynamicCallers } = read.value;
@@ -68,15 +69,13 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
     const literal = nodeLabels(callers);
     if (literal.length > 0) {
       const verb = literal.length === 1 ? 'calls' : 'call';
-      parts.push(
-        `${nodeCount(literal)} (${formatNameList(literal)}) ${verb} it and will fail when they reach that step.`,
-      );
+      parts.push(`${nodePhrase(literal)} ${verb} it and will fail when they reach that step.`);
     }
     const dynamic = nodeLabels(dynamicCallers);
     if (dynamic.length > 0) {
       const verb = dynamic.length === 1 ? 'calls' : 'call';
       parts.push(
-        `${nodeCount(dynamic)} (${formatNameList(dynamic)}) ${verb} a pipeline chosen at run time and may call this one.`,
+        `${nodePhrase(dynamic)} ${verb} a pipeline chosen at run time and may call this one.`,
       );
     }
     hasDependants = triggers.length + literal.length + dynamic.length > 0;
@@ -87,8 +86,4 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
     message: parts.join('\n\n'),
     ...(hasDependants ? { typeToConfirm: name } : {}),
   };
-}
-
-function nodeCount(labels: readonly string[]): string {
-  return labels.length === 1 ? '1 pipeline node' : `${labels.length} pipeline nodes`;
 }

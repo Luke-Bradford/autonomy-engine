@@ -94,6 +94,11 @@ describe('GET /api/pipelines/:id/dependents', () => {
     const parentVersion = version(parent.id, [callNode('callChild', v1.id)]);
     const router = createPipeline(app.db, { ownerId: 'local', name: 'Router' });
     version(router.id, [callNode('callAny', '${params.target}')]);
+    // A literal call to a DIFFERENT pipeline is not a caller of this one.
+    const other = createPipeline(app.db, { ownerId: 'local', name: 'Other' });
+    const otherVersion = version(other.id);
+    const bystander = createPipeline(app.db, { ownerId: 'local', name: 'Bystander' });
+    version(bystander.id, [callNode('callOther', otherVersion.id)]);
     // An archived caller cannot run, so it breaks nothing.
     const retired = createPipeline(app.db, { ownerId: 'local', name: 'Retired' });
     version(retired.id, [callNode('callChild', v1.id)]);
