@@ -308,8 +308,9 @@ function sinkTargetFor(
  * **The operational consequence, stated rather than discovered.** The copy holds
  * the store's write lock for its whole duration, so two copies into one store
  * serialise. In THIS process they queue on `storeWriteQueue` (#1423) and both
- * land; the queued one shows as running while it waits, holds one of the run's
- * dispatch slots, and can be cancelled while queued. A writer in ANOTHER process
+ * land; the queued one shows as running while it waits — it is past
+ * `node.dispatched`, holding one of the executor's adapter slots (`limit` in
+ * `run/executor.ts`) — and can be cancelled while queued. A writer in ANOTHER process
  * still makes the loser get `SQLITE_BUSY` → `transient` → a retry from row 0.
  * `BEGIN IMMEDIATE` front-loads that contention so it is reported before any
  * work is done; it does NOT make the copy immune to a busy `COMMIT`, which is
@@ -364,11 +365,14 @@ export async function writeSqliteDatasetRows(
   if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
 
   // `acquire` rejects for one reason only — the signal aborted while queued.
+  // Checked rather than assumed, so a future rejection of another kind is not
+  // reported as a cancel.
   let release: () => void;
   try {
     release = await storeWriteQueue.acquire(await storeLockKey(dbPath), write.signal);
-  } catch {
-    throw new DatasetIoError('cancelled', 'dataset write aborted');
+  } catch (err) {
+    if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+    throw err;
   }
 
   let db: Database.Database;

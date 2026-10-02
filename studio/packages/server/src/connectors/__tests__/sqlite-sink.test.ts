@@ -1259,8 +1259,15 @@ describe('concurrent writers in ONE process (#1423)', () => {
     const path = seedSink(root);
     let releaseHolder!: () => void;
     const gate = new Promise<void>((r) => (releaseHolder = r));
+    // Resolved when the sink asks the holder for its SECOND batch — by then it
+    // has inserted the first, so it provably holds the slot. Without this the
+    // queued copy could win the slot instead (the path confinement before the
+    // queue settles in any order).
+    let holding!: () => void;
+    const isHolding = new Promise<void>((r) => (holding = r));
     async function* held(): AsyncIterable<readonly Record<string, SinkValue>[]> {
       yield [{ id: 1 }];
+      holding();
       await gate;
       yield [{ id: 2 }];
     }
@@ -1275,8 +1282,11 @@ describe('concurrent writers in ONE process (#1423)', () => {
       },
       held(),
     );
+    await isHolding;
     const controller = new AbortController();
     const queued = writeTo(root, path, [99], controller.signal);
+    // Long enough to reach `acquire` past its async confinement. Were the abort
+    // to land sooner, the pre-queue abort check would report the same outcome.
     await new Promise((r) => setTimeout(r, 20));
     controller.abort();
     // Settles while the holder is still mid-transaction — a cancel does not

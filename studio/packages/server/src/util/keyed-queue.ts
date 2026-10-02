@@ -59,7 +59,7 @@ export class KeyedQueue {
       const onAbort = (): void => {
         if (settled) return;
         settled = true;
-        reject(signal?.reason);
+        reject(signal?.reason ?? new Error('aborted while waiting for the queue'));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       void this.run(key, () => {
