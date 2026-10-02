@@ -9,6 +9,7 @@ import * as download from '../api/download';
 import * as portability from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
+import { typedNameLabel } from '../lib/confirm/typedName';
 import { chooseRowAction } from '../testing/rowActions';
 
 // Network calls only; the shared schemas stay REAL, so the client-side checks
@@ -65,8 +66,7 @@ async function openEdit(user: ReturnType<typeof userEvent.setup>, name: string) 
 }
 
 /** The delete dialog's `Type <name> to confirm` box (#1397), if it asked for one. */
-const typeBox = (name: string) =>
-  screen.queryByRole('textbox', { name: `Type ${name} to confirm` });
+const typeBox = (name: string) => screen.queryByRole('textbox', { name: typedNameLabel(name) });
 
 const USAGE_READ_BY_PIPELINE = {
   pipelines: [{ pipelineId: 'p1', pipelineName: 'Ingest', versionId: 'pv3', version: 3 }],
@@ -406,7 +406,7 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     const action = within(dialog).getByRole('button', { name: 'Delete' });
     expect(action).toBeDisabled();
 
-    const box = within(dialog).getByRole('textbox', { name: 'Type apiUrl to confirm' });
+    const box = within(dialog).getByRole('textbox', { name: typedNameLabel('apiUrl') });
     setConfirmName('apiUrl', 'apiUrL');
     expect(box).toHaveValue('apiUrL');
     expect(action).toBeDisabled();
@@ -434,6 +434,58 @@ describe('GlobalParamsPage (#844 GL2)', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('gp_1'));
     expect(asked).toContain('could not be checked');
     expect(asked).not.toContain('No pipeline');
+  });
+
+  // #1466 — a trigger reading it is a reader too, with no pipeline in the list.
+  it('asks for the name when only a trigger reads the global', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([global()]);
+    usageMock.mockResolvedValue({
+      pipelines: [],
+      triggers: [
+        {
+          triggerId: 't1',
+          triggerName: 'Nightly',
+          enabled: true,
+          pipelineName: 'Ingest',
+          versionId: 'pv1',
+          version: 1,
+        },
+      ],
+    });
+    renderWithDataRouter(<GlobalParamsPage />);
+    await chooseRowAction(user, 'apiUrl', 'Delete');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(typeBox('apiUrl')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeDisabled();
+    await answerConfirm(user, 'cancel');
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  /* #1466 — Delete again while the first usage read is still out is the same
+     row twice: one read, one question. Unguarded, the slower read opened a
+     second dialog for a global the first had already deleted, and accepting it
+     404'd into the banner over a delete that had succeeded. */
+  it('reads usage once when Delete is chosen again while the first read is pending', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([global()]);
+    deleteMock.mockResolvedValue(undefined);
+    let release: (u: { pipelines: []; triggers: [] }) => void = () => {};
+    usageMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderWithDataRouter(<GlobalParamsPage />);
+    await chooseRowAction(user, 'apiUrl', 'Delete');
+    await chooseRowAction(user, 'apiUrl', 'Delete');
+    expect(usageMock).toHaveBeenCalledTimes(1);
+    release({ pipelines: [], triggers: [] });
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    expect(usageMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   describe('the unsaved-changes guard (#1396)', () => {

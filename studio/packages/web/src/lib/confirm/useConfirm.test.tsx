@@ -141,6 +141,34 @@ describe('useConfirm', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('true'));
   });
 
+  it('asks for a spaced name as it is shown: trimmed, one space per run (#1466)', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={{ ...DELETE, typeToConfirm: '  Local   store ' }} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    const dialog = await screen.findByRole('alertdialog');
+    const action = screen.getByRole('button', { name: 'Delete' });
+    // The label shows the name it will accept; nothing invisible is asked for.
+    expect(dialog.querySelector('.confirm-dialog-name')?.textContent).toBe('Local store');
+    setConfirmName('Local store', 'Local stor');
+    expect(action).toBeDisabled();
+    setConfirmName('Local store', 'Local store');
+    expect(action).toBeEnabled();
+    // The stored spelling is accepted too.
+    setConfirmName('Local store', '  Local   store ');
+    expect(action).toBeEnabled();
+  });
+
+  it('still asks for a name that is only whitespace, not for an empty box (#1466)', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={{ ...DELETE, typeToConfirm: '   ' }} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('alertdialog');
+    const action = screen.getByRole('button', { name: 'Delete' });
+    expect(action).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '   ' } });
+    expect(action).toBeEnabled();
+  });
+
   it('refuses a second question while one is open, and leaves the open one alone', async () => {
     let ask: Ask | null = null;
     render(

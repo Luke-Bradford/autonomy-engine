@@ -1,6 +1,7 @@
 import { expect } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { UserEvent } from '@testing-library/user-event';
+import { typedNameLabel } from '../lib/confirm/typedName';
 
 /**
  * #1397 — answer the page's confirmation dialog (`useConfirm`): wait for it,
@@ -38,10 +39,10 @@ export async function answerConfirm(
  * artifact; real keyboard behaviour is covered by e2e/confirm-dialog.spec.ts.
  */
 
-/** Set the dialog's `Type <name> to confirm` box to `value`. */
+/** Set the dialog's `Type <name> to confirm` box (`typedNameLabel`) to `value`. */
 export function setConfirmName(name: string, value: string): void {
   const dialog = screen.getByRole('alertdialog');
-  fireEvent.change(within(dialog).getByLabelText(`Type ${name} to confirm`), {
+  fireEvent.change(within(dialog).getByLabelText(typedNameLabel(name)), {
     target: { value },
   });
 }

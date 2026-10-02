@@ -10,6 +10,7 @@ import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT, chooseRowAction, closeRowMenu } from '../testing/rowActions';
 import { answerConfirm, setConfirmName } from '../testing/confirmDialog';
+import { typedNameLabel } from '../lib/confirm/typedName';
 import { ApiError } from '../api/client';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
@@ -1072,7 +1073,7 @@ describe('ConnectionsPage', () => {
       expect(action).toBeDisabled();
 
       // A near miss does not unlock it — the whole name, exactly.
-      const box = within(dialog).getByLabelText('Type Local store to confirm');
+      const box = within(dialog).getByLabelText(typedNameLabel('Local store'));
       expect(box).toBeInTheDocument();
       setConfirmName('Local store', 'Local stor');
       expect(action).toBeDisabled();
@@ -1083,6 +1084,42 @@ describe('ConnectionsPage', () => {
 
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
+    });
+
+    /* #1466 — every kind of dependant the message names asks for the name on
+       its own, not only a dataset: a bound trigger, a trigger whose dynamic
+       reference can resolve to it, a node naming it, and a node whose dynamic
+       reference can. */
+    const NODE = {
+      pipelineId: 'p1',
+      pipelineName: 'etl',
+      versionId: 'v1',
+      version: 1,
+      nodeId: 'load',
+      nodeType: 'copy',
+    };
+    it.each([
+      ['a trigger', { triggers: [{ id: 't1', name: 'nightly' }] }],
+      ['a dynamic trigger', { dynamic: [{ id: 't2', name: 'hourly', nodeIds: ['load'] }] }],
+      ['a node', { nodes: [{ ...NODE, acceptedKinds: ['sqlite' as const] }] }],
+      ['a dynamic node', { dynamicNodes: [NODE] }],
+    ])('asks for the name when only %s depends on it', async (_label, dependants) => {
+      const user = userEvent.setup();
+      dependentsMock.mockResolvedValue({ ...NO_NODES, triggers: [], dynamic: [], ...dependants });
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await chooseRowAction(user, 'Local store', 'Delete');
+
+      const dialog = await screen.findByRole('alertdialog');
+      const action = within(dialog).getByRole('button', { name: 'Delete' });
+      expect(within(dialog).getByLabelText(typedNameLabel('Local store'))).toBeInTheDocument();
+      expect(action).toBeDisabled();
+      setConfirmName('Local store', 'Local store');
+      expect(action).toBeEnabled();
+      await answerConfirm(user, 'cancel');
+      expect(deleteMock).not.toHaveBeenCalled();
     });
 
     it('does not ask for the name when every check FAILED, but still names the failure', async () => {

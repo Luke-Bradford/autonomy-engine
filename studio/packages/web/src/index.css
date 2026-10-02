@@ -1320,6 +1320,11 @@ td button + button {
   margin-top: 0.75rem;
 }
 
+/* #1466 — a name that is only whitespace still shows as a gap to type. */
+.confirm-dialog-name {
+  white-space: pre;
+}
+
 /* #1396 — the pipeline editor's leave prompt. Fixed, so it takes no space in
    the editor's layout (#1393's no-shift gate), and above React Flow's panes.
    `top` clears the app bar, so it sits just under the page header it guards. */

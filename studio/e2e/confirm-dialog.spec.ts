@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { answerConfirm } from './support/confirmDialog';
+import { typedNameLabel } from '../packages/web/src/lib/confirm/typedName';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { tree } from './support/authorPane';
 import { seedConnection, seedDataset } from './support/seedResources';
@@ -113,7 +114,7 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     const dialog = page.getByRole('alertdialog');
     await expect(dialog).toBeVisible();
     const action = dialog.getByRole('button', { name: 'Delete', exact: true });
-    const box = dialog.getByRole('textbox', { name: `Type ${DEPENDANT} to confirm` });
+    const box = dialog.getByRole('textbox', { name: typedNameLabel(DEPENDANT) });
     // Focus lands on the name box, and the action cannot be reached by a stray Enter.
     await expect(box).toBeFocused();
     await expect(action).toBeDisabled();

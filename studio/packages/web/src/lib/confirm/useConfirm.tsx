@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@fluentui/react-components';
 import { splitConfirmMessage } from './splitConfirmMessage';
+import { TYPED_NAME_PREFIX, TYPED_NAME_SUFFIX, typedNameKey } from './typedName';
 
 /**
  * #1397 OR6 — the one confirmation dialog, replacing `window.confirm`.
@@ -52,7 +53,8 @@ export interface ConfirmRequest {
   readonly cancelLabel?: string;
   /**
    * For an irreversible delete of something other resources depend on: the
-   * action button stays disabled until this exact name is typed.
+   * action button stays disabled until this name is typed. Compared after
+   * `typedNameKey`, so whitespace the dialog cannot show is not asked for.
    */
   readonly typeToConfirm?: string;
   /**
@@ -256,7 +258,9 @@ function ConfirmDialog({
   const [typed, setTyped] = useState('');
   const inputId = useId();
   const bodyId = useId();
-  const blocked = request.typeToConfirm !== undefined && typed !== request.typeToConfirm;
+  const blocked =
+    request.typeToConfirm !== undefined &&
+    typedNameKey(typed) !== typedNameKey(request.typeToConfirm);
   // Focus opens on the safe choice: Cancel, or the name box when one is asked
   // for — never the action, so a stray Enter cannot confirm a delete. Placed
   // by `useConfirm` rather than left to Fluent's first-focusable search, which
@@ -277,7 +281,11 @@ function ConfirmDialog({
           {request.typeToConfirm !== undefined && (
             <div className="confirm-dialog-typed">
               <label htmlFor={inputId}>
-                Type <strong>{request.typeToConfirm}</strong> to confirm
+                {TYPED_NAME_PREFIX}
+                <strong className="confirm-dialog-name">
+                  {typedNameKey(request.typeToConfirm)}
+                </strong>
+                {TYPED_NAME_SUFFIX}
               </label>
               <input
                 ref={initialFocus as RefObject<HTMLInputElement | null>}
