@@ -106,6 +106,15 @@ test.describe('#1139 — copy-node authoring', () => {
     await properties(page).getByRole('combobox', { name: 'Sink dataset' }).selectOption(sinkSet);
     await expect(properties(page).getByRole('status')).toHaveCount(0);
 
+    // The column mapping is a REQUIRED config field the operator fills — an empty
+    // palette-dropped copy is refused at save (#1480). One row is enough here;
+    // the mapping itself is the next test's subject.
+    await properties(page).getByRole('button', { name: 'Add mapping row' }).click();
+    await properties(page).getByRole('textbox', { name: 'mapping row 1 source' }).fill('id');
+    await properties(page).getByRole('textbox', { name: 'mapping row 1 sink' }).fill('id');
+    await properties(page).getByLabel('mapping row 1 type').selectOption('integer');
+    await properties(page).getByRole('button', { name: 'Apply config' }).click();
+
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 

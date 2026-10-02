@@ -100,13 +100,23 @@ test.describe('U7 — per-activity node config form', () => {
   // touches a field TWICE meets it, which is this one's whole shape.
   test('a filled field is still found by its exact label', async ({ page }) => {
     const problems = collectPageProblems(page);
+    // Seeded WITH a url: the write gate refuses an `http_request` without one
+    // (#1480), so the field is never empty on arrival. The trap needs a field
+    // that is located, filled, then located again, which is unchanged.
     await openSeededCanvas(page, 'u7 label after fill', {
-      nodes: [{ id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
+      nodes: [
+        {
+          id: 'a',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: { url: 'https://example.test/before' },
+        },
+      ],
     });
     await canvasNodes(page).first().click();
 
     const url = properties(page).getByLabel('Request URL', { exact: true });
-    await expect(url).toHaveValue('');
+    await expect(url).toHaveValue('https://example.test/before');
     await url.fill('https://example.test/label');
     await expect(url).toHaveValue('https://example.test/label', { timeout: 3_000 });
     await expectQuiet(page, problems);
@@ -383,11 +393,12 @@ test.describe('U7 — per-activity node config form', () => {
     page,
   }) => {
     // The kind comes from the SCHEMA, the value from the DOC. `http_request`'s
-    // `config` is a `z.record(z.string(), z.unknown())` at the doc level, so the
-    // write gate accepts a `url` that is not a string — which is exactly what an
-    // API-authored or imported doc can arrive holding. Rendering that object into
-    // a text box would apply back as "[object Object]": a corruption caused by
-    // OPENING the panel, with no edit at all.
+    // `headers` is a `z.record(z.string(), z.string())`, which admits a header
+    // named '' — a value the write gate accepts (#1480 now refuses a `url` that
+    // is not a string, which this spec used to seed) but that a key/value ROW
+    // cannot hold, so the form cannot show it. Rendering it as rows would
+    // silently drop the entry on an apply that touched another field: a
+    // corruption caused by OPENING the panel, with no edit at all.
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u7 unrenderable', {
       nodes: [
@@ -395,7 +406,7 @@ test.describe('U7 — per-activity node config form', () => {
           id: 'a',
           type: 'http_request',
           position: { x: 0, y: 0 },
-          config: { url: { authored: 'elsewhere' } },
+          config: { url: 'https://example.test/seed', headers: { '': 'authored elsewhere' } },
         },
       ],
     });
@@ -411,7 +422,7 @@ test.describe('U7 — per-activity node config form', () => {
       properties(page).getByRole('textbox', { name: 'Request URL', exact: true }),
     ).toHaveCount(0);
     await expect(
-      properties(page).getByText(/Saved settings this form cannot show \(url\)/),
+      properties(page).getByText(/Saved settings this form cannot show \(headers\)/),
     ).toBeVisible();
 
     await expectQuiet(page, problems);

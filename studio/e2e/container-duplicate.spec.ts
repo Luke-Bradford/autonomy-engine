@@ -108,9 +108,13 @@ test.describe('duplicate a container (U21)', () => {
     for (const copy of latest.containers.filter((c) => c.id !== 'loop_1')) {
       expect(copy.children).toHaveLength(2);
       expect(copy.children.some((id) => ['x', 'y'].includes(id))).toBe(false);
-      // THE POINT: the copy exits on ITS OWN copy of `y`...
+      // THE POINT: the copy exits on ITS OWN copy of `y` — the child whose url
+      // reads a sibling (`x` carries a url too now: #1480 requires one)...
       const copyY = latest.nodes.find(
-        (n) => copy.children.includes(n.id) && typeof n.config['url'] === 'string',
+        (n) =>
+          copy.children.includes(n.id) &&
+          typeof n.config['url'] === 'string' &&
+          n.config['url'].includes('${nodes.'),
       )!;
       expect(copy.exitWhen).toBe(`\${equals(nodes.${copyY.id}.status, "success")}`);
       // ...and keeps the upstream the original box was wired from.

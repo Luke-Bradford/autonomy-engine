@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { viewportSettled } from './support/canvasGraph';
-import { openSeededCanvas, rectOf } from './support/seedDoc';
+import { openSeededCanvas, rectOf, seedVersion } from './support/seedDoc';
 import { editorMenuItem } from './support/canvas';
 
 /**
@@ -130,13 +130,24 @@ test.describe('canvas auto-layout (U9)', () => {
     // A node is as wide as its TITLE, and the title falls back to the raw
     // activity `type` when the catalog has no entry for it — which the write
     // gate permits (an unknown type fails at DISPATCH, not at save), so this is
-    // the doc an import from a newer or older build actually produces. One
+    // the doc an import from a newer or older build actually produces. The save
+    // gate now refuses an unknown type (#1480) UNLESS the node carries `call`,
+    // which the engine dispatches structurally and never through an adapter, so
+    // the fixture is a call node with an unregistered `type`. One
     // unbroken token on purpose: a multi-word title can wrap, which would make
     // the width precondition below depend on the pane width instead of on the
     // layout.
+    const target = await seedVersion(page, 'e2e arrange wide target', {
+      nodes: [{ id: 'only', position: { x: 0, y: 0 } }],
+    });
     await openSeededCanvas(page, 'e2e arrange wide', {
       nodes: [
-        { id: 'wide', type: 'an_extremely_long_unregistered_activity_type_name', position: PILE },
+        {
+          id: 'wide',
+          type: 'an_extremely_long_unregistered_activity_type_name',
+          call: { pipelineVersionId: target.pipelineVersionId, params: {} },
+          position: PILE,
+        },
         { id: 'next', position: PILE },
       ],
       edges: [{ from: 'wide', to: 'next', on: 'success' }],

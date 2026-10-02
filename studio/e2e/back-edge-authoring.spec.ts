@@ -8,7 +8,9 @@ import {
   dragNodeBy,
   edgeGroup,
   firesOn,
+  fillNodeConfig,
   fitAndSettle,
+  SAVABLE_CONFIG,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 
@@ -42,6 +44,10 @@ async function seedChain(page: Page): Promise<void> {
   await addActivity(page, 'Write File');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
+  // Both start without the field their adapter requires, which the save gate
+  // refuses (#1480); the operator fills them, so the chain is savable.
+  await fillNodeConfig(page, 0, SAVABLE_CONFIG['HTTP Request']!);
+  await fillNodeConfig(page, 1, SAVABLE_CONFIG['Write File']!);
   await dragNodeBy(page, 1, 300, 60);
   await connectNodes(page, 0, 1);
   await expect(edgeGroup(page)).toHaveCount(1);

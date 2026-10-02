@@ -247,7 +247,10 @@ test.describe('copy/paste on the canvas (U21)', () => {
     const latest = versions.reduce((x, y) => (x.version > y.version ? x : y));
     const copies = latest.nodes.filter((n) => n.id !== 'z' && n.id !== 'a');
     expect(copies).toHaveLength(2);
-    const copyB = copies.find((n) => typeof n.config['url'] === 'string');
+    // `b` is the copy whose url READS the other: every http_request carries a url now (#1480).
+    const copyB = copies.find(
+      (n) => typeof n.config['url'] === 'string' && n.config['url'].includes('${nodes.'),
+    );
     const copyA = copies.find((n) => n !== copyB);
     // THE POINT: the copy of b reads the copy of a — not the target's own `a`.
     expect(copyB!.config['url']).toBe(`https://example.test/\${nodes.${copyA!.id}.output.body}`);
@@ -415,7 +418,10 @@ test.describe('copy/paste on the canvas (U21)', () => {
     expect(latest.containers).toHaveLength(1);
     const box = latest.containers[0]!;
     const copyY = latest.nodes.find(
-      (n) => box.children.includes(n.id) && typeof n.config['url'] === 'string',
+      (n) =>
+        box.children.includes(n.id) &&
+        typeof n.config['url'] === 'string' &&
+        n.config['url'].includes('${nodes.'),
     )!;
     // THE POINT: the copy exits on ITS OWN copy of `y`...
     expect(box.exitWhen).toBe(`\${equals(nodes.${copyY.id}.status, "success")}`);

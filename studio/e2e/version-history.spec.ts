@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { addActivity, viewportSettled } from './support/canvasGraph';
+import { addActivity, addSavableActivity, viewportSettled } from './support/canvasGraph';
 import { fluentRootReady } from './support/theme';
 import { answerConfirm } from './support/confirmDialog';
 import { editorMenuItem } from './support/canvas';
@@ -356,7 +356,8 @@ test.describe('pipeline version history', () => {
     const problems = collectPageProblems(page);
     await seedThreeVersions(page, 'history-refusal');
 
-    await addActivity(page, 'HTTP Request');
+    // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
+    await addSavableActivity(page, 'HTTP Request');
     // #1393 — dirty is the mark on Save (its description), not a paragraph.
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
     await expect(page.getByRole('button', { name: 'Save version' })).toHaveAccessibleDescription(
@@ -407,7 +408,8 @@ test.describe('pipeline version history', () => {
     await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
 
     // This tab, still based on v1, makes an edit and saves.
-    await addActivity(page, 'HTTP Request');
+    // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
+    await addSavableActivity(page, 'HTTP Request');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const banner = page.locator('.notice-conflict');
@@ -493,7 +495,8 @@ test.describe('pipeline version history', () => {
 
     // Raise the banner: another writer lands v2, this tab saves from v1.
     await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
-    await addActivity(page, 'HTTP Request');
+    // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
+    await addSavableActivity(page, 'HTTP Request');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const override = page.getByRole('button', { name: 'Save as v3 anyway' });
@@ -558,7 +561,8 @@ test.describe('pipeline version history', () => {
     await viewportSettled(page);
 
     const v2 = await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
-    await addActivity(page, 'HTTP Request');
+    // A palette-dropped HTTP node needs its URL before the doc saves (#1480).
+    await addSavableActivity(page, 'HTTP Request');
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeEnabled();
 

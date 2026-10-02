@@ -210,6 +210,14 @@ test.describe('#863 — an issue is shown on the node it is about', () => {
       await expect(canvasNodes(page)).toHaveCount(2);
 
       const [first, second] = [canvasNodes(page).nth(0), canvasNodes(page).nth(1)];
+      // A palette-dropped HTTP node starts without its required URL and badges
+      // until it has one (#1480). Give the FIRST its URL, as an operator must, so
+      // that the only issue on the canvas is the second node's ghost reference.
+      await first.click();
+      await properties(page)
+        .getByRole('textbox', { name: 'Request URL' })
+        .fill('https://example.test/first');
+      await properties(page).getByRole('button', { name: 'Apply config' }).click();
       await second.click();
       await properties(page)
         .getByRole('textbox', { name: 'Request URL' })
