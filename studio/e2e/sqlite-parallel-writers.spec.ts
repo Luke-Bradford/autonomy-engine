@@ -137,14 +137,14 @@ test('#1423 — two parallel Copy branches into one sqlite file both land', asyn
     ).json()) as { type: string; payload: Record<string, unknown> }[];
     const at = (type: string, nodeId: string) =>
       events.findIndex((e) => e.type === type && e.payload.nodeId === nodeId);
-    const lastDispatch = Math.max(at('node.dispatched', 'a'), at('node.dispatched', 'b'));
-    const firstFinish = Math.min(
-      ...events.flatMap((e, i) =>
-        e.type === 'node.succeeded' && ['a', 'b'].includes(String(e.payload.nodeId)) ? [i] : [],
-      ),
+    const dispatches = [at('node.dispatched', 'a'), at('node.dispatched', 'b')];
+    const finishes = events.flatMap((e, i) =>
+      e.type === 'node.succeeded' && ['a', 'b'].includes(String(e.payload.nodeId)) ? [i] : [],
     );
-    expect(lastDispatch).toBeGreaterThanOrEqual(0);
-    expect(lastDispatch).toBeLessThan(firstFinish);
+    // Both present, so neither `-1` nor an empty `Math.min()` can pass the order check.
+    expect(dispatches.every((i) => i >= 0)).toBe(true);
+    expect(finishes).toHaveLength(2);
+    expect(Math.max(...dispatches)).toBeLessThan(Math.min(...finishes));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
