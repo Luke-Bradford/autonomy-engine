@@ -423,6 +423,36 @@ describe('FactoryResources — row actions', () => {
     expect(listMock.mock.calls).toHaveLength(listCallsBefore);
   });
 
+  // #1470 — the menu reopens while the download is still out: Export is drawn
+  // disabled there, and choosing it again does not start a second export.
+  it('exports a row once while its export is in flight', async () => {
+    const user = userEvent.setup();
+    exportMock.mockReset();
+    downloadMock.mockReset();
+    let release: (body: string) => void = () => {};
+    exportMock.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Export' }));
+    await waitFor(() => expect(exportMock).toHaveBeenCalledTimes(1));
+
+    await openRowMenu(user, 'Alpha');
+    const again = await screen.findByRole('menuitem', { name: 'Export' });
+    expect(again).toHaveAttribute('aria-disabled', 'true');
+    await user.click(again);
+    expect(exportMock).toHaveBeenCalledTimes(1);
+
+    release('{}');
+    await waitFor(() => expect(downloadMock).toHaveBeenCalledTimes(1));
+  });
+
   it('duplicates through a name row prefilled with a "(copy)" suffix', async () => {
     const user = userEvent.setup();
     renderPane();

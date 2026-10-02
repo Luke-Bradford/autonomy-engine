@@ -29,15 +29,6 @@ import { useCallback, useRef, useState } from 'react';
  * DELIBERATELY NOT MIGRATED, and why — `useGuardedLoad` sets this convention,
  * because the omissions are the part a later reader cannot reconstruct:
  *
- *   - `FactoryResources`'s Export. It is a Fluent `<MenuItem>`, and
- *     `useMenuItemBase` calls `setOpen(event, {open: false})` BEFORE delegating
- *     to the handler, so the item unmounts on the first click. That argument
- *     is weaker than it reads: the menu can be reopened while the export is in
- *     flight, and reopening it IS the second click. The Pipelines and Triggers
- *     tables moved their Exports into a row menu in #1397 and KEPT this guard
- *     for that reason, drawing the item disabled from `active`; the pane's
- *     Export is still unguarded.
- *
  * `TriggersPage`'s `onFire` WAS on that list, as the page-wide flag this hook
  * argues against, deferred because the page reported a fire through ONE
  * `actionMsg` slot and ONE `watchRunId` — so permitting concurrent fires would
@@ -46,6 +37,11 @@ import { useCallback, useRef, useState } from 'react';
  * #1247 answered it: the page now keys its outcomes per trigger, so `onFire` is
  * MIGRATED and the entry is kept here only so the next reader does not re-derive
  * the objection and re-defer it.
+ *
+ * `FactoryResources`'s Export WAS on that list too, on the argument that its
+ * Fluent `<MenuItem>` unmounts on the first click. The menu can be reopened
+ * while the export is in flight, and reopening it is the second click, so it
+ * is MIGRATED (#1470) and drawn disabled from `active`, as the tables are.
  *
  * `ConnectionsPage.onDelete` — the handler this hook was extracted FROM — is
  * migrated, and keeps its no-affordance shape: its dialog is the feedback.
