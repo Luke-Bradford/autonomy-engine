@@ -1,7 +1,10 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -50,28 +53,83 @@ export interface ConfirmRequest {
 
 interface Pending extends ConfirmRequest {
   readonly id: number;
+  readonly owner: object;
   readonly opener: Element | null;
   readonly resolve: (confirmed: boolean) => void;
+}
+
+type Ask = (request: ConfirmRequest) => Promise<boolean>;
+
+/** What an asker holds. Stable for the controller's lifetime. */
+interface ConfirmApi {
+  /** Ask; `owner` identifies the asker, so it can withdraw only its own question. */
+  readonly confirm: (request: ConfirmRequest, owner: object) => Promise<boolean>;
+  /** Answer `false` to the open question, if `owner` asked it. */
+  readonly withdraw: (owner: object) => void;
+}
+
+const ConfirmHostContext = createContext<ConfirmApi | null>(null);
+
+/**
+ * The app's one confirmation dialog, mounted ABOVE the routes (`main.tsx`).
+ *
+ * A dialog rendered by the page it guards dies with that page, and an in-app
+ * modal does not block Back the way `window.confirm` did. Unmounting an OPEN
+ * Fluent dialog leaves tabster's `aria-hidden` on `#root` — the whole app then
+ * reads as empty to a screen reader and to `getByRole`. Hosted here, the dialog
+ * outlives the page: a page that goes away with its question open withdraws it,
+ * and the dialog CLOSES (`open={false}`), which lifts the `aria-hidden`.
+ */
+export function ConfirmHost({ children }: { children: ReactNode }) {
+  const { api, dialog } = useConfirmController();
+  return (
+    <ConfirmHostContext.Provider value={api}>
+      {children}
+      {dialog}
+    </ConfirmHostContext.Provider>
+  );
 }
 
 /**
  * `const [confirm, confirmDialog] = useConfirm()` — render `confirmDialog`
  * somewhere in the page, then `if (!(await confirm({...}))) return;`.
  *
- * Page-local rather than an app-wide provider: each page owns its dialog, so
- * rendering a page on its own (as its tests do) needs no wrapper.
+ * Under a `ConfirmHost` (the app) the question is shown by the host and
+ * `confirmDialog` is `null`; without one (a page rendered alone, as its unit
+ * tests do) the page shows it itself.
  *
  * Only one question is open at a time. Asking again while one is open answers
  * the NEW question `false` and leaves the open one alone: swapping the dialog
  * under the operator could turn a click meant for "Delete B" into a delete of
- * A. The page unmounting answers an open question `false`, so no caller waits
+ * A. The page unmounting answers its open question `false`, and so does asking
+ * after it has gone (a caller that awaited a read first), so no caller waits
  * forever.
  */
-export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, ReactNode] {
+export function useConfirm(): [Ask, ReactNode] {
+  const host = useContext(ConfirmHostContext);
+  const local = useConfirmController();
+  const target = host ?? local.api;
+  const [owner] = useState(() => ({}));
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      target.withdraw(owner);
+    };
+  }, [target, owner]);
+
+  const confirm = useCallback<Ask>(
+    (request) => (mounted.current ? target.confirm(request, owner) : Promise.resolve(false)),
+    [target, owner],
+  );
+  return [confirm, host === null ? local.dialog : null];
+}
+
+function useConfirmController(): { api: ConfirmApi; dialog: ReactNode } {
   // The question on screen, kept after it is answered so the dialog can CLOSE
-  // (`open={false}`) rather than be torn out while open: unmounting an open
-  // Fluent dialog leaves tabster's `aria-hidden` on the rest of the page, which
-  // then stays invisible to screen readers and to `getByRole`.
+  // (`open={false}`) rather than be torn out while open (see `ConfirmHost`).
   const [shown, setShown] = useState<{ request: Pending; open: boolean } | null>(null);
   const pendingRef = useRef<Pending | null>(null);
   const seq = useRef(0);
@@ -80,9 +138,6 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
   const restoreTo = useRef<HTMLElement | null>(null);
   // The control the dialog opens on (see `ConfirmDialog`).
   const initialFocus = useRef<HTMLElement | null>(null);
-  // A caller that awaited a read before asking can ask after the page has
-  // gone; nothing would ever render or answer that question.
-  const mounted = useRef(true);
 
   const settle = useCallback((confirmed: boolean) => {
     const current = pendingRef.current;
@@ -108,15 +163,16 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
   }, []);
 
   const confirm = useCallback(
-    (request: ConfirmRequest) =>
+    (request: ConfirmRequest, owner: object) =>
       new Promise<boolean>((resolve) => {
-        if (pendingRef.current !== null || !mounted.current) {
+        if (pendingRef.current !== null) {
           resolve(false);
           return;
         }
         const next = {
           ...request,
           id: ++seq.current,
+          owner,
           opener: document.activeElement,
           resolve,
         };
@@ -126,21 +182,27 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
     [],
   );
 
-  // Here, in the asking component, rather than in the dialog body: effects run
-  // child-first, so this runs AFTER Fluent's own first-focus effect in `Dialog`
-  // and has the last word on where focus lands.
+  const withdraw = useCallback(
+    (owner: object) => {
+      if (pendingRef.current?.owner === owner) settle(false);
+    },
+    [settle],
+  );
+
+  // Here, in the component that renders the `Dialog`, rather than in the dialog
+  // body: effects run child-first, so this runs AFTER Fluent's own first-focus
+  // effect in `Dialog` and has the last word on where focus lands.
   useEffect(() => {
     if (shown?.open) initialFocus.current?.focus();
   }, [shown]);
 
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
+  useEffect(
+    () => () => {
       pendingRef.current?.resolve(false);
       pendingRef.current = null;
-    };
-  }, []);
+    },
+    [],
+  );
 
   const dialog =
     shown === null ? null : (
@@ -161,7 +223,10 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
         />
       </Dialog>
     );
-  return [confirm, dialog];
+  // Stable, because askers key effects on it: an api that changed per render
+  // would re-run an asker's unmount cleanup and withdraw its own question.
+  const api = useMemo(() => ({ confirm, withdraw }), [confirm, withdraw]);
+  return { api, dialog };
 }
 
 function ConfirmDialog({

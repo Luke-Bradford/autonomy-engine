@@ -82,6 +82,9 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     await page.keyboard.press('Enter');
     await expect(dialog).toBeHidden();
     await expect(link).toHaveCount(0);
+    // Focus is not dropped on <body> by the closing dialog: the pane hands it
+    // to the New pipeline button once the row has gone.
+    await expect(page.locator('#factory-new-pipeline')).toBeFocused();
 
     // Gone from the server, not just this render.
     await page.reload();
@@ -169,4 +172,28 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
       await expectQuiet(page, problems);
     });
   }
+
+  // The page under the dialog can unmount with it OPEN: Back is not blocked by
+  // an in-app modal the way it was by `window.confirm`.
+  test('navigating Back with it open leaves the app visible to assistive tech', async ({
+    page,
+  }) => {
+    const name = 'e2e_1397_aria_back';
+    const res = await page.request.post('/api/global-params', {
+      data: { name, type: 'string', value: 'v' },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    await page.goto('/#/');
+    await page.goto('/#/manage/global-params');
+    await page.getByRole('heading', { name: 'Global parameters' }).waitFor();
+    await fluentRootReady(page);
+
+    await page.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true');
+    await page.goBack();
+
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    await expect(page.locator('#root')).not.toHaveAttribute('aria-hidden', 'true');
+  });
 });

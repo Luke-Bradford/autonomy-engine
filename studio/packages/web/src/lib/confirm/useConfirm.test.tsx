@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { pressInConfirm, setConfirmName } from '../../testing/confirmDialog';
 import { useEffect, useState, type ReactNode } from 'react';
 import { splitConfirmMessage } from './splitConfirmMessage';
-import { useConfirm, type ConfirmRequest } from './useConfirm';
+import { ConfirmHost, useConfirm, type ConfirmRequest } from './useConfirm';
 
 /** A page that asks one question per click and shows each answer. */
 function Harness({ request }: { request: ConfirmRequest }): ReactNode {
@@ -216,5 +216,79 @@ describe('useConfirm', () => {
     await screen.findByRole('alertdialog');
     unmount();
     await expect(pending!).resolves.toBe(false);
+  });
+
+  describe('under a ConfirmHost', () => {
+    it('shows the question once, in the host, though the page renders its own slot', async () => {
+      const user = userEvent.setup();
+      function Page() {
+        const [confirm, dialog] = useConfirm();
+        return (
+          <>
+            <button type="button" onClick={() => void confirm(DELETE)}>
+              Ask
+            </button>
+            {dialog}
+          </>
+        );
+      }
+      render(
+        <ConfirmHost>
+          <Page />
+        </ConfirmHost>,
+      );
+      await user.click(screen.getByRole('button', { name: 'Ask' }));
+      await screen.findByRole('alertdialog');
+      expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    });
+
+    it('closes the question when the page that asked it goes away, answering false', async () => {
+      let ask: Ask | null = null;
+      function App({ showPage }: { showPage: boolean }) {
+        return (
+          <ConfirmHost>
+            {showPage && (
+              <Capture
+                onReady={(c) => {
+                  ask = c;
+                }}
+              />
+            )}
+          </ConfirmHost>
+        );
+      }
+      const { rerender } = render(<App showPage />);
+      let pending: Promise<boolean> | null = null;
+      act(() => {
+        pending = ask!(DELETE);
+      });
+      await screen.findByRole('alertdialog');
+      rerender(<App showPage={false} />);
+      await expect(pending!).resolves.toBe(false);
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    });
+
+    it("does not withdraw ANOTHER asker's question when an unrelated page goes away", async () => {
+      let askA: Ask | null = null;
+      function App({ showB }: { showB: boolean }) {
+        return (
+          <ConfirmHost>
+            <Capture
+              onReady={(c) => {
+                askA = c;
+              }}
+            />
+            {showB && <Capture onReady={() => {}} />}
+          </ConfirmHost>
+        );
+      }
+      const { rerender } = render(<App showB />);
+      act(() => {
+        void askA!(DELETE);
+      });
+      await screen.findByRole('alertdialog');
+      rerender(<App showB={false} />);
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    });
   });
 });
