@@ -2377,8 +2377,8 @@ function ContainerSection({
    * ONE evaluation, at the moment of the click, against live state — the
    * consequence is never stored, so it cannot go stale the way a frozen
    * `role="alert"` does (`FlowCanvas` documents that failure). `window.confirm`
-   * is the canvas's existing confirmation route (`confirmDeleteContainer`,
-   * and every list page).
+   * is the canvas's existing confirmation route (`confirmDeleteContainer`);
+   * the list pages moved to `useConfirm` in #1397 and this follows.
    */
   function withConfirmation(
     nextContainers: Container[],

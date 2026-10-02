@@ -988,8 +988,9 @@ export function FlowCanvas({
   /**
    * #748 — confirm, then remove the container.
    *
-   * Confirmed where every other destructive act in this app is (a `window.confirm`
-   * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
+   * Confirmed like every other destructive act in this app (still a native
+   * `window.confirm` here; the list pages moved to `useConfirm` in #1397 and
+   * this follows in a later OR6 slice), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
    * surface can re-author yet (U23, #839), so a mis-click costs more than a

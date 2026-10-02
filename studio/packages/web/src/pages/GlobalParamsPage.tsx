@@ -193,6 +193,7 @@ export function GlobalParamsPage() {
           New global parameter
         </button>
       </div>
+
       <p className="page-hint">
         A global parameter is a named value every pipeline in this workspace shares, to be read as{' '}
         <code>{'${global.<name>}'}</code>. A run records the values it read, so editing a global
@@ -203,11 +204,13 @@ export function GlobalParamsPage() {
         Values are <strong>cleartext</strong>: they are shown here and will be copied into run logs,
         exports and git. Put a credential in <Link to="/manage/secrets">Secrets</Link> instead.
       </p>
+
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
+
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -300,7 +303,9 @@ export function GlobalParamsPage() {
           />
         )}
       </div>
-      <ImportPanel listKind="global-param" onImported={refresh} /> {confirmDialog}
+
+      <ImportPanel listKind="global-param" onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }

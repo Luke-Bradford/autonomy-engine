@@ -156,17 +156,20 @@ export function SecretsPage() {
           New secret
         </button>
       </div>
+
       <p className="page-hint">
         A secret is a named credential, stored encrypted. A pipeline never contains the value — a
         node references it by name as <code>{'{"$secret": "<name>"}'}</code>, and it is decrypted
         only at dispatch. Values are write-only: once saved, a secret can be replaced or deleted,
         never read back.
       </p>
+
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
+
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -240,7 +243,7 @@ export function SecretsPage() {
             }}
           />
         )}
-      </div>{' '}
+      </div>
       {confirmDialog}
     </section>
   );

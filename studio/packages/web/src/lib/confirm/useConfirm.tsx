@@ -80,6 +80,9 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
   const restoreTo = useRef<HTMLElement | null>(null);
   // The control the dialog opens on (see `ConfirmDialog`).
   const initialFocus = useRef<HTMLElement | null>(null);
+  // A caller that awaited a read before asking can ask after the page has
+  // gone; nothing would ever render or answer that question.
+  const mounted = useRef(true);
 
   const settle = useCallback((confirmed: boolean) => {
     const current = pendingRef.current;
@@ -107,7 +110,7 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
   const confirm = useCallback(
     (request: ConfirmRequest) =>
       new Promise<boolean>((resolve) => {
-        if (pendingRef.current !== null) {
+        if (pendingRef.current !== null || !mounted.current) {
           resolve(false);
           return;
         }
@@ -130,13 +133,14 @@ export function useConfirm(): [(request: ConfirmRequest) => Promise<boolean>, Re
     if (shown?.open) initialFocus.current?.focus();
   }, [shown]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       pendingRef.current?.resolve(false);
       pendingRef.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const dialog =
     shown === null ? null : (
@@ -181,6 +185,7 @@ function ConfirmDialog({
   // by `useConfirm` rather than left to Fluent's first-focusable search, which
   // agrees in a browser but depends on layout to find a target.
   const asksName = request.typeToConfirm !== undefined;
+  // Cleanup only: runs when Fluent unmounts the surface after it has closed.
   useEffect(() => onGone, [onGone]);
   return (
     <DialogSurface className="confirm-dialog" aria-describedby={bodyId}>
@@ -206,7 +211,8 @@ function ConfirmDialog({
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !blocked) onAnswer(true);
+                  // Not mid-composition: an IME's Enter commits text, not the dialog.
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing && !blocked) onAnswer(true);
                 }}
               />
             </div>

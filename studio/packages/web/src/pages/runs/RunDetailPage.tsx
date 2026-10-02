@@ -315,8 +315,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /**
    * CX4 (#1320) — cancel THIS run, after a confirmation that names what stops.
    *
-   * `window.confirm`, as every other destructive action in the app does
-   * (`PipelinesPage`, `TriggersPage`, `DatasetsPage`). The text is built from
+   * Confirmed like every other destructive action in the app — still a native
+   * `window.confirm` here until a later OR6 slice (#1397) moves it to
+   * `useConfirm`, as the list pages already are. The text is built from
    * the node table's own rows, so it names exactly what the operator sees in
    * progress, in the table's words.
    *

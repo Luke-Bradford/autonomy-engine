@@ -466,9 +466,11 @@ export function ConnectionsPage() {
         ]
           .filter((part) => part !== '')
           .join('\n\n');
-        // Typing the name is asked for only when something is KNOWN to depend
-        // on it. A check that failed stays advisory (#1145/#1158): the message
-        // says so, and an outage adds no friction to the delete.
+        // Typing the name is asked for only when a check that SUCCEEDED named
+        // something depending on it — a dynamic reference that can resolve to
+        // it included, since the message names those too. A check that failed
+        // stays advisory (#1145/#1158): the message says so, and an outage adds
+        // no friction to the delete.
         const hasDependants =
           (check.state === 'known' && check.names.length > 0) ||
           (triggerCheck.state === 'known' &&
@@ -503,15 +505,18 @@ export function ConnectionsPage() {
           New connection
         </button>
       </div>
+
       <p className="page-hint">
         A connection is a worker: an LLM API key, a local model, an agent CLI, or an HTTP endpoint.
         Pipelines reference connections; secrets are stored encrypted and never shown again.
       </p>
+
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
+
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -618,12 +623,14 @@ export function ConnectionsPage() {
           />
         )}
       </div>
+
       {/* The import surface lives on the list an imported connection lands in —
           but it takes ANY export envelope, because `POST /api/import` does (see
           `ImportPanel`). A pipeline or trigger file is imported and then
           reported with a pointer to its own section, rather than refused by a
           client-side rule the server does not have. */}
-      <ImportPanel listKind="connection" onImported={refresh} /> {confirmDialog}
+      <ImportPanel listKind="connection" onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }

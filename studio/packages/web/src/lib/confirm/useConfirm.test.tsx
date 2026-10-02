@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { pressInConfirm, setConfirmName } from '../../testing/confirmDialog';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -173,6 +173,31 @@ describe('useConfirm', () => {
     expect(await screen.findByRole('alertdialog')).toHaveAccessibleDescription(
       'Its triggers stop. This cannot be undone.',
     );
+  });
+
+  it('answers false at once when asked after the page has gone', async () => {
+    let ask: Ask | null = null;
+    const { unmount } = render(
+      <Capture
+        onReady={(c) => {
+          ask = c;
+        }}
+      />,
+    );
+    unmount();
+    await expect(ask!(DELETE)).resolves.toBe(false);
+  });
+
+  it('does not confirm on an Enter that commits an IME composition', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={{ ...DELETE, typeToConfirm: 'Nightly' }} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    const input = await screen.findByLabelText('Type Nightly to confirm');
+    setConfirmName('Nightly', 'Nightly');
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    pressInConfirm('Enter', input);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('true'));
   });
 
   it('answers an open question false when the page unmounts', async () => {

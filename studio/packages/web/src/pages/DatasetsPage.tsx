@@ -421,15 +421,18 @@ export function DatasetsPage() {
           New dataset
         </button>
       </div>
+
       <p className="page-hint">
         A dataset is a thing in a store, in a shape: which connection it lives in, how it is
         addressed, and the columns it declares. A copy activity binds one at each end.
       </p>
+
       {loadError && (
         <p role="alert" className="error">
           {loadError}
         </p>
       )}
+
       {/* #1396 — the list and the form side by side; the form is a column, not
           an overlay, so the row actions stay reachable while it is open. */}
       {guard.routeHold}
@@ -523,7 +526,9 @@ export function DatasetsPage() {
           />
         )}
       </div>
-      <ImportPanel listKind="dataset" stores={connections} onImported={refresh} /> {confirmDialog}
+
+      <ImportPanel listKind="dataset" stores={connections} onImported={refresh} />
+      {confirmDialog}
     </section>
   );
 }
