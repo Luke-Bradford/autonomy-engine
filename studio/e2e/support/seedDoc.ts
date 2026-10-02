@@ -173,6 +173,21 @@ export async function seedVersion(
  * hand-writing raw request bodies for its second and third versions would be
  * expressing the same doc two different ways in one file.
  */
+/** #1480 — the placeholder URL a seeded `http_request` carries unless the spec sets one. */
+export const SEED_URL = 'https://example.test/seed';
+
+/**
+ * A seed node as the write path receives it: `http_request` by default, and,
+ * because the save gate checks a literal config against the schema its adapter
+ * parses (#1480), an `http_request` carries the `url` it requires. A spec that
+ * sets its own `url` keeps it.
+ */
+function seedNode(n: SeedNode): SeedNode {
+  const type = n.type ?? 'http_request';
+  const config = type === 'http_request' ? { url: SEED_URL, ...n.config } : (n.config ?? {});
+  return { ...n, type, config };
+}
+
 export async function mintVersion(
   page: Page,
   pipelineId: string,
@@ -191,7 +206,7 @@ export async function mintVersion(
       data: {
         params: doc.params ?? [],
         outputs: doc.outputs ?? [],
-        nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
+        nodes: doc.nodes.map(seedNode),
         // `Edge.id` is required on the write path; a seed cares about the shape of
         // the graph, not about the ids, so one is minted from the edge itself —
         // stable across runs (no randomness), and unique for any doc a spec can
