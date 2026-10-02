@@ -14,6 +14,11 @@ import {
   PANE_MIN_WIDTH,
   PANE_STORAGE_KEY,
   THEME_STORAGE_KEY,
+  TOOLBOX_COLLAPSED_STORAGE_KEY,
+  TOOLBOX_DEFAULT_WIDTH,
+  TOOLBOX_MAX_WIDTH,
+  TOOLBOX_MIN_WIDTH,
+  TOOLBOX_WIDTH_STORAGE_KEY,
   ambientStorage,
   createUiStore,
   type PreferenceStorage,
@@ -397,5 +402,52 @@ describe('dockMaxHeight (#1475)', () => {
 
   it('never goes under the dock floor', () => {
     expect(dockMaxHeight(300)).toBe(DOCK_MIN_HEIGHT);
+  });
+});
+
+describe('uiStore Activities toolbox (#1475 OR27)', () => {
+  it('starts expanded at the default width', () => {
+    const state = createUiStore(fakeStorage()).getState();
+    expect(state.toolboxWidth).toBe(TOOLBOX_DEFAULT_WIDTH);
+    expect(state.toolboxCollapsed).toBe(false);
+  });
+
+  it('persists the width and the fold across a new store on the same storage', () => {
+    const storage = fakeStorage();
+    const first = createUiStore(storage).getState();
+    first.setToolboxWidth(251.6);
+    first.setToolboxCollapsed(true);
+    expect(storage.data.get(TOOLBOX_WIDTH_STORAGE_KEY)).toBe('252');
+    expect(storage.data.get(TOOLBOX_COLLAPSED_STORAGE_KEY)).toBe('true');
+    const second = createUiStore(storage).getState();
+    expect(second.toolboxWidth).toBe(252);
+    expect(second.toolboxCollapsed).toBe(true);
+  });
+
+  it('clamps a width to its bounds on write and on read', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setToolboxWidth(20);
+    expect(store.getState().toolboxWidth).toBe(TOOLBOX_MIN_WIDTH);
+    store.getState().setToolboxWidth(9000);
+    expect(store.getState().toolboxWidth).toBe(TOOLBOX_MAX_WIDTH);
+    // A bound tightened by a later release still applies to a stored value.
+    expect(
+      createUiStore(fakeStorage({ [TOOLBOX_WIDTH_STORAGE_KEY]: '900' })).getState().toolboxWidth,
+    ).toBe(TOOLBOX_MAX_WIDTH);
+  });
+
+  it('keeps the default for a non-finite or garbage width', () => {
+    const store = createUiStore(fakeStorage());
+    store.getState().setToolboxWidth(Number.NaN);
+    expect(store.getState().toolboxWidth).toBe(TOOLBOX_DEFAULT_WIDTH);
+    for (const raw of ['', '1e3', '-200', 'wide', '12345']) {
+      expect(
+        createUiStore(fakeStorage({ [TOOLBOX_WIDTH_STORAGE_KEY]: raw })).getState().toolboxWidth,
+      ).toBe(TOOLBOX_DEFAULT_WIDTH);
+    }
+    expect(
+      createUiStore(fakeStorage({ [TOOLBOX_COLLAPSED_STORAGE_KEY]: 'yes' })).getState()
+        .toolboxCollapsed,
+    ).toBe(false);
   });
 });

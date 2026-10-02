@@ -1519,8 +1519,11 @@ button.danger {
   display: grid;
   /* #852 — two columns: the toolbox, then the canvas with the property dock
      UNDER it (`.canvas-main`). The properties used to be a third, 320px column;
-     U7 draws them as a bottom dock, which also gives the canvas that width. */
-  grid-template-columns: 180px minmax(0, 1fr);
+     U7 draws them as a bottom dock, which also gives the canvas that width.
+     #1475 OR27 — the toolbox track is the operator's width (`--toolbox-width`,
+     written from `uiStore`; 180px is `TOOLBOX_DEFAULT_WIDTH`), then the 8px
+     `.toolbox-splitter`, which IS the gap between the two: no column gap. */
+  grid-template-columns: var(--toolbox-width, 180px) 8px minmax(0, 1fr);
   /* ONE row, filling the height this grid was given. `minmax(0, 1fr)` rather
      than `1fr`: a bare `1fr` is `minmax(auto, 1fr)`, whose auto MINIMUM is the
      content's intrinsic height, so a tall toolbox catalog would push the row
@@ -1531,7 +1534,7 @@ button.danger {
      `max-height` — so it is kept for the catalog the A-series will grow, not for
      a case the current fixture can demonstrate. */
   grid-template-rows: minmax(0, 1fr);
-  gap: 0.75rem;
+  column-gap: 0;
   margin-top: 0.25rem;
   /* Take the leftover height from `.canvas-page`, and allow shrinking below
      intrinsic content height (same reason as the `minmax` above). */
@@ -1562,6 +1565,37 @@ button.danger {
   font-size: 0.95rem;
 }
 
+/* #1475 — folded to its icon rail: `TOOLBOX_RAIL_WIDTH` in `uiStore.ts`, the
+   hub rail's 48px. The stored width is untouched; it is what unfolding restores. */
+.canvas-grid--toolbox-rail {
+  grid-template-columns: 48px 8px minmax(0, 1fr);
+}
+
+/* #1475 — the divider between the toolbox and the canvas, `.dock-splitter`
+   turned on its side. */
+.toolbox-splitter {
+  cursor: col-resize;
+  /* A touch drag must resize the toolbox, not scroll the page. */
+  touch-action: none;
+}
+
+.toolbox-splitter:hover,
+.toolbox-splitter:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
+}
+
+/* The folded rail's track: the same box, nothing to size. */
+.toolbox-splitter[aria-hidden='true'] {
+  cursor: auto;
+  background: none;
+}
+
+/* A real outline for keyboard focus, for the reasons `.pane-splitter` gives. */
+.toolbox-splitter:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -1px;
+}
+
 /* --- Activities toolbox (U5) --------------------------------------------- */
 
 .activity-toolbox {
@@ -1575,6 +1609,38 @@ button.danger {
      here was mutation-tested and SURVIVED — redundant with the row cap — so the
      coupling is gone rather than merely re-expressed. */
   overflow-y: auto;
+}
+
+.activity-toolbox__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+/* #1475 — the rail: tight padding so a 32px glyph button fits the 48px track,
+   a thin scrollbar so a long catalog does not eat it, and never a sideways
+   scroll. */
+.activity-toolbox--rail {
+  padding: 4px;
+  align-items: center;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+/* Groups have no headings on the rail; a rule between them keeps the grouping. */
+.activity-toolbox--rail .activity-toolbox__group + .activity-toolbox__group {
+  border-top: 1px solid var(--border);
+  padding-top: 0.3rem;
+}
+
+.activity-toolbox--rail .activity-toolbox__item {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .activity-toolbox__filter {

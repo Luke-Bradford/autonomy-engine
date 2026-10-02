@@ -41,6 +41,16 @@ export interface UiState {
   /** The Problems column inside the dock (#1393). */
   problemsOpen: boolean;
   setProblemsOpen: (open: boolean) => void;
+  /**
+   * #1475 OR27 — the editor's Activities toolbox: its width in px, always
+   * within [`TOOLBOX_MIN_WIDTH`, `TOOLBOX_MAX_WIDTH`], and whether it is folded
+   * to its icon rail. The width is meaningful while folded — it is what
+   * unfolding restores. One preference for every pipeline, like the dock's.
+   */
+  toolboxWidth: number;
+  setToolboxWidth: (width: number) => void;
+  toolboxCollapsed: boolean;
+  setToolboxCollapsed: (collapsed: boolean) => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -54,6 +64,8 @@ export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
 export const DOCK_HEIGHT_STORAGE_KEY = 'autonomy-studio.dock-height';
 export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
 export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
+export const TOOLBOX_WIDTH_STORAGE_KEY = 'autonomy-studio.toolbox-width';
+export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -77,8 +89,31 @@ export const PANE_RESIZE_STEP = 16;
  * drag would otherwise be persisted and re-read forever.
  */
 export function clampPaneWidth(width: number): number {
-  if (!Number.isFinite(width)) return PANE_DEFAULT_WIDTH;
-  return Math.round(Math.min(PANE_MAX_WIDTH, Math.max(PANE_MIN_WIDTH, width)));
+  return clampWidth(width, PANE_MIN_WIDTH, PANE_MAX_WIDTH, PANE_DEFAULT_WIDTH);
+}
+
+/** The rule above, for any width with fixed bounds: clamped, rounded, non-finite → `fallback`. */
+function clampWidth(width: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(width)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, width)));
+}
+
+/**
+ * #1475 OR27 — Activities toolbox bounds (the ticket's 140–360px). Unlike the
+ * dock's ceiling these are FIXED, so the ceiling is stored as well as drawn,
+ * the way the nav pane's is. `TOOLBOX_RAIL_WIDTH` is the folded icon rail,
+ * the hub rail's 48px; `index.css` repeats it (`.canvas-grid--toolbox-rail`)
+ * because CSS cannot import it, as it repeats `TOOLBOX_DEFAULT_WIDTH` for the
+ * grid track's fallback.
+ */
+export const TOOLBOX_MIN_WIDTH = 140;
+export const TOOLBOX_MAX_WIDTH = 360;
+export const TOOLBOX_DEFAULT_WIDTH = 180;
+export const TOOLBOX_RAIL_WIDTH = 48;
+export const TOOLBOX_RESIZE_STEP = 16;
+
+export function clampToolboxWidth(width: number): number {
+  return clampWidth(width, TOOLBOX_MIN_WIDTH, TOOLBOX_MAX_WIDTH, TOOLBOX_DEFAULT_WIDTH);
 }
 
 /**
@@ -206,6 +241,11 @@ function parseDockHeight(raw: string): number | undefined {
   return /^\d{1,5}$/.test(raw) ? (clampDockHeight(Number(raw)) ?? undefined) : undefined;
 }
 
+/** Up to three digits, then clamped: `parseDockHeight`'s reasons, at a width's scale. */
+function parseToolboxWidth(raw: string): number | undefined {
+  return /^\d{1,3}$/.test(raw) ? clampToolboxWidth(Number(raw)) : undefined;
+}
+
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
   width: number;
@@ -253,7 +293,9 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
     /* An on/off preference: its stored value, and a setter that writes it
        through. One helper for every flag — the minimap's, then #1475's two —
        so none of them can be the one that forgets to persist. */
-    const flag = <K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen'>(
+    const flag = <
+      K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen' | 'toolboxCollapsed',
+    >(
       field: K,
       key: string,
       fallback: boolean,
@@ -268,6 +310,11 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
     const [minimapHidden, setMinimapHidden] = flag('minimapHidden', MINIMAP_STORAGE_KEY, false);
     const [dockOpen, setDockOpen] = flag('dockOpen', DOCK_OPEN_STORAGE_KEY, true);
     const [problemsOpen, setProblemsOpen] = flag('problemsOpen', PROBLEMS_OPEN_STORAGE_KEY, true);
+    const [toolboxCollapsed, setToolboxCollapsed] = flag(
+      'toolboxCollapsed',
+      TOOLBOX_COLLAPSED_STORAGE_KEY,
+      false,
+    );
 
     /* Both pane setters persist the WHOLE record, so the two fields can never
        drift apart in storage — a width that survived a write the collapse flag
@@ -317,6 +364,20 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setDockOpen,
       problemsOpen,
       setProblemsOpen,
+
+      toolboxWidth: readStored(
+        storage,
+        TOOLBOX_WIDTH_STORAGE_KEY,
+        parseToolboxWidth,
+        TOOLBOX_DEFAULT_WIDTH,
+      ),
+      setToolboxWidth: (width) => {
+        const toolboxWidth = clampToolboxWidth(width);
+        writeStored(storage, TOOLBOX_WIDTH_STORAGE_KEY, String(toolboxWidth));
+        set({ toolboxWidth });
+      },
+      toolboxCollapsed,
+      setToolboxCollapsed,
     };
   });
 }
