@@ -9,13 +9,16 @@ import { tree } from './support/authorPane';
  * resource drawer does.
  *
  * The draft lives in the editor's own store, so leaving its path throws the
- * edits away: Back to pipelines, another pipeline in the tree, Open run. Before
+ * edits away: the Pipelines crumb, another pipeline in the tree, Open run. Before
  * this, every one of those left silently. Asking must not move the canvas
  * (#1393), and while it asks no shortcut may edit the graph behind it.
  */
 
 const prompt = (page: Page) => page.getByRole('alertdialog', { name: 'Unsaved changes' });
-const back = (page: Page) => page.getByRole('link', { name: '← Back to pipelines' });
+/* #1397 — the editor's own "Back to pipelines" is gone; the breadcrumb's
+   Pipelines crumb is the same anchor, so it is the way back this guards. */
+const back = (page: Page) =>
+  page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Pipelines' });
 
 async function editRetries(page: Page) {
   await nodeById(page, 'a').click();

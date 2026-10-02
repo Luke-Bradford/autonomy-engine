@@ -26,8 +26,7 @@ import {
   movePipelineToFolder,
   renamePipeline,
 } from '../../api/pipelines';
-import { downloadTextFile, exportFileName } from '../../api/download';
-import { exportPipeline } from '../../api/portability';
+import { downloadPipelineExport } from '../../api/pipelineExport';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
@@ -412,7 +411,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   const onExport = useCallback(async (p: Pipeline) => {
     setActionError(null);
     try {
-      downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
+      await downloadPipelineExport(p);
     } catch (err) {
       setActionError(`Could not export “${p.name}”: ${messageOf(err)}`);
     }

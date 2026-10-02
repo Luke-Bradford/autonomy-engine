@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { viewportSettled } from './support/canvasGraph';
 import { openSeededCanvas, rectOf } from './support/seedDoc';
+import { editorMenuItem } from './support/canvas';
 
 /**
  * U9 — Arrange, the canvas auto-layout (#1004).
@@ -44,7 +45,7 @@ test.describe('canvas auto-layout (U9)', () => {
     const before = await Promise.all([at('first'), at('second'), at('third')]);
     expect(new Set(before.map((r) => `${r.left},${r.top}`)).size).toBe(1);
 
-    const arrange = page.getByRole('button', { name: 'Arrange', exact: true });
+    const arrange = await editorMenuItem(page, /^Arrange/);
     await expect(arrange).toBeEnabled();
     await arrange.click();
     await viewportSettled(page);
@@ -81,7 +82,7 @@ test.describe('canvas auto-layout (U9)', () => {
     const undo = page.getByRole('button', { name: 'Undo', exact: true });
     await expect(undo).toBeDisabled();
 
-    await page.getByRole('button', { name: 'Arrange', exact: true }).click();
+    await (await editorMenuItem(page, /^Arrange/)).click();
     await viewportSettled(page);
     const spread = await rectOf(page, '.react-flow__node[data-id="c"]');
 
@@ -107,14 +108,13 @@ test.describe('canvas auto-layout (U9)', () => {
     });
     await viewportSettled(page);
 
-    const arrange = page.getByRole('button', { name: 'Arrange', exact: true });
-    await arrange.click();
+    await (await editorMenuItem(page, /^Arrange/)).click();
     await expect(page.getByText('Arranged 1 activity.')).toBeVisible();
     await viewportSettled(page);
 
     // The already-arranged case. `moveNodes` drops a no-op move silently, so
     // without the message this press is indistinguishable from a dead button.
-    await arrange.click();
+    await (await editorMenuItem(page, /^Arrange/)).click();
     await expect(page.getByText('Already arranged — nothing moved.')).toBeVisible();
     // And it recorded nothing: undo still has only the first press to give back.
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
@@ -156,7 +156,7 @@ test.describe('canvas auto-layout (U9)', () => {
       'the fixture must render wider than the reserved column',
     ).toBeGreaterThan(210);
 
-    await page.getByRole('button', { name: 'Arrange', exact: true }).click();
+    await (await editorMenuItem(page, /^Arrange/)).click();
     await viewportSettled(page);
 
     // Screen coords: the wide box must END before its neighbour BEGINS. Packed
@@ -185,7 +185,7 @@ test.describe('canvas auto-layout (U9)', () => {
     });
     await viewportSettled(page);
 
-    await page.getByRole('button', { name: 'Arrange', exact: true }).click();
+    await (await editorMenuItem(page, /^Arrange/)).click();
     await viewportSettled(page);
 
     // The box is DERIVED from the union of its members' rects, so a layout that

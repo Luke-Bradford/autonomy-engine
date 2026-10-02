@@ -1,7 +1,15 @@
 import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
+import {
+  Menu,
+  MenuDivider,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+} from '@fluentui/react-components';
+import { ArrowRedoRegular, ArrowUndoRegular, MoreHorizontalRegular } from '@fluentui/react-icons';
 import {
   CONTAINER_KIND_LABELS,
   ContainerKindSchema,
@@ -23,6 +31,7 @@ import {
   type Dataset,
   type Edge,
   type Node,
+  type Pipeline,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import {
@@ -36,6 +45,8 @@ import {
 import { arrangeMoves, type MeasuredSizes } from './autoLayout';
 import { messageOf } from '../../api/client';
 import {
+  archiveConfirmMessage,
+  archivePipeline,
   createPipelineVersion,
   latestVersion,
   listPipelineVersions,
@@ -43,6 +54,7 @@ import {
   restorePipeline,
   TRIGGERS_STAY_DISABLED_NOTE,
 } from '../../api/pipelines';
+import { downloadPipelineExport } from '../../api/pipelineExport';
 import { listConnections } from '../../api/connections';
 import { listDatasets } from '../../api/datasets';
 import { listGlobalParams, toGlobalReads } from '../../api/globalParams';
@@ -208,11 +220,16 @@ interface PipelineCanvasProps {
   archived: boolean;
   /** Called after a successful unarchive, so the route's copy stops saying archived. */
   onUnarchived: () => void;
-  /* #1242 — a DESTINATION, not a callback. The control's whole job is to go
-     somewhere, so it renders as an anchor and needs an `href` a browser can
-     see; a `() => navigate(...)` prop cannot be middle-clicked, copied or
-     opened in a new tab, which is the same defect #1239 fixed on the run page. */
-  backTo: string;
+  /**
+   * #1397 — called with the pipeline the archive returned, so the route's copy
+   * says archived (and the banner appears). The ROW, not a flag: the archive
+   * drops the pipeline from the side pane's list, which is where the heading's
+   * live name came from, so the route needs the current name in hand.
+   */
+  onArchived: (pipeline: Pipeline) => void;
+  /* #1397 — no `backTo` any more: the editor's "Back to pipelines" duplicated
+     the breadcrumb's Pipelines crumb, which is the same anchor (#1242) one
+     line above it. */
 }
 
 /**
@@ -225,7 +242,7 @@ export function PipelineCanvas({
   pipelineName,
   archived,
   onUnarchived,
-  backTo,
+  onArchived,
 }: PipelineCanvasProps) {
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
@@ -280,6 +297,10 @@ export function PipelineCanvas({
   // next save; this one is about whether the pipeline can be saved at all.
   const [unarchiving, setUnarchiving] = useState(false);
   const [unarchiveError, setUnarchiveError] = useState<string | null>(null);
+  // #1397 — the ⋯ menu's Export/Archive outcome. Its own line, not `saveMsg`,
+  // which describes the last SAVE and is wiped by the next one.
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [archiving, setArchiving] = useState(false);
 
   /**
    * #907 — bring the pipeline back to an editable state.
@@ -343,8 +364,8 @@ export function PipelineCanvas({
    * and it is only safe to do that into an editor that is not there. Leaving
    * the preview remounts the editor, and an operator who then types has work
    * that the arriving response would overwrite. There are three such routes
-   * (this preview's own "Back to editing", the "Version history" toggle, and a
-   * version row), so the lock is named once and applied to all three rather
+   * (this preview's own "Back to editing", the ⋯ menu's "Hide version history",
+   * and a version row), so the lock is named once and applied to all three rather
    * than remembered at each.
    *
    * #904 — `saving` joins `restoring`, and it is the same argument run the
@@ -355,7 +376,7 @@ export function PipelineCanvas({
    */
   const previewLocked = restoring || saving;
   /**
-   * Why the "Version history" toggle is dead, or `null` while it is live.
+   * Why the ⋯ menu's version-history item is dead, or `null` while it is live.
    *
    * Named rather than inlined because it has TWO causes and a nested ternary in
    * the attribute reads as one. `!ready` is checked first to match the
@@ -1142,6 +1163,59 @@ export function PipelineCanvas({
     }
   }, [active, archived, gitConnected, pipelineId, previewed, versions, confirm]);
 
+  /* #1397 — the ⋯ menu's id, so a confirm opened from one of its items can
+     hand focus back to it: the item that asked is unmounted by then. */
+  const moreActionsId = useId();
+
+  /**
+   * #1397 — Export from the editor. It downloads what the SERVER holds, i.e.
+   * the latest SAVED version: the menu says so while there are unsaved edits,
+   * because exporting the file and finding the edits missing is the surprise.
+   */
+  const onExport = useCallback(async () => {
+    setActionMsg(null);
+    try {
+      await downloadPipelineExport({ id: pipelineId, name: pipelineName });
+    } catch (err) {
+      setActionMsg(`Could not export “${pipelineName}”: ${messageOf(err)}`);
+    }
+  }, [pipelineId, pipelineName]);
+
+  /**
+   * #1397 — Archive from the editor, through the SAME confirmation text the
+   * pipelines list uses (`archiveConfirmMessage`). An archived pipeline refuses
+   * every save, so unsaved edits are named too: they stay on the canvas but
+   * cannot be saved until the pipeline is unarchived.
+   */
+  const onArchive = useCallback(async () => {
+    const message = dirty
+      ? `${archiveConfirmMessage(pipelineName)}\n\nYour unsaved changes stay in the editor, but cannot be saved until you unarchive it.`
+      : archiveConfirmMessage(pipelineName);
+    const confirmed = await confirm({
+      message,
+      confirmLabel: 'Archive',
+      restoreFocus: () => document.getElementById(moreActionsId),
+    });
+    if (!confirmed) return;
+    setActionMsg(null);
+    setArchiving(true);
+    try {
+      onArchived(await archivePipeline(pipelineId));
+    } catch (err) {
+      setActionMsg(`Could not archive “${pipelineName}”: ${messageOf(err)}`);
+    } finally {
+      setArchiving(false);
+    }
+  }, [confirm, dirty, moreActionsId, onArchived, pipelineId, pipelineName]);
+
+  const archiveReason = archived
+    ? 'This pipeline is already archived.'
+    : archiving
+      ? 'Archiving…'
+      : saving || restoring || publishing || unarchiving
+        ? 'Wait for the current action to finish.'
+        : null;
+
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
       {leaveGuard.routeHold}
@@ -1162,84 +1236,44 @@ export function PipelineCanvas({
       <div className="page-header">
         <h2 id="canvas-heading">{pipelineName}</h2>
         <div className="form-actions">
-          <Link to={backTo} className="page-back">
-            ← Back to pipelines
-          </Link>
           {/* U17 — undo/redo. Before the Save button because they act on the
               working graph that Save is about to mint, and in that order.
               `onMouseDown={preventDefault}` keeps the click from moving focus
               off whatever the operator was editing: pressing Undo should not
-              also blur the field they are typing in. */}
+              also blur the field they are typing in.
+
+              #1397 — icon buttons. The tooltip is the native `title`, not
+              Fluent's `Tooltip`: these are DISABLED most of the time, a
+              disabled button fires no pointer events, and so a Fluent tooltip
+              would never show the one thing worth saying then — why. */}
           <button
             type="button"
+            className="icon-button editor-header__icon-button"
             aria-label="Undo"
             onClick={() => store.getState().undo()}
             disabled={undoReason !== null}
             title={undoReason ?? 'Undo the last edit (⌘Z)'}
             onMouseDown={(e) => e.preventDefault()}
           >
-            ↶ Undo
+            <ArrowUndoRegular aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="icon-button editor-header__icon-button"
             aria-label="Redo"
             onClick={() => store.getState().redo()}
             disabled={redoReason !== null}
             title={redoReason ?? 'Redo the last undone edit (⇧⌘Z)'}
             onMouseDown={(e) => e.preventDefault()}
           >
-            ↷ Redo
+            <ArrowRedoRegular aria-hidden="true" />
           </button>
-          {/* U9 — Arrange. Beside Undo/Redo because it is the same kind of
-              thing: a write to the working graph that Save will later mint,
-              undoable by the button immediately to its left. Deliberately NOT
-              in React Flow's `<Controls>` panel, which owns the CAMERA — this
-              moves the document, not the view, and putting a document edit in
-              the viewport chrome would be the one place an operator does not
-              expect one. `onMouseDown={preventDefault}`, like its neighbours,
-              so arranging does not blur the field being edited. */}
+          {/* #1397 — the header's ONE primary act: Save keeps the work. Run and
+              Debug sit beside it as ordinary buttons, so the region never
+              offers two equally loud choices. */}
           <button
             type="button"
-            onClick={onArrange}
-            disabled={arrangeReason !== null}
-            title={arrangeReason ?? 'Lay the activities out left to right by their dependencies'}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            Arrange
-          </button>
-          <button
-            type="button"
-            aria-expanded={historyOpen}
-            // Only while the panel is actually MOUNTED. It is unmounted rather
-            // than hidden when collapsed (and `ready` gates it too), so naming
-            // it unconditionally points a screen reader at an element that is
-            // not in the DOM. `aria-expanded` alone carries the closed state.
-            aria-controls={historyOpen && ready ? 'version-history-panel' : undefined}
-            // `previewLocked` — closing the list also drops the preview (below),
-            // which would remount the editor mid-restore. That is the same
-            // escape "Back to editing" offers, just wearing a different button.
-            disabled={!ready || previewLocked}
-            // Both disabled cases get a reason. `!ready` is the commoner of the
-            // two — it covers the whole initial load — and an unexplained dead
-            // control is exactly what a title exists to prevent.
-            title={historyDisabledReason ?? undefined}
-            onClick={() => {
-              // Both setters at the TOP LEVEL. Calling `setPreviewing` inside
-              // the `setHistoryOpen` updater made that updater impure, which
-              // StrictMode double-invokes in development — harmless while it is
-              // idempotent, and a silent double-apply the moment it is not.
-              //
-              // Closing the list also leaves any preview it opened: the preview
-              // is only reachable through a row, so one left on screen with no
-              // list would be stranded.
-              if (historyOpen) setPreviewing(null);
-              setHistoryOpen(!historyOpen);
-            }}
-          >
-            Version history
-          </button>
-          <button
-            type="button"
+            className="primary"
             onClick={() => void onSave()}
             /* The named reason, not a hand-written copy of the terms: every
                refusal this button carries — including "previewing", where Save
@@ -1360,6 +1394,70 @@ export function PipelineCanvas({
               />
             )}
           </span>
+          {/* #1397 — everything the header does less often, in one ⋯ menu.
+              Fluent's default body portal, like the Factory Resources row
+              menu: the U0 spike forbids reparenting a surface into the React
+              Flow viewport. A disabled item says WHY on its own second line,
+              because a `title` is only ever seen by a mouse. */}
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <button
+                id={moreActionsId}
+                type="button"
+                className="icon-button editor-header__icon-button"
+                aria-label="More pipeline actions"
+                title="More pipeline actions"
+              >
+                <MoreHorizontalRegular aria-hidden="true" />
+              </button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                {/* U9 — Arrange moves the DOCUMENT, not the view, so it is not
+                    in React Flow's `<Controls>` (the camera). Undoable with the
+                    Undo button beside this menu. */}
+                <MenuItem
+                  onClick={onArrange}
+                  disabled={arrangeReason !== null}
+                  subText={arrangeReason ?? undefined}
+                >
+                  Arrange
+                </MenuItem>
+                <MenuItem
+                  // `previewLocked` — closing the list also drops the preview
+                  // (below), which would remount the editor mid-restore.
+                  disabled={!ready || previewLocked}
+                  subText={historyDisabledReason ?? undefined}
+                  onClick={() => {
+                    // Both setters at the TOP LEVEL: an impure updater is
+                    // double-invoked by StrictMode. Closing the list also
+                    // leaves any preview it opened, which would otherwise be
+                    // stranded with no list to leave it from.
+                    if (historyOpen) setPreviewing(null);
+                    setHistoryOpen(!historyOpen);
+                  }}
+                >
+                  {historyOpen ? 'Hide version history' : 'Show version history'}
+                </MenuItem>
+                <MenuItem
+                  onClick={() => void onExport()}
+                  subText={
+                    dirty ? 'The last saved version — unsaved changes are not included.' : undefined
+                  }
+                >
+                  Export
+                </MenuItem>
+                <MenuDivider />
+                <MenuItem
+                  onClick={() => void onArchive()}
+                  disabled={archiveReason !== null}
+                  subText={archiveReason ?? undefined}
+                >
+                  Archive
+                </MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
         </div>
       </div>
 
@@ -1487,6 +1585,9 @@ export function PipelineCanvas({
           // nothing an operator is looking at — is still announced.
           { key: 'canvas', text: canvasMsg, role: 'status' },
           { key: 'save', text: saveMsg },
+          // `status`, so a failed Export or Archive — chosen from a menu that
+          // has closed by the time it fails — is still announced.
+          { key: 'action', text: actionMsg, role: 'status' },
           {
             key: 'run',
             text: runStarted?.text ?? null,

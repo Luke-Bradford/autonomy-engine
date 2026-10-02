@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, viewportSettled } from './support/canvasGraph';
 import { fluentRootReady } from './support/theme';
 import { answerConfirm } from './support/confirmDialog';
+import { editorMenuItem } from './support/canvas';
 import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
 
 /**
@@ -79,7 +80,8 @@ async function leftOf(page: Page, id: string): Promise<number> {
   return box!.x;
 }
 
-const historyButton = (page: Page) => page.getByRole('button', { name: 'Version history' });
+/** #1397 — the toggle lives in the editor header's ⋯ menu, worded by state. */
+const historyItem = (page: Page) => editorMenuItem(page, /^(Show|Hide) version history/);
 const rows = (page: Page) => page.locator('.version-history-row');
 
 test.describe('pipeline version history', () => {
@@ -91,19 +93,17 @@ test.describe('pipeline version history', () => {
 
     await expect(page.getByTestId('version-history')).toHaveCount(0);
 
-    // While collapsed the panel is UNMOUNTED, so the toggle must not name it:
-    // an `aria-controls` pointing at an absent id resolves to nothing for a
-    // screen reader. `aria-expanded` is what carries the closed state.
-    await expect(historyButton(page)).toHaveAttribute('aria-expanded', 'false');
-    await expect(historyButton(page)).not.toHaveAttribute('aria-controls', /./);
+    // #1397 — the menu item says which way it will go, so the closed state is
+    // in its NAME rather than an `aria-expanded` a menu item does not carry.
+    const show = await historyItem(page);
+    await expect(show).toHaveAccessibleName('Show version history');
+    await show.click();
+    await expect(page.locator('#version-history-panel')).toHaveCount(1);
 
-    await historyButton(page).click();
-
-    // Open, it names the panel AND that id is really in the DOM.
-    await expect(historyButton(page)).toHaveAttribute('aria-expanded', 'true');
-    const controls = await historyButton(page).getAttribute('aria-controls');
-    expect(controls).toBe('version-history-panel');
-    await expect(page.locator(`#${controls}`)).toHaveCount(1);
+    const hide = await historyItem(page);
+    await expect(hide).toHaveAccessibleName('Hide version history');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
 
     await expect(rows(page)).toHaveCount(3);
     await expect(rows(page).nth(0)).toContainText('v3');
@@ -129,7 +129,7 @@ test.describe('pipeline version history', () => {
   }) => {
     const problems = collectPageProblems(page);
     await seedThreeVersions(page, 'history-preview');
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
     await rows(page).nth(2).click();
 
     await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1');
@@ -178,7 +178,7 @@ test.describe('pipeline version history', () => {
   test('shows the version it is switched TO, not a hybrid of the two', async ({ page }) => {
     const problems = collectPageProblems(page);
     await seedThreeVersions(page, 'history-switch');
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
 
     // v1 — two nodes, `n_a` left of `n_b`.
     await rows(page).nth(2).click();
@@ -211,7 +211,7 @@ test.describe('pipeline version history', () => {
     // The head draws `n_a` to the RIGHT of `n_b`. v1 says the opposite.
     expect(await leftOf(page, 'n_a')).toBeGreaterThan(await leftOf(page, 'n_b'));
 
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
     await rows(page).nth(2).click();
 
     await page.getByRole('button', { name: 'Restore v1' }).click();
@@ -270,7 +270,7 @@ test.describe('pipeline version history', () => {
     await nodeById(page, 'n_c').click();
     await expect(nodeById(page, 'n_c')).toHaveClass(/\bselected\b/);
 
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
     await rows(page).nth(2).click();
     await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1');
 
@@ -316,7 +316,7 @@ test.describe('pipeline version history', () => {
       await route.continue();
     });
 
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
     await rows(page).nth(2).click();
     await page.getByRole('button', { name: 'Restore v1' }).click();
     await answerConfirm(page, 'accept');
@@ -327,8 +327,11 @@ test.describe('pipeline version history', () => {
     const back = page.getByRole('button', { name: 'Back to editing' });
     await expect(back).toBeDisabled();
     // The history toggle clears the preview as it closes — the same exit
-    // wearing a different button.
-    await expect(historyButton(page)).toBeDisabled();
+    // wearing a different button. Disabled in the menu, and it says why.
+    const locked = await historyItem(page);
+    await expect(locked).toBeDisabled();
+    await expect(locked).toContainText('Restoring — wait for it to finish.');
+    await page.keyboard.press('Escape');
     // A row toggles the preview: off entirely, or across to another version.
     await expect(rows(page)).toHaveCount(3);
     for (let i = 0; i < 3; i++) await expect(rows(page).nth(i)).toBeDisabled();
@@ -343,7 +346,8 @@ test.describe('pipeline version history', () => {
     await expect(page.locator('.notice')).toContainText('Restored v1 as v4');
     await expect(page.getByTestId('version-preview-bar')).toHaveCount(0);
     await expect(page.locator('.canvas-grid')).toHaveCount(1);
-    await expect(historyButton(page)).toBeEnabled();
+    await expect(await historyItem(page)).toBeEnabled();
+    await page.keyboard.press('Escape');
 
     await expectQuiet(page, problems);
   });
@@ -359,7 +363,7 @@ test.describe('pipeline version history', () => {
       'Unsaved changes',
     );
 
-    await historyButton(page).click();
+    await (await historyItem(page)).click();
     await rows(page).nth(2).click();
 
     /* Refused rather than discarded: the canvas reloads onto the version a
@@ -607,7 +611,7 @@ test.describe('pipeline version history', () => {
     await expect(page.locator('.notice-conflict')).toBeVisible();
 
     // Now restore v1 from the refreshed history.
-    await page.getByRole('button', { name: 'Version history' }).click();
+    await (await historyItem(page)).click();
     await page.getByRole('button', { name: /^v1\b/ }).click();
     await page.getByRole('button', { name: 'Restore v1' }).click();
     await answerConfirm(page, 'accept');

@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { openExistingCanvas } from './support/canvas';
+import { editorMenuItem, openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
 import { disconnectWorkspaceGit, makeBareRepo } from './support/workspaceGit';
@@ -306,7 +306,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(incoming).toContainText('(new version)');
 
   await openExistingCanvas(page, publishName);
-  await page.getByRole('button', { name: 'Version history' }).click();
+  await (await editorMenuItem(page, /^Show version history/)).click();
   const history = page.getByTestId('version-history');
 
   // Nothing is published yet, so no row may claim to be active. This is the
@@ -340,7 +340,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    */
   await page.reload();
   await page.locator('.react-flow__renderer').waitFor();
-  await page.getByRole('button', { name: 'Version history' }).click();
+  await (await editorMenuItem(page, /^Show version history/)).click();
   await expect(
     page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
   ).toContainText('active');

@@ -4,7 +4,7 @@ import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { useBusyAction } from '../hooks/useBusyAction';
 import { messageOf } from '../api/client';
-import { downloadTextFile, exportFileName } from '../api/download';
+import { downloadPipelineExport } from '../api/pipelineExport';
 import {
   archiveConfirmMessage,
   archivePipeline,
@@ -14,7 +14,6 @@ import {
   listArchivedPipelines,
   restorePipeline,
 } from '../api/pipelines';
-import { exportPipeline } from '../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
@@ -129,7 +128,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       runExport(p.id, async () => {
         setActionMsg(null);
         try {
-          downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
+          await downloadPipelineExport(p);
         } catch (err) {
           setActionMsg(`Could not export “${p.name}”: ${messageOf(err)}`);
         }

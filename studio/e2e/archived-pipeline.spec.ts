@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { openCanvas } from './support/canvas';
+import { editorMenuItem, openCanvas } from './support/canvas';
+import { answerConfirm } from './support/confirmDialog';
 
 /**
  * #907 — an ARCHIVED pipeline refuses every save, the canvas says so before the
@@ -74,5 +75,57 @@ test.describe('#907 an archived pipeline cannot be saved, and says so', () => {
     // The 409 is provoked ON PURPOSE, so the browser's own network entry for it
     // is expected output rather than a regression.
     await expectQuiet(page, problems, [/Failed to load resource.*409/]);
+  });
+
+  /**
+   * #1397 — Archive from the editor's ⋯ menu. Through the SAME confirmation the
+   * pipelines list asks, then straight into the banner above: the route adopts
+   * the archived row, so no reload is needed for the canvas to know.
+   */
+  test('archives from the ⋯ menu, after asking, and the banner follows', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const name = `e2e 1397 archive ${Date.now()}`;
+    await openCanvas(page, name);
+    const banner = page.getByRole('alert').filter({ hasText: 'This pipeline is archived' });
+    const paneRow = page.locator('.factory-resources').getByRole('link', { name, exact: true });
+    await expect(banner).toHaveCount(0);
+    await expect(paneRow).toHaveCount(1);
+
+    // Cancel leaves it alone.
+    await (await editorMenuItem(page, /^Archive/)).click();
+    await answerConfirm(page, 'cancel');
+    await expect(banner).toHaveCount(0);
+
+    // A refused archive says so, and leaves the pipeline as it was.
+    const archiveRoute = '**/api/pipelines/*/archive';
+    await page.route(archiveRoute, (r) =>
+      r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' }),
+    );
+    await (await editorMenuItem(page, /^Archive/)).click();
+    await answerConfirm(page, 'accept');
+    await expect(page.getByRole('status').filter({ hasText: 'Could not archive' })).toBeVisible();
+    await expect(banner).toHaveCount(0);
+    await page.unroute(archiveRoute);
+
+    await (await editorMenuItem(page, /^Archive/)).click();
+    const asked = await answerConfirm(page, 'accept');
+    expect(asked).toContain(`Archive pipeline "${name}"?`);
+    expect(asked).toContain('this is not a delete');
+
+    await expect(banner).toBeVisible();
+    // It left the side pane's list, which lists live pipelines only.
+    await expect(paneRow).toHaveCount(0);
+    // And the menu will not archive it twice — it says why.
+    const again = await editorMenuItem(page, /^Archive/);
+    await expect(again).toBeDisabled();
+    await expect(again).toContainText('already archived');
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: 'Unarchive pipeline' }).click();
+    await expect(banner).toHaveCount(0);
+    await expect(paneRow).toHaveCount(1);
+
+    // The 500 above is provoked on purpose.
+    await expectQuiet(page, problems, [/Failed to load resource.*500/]);
   });
 });

@@ -610,6 +610,27 @@ body {
   outline-offset: -2px;
 }
 
+/* #1397 — the pipeline editor header's icon buttons (Undo, Redo, the ⋯ menu),
+   sized to sit level with the text buttons beside them. The ICON is sized, not
+   the button's font: the Fluent icons are `1em`, and growing the button's
+   `font-size` would take it off the UA control size every other header button
+   keeps (#1245). A border-box square, so the hover fill matches a button's. */
+.editor-header__icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.editor-header__icon-button > svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* `.icon-button:hover` fills the background whatever the state; on a DISABLED
+   Undo/Redo that fill reads as live. Same specificity, declared later, wins. */
+.editor-header__icon-button:disabled {
+  background: none;
+}
+
 .factory-resources__icon-button {
   width: 26px;
   height: 26px;
@@ -906,8 +927,9 @@ a {
    wrapper used on 18 pages and holds whatever a page puts there, so a
    descendant selector would silently turn a future breadcrumb or docs link into
    a chip. #1242 gave the class its second and third users (the canvas's
-   `← Back to pipelines`, the dataset detail page's `Back to datasets`) — opting
-   in, one site at a time, is the point. The container-scoped anchor rules above
+   `← Back to pipelines`, the dataset detail page's `Back to datasets`; #1397
+   then retired the canvas's, which repeated the breadcrumb) — opting in, one
+   site at a time, is the point. The container-scoped anchor rules above
    are containers that exist to hold exactly those anchors; this one is not.
 
    #1245 — the form-control FAMILY reset further down (on `input, select,

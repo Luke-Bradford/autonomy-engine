@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import type { Pipeline } from '@autonomy-studio/shared';
 import { PipelineCanvasRoute } from './PipelineCanvasRoute';
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../testing/renderWithRouter';
@@ -22,13 +23,13 @@ vi.mock('../pipeline/PipelineCanvas', () => ({
     pipelineName,
     archived,
     onUnarchived,
-    backTo,
+    onArchived,
   }: {
     pipelineId: string;
     pipelineName: string;
     archived: boolean;
     onUnarchived: () => void;
-    backTo: string;
+    onArchived: (pipeline: Pipeline) => void;
   }) => (
     <div>
       <span>{`canvas:${pipelineId}:${pipelineName}`}</span>
@@ -40,28 +41,57 @@ vi.mock('../pipeline/PipelineCanvas', () => ({
       <button type="button" onClick={onUnarchived}>
         Report unarchived
       </button>
-      {/* #1242 — a `<Link>`, because that is what the real canvas now renders.
-          The route's contract changed from "run this callback" to "hand down a
-          DESTINATION", and a stub that kept a button would let the route ship a
-          `backTo` no anchor could use while this file stayed green. */}
-      <Link to={backTo}>Back</Link>
+      {/* #1397 — the canvas reports the ROW its archive returned, and the
+          stub reports one with a name the fetch never saw, so the route is
+          proved to adopt the row rather than flip a flag on its stale copy. */}
+      <button
+        type="button"
+        onClick={() =>
+          onArchived({ ...ARCHIVED_ROW_BASE, id: pipelineId, name: 'Renamed since open' })
+        }
+      >
+        Report archived
+      </button>
     </div>
   ),
 }));
 
 const getMock = vi.mocked(pipelinesApi.getPipeline);
 
+/** An archived row, as `archivePipeline` returns one. */
+const ARCHIVED_ROW_BASE: Pipeline = {
+  id: 'pl_1',
+  resourceId: 'res_pl1',
+  ownerId: 'local',
+  name: 'Nightly digest',
+  concurrency: null,
+  folder: null,
+  archived: true,
+  createdAt: 1,
+  updatedAt: 2,
+};
+
 function LocationProbe() {
   return <span data-testid="location">{useLocation().pathname}</span>;
 }
 
-/** Mount the route under a real `:pipelineId` pattern, as `ROUTES` does. */
-function renderRoute(path: string) {
+/**
+ * Mount the route under a real `:pipelineId` pattern, as `ROUTES` does. Over a
+ * stub list store by default: an archive or unarchive refreshes it (#1397), and
+ * the shared singleton would reach the real `fetch`.
+ */
+function renderRoute(
+  path: string,
+  store: PipelinesStore = createPipelinesStore(() => Promise.resolve([])),
+) {
   return renderWithRouter(
     <>
       <Routes>
         <Route path="/author/pipelines" element={<span>list</span>} />
-        <Route path="/author/pipelines/:pipelineId" element={<PipelineCanvasRoute />} />
+        <Route
+          path="/author/pipelines/:pipelineId"
+          element={<PipelineCanvasRoute store={store} />}
+        />
       </Routes>
       <LocationProbe />
     </>,
@@ -173,22 +203,6 @@ describe('PipelineCanvasRoute', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('the server exploded');
   });
 
-  it('hands the canvas a back DESTINATION, and it lands', async () => {
-    const user = userEvent.setup();
-    renderRoute('/author/pipelines/pl_1');
-    await screen.findByText('canvas:pl_1:Nightly digest');
-
-    /* By ROLE `link`, with the `href` asserted before the click: the href is
-       the half of #1242 a button never had, and a click that lands in the right
-       place proves nothing about whether the control could be middle-clicked or
-       copied. */
-    const back = screen.getByRole('link', { name: 'Back' });
-    expect(back).toHaveAttribute('href', '/author/pipelines');
-    await user.click(back);
-
-    expect(screen.getByTestId('location').textContent).toBe('/author/pipelines');
-  });
-
   /**
    * An ABORTED request must not be reported as a failure.
    *
@@ -268,6 +282,38 @@ describe('PipelineCanvasRoute — the name stays in step with a rename (#720)', 
       path,
     );
   }
+
+  /**
+   * #1397 — Archive and Unarchive from the editor change which pipelines the
+   * side pane lists, so the route refreshes the shared store after each. And it
+   * ADOPTS the archived row: the refresh drops this pipeline from the store, so
+   * the name overlay goes with it and the route's own copy must be current.
+   */
+  it('adopts the archived row and refreshes the list after archive and unarchive', async () => {
+    const fetchList = vi
+      .fn<() => Promise<Pipeline[]>>()
+      .mockResolvedValueOnce([pipelineRow])
+      .mockResolvedValue([]);
+    const store = createPipelinesStore(fetchList);
+    await act(async () => {
+      await store.getState().refresh();
+    });
+    renderWithStore(store);
+    expect(await screen.findByText('archived:false')).toBeInTheDocument();
+    expect(fetchList).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Report archived' }));
+
+    expect(await screen.findByText('archived:true')).toBeInTheDocument();
+    expect(fetchList).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('canvas:pl_1:Renamed since open')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Report unarchived' }));
+
+    expect(await screen.findByText('archived:false')).toBeInTheDocument();
+    expect(fetchList).toHaveBeenCalledTimes(3);
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
 
   it('re-renders the heading when the pipeline is renamed in the tree while open', async () => {
     // The defect: the canvas took its name from a ONE-SHOT `getPipeline`, so
