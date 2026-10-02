@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { pressInConfirm, setConfirmName } from '../../testing/confirmDialog';
 import { useEffect, useState, type ReactNode } from 'react';
 import { splitConfirmMessage } from './splitConfirmMessage';
+import { typedNameLabel } from './typedName';
 import { ConfirmHost, useConfirm, type ConfirmRequest } from './useConfirm';
 
 /** A page that asks one question per click and shows each answer. */
@@ -127,6 +128,7 @@ describe('useConfirm', () => {
     await user.click(screen.getByRole('button', { name: 'Ask' }));
     await screen.findByRole('alertdialog');
     const action = screen.getByRole('button', { name: 'Delete' });
+    // The one literal spelling of the label: every other test builds it.
     const input = screen.getByLabelText('Type Nightly to confirm');
     await waitFor(() => expect(input).toHaveFocus());
     expect(action).toBeDisabled();
@@ -139,6 +141,34 @@ describe('useConfirm', () => {
     expect(action).toBeEnabled();
     pressInConfirm('Enter', input);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('true'));
+  });
+
+  it('asks for a spaced name as it is shown: trimmed, one space per run (#1466)', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={{ ...DELETE, typeToConfirm: '  Local   store ' }} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    const dialog = await screen.findByRole('alertdialog');
+    const action = screen.getByRole('button', { name: 'Delete' });
+    // The label shows the name it will accept; nothing invisible is asked for.
+    expect(dialog.querySelector('.confirm-dialog-name')?.textContent).toBe('Local store');
+    setConfirmName('Local store', 'Local stor');
+    expect(action).toBeDisabled();
+    setConfirmName('Local store', 'Local store');
+    expect(action).toBeEnabled();
+    // The stored spelling is accepted too.
+    setConfirmName('Local store', '  Local   store ');
+    expect(action).toBeEnabled();
+  });
+
+  it('still asks for a name that is only whitespace, not for an empty box (#1466)', async () => {
+    const user = userEvent.setup();
+    render(<Harness request={{ ...DELETE, typeToConfirm: '   ' }} />);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('alertdialog');
+    const action = screen.getByRole('button', { name: 'Delete' });
+    expect(action).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '   ' } });
+    expect(action).toBeEnabled();
   });
 
   it('refuses a second question while one is open, and leaves the open one alone', async () => {
@@ -154,7 +184,7 @@ describe('useConfirm', () => {
     act(() => {
       first = ask!({ ...DELETE, typeToConfirm: 'Nightly' });
     });
-    const input = await screen.findByLabelText('Type Nightly to confirm');
+    const input = await screen.findByLabelText(typedNameLabel('Nightly'));
     setConfirmName('Nightly', 'Night');
     let second: Promise<boolean> | null = null;
     act(() => {
@@ -194,7 +224,8 @@ describe('useConfirm', () => {
         <Harness
           request={{
             ...DELETE,
-            restoreFocus: () => screen.getByRole('button', { name: 'More actions', hidden: true }),
+            restoreFocus: () =>
+              screen.queryByRole('button', { name: 'More actions', hidden: true }),
           }}
         />
       </>,
@@ -231,7 +262,7 @@ describe('useConfirm', () => {
     const user = userEvent.setup();
     render(<Harness request={{ ...DELETE, typeToConfirm: 'Nightly' }} />);
     await user.click(screen.getByRole('button', { name: 'Ask' }));
-    const input = await screen.findByLabelText('Type Nightly to confirm');
+    const input = await screen.findByLabelText(typedNameLabel('Nightly'));
     setConfirmName('Nightly', 'Nightly');
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();

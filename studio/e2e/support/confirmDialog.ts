@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test';
+import { typedNameLabel } from '../../packages/web/src/lib/confirm/typedName';
 
 /**
  * #1397 — answer the in-app confirmation dialog (`useConfirm`), which replaced
@@ -27,9 +28,7 @@ export async function answerConfirm(
   await expect(dialog).toBeVisible();
   const text = await dialog.innerText();
   if (opts.typeName !== undefined) {
-    await dialog
-      .getByRole('textbox', { name: `Type ${opts.typeName} to confirm` })
-      .fill(opts.typeName);
+    await dialog.getByRole('textbox', { name: typedNameLabel(opts.typeName) }).fill(opts.typeName);
   }
   const buttons = dialog.getByRole('button');
   if (answer === 'accept') await buttons.last().click();

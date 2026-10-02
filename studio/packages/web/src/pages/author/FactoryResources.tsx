@@ -24,6 +24,7 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
 import { useConfirm } from '../../lib/confirm/useConfirm';
+import { useBusyAction } from '../../hooks/useBusyAction';
 
 /** The tree's own ids — the disclosure's `aria-controls` must name a real one. */
 const PIPELINES_LIST_ID = 'factory-pipelines';
@@ -399,16 +400,25 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   /**
    * Export (#959). Deliberately NOT routed through `run`: `run` refreshes the
    * shared list because it exists for MUTATIONS, and an export changes nothing
-   * — a refresh here would be a request that implies something moved.
+   * — a refresh here would be a request that implies something moved. It is
+   * single-flight per row through `useBusyAction` instead (#1470).
    */
-  const onExport = useCallback(async (p: Pipeline) => {
-    setActionError(null);
-    try {
-      await downloadPipelineExport(p);
-    } catch (err) {
-      setActionError(`Could not export “${p.name}”: ${messageOf(err)}`);
-    }
-  }, []);
+  const { active: exporting, run: runExport } = useBusyAction();
+  const onExport = useCallback(
+    (p: Pipeline) =>
+      // #1470 — single-flight per row: the menu can be reopened while the
+      // download is still in flight, and choosing Export again is the second
+      // click. Drawn disabled meanwhile, as the Pipelines table does.
+      runExport(p.id, async () => {
+        setActionError(null);
+        try {
+          await downloadPipelineExport(p);
+        } catch (err) {
+          setActionError(`Could not export “${p.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [runExport],
+  );
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
@@ -513,7 +523,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
                 );
               },
             },
-            { label: 'Export', onSelect: () => void onExport(p) },
+            { label: 'Export', onSelect: () => void onExport(p), disabled: exporting.has(p.id) },
           ]}
           destructive={{ label: 'Delete', onSelect: () => void onDelete(p) }}
         />

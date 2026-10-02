@@ -1677,6 +1677,30 @@ describe('#1396 the trigger form drawer', () => {
     expect(prompt()).not.toBeNull();
   });
 
+  // #1470 — the row's ⋯ still works while its delete is in flight; Delete
+  // again must not ask a second time (accepting that would 404 into the banner).
+  it("asks once while the row's delete is in flight", async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    let release: () => void = () => {};
+    deleteMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderWithDataRouter(<TriggersPage />);
+    await screen.findByRole('row', { name: /Nightly/ });
+    await chooseRowAction(user, 'Nightly', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await chooseRowAction(user, 'Nightly', 'Delete');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    release();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
   it('closes the drawer when the trigger it is editing is deleted', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);

@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@fluentui/react-components';
 import { splitConfirmMessage } from './splitConfirmMessage';
+import { TYPED_NAME_PREFIX, TYPED_NAME_SUFFIX, typedNameKey } from './typedName';
 
 /**
  * #1397 OR6 — the one confirmation dialog, replacing `window.confirm`.
@@ -52,13 +53,18 @@ export interface ConfirmRequest {
   readonly cancelLabel?: string;
   /**
    * For an irreversible delete of something other resources depend on: the
-   * action button stays disabled until this exact name is typed.
+   * action button stays disabled until this name is typed. Compared after
+   * `typedNameKey`, so whitespace the dialog cannot show is not asked for.
    */
   readonly typeToConfirm?: string;
   /**
    * Where focus goes when the dialog closes. Defaults to whatever had focus
    * when the question was asked — the row's button, as `window.confirm` did.
    * Pass this when that element is about to disappear (a menu item).
+   *
+   * Called once the dialog has gone, not when it is answered, so it sees the
+   * page after anything the answer removed. It runs in an effect cleanup, so it
+   * must not throw: return `null` for "nowhere".
    */
   readonly restoreFocus?: () => HTMLElement | null;
 }
@@ -146,8 +152,11 @@ function useConfirmController(): { api: ConfirmApi; dialog: ReactNode } {
   const pendingRef = useRef<Pending | null>(null);
   const seq = useRef(0);
   // Where focus goes once the dialog has gone. Fluent restores focus only to a
-  // `DialogTrigger`, and these dialogs have none.
-  const restoreTo = useRef<HTMLElement | null>(null);
+  // `DialogTrigger`, and these dialogs have none. Held as a lookup and asked
+  // only when the dialog HAS gone (#1470): an accepted delete can remove its
+  // row during the close animation, and the answer then has to come from the
+  // page as it is by then, not as it was when the button was pressed.
+  const restoreTo = useRef<(() => Element | null) | null>(null);
   // The control the dialog opens on (see `ConfirmDialog`).
   const initialFocus = useRef<HTMLElement | null>(null);
 
@@ -155,8 +164,7 @@ function useConfirmController(): { api: ConfirmApi; dialog: ReactNode } {
     const current = pendingRef.current;
     if (current === null) return;
     pendingRef.current = null;
-    const target = current.restoreFocus?.() ?? current.opener;
-    restoreTo.current = target instanceof HTMLElement ? target : null;
+    restoreTo.current = () => current.restoreFocus?.() ?? current.opener;
     setShown((s) => (s?.request === current ? { request: current, open: false } : s));
     current.resolve(confirmed);
   }, []);
@@ -167,9 +175,11 @@ function useConfirmController(): { api: ConfirmApi; dialog: ReactNode } {
    * somewhere on purpose (a delete that moved it to the next control).
    */
   const onGone = useCallback(() => {
-    const target = restoreTo.current;
+    const lookup = restoreTo.current;
     restoreTo.current = null;
-    if (pendingRef.current !== null || !target?.isConnected) return;
+    if (pendingRef.current !== null || lookup === null) return;
+    const target = lookup();
+    if (!(target instanceof HTMLElement) || !target.isConnected) return;
     const active = document.activeElement;
     if (active === null || active === document.body || !active.isConnected) target.focus();
   }, []);
@@ -256,7 +266,9 @@ function ConfirmDialog({
   const [typed, setTyped] = useState('');
   const inputId = useId();
   const bodyId = useId();
-  const blocked = request.typeToConfirm !== undefined && typed !== request.typeToConfirm;
+  const blocked =
+    request.typeToConfirm !== undefined &&
+    typedNameKey(typed) !== typedNameKey(request.typeToConfirm);
   // Focus opens on the safe choice: Cancel, or the name box when one is asked
   // for — never the action, so a stray Enter cannot confirm a delete. Placed
   // by `useConfirm` rather than left to Fluent's first-focusable search, which
@@ -277,7 +289,11 @@ function ConfirmDialog({
           {request.typeToConfirm !== undefined && (
             <div className="confirm-dialog-typed">
               <label htmlFor={inputId}>
-                Type <strong>{request.typeToConfirm}</strong> to confirm
+                {TYPED_NAME_PREFIX}
+                <strong className="confirm-dialog-name">
+                  {typedNameKey(request.typeToConfirm)}
+                </strong>
+                {TYPED_NAME_SUFFIX}
               </label>
               <input
                 ref={initialFocus as RefObject<HTMLInputElement | null>}

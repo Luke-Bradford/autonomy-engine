@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type RefObject,
@@ -45,6 +46,7 @@ import { ImportPanel } from './ImportPanel';
 import { coerceGlobalValue, formatDefaultInput } from './pipeline/paramRules';
 import { payloadSignature } from './pipeline/configForm';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /**
@@ -110,6 +112,12 @@ const VALUE_PLACEHOLDER: Record<GlobalParamType, string> = {
 export function GlobalParamsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [globals, setGlobals] = useState<GlobalParam[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    globals,
+    createRef,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -140,31 +148,39 @@ export function GlobalParamsPage() {
     void refresh();
   }, [refresh]);
 
+  /* #1466 — one delete per row at a time, the guard spanning the usage read,
+     the dialog and the delete. `ConnectionsPage.onDelete` states the race and
+     why the guard has no `disabled` affordance (its dialog is the feedback). */
+  const { run: runDelete } = useBusyAction();
+
   const onDelete = useCallback(
-    async (global: GlobalParam, origin: RowMenuOrigin) => {
-      // #844 GL3 (GL-D4) — what reads it, shown before the choice. Advisory: a
-      // failed read says so and still lets the operator decide.
-      const usage = await getGlobalParamUsage(global.id).catch(() => null);
-      // Something is KNOWN to read it, so typing the name is asked for. A
-      // failed read stays advisory (GL-D4) and asks only the plain question.
-      const read = usage !== null && usage.pipelines.length + usage.triggers.length > 0;
-      const confirmed = await confirm({
-        message: deleteConfirmText(global.name, usage),
-        confirmLabel: 'Delete',
-        ...(read ? { typeToConfirm: global.name } : {}),
-        // The menu item that asked unmounted while the usage read ran.
-        restoreFocus: origin.find,
-      });
-      if (!confirmed) return;
-      try {
-        await deleteGlobalParam(global.id);
-        closeWhere((open) => open.stored?.id === global.id);
-        await refresh();
-      } catch (err) {
-        setLoadError(`Could not delete “${global.name}”: ${messageOf(err)}`);
-      }
-    },
-    [confirm, refresh, closeWhere],
+    (global: GlobalParam, origin: RowMenuOrigin) =>
+      runDelete(global.id, async () => {
+        // #844 GL3 (GL-D4) — what reads it, shown before the choice. Advisory: a
+        // failed read says so and still lets the operator decide.
+        const usage = await getGlobalParamUsage(global.id).catch(() => null);
+        // Something is KNOWN to read it, so typing the name is asked for. A
+        // failed read stays advisory (GL-D4) and asks only the plain question.
+        const read = usage !== null && usage.pipelines.length + usage.triggers.length > 0;
+        const confirmed = await confirm({
+          message: deleteConfirmText(global.name, usage),
+          confirmLabel: 'Delete',
+          ...(read ? { typeToConfirm: global.name } : {}),
+          // The menu item that asked unmounted while the usage read ran.
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(global.id, origin);
+        try {
+          await deleteGlobalParam(global.id);
+          closeWhere((open) => open.stored?.id === global.id);
+          await refresh();
+        } catch (err) {
+          forget();
+          setLoadError(`Could not delete “${global.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [removalFocus, removingRow, confirm, runDelete, refresh, closeWhere],
   );
 
   /** #844 GL6 — save the global's export file, as Datasets does (#1143). */
@@ -190,6 +206,7 @@ export function GlobalParamsPage() {
       <div className="page-header">
         <h2 id="global-params-heading">Global parameters</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
   DATASET_CONNECTION_KINDS,
@@ -68,6 +68,7 @@ import { allowlistChanged, datasetAllowlistSubject } from './overrideAllowlist';
 import { DatasetKindName, KindSelect } from '../lib/KindName';
 import { DATASET_KIND_ICONS } from '../lib/kindIcons';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 const KINDS = DATASET_KINDS;
@@ -324,6 +325,17 @@ function savePayloadSignature(form: FormState): string {
 export function DatasetsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    datasets,
+    createRef,
+  );
+  /* One removal per row at a time, spanning the dialog and the request: with
+     the delete in flight the row's ⋯ still works, and a second Delete would
+     ask again and 404 into the banner over a delete that succeeded (#1470).
+     `ConnectionsPage.onDelete` states the race. */
+  const { run: runRemove } = useBusyAction();
   const [connections, setConnections] = useState<readonly ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
@@ -390,26 +402,29 @@ export function DatasetsPage() {
   );
 
   const onDelete = useCallback(
-    async (dataset: Dataset, origin: RowMenuOrigin) => {
-      // Names the consequence rather than only the row: nothing scans for
-      // dependants at delete time (the ref is checked at DISPATCH, §3.1), so a
-      // `copy` node bound to this dataset keeps its binding and fails when it
-      // next runs.
-      const confirmed = await confirm({
-        message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
-        confirmLabel: 'Delete',
-        restoreFocus: origin.find,
-      });
-      if (!confirmed) return;
-      try {
-        await deleteDataset(dataset.id);
-        closeWhere((open) => open.id === dataset.id);
-        await refresh();
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [confirm, refresh, closeWhere],
+    (dataset: Dataset, origin: RowMenuOrigin) =>
+      runRemove(dataset.id, async () => {
+        // Names the consequence rather than only the row: nothing scans for
+        // dependants at delete time (the ref is checked at DISPATCH, §3.1), so a
+        // `copy` node bound to this dataset keeps its binding and fails when it
+        // next runs.
+        const confirmed = await confirm({
+          message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
+          confirmLabel: 'Delete',
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(dataset.id, origin);
+        try {
+          await deleteDataset(dataset.id);
+          closeWhere((open) => open.id === dataset.id);
+          await refresh();
+        } catch (err) {
+          forget();
+          setLoadError(err instanceof Error ? err.message : String(err));
+        }
+      }),
+    [removalFocus, removingRow, runRemove, confirm, refresh, closeWhere],
   );
 
   return (
@@ -417,6 +432,7 @@ export function DatasetsPage() {
       <div className="page-header">
         <h2 id="datasets-heading">Datasets</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm(connections)))}
         >

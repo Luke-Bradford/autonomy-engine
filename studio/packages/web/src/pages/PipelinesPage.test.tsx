@@ -438,6 +438,59 @@ describe('PipelinesPage', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
 
+  // #1470 — the row and its ⋯ unmount with the delete; focus goes to the next
+  // row's ⋯ rather than to <body>, and to the New pipeline name when none is left.
+  it("hands focus to the next row's ⋯ after a confirmed delete", async () => {
+    const user = userEvent.setup();
+    const kept = pipeline({ id: 'pl_2', name: 'Kept' });
+    listMock.mockResolvedValue([pipeline({ name: 'Doomed' }), kept]);
+    renderPage();
+    await screen.findByText('Kept');
+    listMock.mockResolvedValue([kept]);
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(screen.queryByText('Doomed')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Actions for Kept' })).toHaveFocus(),
+    );
+  });
+
+  it('hands focus to the New pipeline name after archiving the last pipeline', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Only' })]);
+    renderPage();
+    await screen.findByText('Only');
+    listMock.mockResolvedValue([]);
+    await chooseRowAction(user, 'Only', 'Archive');
+    await answerConfirm(user, 'accept');
+    const form = screen.getByRole('form', { name: 'New pipeline' });
+    await waitFor(() => expect(within(form).getByLabelText('Name')).toHaveFocus());
+  });
+
+  // #1470 — the row's ⋯ still works while its delete is in flight; Delete
+  // again must not ask a second time (accepting that would 404 into the banner).
+  it("asks once while the row's delete is in flight", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
+    let release: () => void = () => {};
+    deleteMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderPage();
+    await screen.findByText('Doomed');
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    release();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a friendly message when deleting a pipeline that has runs (409)', async () => {
     const user = userEvent.setup();
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));

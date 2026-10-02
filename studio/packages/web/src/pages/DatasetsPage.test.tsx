@@ -580,6 +580,30 @@ describe('DatasetsPage', () => {
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('ds_1'));
   });
 
+  // #1470 — the row's ⋯ still works while its delete is in flight; Delete
+  // again must not ask a second time (accepting that would 404 into the banner).
+  it("asks once while the row's delete is in flight", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dataset()]);
+    let release: () => void = () => {};
+    deleteMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderWithDataRouter(<DatasetsPage />);
+    await screen.findByText('Orders');
+    await chooseRowAction(user, 'Orders', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await chooseRowAction(user, 'Orders', 'Delete');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    release();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
   it('closes the drawer when the dataset it is editing is deleted', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);

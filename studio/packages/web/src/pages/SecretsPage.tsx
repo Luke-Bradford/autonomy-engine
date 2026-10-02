@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type RefObject,
@@ -31,6 +32,8 @@ import { useDrawerForm, type UnsavedChangesGuard } from '../lib/form/useDrawerFo
 import { payloadSignature } from './pipeline/configForm';
 import { formatWhen } from './runs/format';
 import { useConfirm } from '../lib/confirm/useConfirm';
+import { useBusyAction } from '../hooks/useBusyAction';
+import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
 
 /** `id === null` means creating; otherwise this form REPLACES that secret's
@@ -87,6 +90,17 @@ function savePayloadSignature(form: FormState): string {
 export function SecretsPage() {
   const [confirm, confirmDialog] = useConfirm();
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
+  // #1470 — a removed row hands focus to its neighbour's ⋯, else to this.
+  const createRef = useRef<HTMLButtonElement>(null);
+  const { restoreFocus: removalFocus, removing: removingRow } = useFocusAfterRemoval(
+    secrets,
+    createRef,
+  );
+  /* One removal per row at a time, spanning the dialog and the request: with
+     the delete in flight the row's ⋯ still works, and a second Delete would
+     ask again and 404 into the banner over a delete that succeeded (#1470).
+     `ConnectionsPage.onDelete` states the race. */
+  const { run: runRemove } = useBusyAction();
   const [loadError, setLoadError] = useState<string | null>(null);
   const {
     form,
@@ -121,30 +135,33 @@ export function SecretsPage() {
   }, [refresh]);
 
   const onDelete = useCallback(
-    async (secret: NamedSecret, origin: RowMenuOrigin) => {
-      // Deleting RETIRES the name, which is a different act from replacing the
-      // value behind it (#1061 gave that its own route and button). What it
-      // costs is the same either way, so the confirmation states it: every node
-      // referencing the name breaks until a secret of that name exists again.
-      const confirmed = await confirm({
-        message:
-          `Delete secret "${secret.name}"?\n\n` +
-          `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
-          `dispatch until a secret of that name exists again.\n\n` +
-          `To change its VALUE and keep the name, use Replace instead.`,
-        confirmLabel: 'Delete',
-        restoreFocus: origin.find,
-      });
-      if (!confirmed) return;
-      try {
-        await deleteSecret(secret.id);
-        closeWhere((open) => open.id === secret.id);
-        await refresh();
-      } catch (err) {
-        setLoadError(`Could not delete “${secret.name}”: ${messageOf(err)}`);
-      }
-    },
-    [confirm, refresh, closeWhere],
+    (secret: NamedSecret, origin: RowMenuOrigin) =>
+      runRemove(secret.id, async () => {
+        // Deleting RETIRES the name, which is a different act from replacing the
+        // value behind it (#1061 gave that its own route and button). What it
+        // costs is the same either way, so the confirmation states it: every node
+        // referencing the name breaks until a secret of that name exists again.
+        const confirmed = await confirm({
+          message:
+            `Delete secret "${secret.name}"?\n\n` +
+            `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
+            `dispatch until a secret of that name exists again.\n\n` +
+            `To change its VALUE and keep the name, use Replace instead.`,
+          confirmLabel: 'Delete',
+          restoreFocus: removalFocus(origin),
+        });
+        if (!confirmed) return;
+        const forget = removingRow(secret.id, origin);
+        try {
+          await deleteSecret(secret.id);
+          closeWhere((open) => open.id === secret.id);
+          await refresh();
+        } catch (err) {
+          forget();
+          setLoadError(`Could not delete “${secret.name}”: ${messageOf(err)}`);
+        }
+      }),
+    [removalFocus, removingRow, runRemove, confirm, refresh, closeWhere],
   );
 
   return (
@@ -152,6 +169,7 @@ export function SecretsPage() {
       <div className="page-header">
         <h2 id="secrets-heading">Secrets</h2>
         <button
+          ref={createRef}
           type="button"
           onClick={(e) => drawer.openFrom(e.currentTarget, () => openForm(blankForm()))}
         >

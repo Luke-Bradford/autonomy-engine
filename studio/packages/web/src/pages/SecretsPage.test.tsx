@@ -228,6 +228,32 @@ describe('SecretsPage', () => {
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('sec_1'));
     expect(await screen.findByText(/No secrets yet/)).toBeInTheDocument();
+    // #1470 — the list emptied, so focus goes to the page's create control.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New secret' })).toHaveFocus());
+  });
+
+  // #1470 — the row's ⋯ still works while its delete is in flight; Delete
+  // again must not ask a second time (accepting that would 404 into the banner).
+  it("asks once while the row's delete is in flight", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([secret()]);
+    let release: () => void = () => {};
+    deleteMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderWithDataRouter(<SecretsPage />);
+    await screen.findByText('stripe-key');
+    await chooseRowAction(user, 'stripe-key', 'Delete');
+    await answerConfirm(user, 'accept');
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+    await chooseRowAction(user, 'stripe-key', 'Delete');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    release();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(deleteMock).toHaveBeenCalledTimes(1);
   });
 
   it('warns that deleting breaks the nodes referencing that name', async () => {
@@ -294,6 +320,9 @@ describe('SecretsPage', () => {
       await answerConfirm(user, 'accept');
       await waitFor(() => expect(screen.queryByRole('form', { name: 'Secret form' })).toBeNull());
       expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
+      // #1470 — neither the drawer's opener (Replace) nor the ⋯ survives the
+      // delete, so focus goes to New secret rather than to <body>.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'New secret' })).toHaveFocus());
     });
   });
 
