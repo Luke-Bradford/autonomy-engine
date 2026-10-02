@@ -11,6 +11,7 @@ import type {
   WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import { WorkspaceGitPage } from './WorkspaceGitPage';
+import { answerConfirm } from '../testing/confirmDialog';
 import { ApiError } from '../api/client';
 import * as api from '../api/workspaceGit';
 
@@ -380,14 +381,18 @@ describe('WorkspaceGitPage', () => {
 
   it('disconnects only after the confirmation is accepted', async () => {
     await renderConnected();
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    // #1397 — the question is the title; what survives is the body.
+    expect(
+      await screen.findByRole('alertdialog', { name: `Disconnect ${status().repoUrl}?` }),
+    ).toHaveTextContent('Your pipelines stay in the database');
+    await answerConfirm(userEvent, 'cancel');
     expect(disconnectMock).not.toHaveBeenCalled();
 
-    confirm.mockReturnValue(true);
     disconnectMock.mockResolvedValue();
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await answerConfirm(userEvent, 'accept');
 
     expect(await screen.findByRole('form', { name: 'Connect a repository' })).toBeInTheDocument();
   });
@@ -438,10 +443,10 @@ describe('WorkspaceGitPage', () => {
 
     it('removes a stored token only after confirmation', async () => {
       await renderConnected({ hasStoredToken: true });
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       clearTokenMock.mockResolvedValue(status({ hasStoredToken: false }));
 
       await userEvent.click(screen.getByRole('button', { name: 'Remove stored token' }));
+      await answerConfirm(userEvent, 'accept');
 
       await waitFor(() => expect(clearTokenMock).toHaveBeenCalledTimes(1));
       expect(await screen.findByRole('button', { name: 'Store token' })).toBeInTheDocument();
@@ -913,14 +918,13 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       await checkForIncoming();
       expect(incoming()).toHaveTextContent(/Legacy/);
 
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
-      const message = confirm.mock.calls[0]?.[0] as string;
+      const message = await answerConfirm(userEvent, 'cancel');
       expect(message).toContain('Legacy');
       expect(message).toMatch(/ARCHIVED/);
       expect(message).toMatch(/trigger depending on them will be disabled/);
@@ -947,12 +951,13 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
-      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differs from/);
+      expect(await answerConfirm(userEvent, 'cancel')).toMatch(
+        /1 resource on the branch differs from/,
+      );
     });
 
     /**
@@ -971,12 +976,13 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
-      expect(confirm.mock.calls[0]?.[0]).toMatch(/2 resources on the branch differ from/);
+      expect(await answerConfirm(userEvent, 'cancel')).toMatch(
+        /2 resources on the branch differ from/,
+      );
     });
 
     /**
@@ -997,12 +1003,13 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
-      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differs from/);
+      expect(await answerConfirm(userEvent, 'cancel')).toMatch(
+        /1 resource on the branch differs from/,
+      );
     });
 
     /**
@@ -1039,10 +1046,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/Import refused/);
       expect(screen.getByText(/unexpected token/)).toBeInTheDocument();
@@ -1072,10 +1079,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByText(/node "n1"/)).toBeInTheDocument();
       // Still an import, not a refusal — the two must not be conflated.
@@ -1103,10 +1110,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         /1 resource it did not apply and did not explain/,
@@ -1140,10 +1147,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('status')).toHaveTextContent('1 resource changed');
       expect(screen.getByText(/pipelines\/nightly\.json/)).toHaveTextContent('new version');
@@ -1179,10 +1186,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('status')).toHaveTextContent(/Nothing to import/);
     });
@@ -1219,7 +1226,6 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       expect(screen.getByRole('table')).toHaveTextContent(
@@ -1232,6 +1238,7 @@ describe('WorkspaceGitPage', () => {
       // thing the excused ref left unchecked — so it is where the caveat has to
       // land.
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
       expect(await screen.findByRole('status')).toHaveTextContent(
         /already matches .* \(a ref names a deleted resource, so it was not compared\)\./,
       );
@@ -1262,10 +1269,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       const row = (await screen.findAllByRole('listitem')).find((li) =>
         li.textContent?.includes('pipelines/nightly.json'),
@@ -1306,10 +1313,10 @@ describe('WorkspaceGitPage', () => {
           archived: [{ resourceId: 'res_2', name: 'retired', disabledTriggerIds: [] }],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('status')).toHaveTextContent(
         /Imported .* 0 resources changed \(a ref names a deleted resource, so it was not compared\)\./,
@@ -1339,10 +1346,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('status')).toHaveTextContent(
         /Imported .* 1 resource changed\.$/,
@@ -1380,10 +1387,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('status')).toHaveTextContent(
         /Nothing to import — this workspace already matches main at abcdef1/,
@@ -1424,10 +1431,10 @@ describe('WorkspaceGitPage', () => {
           ],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         /This workspace does not match main/,
@@ -1467,12 +1474,12 @@ describe('WorkspaceGitPage', () => {
           diagnostics: [conflict],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       expect(screen.queryByText(/would be refused/)).toBeNull();
       expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByText(/is a number here but a string on the branch/)).toBeVisible();
       expect(screen.queryByText(/already matches main/)).toBeNull();
@@ -1488,10 +1495,10 @@ describe('WorkspaceGitPage', () => {
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
       importMock.mockResolvedValue(applyResult({ head: '9999999888888888' }));
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         /abcdef1 was shown, 9999999 was applied/,
@@ -1507,10 +1514,10 @@ describe('WorkspaceGitPage', () => {
           archived: [{ resourceId: 'res_9', name: 'Legacy', disabledTriggerIds: ['tr_1', 'tr_2'] }],
         }),
       );
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       const archived = await screen.findByText(/Legacy/);
       expect(archived).toHaveTextContent('2 triggers disabled');
@@ -1532,10 +1539,10 @@ describe('WorkspaceGitPage', () => {
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
       importMock.mockRejectedValue(new ApiError(500, 'An unexpected error occurred.'));
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         /No resources were changed and the import base did not move/,
@@ -1553,11 +1560,11 @@ describe('WorkspaceGitPage', () => {
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
       importMock.mockRejectedValue(new ApiError(502, 'git fetch failed'));
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       const before = getMock.mock.calls.length;
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(before));
     });
@@ -1575,10 +1582,10 @@ describe('WorkspaceGitPage', () => {
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
       importMock.mockRejectedValue(new TypeError('Failed to fetch'));
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      await answerConfirm(userEvent, 'accept');
 
       const alert = await screen.findByRole('alert');
       expect(alert).toHaveTextContent(/not known whether the import was applied/);

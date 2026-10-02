@@ -161,6 +161,7 @@ import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
@@ -313,6 +314,7 @@ export function PipelineCanvas({
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   /**
    * #979 — the publish state: the active pointer, and whether a repo is
    * connected at all. Both start `undefined` and STAY `undefined` if the read
@@ -466,8 +468,13 @@ export function PipelineCanvas({
       if (leaveGuard.confirming) return;
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
-         listener and behind the same text-entry guard as the history keys. */
+         listener and behind the same text-entry guard as the history keys.
+         #1397 — and locked out as the clipboard keys are: behind a preview the
+         editor is unmounted but its selection is not (the restore dialog no
+         longer swallows the key as `window.confirm` did), and a save or restore
+         in flight would land over the deletion. */
       if (isDeleteKeystroke(e)) {
+        if (previewing !== null || previewLocked) return;
         if (store.getState().selected.length === 0) return;
         e.preventDefault();
         store.getState().deleteSelection();
@@ -956,9 +963,16 @@ export function PipelineCanvas({
       setSaveMsg(refusal);
       return;
     }
+    // #1397 — `primary`, not `danger`: a restore mints a new version and keeps
+    // every old one. While the dialog asks, the editor stays unmounted behind
+    // the preview and every value below is the one the operator read; the
+    // version list is also the CAS basis, so a list that moved fails the write.
     if (
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      !window.confirm(restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }))
+      !(await confirm({
+        message: restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }),
+        confirmLabel: 'Restore',
+        tone: 'primary',
+      }))
     ) {
       return;
     }
@@ -1042,7 +1056,7 @@ export function PipelineCanvas({
     } finally {
       setRestoring(false);
     }
-  }, [dirty, head, headVersion, pipelineId, previewed, store]);
+  }, [dirty, head, headVersion, pipelineId, previewed, store, confirm]);
 
   /**
    * #979 — make the previewed version the active published one.
@@ -1068,14 +1082,18 @@ export function PipelineCanvas({
     // non-null for `undefined`, so this is unreachable — but the CAS argument is
     // too important to rest on a function's return value alone.
     if (active === undefined) return;
+    // #1397 — `primary`: publishing moves a pointer and destroys nothing. The
+    // pointer can move while the dialog asks; `expectedActiveVersionId` is the
+    // one this page read, so the server refuses a publish over a moved pointer.
     if (
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      !window.confirm(
-        publishConfirmMessage({
+      !(await confirm({
+        message: publishConfirmMessage({
           selectedVersion: previewed.version,
           activeVersion: activeVersionLabel(active, versions),
         }),
-      )
+        confirmLabel: 'Publish',
+        tone: 'primary',
+      }))
     ) {
       return;
     }
@@ -1122,7 +1140,7 @@ export function PipelineCanvas({
     } finally {
       setPublishing(false);
     }
-  }, [active, archived, gitConnected, pipelineId, previewed, versions]);
+  }, [active, archived, gitConnected, pipelineId, previewed, versions, confirm]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -1677,6 +1695,7 @@ export function PipelineCanvas({
           </EditorRunProvider>
         </SubjectIssuesContext.Provider>
       )}
+      {confirmDialog}
     </section>
   );
 }
@@ -2376,9 +2395,9 @@ function ContainerSection({
    *
    * ONE evaluation, at the moment of the click, against live state — the
    * consequence is never stored, so it cannot go stale the way a frozen
-   * `role="alert"` does (`FlowCanvas` documents that failure). `window.confirm`
-   * is the canvas's existing confirmation route (`confirmDeleteContainer`);
-   * the list pages moved to `useConfirm` in #1397 and this follows.
+   * `role="alert"` does (`FlowCanvas` documents that failure). The gate still
+   * asks through `window.confirm`, as `confirmDeleteContainer` does; both move
+   * to `useConfirm` in a later #1397 slice.
    */
   function withConfirmation(
     nextContainers: Container[],

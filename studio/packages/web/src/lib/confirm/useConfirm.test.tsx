@@ -68,6 +68,45 @@ describe('useConfirm', () => {
     expect(screen.getByRole('status')).toHaveTextContent('true');
   });
 
+  it('draws a non-destructive action as primary, never as danger', async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        request={{
+          message: 'Restore v1?\n\nEvery existing version is kept.',
+          confirmLabel: 'Restore',
+          tone: 'primary',
+        }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('alertdialog');
+    const action = screen.getByRole('button', { name: 'Restore' });
+    expect(action).toHaveClass('primary');
+    expect(action).not.toHaveClass('danger');
+  });
+
+  it('labels the dismiss button as asked, focuses it first, and it still answers false', async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        request={{
+          message: 'Cancel this run?',
+          confirmLabel: 'Cancel run',
+          cancelLabel: 'Keep running',
+        }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('alertdialog');
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    const keep = screen.getByRole('button', { name: 'Keep running' });
+    await waitFor(() => expect(keep).toHaveFocus());
+    await user.click(keep);
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent('false');
+  });
+
   it('answers false on Cancel and on Escape, and focuses Cancel first', async () => {
     const user = userEvent.setup();
     render(<Harness request={DELETE} />);

@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireManualTrigger, seedVersion } from './support/seedDoc';
 import { fluentRootReady } from './support/theme';
+import { answerConfirm } from './support/confirmDialog';
 
 /**
  * CX4 (#1320) — an operator can stop a run from its page.
@@ -33,9 +34,10 @@ async function eventTypes(page: Page, runId: string): Promise<string[]> {
 }
 
 /**
- * Open the run's page, accept the confirmation, click Cancel. Returns the
- * prompt's text and when the click happened — the clock starts HERE, not before
- * the navigation, so the elapsed-time bound measures the stop and not page load.
+ * Open the run's page, click Cancel run, accept the confirmation. Returns the
+ * prompt's text and when the cancel was confirmed — the clock starts HERE, not
+ * before the navigation or while the dialog is open, so the elapsed-time bound
+ * measures the stop and not page load or reading time.
  */
 async function cancelFromPage(
   page: Page,
@@ -43,16 +45,14 @@ async function cancelFromPage(
 ): Promise<{ prompt: string; clickedAt: number }> {
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
-  let prompt = '';
-  page.once('dialog', (dialog) => {
-    prompt = dialog.message();
-    void dialog.accept();
-  });
   const button = page.getByRole('button', { name: 'Cancel run' });
   await expect(button).toBeEnabled();
-  const clickedAt = Date.now();
   await button.click();
-  await expect.poll(() => prompt, { message: 'no confirmation was shown' }).not.toBe('');
+  // #1397 — the dismiss button says what it does: it keeps the run going.
+  const dialog = page.getByRole('alertdialog', { name: 'Cancel this run?' });
+  await expect(dialog.getByRole('button', { name: 'Keep running' })).toBeVisible();
+  const clickedAt = Date.now();
+  const prompt = await answerConfirm(page, 'accept');
   return { prompt, clickedAt };
 }
 
