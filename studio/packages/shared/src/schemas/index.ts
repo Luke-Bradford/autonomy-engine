@@ -5,6 +5,7 @@ export * from './api-error.js';
 export * from './pagination.js';
 export * from './connection.js';
 export * from './connection-dependents.js';
+export * from './pipeline-dependents.js';
 export * from './dataset.js';
 export * from './pipeline.js';
 export * from './recurrence.js';

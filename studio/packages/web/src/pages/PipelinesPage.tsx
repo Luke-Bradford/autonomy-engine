@@ -20,6 +20,7 @@ import { pipelinePath } from './author/pipelinePath';
 import { useConfirm } from '../lib/confirm/useConfirm';
 import { useFocusAfterRemoval } from '../hooks/useFocusAfterRemoval';
 import { RowMoreMenu, type RowMenuOrigin } from '../lib/RowMoreMenu';
+import { pipelineDeletePlan, readPipelineDependents } from './pipelineDeleteConfirm';
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
@@ -151,9 +152,18 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const onDelete = useCallback(
     (p: Pipeline, origin: RowMenuOrigin) =>
       runRemove(p.id, async () => {
+        // #1397 — read what the delete takes with it, so the question names it.
+        const plan = pipelineDeletePlan(p.name, await readPipelineDependents(p.id));
+        if (plan.kind === 'refused') {
+          // No dialog opened, so the menu hands focus back to ⋯ itself.
+          setActionMsg(plan.message);
+          return;
+        }
         const confirmed = await confirm({
-          message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
+          message: plan.message,
           confirmLabel: 'Delete',
+          ...(plan.typeToConfirm !== undefined ? { typeToConfirm: plan.typeToConfirm } : {}),
+          // The menu item that asked unmounted while the read above ran.
           restoreFocus: removalFocus(origin),
         });
         if (!confirmed) return;
@@ -368,9 +378,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                         in its menu. #1058: Archive stays in the same menu as
                         Delete on purpose. Delete is refused with a 409 the
                         moment the pipeline has run history, and
-                        `describeDeleteFailure` (shared with the Factory
-                        Resources pane, which has no Archive) says so without
-                        naming a way out. The way out is the item above it. */}
+                        `pipelineHasRunsMessage` (shared with the Factory
+                        Resources pane, which has no Archive) names where
+                        Archive is. Here it is the item above Delete. */}
                     <RowMoreMenu
                       name={p.name}
                       actions={[

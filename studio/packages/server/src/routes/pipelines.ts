@@ -19,6 +19,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { deleteUnrunDebugVersion } from '../repo/debug-versions.js';
+import { pipelineDependents } from '../repo/pipeline-dependents.js';
 import {
   aggregatePipelineCost,
   appendWorkspaceEvent,
@@ -147,6 +148,20 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     const updated = updatePipeline(db, existing.id, body);
     if (!updated) throw new NotFoundError('pipeline', existing.id);
     return updated;
+  });
+
+  /**
+   * #1397 OR6 — what a DELETE would take with it (`pipelineDependents`), read
+   * by the delete confirmation so it can name the consequences up front.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/dependents', async (request) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    return pipelineDependents(db, request.principal.ownerId, pipeline.id);
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/pipelines/:id', async (request, reply) => {

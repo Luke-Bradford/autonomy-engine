@@ -7,7 +7,7 @@ import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import { chooseRowAction, closeRowMenu } from '../testing/rowActions';
-import { answerConfirm, pressInConfirm } from '../testing/confirmDialog';
+import { answerConfirm, pressInConfirm, setConfirmName } from '../testing/confirmDialog';
 import * as pipelinesApi from '../api/pipelines';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
@@ -22,6 +22,7 @@ vi.mock('../api/pipelines', async (importActual) => {
     listPipelines: vi.fn(),
     createPipeline: vi.fn(),
     deletePipeline: vi.fn(),
+    listPipelineDependents: vi.fn(),
     // #1058 — the archive half. `archiveConfirmMessage` is deliberately NOT
     // mocked: it is a pure builder and the confirm text is part of what the
     // page owes the operator, so the real one runs.
@@ -49,6 +50,8 @@ vi.mock('../api/portability', async (importActual) => ({
 const listMock = vi.mocked(pipelinesApi.listPipelines);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
+const dependentsMock = vi.mocked(pipelinesApi.listPipelineDependents);
+const NO_DEPENDENTS = { hasRuns: false, triggers: [], callers: [], dynamicCallers: [] };
 const archiveMock = vi.mocked(pipelinesApi.archivePipeline);
 const restoreMock = vi.mocked(pipelinesApi.restorePipeline);
 const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
@@ -79,6 +82,7 @@ beforeEach(() => {
   listMock.mockResolvedValue([]);
   createMock.mockResolvedValue(pipeline());
   deleteMock.mockResolvedValue(undefined);
+  dependentsMock.mockResolvedValue(NO_DEPENDENTS);
   archiveMock.mockResolvedValue(pipeline({ archived: true }));
   restoreMock.mockResolvedValue(pipeline());
   listArchivedMock.mockResolvedValue([]);
@@ -499,6 +503,40 @@ describe('PipelinesPage', () => {
     await chooseRowAction(user, 'Busy', 'Delete');
     await answerConfirm(user, 'accept');
     expect(await screen.findByText(/it has run history/i)).toBeInTheDocument();
+  });
+
+  it('#1397 — names the triggers the delete takes with it, and asks for the name first', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
+    dependentsMock.mockResolvedValue({
+      ...NO_DEPENDENTS,
+      triggers: [{ id: 't1', name: 'At 2am' }],
+    });
+    renderPage();
+    await chooseRowAction(user, 'Doomed', 'Delete');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('also deletes 1 trigger bound to it (At 2am)');
+    // Typing the name is what arms Delete.
+    const del = within(dialog).getByRole('button', { name: 'Delete' });
+    expect(del).toBeDisabled();
+    setConfirmName('Doomed', 'Doomed');
+    expect(del).toBeEnabled();
+    await user.click(del);
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
+  });
+
+  it('#1397 — run history refuses up front: no question, no delete, and focus back on ⋯', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([pipeline({ name: 'Busy' })]);
+    dependentsMock.mockResolvedValue({ ...NO_DEPENDENTS, hasRuns: true });
+    renderPage();
+    await chooseRowAction(user, 'Busy', 'Delete');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Cannot delete “Busy”: it has run history. Archive it instead',
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(document.activeElement).toHaveAccessibleName('Actions for Busy');
   });
 
   it('does not delete when confirmation is declined', async () => {

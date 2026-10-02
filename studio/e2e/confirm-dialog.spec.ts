@@ -6,6 +6,7 @@ import { tree } from './support/authorPane';
 import { seedConnection, seedDataset } from './support/seedResources';
 import { fluentRootReady, resolvedPaletteColor } from './support/theme';
 import { arrowToItem, chooseRowAction } from './support/rowMenu';
+import { seedManualTrigger, seedVersion } from './support/seedDoc';
 
 /**
  * #1397 — the list pages' confirmations are an in-app alert dialog, not
@@ -21,6 +22,7 @@ import { arrowToItem, chooseRowAction } from './support/rowMenu';
 
 const KEYBOARD = 'e2e 1397 keyboard delete';
 const DEPENDANT = 'e2e-1397-typed';
+const CHILD = 'e2e-1397-child';
 
 async function createPipeline(page: Page, name: string): Promise<void> {
   const res = await page.request.post('/api/pipelines', { data: { name } });
@@ -128,6 +130,52 @@ test.describe('#1397 the confirmation dialog, by keyboard', () => {
     await answerConfirm(page, 'cancel');
     await expect(row).toBeVisible();
 
+    await expectQuiet(page, problems);
+  });
+
+  test('a pipeline delete names the trigger it deletes and the pipeline that calls it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const child = await seedVersion(page, CHILD, { nodes: [] });
+    const triggerId = await seedManualTrigger(page, child.pipelineVersionId, `${CHILD} trigger`);
+    const parent = await seedVersion(page, `${CHILD} parent`, {
+      nodes: [
+        {
+          id: 'callChild',
+          type: 'call_pipeline',
+          config: {},
+          position: { x: 0, y: 0 },
+          call: { pipelineVersionId: child.pipelineVersionId, params: {} },
+        },
+      ],
+    });
+    await page.goto('/#/author/pipelines');
+    await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+    await fluentRootReady(page);
+
+    const row = page
+      .getByRole('row')
+      .filter({ has: page.getByRole('link', { name: `Open ${CHILD}`, exact: true }) });
+    await chooseRowAction(row, 'Delete');
+
+    const dialog = page.getByRole('alertdialog', { name: `Delete pipeline "${CHILD}"?` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(`also deletes 1 trigger bound to it (${CHILD} trigger)`);
+    await expect(dialog).toContainText(`1 pipeline node (${CHILD} parent › callChild) calls it`);
+    const action = dialog.getByRole('button', { name: 'Delete', exact: true });
+    await expect(action).toBeDisabled();
+    await dialog.getByRole('textbox', { name: typedNameLabel(CHILD) }).fill(CHILD);
+    await answerConfirm(page, 'accept');
+
+    // The cascade the dialog named really happened.
+    await expect(page.getByRole('link', { name: `Open ${CHILD}`, exact: true })).toHaveCount(0);
+    expect((await page.request.get(`/api/triggers/${triggerId}`)).status()).toBe(404);
+    // The parent now calls a version that no longer exists — exactly what the
+    // dialog warned of — and a later git spec committing this shared workspace
+    // would be refused over it. Remove it.
+    const removed = await page.request.delete(`/api/pipelines/${parent.pipelineId}`);
+    expect(removed.status(), await removed.text()).toBe(204);
     await expectQuiet(page, problems);
   });
 

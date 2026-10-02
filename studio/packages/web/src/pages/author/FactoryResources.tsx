@@ -25,6 +25,7 @@ import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useBusyAction } from '../../hooks/useBusyAction';
+import { pipelineDeletePlan, readPipelineDependents } from '../pipelineDeleteConfirm';
 
 /** The tree's own ids — the disclosure's `aria-controls` must name a real one. */
 const PIPELINES_LIST_ID = 'factory-pipelines';
@@ -420,38 +421,53 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     [runExport],
   );
 
+  /**
+   * Single-flight per row, like the Pipelines table's `runRemove`: the
+   * dependents read sits before the dialog, and a second Delete landing in
+   * that window would otherwise ask again about a pipeline already going.
+   */
+  const { run: runRemove } = useBusyAction();
   const onDelete = useCallback(
-    async (p: Pipeline) => {
-      const confirmed = await confirm({
-        message: `Delete pipeline “${p.name}”?\n\nThis cannot be undone.`,
-        confirmLabel: 'Delete',
-        // The menu item that asked unmounts with its menu; Cancel lands back
-        // on the row's ⋯ button, which is where the keyboard user came from.
-        restoreFocus: () => document.getElementById(rowMenuId(p.id)),
-      });
-      if (!confirmed) return;
-      /* The row — and the Fluent menu anchored to it — is about to be unmounted
+    (p: Pipeline) =>
+      runRemove(p.id, async () => {
+        // #1397 — read what the delete takes with it, so the question names it.
+        const plan = pipelineDeletePlan(p.name, await readPipelineDependents(p.id));
+        if (plan.kind === 'refused') {
+          // No dialog opened, so the menu hands focus back to ⋯ itself.
+          setActionError(plan.message);
+          return;
+        }
+        const confirmed = await confirm({
+          message: plan.message,
+          confirmLabel: 'Delete',
+          ...(plan.typeToConfirm !== undefined ? { typeToConfirm: plan.typeToConfirm } : {}),
+          // The menu item that asked unmounts with its menu; Cancel lands back
+          // on the row's ⋯ button, which is where the keyboard user came from.
+          restoreFocus: () => document.getElementById(rowMenuId(p.id)),
+        });
+        if (!confirmed) return;
+        /* The row — and the Fluent menu anchored to it — is about to be unmounted
          by the refresh, so focus needs somewhere to land. Fluent restores focus
          to its trigger on close, which by then is gone.
 
          Recorded BEFORE the await, not after: `run` refreshes the list as part
          of succeeding, so by the time it returns, the change the effect watches
          has already been committed. */
-      deletingRow.current = p.id;
-      const ok = await run(
-        () => deletePipeline(p.id),
-        (err) => describeDeleteFailure(p.name, err),
-      );
-      if (!ok) {
-        /* Compare-and-clear, never a blind reset: with two deletes in flight the
+        deletingRow.current = p.id;
+        const ok = await run(
+          () => deletePipeline(p.id),
+          (err) => describeDeleteFailure(p.name, err),
+        );
+        if (!ok) {
+          /* Compare-and-clear, never a blind reset: with two deletes in flight the
            second one's id is in the slot, and clearing it outright would strand
            the focus IT is waiting on. Leaving a stale id would be harmless
            anyway — the effect ignores a row that is still listed — but dropping
            our own keeps the slot honest. */
-        if (deletingRow.current === p.id) deletingRow.current = null;
-        return;
-      }
-      /* Leaving the canvas mounted on a pipeline that no longer exists would
+          if (deletingRow.current === p.id) deletingRow.current = null;
+          return;
+        }
+        /* Leaving the canvas mounted on a pipeline that no longer exists would
          show a stale graph over a 404 on the next load. Only when it IS the
          open one — deleting a different pipeline must not yank the user out of
          what they are editing.
@@ -463,9 +479,9 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          `replace`, per the house rule `routes.tsx` states for exactly this: a
          pushed navigation leaves the dead pipeline's URL in history, so Back
          lands on "Pipeline not found". */
-      if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
-    },
-    [confirm, editing, hub.path, navigate, run, section],
+        if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
+      }),
+    [confirm, editing, hub.path, navigate, run, runRemove, section],
   );
 
   /** One pipeline's row — or the draft standing in for it (rename, move). */
