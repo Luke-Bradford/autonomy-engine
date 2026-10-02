@@ -125,7 +125,7 @@ export default defineConfig({
         //
         // #1397 OR6 measured (the first Fluent `Dialog`: one confirmation
         // dialog replacing `window.confirm`) — gzip: `fluent` 95.39 -> 101.74 kB
-        // (+6.35) · entry 111.10 -> 111.94 kB (+0.84, the hook and the eight
+        // (+6.35) · entry 111.10 -> 112.14 kB (+1.04, the hook, its host and the eight
         // pages that call it) · index css 8.82 -> 8.86 kB. Built against the
         // branch with the hook not yet imported, then with it. The cost U4
         // declined for create/rename/duplicate still stands for those; it is
