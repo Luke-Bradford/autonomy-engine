@@ -167,7 +167,8 @@ import {
 import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { DOCK_HEIGHT_VAR, DockSplitter } from './DockSplitter';
-import { uiStore } from '../../stores/uiStore';
+import { TOOLBOX_WIDTH_VAR, ToolboxSplitter } from './ToolboxSplitter';
+import { TOOLBOX_RAIL_WIDTH, uiStore } from '../../stores/uiStore';
 import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
 import { EditorRunContext, type EditorRun } from './editorRunContext';
@@ -273,6 +274,12 @@ export function PipelineCanvas({
   const dockId = useId();
   const dockBodyId = useId();
   const canvasMainRef = useRef<HTMLDivElement>(null);
+  /* #1475 — the toolbox's width and fold, per viewer. Written onto the grid on
+     every render, so a reload paints the operator's width first time. */
+  const toolboxWidth = useStore(uiStore, (s) => s.toolboxWidth);
+  const toolboxRail = useStore(uiStore, (s) => s.toolboxCollapsed);
+  const toolboxId = useId();
+  const canvasGridRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   /* #1393 — the Problems column beside the properties. Open by default, and
      present while open whether or not anything is wrong, so an issue arriving
@@ -1699,10 +1706,21 @@ export function PipelineCanvas({
         <SubjectIssuesContext.Provider value={bySubject}>
           {/* #1395 OR4 — the editor's run, over the canvas and in the dock. */}
           <EditorRunProvider run={editorRun}>
-            <div className="canvas-grid">
+            <div
+              ref={canvasGridRef}
+              className="canvas-grid"
+              /* Folded, the track is the rail's; the stored width is kept for
+                 unfolding to restore. */
+              style={
+                {
+                  [TOOLBOX_WIDTH_VAR]: `${String(toolboxRail ? TOOLBOX_RAIL_WIDTH : toolboxWidth)}px`,
+                } as CSSProperties
+              }
+            >
               {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
-              <ActivityToolbox store={store} />
+              <ActivityToolbox store={store} id={toolboxId} />
+              <ToolboxSplitter gridRef={canvasGridRef} toolboxId={toolboxId} />
               {/* #852 / #844 — U7's BOTTOM dock: the canvas takes the width, the
                 properties sit under it (ADF's layout), and one dock serves both
                 the activity forms and the pipeline's params/outputs. */}

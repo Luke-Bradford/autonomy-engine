@@ -1519,8 +1519,11 @@ button.danger {
   display: grid;
   /* #852 — two columns: the toolbox, then the canvas with the property dock
      UNDER it (`.canvas-main`). The properties used to be a third, 320px column;
-     U7 draws them as a bottom dock, which also gives the canvas that width. */
-  grid-template-columns: 180px minmax(0, 1fr);
+     U7 draws them as a bottom dock, which also gives the canvas that width.
+     #1475 OR27 — the toolbox track is the operator's width (`--toolbox-width`,
+     written from `uiStore`; 180px is `TOOLBOX_DEFAULT_WIDTH`), then the 8px
+     `.toolbox-splitter`, which IS the gap between the two: no column gap. */
+  grid-template-columns: var(--toolbox-width, 180px) 8px minmax(0, 1fr);
   /* ONE row, filling the height this grid was given. `minmax(0, 1fr)` rather
      than `1fr`: a bare `1fr` is `minmax(auto, 1fr)`, whose auto MINIMUM is the
      content's intrinsic height, so a tall toolbox catalog would push the row
@@ -1531,7 +1534,7 @@ button.danger {
      `max-height` — so it is kept for the catalog the A-series will grow, not for
      a case the current fixture can demonstrate. */
   grid-template-rows: minmax(0, 1fr);
-  gap: 0.75rem;
+  column-gap: 0;
   margin-top: 0.25rem;
   /* Take the leftover height from `.canvas-page`, and allow shrinking below
      intrinsic content height (same reason as the `minmax` above). */
@@ -1548,8 +1551,9 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  /* The toolbox sits in a FIXED 180px track. A grid item's automatic minimum
-     size is its content's intrinsic minimum, and a text input's is its `size`
+  /* The toolbox sits in a FIXED-width track (the operator's width, #1475). A
+     grid item's automatic minimum size is its content's intrinsic minimum, and
+     a text input's is its `size`
      attribute (~20 characters) — so without this the filter below pushes the
      column wider than its track and the whole canvas grid overflows
      horizontally. U4 hit exactly this in the secondary pane. */
@@ -1560,6 +1564,18 @@ button.danger {
 .property-panel h3 {
   margin: 0;
   font-size: 0.95rem;
+}
+
+/* #1475 — the divider between the toolbox and the canvas: `.dock-splitter`
+   (below, which also carries the rules the two share) turned on its side. */
+.toolbox-splitter {
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.toolbox-splitter:hover,
+.toolbox-splitter:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
 }
 
 /* --- Activities toolbox (U5) --------------------------------------------- */
@@ -1575,6 +1591,38 @@ button.danger {
      here was mutation-tested and SURVIVED — redundant with the row cap — so the
      coupling is gone rather than merely re-expressed. */
   overflow-y: auto;
+}
+
+.activity-toolbox__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+/* #1475 — the rail: tight padding so a 32px glyph button fits the 48px track.
+   No scrollbar drawn: a classic one would take 8-15px of a 38px content box and
+   clip every button. It still scrolls by wheel, touch, and focus moving into view. */
+.activity-toolbox--rail {
+  padding: 4px;
+  align-items: center;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+/* Groups have no headings on the rail; a rule between them keeps the grouping. */
+.activity-toolbox--rail .activity-toolbox__group + .activity-toolbox__group {
+  border-top: 1px solid var(--border);
+  padding-top: 0.3rem;
+}
+
+.activity-toolbox--rail .activity-toolbox__item {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .activity-toolbox__filter {
@@ -1927,15 +1975,17 @@ button.danger {
   background: linear-gradient(var(--accent), var(--accent)) center / 100% 3px no-repeat;
 }
 
-/* The track `DockSplitter` draws before it has measured the column: the same
-   box, no control yet. */
-.dock-splitter[aria-hidden='true'] {
+/* The track `DockSplitter` draws before it has measured the column, and the one
+   `ToolboxSplitter` draws while the toolbox is a rail: the same box, no control. */
+.dock-splitter[aria-hidden='true'],
+.toolbox-splitter[aria-hidden='true'] {
   cursor: auto;
   background: none;
 }
 
 /* A real outline for keyboard focus, for the reasons `.pane-splitter` gives. */
-.dock-splitter:focus-visible {
+.dock-splitter:focus-visible,
+.toolbox-splitter:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: -1px;
 }

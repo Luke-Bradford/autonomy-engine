@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { answerConfirm } from '../../testing/confirmDialog';
 import { ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
@@ -7,6 +7,7 @@ import { ActivityToolbox } from './ActivityToolbox';
 import { ACTIVITY_DND_MIME, CONTAINER_DND_MIME } from './activityDnd';
 import { CONTAINER_PALETTE } from './activityGroups';
 import { createCanvasStore } from './canvasStore';
+import { TOOLBOX_DEFAULT_WIDTH, uiStore } from '../../stores/uiStore';
 
 function renderToolbox() {
   const store = createCanvasStore();
@@ -346,5 +347,72 @@ describe('ActivityToolbox', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Collapse Containers' }));
       expect(screen.queryByRole('button', { name: 'ForEach' })).toBeNull();
     });
+  });
+});
+
+/**
+ * #1475 OR27 — the toolbox folds to an icon rail rather than going away (U5:
+ * activities stay addable while the canvas has the width). The fold is the
+ * `uiStore` SINGLETON's, so every case puts it back.
+ */
+describe('ActivityToolbox icon rail (#1475)', () => {
+  afterEach(() => {
+    uiStore.getState().setToolboxCollapsed(false);
+    uiStore.getState().setToolboxWidth(TOOLBOX_DEFAULT_WIDTH);
+  });
+
+  it('folds to the rail and back from ONE toggle, which keeps focus and persists the fold', async () => {
+    renderToolbox();
+    const toggle = screen.getByRole('button', { name: 'Collapse activities' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(toggle);
+
+    expect(uiStore.getState().toolboxCollapsed).toBe(true);
+    const expand = screen.getByRole('button', { name: 'Expand activities' });
+    // The same element, so a keyboard user's focus is not dropped on the floor.
+    expect(expand).toBe(toggle);
+    expect(expand).toHaveFocus();
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('searchbox', { name: 'Filter activities' })).toBeNull();
+
+    await userEvent.click(expand);
+    expect(uiStore.getState().toolboxCollapsed).toBe(false);
+    expect(filterBox()).toBeVisible();
+  });
+
+  it('offers every activity and container on the rail, named by its title, ignoring a typed filter', async () => {
+    renderToolbox();
+    await userEvent.type(filterBox(), 'http');
+    act(() => uiStore.getState().setToolboxCollapsed(true));
+
+    const rail = screen.getAllByRole('button');
+    const offered = rail.filter((b) => b.hasAttribute('draggable'));
+    expect(offered.map((b) => b.getAttribute('aria-label')).sort()).toEqual(
+      [...authorable.map((d) => d.title), ...CONTAINER_PALETTE.map((c) => c.title)].sort(),
+    );
+    // A glyph only: the visible label is gone, the name stays.
+    for (const item of offered) expect(item.textContent).toBe('');
+    // Each still says what it does on hover (#1413).
+    const http = screen.getByRole('button', { name: catalog.get('http_request')!.title });
+    expect(http.getAttribute('title')).toContain(catalog.get('http_request')!.description);
+  });
+
+  it('adds an activity from the rail by click, the way the full toolbox does', async () => {
+    uiStore.getState().setToolboxCollapsed(true);
+    const store = renderToolbox();
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: catalog.get('http_request')!.title }));
+    expect(store.getState().nodes.map((n) => n.type)).toEqual(['http_request']);
+  });
+
+  it('writes the drag payload from the rail', () => {
+    uiStore.getState().setToolboxCollapsed(true);
+    renderToolbox();
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    const setData = vi.fn();
+    fireEvent.dragStart(screen.getByRole('button', { name: catalog.get('http_request')!.title }), {
+      dataTransfer: { setData, effectAllowed: '' },
+    });
+    expect(setData).toHaveBeenCalledWith(ACTIVITY_DND_MIME, 'http_request');
   });
 });

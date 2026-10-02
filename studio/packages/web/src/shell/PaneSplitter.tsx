@@ -22,7 +22,7 @@ interface PaneSplitterProps {
    * the property dock sits BELOW its divider, so dragging UP makes it taller.
    */
   grow?: 1 | -1;
-  /** `pane-splitter` (the nav pane) or `dock-splitter` (#1475). */
+  /** `pane-splitter` (the nav pane), `dock-splitter` or `toolbox-splitter` (#1475). */
   className: string;
   /**
    * Transient size during a pointer drag. The owner writes it straight onto
@@ -43,7 +43,7 @@ const DRAG_THRESHOLD_PX = 3;
 
 /**
  * A draggable divider: between the secondary pane and the workspace (U3), and
- * between the canvas and its property dock (#1475 OR27).
+ * between the canvas and its property dock and Activities toolbox (#1475 OR27).
  *
  * ARIA-wise this is a WINDOW SPLITTER: `role="separator"` that is focusable and
  * reports a value. The spec's accessibility criteria call for a

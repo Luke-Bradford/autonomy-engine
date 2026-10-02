@@ -1,14 +1,20 @@
 import { useId, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
-import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
+import type { DragEvent, ReactNode } from 'react';
+import {
+  ChevronDownRegular,
+  ChevronRightRegular,
+  PanelLeftContractRegular,
+  PanelLeftExpandRegular,
+} from '@fluentui/react-icons';
+import { useStore, type StoreApi } from 'zustand';
 import type { ContainerKind } from '@autonomy-studio/shared';
-import type { StoreApi } from 'zustand';
 import { setActivityDragType, setContainerDragKind } from './activityDnd';
 import { ActivityGlyph } from './ActivityGlyph';
 import { CONTAINER_GROUP_LABEL, containerToolboxEntries, toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
 import { NEW_CONTAINER_CONFIRM, newContainerQuestion } from './containerRules';
 import { useConfirm } from '../../lib/confirm/useConfirm';
+import { uiStore } from '../../stores/uiStore';
 
 /** The Containers group's collapse key — not a catalog category, so it cannot collide with one. */
 const CONTAINERS_KEY = 'containers';
@@ -35,9 +41,18 @@ const CONTAINERS_KEY = 'containers';
  * — an operator who collapsed the pane to widen the canvas would lose the ability
  * to add activities to the canvas they just widened. (Same reasoning U4 used to
  * keep the pipelines PAGE alive alongside the pane tree.)
+ *
+ * #1475 OR27 — folded, the toolbox is an ICON RAIL, not gone: the same
+ * entries as glyph-only buttons, still added by click or drag, so an operator
+ * who gave the canvas the toolbox's width can still author on it (the reason
+ * above, again). The fold is a per-viewer `uiStore` preference, like the
+ * dock's; the divider that sizes the open toolbox is the canvas grid's
+ * (`PipelineCanvas.tsx`).
  */
-export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
+export function ActivityToolbox({ store, id }: { store: StoreApi<CanvasState>; id?: string }) {
   const [confirm, confirmDialog] = useConfirm();
+  const rail = useStore(uiStore, (s) => s.toolboxCollapsed);
+  const setRail = useStore(uiStore, (s) => s.setToolboxCollapsed);
 
   /** A container from the palette by click — the drop's confirm, so the two ways to add one agree. */
   async function addContainer(kind: ContainerKind, title: string) {
@@ -70,8 +85,12 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
   // Keyed by a catalog category, or `CONTAINERS_KEY` for the Containers group.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
-  const groups = useMemo(() => toolboxGroups(query), [query]);
-  const containerEntries = useMemo(() => containerToolboxEntries(query), [query]);
+  /* The rail offers EVERYTHING: it has no filter box, so a query typed before
+     folding would otherwise hide entries with nothing on screen saying why.
+     The query is kept, and comes back with the filter. */
+  const shownQuery = rail ? '' : query;
+  const groups = useMemo(() => toolboxGroups(shownQuery), [shownQuery]);
+  const containerEntries = useMemo(() => containerToolboxEntries(shownQuery), [shownQuery]);
 
   /**
    * A SEARCH SUSPENDS EVERY COLLAPSE — and, with it, the disclosures themselves.
@@ -90,7 +109,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
    * either lie about its own state or rewrite the preference invisibly, and
    * removing it while it has nothing to control retires both.
    */
-  const searching = query.trim() !== '';
+  const searching = shownQuery.trim() !== '';
 
   function toggle(key: string) {
     setCollapsed((prev) => {
@@ -103,6 +122,18 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
   /** A group's heading and list — shared by the catalog groups and Containers. */
   function group(key: string, label: string, items: ReactNode) {
     const isCollapsed = collapsed.has(key);
+    if (rail) {
+      // No headings and no group collapse on the rail: a 48px column has no
+      // room for a label, and a folded group there would hide entries with
+      // nothing to say so. The list keeps its name for assistive tech.
+      return (
+        <div className="activity-toolbox__group" key={key}>
+          <ul className="activity-toolbox__list" aria-label={label}>
+            {items}
+          </ul>
+        </div>
+      );
+    }
     return (
       <div className="activity-toolbox__group" key={key}>
         {searching ? (
@@ -149,18 +180,82 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
     );
   }
 
+  /**
+   * One entry — an activity or a container, open or on the rail. Open, its
+   * visible title is its name and the hover says what it does (#1413). On the
+   * rail the title moves into `aria-label`, and into the hover ahead of the
+   * description, because the glyph is all that is drawn.
+   */
+  function item(entry: {
+    key: string;
+    title: string;
+    description: string;
+    icon: ReactNode;
+    onDragStart: (dataTransfer: DataTransfer) => void;
+    onClick: () => void;
+  }) {
+    return (
+      <li key={entry.key}>
+        <button
+          type="button"
+          className="activity-toolbox__item"
+          draggable
+          aria-label={rail ? entry.title : undefined}
+          title={rail ? `${entry.title} — ${entry.description}` : entry.description}
+          onDragStart={(e: DragEvent<HTMLButtonElement>) => {
+            // A synthetic event can carry a null dataTransfer; a real
+            // dragstart never does.
+            if (e.dataTransfer) entry.onDragStart(e.dataTransfer);
+          }}
+          onClick={entry.onClick}
+        >
+          {/* Decorative — the button's text, or on the rail its
+              `aria-label`, is its accessible name. */}
+          <span aria-hidden="true" className="activity-toolbox__icon">
+            {entry.icon}
+          </span>
+          {!rail && <span>{entry.title}</span>}
+        </button>
+      </li>
+    );
+  }
+
   return (
-    <aside className="activity-toolbox" aria-label="Activities">
+    <aside
+      id={id}
+      className={rail ? 'activity-toolbox activity-toolbox--rail' : 'activity-toolbox'}
+      aria-label="Activities"
+    >
       {confirmDialog}
-      <h3>Activities</h3>
-      <input
-        type="search"
-        className="activity-toolbox__filter"
-        placeholder="Filter"
-        aria-label="Filter activities"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      <div className="activity-toolbox__header">
+        {!rail && <h3>Activities</h3>}
+        {/* ONE toggle in both states, in the same slot, so React keeps the
+            element and a keyboard user's focus stays on it across the fold. */}
+        <button
+          type="button"
+          className="icon-button activity-toolbox__fold"
+          aria-expanded={!rail}
+          aria-label={rail ? 'Expand activities' : 'Collapse activities'}
+          title={rail ? 'Expand activities' : 'Collapse activities'}
+          onClick={() => setRail(!rail)}
+        >
+          {rail ? (
+            <PanelLeftExpandRegular aria-hidden="true" />
+          ) : (
+            <PanelLeftContractRegular aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      {!rail && (
+        <input
+          type="search"
+          className="activity-toolbox__filter"
+          placeholder="Filter"
+          aria-label="Filter activities"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
 
       {/* ALWAYS mounted, with only its TEXT changing. `role="status"` is a live
           region, and a live region inserted into the DOM in the same commit as
@@ -179,32 +274,20 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
         group(
           g.category,
           g.label,
-          g.entries.map((entry) => (
-            <li key={entry.type}>
-              <button
-                type="button"
-                className="activity-toolbox__item"
-                draggable
-                title={entry.description}
-                onDragStart={(e) => {
-                  // A synthetic event can carry a null dataTransfer; a real
-                  // dragstart never does.
-                  if (e.dataTransfer) setActivityDragType(e.dataTransfer, entry.type);
-                }}
-                onClick={() => store.getState().addNode(entry.type)}
-              >
-                {/* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
-                    point rather than an economy: the palette is where an
-                    operator learns what a shape means, so a different icon
-                    here would teach nothing. Decorative — the button's text
-                    is its accessible name. */}
-                <span aria-hidden="true" className="activity-toolbox__icon">
-                  <ActivityGlyph type={entry.type} category={entry.category} />
-                </span>
-                <span>{entry.title}</span>
-              </button>
-            </li>
-          )),
+          g.entries.map((entry) =>
+            item({
+              key: entry.type,
+              title: entry.title,
+              description: entry.description,
+              /* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
+                 point rather than an economy: the palette is where an
+                 operator learns what a shape means, so a different icon
+                 here would teach nothing. */
+              icon: <ActivityGlyph type={entry.type} category={entry.category} />,
+              onDragStart: (dataTransfer) => setActivityDragType(dataTransfer, entry.type),
+              onClick: () => store.getState().addNode(entry.type),
+            }),
+          ),
         ),
       )}
       {/* #1420 — the containers, last: they hold activities, so an operator
@@ -215,25 +298,16 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
         group(
           CONTAINERS_KEY,
           CONTAINER_GROUP_LABEL,
-          containerEntries.map((entry) => (
-            <li key={entry.kind}>
-              <button
-                type="button"
-                className="activity-toolbox__item"
-                draggable
-                title={entry.description}
-                onDragStart={(e) => {
-                  if (e.dataTransfer) setContainerDragKind(e.dataTransfer, entry.kind);
-                }}
-                onClick={() => void addContainer(entry.kind, entry.title)}
-              >
-                <span aria-hidden="true" className="activity-toolbox__icon">
-                  <entry.icon />
-                </span>
-                <span>{entry.title}</span>
-              </button>
-            </li>
-          )),
+          containerEntries.map((entry) =>
+            item({
+              key: entry.kind,
+              title: entry.title,
+              description: entry.description,
+              icon: <entry.icon />,
+              onDragStart: (dataTransfer) => setContainerDragKind(dataTransfer, entry.kind),
+              onClick: () => void addContainer(entry.kind, entry.title),
+            }),
+          ),
         )}
     </aside>
   );
