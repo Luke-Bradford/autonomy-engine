@@ -23,6 +23,8 @@ import {
   type DebugRunResult,
   type FireResult,
   type ManualRunRequest,
+  PipelineDependentsResponseSchema,
+  type PipelineDependentsResponse,
 } from '@autonomy-studio/shared';
 import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -176,6 +178,22 @@ export function deletePipeline(id: string): Promise<void> {
 }
 
 /**
+ * #1397 OR6 — what deleting the pipeline would take with it (`GET
+ * /api/pipelines/:id/dependents`): whether runs refuse the delete, the triggers
+ * the cascade removes, and the `call_pipeline` nodes elsewhere that would break.
+ * Read before the confirmation so it can name them.
+ */
+export function listPipelineDependents(
+  id: string,
+  signal?: AbortSignal,
+): Promise<PipelineDependentsResponse> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}/dependents`, {
+    schema: PipelineDependentsResponseSchema,
+    signal,
+  });
+}
+
+/**
  * #907 — bring an ARCHIVED pipeline back to an editable state (`POST
  * /api/pipelines/:id/restore`, 200). Idempotent: restoring a live pipeline
  * answers 200 with the same shape.
@@ -249,6 +267,13 @@ export function listArchivedPipelines(signal?: AbortSignal): Promise<Pipeline[]>
 export const TRIGGERS_STAY_DISABLED_NOTE = 'its triggers stay disabled either way';
 
 /**
+ * What the next Commit does once a pipeline leaves the serialized set — by an
+ * archive (#666) or a delete. One clause, because both confirmations state it.
+ */
+export const GIT_COMMIT_DELETES_FILES_NOTE =
+  "your next Commit will delete its file — and its triggers' files — from the branch";
+
+/**
  * What archiving "{name}" actually does, as the operator's confirmation.
  *
  * Extracted and exported (the `restoreConfirmMessage` shape) because the SAME
@@ -280,8 +305,7 @@ export function archiveConfirmMessage(name: string): string {
     `You can unarchive it from Show archived, but ${TRIGGERS_STAY_DISABLED_NOTE} — ` +
     'unarchiving brings the pipeline back editable, not running.\n\n' +
     'If this workspace is connected to git, an archived pipeline is left out of ' +
-    'the committed set, so your next Commit will delete its file — and its ' +
-    "triggers' files — from the branch."
+    `the committed set, so ${GIT_COMMIT_DELETES_FILES_NOTE}.`
   );
 }
 
@@ -514,6 +538,16 @@ export function debugPipelineDraft(
 }
 
 /**
+ * The refusal a pipeline with run history gets, before the confirmation
+ * (`pipelineDeletePlan`) or after a 409 from a delete that raced a new run.
+ * Runs are immutable audit history (`runs.pipeline_version_id` is FK-restrict),
+ * so the way out is an archive.
+ */
+export function pipelineHasRunsMessage(name: string): string {
+  return `Cannot delete “${name}”: it has run history. Archive it instead — that keeps every version and run.`;
+}
+
+/**
  * What to tell the user about a failed pipeline delete.
  *
  * The 409 (`pipeline_has_runs`) is a real, explainable REFUSAL rather than a
@@ -523,8 +557,6 @@ export function debugPipelineDraft(
  * typographically before this was extracted.
  */
 export function describeDeleteFailure(name: string, err: unknown): string {
-  if (err instanceof ApiError && err.status === 409) {
-    return `Cannot delete “${name}”: it has run history.`;
-  }
+  if (err instanceof ApiError && err.status === 409) return pipelineHasRunsMessage(name);
   return `Could not delete “${name}”: ${messageOf(err)}`;
 }

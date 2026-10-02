@@ -25,6 +25,7 @@ import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
 import { useConfirm } from '../../lib/confirm/useConfirm';
 import { useBusyAction } from '../../hooks/useBusyAction';
+import { pipelineDeletePlan, readPipelineDependents } from '../pipelineDeleteConfirm';
 
 /** The tree's own ids — the disclosure's `aria-controls` must name a real one. */
 const PIPELINES_LIST_ID = 'factory-pipelines';
@@ -422,9 +423,17 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
+      // #1397 — read what the delete takes with it, so the question names it.
+      const plan = pipelineDeletePlan(p.name, await readPipelineDependents(p.id));
+      if (plan.kind === 'refused') {
+        // No dialog opened, so the menu hands focus back to ⋯ itself.
+        setActionError(plan.message);
+        return;
+      }
       const confirmed = await confirm({
-        message: `Delete pipeline “${p.name}”?\n\nThis cannot be undone.`,
+        message: plan.message,
         confirmLabel: 'Delete',
+        ...(plan.typeToConfirm !== undefined ? { typeToConfirm: plan.typeToConfirm } : {}),
         // The menu item that asked unmounts with its menu; Cancel lands back
         // on the row's ⋯ button, which is where the keyboard user came from.
         restoreFocus: () => document.getElementById(rowMenuId(p.id)),

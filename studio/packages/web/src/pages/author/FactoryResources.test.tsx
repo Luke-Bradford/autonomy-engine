@@ -21,6 +21,7 @@ vi.mock('../../api/pipelines', async (importActual) => ({
   movePipelineToFolder: vi.fn(),
   duplicatePipeline: vi.fn(),
   deletePipeline: vi.fn(),
+  listPipelineDependents: vi.fn(),
 }));
 
 // See `PipelinesPage.test.tsx` for why the real download helper is kept out of
@@ -98,6 +99,12 @@ beforeEach(() => {
   moveMock.mockResolvedValue(pipeline({ folder: 'Ops' }));
   duplicateMock.mockResolvedValue(pipeline({ id: 'pl_3', name: 'Alpha (copy)' }));
   deleteMock.mockResolvedValue(undefined);
+  vi.mocked(pipelinesApi.listPipelineDependents).mockResolvedValue({
+    hasRuns: false,
+    triggers: [],
+    callers: [],
+    dynamicCallers: [],
+  });
 });
 
 afterEach(() => {
@@ -546,7 +553,7 @@ describe('FactoryResources — row actions', () => {
     await openRowMenu(user, 'Alpha');
     await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
     const text = await answerConfirm(user, 'cancel');
-    expect(text).toContain('Delete pipeline “Alpha”?');
+    expect(text).toContain('Delete pipeline "Alpha"?');
     expect(text).toContain('This cannot be undone.');
     expect(deleteMock).not.toHaveBeenCalled();
 
