@@ -18,6 +18,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
+import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
@@ -80,7 +81,15 @@ function httpNode(
   config: Record<string, unknown>,
 ): Node {
   seq += 1;
-  return { id, type: 'http_request', config, connectionId, position: { x: seq, y: 0 } };
+  // #1480 — a bare `http_request` no longer saves: it needs a `url`. A test that
+  // names one in `config` keeps it; every other fixture gets this inert default.
+  return {
+    id,
+    type: 'http_request',
+    config: { url: 'https://example.test/x', ...config },
+    connectionId,
+    position: { x: seq, y: 0 },
+  };
 }
 
 function seedVersion(
@@ -98,6 +107,23 @@ function seedVersion(
     catalogVersion: CATALOG_VERSION,
   };
   return createPipelineVersion(db, input, { catalog: STUB_SAVE_CATALOG }).id;
+}
+
+/**
+ * #1480 — a version inserted WITHOUT the save gate, as one saved before it. For a
+ * test of a dispatch-time refusal (unknown type, bad config) the gate now stops
+ * the doc ever being saved, yet such versions still reach the executor.
+ */
+function seedLegacyVersion(db: Db, nodes: Node[]): string {
+  const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+  return insertLegacyVersion(db, {
+    pipelineId: pipeline.id,
+    params: [],
+    outputs: [],
+    nodes,
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  }).id;
 }
 
 function seedRun(db: Db, pvId: string) {
@@ -956,7 +982,8 @@ describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', 
 describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)', () => {
   it('an unknown activity type fails the node with NO node.dispatched', async () => {
     const db = freshDb().db;
-    const pvId = seedVersion(db, [
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    const pvId = seedLegacyVersion(db, [
       { id: 'n1', type: 'no_such_activity', config: {}, position: { x: 1, y: 0 } },
     ]);
     const run = seedRun(db, pvId);
@@ -3819,16 +3846,17 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
   });
 
   it('a NON-marker value at secretHeaders fails PERMANENT, never silently sending it', async () => {
-    // The save gate only VISITS `{$secret}`-shaped values (isSecretRef), so a raw
-    // string at the sink is not a marker to bless OR refuse — it passes save. At
-    // dispatch it is left in ctx.input (never resolved to a secretField), where the
-    // adapter's `secretHeaders: z.record(SecretRefSchema)` rejects it as a permanent
-    // config error. The PR's fail-loud claim: a misauthored sink FAILS, it does not
-    // silently drop the value onto the wire. Proven through the REAL save gate +
-    // REAL httpAdapter (not the S3 synthetic-catalog block above).
+    // #1480 — the save gate now parses the literal config against the adapter's own
+    // schema, so a raw string at `secretHeaders` is refused at SAVE. A version saved
+    // before that gate can still carry one; it is left in ctx.input at dispatch
+    // (never resolved to a secretField), where the adapter's
+    // `secretHeaders: z.record(SecretRefSchema)` rejects it as a permanent config
+    // error. The fail-loud claim: a misauthored sink FAILS, it does not silently
+    // drop the value onto the wire. Proven through the REAL httpAdapter.
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
-    const pvId = seedVersion(db, [
+    // #1480 — the save gate now refuses this; inserted directly as a version saved before it
+    const pvId = seedLegacyVersion(db, [
       httpNode('n1', connId, {
         url: 'https://api.example.com/thing',
         secretHeaders: { 'X-Api-Key': 'raw-plaintext-not-a-marker' },

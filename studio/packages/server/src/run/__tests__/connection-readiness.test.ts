@@ -26,7 +26,7 @@ import { STUB_SAVE_CATALOG } from '../../__tests__/stub-catalog.js';
 /** An `llm_call` node (its catalog `connectionKinds` includes `ollama` +
  * `anthropic_api`) carrying `connectionId`. `config: {}` passes the write gate. */
 function llmNode(id: string, connectionId?: string): Node {
-  return { id, type: 'llm_call', config: {}, connectionId, position: { x: 0, y: 0 } };
+  return { id, type: 'llm_call', config: { prompt: 'p' }, connectionId, position: { x: 0, y: 0 } };
 }
 
 /** An `if` node — `connectionKinds: []` (never binds a connection). A stray

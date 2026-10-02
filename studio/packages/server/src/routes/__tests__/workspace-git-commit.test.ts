@@ -271,7 +271,13 @@ describe('workspace-git commit route', () => {
     createPipelineVersion(app.db, {
       ...baseVersion(p.id),
       nodes: [
-        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { prompt: 'p' },
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
       ],
     });
     deleteConnection(app.db, conn.id);

@@ -784,8 +784,8 @@ describe('pipelines routes', () => {
       const { pipeline, res } = await postDoc({
         ...emptyVersionBody,
         nodes: [
-          { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
-          { id: 'b', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+          { id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } },
+          { id: 'b', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } },
         ],
         edges: [
           { id: 'e1', from: 'a', to: 'b', on: 'success' },
@@ -820,7 +820,7 @@ describe('pipelines routes', () => {
     it('400 invalid_pipeline_doc for a maxRounds on a stage (#859)', async () => {
       const { res } = await postDoc({
         ...emptyVersionBody,
-        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+        nodes: [{ id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
         containers: [{ id: 'st', kind: 'stage', children: ['a'], maxRounds: 3 }],
       });
       expect(res.statusCode).toBe(400);
@@ -837,7 +837,7 @@ describe('pipelines routes', () => {
           {
             id: 'a',
             type: 'agent_task',
-            config: { prompt: '${params.nope}' },
+            config: { task: 't', prompt: '${params.nope}' },
             position: { x: 0, y: 0 },
           },
         ],
@@ -860,7 +860,7 @@ describe('pipelines routes', () => {
     it('still accepts a VALID doc (201) — the gate refuses invalid docs, not all docs', async () => {
       const { res } = await postDoc({
         ...emptyVersionBody,
-        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+        nodes: [{ id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
       });
       expect(res.statusCode).toBe(201);
     });

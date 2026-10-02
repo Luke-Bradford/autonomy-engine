@@ -35,7 +35,9 @@ const RetryRefSchema = z.object({ runId: z.string(), nodeId: z.string() });
 
 function seedRun(db: Db): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
-  const nodes: Node[] = [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }];
+  const nodes: Node[] = [
+    { id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } },
+  ];
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
     params: [],

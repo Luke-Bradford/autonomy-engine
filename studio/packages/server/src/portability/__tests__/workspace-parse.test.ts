@@ -77,14 +77,14 @@ describe('parseWorkspaceFiles', () => {
         {
           id: 'n1',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: connection.id, // literal → remapped to resourceId
           position: { x: 0, y: 0 },
         },
         {
           id: 'n2',
           type: 'llm_call',
-          config: {},
+          config: { prompt: 'p' },
           connectionId: '${params.conn}', // dynamic → preserved verbatim
           position: { x: 0, y: 0 },
         },

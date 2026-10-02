@@ -186,7 +186,7 @@ describe('triggers routes', () => {
           {
             id: 'n1',
             type: 'llm_call',
-            config: {},
+            config: { prompt: 'p' },
             connectionId: connectionExpr,
             position: { x: 0, y: 0 },
           },

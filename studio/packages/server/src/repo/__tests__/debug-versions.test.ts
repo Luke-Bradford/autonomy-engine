@@ -27,7 +27,7 @@ function doc(pipelineId: string): NewPipelineVersion {
     pipelineId,
     params: [],
     outputs: [],
-    nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+    nodes: [{ id: 'n1', type: 'llm_call', config: { prompt: 'p' }, position: { x: 0, y: 0 } }],
     edges: [],
     catalogVersion: CATALOG_VERSION,
   };

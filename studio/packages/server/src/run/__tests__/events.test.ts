@@ -107,7 +107,7 @@ describe('appendEngineEvent — the fold and the log are the same fact', () => {
       pipelineId: pipeline.id,
       params: [],
       outputs: [],
-      nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     });
@@ -145,7 +145,7 @@ describe('#646 — loadEngineEvents types log corruption at the source', () => {
       pipelineId: pipeline.id,
       params: [],
       outputs: [],
-      nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [{ id: 'a', type: 'agent_task', config: { task: 't' }, position: { x: 0, y: 0 } }],
       edges: [],
       catalogVersion: CATALOG_VERSION,
     });

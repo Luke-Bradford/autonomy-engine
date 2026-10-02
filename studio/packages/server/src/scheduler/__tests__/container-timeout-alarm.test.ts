@@ -51,7 +51,7 @@ function gate(id: string): Node {
   return {
     id,
     type: 'agent_task',
-    config: { outputs: [{ name: 'done', type: 'boolean' }] },
+    config: { task: 't', outputs: [{ name: 'done', type: 'boolean' }] },
     position: { x: seq, y: 0 },
   };
 }
