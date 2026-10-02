@@ -62,6 +62,16 @@ function subtreeOpaque(v: unknown, depth: Opacity): boolean {
   return false;
 }
 
+/** The raw value at `path` in `config`; `undefined` when any step is missing. */
+function valueAt(config: unknown, path: readonly PropertyKey[]): unknown {
+  let v: unknown = config;
+  for (const key of path) {
+    if (typeof v !== 'object' || v === null) return undefined;
+    v = (v as Record<PropertyKey, unknown>)[key];
+  }
+  return v;
+}
+
 /** True when the issue could be an artefact of judging the template, not its value. */
 function decidedByExpression(config: unknown, issue: z.core.$ZodIssue): boolean {
   let v: unknown = config;
@@ -120,6 +130,10 @@ export function activityNodeErrors(node: Node, catalog: ActivityCatalog = shared
     .filter((issue) => !decidedByExpression(node.config, issue))
     .map((issue) => {
       const path = ['config', ...issue.path.map(String)].join('.');
-      return `node '${node.id}': ${path}: ${issue.message}`;
+      // A field that is simply absent reads as Zod's "expected string, received
+      // undefined"; the operator's next step is to fill it, so say that.
+      const missing =
+        issue.code === 'invalid_type' && valueAt(node.config, issue.path) === undefined;
+      return `node '${node.id}': ${path}: ${missing ? 'required' : issue.message}`;
     });
 }

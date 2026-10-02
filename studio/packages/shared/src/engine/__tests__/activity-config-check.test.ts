@@ -48,8 +48,10 @@ describe('activityNodeErrors (#1480)', () => {
   });
 
   it('refuses a missing required field', () => {
-    const errors = activityNodeErrors(node('http_request', {}));
-    expect(errors.some((e) => e.startsWith("node 'n1': config.url: "))).toBe(true);
+    // Named as what to do about it, not as Zod's "received undefined".
+    expect(activityNodeErrors(node('http_request', {}))).toEqual([
+      "node 'n1': config.url: required",
+    ]);
   });
 
   it('accepts a `${}` expression where a literal of another type is expected', () => {
