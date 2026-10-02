@@ -18,8 +18,18 @@ import {
 } from './containerRules';
 import { policyIssues, validateCanvas } from './canvasDoc';
 
-const A: Node = { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } };
-const B: Node = { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } };
+const A: Node = {
+  id: 'n_a',
+  type: 'http_request',
+  config: { url: 'https://example.test/x' },
+  position: { x: 0, y: 0 },
+};
+const B: Node = {
+  id: 'n_b',
+  type: 'llm_call',
+  config: { prompt: 'p' },
+  position: { x: 100, y: 0 },
+};
 /** An activity the catalog does not know — the label falls back to its type. */
 const C: Node = { id: 'n_c', type: 'not_in_catalog', config: {}, position: { x: 200, y: 0 } };
 
@@ -35,7 +45,12 @@ function doc(overrides: Partial<ContainerEditDoc> = {}): ContainerEditDoc {
   };
 }
 
-const D: Node = { id: 'n_d', type: 'http_request', config: {}, position: { x: 300, y: 0 } };
+const D: Node = {
+  id: 'n_d',
+  type: 'http_request',
+  config: { url: 'https://example.test/x' },
+  position: { x: 300, y: 0 },
+};
 
 const AB: Edge = { id: 'e_ab', from: 'n_a', to: 'n_b', on: 'success' };
 const STAGE: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b'] }];
@@ -816,7 +831,10 @@ describe('issuesBySubject (#863)', () => {
   it('never badges the PRODUCER a consumer names mid-sentence', () => {
     // `n_b` reads an output `n_a` does not declare: the message names `n_a`
     // twice (in the expression and quoted), and `n_b` only in its location.
-    const producer: Node = { ...A, config: { outputs: [{ name: 'real', type: 'string' }] } };
+    const producer: Node = {
+      ...A,
+      config: { ...A.config, outputs: [{ name: 'real', type: 'string' }] },
+    };
     const consumer: Node = { ...B, config: { prompt: '${nodes.n_a.output.missing}' } };
     const { located, map } = attributed(doc({ nodes: [producer, consumer], edges: [AB] }));
     expect(located.some((i) => i.raw.includes("'n_a'") || i.raw.includes('nodes.n_a'))).toBe(true);

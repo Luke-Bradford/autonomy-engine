@@ -17,7 +17,12 @@ import {
 } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
-  return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
+  return {
+    id,
+    type: 'http_request',
+    config: { url: 'https://example.test/x', ...config },
+    position: { x: 0, y: 0 },
+  };
 }
 
 function edge(id: string, from: string, to: string, on: EdgeOn = 'success'): Edge {
