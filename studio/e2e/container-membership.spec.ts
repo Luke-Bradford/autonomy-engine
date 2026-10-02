@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { scaleOf, validationIssues } from './support/canvasGraph';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
@@ -175,9 +176,8 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     const problems = collectPageProblems(page);
     // The delete is confirmed, because the cascade takes the container's config
     // and its incident edges with it — worth stopping before it happens, even
-    // though U17 has since made it reversible. Playwright DISMISSES dialogs by
-    // default, which would make this test pass for the wrong reason — nothing
-    // deleted, nothing to save.
+    // though U17 has since made it reversible. #1397 — in the app's own dialog,
+    // answered below; an unanswered one would leave nothing deleted.
     // #852 — the assertions below need a WIDTH-bound fit (vertical slack, so the
     // box is off the right edge only). The bottom dock made the default canvas
     // wide and short, which binds the fit on height instead; a narrower, taller
@@ -185,7 +185,6 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     // fixed status strip takes a constant line off the canvas, which cost the
     // fit that vertical slack at 1000px, so the viewport is taller again.
     await page.setViewportSize({ width: 1000, height: 1150 });
-    page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 
     const beforeDelete = await viewportTransform(page);
@@ -234,6 +233,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     await nodeById(page, 'loop_1')
       .getByRole('button', { name: 'Delete Until 1 container' })
       .click();
+    await answerConfirm(page, 'accept');
     await expect(nodeById(page, 'loop_1')).toHaveCount(0);
     // The activity outside the box is untouched.
     await expect(nodeById(page, 'after')).toHaveCount(1);
@@ -279,12 +279,12 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
    */
   test('deleting a populated stage keeps the activities inside it', async ({ page }) => {
     const problems = collectPageProblems(page);
-    page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-ungroup', stageDoc());
 
     await nodeById(page, 'stage_1')
       .getByRole('button', { name: 'Delete Stage 1 container' })
       .click();
+    expect(await answerConfirm(page, 'accept')).toContain('Delete this Stage 1 container?');
 
     await expect(nodeById(page, 'stage_1')).toHaveCount(0);
     await expect(nodeById(page, 'a')).toHaveCount(1);
@@ -300,6 +300,45 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     expect(v2.containers).toEqual([]);
     // Un-grouped, not deleted — and still there in the doc that was minted.
     expect(v2.nodes.map((n) => n.id).sort()).toEqual(['a', 'after', 'b']);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1397 — while the confirmation asks, the editor's shortcuts edit nothing
+   * behind it. `window.confirm` blocked the tab; the in-app dialog lets a key
+   * pressed on its button bubble to the editor's document listener, where ⌘Z
+   * would undo an edit and Delete would remove the selection — and a confirmed
+   * delete would then apply to a graph the dialog did not describe.
+   *
+   * ⌘Z is the probe that cannot pass vacuously: the undo stack does not depend
+   * on what is selected, so an earlier delete is there to bring back.
+   */
+  test('the delete confirmation locks the editor shortcuts behind it', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'container-modal-keys', stageDoc());
+    await deleteActivity(page, 'after');
+    // Something selected for Delete to take.
+    await nodeById(page, 'a').click();
+
+    await nodeById(page, 'stage_1')
+      .getByRole('button', { name: 'Delete Stage 1 container' })
+      .click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toBeVisible();
+    // Still selected behind the dialog, so the Delete probe below is not vacuous.
+    await expect(nodeById(page, 'a')).toHaveClass(/\bselected\b/);
+    await page.keyboard.press('ControlOrMeta+z');
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Backspace');
+    await answerConfirm(page, 'cancel');
+
+    await expect(nodeById(page, 'after'), '⌘Z behind the dialog undid the delete').toHaveCount(0);
+    await expect(nodeById(page, 'a'), 'Delete behind the dialog removed a node').toHaveCount(1);
+    await expect(nodeById(page, 'stage_1')).toHaveCount(1);
+    // With the dialog gone the shortcut works again — the lock is the dialog's.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(nodeById(page, 'after')).toHaveCount(1);
 
     await expectQuiet(page, problems);
   });

@@ -131,6 +131,29 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select';
 }
 
+/**
+ * #1397 — is a modal dialog open on the page? While one is, no canvas shortcut
+ * may edit the graph behind it.
+ *
+ * `window.confirm` blocked the whole tab, so a keystroke could never reach the
+ * editor while a question was asked. The in-app dialog does not: Delete or ⌘Z
+ * pressed on its focused button bubbles to the editor's document listener, and
+ * would delete the selection or undo an edit behind the question — and a
+ * confirmed edit would then apply to a graph the dialog did not describe.
+ *
+ * PRESENCE on the page, not "the keystroke came from inside a dialog": focus
+ * can fall to `<body>` while a modal is up (a mousedown on its backdrop), and
+ * the page behind a modal is inert whatever has focus. `aria-modal`, so a
+ * non-modal alert (the leave prompt, which has its own guard) does not count.
+ */
+export function isModalDialogOpen(doc: Document = document): boolean {
+  return (
+    doc.querySelector(
+      '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]',
+    ) !== null
+  );
+}
+
 /** Which history command a keystroke asks for, or `null` for one that is not ours. */
 export type HistoryCommand = 'undo' | 'redo';
 

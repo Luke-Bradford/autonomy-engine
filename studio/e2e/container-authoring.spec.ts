@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { validationIssues } from './support/canvasGraph';
+import { captureConfirm, expectNoConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
@@ -23,35 +24,6 @@ import { nodeById, openSeededCanvas } from './support/seedDoc';
 async function select(page: Page, id: string): Promise<void> {
   await nodeById(page, id).click();
   await expect(page.getByLabel('Container membership')).toBeVisible();
-}
-
-/**
- * Run `act`, capturing the text of the one confirm it is expected to raise.
- *
- * Returns `null` when nothing was raised, which is an assertable outcome in its
- * own right: an edit that costs nothing must NOT interrupt the operator.
- */
-async function captureConfirm(
-  page: Page,
-  act: () => Promise<void>,
-  response: 'accept' | 'dismiss' = 'accept',
-): Promise<string | null> {
-  let seen: string | null = null;
-  const handler = async (dialog: {
-    message: () => string;
-    accept: () => Promise<void>;
-    dismiss: () => Promise<void>;
-  }) => {
-    seen = dialog.message();
-    await (response === 'accept' ? dialog.accept() : dialog.dismiss());
-  };
-  page.on('dialog', handler);
-  try {
-    await act();
-  } finally {
-    page.off('dialog', handler);
-  }
-  return seen;
 }
 
 test.describe('U6d — creating a container from the canvas', () => {
@@ -240,7 +212,7 @@ test.describe('U6d — creating a container from the canvas', () => {
       async () => {
         await page.getByRole('button', { name: 'Create container' }).click();
       },
-      'dismiss',
+      'cancel',
     );
 
     await expect(page.locator('.flow-container')).toHaveCount(0);
@@ -266,10 +238,9 @@ test.describe('U6d — creating a container from the canvas', () => {
     await page.getByLabel('Exit when').fill('${equals(nodes.a.status, "success")}');
     await expect(create).toBeEnabled();
 
-    await captureConfirm(page, async () => {
-      await create.click();
-    });
+    await create.click();
     await expect(page.locator('.flow-container')).toHaveCount(1);
+    await expectNoConfirm(page);
     await expect(page.locator('.flow-container-label')).toHaveText('Until 1');
 
     await expectQuiet(page, problems);
@@ -370,10 +341,9 @@ test.describe('#840 — a container edit states the routing it changes', () => {
     });
 
     await select(page, 'b');
-    const message = await captureConfirm(page, async () => {
-      await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
-    });
-    expect(message).toBeNull();
+    await page.getByLabel('Container membership').selectOption({ label: 'Stage 1' });
+    await expectNoConfirm(page);
+    await expect(page.getByLabel('Container membership')).toHaveValue('stage_1');
 
     await expectQuiet(page, problems);
   });

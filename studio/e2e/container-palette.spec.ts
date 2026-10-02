@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { toolbox, validationIssues, viewportSettled, WIDE_CANVAS } from './support/canvasGraph';
+import { answerConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 
@@ -65,20 +66,10 @@ async function issues(page: Page): Promise<string> {
 }
 
 test.describe('#1420 containers in the Activities palette', () => {
-  /** Every dialog the page raised, accepted — the confirms are asserted on. */
-  let dialogs: string[] = [];
-
   test.beforeEach(async ({ page }) => {
-    dialogs = [];
     // Room for the box beside the graph without the reveal pan pushing the
     // activity under the toolbox.
     await page.setViewportSize(WIDE_CANVAS);
-    // The first container on an edge-less graph changes its inferred routing,
-    // which is confirmed — accepted here; the dialog itself is `containerRules`'.
-    page.on('dialog', (d) => {
-      dialogs.push(d.message());
-      void d.accept();
-    });
   });
 
   test('drop a ForEach as an empty box, then drag an activity into it', async ({ page }) => {
@@ -103,13 +94,15 @@ test.describe('#1420 containers in the Activities palette', () => {
     // the RIGHT of the graph, so this placement cannot be reached by accident.
     const dropAt = { x: node.x, y: node.y + node.height + 60 };
     await dropFromPalette(page, 'ForEach', dropAt);
+    // Two edge-less activities are an inferred chain, and the first container
+    // turns it into parallel partitions — the one thing the drop confirms
+    // (#1397: in the app's dialog, titled with the question).
+    const asked = await answerConfirm(page, 'accept');
+    expect(asked.startsWith('Add a ForEach container?')).toBe(true);
+    expect(asked).toContain('parallel');
 
     const box = containerBox(page, 'ForEach 1');
     await expect(box).toHaveAttribute('aria-label', /^ForEach 1 container, 0 activities\b/);
-    // Two edge-less activities are an inferred chain, and the first container
-    // turns it into parallel partitions — the one thing the drop confirms.
-    expect(dialogs).toHaveLength(1);
-    expect(dialogs[0]).toContain('Add a ForEach container?');
     await viewportSettled(page);
     // The box is where it was dropped, not on the stacked fallback beside the
     // graph. Measured RELATIVE to the node: selecting the new box opens its
@@ -123,6 +116,9 @@ test.describe('#1420 containers in the Activities palette', () => {
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     await dragNodeCentreTo(page, 'b', centre(boxRect));
+    // A drag that joins a box is confirmed when it changes routing, as the
+    // Settings → Container select is — titled with what moves where.
+    expect(await answerConfirm(page, 'accept')).toMatch(/^Move .+ into ForEach 1\?/);
 
     await expect(box).toHaveAttribute('aria-label', /^ForEach 1 container, 1 activity\b/);
     expect(await membershipOf(page, 'b')).toBe('ForEach 1');
@@ -151,6 +147,8 @@ test.describe('#1420 containers in the Activities palette', () => {
 
     // The click path (the keyboard-reachable one) adds an empty box too.
     await toolbox(page).getByRole('button', { name: 'Until', exact: true }).click();
+    // The new box would change routing, so the click asks, as the drop does.
+    expect(await answerConfirm(page, 'accept')).toContain('Add an Until container?');
     await expect(containerBox(page, 'Until 1')).toHaveAttribute(
       'aria-label',
       /^Until 1 container, 0 activities\b/,

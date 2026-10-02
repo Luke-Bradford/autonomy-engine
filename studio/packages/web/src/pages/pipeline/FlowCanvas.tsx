@@ -53,12 +53,15 @@ import {
   type ActivityBadge,
 } from './activitySummary';
 import {
-  confirmContainerEdit,
-  confirmNewContainer,
+  CONTAINER_EDIT_TONE,
+  containerEditQuestion,
   containerLabels,
+  NEW_CONTAINER_CONFIRM,
+  newContainerQuestion,
   routingChangeBetween,
   routingSentence,
 } from './containerRules';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 import { hasCanvasDragType, readActivityDragType, readContainerDragKind } from './activityDnd';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
@@ -607,6 +610,10 @@ export function FlowCanvas({
   /** #1452 — the page's `role="status"` notice, for what an insert added. */
   onNotice?: (message: string) => void;
 }) {
+  // #1397 — the canvas's own confirmations (a container's delete, a drag that
+  // joins one, a dropped new one). Under the app's `ConfirmHost` the host draws
+  // the dialog and `confirmDialog` is null; rendered alone, the canvas draws it.
+  const [confirm, confirmDialog] = useConfirm();
   const nodes = useStore(store, (s) => s.nodes);
   const datasetName = useMemo(() => datasetNameLookup(datasets), [datasets]);
   const edges = useStore(store, (s) => s.edges);
@@ -988,9 +995,8 @@ export function FlowCanvas({
   /**
    * #748 — confirm, then remove the container.
    *
-   * Confirmed like every other destructive act in this app (still a native
-   * `window.confirm` here; the list pages moved to `useConfirm` in #1397 and
-   * this follows in a later OR6 slice), and unlike "Delete
+   * Confirmed like every other destructive act in this app (through the shared
+   * `useConfirm` dialog since #1397), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
    * surface can re-author yet (U23, #839), so a mis-click costs more than a
@@ -1044,13 +1050,13 @@ export function FlowCanvas({
    * which starts inferring routing for a doc that previously authored its own.
    * Both mint into the next immutable version.
    *
-   * Appended rather than folded into `confirmContainerEdit`: that gate diffs the
+   * Appended rather than folded into `containerEditQuestion`: that gate diffs the
    * VALIDATOR's issues, which is not what a delete costs, and `containerRules`
    * argues that merging the two makes each vaguer. So the routing half is reused
    * and the destruction sentence stays this function's own.
    */
   const confirmDeleteContainer = useCallback(
-    (id: string, kind: ContainerKind) => {
+    async (id: string, kind: ContainerKind) => {
       const state = store.getState();
       const routing = routingSentence(
         routingChangeBetween(state, { ...state, ...cascadeDeleteContainer(state, id) }),
@@ -1066,9 +1072,9 @@ export function FlowCanvas({
       // from the render that created the callback, not from the doc as it stands
       // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
       const name = containerLabels(state.containers).get(id) ?? CONTAINER_KIND_LABELS[kind];
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      const confirmed = window.confirm(
-        `Delete this ${name} container?\n\n` +
+      const confirmed = await confirm({
+        message:
+          `Delete this ${name} container?\n\n` +
           // U17 — this used to end "and this cannot be undone", which was true
           // when it was written and is not any more. The destruction is
           // unchanged and still worth confirming (the container's config and
@@ -1082,11 +1088,15 @@ export function FlowCanvas({
               ' before the pipeline can be saved.'
             : '') +
           (routing === null ? '' : `\n\n${routing}`),
-      );
+        confirmLabel: 'Delete container',
+      });
       if (!confirmed) return;
+      // The id, not the box read before the dialog: `deleteContainer` resolves
+      // it against the doc as it stands now, and does nothing for a box that
+      // has gone in the meantime.
       store.getState().deleteContainer(id);
     },
-    [store],
+    [store, confirm],
   );
 
   /* #1005 — what React Flow has ACTUALLY measured, for `measuredSizesRef`.
@@ -1260,7 +1270,7 @@ export function FlowCanvas({
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
           selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
-          onDelete: confirmDeleteContainer,
+          onDelete: (id: string, kind: ContainerKind) => void confirmDeleteContainer(id, kind),
           onConfigure: selectContainer,
           onFanChange: onContainerFanChange,
         } satisfies ContainerData,
@@ -2257,7 +2267,7 @@ export function FlowCanvas({
   );
   /**
    * Every dragged activity joins the box the pointer was released over, as ONE
-   * edit (`setNodesContainer`), gated by `confirmContainerEdit` exactly as the
+   * edit (`setNodesContainer`), gated by `containerEditQuestion` exactly as the
    * node's Settings → Container select is — a join can orphan an edge or an
    * `${item}`. The box that already holds EVERY dragged node is excluded (its
    * box contains them by construction). Dragging OUT stays on that select and
@@ -2265,7 +2275,7 @@ export function FlowCanvas({
    * stable meaning at release.
    */
   const onNodesDragStop = useCallback(
-    (event: MouseEvent | TouchEvent | ReactMouseEvent, dragged: FlowNode[]) => {
+    async (event: MouseEvent | TouchEvent | ReactMouseEvent, dragged: FlowNode[]) => {
       const start = dragStartPoint.current;
       dragStartPoint.current = null;
       const end = flowPointOf(event);
@@ -2287,22 +2297,47 @@ export function FlowCanvas({
         (acc, id) => assignContainerChild(acc, id, target),
         state.containers,
       );
-      if (!confirmContainerEdit(state, next, 'Undo (⌘Z) takes it back out.')) return;
-      state.setNodesContainer(joining, target);
+      const name = containerLabels(state.containers).get(target) ?? 'the container';
+      const what =
+        joining.length === 1
+          ? (activityLabels(state.nodes).get(joining[0]!) ?? 'this activity')
+          : `${joining.length} activities`;
+      const question = containerEditQuestion(
+        state,
+        next,
+        'Undo (⌘Z) takes it back out.',
+        `Move ${what} into ${name}?`,
+      );
+      /* A synchronous apply when there is nothing to ask. A selection drag
+         reaches here TWICE (React Flow calls `onNodeDragStop` and then
+         `onSelectionDragStop` for it); the second ask arrives while the first is
+         open, and `useConfirm` answers it `false` at once, so one drag raises
+         one dialog. The first answer is the one that applies. */
+      if (
+        question !== null &&
+        !(await confirm({ message: question, confirmLabel: 'Move', tone: CONTAINER_EDIT_TONE }))
+      ) {
+        return;
+      }
+      // `joining` and `target` were read before the dialog. Nothing can change
+      // them while it asks: it blocks the pointer, and `isModalDialogOpen` locks
+      // the editor's shortcuts.
+      store.getState().setNodesContainer(joining, target);
     },
-    [store, containerBoxes, flowPointOf],
+    [store, containerBoxes, flowPointOf, confirm],
   );
 
   /**
    * #1420 — a palette container dropped on the canvas: an EMPTY box whose
    * top-left is under the pointer, which activities are then dragged into.
-   * `confirmNewContainer` says why only a routing change is confirmed.
+   * `newContainerQuestion` says why only a routing change is confirmed.
    */
-  function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
-    const state = store.getState();
-    const title = CONTAINER_KIND_LABELS[kind];
-    if (!confirmNewContainer(state, kind, title)) return;
-    state.addContainer(kind, position);
+  async function dropContainer(kind: ContainerKind, position: { x: number; y: number }) {
+    const question = newContainerQuestion(store.getState(), kind, CONTAINER_KIND_LABELS[kind]);
+    if (question !== null && !(await confirm({ message: question, ...NEW_CONTAINER_CONFIRM }))) {
+      return;
+    }
+    store.getState().addContainer(kind, position);
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
@@ -2319,7 +2354,7 @@ export function FlowCanvas({
     event.preventDefault();
     const kind = readContainerDragKind(event.dataTransfer);
     if (kind !== null) {
-      dropContainer(kind, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+      void dropContainer(kind, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
       return;
     }
     // Ours, but not something we can author (an uncatalogued or structural-call
@@ -2342,6 +2377,7 @@ export function FlowCanvas({
 
   return (
     <>
+      {confirmDialog}
       <EdgeMarkers />
       <ReactFlow
         nodes={renderedNodes}
@@ -2469,9 +2505,9 @@ export function FlowCanvas({
         onDragOver={onDragOver}
         onDrop={onDrop}
         onNodeDragStart={onNodesDragStart}
-        onNodeDragStop={(e, _node, dragged) => onNodesDragStop(e, dragged)}
+        onNodeDragStop={(e, _node, dragged) => void onNodesDragStop(e, dragged)}
         onSelectionDragStart={onNodesDragStart}
-        onSelectionDragStop={onNodesDragStop}
+        onSelectionDragStop={(e, dragged) => void onNodesDragStop(e, dragged)}
         onlyRenderVisibleElements
         fitView
         fitViewOptions={FIT_VIEW_OPTIONS}

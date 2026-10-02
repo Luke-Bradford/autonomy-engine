@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
+import userEvent from '@testing-library/user-event';
 import { HTTP_REQUEST_ACTIVITY_TYPE, PipelineVersionSchema } from '@autonomy-studio/shared';
+import { answerConfirm } from '../../testing/confirmDialog';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
@@ -742,8 +744,6 @@ describe('FlowCanvas container rendering (U6c)', () => {
  * `timeout` (there is no undo) is that declining really does nothing.
  */
 describe('FlowCanvas container delete (#748)', () => {
-  afterEach(() => vi.restoreAllMocks());
-
   function withBoxedGraph(kind: 'stage' | 'loop' | 'foreach' = 'stage') {
     const store = createCanvasStore();
     store.getState().loadVersion(
@@ -791,10 +791,13 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(within(box).getByRole('button', { name: 'Delete Until 1 container' })).toBeTruthy();
   });
 
-  it('deletes the container, and its incident edges, once confirmed', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('deletes the container, and its incident edges, once confirmed', async () => {
+    const user = userEvent.setup();
     const { store, box } = withBoxedGraph();
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Stage 1 container' }));
+    // Nothing goes until the operator answers.
+    expect(store.getState().containers.map((c) => c.id)).toEqual(['c_1']);
+    await answerConfirm(user, 'accept');
     const st = store.getState();
     expect(st.containers).toEqual([]);
     expect(st.edges).toEqual([]);
@@ -802,10 +805,11 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(st.nodes.map((n) => n.id)).toEqual(['n_a', 'after']);
   });
 
-  it('does nothing at all when the confirmation is declined', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('does nothing at all when the confirmation is declined', async () => {
+    const user = userEvent.setup();
     const { store, box } = withBoxedGraph();
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Stage 1 container' }));
+    await answerConfirm(user, 'cancel');
     const st = store.getState();
     expect(st.containers.map((c) => c.id)).toEqual(['c_1']);
     expect(st.edges.map((e) => e.id)).toEqual(['e_out']);
@@ -820,11 +824,11 @@ describe('FlowCanvas container delete (#748)', () => {
    * that said only "are you sure?" would leave the operator guessing whether
    * they are about to delete their nodes.
    */
-  it('warns that the config goes and the activities stay', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('warns that the config goes and the activities stay', async () => {
+    const user = userEvent.setup();
     const { box } = withBoxedGraph('loop');
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Until 1 container' }));
-    const message = confirm.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     // #883 — the ORDINAL, not a bare `toContain('loop')` that a bare-kind dialog
     // would also satisfy. Naming the button "Delete Until 1 container" and then
     // asking "Delete this loop container?" would relocate the half-named split
@@ -852,18 +856,18 @@ describe('FlowCanvas container delete (#748)', () => {
    * The `loop`/`stage` half of the assertion is what stops the warning becoming
    * boilerplate on every kind, which would make it invisible.
    */
-  it('warns that a foreach un-groups its children out of ${item} scope', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('warns that a foreach un-groups its children out of ${item} scope', async () => {
+    const user = userEvent.setup();
     const { box } = withBoxedGraph('foreach');
     fireEvent.click(within(box).getByRole('button', { name: 'Delete ForEach 1 container' }));
-    expect(confirm.mock.calls[0]![0] as string).toContain('${item}');
+    expect(await answerConfirm(user, 'cancel')).toContain('${item}');
   });
 
-  it('does NOT warn about ${item} for a kind that never scoped it', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('does NOT warn about ${item} for a kind that never scoped it', async () => {
+    const user = userEvent.setup();
     const { box } = withBoxedGraph('loop');
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Until 1 container' }));
-    expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
+    expect(await answerConfirm(user, 'cancel')).not.toContain('${item}');
   });
 
   /**
@@ -874,11 +878,11 @@ describe('FlowCanvas container delete (#748)', () => {
    * A comparison short-circuited on "the doc has authored edges" would report
    * nothing here, which is why `routingChangeBetween` refuses that guard.
    */
-  it('warns that deleting the box leaves routing INFERRED, when the cascade empties the edges', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('warns that deleting the box leaves routing INFERRED, when the cascade empties the edges', async () => {
+    const user = userEvent.setup();
     const { box } = withBoxedGraph();
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Stage 1 container' }));
-    const message = confirm.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('no authored edges');
     expect(message).toContain('one sequence');
     // The destruction half is still its own sentence — the two are composed, not
@@ -893,8 +897,8 @@ describe('FlowCanvas container delete (#748)', () => {
    * second authored edge survives the cascade, so routing stays authored on both
    * sides and there is nothing to say.
    */
-  it('says nothing about routing when an authored edge survives the cascade', () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('says nothing about routing when an authored edge survives the cascade', async () => {
+    const user = userEvent.setup();
     const store = createCanvasStore();
     store.getState().loadVersion(
       PipelineVersionSchema.parse({
@@ -925,7 +929,7 @@ describe('FlowCanvas container delete (#748)', () => {
     );
     const box = container.querySelector<HTMLElement>('.react-flow__node[data-id="c_1"]')!;
     fireEvent.click(within(box).getByRole('button', { name: 'Delete Stage 1 container' }));
-    const message = confirm.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     expect(message).not.toContain('inferred');
     expect(message).not.toContain('one sequence');
   });

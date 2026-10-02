@@ -36,3 +36,34 @@ export async function answerConfirm(
   await expect(dialog).toBeHidden();
   return text;
 }
+
+/**
+ * #1397 — assert that the last action raised NO confirmation. An edit that
+ * costs nothing must not interrupt the operator.
+ *
+ * The in-app dialog opens on a render after the click, not inside it, so a bare
+ * `toHaveCount(0)` straight after the action passes before the dialog could
+ * exist. Two animation frames let a question that was asked reach the screen
+ * first; prefer asserting the edit's applied effect before calling this, which
+ * is the stronger wait.
+ */
+export async function expectNoConfirm(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+}
+
+/**
+ * Run `act`, then answer the confirmation it is expected to raise, returning
+ * the dialog's text (`answerConfirm`). An action expected NOT to ask is asserted
+ * with `expectNoConfirm` instead.
+ */
+export async function captureConfirm(
+  page: Page,
+  act: () => Promise<void>,
+  response: 'accept' | 'cancel' = 'accept',
+): Promise<string> {
+  await act();
+  return answerConfirm(page, response);
+}

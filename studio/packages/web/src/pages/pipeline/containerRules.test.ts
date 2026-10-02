@@ -3,9 +3,12 @@ import type { Container, Edge, Node } from '@autonomy-studio/shared';
 import {
   consequenceMessage,
   containerEditConsequence,
+  containerEditQuestion,
   containerLabels,
   issueSubject,
   issuesBySubject,
+  newContainerQuestion,
+  withArticle,
   readableIssue,
   routingChangeBetween,
   sameAttribution,
@@ -673,7 +676,8 @@ describe('consequenceMessage', () => {
       'undo me',
     );
     expect(msg).toContain('parallel roots');
-    expect(msg).toContain('Apply it anyway?');
+    // #1397 — the body only: the question is the caller's, and leads.
+    expect(msg).not.toContain('Apply it anyway?');
   });
 
   /**
@@ -902,5 +906,44 @@ describe('sameAttribution (#863)', () => {
     ['the same raw message worded differently', map([['node:a', [one('x', 'renamed')]]])],
   ])('is false for %s', (_, other) => {
     expect(sameAttribution(map([['node:a', [one('x')]]]), other)).toBe(false);
+  });
+});
+
+/**
+ * #1397 — the builders the canvas hands to `useConfirm`. The dialog takes its
+ * title from the FIRST paragraph, so the question must lead and the
+ * consequences must not: a body-first message would title the dialog with a
+ * paragraph of bullets.
+ */
+describe('containerEditQuestion / newContainerQuestion (#1397)', () => {
+  it.each([
+    ['Stage', 'a Stage'],
+    ['ForEach', 'a ForEach'],
+    ['Until', 'an Until'],
+  ])('names %s with its article', (title, expected) => {
+    expect(withArticle(title)).toBe(expected);
+  });
+
+  it('is null for an edit with nothing to confirm', () => {
+    expect(containerEditQuestion(doc(), [], 'undo me', 'Move it?')).toBeNull();
+  });
+
+  it("leads with the caller's question, then the consequences", () => {
+    const msg = containerEditQuestion(doc(), STAGE, 'undo me', 'Move B into Stage 1?')!;
+    const [title, ...body] = msg.split('\n\n');
+    expect(title).toBe('Move B into Stage 1?');
+    expect(body.join('\n\n')).toContain('parallel roots');
+  });
+
+  it('asks about a new container only when it changes routing', () => {
+    // An edge-less chain: the first container partitions it.
+    const msg = newContainerQuestion(doc(), 'foreach', 'ForEach')!;
+    expect(msg.split('\n\n')[0]).toBe('Add a ForEach container?');
+    expect(msg).toContain('parallel roots');
+    expect(newContainerQuestion(doc(), 'loop', 'Until')!.split('\n\n')[0]).toBe(
+      'Add an Until container?',
+    );
+    // No activities, so no routing for a box to change.
+    expect(newContainerQuestion(doc({ nodes: [] }), 'foreach', 'ForEach')).toBeNull();
   });
 });

@@ -39,6 +39,7 @@ import {
   arrangeDisabledReason,
   historyCommandFor,
   isDeleteKeystroke,
+  isModalDialogOpen,
   redoDisabledReason,
   undoDisabledReason,
 } from './undoRedo';
@@ -100,8 +101,10 @@ import {
   type ConfigField,
 } from './configForm';
 import {
-  confirmContainerEdit,
+  CONTAINER_EDIT_TONE,
+  containerEditQuestion,
   containerLabels,
+  withArticle,
   issuesBySubject,
   readableIssue,
   sameAttribution,
@@ -487,6 +490,10 @@ export function PipelineCanvas({
          asking about. Checked here rather than by stopping keys at the prompt,
          because the prompt is not modal: focus can be anywhere on the page. */
       if (leaveGuard.confirming) return;
+      /* #1397 — nor while a modal dialog asks (`isModalDialogOpen`): a container
+         delete, an Archive, a membership move. Unlike `window.confirm` the
+         in-app dialog lets keys bubble here. */
+      if (isModalDialogOpen()) return;
       /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
          so the whole gesture is ONE undo entry. Read on the same document
          listener and behind the same text-entry guard as the history keys.
@@ -2490,30 +2497,36 @@ function ContainerSection({
 
   const labels = containerLabels(containers);
   const ownerId = containers.find((c) => c.children.includes(nodeId))?.id ?? '';
+  const [confirm, confirmDialog] = useConfirm();
 
   /**
    * Apply an edit once the operator has seen what it costs.
    *
    * ONE evaluation, at the moment of the click, against live state — the
    * consequence is never stored, so it cannot go stale the way a frozen
-   * `role="alert"` does (`FlowCanvas` documents that failure). The gate still
-   * asks through `window.confirm`, as `confirmDeleteContainer` does; both move
-   * to `useConfirm` in a later #1397 slice.
+   * `role="alert"` does (`FlowCanvas` documents that failure). It asks through
+   * the shared `useConfirm` dialog (#1397), and only when there is something
+   * to ask: an edit that costs nothing applies on the click, synchronously.
    */
-  function withConfirmation(
+  async function withConfirmation(
     nextContainers: Container[],
     recovery: string,
+    question: string,
+    confirmLabel: string,
     apply: () => void,
-  ): boolean {
-    // The gate itself is `confirmContainerEdit`, hoisted into `containerRules`
+  ): Promise<boolean> {
+    // The gate itself is `containerEditQuestion`, hoisted into `containerRules`
     // when U23's config panel became its second call site. This wrapper is only
     // the "and then apply it" half, which the two callers below share.
+    const message = containerEditQuestion(
+      { nodes, edges, containers, params, variables, globals },
+      nextContainers,
+      recovery,
+      question,
+    );
     if (
-      !confirmContainerEdit(
-        { nodes, edges, containers, params, variables, globals },
-        nextContainers,
-        recovery,
-      )
+      message !== null &&
+      !(await confirm({ message, confirmLabel, tone: CONTAINER_EDIT_TONE }))
     ) {
       return false;
     }
@@ -2524,14 +2537,18 @@ function ContainerSection({
   function changeOwner(value: string) {
     const target = value === '' ? null : value;
     setError(null);
-    withConfirmation(
+    void withConfirmation(
       assignContainerChild(containers, nodeId, target),
       'You can undo it by setting the activity back to — none —.',
+      target === null
+        ? 'Take this activity out of its container?'
+        : `Move this activity into ${labels.get(target) ?? 'the container'}?`,
+      target === null ? 'Take it out' : 'Move',
       () => store.getState().setNodeContainer(nodeId, target),
     );
   }
 
-  function create() {
+  async function create() {
     const trimmedRounds = maxRounds.trim();
     const built = buildContainer(kind, nodeId, {
       ...(kind === 'loop' ? { exitWhen: exitWhen.trim() } : {}),
@@ -2546,11 +2563,13 @@ function ContainerSection({
       return;
     }
     setError(null);
-    const applied = withConfirmation(
+    const applied = await withConfirmation(
       containersWithNew(containers, built.container),
       // NOT "set it back to — none —": emptying a freshly-made loop leaves a
       // worse doc than the one being escaped (see `consequenceMessage`).
       'You can undo it with the ✕ on the container box.',
+      `Create ${withArticle(CONTAINER_KIND_LABELS[kind])} container around this activity?`,
+      'Create container',
       () => store.getState().createContainer(built.container),
     );
     if (applied) {
@@ -2570,6 +2589,7 @@ function ContainerSection({
   // wrapper of their own is needed.
   return (
     <FormSection title="Container" hint={FORM_SECTION_HINTS.node.container}>
+      {confirmDialog}
       {/* The visible label matches the select's name, so a voice command that
           reads the label reaches the control (WCAG 2.5.3). */}
       <LabelledControl label="Container membership">
@@ -2642,7 +2662,7 @@ function ContainerSection({
             />
           </label>
         )}
-        <button type="button" disabled={!canCreate} onClick={create}>
+        <button type="button" disabled={!canCreate} onClick={() => void create()}>
           Create container
         </button>
       </fieldset>

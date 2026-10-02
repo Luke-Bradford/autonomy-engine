@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { captureConfirm, expectNoConfirm } from './support/confirmDialog';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { openSeededCanvas } from './support/seedDoc';
 import { properties } from './support/panels';
@@ -27,27 +28,6 @@ const AT2 = { x: 40, y: 200 };
 async function configure(page: Page, label: string): Promise<void> {
   await page.getByRole('button', { name: `Configure ${label}` }).click();
   await expect(page.getByRole('heading', { name: label })).toBeVisible();
-}
-
-/**
- * Run `act`, capturing the text of the confirm it may raise.
- *
- * `null` means nothing was raised, which is assertable in its own right: an
- * edit that costs the doc nothing must not interrupt the operator.
- */
-async function captureConfirm(page: Page, act: () => Promise<void>): Promise<string | null> {
-  let seen: string | null = null;
-  const handler = async (dialog: { message: () => string; accept: () => Promise<void> }) => {
-    seen = dialog.message();
-    await dialog.accept();
-  };
-  page.on('dialog', handler);
-  try {
-    await act();
-  } finally {
-    page.off('dialog', handler);
-  }
-  return seen;
 }
 
 /** The container docs the server holds for `pipelineId`, latest version first. */
@@ -245,7 +225,6 @@ test.describe('U23 — container config editing', () => {
       await page.getByRole('button', { name: 'Apply container settings' }).click();
     });
 
-    expect(message).not.toBeNull();
     expect(message).toContain('unsavable');
     // The recovery sentence names the PREVIOUS value, not a generic instruction.
     expect(message).toContain('${equals(1, 1)}');
@@ -262,12 +241,9 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'Until 1');
-    const message = await captureConfirm(page, async () => {
-      await page.getByLabel(/^Timeout \(seconds\)/).fill('30');
-      await page.getByRole('button', { name: 'Apply container settings' }).click();
-    });
-
-    expect(message).toBeNull();
+    await page.getByLabel(/^Timeout \(seconds\)/).fill('30');
+    await page.getByRole('button', { name: 'Apply container settings' }).click();
+    await expectNoConfirm(page);
     await expectQuiet(page, problems);
   });
 
