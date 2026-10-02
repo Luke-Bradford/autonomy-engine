@@ -174,6 +174,10 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     // Throws `PipelineHasRunsError` (mapped to 409 by the global error
     // handler) when the pipeline has run history — see `repo/pipelines.ts`.
     deletePipeline(db, existing.id);
+    // #1485 — `triggers.pipeline_version_id` is ON DELETE CASCADE, so the
+    // delete took this pipeline's triggers with it. Reconcile so their pending
+    // `schedule_tick` rows are cancelled now, as `DELETE /api/triggers/:id` does.
+    fastify.scheduler.sync();
     reply.status(204).send();
   });
 

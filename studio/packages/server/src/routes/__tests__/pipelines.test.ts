@@ -13,6 +13,7 @@ import {
 } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
+import { pendingTicks } from '../../scheduler/__tests__/pending-ticks.js';
 
 /**
  * A minimal version doc. #904 — the POST body also declares the version the
@@ -263,6 +264,40 @@ describe('pipelines routes', () => {
     const deleteRes = await app.inject({ method: 'DELETE', url: `/api/pipelines/${pipeline.id}` });
     expect(deleteRes.statusCode).toBe(409);
     expect(deleteRes.json().error).toBe('conflict');
+  });
+
+  it('#1485 — deleting a pipeline cancels the pending schedule tick of every trigger it cascades away', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Scheduled' });
+    const version = (
+      await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      })
+    ).json();
+    const trigger = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          name: 'Nightly',
+          pipelineVersionId: version.id,
+          params: {},
+          mode: 'schedule',
+          schedule: '0 2 * * *',
+          webhook: null,
+          concurrency: { policy: 'skip_if_running' },
+          runWindows: null,
+          enabled: true,
+        },
+      })
+    ).json();
+    expect(pendingTicks(app.db, trigger.id)).toHaveLength(1);
+
+    const deleteRes = await app.inject({ method: 'DELETE', url: `/api/pipelines/${pipeline.id}` });
+    expect(deleteRes.statusCode).toBe(204);
+    expect(getTrigger(app.db, trigger.id)).toBeNull();
+    expect(pendingTicks(app.db, trigger.id)).toHaveLength(0);
   });
 
   it('GET /api/pipelines/:id/cost rolls up cost across ALL versions of the pipeline, fail-closed', async () => {
