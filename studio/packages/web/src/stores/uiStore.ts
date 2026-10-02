@@ -42,6 +42,24 @@ export interface UiState {
   problemsOpen: boolean;
   setProblemsOpen: (open: boolean) => void;
   /**
+   * #1475 OR27 — the Problems column's width in px, within
+   * [`PROBLEMS_MIN_WIDTH`, `PROBLEMS_MAX_WIDTH`]. Like the dock's height, the
+   * cap that depends on the dock's own width (`problemsMaxWidth`) is applied
+   * where that width is known and never stored.
+   */
+  problemsWidth: number;
+  setProblemsWidth: (width: number) => void;
+  /**
+   * #1475 OR27 — the dock tab last chosen, for an activity and for the
+   * pipeline. One preference for every pipeline, so a reload or another
+   * pipeline lands on the tab the operator was using, as selecting another
+   * activity already did (#852).
+   */
+  dockNodeTab: NodeTab;
+  setDockNodeTab: (tab: NodeTab) => void;
+  dockPipelineTab: PipelineTab;
+  setDockPipelineTab: (tab: PipelineTab) => void;
+  /**
    * #1475 OR27 — the editor's Activities toolbox: its width in px, always
    * within [`TOOLBOX_MIN_WIDTH`, `TOOLBOX_MAX_WIDTH`], and whether it is folded
    * to its icon rail. The width is meaningful while folded — it is what
@@ -55,6 +73,13 @@ export interface UiState {
 
 export type UiStore = StoreApi<UiState>;
 
+/** #852 — an activity's dock tabs: its configuration, then ADF's "General" (run policy). */
+export const NODE_TABS = ['settings', 'general'] as const;
+export type NodeTab = (typeof NODE_TABS)[number];
+/** #844 — the pipeline-level panel's tabs. */
+export const PIPELINE_TABS = ['params', 'variables', 'outputs', 'general'] as const;
+export type PipelineTab = (typeof PIPELINE_TABS)[number];
+
 export const THEME_STORAGE_KEY = 'autonomy-studio.theme';
 export const PANE_STORAGE_KEY = 'autonomy-studio.pane';
 export const MINIMAP_STORAGE_KEY = 'autonomy-studio.minimap-hidden';
@@ -66,6 +91,9 @@ export const DOCK_OPEN_STORAGE_KEY = 'autonomy-studio.dock-open';
 export const PROBLEMS_OPEN_STORAGE_KEY = 'autonomy-studio.problems-open';
 export const TOOLBOX_WIDTH_STORAGE_KEY = 'autonomy-studio.toolbox-width';
 export const TOOLBOX_COLLAPSED_STORAGE_KEY = 'autonomy-studio.toolbox-collapsed';
+export const PROBLEMS_WIDTH_STORAGE_KEY = 'autonomy-studio.problems-width';
+export const DOCK_NODE_TAB_STORAGE_KEY = 'autonomy-studio.dock-node-tab';
+export const DOCK_PIPELINE_TAB_STORAGE_KEY = 'autonomy-studio.dock-pipeline-tab';
 
 /**
  * Pane width bounds. The minimum is a readable list width; the maximum keeps
@@ -113,6 +141,36 @@ export const TOOLBOX_RESIZE_STEP = 16;
 
 export function clampToolboxWidth(width: number): number {
   return clampWidth(width, TOOLBOX_MIN_WIDTH, TOOLBOX_MAX_WIDTH, TOOLBOX_DEFAULT_WIDTH);
+}
+
+/**
+ * #1475 OR27 — Problems column bounds. The default is the fixed `20rem` column
+ * it was before it could be resized (#1393). `index.css` repeats
+ * `PROBLEMS_DEFAULT_WIDTH`, `PROBLEMS_MAX_WIDTH` and `PROBLEMS_MAX_SHARE` in the
+ * column's width and `max-width` — CSS cannot import them — so change both
+ * together.
+ */
+export const PROBLEMS_MIN_WIDTH = 200;
+export const PROBLEMS_MAX_WIDTH = 480;
+export const PROBLEMS_DEFAULT_WIDTH = 320;
+export const PROBLEMS_MAX_SHARE = 0.5;
+export const PROBLEMS_RESIZE_STEP = 16;
+
+export function clampProblemsWidth(width: number): number {
+  return clampWidth(width, PROBLEMS_MIN_WIDTH, PROBLEMS_MAX_WIDTH, PROBLEMS_DEFAULT_WIDTH);
+}
+
+/**
+ * The widest Problems may be in a dock body `bodyWidth` px wide: at most
+ * `PROBLEMS_MAX_SHARE` of it, so the properties beside it always keep the other
+ * half, and never under `PROBLEMS_MIN_WIDTH`. Floored for `dockMaxHeight`'s
+ * reason: a measured width is fractional, and this is committed and reported.
+ */
+export function problemsMaxWidth(bodyWidth: number): number {
+  return Math.max(
+    PROBLEMS_MIN_WIDTH,
+    Math.floor(Math.min(PROBLEMS_MAX_WIDTH, bodyWidth * PROBLEMS_MAX_SHARE)),
+  );
 }
 
 /**
@@ -241,9 +299,27 @@ function parseDockHeight(raw: string): number | undefined {
 }
 
 /** Up to three digits, then clamped: `parseDockHeight`'s reasons, at a width's scale. */
-function parseToolboxWidth(raw: string): number | undefined {
-  return /^\d{1,3}$/.test(raw) ? clampToolboxWidth(Number(raw)) : undefined;
+function parseWidth(clamp: (width: number) => number): (raw: string) => number | undefined {
+  return (raw) => (/^\d{1,3}$/.test(raw) ? clamp(Number(raw)) : undefined);
 }
+
+/**
+ * One of a fixed set of strings, or absent. A tab a later release renamed or
+ * removed must fall back to the default: an unknown key would select no tab
+ * and hide every panel.
+ */
+function parseOneOf<T extends string>(choices: readonly T[]): (raw: string) => T | undefined {
+  return (raw) => choices.find((choice) => choice === raw);
+}
+
+/** The preferences `createUiStore`'s `pref` stores as their own string. */
+type StoredAsIs =
+  | 'minimapHidden'
+  | 'dockOpen'
+  | 'problemsOpen'
+  | 'toolboxCollapsed'
+  | 'dockNodeTab'
+  | 'dockPipelineTab';
 
 /** The pane preference as it is persisted — one record, written atomically. */
 interface StoredPane {
@@ -289,28 +365,53 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
   });
 
   return createStore<UiState>((set, get) => {
-    /* An on/off preference: its stored value, and a setter that writes it
-       through. One helper for every flag — the minimap's, then #1475's two —
-       so none of them can be the one that forgets to persist. */
-    const flag = <K extends 'minimapHidden' | 'dockOpen' | 'problemsOpen' | 'toolboxCollapsed'>(
+    /* A preference stored as-is — an on/off flag, or one of a fixed set of
+       strings: its stored value, and a setter that writes it through. One
+       helper for every such preference, so none of them can be the one that
+       forgets to persist. */
+    const pref = <K extends StoredAsIs>(
       field: K,
       key: string,
-      fallback: boolean,
+      parse: (raw: string) => UiState[K] | undefined,
+      fallback: UiState[K],
     ) =>
       [
-        readStored(storage, key, parseBoolean, fallback),
-        (value: boolean) => {
+        readStored(storage, key, parse, fallback),
+        (value: UiState[K]) => {
           writeStored(storage, key, String(value));
           set({ [field]: value } as Pick<UiState, K>);
         },
       ] as const;
-    const [minimapHidden, setMinimapHidden] = flag('minimapHidden', MINIMAP_STORAGE_KEY, false);
-    const [dockOpen, setDockOpen] = flag('dockOpen', DOCK_OPEN_STORAGE_KEY, true);
-    const [problemsOpen, setProblemsOpen] = flag('problemsOpen', PROBLEMS_OPEN_STORAGE_KEY, true);
-    const [toolboxCollapsed, setToolboxCollapsed] = flag(
+    const [minimapHidden, setMinimapHidden] = pref(
+      'minimapHidden',
+      MINIMAP_STORAGE_KEY,
+      parseBoolean,
+      false,
+    );
+    const [dockOpen, setDockOpen] = pref('dockOpen', DOCK_OPEN_STORAGE_KEY, parseBoolean, true);
+    const [problemsOpen, setProblemsOpen] = pref(
+      'problemsOpen',
+      PROBLEMS_OPEN_STORAGE_KEY,
+      parseBoolean,
+      true,
+    );
+    const [toolboxCollapsed, setToolboxCollapsed] = pref(
       'toolboxCollapsed',
       TOOLBOX_COLLAPSED_STORAGE_KEY,
+      parseBoolean,
       false,
+    );
+    const [dockNodeTab, setDockNodeTab] = pref(
+      'dockNodeTab',
+      DOCK_NODE_TAB_STORAGE_KEY,
+      parseOneOf(NODE_TABS),
+      'settings',
+    );
+    const [dockPipelineTab, setDockPipelineTab] = pref(
+      'dockPipelineTab',
+      DOCK_PIPELINE_TAB_STORAGE_KEY,
+      parseOneOf(PIPELINE_TABS),
+      'params',
     );
 
     /* Both pane setters persist the WHOLE record, so the two fields can never
@@ -361,11 +462,26 @@ export function createUiStore(storage: PreferenceStorage | undefined = ambientSt
       setDockOpen,
       problemsOpen,
       setProblemsOpen,
+      problemsWidth: readStored(
+        storage,
+        PROBLEMS_WIDTH_STORAGE_KEY,
+        parseWidth(clampProblemsWidth),
+        PROBLEMS_DEFAULT_WIDTH,
+      ),
+      setProblemsWidth: (width) => {
+        const problemsWidth = clampProblemsWidth(width);
+        writeStored(storage, PROBLEMS_WIDTH_STORAGE_KEY, String(problemsWidth));
+        set({ problemsWidth });
+      },
+      dockNodeTab,
+      setDockNodeTab,
+      dockPipelineTab,
+      setDockPipelineTab,
 
       toolboxWidth: readStored(
         storage,
         TOOLBOX_WIDTH_STORAGE_KEY,
-        parseToolboxWidth,
+        parseWidth(clampToolboxWidth),
         TOOLBOX_DEFAULT_WIDTH,
       ),
       setToolboxWidth: (width) => {

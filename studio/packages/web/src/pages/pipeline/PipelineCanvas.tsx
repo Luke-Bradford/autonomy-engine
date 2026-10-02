@@ -168,7 +168,8 @@ import { useTransientNotice } from './useTransientNotice';
 import { EditorStatusStrip } from './EditorStatusStrip';
 import { DOCK_HEIGHT_VAR, DockSplitter } from './DockSplitter';
 import { TOOLBOX_WIDTH_VAR, ToolboxSplitter } from './ToolboxSplitter';
-import { TOOLBOX_RAIL_WIDTH, uiStore } from '../../stores/uiStore';
+import { PROBLEMS_WIDTH_VAR, ProblemsSplitter } from './ProblemsSplitter';
+import { TOOLBOX_RAIL_WIDTH, uiStore, type NodeTab, type PipelineTab } from '../../stores/uiStore';
 import { DebugRunPanel, RunNowPanel } from './RunNowPanel';
 import { EditorRunDrawer, EditorRunProvider } from './editorRun';
 import { EditorRunContext, type EditorRun } from './editorRunContext';
@@ -286,6 +287,8 @@ export function PipelineCanvas({
      never narrows the properties it sits beside. */
   const problemsOpen = useStore(uiStore, (s) => s.problemsOpen);
   const setProblemsOpen = useStore(uiStore, (s) => s.setProblemsOpen);
+  const problemsWidth = useStore(uiStore, (s) => s.problemsWidth);
+  const dockBodyRef = useRef<HTMLDivElement>(null);
   const problemsId = useId();
   const unsavedId = useId();
   const saveReasonId = useId();
@@ -1810,7 +1813,15 @@ export function PipelineCanvas({
                   {/* HIDDEN, not unmounted, when collapsed: the panel holds drafts
                     (an unapplied config form, a half-typed param) that closing
                     the dock to look at the graph must not throw away. */}
-                  <div id={dockBodyId} className="property-dock__body" hidden={!dockOpen}>
+                  <div
+                    id={dockBodyId}
+                    ref={dockBodyRef}
+                    className="property-dock__body"
+                    hidden={!dockOpen}
+                    /* #1475 — from the stored preference on every render, like
+                       the dock's height, so a reload paints it first time. */
+                    style={{ [PROBLEMS_WIDTH_VAR]: `${String(problemsWidth)}px` } as CSSProperties}
+                  >
                     <SelectedRunDrawer store={store} />
                     <PropertyPanel
                       store={store}
@@ -1819,6 +1830,9 @@ export function PipelineCanvas({
                       pipelineId={pipelineId}
                       onNotice={showCanvasMsg}
                     />
+                    {problemsOpen && (
+                      <ProblemsSplitter bodyRef={dockBodyRef} problemsId={problemsId} />
+                    )}
                     {/* #1393 — the validation list, moved here from above the
                       canvas, where it grew by one line per issue on every
                       keystroke. Plain text: the header above announces. */}
@@ -1897,9 +1911,12 @@ function PropertyPanel({
   const globals = useStore(store, (s) => s.globals);
   // #852 / #844 — the dock's tab choices live HERE, above the panels, because
   // `NodePanel` is keyed per node: selecting another activity remounts it, and
-  // the operator should land on the tab they were using, as ADF does.
-  const [nodeTab, setNodeTab] = useState<NodeTab>('settings');
-  const [pipelineTab, setPipelineTab] = useState<PipelineTab>('params');
+  // the operator should land on the tab they were using, as ADF does. #1475 —
+  // in `uiStore`, so that holds across a reload and across pipelines too.
+  const nodeTab = useStore(uiStore, (s) => s.dockNodeTab);
+  const setNodeTab = useStore(uiStore, (s) => s.setDockNodeTab);
+  const pipelineTab = useStore(uiStore, (s) => s.dockPipelineTab);
+  const setPipelineTab = useStore(uiStore, (s) => s.setDockPipelineTab);
   const pipelinePanel = (
     <PipelinePanel
       store={store}
@@ -2126,11 +2143,6 @@ export function MultiSelectionPanel({
  *
  * Exported for its own tests, the same reason `EdgePanel`/`NodePanel` are.
  */
-/** #844 — the pipeline-level panel's tabs. */
-export type PipelineTab = 'params' | 'variables' | 'outputs' | 'general';
-/** #852 — an activity's tabs: its configuration, then ADF's "General" (run policy). */
-export type NodeTab = 'settings' | 'general';
-
 export function PipelinePanel({
   store,
   pipelineId,
