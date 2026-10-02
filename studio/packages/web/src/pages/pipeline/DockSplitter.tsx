@@ -49,11 +49,10 @@ export function DockSplitter({ columnRef, dockRef, dockId }: DockSplitterProps) 
    */
   const beforeMaximise = useRef<number | null | undefined>(undefined);
 
-  /* Passive, not layout, for `useElementSize`'s reason: `dockRef` is on this
-     component's next sibling, attached only after its layout effects. */
-
   // Re-read after anything that can change the dock's height: a committed
   // preference, or a new column height (which moves the default share and the cap).
+  // Passive, not layout, for `useElementSize`'s reason: `dockRef` is on this
+  // component's next sibling, attached only after its layout effects.
   useEffect(() => {
     const el = dockRef.current;
     if (el) setRendered(Math.round(el.getBoundingClientRect().height));

@@ -2065,6 +2065,9 @@ button.danger {
      properties keep the rest bar the divider; `ProblemsSplitter` reports the same
      number. No left margin: `.problems-splitter` is the gap. */
   flex: 0 0 var(--problems-width, 320px);
+  /* The first line is for a browser without `round()`, which drops the
+     second whole; it can only differ from the reported cap by a subpixel. */
+  max-width: max(200px, min(480px, 50%));
   max-width: max(200px, min(480px, round(down, 50%, 1px)));
   overflow-y: auto;
   min-height: 0;
