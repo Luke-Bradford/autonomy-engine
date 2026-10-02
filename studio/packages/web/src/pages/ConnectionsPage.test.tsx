@@ -9,6 +9,7 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter as renderWithRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
+import { answerConfirm } from '../testing/confirmDialog';
 import { ApiError } from '../api/client';
 
 // Mock only the network calls; keep ConnectionWriteSchema real so the form's
@@ -520,13 +521,13 @@ describe('ConnectionsPage', () => {
     // flight when the operator navigates away is abortable too — it is not only
     // the initial load that is.
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Doomed');
     expect(listMock).toHaveBeenCalledWith(expect.any(AbortSignal));
 
     await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
     expect(listMock.mock.calls[1]![0]).toEqual(expect.any(AbortSignal));
   });
@@ -534,33 +535,33 @@ describe('ConnectionsPage', () => {
   it('deletes a connection after confirmation', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Doomed');
 
     await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_1'));
   });
 
   it('closes the drawer when the connection it is editing is deleted', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithRouter(<ConnectionsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Doomed' }));
     expect(screen.getByRole('form', { name: 'Connection form' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Connection form' })).toBeNull());
   });
 
   it('does not delete when confirmation is cancelled', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Safe' })]);
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Safe');
 
     await user.click(screen.getByRole('button', { name: 'Delete Safe' }));
+    await answerConfirm(user, 'cancel');
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
@@ -931,7 +932,6 @@ describe('ConnectionsPage', () => {
 
     it('names the stranded datasets in the delete confirmation', async () => {
       const user = userEvent.setup();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       listDatasetsMock.mockResolvedValue([
         ds('orders', 'table', 'conn_store'),
         // A dataset on ANOTHER connection must not be counted.
@@ -943,8 +943,7 @@ describe('ConnectionsPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
 
-      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-      const said = confirmSpy.mock.calls[0]?.[0] ?? '';
+      const said = await answerConfirm(user, 'cancel');
       expect(said).toContain('1 dataset reads it');
       expect(said).toContain('orders');
       expect(said).not.toContain('elsewhere');
@@ -955,13 +954,12 @@ describe('ConnectionsPage', () => {
 
     it('raises ONE confirm for a double-clicked delete', async () => {
       // #1174 put a real round trip (the dataset read) in FRONT of the confirm,
-      // and `window.confirm` blocking the main thread was the only thing that
-      // had ever serialized this handler. Without the re-entrancy guard the
-      // second click raises a second dialog for a connection the first has
-      // already deleted, and accepting it 404s into an error banner over an
-      // operation that in fact succeeded.
+      // and the dialog (#1397) does not block the main thread the way
+      // `window.confirm` did, so nothing but the re-entrancy guard serializes
+      // this handler. Without it the second click raises a second dialog for a
+      // connection the first has already deleted, and accepting it 404s into an
+      // error banner over an operation that in fact succeeded.
       const user = userEvent.setup();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
       const held = deferred<Dataset[]>();
       listDatasetsMock.mockReturnValue(held.promise);
       listMock.mockResolvedValue([store]);
@@ -975,9 +973,16 @@ describe('ConnectionsPage', () => {
       await user.click(button);
       held.resolve([]);
 
-      await waitFor(() => expect(deleteMock).toHaveBeenCalled());
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
-      expect(deleteMock).toHaveBeenCalledTimes(1);
+      // Exactly one dialog, and the second click never started a second read.
+      expect(await screen.findAllByRole('alertdialog')).toHaveLength(1);
+      expect(listDatasetsMock).toHaveBeenCalledTimes(1);
+      expect(dependentsMock).toHaveBeenCalledTimes(1);
+
+      await answerConfirm(user, 'accept');
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+      expect(deleteMock).toHaveBeenCalledWith('conn_store');
+      // Nothing queued behind the first dialog: no second one opened after it.
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
     it("does not let one row's delete swallow ANOTHER row's click", async () => {
@@ -985,8 +990,12 @@ describe('ConnectionsPage', () => {
       // serialize the page. A page-wide flag makes a click on a second row
       // while the first row's dataset read is in flight a SILENT no-op — no
       // dialog, no error, nothing — which reads as a dead button.
+      //
+      // Under the dialog (#1397) the first row's own question then arrives
+      // while the second row's is open, and `useConfirm` answers THAT one false
+      // at once and leaves the open dialog in place — so the second row keeps
+      // its question and the first row's delete is declined, never doubled.
       const user = userEvent.setup();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       const other = conn({ id: 'conn_other', name: 'Remote store', kind: 'sqlite', config: {} });
       const held = deferred<Dataset[]>();
       // First call hangs (the in-flight read); the second answers at once.
@@ -999,14 +1008,28 @@ describe('ConnectionsPage', () => {
       await user.click(screen.getByRole('button', { name: 'Delete Remote store' }));
 
       // The second row got its own question while the first was still reading.
-      await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
-      expect(confirmSpy.mock.calls[0]?.[0] ?? '').toContain('Remote store');
-      held.resolve([]);
+      const dialog = await screen.findByRole('alertdialog');
+      expect(dialog).toHaveTextContent('Remote store');
+      expect(listDatasetsMock).toHaveBeenCalledTimes(2);
+
+      // The first row's read now lands; its confirm is refused (a dialog is
+      // already open) and must not replace or duplicate the open one.
+      await act(async () => {
+        held.resolve([]);
+        await held.promise;
+      });
+      expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+      expect(screen.getByRole('alertdialog')).toHaveTextContent('Remote store');
+      expect(deleteMock).not.toHaveBeenCalled();
+
+      const said = await answerConfirm(user, 'accept');
+      expect(said).toContain('Remote store');
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+      expect(deleteMock).toHaveBeenCalledWith('conn_other');
     });
 
     it('warns the delete check failed rather than asking the bare question', async () => {
       const user = userEvent.setup();
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
       listDatasetsMock.mockRejectedValue(new Error('datasets offline'));
       listMock.mockResolvedValue([store]);
       renderWithRouter(<ConnectionsPage />);
@@ -1014,10 +1037,73 @@ describe('ConnectionsPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
 
-      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-      expect(confirmSpy.mock.calls[0]?.[0] ?? '').toContain('Could not check');
+      expect(await answerConfirm(user, 'accept')).toContain('Could not check');
       // A diagnostic that could not be computed must not BLOCK the delete —
       // advisory in both directions.
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
+    });
+
+    it('keeps Delete disabled until the connection name is typed, when a dataset depends on it', async () => {
+      const user = userEvent.setup();
+      listDatasetsMock.mockResolvedValue([ds('orders', 'table', 'conn_store')]);
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      const action = within(dialog).getByRole('button', { name: 'Delete' });
+      expect(action).toBeDisabled();
+
+      // A near miss does not unlock it — the whole name, exactly.
+      const box = within(dialog).getByLabelText('Type Local store to confirm');
+      await user.type(box, 'Local stor');
+      expect(action).toBeDisabled();
+      expect(deleteMock).not.toHaveBeenCalled();
+
+      await user.type(box, 'e');
+      expect(action).toBeEnabled();
+
+      await answerConfirm(user, 'accept');
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
+    });
+
+    it('does not ask for the name when every check FAILED, but still names the failure', async () => {
+      // Advisory polarity (#1145/#1158): an outage adds no friction. Nothing is
+      // KNOWN to depend on the connection, so the plain question is asked.
+      const user = userEvent.setup();
+      listDatasetsMock.mockRejectedValue(new Error('datasets offline'));
+      dependentsMock.mockRejectedValue(new Error('dependents offline'));
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(dialog).toHaveTextContent('Could not check');
+      expect(dialog).toHaveTextContent('datasets offline');
+      expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
+
+      await answerConfirm(user, 'accept');
+      await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
+    });
+
+    it('asks the plain question, with no name to type, when nothing depends on it', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([store]);
+      renderWithRouter(<ConnectionsPage />);
+      await screen.findByText('Local store');
+
+      await user.click(screen.getByRole('button', { name: 'Delete Local store' }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled();
+
+      await answerConfirm(user, 'accept');
       await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('conn_store'));
     });
   });
@@ -1153,18 +1239,15 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       ],
       dynamicNodes: [],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
     await user.click(screen.getByRole('button', { name: /Delete/ }));
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-    const message = confirmSpy.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('Delete connection "Local"?');
     expect(message).toContain('1 pipeline node (etl › summarise) uses it');
-    confirmSpy.mockRestore();
   });
 
   it('names them in the DELETE confirm, alongside the datasets it strands', async () => {
@@ -1173,19 +1256,16 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
     await user.click(screen.getByRole('button', { name: /Delete/ }));
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-    const message = confirmSpy.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('Delete connection "Local"?');
     expect(message).toContain('1 enabled trigger (nightly)');
     expect(deleteMock).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it('a datasets outage does not erase the trigger answer, or the other way round', async () => {
@@ -1197,18 +1277,15 @@ describe('#1211 — the enabled triggers a connection edit switches off', () => 
       triggers: [{ id: 't1', name: 'nightly' }],
       dynamic: [],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     listMock.mockResolvedValue([ready]);
     renderWithRouter(<ConnectionsPage />);
     await screen.findByText('Local');
 
     await user.click(screen.getByRole('button', { name: /Delete/ }));
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-    const message = confirmSpy.mock.calls[0]![0] as string;
+    const message = await answerConfirm(user, 'cancel');
     expect(message).toContain('datasets down');
     expect(message).toContain('1 enabled trigger (nightly)');
-    confirmSpy.mockRestore();
   });
 
   describe('the override allowlist (#1305)', () => {

@@ -9,6 +9,7 @@ import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
 import { renderWithDataRouter } from '../testing/renderWithRouter';
 import { ROW_EDIT } from '../testing/rowActions';
+import { answerConfirm } from '../testing/confirmDialog';
 
 // Mock only the network calls; `DatasetWriteSchema` stays REAL so the form's
 // client-side validation is exercised exactly as it ships.
@@ -562,27 +563,30 @@ describe('DatasetsPage', () => {
   it('deletes only on confirmation, and says what breaks', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderWithDataRouter(<DatasetsPage />);
     await screen.findByText('Orders');
 
     await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('fail at dispatch'));
+    expect(await answerConfirm(user, 'cancel')).toContain('fail at dispatch');
     expect(deleteMock).not.toHaveBeenCalled();
+    // Declining hands focus back to the button that asked.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete Orders' })).toHaveFocus(),
+    );
 
-    confirmSpy.mockReturnValue(true);
     await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('ds_1'));
   });
 
   it('closes the drawer when the dataset it is editing is deleted', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dataset()]);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderWithDataRouter(<DatasetsPage />);
     await user.click(await screen.findByRole('button', { name: 'Edit Orders' }));
     expect(form()).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Delete Orders' }));
+    await answerConfirm(user, 'accept');
     await waitFor(() => expect(screen.queryByRole('form', { name: 'Dataset form' })).toBeNull());
   });
 

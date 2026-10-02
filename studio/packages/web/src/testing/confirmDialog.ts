@@ -6,8 +6,8 @@ import type { UserEvent } from '@testing-library/user-event';
  * #1397 — answer the page's confirmation dialog (`useConfirm`): wait for it,
  * click its action button (`accept`, always the last button) or Cancel, and
  * wait for it to close. Returns the dialog's text so a test can assert the
- * consequences it named. `typeName` fills in the "Type <name> to confirm" box
- * first, for a dialog that asks for it.
+ * consequences it named. A dialog that asks for a typed name needs the name
+ * typed (`Type <name> to confirm`) before `accept`.
  *
  * Waiting for the close is what keeps a declined test honest: an
  * `expect(deleteMock).not.toHaveBeenCalled()` straight after the click would
