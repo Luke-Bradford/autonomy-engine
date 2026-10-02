@@ -7,6 +7,7 @@ import {
   DialogSurface,
   DialogTitle,
 } from '@fluentui/react-components';
+import { splitConfirmMessage } from './splitConfirmMessage';
 
 /**
  * #1397 OR6 — the one confirmation dialog, replacing `window.confirm`.
@@ -43,15 +44,6 @@ interface Pending extends ConfirmRequest {
   readonly id: number;
   readonly opener: Element | null;
   readonly resolve: (confirmed: boolean) => void;
-}
-
-/** Split a confirm message into its title and body paragraphs. */
-export function splitConfirmMessage(message: string): {
-  title: string;
-  paragraphs: string[];
-} {
-  const [title = '', ...rest] = message.split(/\n\s*\n/);
-  return { title: title.trim(), paragraphs: rest.map((p) => p.trim()).filter((p) => p !== '') };
 }
 
 /**

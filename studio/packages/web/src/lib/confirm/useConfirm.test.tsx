@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactNode } from 'react';
-import { splitConfirmMessage, useConfirm, type ConfirmRequest } from './useConfirm';
+import { splitConfirmMessage } from './splitConfirmMessage';
+import { useConfirm, type ConfirmRequest } from './useConfirm';
 
 /** A page that asks one question per click and shows each answer. */
 function Harness({ request }: { request: ConfirmRequest }): ReactNode {
