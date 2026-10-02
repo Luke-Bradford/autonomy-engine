@@ -34,6 +34,7 @@ import { useRunProjection } from './useRunProjection';
 import { isSecureMarker } from './secureMarker';
 import { pipelinePath } from '../author/pipelinePath';
 import { CopyableId } from '../../lib/CopyableId';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 import { shortId } from '../../lib/ids';
 import { useShellLabel } from '../../shell/shellLabel';
 import { versionLabel } from '../../lib/versionLabel';
@@ -91,6 +92,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   /* Whether this mount is still on screen, read by the rerun settle handlers.
@@ -315,11 +317,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /**
    * CX4 (#1320) — cancel THIS run, after a confirmation that names what stops.
    *
-   * Confirmed like every other destructive action in the app — still a native
-   * `window.confirm` here until a later OR6 slice (#1397) moves it to
-   * `useConfirm`, as the list pages already are. The text is built from
-   * the node table's own rows, so it names exactly what the operator sees in
-   * progress, in the table's words.
+   * Confirmed like every other destructive action in the app, through
+   * `useConfirm` (#1397). The text is built from the node table's own rows, so
+   * it names exactly what the operator sees in progress, in the table's words.
+   * The dismiss button says "Keep running": [Cancel] beside [Cancel run] would
+   * not say which one leaves the run alone.
+   *
+   * Unlike `window.confirm`, the dialog does not freeze the stream while it is
+   * open, so the run can end — or a listed node finish — before the answer. The
+   * list is the moment of asking, and the server is the authority: a cancel of a
+   * run that has meanwhile ended is a `409 conflict` saying so, shown as the
+   * cancel error rather than as a cancel that happened.
    *
    * A second cancel is harmless — the server answers `202` and appends nothing
    * (D5) — so `cancelBusy` only keeps one mount from sending two requests and
@@ -339,8 +347,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
     const message = cancelConfirmMessage(
       nodes.map((n) => ({ name: nameOf(n.nodeId) ?? n.nodeId, status: n.status })),
     );
-    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-    if (!window.confirm(message)) return;
+    if (!(await confirm({ message, confirmLabel: 'Cancel run', cancelLabel: 'Keep running' }))) {
+      return;
+    }
     setCancelBusy(true);
     setCancelError(null);
     try {
@@ -902,6 +911,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </tbody>
         </table>
       )}
+      {confirmDialog}
     </section>
   );
 }

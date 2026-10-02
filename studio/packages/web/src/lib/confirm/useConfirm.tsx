@@ -39,6 +39,18 @@ export interface ConfirmRequest {
   /** The action button's label: what happens, e.g. "Delete" or "Archive". */
   readonly confirmLabel: string;
   /**
+   * How the action button is drawn. `danger` (the default) for an act that
+   * destroys or stops something; `primary` for one that destroys nothing (a
+   * restore that mints a new version, a publish that moves a pointer), which a
+   * red button would misdescribe.
+   */
+  readonly tone?: 'danger' | 'primary';
+  /**
+   * The dismiss button's label. "Cancel" unless that collides with the action:
+   * "Cancel this run?" over [Cancel] [Cancel run] does not say which keeps it.
+   */
+  readonly cancelLabel?: string;
+  /**
    * For an irreversible delete of something other resources depend on: the
    * action button stays disabled until this exact name is typed.
    */
@@ -289,11 +301,11 @@ function ConfirmDialog({
             ref={asksName ? undefined : (initialFocus as RefObject<HTMLButtonElement | null>)}
             onClick={() => onAnswer(false)}
           >
-            Cancel
+            {request.cancelLabel ?? 'Cancel'}
           </button>
           <button
             type="button"
-            className="danger"
+            className={request.tone ?? 'danger'}
             disabled={blocked}
             onClick={() => onAnswer(true)}
           >

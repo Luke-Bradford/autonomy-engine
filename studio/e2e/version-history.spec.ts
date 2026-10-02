@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, viewportSettled } from './support/canvasGraph';
 import { fluentRootReady } from './support/theme';
+import { answerConfirm } from './support/confirmDialog';
 import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
 
 /**
@@ -213,15 +214,17 @@ test.describe('pipeline version history', () => {
     await historyButton(page).click();
     await rows(page).nth(2).click();
 
-    page.once('dialog', (d) => {
-      // The confirmation must state what is created and that nothing is lost —
-      // an operator who thinks this discards their later work will not press it.
-      expect(d.message()).toContain('v1');
-      expect(d.message()).toContain('v4');
-      expect(d.message()).toContain('kept');
-      void d.accept();
-    });
     await page.getByRole('button', { name: 'Restore v1' }).click();
+    // The confirmation must state what is created and that nothing is lost —
+    // an operator who thinks this discards their later work will not press it.
+    // #1397 — and its action is not drawn as a destructive one.
+    await expect(
+      page.getByRole('alertdialog').getByRole('button', { name: 'Restore', exact: true }),
+    ).toHaveClass(/\bprimary\b/);
+    const prompt = await answerConfirm(page, 'accept');
+    expect(prompt).toContain('v1');
+    expect(prompt).toContain('v4');
+    expect(prompt).toContain('kept');
 
     await expect(page.locator('.notice')).toContainText('Restored v1 as v4');
     // Back in the editor, on the restored version.
@@ -248,6 +251,41 @@ test.describe('pipeline version history', () => {
     const v4 = versions.find((v) => v.version === 4)!;
     const v1 = versions.find((v) => v.version === 1)!;
     expect(v4.nodes).toEqual(v1.nodes);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * #1397 — `window.confirm` froze the page; the in-app dialog does not, so a key
+   * pressed at it reaches the canvas's document-level shortcuts. Behind a
+   * preview the editor is unmounted but its selection is not, and Delete would
+   * remove nodes from a working graph the operator cannot see — the reason ⌘V
+   * is already refused in a preview.
+   */
+  test('a Delete pressed in a preview, or at its restore confirmation, edits nothing', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-delete-key');
+    await nodeById(page, 'n_c').click();
+    await expect(nodeById(page, 'n_c')).toHaveClass(/\bselected\b/);
+
+    await historyButton(page).click();
+    await rows(page).nth(2).click();
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v1');
+
+    await page.getByRole('button', { name: 'Restore v1' }).click();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Backspace');
+    await answerConfirm(page, 'cancel');
+    // And with no dialog open, focus back on the preview bar.
+    await page.keyboard.press('Delete');
+
+    await page.getByRole('button', { name: 'Back to editing' }).click();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expect(nodeById(page, 'n_c')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'hidden');
 
     await expectQuiet(page, problems);
   });
@@ -280,8 +318,8 @@ test.describe('pipeline version history', () => {
 
     await historyButton(page).click();
     await rows(page).nth(2).click();
-    page.once('dialog', (d) => void d.accept());
     await page.getByRole('button', { name: 'Restore v1' }).click();
+    await answerConfirm(page, 'accept');
 
     // In flight: the restore is running…
     await expect(page.getByRole('button', { name: 'Restoring…' })).toBeDisabled();
@@ -571,8 +609,8 @@ test.describe('pipeline version history', () => {
     // Now restore v1 from the refreshed history.
     await page.getByRole('button', { name: 'Version history' }).click();
     await page.getByRole('button', { name: /^v1\b/ }).click();
-    page.once('dialog', (d) => void d.accept());
     await page.getByRole('button', { name: 'Restore v1' }).click();
+    await answerConfirm(page, 'accept');
 
     await expect(page.locator('.notice')).toHaveText('Restored v1 as v3.');
     // And the banner is gone: the head it named has been advanced past.

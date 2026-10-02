@@ -5,7 +5,8 @@ import type { UserEvent } from '@testing-library/user-event';
 /**
  * #1397 — answer the page's confirmation dialog (`useConfirm`): wait for it,
  * click its action button (`accept`, always the last button) or Cancel, and
- * wait for it to close. Returns the dialog's text so a test can assert the
+ * wait for it to close. Cancel is the FIRST button whatever its label (a
+ * request may rename it, e.g. "Keep running"). Returns the dialog's text so a test can assert the
  * consequences it named. A dialog that asks for a typed name needs the name
  * typed (`Type <name> to confirm`) before `accept`.
  *
@@ -17,10 +18,7 @@ export async function answerConfirm(user: UserEvent, answer: 'accept' | 'cancel'
   const dialog = await screen.findByRole('alertdialog');
   const text = dialog.textContent ?? '';
   const buttons = within(dialog).getAllByRole('button');
-  const target =
-    answer === 'cancel'
-      ? within(dialog).getByRole('button', { name: 'Cancel' })
-      : buttons[buttons.length - 1]!;
+  const target = answer === 'cancel' ? buttons[0]! : buttons[buttons.length - 1]!;
   await user.click(target);
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
   return text;

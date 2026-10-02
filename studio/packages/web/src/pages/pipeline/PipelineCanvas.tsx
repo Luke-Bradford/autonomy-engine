@@ -161,6 +161,7 @@ import { FormSection } from '../../lib/form/FormSection';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 import { readPublishState } from './publishState';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { useConfirm } from '../../lib/confirm/useConfirm';
 
 /**
  * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
@@ -313,6 +314,7 @@ export function PipelineCanvas({
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   /**
    * #979 — the publish state: the active pointer, and whether a repo is
    * connected at all. Both start `undefined` and STAY `undefined` if the read
@@ -956,9 +958,16 @@ export function PipelineCanvas({
       setSaveMsg(refusal);
       return;
     }
+    // #1397 — `primary`, not `danger`: a restore mints a new version and keeps
+    // every old one. While the dialog asks, the editor stays unmounted behind
+    // the preview and every value below is the one the operator read; the
+    // version list is also the CAS basis, so a list that moved fails the write.
     if (
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      !window.confirm(restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }))
+      !(await confirm({
+        message: restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }),
+        confirmLabel: 'Restore',
+        tone: 'primary',
+      }))
     ) {
       return;
     }
@@ -1042,7 +1051,7 @@ export function PipelineCanvas({
     } finally {
       setRestoring(false);
     }
-  }, [dirty, head, headVersion, pipelineId, previewed, store]);
+  }, [dirty, head, headVersion, pipelineId, previewed, store, confirm]);
 
   /**
    * #979 — make the previewed version the active published one.
@@ -1068,14 +1077,18 @@ export function PipelineCanvas({
     // non-null for `undefined`, so this is unreachable — but the CAS argument is
     // too important to rest on a function's return value alone.
     if (active === undefined) return;
+    // #1397 — `primary`: publishing moves a pointer and destroys nothing. The
+    // pointer can move while the dialog asks; `expectedActiveVersionId` is the
+    // one this page read, so the server refuses a publish over a moved pointer.
     if (
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      !window.confirm(
-        publishConfirmMessage({
+      !(await confirm({
+        message: publishConfirmMessage({
           selectedVersion: previewed.version,
           activeVersion: activeVersionLabel(active, versions),
         }),
-      )
+        confirmLabel: 'Publish',
+        tone: 'primary',
+      }))
     ) {
       return;
     }
@@ -1122,7 +1135,7 @@ export function PipelineCanvas({
     } finally {
       setPublishing(false);
     }
-  }, [active, archived, gitConnected, pipelineId, previewed, versions]);
+  }, [active, archived, gitConnected, pipelineId, previewed, versions, confirm]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -1677,6 +1690,7 @@ export function PipelineCanvas({
           </EditorRunProvider>
         </SubjectIssuesContext.Provider>
       )}
+      {confirmDialog}
     </section>
   );
 }

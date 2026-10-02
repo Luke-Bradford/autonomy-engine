@@ -35,6 +35,7 @@ import {
 import { ApiError, messageOf } from '../api/client';
 import { formatWhen } from './runs/format';
 import { countOf } from '../lib/countOf';
+import { useConfirm } from '../lib/confirm/useConfirm';
 
 /**
  * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
@@ -280,6 +281,7 @@ function GitStatusPanel({
   runExclusive: (act: () => Promise<void>) => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   /**
    * The incoming readings live HERE, not inside `ImportSection`, because two
@@ -339,10 +341,10 @@ function GitStatusPanel({
 
   const onDisconnect = useCallback(async () => {
     if (
-      // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-      !window.confirm(
-        `Disconnect ${status.repoUrl}? Your pipelines stay in the database — only the link to the repository is removed.`,
-      )
+      !(await confirm({
+        message: `Disconnect ${status.repoUrl}?\n\nYour pipelines stay in the database — only the link to the repository is removed.`,
+        confirmLabel: 'Disconnect',
+      }))
     )
       return;
     await runExclusive(async () => {
@@ -354,7 +356,7 @@ function GitStatusPanel({
         setError(messageOf(err));
       }
     });
-  }, [status.repoUrl, onDisconnected, runExclusive]);
+  }, [status.repoUrl, onDisconnected, runExclusive, confirm]);
 
   return (
     <>
@@ -415,6 +417,7 @@ function GitStatusPanel({
         busy={busy}
         runExclusive={runExclusive}
       />
+      {confirmDialog}
     </>
   );
 }
@@ -439,6 +442,7 @@ function TokenForm({
 }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -461,8 +465,12 @@ function TokenForm({
   }
 
   async function onClear() {
-    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-    if (!window.confirm('Remove the stored token? Pushes will fall back to your git credentials.'))
+    if (
+      !(await confirm({
+        message: 'Remove the stored token?\n\nPushes will fall back to your git credentials.',
+        confirmLabel: 'Remove token',
+      }))
+    )
       return;
     await runExclusive(async () => {
       setError(null);
@@ -475,42 +483,45 @@ function TokenForm({
   }
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} aria-label="Git token">
-      <h3>Access token</h3>
-      <p className="page-hint">
-        {status.hasStoredToken
-          ? 'A token is stored, encrypted. It is never shown again — enter a new one to replace it.'
-          : 'No token stored. One is only needed if your environment cannot authenticate to the remote on its own.'}
-      </p>
-
-      <label>
-        Token
-        <input
-          type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder={status.hasStoredToken ? 'enter a new token to replace the stored one' : ''}
-          autoComplete="off"
-        />
-      </label>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
+    <>
+      <form onSubmit={(e) => void onSubmit(e)} aria-label="Git token">
+        <h3>Access token</h3>
+        <p className="page-hint">
+          {status.hasStoredToken
+            ? 'A token is stored, encrypted. It is never shown again — enter a new one to replace it.'
+            : 'No token stored. One is only needed if your environment cannot authenticate to the remote on its own.'}
         </p>
-      )}
 
-      <div className="form-actions">
-        <button type="submit" disabled={busy}>
-          {busy ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
-        </button>
-        {status.hasStoredToken && (
-          <button type="button" onClick={() => void onClear()} disabled={busy}>
-            Remove stored token
-          </button>
+        <label>
+          Token
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={status.hasStoredToken ? 'enter a new token to replace the stored one' : ''}
+            autoComplete="off"
+          />
+        </label>
+
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
         )}
-      </div>
-    </form>
+
+        <div className="form-actions">
+          <button type="submit" disabled={busy}>
+            {busy ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
+          </button>
+          {status.hasStoredToken && (
+            <button type="button" onClick={() => void onClear()} disabled={busy}>
+              Remove stored token
+            </button>
+          )}
+        </div>
+      </form>
+      {confirmDialog}
+    </>
   );
 }
 
@@ -711,6 +722,7 @@ function ImportSection({
 }) {
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   const onCheck = useCallback(
     () =>
@@ -781,8 +793,17 @@ function ImportSection({
 
   async function onImport() {
     if (readings === null || blocked !== null) return;
-    // eslint-disable-next-line no-restricted-properties -- #1397: moves to useConfirm in a later OR6 slice
-    if (!window.confirm(buildImportConfirmation(readings.preview, readings.divergence, status)))
+    // Unlike `window.confirm`, the dialog does not freeze the page while it asks.
+    // Nothing here changes underneath it, though: no poll touches `readings` or
+    // `status`, and the modal takes every click. The guard that matters is the
+    // server's — the branch is re-read on import, which the message says — and
+    // `previewedHead` is what the outcome report holds the import against.
+    if (
+      !(await confirm({
+        message: buildImportConfirmation(readings.preview, readings.divergence, status),
+        confirmLabel: 'Import',
+      }))
+    )
       return;
 
     const previewedHead = readings.preview.head;
@@ -862,6 +883,7 @@ function ImportSection({
           {blocked !== null && <span className="page-hint">{blocked}</span>}
         </div>
       )}
+      {confirmDialog}
     </section>
   );
 }

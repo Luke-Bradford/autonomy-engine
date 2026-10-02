@@ -15,7 +15,8 @@ import { expect, type Page } from '@playwright/test';
  * is disabled until it matches exactly. Passing it for a dialog that does not ask
  * fails loudly on the missing textbox rather than being ignored.
  *
- * The action button is the LAST button (Cancel, then the action).
+ * The action button is the LAST button; the dismiss button is the FIRST, whatever
+ * its label (a request may rename "Cancel", e.g. "Keep running" on a run cancel).
  */
 export async function answerConfirm(
   page: Page,
@@ -32,7 +33,7 @@ export async function answerConfirm(
   }
   const buttons = dialog.getByRole('button');
   if (answer === 'accept') await buttons.last().click();
-  else await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  else await buttons.first().click();
   await expect(dialog).toBeHidden();
   return text;
 }
