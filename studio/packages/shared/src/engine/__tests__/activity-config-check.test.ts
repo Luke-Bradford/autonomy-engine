@@ -30,6 +30,14 @@ describe('activityNodeErrors (#1480)', () => {
     expect(error).toMatch(/closest: file_read\b/);
   });
 
+  it('compares only a bounded prefix of an oversized type for the hint', () => {
+    // Uncapped this took ~0.5 s for one node; capped it is a few milliseconds.
+    const started = performance.now();
+    const [error] = activityNodeErrors(node('x'.repeat(1_000_000), {}));
+    expect(error).toMatch(/unknown activity type/);
+    expect(performance.now() - started).toBeLessThan(150);
+  });
+
   it('skips a structural call node, whose type the engine never dispatches on', () => {
     const call = { pipelineVersionId: 'pv_x' };
     expect(activityNodeErrors(node('call_pipeline', {}, { call } as Partial<Node>))).toEqual([]);
@@ -103,10 +111,12 @@ describe('activityNodeErrors (#1480)', () => {
   });
 
   it('checks against an injected catalog, the one the executor dispatches with', () => {
-    const entry = {
+    // A complete entry (a real one, re-keyed), so no cast hides a missing field.
+    const entry: ActivityCatalogEntry = {
+      ...catalog.get('file_read')!,
       type: 'test_activity',
       dispatchConfigSchema: z.object({ n: z.number() }),
-    } as unknown as ActivityCatalogEntry;
+    };
     const injected: ActivityCatalog = new Map([['test_activity', entry]]);
     expect(activityNodeErrors(node('test_activity', { n: 1 }), injected)).toEqual([]);
     expect(activityNodeErrors(node('test_activity', { n: 'x' }), injected)).toHaveLength(1);

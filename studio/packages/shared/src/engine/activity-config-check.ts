@@ -45,6 +45,13 @@ import { MAX_CONFIG_DEPTH } from './params.js';
 /** How many catalog types an unknown-type refusal offers. */
 const CLOSEST_TYPES = 3;
 
+/**
+ * How much of an unknown `type` the closest-type hint compares. `Node.type` has
+ * no length bound of its own, and the edit distance costs O(length) per catalog
+ * entry: uncapped, one 1 MB type took ~0.5 s of CPU at save (measured).
+ */
+const CLOSEST_COMPARED_CHARS = 64;
+
 type Opacity = 'any' | 'whole';
 
 /** Whether `v` itself is a value dispatch sees resolved rather than as written. */
@@ -114,8 +121,9 @@ function editDistance(a: string, b: string): number {
 }
 
 function closestTypes(type: string, known: ActivityCatalog): string[] {
+  const compared = type.slice(0, CLOSEST_COMPARED_CHARS);
   return [...known.keys()]
-    .map((t) => ({ t, d: editDistance(type, t) }))
+    .map((t) => ({ t, d: editDistance(compared, t) }))
     .sort((x, y) => x.d - y.d || x.t.localeCompare(y.t))
     .slice(0, CLOSEST_TYPES)
     .map((x) => x.t);
