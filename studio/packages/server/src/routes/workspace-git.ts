@@ -61,7 +61,7 @@ import {
 } from '../git/provider.js';
 import { GitHubHostClient, type GitHostClient } from '../git/github-host.js';
 import { decrypt, encrypt } from '../secrets/secrets.js';
-import { KeyedQueue } from '../git/queue.js';
+import { KeyedQueue } from '../util/keyed-queue.js';
 import { readyVersionResourceIds } from '../run/connection-readiness.js';
 import { NotFoundError } from '../errors.js';
 import type { Db } from '../repo/types.js';

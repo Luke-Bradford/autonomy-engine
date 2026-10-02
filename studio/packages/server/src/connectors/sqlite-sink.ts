@@ -1,6 +1,8 @@
+import { stat } from 'node:fs/promises';
 import Database from 'better-sqlite3';
 import { formatZodIssues, type CoercedValue, type DatasetKind } from '@autonomy-studio/shared';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
+import { KeyedQueue } from '../util/keyed-queue.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { classifySinkFailure } from './error-kind.js';
 import { yieldToEventLoop } from './scheduling.js';
@@ -216,6 +218,46 @@ function certainlyNotNull(
   );
 }
 
+/**
+ * #1423 — one write slot per sqlite STORE in this process.
+ *
+ * The sink holds `begin immediate` across its between-batch yields, and
+ * better-sqlite3's busy wait is SYNCHRONOUS (`SQLITE_BUSY_TIMEOUT_MS`). So a
+ * second copy into the same store in the SAME process could never succeed by
+ * waiting: its 250ms busy-wait freezes the event loop, the holder cannot reach
+ * its next batch let alone its commit, and the second copy fails
+ * `database is locked`. Measured: a parallel foreach (`batchCount: 3`) into one
+ * file failed two of its three iterations, and two ordinary parallel Copy
+ * branches failed the operator's demo run outright (retry defaults to 0).
+ * Queuing here turns that into an ASYNC wait the holder is not frozen by.
+ *
+ * Process-wide, deliberately — not per run: two concurrent runs writing one
+ * store collide exactly the same way. Another PROCESS writing the store is still
+ * met by the busy timeout and reported `transient`, unchanged. So is a streaming
+ * READER of the store in this process: it holds a shared lock across its awaits,
+ * and a commit that meets it can still fail the same way — #1489.
+ */
+const storeWriteQueue = new KeyedQueue();
+
+/**
+ * The queue key: the file's identity, not its path.
+ *
+ * `confineStorePath` canonicalises the PARENT only, and a path string is not a
+ * file: on a case-insensitive filesystem (macOS's default) `App.db` and `app.db`
+ * are one file, and a hard link is one file under two names. SQLite's own locks
+ * belong to the file, so the queue must too, or two spellings would collide just
+ * as before. `dev:ino` is that identity. If `stat` fails the path is used — the
+ * open just after it reports the real problem.
+ */
+async function storeLockKey(dbPath: string): Promise<string> {
+  try {
+    const s = await stat(dbPath, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return dbPath;
+  }
+}
+
 /** The `table` dataset config of a SINK, or a refusal. */
 function sinkTargetFor(
   datasetKind: DatasetKind,
@@ -265,7 +307,11 @@ function sinkTargetFor(
  *
  * **The operational consequence, stated rather than discovered.** The copy holds
  * the store's write lock for its whole duration, so two copies into one store
- * serialise and the loser gets `SQLITE_BUSY` → `transient` → a retry from row 0.
+ * serialise. In THIS process they queue on `storeWriteQueue` (#1423) and both
+ * land; the queued one shows as running while it waits — it is past
+ * `node.dispatched`, holding one of the executor's adapter slots (`limit` in
+ * `run/executor.ts`) — and can be cancelled while queued. A writer in ANOTHER process
+ * still makes the loser get `SQLITE_BUSY` → `transient` → a retry from row 0.
  * `BEGIN IMMEDIATE` front-loads that contention so it is reported before any
  * work is done; it does NOT make the copy immune to a busy `COMMIT`, which is
  * measurable in rollback-journal mode (the default for an operator's database —
@@ -318,10 +364,22 @@ export async function writeSqliteDatasetRows(
 
   if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
 
+  // `acquire` rejects for one reason only — the signal aborted while queued.
+  // Checked rather than assumed, so a future rejection of another kind is not
+  // reported as a cancel.
+  let release: () => void;
+  try {
+    release = await storeWriteQueue.acquire(await storeLockKey(dbPath), write.signal);
+  } catch (err) {
+    if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+    throw err;
+  }
+
   let db: Database.Database;
   try {
     db = new Database(dbPath, { fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
   } catch (err) {
+    release();
     throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
   }
 
@@ -439,5 +497,7 @@ export async function writeSqliteDatasetRows(
     } catch {
       // Never let a close failure replace the outcome the caller is unwinding with.
     }
+    // AFTER close, so the next writer finds SQLite's own lock already free.
+    release();
   }
 }
