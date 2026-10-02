@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RowMenuOrigin } from '../lib/RowMoreMenu';
 import { useFocusAfterRemoval } from './useFocusAfterRemoval';
 
@@ -8,21 +8,30 @@ interface Row {
   readonly id: string;
 }
 
-let api: {
+interface Api {
   setRows: (rows: Row[] | null) => void;
   restoreFocus: (id: string) => () => HTMLElement | null;
-} | null = null;
+}
+let api: Api | null = null;
+const expose = (next: Api) => {
+  api = next;
+};
+
+/** What `RowMoreMenu` hands an action: the row's `⋯`, and a lookup for it. */
+function origin(id: string): RowMenuOrigin {
+  const find = () => document.getElementById(`menu-${id}`);
+  return { element: find()!, find };
+}
 
 /** A table whose rows each have a `⋯`, as the list pages draw them. */
 function Table({ initial }: { initial: Row[] }): ReactNode {
   const [rows, setRows] = useState<Row[] | null>(initial);
   const createRef = useRef<HTMLButtonElement>(null);
   const { restoreFocus } = useFocusAfterRemoval(rows, createRef);
-  const origin = (id: string): RowMenuOrigin => {
-    const find = () => document.getElementById(`menu-${id}`);
-    return { element: find()!, find };
-  };
-  api = { setRows, restoreFocus: (id) => restoreFocus(id, origin(id)) };
+  useEffect(
+    () => expose({ setRows, restoreFocus: (id) => restoreFocus(id, origin(id)) }),
+    [restoreFocus],
+  );
   return (
     <>
       <button ref={createRef} type="button">

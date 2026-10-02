@@ -28,9 +28,7 @@ export async function answerConfirm(
   await expect(dialog).toBeVisible();
   const text = await dialog.innerText();
   if (opts.typeName !== undefined) {
-    await dialog
-      .getByRole('textbox', { name: typedNameLabel(opts.typeName) })
-      .fill(opts.typeName);
+    await dialog.getByRole('textbox', { name: typedNameLabel(opts.typeName) }).fill(opts.typeName);
   }
   const buttons = dialog.getByRole('button');
   if (answer === 'accept') await buttons.last().click();
