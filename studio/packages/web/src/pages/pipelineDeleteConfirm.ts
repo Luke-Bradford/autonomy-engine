@@ -4,7 +4,7 @@ import {
   listPipelineDependents,
   pipelineHasRunsMessage,
 } from '../api/pipelines';
-import { messageOf } from '../api/client';
+import { advisoryDetail, messageOf } from '../api/client';
 import { formatNameList } from './connections/dependencyCheck';
 import { nodeLabels, nodePhrase } from './connections/dependentNodes';
 
@@ -56,8 +56,7 @@ export function pipelineDeletePlan(name: string, read: PipelineDependentsRead): 
   let hasDependants = false;
   if (read.state === 'unavailable') {
     parts.push(
-      // One line: a multi-paragraph error would split into dialog paragraphs.
-      `Could not check what depends on it (${read.detail.replace(/\s+/g, ' ').trim()}) — any trigger bound to it is deleted with it, and any pipeline that calls it will fail at that step.`,
+      `Could not check what depends on it (${advisoryDetail(read.detail)}) — any trigger bound to it is deleted with it, and any pipeline that calls it will fail at that step.`,
     );
   } else {
     const { triggers, callers, dynamicCallers } = read.value;

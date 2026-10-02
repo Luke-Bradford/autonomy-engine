@@ -4,6 +4,7 @@ import {
   type ConnectionKind,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
+import { advisoryDetail } from '../../api/client';
 import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**
@@ -149,7 +150,7 @@ export function triggerDisableAdvisory(check: TriggerCheck): string | null {
     case 'loading':
       return 'Still checking which enabled triggers this would switch off.';
     case 'unavailable':
-      return `Could not check which enabled triggers depend on this connection (${check.detail}) — saving may switch some off.`;
+      return `Could not check which enabled triggers depend on this connection (${advisoryDetail(check.detail)}) — saving may switch some off.`;
     case 'known': {
       if (check.names.length === 0) {
         return check.dynamicNames.length === 0
@@ -171,7 +172,7 @@ export function deleteConfirmTriggerClause(check: TriggerCheck): string {
     case 'loading':
       return 'Still checking which enabled triggers depend on it — any that do will be switched off.';
     case 'unavailable':
-      return `Could not check which enabled triggers depend on it (${check.detail}) — any that do will be switched off.`;
+      return `Could not check which enabled triggers depend on it (${advisoryDetail(check.detail)}) — any that do will be switched off.`;
     case 'known': {
       if (check.names.length === 0) {
         return check.dynamicNames.length === 0

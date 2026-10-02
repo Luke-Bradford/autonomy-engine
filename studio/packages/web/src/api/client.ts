@@ -40,6 +40,27 @@ export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The longest failure detail an advisory clause quotes, ellipsis included. */
+export const ADVISORY_DETAIL_MAX = 120;
+
+/**
+ * A failure detail as an advisory clause quotes it (#1487): one line, bounded.
+ * Every "Could not check … (detail) — …" clause sits inside a confirmation
+ * dialog or a form notice, so a long or multi-line server message would bury
+ * the consequence that follows it. ONE policy for all of them. Counted in code
+ * points, so the cut never splits an emoji into a lone surrogate.
+ */
+export function advisoryDetail(detail: string): string {
+  const points = Array.from(detail.replace(/\s+/g, ' ').trim());
+  if (points.length === 0) return 'no detail given';
+  return points.length <= ADVISORY_DETAIL_MAX
+    ? points.join('')
+    : `${points
+        .slice(0, ADVISORY_DETAIL_MAX - 1)
+        .join('')
+        .trimEnd()}…`;
+}
+
 /**
  * A server's validation issues as one line, `path: message; …`.
  *

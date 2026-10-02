@@ -5,6 +5,7 @@ import type {
   DynamicDependentNode,
 } from '@autonomy-studio/shared';
 import { kindPlural } from '../../lib/resourceOptionLabel';
+import { advisoryDetail } from '../../api/client';
 import { formatNameList, type DependencyCheck } from './dependencyCheck';
 
 /**
@@ -109,7 +110,7 @@ export function nodeKindAdvisory(
     case 'loading':
       return 'Still checking which pipeline nodes use this connection.';
     case 'unavailable':
-      return `Could not check which pipeline nodes use this connection (${check.detail}) — any whose activity does not accept ${accepted} will fail at run time.`;
+      return `Could not check which pipeline nodes use this connection (${advisoryDetail(check.detail)}) — any whose activity does not accept ${accepted} will fail at run time.`;
     case 'known': {
       const broken = nodeLabels(nodesBrokenByKind(check.nodes, storedKind, nextKind));
       if (broken.length === 0) {
@@ -133,7 +134,7 @@ export function deleteConfirmNodeClause(check: NodeCheck): string {
     case 'loading':
       return 'Still checking which pipeline nodes use it.';
     case 'unavailable':
-      return `Could not check which pipeline nodes use it (${check.detail}) — any that do will fail at run time.`;
+      return `Could not check which pipeline nodes use it (${advisoryDetail(check.detail)}) — any that do will fail at run time.`;
     case 'known': {
       const labels = nodeLabels(check.nodes);
       if (labels.length === 0) return dynamicNodeClause(check.dynamicNodes, false, question).trim();

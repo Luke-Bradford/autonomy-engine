@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { ApiErrorBody } from '@autonomy-studio/shared';
-import { apiFetch, ApiError, apiIssuesOf, formatApiIssues } from './client';
+import {
+  ADVISORY_DETAIL_MAX,
+  advisoryDetail,
+  apiFetch,
+  ApiError,
+  apiIssuesOf,
+  formatApiIssues,
+} from './client';
 
 const Thing = z.object({ id: z.string(), n: z.number() });
 
@@ -158,5 +165,31 @@ describe('formatApiIssues / apiIssuesOf (#1396)', () => {
       apiIssuesOf(new ApiError(400, 'x', { error: 'validation_error', issues: [] })),
     ).toBeNull();
     expect(apiIssuesOf(new Error('network'))).toBeNull();
+  });
+});
+
+describe('advisoryDetail (#1487)', () => {
+  it('collapses whitespace to one line and trims it', () => {
+    expect(advisoryDetail('  offline:\n\tretry  later ')).toBe('offline: retry later');
+  });
+
+  it('keeps a detail at the bound whole', () => {
+    const exact = 'x'.repeat(ADVISORY_DETAIL_MAX);
+    expect(advisoryDetail(exact)).toBe(exact);
+  });
+
+  it('cuts a longer detail to the bound, ending in an ellipsis', () => {
+    const out = advisoryDetail('y'.repeat(ADVISORY_DETAIL_MAX + 50));
+    expect(out).toHaveLength(ADVISORY_DETAIL_MAX);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('never cuts an astral character in half at the bound', () => {
+    const out = advisoryDetail(`${'a'.repeat(ADVISORY_DETAIL_MAX - 2)}😀zz`);
+    expect(out).toBe(`${'a'.repeat(ADVISORY_DETAIL_MAX - 2)}😀…`);
+  });
+
+  it('names an empty detail rather than quoting empty parentheses', () => {
+    expect(advisoryDetail(' \n ')).toBe('no detail given');
   });
 });
