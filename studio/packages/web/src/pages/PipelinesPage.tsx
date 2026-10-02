@@ -139,11 +139,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
-      const ok = await confirm({
+      const confirmed = await confirm({
         message: `Delete pipeline "${p.name}"?\n\nThis cannot be undone.`,
         confirmLabel: 'Delete',
       });
-      if (!ok) return;
+      if (!confirmed) return;
       setActionMsg(null);
       try {
         await deletePipeline(p.id);
@@ -245,8 +245,11 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    */
   const onArchive = useCallback(
     async (p: Pipeline) => {
-      const ok = await confirm({ message: archiveConfirmMessage(p.name), confirmLabel: 'Archive' });
-      if (!ok) return;
+      const confirmed = await confirm({
+        message: archiveConfirmMessage(p.name),
+        confirmLabel: 'Archive',
+      });
+      if (!confirmed) return;
       setActionMsg(null);
       try {
         await archivePipeline(p.id);

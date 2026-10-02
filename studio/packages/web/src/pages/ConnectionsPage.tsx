@@ -475,12 +475,12 @@ export function ConnectionsPage() {
             triggerCheck.names.length + triggerCheck.dynamicNames.length > 0) ||
           (dependentsResult.status === 'fulfilled' &&
             dependentsResult.value.nodes.length + dependentsResult.value.dynamicNodes.length > 0);
-        const ok = await confirm({
+        const confirmed = await confirm({
           message,
           confirmLabel: 'Delete',
           ...(hasDependants ? { typeToConfirm: conn.name } : {}),
         });
-        if (!ok) return;
+        if (!confirmed) return;
         try {
           await deleteConnection(conn.id);
           closeWhere((open) => open.id === conn.id);

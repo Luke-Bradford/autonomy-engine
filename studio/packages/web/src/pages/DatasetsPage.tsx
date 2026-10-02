@@ -394,11 +394,11 @@ export function DatasetsPage() {
       // dependants at delete time (the ref is checked at DISPATCH, §3.1), so a
       // `copy` node bound to this dataset keeps its binding and fails when it
       // next runs.
-      const ok = await confirm({
+      const confirmed = await confirm({
         message: `Delete dataset "${dataset.name}"?\n\nAny pipeline node bound to it will fail at dispatch.`,
         confirmLabel: 'Delete',
       });
-      if (!ok) return;
+      if (!confirmed) return;
       try {
         await deleteDataset(dataset.id);
         closeWhere((open) => open.id === dataset.id);

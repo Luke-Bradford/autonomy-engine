@@ -147,12 +147,12 @@ export function GlobalParamsPage() {
       // Something is KNOWN to read it, so typing the name is asked for. A
       // failed read stays advisory (GL-D4) and asks only the plain question.
       const read = usage !== null && usage.pipelines.length + usage.triggers.length > 0;
-      const ok = await confirm({
+      const confirmed = await confirm({
         message: deleteConfirmText(global.name, usage),
         confirmLabel: 'Delete',
         ...(read ? { typeToConfirm: global.name } : {}),
       });
-      if (!ok) return;
+      if (!confirmed) return;
       try {
         await deleteGlobalParam(global.id);
         closeWhere((open) => open.stored?.id === global.id);

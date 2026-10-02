@@ -405,8 +405,11 @@ export function TriggersPage() {
 
   const onDelete = useCallback(
     async (t: TriggerPublic) => {
-      const ok = await confirm({ message: `Delete trigger "${t.name}"?`, confirmLabel: 'Delete' });
-      if (!ok) return;
+      const confirmed = await confirm({
+        message: `Delete trigger "${t.name}"?`,
+        confirmLabel: 'Delete',
+      });
+      if (!confirmed) return;
       try {
         await deleteTrigger(t.id);
         // A form open on the trigger just deleted would save to nothing.

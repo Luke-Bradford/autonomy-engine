@@ -125,7 +125,7 @@ export function SecretsPage() {
       // value behind it (#1061 gave that its own route and button). What it
       // costs is the same either way, so the confirmation states it: every node
       // referencing the name breaks until a secret of that name exists again.
-      const ok = await confirm({
+      const confirmed = await confirm({
         message:
           `Delete secret "${secret.name}"?\n\n` +
           `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
@@ -133,7 +133,7 @@ export function SecretsPage() {
           `To change its VALUE and keep the name, use Replace instead.`,
         confirmLabel: 'Delete',
       });
-      if (!ok) return;
+      if (!confirmed) return;
       try {
         await deleteSecret(secret.id);
         closeWhere((open) => open.id === secret.id);

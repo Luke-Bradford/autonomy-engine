@@ -420,14 +420,14 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
-      const ok = await confirm({
+      const confirmed = await confirm({
         message: `Delete pipeline “${p.name}”?\n\nThis cannot be undone.`,
         confirmLabel: 'Delete',
         // The menu item that asked unmounts with its menu; Cancel lands back
         // on the row's ⋯ button, which is where the keyboard user came from.
         restoreFocus: () => document.getElementById(rowMenuId(p.id)),
       });
-      if (!ok) return;
+      if (!confirmed) return;
       /* The row — and the Fluent menu anchored to it — is about to be unmounted
          by the refresh, so focus needs somewhere to land. Fluent restores focus
          to its trigger on close, which by then is gone.
